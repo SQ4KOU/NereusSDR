@@ -9,6 +9,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns: endOfOverTailActive /
+//                 endOfOverTailChanged, startRadeEndOfOverTail and
+//                 onEndOfOverTailChanged (FreeDV's end-of-over frame after
+//                 an operator's release). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -2537,6 +2542,16 @@ public:
     // holds the Core's value as it last heard it.
     bool isTransmitting() const;
 
+    // RADE end-of-over callsigns: the radio is sending FreeDV's end-of-over
+    // frame after an operator's release (MoxController's end-of-over tail).
+    // The Core's value; TransmitState sends it as txEnding.
+    bool endOfOverTailActive() const;
+    // Whether an unkey now may send the RADE end-of-over tail: the Core's
+    // own release (not after one of its stops, the RF gate still open), not
+    // TUNE or two-tone, and the TX-bound slice in RADE. The tail also needs
+    // the slice's running RADE channel and the TX worker.
+    bool radeEndOfOverTailPermitted() const;
+
     // R-R3-49 (parity Task 1): the Core's one on-the-air refusal. True,
     // with "The radio is on the air. Try again when it stops." in `reason`,
     // while the radio is keyed (MoxController from any source, through its
@@ -3669,6 +3684,12 @@ public:
     // open on a Disconnected state keys on a non-empty name, and a test has
     // no other way to give a local model one without a live connection.
     void setNameForTest(const QString& name) { m_name = name; }
+    // RADE end-of-over callsigns: a TX worker without a started pump (the
+    // test drives tickForTest), wired as the connect path wires its own.
+    void installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker);
+    TxWorkerThread* txWorkerMutableForTest() const { return m_txWorker.get(); }
+    // The 24 -> 48 kHz RADE TX resampler (null until the first modem block).
+    const Resampler* radeTxResamplerForTest() const { return m_radeTxResampler.get(); }
 
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
@@ -4817,6 +4838,8 @@ signals:
     void rfKitEnabledChanged(bool enabled);
     // R-R3-49: isTransmitting() changed.
     void transmittingChanged(bool transmitting);
+    // RADE end-of-over callsigns: endOfOverTailActive() changed.
+    void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
     // R-R3-32 (parity Task 6): paReadings() changed.
@@ -5272,6 +5295,27 @@ private slots:
 
 private:
     void updateAutoAgc();
+
+    // RADE end-of-over callsigns (MoxController::setEndOfOverTail). Starts
+    // the tail when this release is an operator's and the transmitter runs
+    // RADE: queues the end-of-over frame, carrying the station callsign
+    // FreeDV Reporter uses, on the TX-bound slice's RADE channel and arms
+    // the TX worker's drained notice. False (no tail) otherwise.
+    bool startRadeEndOfOverTail();
+    // The TX worker's RADE connections: the path latch on MOX-on and the
+    // tail's drained notice. Called where the worker is created.
+    void wireTxWorkerRade(TxWorkerThread* worker);
+    // The tail ended (sent, timed out, stopped or cut by a new key).
+    void onEndOfOverTailChanged(bool active);
+    // At every unkey's drain: the RADE TX audio the over left (the worker's
+    // queue, the 24 -> 48 kHz resampler, the channel's encoder state).
+    void dropRadeTxAudio();
+    // While a tail runs: the TX slice's dspModeChanged and the arbiter's
+    // txBoundSliceChanged, each ending it.
+    QMetaObject::Connection m_endOfOverTailModeWatch;
+    // Set around teardownConnection's unkey: a disconnect sends no tail.
+    bool m_refuseEndOfOverTail{false};
+    QMetaObject::Connection m_endOfOverTailSliceWatch;
 
     // R-R3-49 / R-R3-47: false, with the reason, when a window may not
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio

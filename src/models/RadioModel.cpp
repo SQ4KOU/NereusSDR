@@ -14,6 +14,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
+//                 sends FreeDV's end-of-over frame with the station callsign
+//                 before the radio unkeys (startRadeEndOfOverTail,
+//                 onEndOfOverTailChanged); the Core's stops skip it.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -1903,6 +1908,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // is gone before this key's own hardwareFlipped(true) is queued.
     connect(m_moxController, &MoxController::txAboutToBegin,
             this, [this]() { m_transmitStopHold = false; });
+
+    // RADE end-of-over callsigns: an operator's release in RADE sends
+    // FreeDV's end-of-over frame before the TX→RX walk (at most
+    // MoxController::kEndOfOverTailMaxMs). The Core's stops never wait for
+    // it (stopTransmitNow aborts it).
+    m_moxController->setEndOfOverTail([this]() { return startRadeEndOfOverTail(); });
+    connect(m_moxController, &MoxController::endOfOverTailChanged,
+            this, &RadioModel::onEndOfOverTailChanged);
+    // Every unkey reaches the TX channel's drain (after a tail, or at once
+    // without one: Stop All TX, TX inhibit, the time-out). Whatever RADE
+    // audio the over left, queued for the worker or held in the TX
+    // resamplers and encoder, is dropped there so it never starts the next
+    // over.
+    connect(m_moxController, &MoxController::txDrainRequested,
+            this, &RadioModel::dropRadeTxAudio);
 
     // R-IOS-13 (2026-09-27): every key (MOX, TUNE, a remote key, VOX,
     // two-tone) goes through txAboutToBegin before the hardware flip and
@@ -6506,6 +6526,236 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::endOfOverTailActive() const
+{
+    return m_role != Role::Remote && m_moxController != nullptr
+        && m_moxController->isEndOfOverTailActive();
+}
+
+// ---------------------------------------------------------------------------
+// wireTxWorkerRade: the TX worker's RADE connections, made where the worker is
+// created (and by installTxWorkerForTest).
+//
+// Phase 3R Task K2: mode-aware path swap on MOX-on. On every MOX-on
+// transition, read the TX-bound slice's DSPMode and post a TxPath swap to the
+// worker. DSPMode == RADE -> TxPath::Rade. Anything else -> TxPath::Wdsp (the
+// existing path). The moxStateChanged signal fires exactly once per MOX
+// transition at the END of the timer walk (MoxController.h:863-865
+// [v2.10.3.13 conceptual]); the RX path doesn't need a corresponding TxPath
+// flip because dispatchOneBlock is gated on the worker pump running anyway.
+// The worker is the connection's context, so the connection goes with it
+// (it used to capture the raw pointer with this model as context, and so
+// outlived a worker a disconnect destroyed).
+//
+// RADE end-of-over callsigns: radeAudioDrained ends the tail.
+// ---------------------------------------------------------------------------
+void RadioModel::wireTxWorkerRade(TxWorkerThread* worker)
+{
+    if (worker == nullptr || m_moxController == nullptr) {
+        return;
+    }
+    connect(m_moxController, &MoxController::moxStateChanged,
+            worker, [this, worker](bool active) {
+                if (!active) {
+                    return;   // released; pump will idle anyway
+                }
+                const SliceModel* const txSlice = txBoundSlice();
+                const DSPMode mode = txSlice ? txSlice->dspMode() : DSPMode::USB;
+                const bool isRade = (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L);
+                worker->setCurrentTxPath(isRade ? TxWorkerThread::TxPath::Rade
+                                                : TxWorkerThread::TxPath::Wdsp);
+            });
+    connect(worker, &TxWorkerThread::radeAudioDrained, this, [this]() {
+        if (m_moxController) {
+            m_moxController->onEndOfOverTailDone();
+        }
+    });
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioModel::installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker)
+{
+    m_txWorker = std::move(worker);
+    wireTxWorkerRade(m_txWorker.get());
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// RADE end-of-over callsigns: the tail. NereusSDR-original sequencing of
+// FreeDV's end of an over: once the operator lets go, the EOO frame (with
+// the callsign rade_text encodes) and 200 ms of silence go out, then PTT
+// drops (freedv-gui src/ongui.cpp:1479-1523 and
+// src/pipeline/TxRxThread.cpp:808-847 [@a4ae053]; RadeChannel::
+// queueEndOfOver carries the RADETransmitStep port).
+//
+// Only an operator's release: never after the Core's stops (the hold
+// stopTransmitNow sets, or a closed RF gate), never for TUNE or two-tone,
+// and only while the transmitter runs RADE on the TX-bound slice. The tail
+// keys nothing: MOX is already off when this runs, the hardware simply
+// stays keyed until the TX worker has taken the queued audio.
+// ---------------------------------------------------------------------------
+bool RadioModel::radeEndOfOverTailPermitted() const
+{
+    if (m_role == Role::Remote || m_transmitStopHold || m_refuseEndOfOverTail) {
+        return false;
+    }
+    // Review Important 1: the path the TX worker latched when this key
+    // began, not the slice's mode now. A slice switched to RADE while keyed
+    // in another mode still has the live microphone on the WDSP path.
+    if (!m_txWorker || m_txWorker->currentTxPath() != TxWorkerThread::TxPath::Rade) {
+        return false;
+    }
+    if (m_txChannel == nullptr || !m_txChannel->isRfGateOpen()) {
+        return false;
+    }
+    if (m_isTuning || m_pendingTuneOff || m_transmitModel.isTwoToneActive()) {
+        return false;
+    }
+    // Review Minor 4: two-tone's own walk releases MOX before it keys (and
+    // again when it stops); neither release ends an over.
+    if (m_twoToneController
+        && (m_twoToneController->isActive() || m_twoToneController->isActivationInFlight())) {
+        return false;
+    }
+    const SliceModel* const txSlice = txBoundSlice();
+    if (txSlice == nullptr) {
+        return false;
+    }
+    const DSPMode mode = txSlice->dspMode();
+    return mode == DSPMode::RADE_U || mode == DSPMode::RADE_L;
+}
+
+bool RadioModel::startRadeEndOfOverTail()
+{
+    if (!radeEndOfOverTailPermitted() || m_wdspEngine == nullptr) {
+        return false;
+    }
+    SliceModel* const txSlice = txBoundSlice();
+    RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex());
+    if (channel == nullptr || !channel->isActive()) {
+        return false;
+    }
+    // The callsign FreeDV Reporter registers with at the Core, and only
+    // while the operator's FreeDV reporting is on, as FreeDV does:
+    // From freedv-gui src/main.cpp:2643-2653 [@a4ae053]
+    //   if (!wxGetApp().appConfiguration.reportingConfiguration.reportingEnabled)
+    //   { freedvInterface.setTextCallbackFn(...); }
+    //   else
+    //   {
+    //       strncpy(temp, ...reportingCallsign->ToUTF8(), 8); // One less than the size of temp to ensure we don't overwrite the null.
+    //       freedvInterface.setReliableText(temp);
+    //   }
+    // With reporting off FreeDV never sets the EOO data: it creates no
+    // rade_text object then (From freedv-gui src/freedv_interface.cpp:171-183
+    // [@a4ae053]), so its end-of-over frame carries librade's zero data; an
+    // empty callsign here writes the same zeros (RadeText::pushTxCallsign).
+    //
+    // FreeDV keys this on its reporting setting, not on the reporter's
+    // connection. NereusSDR has no separate setting: reporting is on from
+    // the operator's start (or the launch auto-start) until the operator
+    // stops it, which is every reporter state but Off. A connection error
+    // or a lost connection leaves it on, as the client keeps retrying.
+    const bool reporting = m_spotSourceHost
+        && m_spotSourceHost->freedvReporterState() != SpotSourceHost::kOff;
+    const QString callsign = reporting ? SpotSourceHost::freedvCallsign() : QString();
+    // queueEndOfOver emits txModemReady synchronously; wireRadeChannel's
+    // lambda queues the samples to the worker, so the notice below lands
+    // behind them.
+    if (!channel->queueEndOfOver(callsign)) {
+        return false;
+    }
+    // Review Minor 1: the 24 -> 48 kHz stage holds back its latency too
+    // (about 70 ms); push that much silence through it so the worker gets
+    // all of the EOO and the 200 ms of silence behind it.
+    if (m_radeTxResampler) {
+        const std::vector<float> zeros(
+            static_cast<size_t>(m_radeTxResampler->latencyInputSamples()), 0.0f);
+        const QByteArray flushed =
+            m_radeTxResampler->process(zeros.data(), static_cast<int>(zeros.size()));
+        if (!flushed.isEmpty()) {
+            QMetaObject::invokeMethod(m_txWorker.get(), "setRadeAudioBlock",
+                                      Qt::QueuedConnection, Q_ARG(QByteArray, flushed));
+        }
+    }
+    QMetaObject::invokeMethod(m_txWorker.get(), "armRadeAudioDrainedNotice",
+                              Qt::QueuedConnection);
+    return true;
+}
+
+void RadioModel::dropRadeTxAudio()
+{
+    if (m_txWorker) {
+        QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
+                                  Qt::QueuedConnection);
+    }
+    m_radeTxResampler.reset();
+    m_radeTxResamplerHwRate = 0;
+    if (m_wdspEngine != nullptr) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            if (RadeChannel* const channel = m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
+                channel->dropTxAudio();
+            }
+        }
+    }
+}
+
+void RadioModel::onEndOfOverTailChanged(bool active)
+{
+    // Review Important 1: a mode change on the transmitting slice, or the
+    // transmitter moving to another slice, ends the tail at once, so the
+    // rest of the EOO never goes out through another mode's modulator.
+    QObject::disconnect(m_endOfOverTailModeWatch);
+    QObject::disconnect(m_endOfOverTailSliceWatch);
+    if (active) {
+        if (SliceModel* const txSlice = txBoundSlice()) {
+            m_endOfOverTailModeWatch = connect(
+                txSlice, &SliceModel::dspModeChanged, this, [this]() {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+        if (m_txSliceArbiter) {
+            m_endOfOverTailSliceWatch = connect(
+                m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) {
+                    if (m_moxController) {
+                        m_moxController->abortEndOfOverTail();
+                    }
+                });
+        }
+    }
+    if (!active) {
+        // The channel encodes the next over again.
+        // Review Minor 5: a new key ended it. The end-of-over frame already
+        // queued plays out whole ahead of the new over, as FreeDV's does:
+        // RADETransmitStep::restartVocoder writes the EOO into the step's
+        // output FIFO and execute reads that FIFO in order ahead of any
+        // later modem samples, and freedv-gui drops PTT only once the EOO
+        // is queued and the output has drained, so a new over never cuts
+        // it (freedv-backend src/pipeline/RADETransmitStep.cpp:174-178,
+        // 233, 242, 265 [@f02e7e9]; freedv-gui src/ongui.cpp:1479-1523
+        // [@a4ae053]). Any other end (a stop, a block, a mode change, the
+        // bound) drops what is left of it.
+        const bool rekeyed = m_moxController != nullptr && m_moxController->isMox();
+        if (m_txWorker && !rekeyed) {
+            QMetaObject::invokeMethod(m_txWorker.get(), "clearRadeAudio",
+                                      Qt::QueuedConnection);
+        }
+        if (m_wdspEngine != nullptr) {
+            if (SliceModel* const txSlice = txBoundSlice()) {
+                if (RadeChannel* const channel =
+                        m_wdspEngine->radeChannel(txSlice->sliceIndex())) {
+                    if (channel->endOfOverQueued()) {
+                        channel->dropTxAudio();
+                    }
+                }
+            }
+        }
+    }
+    emit endOfOverTailChanged(active);
 }
 
 bool RadioModel::pureSignalOperationPermitted() const
@@ -12910,12 +13160,10 @@ void RadioModel::onRadeTextDecoded(int sliceId, const QString& callsign,
         }
     }
 
-    // I4 Option B (the third_party/rade callsign-over-EOO channel)
-    // does not carry a grid square; RadeText emits textDecoded with
-    // callsign only. Phase L wires RadeText::textDecoded(callsign)
-    // through the channel as rxTextDecoded(callsign, "") (empty
-    // grid). Future text-channel revs may add grid; the payload
-    // string accommodates both forms.
+    // FreeDV's end-of-over frame carries a callsign and no grid square;
+    // RadeChannel forwards RadeText::textDecoded(callsign) as
+    // rxTextDecoded(callsign, "") (empty grid). The payload string
+    // accommodates both forms.
     if (!grid.isEmpty()) {
         decode.payload = QStringLiteral("%1 %2").arg(callsign, grid);
     } else {
@@ -15403,6 +15651,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                     m_transmitModel.micSource() == MicSource::Vax);
 
                 m_txWorker = std::make_unique<TxWorkerThread>(this);
+                // RADE: the TX path latch and the end-of-over tail's
+                // drained notice (wireTxWorkerRade).
+                wireTxWorkerRade(m_txWorker.get());
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
@@ -15574,40 +15825,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                             });
                 }
 
-                // ── Phase 3R Task K2: mode-aware path swap on MOX-on ──
-                //
-                // On every MOX-on transition, read the TX-bound slice's
-                // DSPMode and post a TxPath swap to the worker.  DSPMode
-                // == RADE -> TxPath::Rade (scaffolded; full integration
-                // K-bench).  Anything else -> TxPath::Wdsp (the existing
-                // path).  The moxStateChanged signal fires exactly once
-                // per MOX transition at the END of the timer walk
-                // (MoxController.h:863-865 [v2.10.3.13 conceptual]); the
-                // RX path doesn't need a corresponding TxPath flip
-                // because dispatchOneBlock is gated on the worker pump
-                // running anyway.
-                if (m_moxController != nullptr && m_txWorker) {
-                    TxWorkerThread* worker = m_txWorker.get();
-                    connect(m_moxController, &MoxController::moxStateChanged,
-                            this, [this, worker](bool active) {
-                                if (!active) {
-                                    return;   // released; pump will idle anyway
-                                }
-                                const SliceModel* const txSlice =
-                                    txBoundSlice();
-                                const DSPMode mode =
-                                    txSlice ? txSlice->dspMode()
-                                            : DSPMode::USB;
-                                const bool isRade =
-                                    (mode == DSPMode::RADE_U
-                                     || mode == DSPMode::RADE_L);
-                                const TxWorkerThread::TxPath path =
-                                    isRade
-                                        ? TxWorkerThread::TxPath::Rade
-                                        : TxWorkerThread::TxPath::Wdsp;
-                                worker->setCurrentTxPath(path);
-                            });
-                }
+                // Phase 3R Task K2: the mode-aware path swap on MOX-on is
+                // in wireTxWorkerRade, connected with the worker above.
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
@@ -20591,8 +20810,18 @@ void RadioModel::teardownConnection()
     // (its manual key is cleared further down with the session's TUN
     // state). The TX-to-RX walk's hardware flip runs now, while the
     // connection is still live, so the radio gets the MOX bit off.
+    // RADE end-of-over callsigns (review Important 2): no end-of-over tail
+    // on a disconnect. The unkey walks as it did before the tail existed,
+    // so the amplifier's UNKEY (txAboutToEnd) and the TX channel's drain
+    // run inside this setMox(false), while the TX channel is still wired.
+    // A tail already running (the operator released, then disconnected
+    // within it) is not touched by setMox(false), since MOX is already off;
+    // end it here too, for the same reason.
     if (m_moxController) {
+        m_refuseEndOfOverTail = true;
         m_moxController->setMox(false);
+        m_moxController->abortEndOfOverTail();
+        m_refuseEndOfOverTail = false;
     }
     if (m_isTuning) {
         setTune(false);
@@ -20938,6 +21167,8 @@ void RadioModel::teardownConnection()
     // Task 33: nothing reports a TX drain any more.
     if (m_moxController) {
         m_moxController->setAwaitsTxDrain(false);
+        // Nor an end-of-over tail.
+        m_moxController->abortEndOfOverTail();
     }
 
     // Shutdown WDSP (destroys all channels, saves cache)
@@ -21669,6 +21900,13 @@ void RadioModel::stopTransmitNow(const QString& reason)
         });
     }
 
+    // RADE end-of-over callsigns: a stop never waits for an end-of-over
+    // tail. One under way ends here, after the gate has closed and MOX off
+    // is queued, so the walk goes on to its drain and hardware release.
+    if (m_moxController) {
+        m_moxController->abortEndOfOverTail();
+    }
+
     qCInfo(lcConnection).noquote() << "Transmit stopped at once:" << reason;
 }
 
@@ -21712,7 +21950,10 @@ void RadioModel::stopAllTx(const QString& message)
     const bool twoToneOn = m_twoToneController
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight());
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+    // RADE end-of-over callsigns: the radio is still on the air during an
+    // end-of-over tail (MOX is already off), so a stop then stops it too.
+    const bool tailOn = endOfOverTailActive();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn) {
         return;
     }
 

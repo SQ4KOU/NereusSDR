@@ -267,6 +267,67 @@ private slots:
         src.stop();
     }
 
+    // RADE end-of-over callsigns: radeAudioDrained fires once, in the
+    // block that takes the last of the RADE audio queued before the
+    // notice was armed; at once when nothing is queued; never after
+    // clearRadeAudio.
+    void radeAudioDrainedFollowsTheQueuedAudio()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+        RadeChannel rade;
+        w.setRadeChannel(&rade);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+
+        QSignalSpy drained(&w, &TxWorkerThread::radeAudioDrained);
+
+        // Nothing queued: at once.
+        w.armRadeAudioDrainedNotice();
+        QCOMPARE(drained.count(), 1);
+
+        // Two and a half blocks queued: the third block takes the last.
+        const std::vector<float> tail(static_cast<size_t>(kBlockFrames * 5 / 2), 0.25f);
+        w.setRadeAudioBlock(QByteArray(reinterpret_cast<const char*>(tail.data()),
+                                       static_cast<int>(tail.size() * sizeof(float))));
+        w.armRadeAudioDrainedNotice();
+        std::vector<float> mic(kBlockFrames, 0.0f);
+        for (int blk = 0; blk < 2; ++blk) {
+            src.inbound(mic.data(), kBlockFrames);
+            w.tickForTest();
+        }
+        QCOMPARE(drained.count(), 1);
+        src.inbound(mic.data(), kBlockFrames);
+        w.tickForTest();
+        QCOMPARE(drained.count(), 2);
+        src.inbound(mic.data(), kBlockFrames);
+        w.tickForTest();
+        QCOMPARE(drained.count(), 2);  // once per arming
+
+        // Cleared: the queued audio and the notice both go.
+        w.setRadeAudioBlock(QByteArray(reinterpret_cast<const char*>(tail.data()),
+                                       static_cast<int>(tail.size() * sizeof(float))));
+        w.armRadeAudioDrainedNotice();
+        w.clearRadeAudio();
+        for (int blk = 0; blk < 4; ++blk) {
+            src.inbound(mic.data(), kBlockFrames);
+            w.tickForTest();
+        }
+        QCOMPARE(drained.count(), 2);
+
+        src.stop();
+    }
+
     void pcMicSelected_withoutCaptureFeedsSilenceToRade()
     {
         AudioEngine engine;

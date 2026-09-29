@@ -11,6 +11,9 @@
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13,
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: RADE end-of-over callsigns: txEnding follows
+//               RadioModel::endOfOverTailActive. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-26: Transmit group fix wave: I4 txState names the holder
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
 //               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
@@ -125,6 +128,8 @@ void TransmitState::bind(RadioModel* model)
 
     connect(model, &RadioModel::transmittingChanged, this, &TransmitState::onTransmittingChanged);
     connect(model, &RadioModel::keyedByChanged, this, &TransmitState::refreshState);
+    // RADE end-of-over callsigns: txEnding follows the Core's tail.
+    connect(model, &RadioModel::endOfOverTailChanged, this, &TransmitState::refreshState);
     connect(&model->transmitModel(), &TransmitModel::tuneChanged, this,
             &TransmitState::refreshState);
     connect(&model->transmitModel(), &TransmitModel::twoToneActiveChanged, this,
@@ -372,10 +377,26 @@ void TransmitState::refreshState()
     const TxSliceArbiter* arbiter = m_model->txSliceArbiter();
     const int txSliceId = arbiter != nullptr ? arbiter->txBoundSliceId() : -1;
     const RadioModel::KeyedBy keyedBy = m_model->keyedBy();
+    // RADE end-of-over callsigns (review Minor 3): keyedBy clears at the
+    // release, but the radio stays on the air through an end-of-over tail.
+    // During the tail who keyed stays the one this key had. (Only then: the
+    // ordinary TX to RX handover keeps its recorded wire behaviour.)
+    if (!keyed) {
+        m_heldKeyedByName.clear();
+        m_heldKeyedByKind.clear();
+        m_heldKeyedTrigger.clear();
+    } else if (!keyedBy.isEmpty()) {
+        m_heldKeyedByName = keyedBy.deviceName;
+        m_heldKeyedByKind = keyedBy.deviceKind;
+        m_heldKeyedTrigger = keyedBy.trigger;
+    }
+    const bool ending = m_model->endOfOverTailActive();
+    const bool held = keyedBy.isEmpty() && ending;
     // Who keyed, only while keyed (keyedBy is empty while unkeyed).
-    const QString name = keyed ? keyedBy.deviceName : QString();
-    const QString kind = keyed ? keyedBy.deviceKind : QString();
-    const QString trigger = keyed ? QString::fromLatin1(keyedBy.trigger) : QString();
+    const QString name = !keyed ? QString() : held ? m_heldKeyedByName : keyedBy.deviceName;
+    const QString kind = !keyed ? QString() : held ? m_heldKeyedByKind : keyedBy.deviceKind;
+    const QString trigger = !keyed ? QString()
+        : QString::fromLatin1(held ? m_heldKeyedTrigger : keyedBy.trigger);
     const qint64 since = keyed ? m_keyedSinceMs : 0;
     if (keyed && !keyedBy.isEmpty()) {
         m_lastKeyedByName = keyedBy.deviceName;
@@ -383,7 +404,7 @@ void TransmitState::refreshState()
     }
     if (keyed == m_keyed && tuning == m_tuning && twoTone == m_twoTone
         && txSliceId == m_txSliceId && name == m_keyedByName && kind == m_keyedByKind
-        && trigger == m_keyedTrigger && since == m_keyedSinceMs) {
+        && trigger == m_keyedTrigger && since == m_keyedSinceMs && ending == m_txEnding) {
         return;
     }
     m_keyed = keyed;
@@ -394,6 +415,7 @@ void TransmitState::refreshState()
     m_keyedByKind = kind;
     m_keyedTrigger = trigger;
     m_keyedSinceMs = since;
+    m_txEnding = ending;
     emit stateChanged();
 }
 

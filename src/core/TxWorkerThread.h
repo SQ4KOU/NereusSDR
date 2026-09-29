@@ -10,6 +10,10 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-28 - RADE end-of-over callsigns by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code: radeAudioDrained,
+//                 armRadeAudioDrainedNotice and clearRadeAudio, so the
+//                 end-of-over tail knows when its audio has gone out.
 //   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. Worker source routing now follows PC-mic
 //                 selection intent and fails silent when capture is unavailable.
@@ -170,6 +174,11 @@ public:
     /// getbuffsize(48000) at cmsetup.c:106-110 [v2.10.3.13].
     static constexpr int kBlockFrames = 64;
 
+    /// RADE end-of-over callsigns: the TX path latched at the last MOX-on
+    /// (setCurrentTxPath). Read from the main thread; the worker reads the
+    /// same atomic.
+    TxPath currentTxPath() const { return m_currentTxPath.load(std::memory_order_acquire); }
+
 #ifdef NEREUS_BUILD_TESTS
     /// Test seam — drive one pump tick synchronously without standing up
     /// the QThread + semaphore wait infrastructure.  Drains one block
@@ -184,6 +193,10 @@ public:
     /// run-loop body; tests use this accessor to assert the swap
     /// after setCurrentTxPath().
     TxPath currentTxPathForTest() const;
+
+    /// RADE end-of-over callsigns test seam: the RADE audio queued for the
+    /// dispatch (48 kHz mono samples).
+    int radeAudioQueuedSamplesForTest();
 
     /// Phase 3R K-bench test seam — observe the active RADE channel
     /// pointer without exposing the production member.  Tests verify
@@ -211,6 +224,11 @@ signals:
     /// dedicated QThread.  The queued delivery serialises across the
     /// thread boundary without holding any audio-thread lock.
     void radeMicBlockReady(const QByteArray& speech16k);
+
+    /// RADE end-of-over callsigns: the RADE audio queued before
+    /// armRadeAudioDrainedNotice() has all gone through the TX chain.
+    /// Emitted once per arming, from this worker's thread.
+    void radeAudioDrained();
 
     /// Phase 3F Sub-Epic J Task 9: internal anti-VOX handoff.  Carries an
     /// OWNED copy of one mixed anti-VOX reference block from
@@ -254,6 +272,16 @@ public slots:
     // worker thread differs). Invoked via QMetaObject::invokeMethod
     // with Qt::QueuedConnection from the wireRadeChannel lambda.
     void setRadeAudioBlock(const QByteArray& audio48k);
+
+    // ── RADE end-of-over callsigns ──────────────────────────────────────
+    //
+    // armRadeAudioDrainedNotice: queued behind the end-of-over frame's
+    // setRadeAudioBlock, so radeAudioDrained fires once the dispatch has
+    // taken the last of it (at once when nothing is queued).
+    // clearRadeAudio: drops the queued RADE audio and any armed notice (a
+    // stop, or a new key, during the tail).
+    void armRadeAudioDrainedNotice();
+    void clearRadeAudio();
 
     // ── Phase 3R K-bench: RADE pre-encoder mic processing config ────────
     //
@@ -417,6 +445,9 @@ private:
     // every ~25 ms during RADE TX, contention is negligible).
     QMutex      m_radeAudioOverrideMutex;
     QByteArray  m_radeAudioOverride;
+    // RADE end-of-over callsigns: radeAudioDrained is owed once
+    // m_radeAudioOverride empties (under m_radeAudioOverrideMutex).
+    bool        m_radeDrainNoticeArmed{false};
 
     // Phase 3R K-bench: RADE pre-encoder mic processing state.
     // Mic gain dB is read live from TransmitModel via setRadeMicGainDb;

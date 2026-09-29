@@ -26,8 +26,8 @@
 //                          the key (Task 38), -1 when none applies
 //   forwardPowerWatts, reflectedPowerWatts, swr, alcDb, micLevelDb
 //                          the transmit meters (TxMeterPump)
-//   txEnding               true only during a RADE end-of-over tail; no
-//                          tail is built yet, so always false
+//   txEnding               true only during a RADE end-of-over tail
+//                          (RadioModel::endOfOverTailActive)
 //   stopReason, stopText   why the Core last stopped a transmission on its
 //                          own, and that in the operator's words:
 //                          "" (none yet), linkLost, micStarved, timeOut,
@@ -81,6 +81,10 @@
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13,
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: RADE end-of-over callsigns: txEnding follows
+//               RadioModel::endOfOverTailActive; keyedBy* keep the key's
+//               holder through an end-of-over tail. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-26: Transmit group fix wave: I4 txState names the holder
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
 //               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
@@ -405,6 +409,11 @@ private:
     bool m_keyStopped{false};
     QString m_lastKeyedByName;
     QString m_lastKeyedByKind;
+    // The keyedBy this key had, shown through an end-of-over tail after
+    // keyedBy clears at the release.
+    QString m_heldKeyedByName;
+    QString m_heldKeyedByKind;
+    QByteArray m_heldKeyedTrigger;
 };
 
 } // namespace NereusSDR

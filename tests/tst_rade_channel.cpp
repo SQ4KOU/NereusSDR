@@ -78,6 +78,12 @@ private slots:
 
     // v0.5.0 RADE U/L sideband-split fix-up.
     void sidebandRoundTripsViaSetter();
+
+    // RADE end-of-over callsigns.
+    void endOfOverQueuesFrameAndSilence();
+    void noSpeechAfterEndOfOverUntilReset();
+    void endOfOverWhileInactiveSendsNothing();
+    void endOfOverCallsignReachesAnotherChannel();
 };
 
 void TestRadeChannel::initialState()
@@ -463,6 +469,106 @@ void TestRadeChannel::sidebandRoundTripsViaSetter()
 
     ch.setSideband(true);
     QVERIFY(ch.sidebandUpper());
+}
+
+// RADE end-of-over callsigns: queueEndOfOver emits the EOO frame and FreeDV's
+// 200 ms of silence once, as txModemReady, and reports its length.
+void TestRadeChannel::endOfOverQueuesFrameAndSilence()
+{
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+    // rade_n_tx_eoo_out (1152 for RADE V1) + NUM_SAMPLES_SILENCE (1600) +
+    // the 8 -> 24 kHz resampler's latency in zeros.
+    const int samples8k = ch.endOfOverSamples8k();
+    QVERIFY2(samples8k > 1152 + 1600, qPrintable(QString::number(samples8k)));
+
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+    QVERIFY(ch.queueEndOfOver(QStringLiteral("KG4VCF")));
+    QVERIFY(ch.endOfOverQueued());
+    QCOMPARE(modemSpy.count(), 1);
+    // From a fresh resampler the output at 24 kHz is exactly the EOO and
+    // the 200 ms of silence: (1152 + 1600) x 3 stereo float frames.
+    const int bytes = modemSpy.first().value(0).toByteArray().size();
+    const int frames = bytes / (2 * static_cast<int>(sizeof(float)));
+    QVERIFY2(std::abs(frames - (1152 + 1600) * 3) <= 3,
+             qPrintable(QStringLiteral("%1 frames").arg(frames)));
+    ch.stop();
+    QCOMPARE(ch.endOfOverSamples8k(), 0);
+}
+
+// After the end-of-over frame nothing more is encoded (FreeDV stops taking
+// microphone audio once the over is ending) until resetTx starts a new over.
+void TestRadeChannel::noSpeechAfterEndOfOverUntilReset()
+{
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+    QVERIFY(ch.queueEndOfOver(QString()));
+
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+    ch.txEncode(makeSyntheticSpeech16k(16000));
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+    QCOMPARE(modemSpy.count(), 0);
+
+    ch.resetTx();
+    QVERIFY(!ch.endOfOverQueued());
+    ch.txEncode(makeSyntheticSpeech16k(16000));
+    QVERIFY(ch.radeTxCallCountForTest() > 0);
+    ch.stop();
+}
+
+void TestRadeChannel::endOfOverWhileInactiveSendsNothing()
+{
+    RadeChannel ch;
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+    QVERIFY(!ch.queueEndOfOver(QStringLiteral("KG4VCF")));
+    QVERIFY(!ch.endOfOverQueued());
+    QCOMPARE(modemSpy.count(), 0);
+}
+
+// One channel transmits an over (speech, then the end-of-over frame with
+// KG4VCF); its modem audio, the real leg as a radio's SSB receiver hands it
+// back (I = audio, Q = 0), goes into a second channel, which reports the
+// callsign once with no grid.
+void TestRadeChannel::endOfOverCallsignReachesAnotherChannel()
+{
+    RadeChannel tx;
+    RadeChannel rx;
+    QVERIFY(tx.start("dummy"));
+    QVERIFY(rx.start("dummy"));
+
+    QByteArray air;  // 24 kHz stereo float
+    connect(&tx, &RadeChannel::txModemReady, this,
+            [&air](const QByteArray& pcm) { air.append(pcm); });
+
+    // 1.5 s of speech-like audio, then the end-of-over frame.
+    for (int i = 0; i < 12; ++i) {
+        tx.txEncode(makeSyntheticSpeech16k(2000));
+    }
+    QVERIFY(tx.queueEndOfOver(QStringLiteral("KG4VCF")));
+    // Silence behind it: the receiver's 24 -> 8 kHz resampler holds back
+    // about 300 ms.
+    air.append(QByteArray(24000 * 2 * 2 * static_cast<int>(sizeof(float)), '\0'));
+
+    QSignalSpy textSpy(&rx, &RadeChannel::rxTextDecoded);
+    const auto* stereo = reinterpret_cast<const float*>(air.constData());
+    const int frames = air.size() / (2 * static_cast<int>(sizeof(float)));
+    constexpr int kChunk = 2048;
+    for (int off = 0; off < frames; off += kChunk) {
+        const int n = std::min(kChunk, frames - off);
+        QByteArray iq(n * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* out = reinterpret_cast<float*>(iq.data());
+        for (int i = 0; i < n; ++i) {
+            out[2 * i] = stereo[2 * (off + i)];
+            out[2 * i + 1] = 0.0f;
+        }
+        rx.processIq(iq);
+    }
+
+    QCOMPARE(textSpy.count(), 1);
+    QCOMPARE(textSpy.first().value(0).toString(), QStringLiteral("KG4VCF"));
+    QVERIFY(textSpy.first().value(1).toString().isEmpty());
+    tx.stop();
+    rx.stop();
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannel)

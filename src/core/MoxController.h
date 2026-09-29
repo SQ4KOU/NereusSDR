@@ -139,6 +139,13 @@
 //                 the only valid anti-VOX cancellation reference.  See
 //                 commit message for full rationale.  J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 : RADE end-of-over callsigns: setEndOfOverTail,
+//                 onEndOfOverTailDone, abortEndOfOverTail,
+//                 endOfOverTailChanged and kEndOfOverTailMaxMs (an
+//                 operator's release keeps the radio keyed, at most 1 s, for
+//                 FreeDV's end-of-over frame before the TX→RX walk).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-25 : Task 33 (R-IOS-03): txDrainRequested, onTxDrained,
 //                 setAwaitsTxDrain and kTxDrainTimeoutMs (the TX→RX walk
 //                 drains before the hardware flip, as Thetis does);
@@ -366,6 +373,12 @@ public:
     // the drain on the transmit lane, so the walk must not wait on a lane
     // that is busy for longer.
     static constexpr int kTxDrainTimeoutMs = 100;
+    // RADE end-of-over callsigns: the longest an operator's release keeps
+    // the radio on the air for an end-of-over tail. JJ's ruling (Core/GUI
+    // session, 2026-09-23): the tail lasts at most 1 s. NereusSDR-original;
+    // FreeDV bounds the same wait at 2 s for the EOO to queue plus 1 s for
+    // the audio to drain (freedv-gui src/ongui.cpp:1479-1523 [@a4ae053]).
+    static constexpr int kEndOfOverTailMaxMs = 1000;
 
     // ── Getters ──────────────────────────────────────────────────────────────
     bool     isMox()      const noexcept { return m_mox; }
@@ -529,6 +542,27 @@ public:
                            int keyUpMs, int pttOutMs, int breakInMs);
     // FOR TESTING ONLY: the drain wait's bound (kTxDrainTimeoutMs).
     void setTxDrainTimeoutMsForTest(int ms);
+    // FOR TESTING ONLY: the end-of-over tail's bound (kEndOfOverTailMaxMs).
+    void setEndOfOverTailMaxMsForTest(int ms);
+
+    // ── RADE end-of-over callsigns: the end-of-over tail ─────────────────────
+    //
+    // An operator's release (setMox(false) while nothing blocks transmit)
+    // asks the installed function whether a tail goes out first. It returns
+    // true when it started one: the walk then keeps the radio keyed, in
+    // TxToRxInFlight, until onEndOfOverTailDone() or kEndOfOverTailMaxMs,
+    // and only then emits txAboutToEnd and txDrainRequested. It is never
+    // asked for a key (the tail keys nothing), for an unkey while TX
+    // inhibit, the PA trip or receive-only holds, or when the release did
+    // not change MOX. A new key during the tail ends it (stopAllTimers), as
+    // does abortEndOfOverTail(), which the Core's stops call so a stop
+    // never waits for a tail. RadioModel installs it for RADE (FreeDV's
+    // end-of-over frame and 200 ms of silence).
+    using EndOfOverTailFn = std::function<bool()>;
+    void setEndOfOverTail(EndOfOverTailFn fn);
+    void onEndOfOverTailDone();
+    void abortEndOfOverTail();
+    bool isEndOfOverTailActive() const noexcept { return m_waitingForEndOfOverTail; }
 
     // ── Task 33: the TX drain in the TX→RX walk ──────────────────────────────
     //
@@ -1191,6 +1225,10 @@ signals:
                                     // (phase 4 of 5 is hardwareFlipped(false), right after txaFlushed)
     void rxReady();                 // TX→RX phase 5 of 5: fires after pttOutDelay
 
+    // RADE end-of-over callsigns: an end-of-over tail began (true) or
+    // ended, however it ended (false). Emitted before txAboutToEnd.
+    void endOfOverTailChanged(bool active);
+
     // voxRunRequested: emitted when the gated VOX-run state changes.
     //
     // Carries (voxEnabled && isVoiceMode(currentMode)).  Emitted at most
@@ -1356,10 +1394,16 @@ private slots:
     void onPttOutElapsed();
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
     void onTxDrainTimedOut();     // Task 33: the drain wait's bound
+    void onEndOfOverTailTimedOut(); // RADE end-of-over tail's bound
 
 private:
     // Task 33: the drain is done (or its wait timed out): start mox_delay.
     void finishTxDrainWait();
+    // The TX→RX walk from txAboutToEnd on (split out of setMox(false) so an
+    // end-of-over tail can run first).
+    void beginTxToRxTeardown();
+    // The end-of-over tail is over (sent, timed out or aborted): go on.
+    void finishEndOfOverTail();
     // Task 34: a refusal, as moxRejected(reason) and moxRefused(refusal);
     // `quiet` (a held source's repeat, M3) records it and says nothing.
     void reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet);
@@ -1645,10 +1689,16 @@ private:
     QTimer m_pttOutDelayTimer;  // 20 ms — TX→RX: HW settle before WDSP RX on; drives TxToRxFlush
     QTimer m_breakInDelayTimer; // 300 ms — 3M-2 CW QSK; NOT started from any B.3 logic
     QTimer m_txDrainTimeoutTimer; // 100 ms: Task 33, bound on the TX→RX drain wait
+    QTimer m_endOfOverTailTimer;  // 1000 ms: bound on an end-of-over tail
 
     // Task 33: the TX→RX walk waits for the TX channel's drain.
     bool m_awaitTxDrain{false};
     bool m_waitingForTxDrain{false};
+
+    // RADE end-of-over callsigns: who starts a tail, and whether the walk
+    // waits for one now.
+    EndOfOverTailFn m_endOfOverTail;
+    bool m_waitingForEndOfOverTail{false};
 
     // Task 33: StopAllTx's latch (Thetis _stop_all_tx). pollPtt consumes it
     // against the PTT source levels (m_micPtt, m_catPtt, m_voxPtt, m_tciPtt).

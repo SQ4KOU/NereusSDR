@@ -6548,7 +6548,7 @@ Watching starts with a fresh 400 ms. A keepalive counts when its
 by another path, or one overtaken, does not) and its `epoch` is not older
 than the device's key's. The device's own release (`tx.unkey`, TUNE or
 two-tone off) ends the watch on its key at once, so a transmission that
-ends by itself after a release (a RADE end-of-over tail, later) is never
+ends by itself after a release (a RADE end-of-over tail) is never
 taken for a lost link.
 
 **When it stops.** More than 400 ms without a keepalive that counts, or
@@ -6689,7 +6689,7 @@ is refused as any outbound property's is.
 | `timeOutRemainingSeconds` | Whole seconds before the transmit time-out stops this key, -1 when no time-out applies (unkeyed, or the limit for this device's kind is off). Phones and tablets have their own limit, 180 s by default |
 | `forwardPowerWatts`, `reflectedPowerWatts`, `swr` | The radio's power readings, as the Core's own power and SWR meters show them; `swr` is 1.0 with no forward power |
 | `alcDb`, `micLevelDb` | The ALC and MIC readings as the Core's meters show them (Thetis's readings: ALC floored at -30 dB, MIC at -195 dB); -400, no reading, while the Core has no transmit channel |
-| `txEnding` | True only during a RADE end-of-over tail; no tail is built yet, so always false |
+| `txEnding` | True only during a RADE end-of-over tail: after an operator's release in RADE, while the radio sends FreeDV's end-of-over frame (at most 1 s). The Core's stops never wait for it |
 | `stopReason` | Why the Core last stopped a transmission on its own: `""` (none since the Core started), `linkLost`, `micStarved`, `timeOut`, `takenOver`, `revoked` or `station` |
 | `stopText` | That stop in plain words, for an app to show as sent |
 | `stopSerial` | Advances by one with each such stop (serial-number arithmetic, as `devices`' `revision`); 0 before the first |
