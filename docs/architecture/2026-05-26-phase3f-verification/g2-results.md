@@ -310,13 +310,6 @@ rather than continuing, because later rows assume the earlier ones.
 - Slice B+ come up with default NR / SNB / APF / squelch.
 - A pan whose slice was removed keeps rendering its stream rather than going
   dark.
-- Fixed 2026-09-29: `Cannot create receiver: at maximum 4` at startup on a
-  5-stream pool. The stream pool now follows the receiver count the radio
-  reports in discovery (4 on this G2), so every stream has a receiver behind
-  it and a fifth pan is refused with a plain reason. Bench: confirm the
-  warning is gone and four pans each get a live receiver. Also confirm what
-  the G2's reported count covers: if it includes the PureSignal and
-  diversity streams, the usable count is lower than 4.
 
 ---
 
