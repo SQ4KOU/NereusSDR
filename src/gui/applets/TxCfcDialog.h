@@ -226,6 +226,11 @@ public:
     // RadioModel::stationCommandFinished; only this dialog's command counts.
     void onStationCommandFinished(quint32 commandId, bool accepted,
                                   const QString& reason);
+    // RadioModel::stationLinkStateChanged. A lost link takes the answer to
+    // this dialog's command with it: the change waiting on it and any edit
+    // held behind it are dropped, and the dialog follows the Core's values
+    // again.
+    void onStationLinkChanged(bool ready);
     // Why the Core did not take the last change; hidden when it did.
     QLabel* profileReasonLabel() const { return m_profileReasonLabel; }
 

@@ -2539,8 +2539,10 @@ void TxApplet::requestOpenCfcDialog()
             m_model->txChannel(),
             host ? host : static_cast<QWidget*>(this));
         // Setup publication (CFC band editor): a remote window sends the
-        // whole table to a Core that takes it, and hears the answer.
-        if (m_model->stationLink()) {
+        // whole table to a Core that takes it, and hears the answer. The
+        // link is looked up on every call, so a dialog built before the
+        // window reached a Core sends whole once it has.
+        {
             QPointer<RadioModel> model(m_model);
             m_cfcDialog->setStationProfileSender(
                 [model] {
@@ -2564,6 +2566,13 @@ void TxApplet::requestOpenCfcDialog()
                 });
             connect(m_model, &RadioModel::stationCommandFinished,
                     m_cfcDialog, &TxCfcDialog::onStationCommandFinished);
+            QPointer<TxCfcDialog> dialog(m_cfcDialog);
+            connect(m_model, &RadioModel::stationLinkStateChanged, m_cfcDialog,
+                    [model, dialog] {
+                        if (!dialog) { return; }
+                        const IStationLink* link = model ? model->stationLink() : nullptr;
+                        dialog->onStationLinkChanged(link && link->stationLinkReady());
+                    });
         }
     } else {
         // Connection may have come up since the dialog was created.

@@ -144,6 +144,14 @@ struct Session {
         server->acceptTransport(coreEnd);
         return completed.wait(5000) || completed.count() == 1;
     }
+    // A fresh link to the same Core, after the old one was lost.
+    bool reconnect(QObject* parent)
+    {
+        coreEnd = new LoopbackTransport(QStringLiteral("station-end-2"), parent);
+        windowEnd = new LoopbackTransport(QStringLiteral("client-end-2"), parent);
+        coreEnd->linkTo(windowEnd);
+        return connect();
+    }
     // A raw `transmit` write, and the Core's answer for it.
     SessionPropertyResult writeTransmit(const QByteArray& name, MirrorWireKind kind,
                                         const QVariant& value)
@@ -370,6 +378,8 @@ private slots:
     void remoteCfcDialogSendsTheTableAsOneCommand();
     void remoteCfcDialogShowsAStaleRefusal();
     void remoteCfcDialogKeepsThePropertyWriteForAnOlderCore();
+    void remoteCfcDialogFollowsTheCoreAfterAResultIsLost();
+    void remoteCfcDialogOpenedBeforeTheLinkSendsWhole();
 
 private:
     QTemporaryDir m_securityDir;
@@ -1521,6 +1531,9 @@ void TstRemoteTxEqCfc::remoteCfcDialogSendsTheTableAsOneCommand()
     QTRY_COMPARE(s.window.transmitModel().cfcParaEqData(), coreTx.cfcParaEqData());
     dlg->bands5Radio()->setChecked(true);
     QTRY_COMPARE(coreBandCount(coreTx), 5);
+    // One command each for the precomp and the two band counts.
+    const int beforeBurst = cfcTraffic(s.coreEnd).commands;
+    QCOMPARE(beforeBurst, 3);
     // Several quick edits: the newest one wins, one command at a time.
     dlg->postEqGainSpin()->setValue(-2.0);
     dlg->postEqGainSpin()->setValue(-3.0);
@@ -1528,8 +1541,12 @@ void TstRemoteTxEqCfc::remoteCfcDialogSendsTheTableAsOneCommand()
     QTRY_COMPARE(coreTx.cfcPostEqGainDb(), -4);
     QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
 
+    // The burst of three post-EQ edits sends at most two commands: the first
+    // (unless the band count's answer is still out, which holds it) and the
+    // newest.
     const CfcTraffic traffic = cfcTraffic(s.coreEnd);
-    QVERIFY(traffic.commands >= 4);
+    QVERIFY2(traffic.commands - beforeBurst >= 1 && traffic.commands - beforeBurst <= 2,
+             qPrintable(QString::number(traffic.commands - beforeBurst)));
     QCOMPARE(traffic.propertyWrites, 0);
     QVERIFY(!dlg->profileReasonLabel()->isVisibleTo(dlg));
 
@@ -1604,6 +1621,76 @@ void TstRemoteTxEqCfc::remoteCfcDialogKeepsThePropertyWriteForAnOlderCore()
     const CfcTraffic traffic = cfcTraffic(s.coreEnd);
     QCOMPARE(traffic.commands, 0);
     QVERIFY(traffic.propertyWrites >= 2);
+    dlg->hide();
+}
+
+// A link lost after the dialog sent a change and before the Core answered:
+// the Core may or may not have applied it, and its answer can no longer
+// arrive. The dialog drops the change it was waiting on, follows the Core's
+// values after the reconnect, and sends the next edit.
+void TstRemoteTxEqCfc::remoteCfcDialogFollowsTheCoreAfterAResultIsLost()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TxApplet applet(&s.window);
+    applet.setTxProcessingPermitted(true);
+    applet.requestOpenCfcDialog();
+    TxCfcDialog* dlg = applet.cfcDialog();
+    QVERIFY(dlg);
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+
+    // The Core takes the command, but nothing it says reaches the window.
+    s.coreEnd->setDropsOutgoing(true);
+    s.coreEnd->clearReceived();
+    dlg->precompSpin()->setValue(13.0);
+    QTRY_COMPARE(coreTx.cfcPrecompDb(), 13);
+    QCOMPARE(cfcTraffic(s.coreEnd).commands, 1);
+    s.windowEnd->closeLink(QStringLiteral("test: link lost"));
+    QTRY_VERIFY(!s.client->stationLinkReady());
+
+    QVERIFY(s.reconnect(this));
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+    QTRY_COMPARE(dlg->precompSpin()->value(), 13.0);
+    // The Core's next change shows in the dialog.
+    coreTx.setCfcPrecompDb(4);
+    QTRY_COMPARE(dlg->precompSpin()->value(), 4.0);
+
+    // The next edit goes to the Core as one command.
+    s.coreEnd->clearReceived();
+    dlg->postEqGainSpin()->setValue(-5.0);
+    QTRY_COMPARE(coreTx.cfcPostEqGainDb(), -5);
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+    const CfcTraffic traffic = cfcTraffic(s.coreEnd);
+    QCOMPARE(traffic.commands, 1);
+    QCOMPARE(traffic.propertyWrites, 0);
+    QVERIFY(!dlg->profileReasonLabel()->isVisibleTo(dlg));
+    dlg->hide();
+}
+
+// A dialog built before the window reached a Core still sends its table as
+// one command once the link comes up.
+void TstRemoteTxEqCfc::remoteCfcDialogOpenedBeforeTheLinkSendsWhole()
+{
+    Session s(m_securityDir.path(), this);
+    // No link on the window while the dialog is built.
+    s.window.attachStation(nullptr);
+    TxApplet applet(&s.window);
+    applet.setTxProcessingPermitted(true);
+    applet.requestOpenCfcDialog();
+    TxCfcDialog* dlg = applet.cfcDialog();
+    QVERIFY(dlg);
+    s.window.attachStation(s.client.get());
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    QTRY_COMPARE(s.window.transmitModel().cfcProfile(), coreTx.cfcProfile());
+    s.coreEnd->clearReceived();
+
+    dlg->precompSpin()->setValue(9.0);
+    QTRY_COMPARE(coreTx.cfcPrecompDb(), 9);
+    const CfcTraffic traffic = cfcTraffic(s.coreEnd);
+    QCOMPARE(traffic.commands, 1);
+    QCOMPARE(traffic.propertyWrites, 0);
     dlg->hide();
 }
 

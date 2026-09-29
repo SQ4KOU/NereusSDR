@@ -869,6 +869,15 @@ void TxCfcDialog::setStationProfileSender(StationProfileAvailable available,
     clearStationProfileInFlight();
 }
 
+void TxCfcDialog::onStationLinkChanged(bool ready)
+{
+    if (ready || (m_profileCommandId == 0 && !m_profilePending)) { return; }
+    // The Core may or may not have applied the change; its answer cannot
+    // arrive on a new link. The Core's next push shows what it holds.
+    clearStationProfileInFlight();
+    syncFromModel();
+}
+
 void TxCfcDialog::clearStationProfileInFlight()
 {
     m_profileCommandId = 0;
