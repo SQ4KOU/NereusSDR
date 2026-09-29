@@ -186,7 +186,7 @@ void TestBandPlanGuard::extended_bypassesAllGuards_returnsTrue()
 void TestBandPlanGuard::differentBandGuard_blocksMismatch_returnsFalse()
 {
     // VFO-A on 20m, VFO-B-TX on 40m, _preventTXonDifferentBandToRXband ON
-    // (console.cs:29401-29414 [2.9.0.7]MW0LGE)
+    // (console.cs:29451-29465 [v2.10.3.15], //MW0LGE [2.9.0.7])
     BandPlanGuard guard;
     QVERIFY(!guard.isValidTxBand(
         Band::Band20m, Band::Band40m, /*preventDifferentBand=*/true));

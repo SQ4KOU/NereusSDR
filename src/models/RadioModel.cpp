@@ -658,6 +658,11 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - Prevent transmitting on a different band matches Thetis
+//                (console.cs:29451-29465 [v2.10.3.15], JJ's ruling): only
+//                a transmitting slice that is not its device's active
+//                slice is compared, with the active slice. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -15876,8 +15881,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             //
             // The closure derives region from AppSettings (key "BandPlanRegion"
             // with Region2/UnitedStates as safe default matching Thetis).
-            // preventDifferentBand and extended are not yet plumbed into RadioModel
-            // (deferred to 3M-2+ as per the plan §L.1 TODO annotation).
+            // preventDifferentBand and extended are the Core's
+            // PreventTxOnDifferentBandToRx and ExtendedTransmit settings,
+            // read at every key.
             //
             // Cite: pre-code review §0.3 + MoxController.h K.2 API contract.
             if (m_moxController) {
@@ -17978,10 +17984,80 @@ void RadioModel::installBandPlanMoxCheck()
         const bool extended = extendedTransmitSetting();
         // The filter edges below are skipped for TUNE (bIgnoreFilter):
         //MW0LGE_21d filter outside band, ignore option  [original inline comment from console.cs:6784]
+        // From Thetis console.cs:29451-29465 [v2.10.3.15]
+        //MW0LGE [2.9.0.7]
+        //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || (RX2Enabled && VFOBTX && RX2Band != TXBand)))
+        //   // note RX2 enabled with a TXvfoB will always TX  [original inline comment from console.cs:29458]
+        // Thetis refuses only when it transmits on VFO B (split, VFOBTX)
+        // and VFO B's band differs from the RX band it listens on. JJ's
+        // ruling (2026-09-29) matches that: NereusSDR has no split, and the
+        // counterpart of VFO B is a transmitting slice that is not its
+        // device's active (listening) slice. Only then is the active
+        // slice's band the RX band; a key on the active slice itself never
+        // refuses, however other slices are parked. Slices other devices
+        // hold do not count. A slice's device is its mark's subject
+        // (SliceOwnership::Mark::subject): a slice held for an absent
+        // device is that device's, not the station device's.
+        const bool preventDifferentBand = preventTxOnDifferentBandSetting();
+        Band rxBand = txBand;
+        if (preventDifferentBand) {
+            // An ownerless slice (a desktop with no devices, or slices the
+            // Core made before any device adopted them) is operated by the
+            // station window, so it counts as the station device's.
+            const auto deviceOf = [this](int sliceId) {
+                const QByteArray subject = m_sliceOwnership->mark(sliceId).subject();
+                return subject.isEmpty() ? SliceOwnership::stationDevice() : subject;
+            };
+            const int txId = slice->sliceIndex();
+            const QByteArray device = deviceOf(txId);
+            // The device's active slice. The station device's is the most
+            // recent choice among its own and the ownerless slices; another
+            // device's is its own choice; slices held for an absent device
+            // are chosen by the station, which runs them. The first
+            // candidate that is the device's own is it, else its first
+            // slice in creation order (activeFor's own fallback).
+            // Recency: SliceOwnership keeps only one most recent choice
+            // across all owners (stationActiveSlice, first here while
+            // nobody else holds transmit); it keeps no per-owner recency.
+            // So when that slot names another device's slice, or the
+            // station holds transmit (stationActiveSlice is then
+            // activeFor(station)), station-owned and ownerless choices
+            // cannot be ranked by recency and the fixed order below
+            // applies: the station's own choice before the ownerless one.
+            QList<int> candidates;
+            if (device == SliceOwnership::stationDevice()) {
+                candidates = {m_sliceOwnership->stationActiveSlice(),
+                              m_sliceOwnership->activeFor(device),
+                              m_sliceOwnership->activeFor(QByteArray())};
+            } else {
+                candidates = {m_sliceOwnership->activeFor(device),
+                              m_sliceOwnership->activeFor(SliceOwnership::stationDevice())};
+            }
+            int activeId = -1;
+            for (const int id : std::as_const(candidates)) {
+                if (id >= 0 && m_sliceOwnership->isLive(id) && deviceOf(id) == device) {
+                    activeId = id;
+                    break;
+                }
+            }
+            if (activeId < 0) {
+                for (const int id : m_sliceOwnership->liveSlices()) {
+                    if (deviceOf(id) == device) {
+                        activeId = id;
+                        break;
+                    }
+                }
+            }
+            if (activeId >= 0 && activeId != txId) {
+                if (const SliceModel* active = sliceById(activeId)) {
+                    rxBand = bandFromFrequency(active->frequency());
+                }
+            }
+        }
         const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
             m_bandPlan.checkMoxAllowed(region, freqHz, mode,
-                                       txBand, txBand,
-                                       /*preventDifferentBand=*/false,
+                                       rxBand, txBand,
+                                       preventDifferentBand,
                                        extended, filterLow, filterHigh,
                                        /*ignoreFilter=*/m_isTuning);
         if (!bandPlanResult.ok) {
@@ -24610,9 +24686,21 @@ bool RadioModel::extendedTransmitSetting()
            == QStringLiteral("True");
 }
 
+bool RadioModel::preventTxOnDifferentBandSetting()
+{
+    // Exactly "True" turns it on; anything else, or no value, is off
+    // (Thetis's _preventTXonDifferentBandToRXband default false,
+    // console.cs:20843 [v2.10.3.15]).
+    return AppSettings::instance()
+               .value(QString::fromLatin1(kPreventTxOnDifferentBandKey), QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
 void RadioModel::reportTransmitGateSettingChanged(const QString& key)
 {
-    if (key == QLatin1String(kExtendedTransmitKey)) {
+    if (key == QLatin1String(kExtendedTransmitKey)
+        || key == QLatin1String(kPreventTxOnDifferentBandKey)) {
         emit transmitGateSettingChanged(key);
     }
 }

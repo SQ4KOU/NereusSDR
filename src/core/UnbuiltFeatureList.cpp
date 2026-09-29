@@ -174,8 +174,6 @@ const QList<Entry>& all()
          QStringLiteral("MeterPoller stores a window size but does not average readings")},
         {F::TxGridScale, QStringLiteral("tx-grid-scale"),
          QStringLiteral("TX Display grid controls are not ported")},
-        {F::CrossBandSplitGuard, QStringLiteral("cross-band-split-guard"),
-         QStringLiteral("General Options Thetis VFO-B split TX guard is retired")},
     };
     return entries;
 }

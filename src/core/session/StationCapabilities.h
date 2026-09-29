@@ -219,6 +219,12 @@ namespace NereusSDR {
 /// them disabled on the air with the reason.
 inline constexpr int kTransmitSettingsOnAirVersion = 13;
 
+/// From this transmitSettingsVersion the Core owns General Options'
+/// "Prevent transmitting on a different band" (PreventTxOnDifferentBandToRx):
+/// a window shows the Core's value and changes it with transmit permission,
+/// off the air. Against an older Core the box is disabled with the reason.
+inline constexpr int kTransmitSettingsDifferentBandVersion = 14;
+
 /// Optional identity of the Core executable, never radio firmware identity.
 struct CoreBuildInfo {
     QString productVersion;

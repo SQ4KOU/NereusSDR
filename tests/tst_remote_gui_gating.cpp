@@ -2086,8 +2086,9 @@ private slots:
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
             // General: Region, Network Watchdog (R-R3-49), Receive Only
             // (Task 16), the Time Out Timers group (iPhone app plan
-            // Task 38, gated as one) and Extended (addendum G-42).
-            {QStringLiteral("Options"), 5},
+            // Task 38, gated as one), Extended (addendum G-42) and Prevent
+            // TX'ing on a different band (the Core's setting since 2026-09-29).
+            {QStringLiteral("Options"), 6},
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
@@ -4367,6 +4368,24 @@ private slots:
             QTRY_VERIFY(extendedBox->isChecked());
             stationSettings.remove(QStringLiteral("ExtendedTransmit"));
             QTRY_VERIFY(!extendedBox->isChecked());
+            // Prevent TX'ing on a different band is the Core's setting the
+            // same way, from transmitSettingsVersion 14.
+            QVERIFY(client->transmitSettingsAvailable(14));
+            auto* preventBox = regionPage.findChild<QCheckBox*>(
+                QStringLiteral("chkPreventTXonDifferentBandToRX"));
+            QVERIFY(preventBox);
+            QVERIFY(!preventBox->isHidden());
+            QVERIFY(!preventBox->isEnabled());
+            QCOMPARE(preventBox->toolTip(), QStringLiteral("This Core is set to receive only."));
+            QVERIFY(!preventBox->isChecked());
+            preventBox->setChecked(true);
+            QVERIFY(!preventBox->isChecked());
+            QVERIFY(!stationSettings.contains(QStringLiteral("PreventTxOnDifferentBandToRx")));
+            stationSettings.setValue(QStringLiteral("PreventTxOnDifferentBandToRx"),
+                                     QStringLiteral("True"));
+            QTRY_VERIFY(preventBox->isChecked());
+            stationSettings.remove(QStringLiteral("PreventTxOnDifferentBandToRx"));
+            QTRY_VERIFY(!preventBox->isChecked());
             QPushButton* const lev = txApplet->findChild<QPushButton*>(QStringLiteral("TxLevButton"));
             QPushButton* const vox = txApplet->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
             auto* const phone = window->findChild<PhoneCwApplet*>();
@@ -4387,6 +4406,9 @@ private slots:
             QTRY_VERIFY(!extendedBox->isEnabled());
             QCOMPARE(extendedBox->toolTip(),
                      QStringLiteral("The radio is on the air. Try again when it stops."));
+            QTRY_VERIFY(!preventBox->isEnabled());
+            QCOMPARE(preventBox->toolTip(),
+                     QStringLiteral("The radio is on the air. Try again when it stops."));
             QVERIFY(txApplet->rfPowerSlider()->isEnabled());
             for (QWidget* w : std::initializer_list<QWidget*>{txApplet->tunePowerSlider(), lev, proc}) {
                 QVERIFY(w->isEnabled());
@@ -4406,6 +4428,9 @@ private slots:
             QTRY_COMPARE(extendedBox->toolTip(),
                          QStringLiteral("This Core is set to receive only."));
             QVERIFY(!extendedBox->isEnabled());
+            QTRY_COMPARE(preventBox->toolTip(),
+                         QStringLiteral("This Core is set to receive only."));
+            QVERIFY(!preventBox->isEnabled());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
             QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
             QTRY_VERIFY(lev->isEnabled());

@@ -723,6 +723,19 @@ QString modeWords(DSPMode mode)
     }
 }
 
+// A band as a sentence names it: "40 m", "general coverage", "WWV".
+QString bandWords(Band band)
+{
+    if (band == Band::GEN) {
+        return QStringLiteral("general coverage");
+    }
+    const QString label = bandLabel(band);
+    if (!label.isEmpty() && label.front().isDigit() && label.endsWith(QLatin1Char('m'))) {
+        return label.left(label.size() - 1) + QStringLiteral(" m");
+    }
+    return label;
+}
+
 QString mhzWords(std::int64_t freqHz)
 {
     return QString::number(static_cast<double>(freqHz) / 1e6, 'f', 6);
@@ -848,7 +861,8 @@ bool BandPlanGuard::isValidTxPassband(Region region, std::int64_t freqHz, DSPMod
 bool BandPlanGuard::isValidTxBand(Band rxBand, Band txBand,
                                   bool preventDifferentBand) const noexcept
 {
-    // From console.cs:29401-29414 [2.9.0.7]MW0LGE
+    // From Thetis console.cs:29451-29465 [v2.10.3.15]
+    //MW0LGE [2.9.0.7]
     if (!preventDifferentBand) {
         return true;
     }
@@ -920,6 +934,22 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
         return {false, reason};
     }
 
+    // Band-mismatch check. Thetis runs it before the US 60 m mode check and
+    // the band edges, so a key on another band refuses for that first.
+    // From Thetis console.cs:29451-29465 [v2.10.3.15]
+    //MW0LGE [2.9.0.7]
+    //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || ...
+    //   // note RX2 enabled with a TXvfoB will always TX
+    // Thetis compares the split TX band with the RX band; NereusSDR has no
+    // split, so rxBand is the band of the device's active slice when the
+    // transmitting slice is not it, else the TX band
+    // (RadioModel::installBandPlanMoxCheck picks it). The sentence names both.
+    if (!isValidTxBand(rxBand, txBand, preventDifferentBand)) {
+        return {false, QStringLiteral("Transmit would be on %1 while another slice you have open is on %2, and Setup "
+                                      "is set to prevent transmitting on a different band.")
+                           .arg(bandWords(txBand), bandWords(rxBand))};
+    }
+
     // Addendum G-42 item 4: each refusal below says what is wrong, after
     // Thetis's MOX messages, in the operator's words.
     // From Thetis console.cs:29467-29484 [v2.10.3.15]:
@@ -956,12 +986,6 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
                                       "(%4).")
                            .arg(mhzWords(freqHz)).arg(filterLowHz).arg(filterHighHz)
                            .arg(regionWords(region))};
-    }
-
-    // Band-mismatch check.
-    if (!isValidTxBand(rxBand, txBand, preventDifferentBand)) {
-        return {false, QStringLiteral("Transmit is on a different band from receive, and "
-                                      "Setup is set to prevent that.")};
     }
 
     return {true, QString()};

@@ -5,6 +5,9 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-29: a hosting desktop's Extended waits while another device
 // holds transmit. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: Prevent transmitting on a different band is shown and is the
+// Core's PreventTxOnDifferentBandToRx setting, gated as Extended. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/gui/setup/GeneralOptionsPage.cpp  (NereusSDR)
 // =================================================================
@@ -14,6 +17,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - Prevent TX'ing on a different band is shown again as the
+//                 Core's setting, compared against the device's other slices.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - Task 25: retire the obsolete split-band checkbox and show
 //                 enforced, disabled TX policy values pending Core policy.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -128,7 +134,6 @@
 //============================================================================================//
 
 #include "GeneralOptionsPage.h"
-#include "gui/UnbuiltFeatures.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
@@ -137,6 +142,7 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/IStationLink.h"
+#include "core/session/StationCapabilities.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/safety/BandPlanGuard.h"
 
@@ -220,6 +226,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         const auto refresh = [this]() {
             refreshRegionAvailability();
             refreshExtendedAvailability();
+            refreshPreventDifferentBandAvailability();
         };
         connect(model, &RadioModel::coreOnAirChanged, this, refresh);
         connect(model, &RadioModel::stationLinkStateChanged, this, refresh);
@@ -230,6 +237,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     }
     refreshRegionAvailability();
     refreshExtendedAvailability();
+    refreshPreventDifferentBandAvailability();
     // Addendum G-42: every device shows the Core's Extended. A remote
     // window hears the Core's change (stationSettingChanged, empty for a
     // whole snapshot) and its own refused write; the Core's own page hears
@@ -240,11 +248,18 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
                 syncExtendedFromSetting();
                 refreshExtendedAvailability();
             }
+            if (key.isEmpty() || key == QLatin1String(RadioModel::kPreventTxOnDifferentBandKey)) {
+                syncPreventDifferentBandFromSetting();
+                refreshPreventDifferentBandAvailability();
+            }
         };
         connect(model, &RadioModel::stationSettingChanged, this, follow);
         connect(model, &RadioModel::transmitGateSettingChanged, this, follow);
         connect(model, &RadioModel::transmitHolderChanged, this,
-                [this]() { refreshExtendedAvailability(); });
+                [this]() {
+                    refreshExtendedAvailability();
+                    refreshPreventDifferentBandAvailability();
+                });
     }
     if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
         connect(proxy, &SettingsProxy::valueRejected, this,
@@ -252,6 +267,10 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
             if (key == QLatin1String(RadioModel::kExtendedTransmitKey)) {
                 syncExtendedFromSetting();
                 refreshExtendedAvailability();
+            }
+            if (key == QLatin1String(RadioModel::kPreventTxOnDifferentBandKey)) {
+                syncPreventDifferentBandFromSetting();
+                refreshPreventDifferentBandAvailability();
             }
         });
     }
@@ -310,6 +329,7 @@ void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QStri
     m_regionSettingsAvailable = available;
     m_regionSettingsReason = reason;
     refreshExtendedAvailability();
+    refreshPreventDifferentBandAvailability();
     // R-R3-49: the Network Watchdog is the Core's setting too; so is
     // Receive Only (Task 16). The radio-has-no-transmitter lock sits on top
     // of the Core's gate, so it is taken off first and put back after.
@@ -353,7 +373,7 @@ void GeneralOptionsPage::refreshRegionAvailability()
     m_comboFRSRegion->setAccessibleDescription(reason);
 }
 
-bool GeneralOptionsPage::extendedEditAvailable()
+bool GeneralOptionsPage::transmitGateEditAvailable(int version)
 {
     const RadioModel* radio = model();
     if (!radio || !m_regionSettingsAvailable) { return false; }
@@ -365,8 +385,66 @@ bool GeneralOptionsPage::extendedEditAvailable()
     const IStationLink* link = radio->stationLink();
     // The Core takes the change only from a device it permits to transmit,
     // so without that the box is disabled rather than refused after a tick.
-    return link && link->transmitSettingsAvailable(12) && link->transmitSettingsPermitted()
+    return link && link->transmitSettingsAvailable(version) && link->transmitSettingsPermitted()
         && !radio->isCoreOnAir();
+}
+
+QString GeneralOptionsPage::transmitGateReason(int version, const QString& olderCoreText,
+                                               const QString& unavailableText)
+{
+    const RadioModel* radio = model();
+    const bool onAir = radio && (radio->ownsLocalDsp()
+        ? radio->stationOnAirRefusal(nullptr) : radio->isCoreOnAir());
+    const IStationLink* link = radio ? radio->stationLink() : nullptr;
+    const bool olderCore = radio && !radio->ownsLocalDsp() && m_regionSettingsAvailable
+        && link && !link->transmitSettingsAvailable(version);
+    const bool notPermitted = radio && !radio->ownsLocalDsp() && link
+        && !link->transmitSettingsPermitted();
+    return !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
+        ? m_regionSettingsReason
+        : onAir ? RadioModel::onAirReason()
+        : radio && radio->ownsLocalDsp() && !radio->otherDeviceHoldsRefusal().isEmpty()
+          ? radio->otherDeviceHoldsRefusal()
+        : olderCore ? olderCoreText
+        : notPermitted ? link->transmitPermissionReason()
+        : unavailableText;
+}
+
+bool GeneralOptionsPage::extendedEditAvailable()
+{
+    return transmitGateEditAvailable(12);
+}
+
+bool GeneralOptionsPage::preventDifferentBandEditAvailable()
+{
+    return transmitGateEditAvailable(kTransmitSettingsDifferentBandVersion);
+}
+
+void GeneralOptionsPage::syncPreventDifferentBandFromSetting()
+{
+    if (!m_chkPreventTXonDifferentBandToRX) { return; }
+    const QSignalBlocker blocked(m_chkPreventTXonDifferentBandToRX);
+    m_chkPreventTXonDifferentBandToRX->setChecked(RadioModel::preventTxOnDifferentBandSetting());
+}
+
+void GeneralOptionsPage::refreshPreventDifferentBandAvailability()
+{
+    if (!m_chkPreventTXonDifferentBandToRX) { return; }
+    const bool enabled = preventDifferentBandEditAvailable();
+    m_chkPreventTXonDifferentBandToRX->setEnabled(enabled);
+    const QString reason = enabled ? QString() : transmitGateReason(
+        kTransmitSettingsDifferentBandVersion,
+        tr("This Core does not have Prevent transmitting on a different band. Update the "
+           "Core to use it."),
+        tr("Prevent transmitting on a different band is not available on this Core."));
+    // Thetis's enabled tooltip (setup.designer.cs:9098-9107 [v2.10.3.15])
+    // says "the RX band"; NereusSDR has no split, so ours names the active
+    // slice, the one this device listens on.
+    m_chkPreventTXonDifferentBandToRX->setToolTip(
+        enabled ? tr("Refuse to transmit when the transmitting slice is not your active slice "
+                     "and is on a different band from it")
+                : reason);
+    m_chkPreventTXonDifferentBandToRX->setAccessibleDescription(reason);
 }
 
 void GeneralOptionsPage::syncExtendedFromSetting()
@@ -381,25 +459,9 @@ void GeneralOptionsPage::refreshExtendedAvailability()
     if (!m_chkExtended) { return; }
     const bool enabled = extendedEditAvailable();
     m_chkExtended->setEnabled(enabled);
-    QString reason;
-    if (!enabled) {
-        const RadioModel* radio = model();
-        const bool onAir = radio && (radio->ownsLocalDsp()
-            ? radio->stationOnAirRefusal(nullptr) : radio->isCoreOnAir());
-        const IStationLink* link = radio ? radio->stationLink() : nullptr;
-        const bool olderCore = radio && !radio->ownsLocalDsp() && m_regionSettingsAvailable
-            && link && !link->transmitSettingsAvailable(12);
-        const bool notPermitted = radio && !radio->ownsLocalDsp() && link
-            && !link->transmitSettingsPermitted();
-        reason = !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
-            ? m_regionSettingsReason
-            : onAir ? RadioModel::onAirReason()
-            : radio && radio->ownsLocalDsp() && !radio->otherDeviceHoldsRefusal().isEmpty()
-              ? radio->otherDeviceHoldsRefusal()
-            : olderCore ? tr("This Core does not have Extended transmit. Update the Core to use it.")
-            : notPermitted ? link->transmitPermissionReason()
-            : tr("Extended transmit is not available on this Core.");
-    }
+    const QString reason = enabled ? QString() : transmitGateReason(
+        12, tr("This Core does not have Extended transmit. Update the Core to use it."),
+        tr("Extended transmit is not available on this Core."));
     // From Thetis setup.designer.cs:8121 [v2.10.3.15] (the enabled tooltip).
     m_chkExtended->setToolTip(enabled ? tr("Enable extended TX (out of band)") : reason);
     m_chkExtended->setAccessibleDescription(reason);
@@ -782,23 +844,38 @@ void GeneralOptionsPage::buildOptionsGroup()
     auto* vbox = new QVBoxLayout(group);
     vbox->setSpacing(6);
 
-    // From Thetis setup.designer.cs:9050-9059 [v2.10.3.13]
-    // Note: tooltip is NereusSDR-original — Thetis has no tooltip on this control.
+    // From Thetis setup.designer.cs:9098-9107 [v2.10.3.15]
+    // (chkPreventTXonDifferentBandToRX; Thetis's tooltip is "Prevent TX'ing
+    // on a different band to the RX band", see
+    // refreshPreventDifferentBandAvailability for ours).
     m_chkPreventTXonDifferentBandToRX = new QCheckBox(
         tr("Prevent TX'ing on a different band to the RX band"), group);
     m_chkPreventTXonDifferentBandToRX->setObjectName(QStringLiteral("chkPreventTXonDifferentBandToRX"));
-    m_chkPreventTXonDifferentBandToRX->setToolTip(
-        QStringLiteral("When checked, MOX is rejected if the TX VFO is on a different band than the RX VFO"));
-    m_chkPreventTXonDifferentBandToRX->setChecked(
-        AppSettings::instance().value(QStringLiteral("PreventTxOnDifferentBandToRx"),
-                                       QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkPreventTXonDifferentBandToRX, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("PreventTxOnDifferentBandToRx"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_chkPreventTXonDifferentBandToRX->setProperty("nereusSetupId",
+                                                   "general.options.preventDifferentBand");
+    m_chkPreventTXonDifferentBandToRX->setEnabled(false);
+    // JJ's ruling (2026-09-29): the box shows and changes the Core's
+    // PreventTxOnDifferentBandToRx, which the Core's transmit gate reads,
+    // gated as Extended (transmit permission, off the air).
+    syncPreventDifferentBandFromSetting();
+    connect(m_chkPreventTXonDifferentBandToRX, &QCheckBox::toggled, this, [this](bool on) {
+        if (!preventDifferentBandEditAvailable()) {
+            syncPreventDifferentBandFromSetting();
+            refreshPreventDifferentBandAvailability();
+            return;
+        }
+        // From Thetis setup.cs:24414-24416 [v2.10.3.15]
+        // (chkPreventTXonDifferentBandToRX_CheckedChanged):
+        //   console.PreventTXonDifferentBandToRXband = chkPreventTXonDifferentBandToRX.Checked;
+        AppSettings::instance().setValue(
+            QString::fromLatin1(RadioModel::kPreventTxOnDifferentBandKey),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+        if (RadioModel* radio = model()) {
+            radio->reportTransmitGateSettingChanged(
+                QString::fromLatin1(RadioModel::kPreventTxOnDifferentBandKey));
+        }
     });
     vbox->addWidget(m_chkPreventTXonDifferentBandToRX);
-    UnbuiltFeatures::hideUnlessBuilt(m_chkPreventTXonDifferentBandToRX,
-                                    UnbuiltFeature::CrossBandSplitGuard);
 
     // ── Phase 3M-4 Task 11: PureSignal Info Bar checkboxes ─────────────────
     //

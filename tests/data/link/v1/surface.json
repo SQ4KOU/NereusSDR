@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 13
+            "value": 14
         },
         {
             "kind": "i64",
@@ -8163,8 +8163,7 @@
             }
         ],
         "operatorLocalKeys": [
-            "ExtendedTxAllowed",
-            "PreventTxOnDifferentBandToRx"
+            "ExtendedTxAllowed"
         ],
         "operatorLocalPrefixes": [
             "Tci",
@@ -8193,6 +8192,7 @@
             "BandPlanName",
             "BandPlanRegion",
             "ExtendedTransmit",
+            "PreventTxOnDifferentBandToRx",
             "Region",
             "CWPitch",
             "Nr3ModelPath",

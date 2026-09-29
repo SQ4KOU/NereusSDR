@@ -74,6 +74,9 @@
 //   2026-09-28: addendum G-42: the Core's Extended transmit setting needs
 //               transmit permission and waits for receive. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: Prevent TX'ing on a different band is a Core setting like
+//               Extended. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -3130,10 +3133,24 @@ private slots:
     // transmits, nobody else holding transmit), never while the radio is
     // on the air, and only to True or False. Every device hears the Core's
     // value. No RF: MOX here is the transmit model's latch only.
-    void extendedTransmitNeedsTransmitPermissionAndWaitsForReceive()
+    // Prevent TX'ing on a different band (PreventTxOnDifferentBandToRx,
+    // 2026-09-29) is the same kind of Core setting.
+    void transmitGateSettingNeedsTransmitPermissionAndWaitsForReceive_data()
     {
+        QTest::addColumn<QString>("key");
+        QTest::addColumn<QString>("onOrOff");
+        QTest::newRow("extended") << QStringLiteral("ExtendedTransmit")
+                                  << QStringLiteral("Extended transmit is either on or off.");
+        QTest::newRow("prevent-different-band")
+            << QStringLiteral("PreventTxOnDifferentBandToRx")
+            << QStringLiteral("Prevent transmitting on a different band is either on or off.");
+    }
+
+    void transmitGateSettingNeedsTransmitPermissionAndWaitsForReceive()
+    {
+        QFETCH(QString, key);
+        QFETCH(QString, onOrOff);
         Shared s(2, 5, kTransmitter);
-        const QString key = QStringLiteral("ExtendedTransmit");
         const auto refusedWith = [&](LoopbackTransport* app, const QString& value) {
             const int before = countOf(app, QStringLiteral("settings.reject"));
             app->sendText(SessionMessages::encode(
@@ -3165,8 +3182,7 @@ private slots:
         QCOMPARE(refusedWith(s.appA, QStringLiteral("True")),
                  QStringLiteral("Update this app to transmit through this Core."));
         // Only on or off.
-        QCOMPARE(refusedWith(s.appB, QStringLiteral("yes")),
-                 QStringLiteral("Extended transmit is either on or off."));
+        QCOMPARE(refusedWith(s.appB, QStringLiteral("yes")), onOrOff);
         QVERIFY(!s.core.settings->contains(key));
 
         // A device with transmit permission, off the air: taken, and every
@@ -3191,11 +3207,11 @@ private slots:
         QCOMPARE(holder->askKey(take).verdict, KeyingVerdict::Admit);
         const QString heldReason = refusedWith(s.appB, QStringLiteral("False"));
         QVERIFY(!heldReason.isEmpty());
-        QVERIFY(heldReason != QStringLiteral("Extended transmit is either on or off."));
+        QVERIFY(heldReason != onOrOff);
         QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("True"));
         holder->release(s.a.key.fingerprint(), QStringLiteral("test"));
 
-        // Removing it turns Extended off again.
+        // Removing it turns it off again.
         s.appB->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
         QTRY_VERIFY(!s.core.settings->contains(key));
         QTRY_COMPARE(heardValue(s.appA), QStringLiteral("<absent>"));

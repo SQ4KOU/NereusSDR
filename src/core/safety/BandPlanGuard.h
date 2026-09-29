@@ -191,8 +191,11 @@ public:
                            bool ignoreFilter = false) const noexcept;
 
     /// Returns true iff TX-band == RX-band, OR \p preventDifferentBand
-    /// is false. Mirrors _preventTXonDifferentBandToRXband check at
-    /// console.cs:29401-29414 [2.9.0.7]MW0LGE.
+    /// is false. Mirrors the _preventTXonDifferentBandToRXband check at
+    /// Thetis console.cs:29451-29465 [v2.10.3.15] //MW0LGE [2.9.0.7].
+    /// Thetis compares the split TX band with the RX band; NereusSDR passes
+    /// the band of the device's active slice as \p rxBand when the
+    /// transmitting slice is not it, else the TX band.
     bool isValidTxBand(Band rxBand, Band txBand,
                        bool preventDifferentBand) const noexcept;
 
@@ -210,7 +213,9 @@ public:
     /// Composite MOX-allowed check: mode check (above) + existing
     /// isValidTxFreq + isValidTxBand checks.
     /// Returns a {ok, reason} struct suitable for tooltip / status-bar display.
-    /// Mode check runs first (cheaper and more user-facing).
+    /// Mode check runs first (cheaper and more user-facing), then the
+    /// different-band check, then the US 60 m mode check and the band edges,
+    /// in Thetis's order.
     struct MoxCheckResult {
         bool    ok;
         QString reason; ///< empty when ok==true

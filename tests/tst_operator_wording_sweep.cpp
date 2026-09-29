@@ -1098,10 +1098,12 @@ private slots:
         } sites[] = {
             {"src/core/safety/BandPlanGuard.cpp", true,
              {"coming in Phase", "RX/TX band mismatch", "TX-allowed range",
-              "Mode not supported for TX"},
+              "Mode not supported for TX",
+              "Transmit is on a different band from receive"},
              {"CW transmit is not available on this Core", "FM transmit is not available on this Core",
               "DRM transmit is not available on this Core",
-              "Transmit is on a different band from receive, and Setup is set to prevent that."}},
+              "Transmit would be on %1 while another slice you have open is on %2, and Setup "
+              "is set to prevent transmitting on a different band."}},
             {"src/gui/applets/TxApplet.cpp", true,
              {"coming in Phase"},
              {"CW transmit is not available on this Core", "FM transmit is not available on this Core",

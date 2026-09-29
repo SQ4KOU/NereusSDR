@@ -1136,6 +1136,18 @@ public:
     // with transmit permission and off the air.
     static constexpr const char* kExtendedTransmitKey = "ExtendedTransmit";
     static bool extendedTransmitSetting();
+    // JJ's ruling (2026-09-29): Thetis's "Prevent TX'ing on a different
+    // band to the RX band" (chkPreventTXonDifferentBandToRX,
+    // _preventTXonDifferentBandToRXband; console.cs:20843 and
+    // :29451-29465 [v2.10.3.15]) as one Core setting under Thetis's key
+    // name (SettingsScope::Station), default off. The transmit gate reads
+    // it at every key: when the transmitting slice is not its device's
+    // active slice, its band is compared with the active slice's (Thetis
+    // compares split TX with RX; NereusSDR has no split).
+    // StationServer takes a device's change only with transmit permission
+    // and off the air.
+    static constexpr const char* kPreventTxOnDifferentBandKey = "PreventTxOnDifferentBandToRx";
+    static bool preventTxOnDifferentBandSetting();
     /// A local window, or the Core a device changed it on, tells the pages
     /// that show it (transmitGateSettingChanged).
     void reportTransmitGateSettingChanged(const QString& key);

@@ -47,6 +47,7 @@ private slots:
     // ── checkMoxAllowed: freq/band reject on allowed mode ─────────────────
     void usb_outOfBandFreq_returnsFreqReject();
     void lsb_crossBandTx_returnsBandReject();
+    void crossBandTx_isCheckedBeforeTheBandEdges();
     void refusalsSayWhatIsWrong_data();
     void refusalsSayWhatIsWrong();
 };
@@ -270,13 +271,42 @@ void TestBandPlanGuardModeAllowList::usb_outOfBandFreq_returnsFreqReject()
 
 void TestBandPlanGuardModeAllowList::lsb_crossBandTx_returnsBandReject()
 {
-    // LSB, valid 20m freq, but TX band is 40m with preventDifferentBand=true
+    // LSB, valid 20m freq, but TX band is 40m with preventDifferentBand=true;
+    // rxBand is the band of the device's other slice.
     BandPlanGuard guard;
     auto r = guard.checkMoxAllowed(kRegion, kValidHz, DSPMode::LSB,
                                    kBand20m, Band::Band40m, /*preventDifferentBand=*/true, false);
     QVERIFY(!r.ok);
     QCOMPARE(r.reason, QStringLiteral(
-        "Transmit is on a different band from receive, and Setup is set to prevent that."));
+        "Transmit would be on 40 m while another slice you have open is on 20 m, and "
+        "Setup is set to prevent transmitting on a different band."));
+}
+
+// Thetis checks the different band before the US 60 m mode rule and
+// CheckValidTXFreq (console.cs:29451, :29467, :29486 [v2.10.3.15]).
+// General coverage is named in words.
+void TestBandPlanGuardModeAllowList::crossBandTx_isCheckedBeforeTheBandEdges()
+{
+    BandPlanGuard guard;
+    auto r = guard.checkMoxAllowed(kRegion, 14'500'000, DSPMode::USB,
+                                   Band::GEN, kBand20m, /*preventDifferentBand=*/true, false);
+    QVERIFY(!r.ok);
+    QCOMPARE(r.reason, QStringLiteral(
+        "Transmit would be on 20 m while another slice you have open is on general "
+        "coverage, and Setup is set to prevent transmitting on a different band."));
+    QVERIFY(r.refusalCode.isEmpty());
+    r = guard.checkMoxAllowed(kRegion, 5'357'000, DSPMode::AM,
+                              kBand20m, Band::Band60m, /*preventDifferentBand=*/true, false);
+    QVERIFY(!r.ok);
+    QCOMPARE(r.reason, QStringLiteral(
+        "Transmit would be on 60 m while another slice you have open is on 20 m, and "
+        "Setup is set to prevent transmitting on a different band."));
+    // Off: the band edges refuse as before.
+    r = guard.checkMoxAllowed(kRegion, 14'500'000, DSPMode::USB,
+                              Band::GEN, kBand20m, /*preventDifferentBand=*/false, false);
+    QVERIFY(!r.ok);
+    QCOMPARE(r.reason, QStringLiteral(
+        "14.500000 MHz is outside the transmit bands for your region (United States)."));
 }
 
 // Addendum G-42 item 4: each band plan refusal says what is wrong in the

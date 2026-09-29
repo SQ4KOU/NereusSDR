@@ -243,9 +243,10 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // transmit calibration), 10 since iPhone app plan Task 40 (micMuted),
     // 11 since hardware parity batch B (Disable HF PA), 12 since addendum
     // G-42 (the Core's Extended transmit setting), 13 since the transmit
-    // settings are taken on the air as a local window takes them.
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 13);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 13);
+    // settings are taken on the air as a local window takes them, 14 since
+    // Prevent TX'ing on a different band became the Core's setting.
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 14);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -260,7 +261,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(11));
     QVERIFY(s.client->transmitSettingsAvailable(12));
     QVERIFY(s.client->transmitSettingsAvailable(13));
-    QVERIFY(!s.client->transmitSettingsAvailable(14));
+    QVERIFY(s.client->transmitSettingsAvailable(14));
+    QVERIFY(!s.client->transmitSettingsAvailable(15));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(

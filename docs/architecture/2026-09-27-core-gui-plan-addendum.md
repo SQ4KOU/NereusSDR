@@ -751,6 +751,25 @@ Thetis only enables ADC0 on every board; NereusSDR offers two ADCs on boards tha
   Options' Extended box (local window, remote window, phone Setup description)
   shows and changes the Core's value. No transverter transmit path exists yet,
   so Thetis's `tx_xvtr_index > -1` bypass has no counterpart.
+- Settings migration (Prevent TX on a different band, 2026-09-29): the key
+  name stays `PreventTxOnDifferentBandToRx` and moves from `OperatorLocal` to
+  `SettingsScope::Station` ("True"/"False", absent = off, Thetis's default at
+  console.cs:20843 [v2.10.3.15]). Following the Extended precedent, nothing is
+  copied between computers: the Core's own saved value carries forward (it can
+  only restrict transmit), and a remote computer's old value is no longer read.
+  Writes take the same gates as `ExtendedTransmit`; `transmitSettingsVersion`
+  14 offers it and the box is shown (never hidden) in the local window, remote
+  windows and the phone Setup description. The comparison changes with JJ's
+  ruling: Thetis compares the TX VFO's band with RX1's and only in split
+  (console.cs:29451-29465 [v2.10.3.15]); a station has no split, so the Core
+  refuses a key only when the transmitting slice is not the device's active
+  (listening) slice and is on a different band from it. A slice parked on
+  another band does not block a key on the active slice, and other devices'
+  slices never count. It runs after
+  the mode allow-list and before the US 60 m and band edge checks, as in Thetis,
+  and keeps the band plan refusal code with a sentence naming both bands.
+  Thetis's CWX StopEverything on this refusal and its `!calibrating` condition
+  have no counterpart yet.
 - Plan: remote-window parity Setup and transmit gate safety.
 
 ### G-43: Transmit frequency guard omits XIT offset
