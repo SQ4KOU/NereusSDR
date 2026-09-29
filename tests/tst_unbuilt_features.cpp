@@ -743,9 +743,9 @@ QMap<F, QList<Surface>> surfaces()
                             Surface{QStringLiteral("Spot Hub RBN Rate Limit label"), Host::SpotHub,
                                     [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
     map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
-    // CW to CWU, the TX channel and the sensor intervals are built
-    // (codex/tci-settings-real); the three RX2 VFO options and the stream
-    // channels stay in view, disabled with the reason, until they are.
+    // CW to CWU, the TX channel, the sensor intervals and the stream
+    // channels are built (codex/tci-settings-real); the three RX2 VFO
+    // options stay in view, disabled with the reason, until they are.
     const auto usable = [](const QString& name) {
         return [name](QWidget* root) { return usableShown(root, name); };
     };
@@ -755,9 +755,7 @@ QMap<F, QList<Surface>> surfaces()
         onPage(QStringLiteral("TCI Server"), QStringLiteral("Use RX1 VFOA for RX2 VFOA"),
                usable(QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck"))),
         onPage(QStringLiteral("TCI Server"), QStringLiteral("Copy RX2 VFOB to VFOA"),
-               usable(QStringLiteral("tciCopyRx2VfobToVfoaCheck"))),
-        onPage(QStringLiteral("TCI"), QStringLiteral("stream channels"),
-               usable(QStringLiteral("tciStreamChannelsCombo")))};
+               usable(QStringLiteral("tciCopyRx2VfobToVfoaCheck")))};
     map[F::SmallFilter] = {onPage(QStringLiteral("Meter Styles"), QStringLiteral("small filter display"),
                                   named(QStringLiteral("appearanceVfoFlagGroup")))};
     map[F::ApfParams] = {onPage(QStringLiteral("CW"), QStringLiteral("APF bandwidth"), text(QStringLiteral("Bandwidth"))),

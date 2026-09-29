@@ -2103,6 +2103,21 @@ void TciServer::onNewConnection()
                 session->audioStreamSamples = samplesSaved;
             }
 
+            // Audio stream channel count. Thetis starts each app at 2
+            // (m_audioStreamChannels = 2, TCIServer.cs:781 [v2.10.3.15]) and
+            // takes only 1 or 2 from it afterwards:
+            //     if (channels == 1 || channels == 2)
+            //         m_audioStreamChannels = channels;
+            // (handleAudioStreamChannels, TCIServer.cs:6340-6354
+            // [v2.10.3.15]). Setup > Audio > TCI's Channels is that starting
+            // count; anything else keeps Thetis's 2. The app's own
+            // audio_stream_channels still wins.
+            const int channelsSaved = s.value(
+                QStringLiteral("TciAudioStreamChannels"), 2).toInt();
+            if (channelsSaved == 1 || channelsSaved == 2) {
+                session->audioStreamChannels = channelsSaved;
+            }
+
             // TciTxStreamBufferingMs — no TciClientSession field yet; log only.
             // TODO Phase 3J-2: add txStreamBufferingMs to TciClientSession and
             // wire into the TX audio drain path so the operator-configured
@@ -2135,6 +2150,12 @@ void TciServer::onNewConnection()
             for (QString line : burst) {
                 if (line.startsWith(QLatin1String("iq_samplerate:"))) {
                     line = QStringLiteral("iq_samplerate:%1;").arg(publishedIqRate());
+                } else if (line.startsWith(QLatin1String("audio_stream_channels:"))) {
+                    // Thetis announces the app's own count
+                    // (sendAudioStreamChannels(m_audioStreamChannels),
+                    // TCIServer.cs:2645 [v2.10.3.15]).
+                    line = QStringLiteral("audio_stream_channels:%1;")
+                               .arg(session->audioStreamChannels);
                 }
                 session->sendQueue.push(TciSendQueue::Priority::Control, line);
             }

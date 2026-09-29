@@ -164,6 +164,49 @@ private slots:
         app.close();
         server.stop();
     }
+    // Thetis keeps each app's audio stream channel count, 2 until the app
+    // sends audio_stream_channels:1 or :2 (m_audioStreamChannels = 2,
+    // TCIServer.cs:781; handleAudioStreamChannels, TCIServer.cs:6340-6354
+    // [v2.10.3.15]) and announces it in the app's first lines
+    // (sendAudioStreamChannels, TCIServer.cs:2645). Setup > Audio > TCI's
+    // Channels is that starting count; anything but 1 or 2 is Thetis's 2.
+    void streamChannelsAreTheAppsStartingCount_data()
+    {
+        QTest::addColumn<QString>("saved");
+        QTest::addColumn<int>("expected");
+        QTest::newRow("mono") << QStringLiteral("1") << 1;
+        QTest::newRow("stereo") << QStringLiteral("2") << 2;
+        QTest::newRow("not saved") << QString() << 2;
+        QTest::newRow("out of range") << QStringLiteral("3") << 2;
+    }
+    void streamChannelsAreTheAppsStartingCount()
+    {
+        QFETCH(QString, saved);
+        QFETCH(int, expected);
+        if (!saved.isEmpty()) {
+            AppSettings::instance().setValue(QStringLiteral("TciAudioStreamChannels"), saved);
+        }
+        TciServer server(nullptr);
+        QVERIFY(server.start(0));
+        QWebSocket app;
+        QStringList lines;
+        connect(&app, &QWebSocket::textMessageReceived, &app,
+                [&lines](const QString& text) { lines << text; });
+        QSignalSpy connected(&app, &QWebSocket::connected);
+        app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+        QVERIFY(connected.wait(2000));
+        QTRY_COMPARE(server.clients().size(), 1);
+        const std::shared_ptr<TciClientSession> session = server.clients().cbegin().value();
+        QCOMPARE(session->audioStreamChannels, expected);
+        const QString announced = QStringLiteral("audio_stream_channels:%1;").arg(expected);
+        QTRY_VERIFY2(lines.contains(announced), qPrintable(lines.join(QLatin1Char(' '))));
+        // The app's own choice still wins, as in Thetis.
+        const int other = expected == 1 ? 2 : 1;
+        app.sendTextMessage(QStringLiteral("audio_stream_channels:%1;").arg(other));
+        QTRY_COMPARE(session->audioStreamChannels, other);
+        app.close();
+        server.stop();
+    }
 };
 
 QTEST_GUILESS_MAIN(TestTciServerSettingsReal)
