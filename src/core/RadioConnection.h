@@ -609,6 +609,9 @@ public:
         quint64 overflowSamples{0};     ///< samples the full ring refused (lost)
         quint64 sendErrors{0};          ///< sends the socket refused (retried)
         int maxRingMs{0};               ///< deepest the ring got, in ms
+        /// G-07: only overflowSamples is kept (Protocol 1); the other
+        /// counters are not measured and read zero.
+        bool overflowOnly{false};
     };
     virtual TxSendStats txSendStats() const { return {}; }
     /// R-IOS-13 (2026-09-27): what the transmit I/Q send ring holds now,

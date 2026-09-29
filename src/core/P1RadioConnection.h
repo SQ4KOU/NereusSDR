@@ -241,6 +241,9 @@ public slots:
     void setAlexRxBpf(AlexRxBpf bpf) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
+    // G-07: Protocol 1 keeps only the full-ring loss count
+    // (TxSendStats::overflowOnly); the rest of the counters are Protocol 2's.
+    TxSendStats txSendStats() const override;
     void setTrxRelay(bool enabled) override;
     void setTxStepAttenuation(int dB) override;
     void setMicBoost(bool on) override;
@@ -825,8 +828,10 @@ private:
     // [@120188f] (old_protocol_iq_samples / TXRING_AUDIO_SAMPLE_BYTES).
     //
     // One EP2 frame carries 2×63 = 126 samples.  kTxIqBufSamples is sized
-    // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks) giving ~21 msec
-    // of headroom at 48 kHz before the producer stalls.
+    // to match deskhpsdr's TXRING_MAX_BLOCKS×126 (32 blocks): 4032 samples,
+    // ~84 ms at the 48 kHz wire rate, before the ring is full.  A full ring
+    // drops the rest of the producer's block (nothing unread is
+    // overwritten) and counts it in m_txIqOverflowSamples (G-07).
     // Source: deskhpsdr/src/old_protocol.c:460-461 [@120188f]
     //   TXRING_AUDIO_FRAMES_PER_BLOCK 126
     //   TXRING_MAX_BLOCKS             32
@@ -851,6 +856,9 @@ private:
     std::atomic<int> m_txIqWritePos{0};  // audio thread writes; relaxed store
     std::atomic<int> m_txIqReadPos{0};   // connection thread writes; relaxed store
     std::atomic<int> m_txIqCount{0};     // both threads: fetch_add (audio, release) / fetch_sub (conn)
+    // G-07: samples a full ring refused since the last key, reported as
+    // TxSendStats::overflowSamples.  Audio thread adds; any thread reads.
+    std::atomic<quint64> m_txIqOverflowSamples{0};
 
     // TX I/Q ring pre-prime flag.  setMox(true) sets it on the connection
     // thread; sendTxIq consumes it on the TX worker thread (single-writer

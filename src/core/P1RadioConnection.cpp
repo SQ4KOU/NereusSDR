@@ -1491,6 +1491,8 @@ void P1RadioConnection::setMox(bool enabled)
     // rationale.  At P1's 48 kHz wire rate, 20 ms cushion = 960 samples.
     if (enabled) {
         m_txIqPrimePending.store(true, std::memory_order_release);
+        // G-07: the full-ring loss count runs per key, as on Protocol 2.
+        m_txIqOverflowSamples.store(0, std::memory_order_relaxed);
     }
     m_mox = enabled;
 }
@@ -1722,6 +1724,22 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
+// txSendStats — G-07
+//
+// The transmit diagnostics' view of this path (the Core's "Transmit ended"
+// line). Protocol 1 counts only what a full ring refused; the send-timing
+// counters are Protocol 2's sender thread's.
+// ---------------------------------------------------------------------------
+RadioConnection::TxSendStats P1RadioConnection::txSendStats() const
+{
+    TxSendStats st;
+    st.valid = true;
+    st.overflowOnly = true;
+    st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
+    return st;
+}
+
+// ---------------------------------------------------------------------------
 // sendTxIq — 3M-1a Task E.2
 //
 // Porting from deskhpsdr/src/old_protocol.c:2373-2459 [@120188f]
@@ -1819,8 +1837,11 @@ void P1RadioConnection::sendTxIq(const float* iq, int n)
         // Ring-buffer full: drop sample, matching deskhpsdr overflow path.
         // acquire: see the latest fetch_sub from the connection thread so we
         // don't overfill after a drain.
+        // The rest of the block is dropped, never written over unread
+        // slots; the loss is counted below (G-07).
         if (m_txIqCount.load(std::memory_order_acquire) >= kTxIqBufSamples) {
-            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow — dropping sample";
+            qCDebug(lcConnection) << "P1 TX I/Q ring buffer overflow: dropping"
+                                  << (n - k) << "samples";
             break;
         }
 
@@ -1860,6 +1881,11 @@ void P1RadioConnection::sendTxIq(const float* iq, int n)
         // is observed by the connection thread's acquire load.
         m_txIqCount.fetch_add(1, std::memory_order_release);
         ++pushedSamples;
+    }
+
+    if (pushedSamples < n) {
+        m_txIqOverflowSamples.fetch_add(static_cast<quint64>(n - pushedSamples),
+                                        std::memory_order_relaxed);
     }
 
     if (pushedSamples > 0 && m_mox) {
