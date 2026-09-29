@@ -17,7 +17,13 @@
 //                 device's key through the Core (RadioModel::keyedBy names
 //                 which device). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Tci: a TCI key reads TCI, apart from CAT, as Thetis
+//                 keeps the two apart. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
+
+// no-port-check: NereusSDR-original file; the Thetis PTT mode it names
+// (TCI apart from CAT) is cited inline below. No Thetis logic is ported.
 
 #pragma once
 
@@ -35,6 +41,11 @@ enum class PttSource {
     Tune      = 6,   // Tune button (reduced power carrier)
     TwoTone   = 7,   // Two-tone test generator
     Remote    = 8,   // A paired device's key through the Core (Task 35)
+    // A TCI program's key. Thetis keeps it apart from CAT: its PTTMode has
+    // both (From Thetis enums.cs:347-360 [v2.10.3.15]: ... CAT, VOX, SPACE,
+    // TCI, LAST), and PollPTT sets _current_ptt_mode = PTTMode.TCI for a
+    // TCI key (From Thetis console.cs:25507-25511 [v2.10.3.15]).
+    Tci       = 9,
     Count
 };
 
@@ -49,6 +60,7 @@ inline QString pttSourceLabel(PttSource s) {
         case PttSource::Tune:    return QStringLiteral("Tune");
         case PttSource::TwoTone: return QStringLiteral("2-Tone");
         case PttSource::Remote:  return QStringLiteral("Remote");
+        case PttSource::Tci:     return QStringLiteral("TCI");
         default:                 return QStringLiteral("?");
     }
 }
@@ -75,15 +87,17 @@ inline PttSource pttSourceForKey(bool keyed, bool deviceKey, bool tuning,
     if (tuning || trigger == QLatin1String("tune")) {
         return PttSource::Tune;
     }
-    // The station's own keys (RemoteKeying::stationTrigger). A TCI key has
-    // no pill of its own and shows with the other program keys as CAT.
+    // The station's own keys (RemoteKeying::stationTrigger).
     if (trigger == QLatin1String("radioPtt")) {
         return PttSource::MicPtt;
     }
     if (trigger == QLatin1String("vox")) {
         return PttSource::Vox;
     }
-    if (trigger == QLatin1String("cat") || trigger == QLatin1String("tci")) {
+    if (trigger == QLatin1String("tci")) {
+        return PttSource::Tci;
+    }
+    if (trigger == QLatin1String("cat")) {
         return PttSource::Cat;
     }
     return PttSource::Mox;

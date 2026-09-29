@@ -17,6 +17,9 @@
 //   2026-09-27 - Parity Task 33 (R-R3-49): setPowerReadings, a remote
 //                 window's copy of the Core's readings. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29 - setActivePttSource records a release with the source it
+//                 ended. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -164,7 +167,9 @@ void RadioStatus::setActivePttSource(PttSource source)
 
     bool stateChanged = (m_transmitting != wasTransmitting) || (m_pttSource != prev);
     if (stateChanged) {
-        recordPttEvent(source, m_transmitting);
+        // A release is recorded with the source it ended (the new source is
+        // None then), as setTransmitting(false) records it.
+        recordPttEvent(m_transmitting ? source : prev, m_transmitting);
         emit pttChanged(m_pttSource, m_transmitting);
     }
 }
