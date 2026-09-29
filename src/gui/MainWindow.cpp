@@ -398,6 +398,16 @@
 //               kinds); the hosting select fallback reaches a listened slice
 //               as its RX (setActiveRxFor). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16 (rulings U1, U2, U7): a layout
+//               change moves only the slices this window controls and stops
+//               listening to a listened slice it no longer shows, with a
+//               notice; listening to or taking an unseen slice shows it in
+//               the main window (an empty pan, else one pan more, else the
+//               operator picks); selecting a slice brings its pan forward,
+//               a floating one included. The bottom RX area's picker
+//               connect moved to buildStatusBar, where the dashboard
+//               exists. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1650,10 +1660,229 @@ SliceModel* MainWindow::windowRxSlice() const
 bool MainWindow::sliceShownInWindow(int sliceId) const
 {
     if (!m_panStack) { return true; }
-    for (PanadapterApplet* pan : m_panStack->allApplets()) {
-        if (pan && pan->associatedSlices().contains(sliceId)) { return true; }
+    // Slice control plan Task 16 (ruling U7): shown means on one of this
+    // window's pans, not on a pan made only to hold another device's slice.
+    return !windowPanFor(m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr).isEmpty();
+}
+
+bool MainWindow::windowSharesSlices() const
+{
+    return desktopHosting() || sliceAccessClient() != nullptr;
+}
+
+bool MainWindow::windowControlsSlice(int sliceId) const
+{
+    if (desktopHosting()) { return desktopSliceAllowed(sliceId); }
+    if (StationClient* client = sliceAccessClient()) {
+        const SliceAccessMirror* access = client->sliceAccess();
+        if (!access) { return true; }
+        const std::optional<SliceAccessMirror::Entry> entry = access->entry(sliceId);
+        return entry && entry->controllerDeviceId == access->selfDeviceId();
+    }
+    return true;
+}
+
+bool MainWindow::windowListensTo(int sliceId) const
+{
+    if (desktopHosting()) { return desktopListensTo(sliceId); }
+    if (StationClient* client = sliceAccessClient()) {
+        const SliceAccessMirror* access = client->sliceAccess();
+        if (!access) { return false; }
+        const QString self = access->selfDeviceId();
+        const std::optional<SliceAccessMirror::Entry> entry = access->entry(sliceId);
+        return entry && entry->controllerDeviceId != self && entry->listeners.contains(self);
     }
     return false;
+}
+
+QStringList MainWindow::windowPanIds() const
+{
+    QStringList ids;
+    if (!m_panStack) { return ids; }
+    for (const QString& id : panIdsForLayout(m_panStack->currentLayoutId())) {
+        if (m_panStack->panadapter(id)) { ids << id; }
+    }
+    return ids;
+}
+
+QString MainWindow::windowPanFor(const SliceModel* slice) const
+{
+    if (!slice || !m_panStack) { return QString(); }
+    const QStringList ids = windowPanIds();
+    const QString placed = m_listenPlacement.value(slice->sliceIndex());
+    if (!placed.isEmpty() && ids.contains(placed)) { return placed; }
+    if (ids.contains(slice->panKey())) { return slice->panKey(); }
+    for (const QString& id : ids) {
+        PanadapterApplet* pan = m_panStack->panadapter(id);
+        if (pan && pan->associatedSlices().contains(slice->sliceIndex())) { return id; }
+    }
+    return QString();
+}
+
+void MainWindow::rehostSliceView(SliceModel* slice)
+{
+    if (!slice || slice->sliceIndex() == 0) { return; }  // Slice A: dedicated flag path
+    const int id = slice->sliceIndex();
+    SpectrumWidget* dest = spectrumForSlice(slice);
+    VfoWidget* flag = m_vfoWidgetsBySlice.value(id, nullptr);
+    if (flag && flag->parentWidget() == dest) { return; }
+    if (flag) {
+        if (auto* old = qobject_cast<SpectrumWidget*>(flag->parentWidget())) {
+            old->removeVfoWidget(id);
+        }
+    }
+    m_vfoWidgetsBySlice.remove(id);
+    if (dest) { createSliceFlag(slice, dest); }
+}
+
+void MainWindow::revealSliceInWindow(int sliceId)
+{
+    if (!m_panStack || !m_radioModel) { return; }
+    SliceModel* slice = m_radioModel->sliceById(sliceId);
+    if (!slice) { return; }
+    QString target = windowPanFor(slice);
+    if (!target.isEmpty()) {
+        // Ruling U2: a pan that shows the slice comes forward, a floating
+        // one included. Nothing moves.
+        m_panStack->setActivePan(target);
+        m_panStack->raiseFloatingPan(target);
+        return;
+    }
+    // Ruling U1: an empty pan in the main window.
+    for (const QString& id : windowPanIds()) {
+        if (m_panStack->isFloating(id)) { continue; }
+        bool empty = true;
+        for (SliceModel* other : m_radioModel->slices()) {
+            if (other && other != slice && windowPanFor(other) == id) { empty = false; break; }
+        }
+        if (empty) { target = id; break; }
+    }
+    if (target.isEmpty()) {
+        // The next layout that fits, one pan more, in this window. No
+        // slice is added to any other pan it opens.
+        static const QHash<int, QString> kGrowTo = {
+            {1, QStringLiteral("2v")},
+            {2, QStringLiteral("3v")},
+            {3, QStringLiteral("2x2")},
+            {4, QStringLiteral("3h2")},
+        };
+        const QStringList before = panIdsForLayout(m_panStack->currentLayoutId());
+        const QString grown = kGrowTo.value(before.size());
+        const QStringList after = panIdsForLayout(grown);
+        if (!grown.isEmpty() && after.size() <= panLayoutLimitFor(m_radioModel)) {
+            QStringList floating;
+            for (const QString& id : before) {
+                if (m_panStack->isFloating(id)) { floating << id; }
+            }
+            m_panStack->applyLayout(grown, after);
+            // applyLayout docks every floating pan; the operator's floating
+            // pans go back out.
+            for (const QString& id : std::as_const(floating)) {
+                m_panStack->floatPanadapter(id);
+            }
+            // A slice whose flag sat on a pan the new layout retired keeps
+            // its flag.
+            for (SliceModel* other : m_radioModel->slices()) {
+                if (other && other != slice) { rehostSliceView(other); }
+            }
+            target = after.value(before.size());
+        }
+    }
+    if (target.isEmpty()) {
+        // No larger layout fits: the operator picks the pan.
+        QMenu* menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
+        menu->addSection(tr("Show Slice %1 on").arg(letter));
+        for (const QString& id : windowPanIds()) {
+            const int number = id.mid(id.lastIndexOf(QLatin1Char('-')) + 1).toInt() + 1;
+            QAction* pick = menu->addAction(tr("Pan %1").arg(number));
+            connect(pick, &QAction::triggered, this, [this, sliceId, id]() {
+                SliceModel* chosen = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
+                if (!chosen || !m_panStack || !m_panStack->panadapter(id)) { return; }
+                if (windowControlsSlice(sliceId)) {
+                    chosen->setPanKey(id);
+                } else {
+                    m_listenPlacement.insert(sliceId, id);
+                    m_panStack->moveSliceToPan(sliceId, id);
+                    rehostSliceView(chosen);
+                    rebuildFftRouting();
+                    refreshDesktopStationState();
+                }
+                m_panStack->setActivePan(id);
+                m_panStack->raiseFloatingPan(id);
+            });
+        }
+        menu->popup(QCursor::pos());
+        return;
+    }
+    if (windowControlsSlice(sliceId)) {
+        slice->setPanKey(target);
+    } else {
+        // The slice's pan key belongs to its controller; this window only
+        // places it.
+        m_listenPlacement.insert(sliceId, target);
+        m_panStack->moveSliceToPan(sliceId, target);
+        rehostSliceView(slice);
+        rebuildFftRouting();
+    }
+    m_panStack->setActivePan(target);
+}
+
+void MainWindow::reconcileListenPlacements()
+{
+    if (m_reconcilingPlacements || !m_radioModel) { return; }
+    m_reconcilingPlacements = true;
+    bool changed = false;
+    const QList<int> placed = m_listenPlacement.keys();
+    for (int id : placed) {
+        SliceModel* slice = m_radioModel->sliceById(id);
+        const QString pan = m_listenPlacement.value(id);
+        if (!slice) {
+            m_listenPlacement.remove(id);
+            changed = true;
+            continue;
+        }
+        if (windowControlsSlice(id)) {
+            // Now this window's to control: the placement becomes its pan.
+            m_listenPlacement.remove(id);
+            changed = true;
+            if (m_panStack && m_panStack->panadapter(pan)) { slice->setPanKey(pan); }
+            continue;
+        }
+        if (!windowListensTo(id)) {
+            m_listenPlacement.remove(id);
+            changed = true;
+            if (m_panStack && slice->panKey() != pan) {
+                if (PanadapterApplet* applet = m_panStack->panadapter(pan)) {
+                    applet->removeSlice(id);
+                }
+            }
+        }
+    }
+    if (changed) { rebuildFftRouting(); }
+    m_reconcilingPlacements = false;
+}
+
+void MainWindow::stopListeningOffWindow(int sliceId)
+{
+    if (!m_radioModel) { return; }
+    m_listenPlacement.remove(sliceId);
+    if (desktopHosting()) {
+        if (HostingSliceActions* actions = hostingSlices()) {
+            actions->stopListening(sliceId);
+        } else if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
+            ownership->leave(SliceOwnership::stationDevice(), sliceId);
+        }
+    } else if (StationClient* client = sliceAccessClient()) {
+        const std::optional<SliceAccessMirror::Entry> entry =
+            client->sliceAccess() ? client->sliceAccess()->entry(sliceId) : std::nullopt;
+        client->requestStopListening(sliceId, entry ? entry->incarnation : 0);
+    }
+    const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
+    showToast(tr("Stopped listening to Slice %1: it is no longer shown in this window.")
+                  .arg(letter),
+              ToastSeverity::Info, 5000);
 }
 
 StationServer* MainWindow::sliceAccessServer() const
@@ -2594,12 +2823,19 @@ void MainWindow::wireHostingSlices()
     connect(actions, &HostingSliceActions::question, this, &MainWindow::showHostingQuestion);
     connect(actions, &HostingSliceActions::notice, this, &MainWindow::showHostingNotice);
     connect(actions, &HostingSliceActions::finished, this,
-            [this](const QByteArray& verb, int, bool accepted, const QString& reason) {
+            [this](const QByteArray& verb, int sliceId, bool accepted, const QString& reason) {
         const QPointer<MainWindow> self(this);
         finishSliceChooserRequest(verb == QByteArrayLiteral("addSliceOnPan")
                                       ? QByteArrayLiteral("addSlice") : verb,
                                   accepted, reason);
         if (!self || verb == QByteArrayLiteral("setActiveSliceById")) { return; }
+        // Slice control plan Task 16 (ruling U1): a slice the station
+        // device now listens to or controls is shown in this window.
+        if (accepted && sliceId >= 0
+            && (verb == QByteArrayLiteral("slice.listen")
+                || verb == QByteArrayLiteral("slice.takeControl"))) {
+            revealSliceInWindow(sliceId);
+        }
         refreshForeignMarkers();
         refreshDesktopStationState();
     });
@@ -2622,6 +2858,9 @@ bool MainWindow::selectSliceForWindow(int sliceId)
             });
         actions->select(sliceId);
         disconnect(answer);
+        // Slice control plan Task 16 (ruling U2): the selected slice's pan
+        // comes forward, a floating one included.
+        if (accepted) { revealSliceInWindow(sliceId); }
         return accepted;
     }
     if (desktopHosting()) {
@@ -2634,9 +2873,14 @@ bool MainWindow::selectSliceForWindow(int sliceId)
             || !ownership->isListening(SliceOwnership::stationDevice(), sliceId)) {
             return false;
         }
-        return m_radioModel->setActiveRxFor(SliceOwnership::stationDevice(), sliceId);
+        const bool selected =
+            m_radioModel->setActiveRxFor(SliceOwnership::stationDevice(), sliceId);
+        if (selected) { revealSliceInWindow(sliceId); }
+        return selected;
     }
-    return m_radioModel->setActiveSliceById(sliceId);
+    const bool selected = m_radioModel->setActiveSliceById(sliceId);
+    if (selected) { revealSliceInWindow(sliceId); }
+    return selected;
 }
 
 void MainWindow::addSliceForWindow(const QString& panId)
@@ -2850,6 +3094,9 @@ void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
         return;
     }
     m_sliceChooser->beginRequest(verb, tr("Asking the Core…"), success);
+    if (action == SliceChooserAction::Listen || action == SliceChooserAction::TakeControl) {
+        m_pendingRevealSlice = sliceId;
+    }
 }
 
 void MainWindow::refreshTakeReceiverOffer()
@@ -3018,7 +3265,17 @@ void MainWindow::ensureRemoteSession()
         connect(m_stationClient, &StationClient::deviceCommandFinished, this,
                 [this](const QByteArray& verb, quint32, bool accepted, const QString& reason,
                        bool) {
+                    const QPointer<MainWindow> self(this);
                     finishSliceChooserRequest(verb, accepted, reason);
+                    if (!self) { return; }
+                    // Slice control plan Task 16 (ruling U1): a slice this
+                    // window now listens to or controls is shown here.
+                    if (verb == QByteArrayLiteral("slice.listen")
+                        || verb == QByteArrayLiteral("slice.takeControl")) {
+                        const int reveal = m_pendingRevealSlice;
+                        m_pendingRevealSlice = -1;
+                        if (accepted && reveal >= 0) { revealSliceInWindow(reveal); }
+                    }
                 });
         // A request still waiting when the link drops is not answered.
         connect(m_stationClient, &StationClient::sessionEnded, this, [this](const QString&) {
@@ -3033,6 +3290,7 @@ void MainWindow::ensureRemoteSession()
                     [this](int) {
                 refreshSliceChooser();
                 refreshContainerControls();
+                reconcileListenPlacements();
             });
         }
         if (RemoteDevicesState* devices = m_stationClient->remoteDevices()) {
@@ -3585,6 +3843,11 @@ void MainWindow::setSpectrumHooks(SpectrumWidget* sw)
 SpectrumWidget* MainWindow::spectrumForSlice(SliceModel* s) const
 {
     if (s && m_panStack) {
+        // Slice control plan Task 16: where this window placed a slice it
+        // only listens to.
+        if (auto* sw = m_panStack->spectrum(m_listenPlacement.value(s->sliceIndex()))) {
+            return sw;
+        }
         if (auto* sw = m_panStack->spectrum(s->panKey())) {
             return sw;
         }
@@ -5622,7 +5885,10 @@ void MainWindow::rebuildFftRouting()
         // operator made another pan active. activePanId() stays as the last
         // resort, matching spectrumForSlice (MainWindow.cpp:880).
         if (!m_panStack) { continue; }
-        QString panId = slice->panKey();
+        // Slice control plan Task 16: a listened slice this window placed
+        // feeds the pan it was placed on.
+        QString panId = m_listenPlacement.value(slice->sliceIndex());
+        if (panId.isEmpty() || !m_panStack->panadapter(panId)) { panId = slice->panKey(); }
         if (panId.isEmpty() || !m_panStack->panadapter(panId)) {
             panId.clear();
             for (auto* applet : m_panStack->allApplets()) {
@@ -6630,15 +6896,10 @@ void MainWindow::buildUI()
             [rebindDashboard]() { rebindDashboard(); });
     rebindDashboard();
 
-    // Slice control plan Task 13: the picker opens the chooser; a new slice
-    // it asked for is answered by the slice or by the refusal.
-    connect(m_rxDashboard, &RxDashboard::chooserRequested, this, [this]() {
-        if (m_sliceChooser && m_sliceChooser->isVisible()) {
-            m_sliceChooser->hide();
-        } else {
-            openSliceChooser();
-        }
-    });
+    // Slice control plan Task 13: a new slice the chooser asked for is
+    // answered by the slice or by the refusal. The picker's own connection
+    // lives in buildStatusBar(), where the dashboard is made (Task 16: it
+    // sat here, before the dashboard existed, and never connected).
     connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int) {
         finishSliceChooserRequest(QByteArrayLiteral("addSlice"), true, QString());
     });
@@ -6650,9 +6911,13 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::sliceRemoved, this, [this](int) { refreshSliceChooser(); });
     if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
         connect(ownership, &SliceOwnership::markChanged, this,
-                [this](int, const QByteArray&, const QByteArray&) { refreshSliceChooser(); });
+                [this](int, const QByteArray&, const QByteArray&) {
+            refreshSliceChooser();
+            reconcileListenPlacements();
+        });
         connect(ownership, &SliceOwnership::listenersChanged, this, [this](int) {
             refreshSliceChooser();
+            reconcileListenPlacements();
             // Task 14a: a slice this window starts or stops listening to
             // gains or loses its flag.
             if (desktopHosting()) { refreshDesktopStationState(); }
@@ -6766,7 +7031,11 @@ void MainWindow::buildUI()
             // rebuild's early return below so the association is corrected on
             // any path that reaches this handler.
             if (m_panStack) {
-                m_panStack->moveSliceToPan(idx, newPanKey);
+                // Slice control plan Task 16: a slice this window placed
+                // stays where it was placed when its controller moves it.
+                const QString placed = m_listenPlacement.value(idx);
+                m_panStack->moveSliceToPan(
+                    idx, !placed.isEmpty() && m_panStack->panadapter(placed) ? placed : newPanKey);
             }
             if (idx == 0) { return; }  // Slice A flag is the dedicated path
             if (m_panStack) {
@@ -10740,6 +11009,14 @@ void MainWindow::buildStatusBar()
     // "—" until the slice receives live values from the radio.
     m_rxDashboard = new RxDashboard(barWidget);
     hbox->addWidget(m_rxDashboard);
+    // Slice control plan Task 13: the picker opens the chooser.
+    connect(m_rxDashboard, &RxDashboard::chooserRequested, this, [this]() {
+        if (m_sliceChooser && m_sliceChooser->isVisible()) {
+            m_sliceChooser->hide();
+        } else {
+            openSliceChooser();
+        }
+    });
     // R-R3-21: a badge click opens the VFO flag tab holding that setting,
     // on the flag of the slice the dashboard describes.
     connect(m_rxDashboard, &RxDashboard::badgeClicked, this,
@@ -14717,10 +14994,69 @@ void MainWindow::applyPanLayout(const QString& layoutId)
 
     const QStringList ids = panIdsForLayout(layoutId);
 
+    // Slice control plan Task 16 (ruling U7): a window that shares slices
+    // moves only the slices it controls, and a slice it only listens to is
+    // placed where this window shows it. Read before the layout changes, so
+    // the pans a listened slice was shown on are the ones it had.
+    const bool shared = m_radioModel && windowSharesSlices();
+    RadioModel::PanScope scope;
+    if (shared) {
+        for (SliceModel* slice : m_radioModel->slices()) {
+            if (!slice) { continue; }
+            const int id = slice->sliceIndex();
+            if (windowControlsSlice(id)) {
+                scope.controlled.insert(id);
+            } else if (windowListensTo(id)) {
+                const QString shownOn = windowPanFor(slice);
+                if (!shownOn.isEmpty()) { scope.listenedOn.insert(id, shownOn); }
+            }
+        }
+    }
+
     qCInfo(lcContainer) << "Pan layout: applying" << layoutId << "with ids" << ids;
     m_panStack->applyLayout(layoutId, ids);
 
     if (!m_radioModel) { return; }
+
+    if (shared) {
+        // Controlled slices rehome as before; nothing else moves, and no
+        // stream or DDC is touched.
+        const int rehomed = m_radioModel->rehomeSlicesToPans(ids, &scope);
+        if (rehomed > 0) {
+            qCInfo(lcContainer) << "Layout: rehomed" << rehomed
+                                << "controlled slice(s) onto" << ids.value(0);
+        }
+        // Flags on a pan the layout retired move to a pan that remains.
+        for (SliceModel* slice : m_radioModel->slices()) {
+            if (!slice) { continue; }
+            const QString placed = m_listenPlacement.value(slice->sliceIndex());
+            if (!placed.isEmpty() && !ids.contains(placed)) {
+                m_listenPlacement.remove(slice->sliceIndex());
+            }
+            rehostSliceView(slice);
+        }
+        // A device hears only the slices it can see.
+        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
+            scope.listenedOn.remove(off);
+            stopListeningOffWindow(off);
+        }
+        m_radioModel->spreadSlicesOntoEmptyPans(ids, &scope);
+        // populatePanSlices' rule, counting only what this window shows.
+        if (m_radioModel->ownsLocalDsp()
+            || (m_stationClient && m_stationClient->isHandshakeComplete())) {
+            for (const QString& emptyPan : m_radioModel->pansWithoutSlices(ids, &scope)) {
+                if (HostingSliceActions* hosting = hostingSlices()) {
+                    hosting->addOnPan(emptyPan);
+                } else {
+                    m_radioModel->addSliceOnPan(emptyPan);
+                }
+            }
+        }
+        rebuildFftRouting();
+        refreshSliceChooser();
+        refreshForeignMarkers();
+        return;
+    }
 
     // Shrink first. Slices left on panes applyLayout just deleted would keep a
     // dangling panKey, lose their VFO widget, and hold a DDC, a stream and

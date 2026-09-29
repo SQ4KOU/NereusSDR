@@ -376,6 +376,11 @@
 //                slice (requestTxHandoffToSlice), so the session server
 //                records an explicit choice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2249,7 +2254,31 @@ public:
     /// Lives here rather than in the MainWindow lambda that has the defect,
     /// because MainWindow is not constructible in the test harness and logic
     /// put there cannot be tested at all.
-    int rehomeSlicesToPans(const QStringList& livePanIds);
+    /// Slice control and listening, layout change rule: which slices one
+    /// window may place, and where it shows the ones it only listens to.
+    ///
+    /// A slice's pan key is shared by every device (it mirrors both ways),
+    /// so a window that rehomes or spreads a slice it does not control moves
+    /// that slice for the device that does. A scoped call moves only
+    /// `controlled` slices and counts a pan as occupied when a controlled
+    /// slice has its key or a listened slice is placed there (`listenedOn`,
+    /// slice id to this window's pan id). Every other slice is invisible to
+    /// the scoped calls. A null scope keeps the unscoped behavior, which is
+    /// what a window with no other devices has always had.
+    struct PanScope {
+        QSet<int> controlled;
+        QHash<int, QString> listenedOn;
+    };
+
+    int rehomeSlicesToPans(const QStringList& livePanIds,
+                           const PanScope* scope = nullptr);
+
+    /// The listened slices in `scope` whose placement is not one of
+    /// `panIds`, in slice order. A layout change that returns any of these
+    /// has taken them out of view, and a device hears only slices it can
+    /// see, so the caller stops listening to each one. Nothing about the
+    /// slice itself changes here.
+    QList<int> listenedOffPans(const QStringList& panIds, const PanScope& scope) const;
 
     /// Which of `panIds` currently host no slice, in the order given.
     ///
@@ -2265,7 +2294,8 @@ public:
     /// Occupancy is the question the caller is actually asking, so it is the
     /// question answered here. Co-hosted slices count once: a pan with three
     /// slices on it is occupied, not three-times occupied.
-    QStringList pansWithoutSlices(const QStringList& panIds) const;
+    QStringList pansWithoutSlices(const QStringList& panIds,
+                                  const PanScope* scope = nullptr) const;
 
     /// Slices currently living on `panId`, optionally skipping one.
     ///
@@ -2299,7 +2329,8 @@ public:
     /// The slices needed are already there, so they are moved before any are
     /// made. Only genuinely surplus ones move: a pan holding a single slice is
     /// never raided, or expanding would just relocate the hole.
-    int spreadSlicesOntoEmptyPans(const QStringList& panIds);
+    int spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                  const PanScope* scope = nullptr);
 
     /// Phase 3F closeout — public helper for invoking the antennaAutoSwitched
     /// signal from operator surfaces (Tools menu "Test antenna switch toast"

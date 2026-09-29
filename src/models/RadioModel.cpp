@@ -599,6 +599,11 @@
 //                power does not change while transmitting (Thetis's MOX
 //                gate on TXBand, console.cs [v2.10.3.15]). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -26941,7 +26946,8 @@ void RadioModel::stopExternalDiversityRoute()
 
 // Codex review, PR #293. See RadioModel.h for the defect and for why this
 // rehomes instead of removing.
-int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
+int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds,
+                                   const PanScope* scope)
 {
     if (livePanIds.isEmpty()) {
         return 0;
@@ -26951,6 +26957,9 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
     int moved = 0;
     for (SliceModel* s : std::as_const(m_slices)) {
         if (!s) { continue; }
+        // Scoped: only a slice this window controls is its to move. Writing
+        // the shared pan key of any other slice moves it for its controller.
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         if (livePanIds.contains(s->panKey())) { continue; }
         // setPanKey emits panKeyChanged, which is what MainWindow needs in
         // order to move the slice's VfoWidget onto the surviving pan. Its
@@ -26960,6 +26969,19 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
         ++moved;
     }
     return moved;
+}
+
+// Slice control and listening, layout change rule. See RadioModel.h.
+QList<int> RadioModel::listenedOffPans(const QStringList& panIds,
+                                       const PanScope& scope) const
+{
+    QList<int> off;
+    for (auto it = scope.listenedOn.constBegin(); it != scope.listenedOn.constEnd(); ++it) {
+        if (scope.controlled.contains(it.key())) { continue; }
+        if (!panIds.contains(it.value())) { off << it.key(); }
+    }
+    std::sort(off.begin(), off.end());
+    return off;
 }
 
 // See RadioModel.h.
@@ -26988,21 +27010,27 @@ bool RadioModel::panHasSlicesFor(const QString& panId, const QByteArray& owner,
 }
 
 // Codex review round 5, PR #293. See RadioModel.h.
-int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
+int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                          const PanScope* scope)
 {
+    auto movable = [scope](const SliceModel* s) {
+        return s && (!scope || scope->controlled.contains(s->sliceIndex()));
+    };
     int moved = 0;
-    for (const QString& emptyPan : pansWithoutSlices(panIds)) {
+    for (const QString& emptyPan : pansWithoutSlices(panIds, scope)) {
         // Find a pan carrying more than one slice and take one of its
         // extras. Recounted every iteration, because the previous move
-        // changed the occupancy this decision rests on.
+        // changed the occupancy this decision rests on. Scoped, only
+        // controlled slices count and only they may donate: a listened
+        // slice sharing a pan with a controlled one is never moved.
         QHash<QString, int> occupancy;
         for (const SliceModel* s : m_slices) {
-            if (s) { occupancy[s->panKey()] += 1; }
+            if (movable(s)) { occupancy[s->panKey()] += 1; }
         }
 
         SliceModel* donor = nullptr;
         for (SliceModel* s : std::as_const(m_slices)) {
-            if (!s) { continue; }
+            if (!movable(s)) { continue; }
             if (occupancy.value(s->panKey()) > 1) { donor = s; break; }
         }
         if (!donor) {
@@ -27019,13 +27047,22 @@ int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
 }
 
 // Codex review round 4, PR #293. See RadioModel.h.
-QStringList RadioModel::pansWithoutSlices(const QStringList& panIds) const
+QStringList RadioModel::pansWithoutSlices(const QStringList& panIds,
+                                          const PanScope* scope) const
 {
     QSet<QString> occupied;
     for (const SliceModel* s : m_slices) {
         if (!s) { continue; }
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         const QString key = s->panKey();
         if (!key.isEmpty()) { occupied.insert(key); }
+    }
+    if (scope) {
+        // A listened slice occupies the pan this window placed it on.
+        for (auto it = scope->listenedOn.constBegin();
+             it != scope->listenedOn.constEnd(); ++it) {
+            if (!it.value().isEmpty()) { occupied.insert(it.value()); }
+        }
     }
 
     QStringList empty;

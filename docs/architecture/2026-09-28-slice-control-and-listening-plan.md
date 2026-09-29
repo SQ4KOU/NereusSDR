@@ -237,10 +237,13 @@ controller has JJ's answer (or JJ accepts the recommendation).
 
 UI questions (already under JJ's review; Tasks 13 to 16 are blocked on them):
 
-- **U1. Where an unseen slice shows.** Recommendation (design): focus its
-  existing pane if visible (floating included); else prefer an empty pane;
-  else offer a named destination or another pane. Never create a physical
-  receiver or change shared tuning to show it.
+- **U1. Where an unseen slice shows.** Ruled: in the main window. A pane
+  that shows it comes forward (floating included); else an empty
+  main-window pane; else the window grows to the next layout that fits in
+  the single window; a destination is asked for only when no larger layout
+  fits. Growing adds no slice to other empty panes and never opens a
+  floating pane. Never create a physical receiver or change shared tuning
+  to show it.
 - **U2. Bottom RX selection and a floating pan.** Recommendation: selecting
   a row whose slice sits in a floating pan raises that floater and updates
   main-window RX; focusing a floater's flag updates the main bottom bar.
@@ -259,9 +262,12 @@ UI questions (already under JJ's review; Tasks 13 to 16 are blocked on them):
   and Aether color unchanged; text "You control" or "Listening" plus the
   controller's name; Take control and Stop listening reachable from the
   flag and the chooser.
-- **U7. Layout change behavior** (G-126). Recommendation: a layout change
-  never moves or recreates a listened slice or spends a DDC; empty panes
-  offer Choose a slice and New slice instead of adding automatically.
+- **U7. Layout change behavior** (G-126). Ruled: a device hears only
+  slices it can see. A layout change never moves, recreates or spends a DDC
+  for a slice; a listened slice whose pan it removes stops being listened
+  to on this device, with a plain notice; controlled slices keep rehoming
+  into a remaining pan. Supersedes the earlier recommendation that empty
+  panes offer Choose a slice and New slice instead of adding automatically.
 - **U8. TX applet showing every letter** (JJ's tentative idea in G-118).
   Recommendation: not in this plan; TX selection stays in today's TX
   controls.
@@ -1438,7 +1444,7 @@ Acceptance:
 
 Verification: `tst_rx_applet_*`, `tst_multi_device_screens` captures.
 
-## Task 16: Multiple pans, unseen slices, floating focus, background click and layout changes (BLOCKED on U1, U2, U3, U7)
+## Task 16: Multiple pans, unseen slices, floating focus, background click and layout changes
 
 Implements: design full-window proposal bullets 1 and 5; G-126.
 Depends on: Task 15 and JJ's ruling. Model tier: opus.
@@ -1450,14 +1456,29 @@ focus only (`PanadapterApplet.cpp:217-234`); floating reparents without
 changing identity (`PanadapterStack::floatPanadapter` `:481`, `dockPanadapter` `:534`); spectrum actions target
 the emitting pan's slice through `sliceForPan` (`MainWindow.cpp:3936-3980`, `:4179`, `:4222-4261`).
 
-Change (as ruled): showing an unseen joined slice per U1 without allocating
-or retuning; floating focus per U2; background click per U3; layout changes
-per U7 never moving, recreating or spending a DDC for a listened slice;
-every control keeps an explicit target slice.
+Change (as ruled): an unseen slice this window starts listening to or
+takes control of goes into the main window: a main-window pan that shows it
+comes forward, else an empty main-window pan, else the window grows to the
+next layout that fits in the single window, else the operator picks a pan.
+Growing adds no slice to any other empty pan and never opens a floating pan.
+A listened slice is placed by this window only; its pan key stays its
+controller's. Selecting a slice shown in a floating pan brings that floater
+forward and makes it this window's RX; nothing moves and no second flag
+appears (U2). A pan background click stays display-only (U3). A layout
+change moves only the slices this window controls; a listened slice whose
+pan the change removes stops being listened to here, with the notice
+"Stopped listening to Slice B: it is no longer shown in this window." (U7).
+A layout change never moves, recreates or spends a DDC for a slice. Every
+control keeps an explicit target slice.
 
-Acceptance: to be written from the ruling; at minimum a layout change with a
-listened slice leaves slice count, streams, DDC mask and the controller's
-tuning unchanged.
+Acceptance: a layout change that removes a listened slice's pan stops the
+listening, shows the notice once, keeps the slice's controller, pan key and
+tuning, and leaves slice count, each slice's stream, each stream's DDC and
+the slice's DDC unchanged; listening to an unseen slice with no empty pan
+grows the window by one pan and shows the slice there without adding a
+slice or moving its pan key; selecting a slice in a floating pan restores
+and raises that floater with one flag and no move; a pan background click
+changes neither the window's RX nor the active slice.
 
 Verification: `tst_panadapter_stack_layouts`, `tst_pan_floating_window`,
 `tst_slice_rehome_on_layout_shrink`, `tst_pan_active_slice_sync`,

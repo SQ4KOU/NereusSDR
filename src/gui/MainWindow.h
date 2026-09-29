@@ -76,6 +76,13 @@
 //                refreshFlagTransmitGates, one path for the flag's TX button
 //                and the TX applet's letters. AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 16 (rulings
+//                U1, U2, U7): windowSharesSlices, windowControlsSlice,
+//                windowListensTo, windowPanIds, windowPanFor,
+//                rehostSliceView, revealSliceInWindow,
+//                reconcileListenPlacements, stopListeningOffWindow,
+//                m_listenPlacement, m_pendingRevealSlice. AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1222,6 +1229,36 @@ private:
     // controls it; the applet binds windowRxSlice() with its access.
     void refreshRxAppletSlices();
     bool sliceShownInWindow(int sliceId) const;
+    // Slice control plan Task 16 (rulings U1, U2, U7). Whether this window
+    // shares slices with other devices (it hosts, or it is a remote window
+    // on a Core that reports slice access); whether it controls a slice (a
+    // window that shares nothing controls every slice); whether it listens
+    // to one another device controls.
+    bool windowSharesSlices() const;
+    bool windowControlsSlice(int sliceId) const;
+    bool windowListensTo(int sliceId) const;
+    // This window's pans: the current layout's ids that exist (floating
+    // ones included). A pan made only to hold another device's slice is
+    // not one of them.
+    QStringList windowPanIds() const;
+    // The window pan showing `slice`: where this window placed a listened
+    // slice, else its pan key, else the window pan that lists it. Empty
+    // when this window does not show it.
+    QString windowPanFor(const SliceModel* slice) const;
+    // Move a slice's flag onto the pan that shows it (spectrumForSlice).
+    void rehostSliceView(SliceModel* slice);
+    // Ruling U1 and U2: show `sliceId` in this window. A pan that shows it
+    // comes forward (a floating one is raised); otherwise it goes to an
+    // empty main-window pan, else the window grows to the next layout that
+    // fits, else the operator picks a pan. Nothing is added or moved for
+    // any other slice.
+    void revealSliceInWindow(int sliceId);
+    // A placement for a slice this window no longer only listens to is
+    // dropped; one it now controls takes the placement as its pan.
+    void reconcileListenPlacements();
+    // Ruling U7: stop listening to a slice a layout change took out of
+    // view, and say so.
+    void stopListeningOffWindow(int sliceId);
     // Slice control plan Task 15 fix round 1: the server this window hosts
     // and the Core link it shares slices over (each null when it does not),
     // from which the chooser, the flags and the RX applet say who controls
@@ -1659,6 +1696,15 @@ private:
     // Task 14a: the flag whose menu sent the request in flight (-1: none);
     // it shows the wait and then the Core's answer.
     int m_flagRequestSlice{-1};
+    // Slice control plan Task 16: where this window shows a slice it only
+    // listens to, when that slice's own pan key names no pan here (slice id
+    // to pan id). Never written to the slice: its pan key belongs to its
+    // controller.
+    QHash<int, QString> m_listenPlacement;
+    // A remote window's listen or take-control request whose slice is shown
+    // once the Core accepts it (-1: none).
+    int m_pendingRevealSlice{-1};
+    bool m_reconcilingPlacements{false};
     // Task 14b: a remote window's own listening level per listened slice,
     // for the slice incarnation it was set on. The Core applies it and
     // does not publish it back, so the window keeps the value it sent,

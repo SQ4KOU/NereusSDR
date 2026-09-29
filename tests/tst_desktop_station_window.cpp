@@ -20,6 +20,9 @@
 #include "gui/PanadapterStack.h"
 #include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/RxDashboard.h"
+#include "gui/widgets/StatusToast.h"
+#include "gui/SliceChooser.h"
+#include "gui/PanFloatingWindow.h"
 #include "gui/SetupDialog.h"
 #include "gui/setup/DspSetupPages.h"
 #include "models/RadioModel.h"
@@ -96,6 +99,44 @@ QToolButton* sliceTabFor(RxApplet& applet, QChar letter)
         }
     }
     return nullptr;
+}
+
+DeviceSessionRegistry::Entry admitPhone(StationServer& server, QObject& session,
+                                        const QByteArray& deviceId)
+{
+    DeviceSessionRegistry::Entry phone;
+    phone.deviceId = deviceId;
+    phone.kind = DeviceSessionRegistry::Kind::Paired;
+    phone.name = QStringLiteral("Living room iPhone");
+    phone.shortName = QStringLiteral("iPhone");
+    phone.deviceKind = QStringLiteral("phone");
+    const bool admitted = server.deviceSessions()->admit(phone, &session).admission
+        == DeviceSessionRegistry::Admission::Admitted;
+    if (!admitted) { phone.deviceId.clear(); }
+    return phone;
+}
+
+int toastsSaying(MainWindow& window, const QString& words)
+{
+    int count = 0;
+    for (StatusToast* toast : window.findChildren<StatusToast*>()) {
+        if (toast->message() == words) { ++count; }
+    }
+    return count;
+}
+
+int flagCountFor(MainWindow& window, int id)
+{
+    int count = 0;
+    for (VfoWidget* flag : window.findChildren<VfoWidget*>()) {
+        if (flag->sliceIndex() == id) { ++count; }
+    }
+    return count;
+}
+
+bool applyLayout(MainWindow& window, const QString& layoutId)
+{
+    return QMetaObject::invokeMethod(&window, "applyPanLayout", Q_ARG(QString, layoutId));
 }
 }
 
@@ -951,6 +992,248 @@ private slots:
         QVERIFY(!pending || !pending->isVisible());
         QVERIFY(!controller.enabled());
         QCOMPARE(tx->tuneButton()->isChecked(), model->isTune());
+    }
+
+    // Slice control plan Task 16 (ruling U7): a layout change that takes
+    // away the pan showing a slice this window listens to (another device
+    // controls it) stops listening to it with a notice, and changes nothing
+    // about the slice: no slice is added or removed, and its stream, its
+    // receiver, its tuning and its pan for the controller all stay.
+    void layoutChangeStopsListeningToASliceItNoLongerShows()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(applyLayout(window, QStringLiteral("2v")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        QCOMPARE(model->slices().size(), 2);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-layouts-0001"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        ownership->setOwner(bId, phone.deviceId);
+        QVERIFY(ownership->isListening(station, bId));
+        QVERIFY(flagFor(window, bId) && flagFor(window, bId)->isListening());
+
+        QHash<int, int> ddcs;
+        QHash<int, int> streams;
+        for (SliceModel* slice : model->slices()) {
+            streams.insert(slice->sliceIndex(), slice->streamIndex());
+            ddcs.insert(slice->sliceIndex(), model->ddcForStream(slice->streamIndex()));
+        }
+        const int bDdc = b->ddcIndex();
+        const double frequency = b->frequency();
+        QSignalSpy added(model, &RadioModel::sliceAdded);
+        QSignalSpy removed(model, &RadioModel::sliceRemoved);
+        QSignalSpy tuned(b, &SliceModel::frequencyChanged);
+        QSignalSpy moved(b, &SliceModel::panKeyChanged);
+
+        QVERIFY(applyLayout(window, QStringLiteral("1")));
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        QVERIFY(!ownership->isListening(station, bId));
+        QCOMPARE(ownership->mark(bId).subject(), phone.deviceId);
+        QCOMPARE(toastsSaying(window, QStringLiteral(
+                     "Stopped listening to Slice B: it is no longer shown in this window.")), 1);
+        QCOMPARE(added.count(), 0);
+        QCOMPARE(removed.count(), 0);
+        QCOMPARE(model->slices().size(), 2);
+        for (SliceModel* slice : model->slices()) {
+            QCOMPARE(slice->streamIndex(), streams.value(slice->sliceIndex()));
+            QCOMPARE(model->ddcForStream(slice->streamIndex()), ddcs.value(slice->sliceIndex()));
+        }
+        QCOMPARE(b->ddcIndex(), bDdc);
+        QCOMPARE(b->frequency(), frequency);
+        QCOMPARE(tuned.count(), 0);
+        QCOMPARE(moved.count(), 0);
+        QCOMPARE(b->panKey(), QStringLiteral("pan-1"));
+        QCOMPARE(model->sliceById(aId)->panKey(), QStringLiteral("pan-0"));
+        // The flag survives its pan and shows nothing for this window.
+        VfoWidget* flagB = flagFor(window, bId);
+        QVERIFY(flagB);
+        QVERIFY(!flagB->stationPresentationAllowed());
+        QCOMPARE(flagCountFor(window, bId), 1);
+        controller.stop();
+    }
+
+    // Slice control plan Task 16 (ruling U1): listening to a slice this
+    // window does not show places it in the main window. With one pan and
+    // no empty one, the window grows to the next layout and the slice
+    // appears on the new pan. No slice is added, and the slice's pan for
+    // its controller does not move.
+    void listeningToAnUnseenSliceGrowsTheMainWindow()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(applyLayout(window, QStringLiteral("1")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-layouts-0002"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        // The phone's slice, on a pan this window does not have.
+        const int bId = model->addSlice(QStringLiteral("pan-3"));
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(b);
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        ownership->setOwner(bId, phone.deviceId);
+        ownership->leave(station, bId);
+        QVERIFY(!ownership->isListening(station, bId));
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        const int count = model->slices().size();
+        QSignalSpy added(model, &RadioModel::sliceAdded);
+        QSignalSpy moved(b, &SliceModel::panKeyChanged);
+
+        RxDashboard* dashboard = window.findChild<RxDashboard*>();
+        QVERIFY(dashboard);
+        dashboard->chooserButton()->click();
+        SliceChooser* chooser = window.findChild<SliceChooser*>();
+        QVERIFY(chooser);
+        emit chooser->listenRequested(bId);
+        QVERIFY(ownership->isListening(station, bId));
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        PanadapterApplet* grown = stack->panadapter(QStringLiteral("pan-1"));
+        QVERIFY(grown);
+        QVERIFY(grown->associatedSlices().contains(bId));
+        QVERIFY(!stack->panadapter(QStringLiteral("pan-0"))->associatedSlices().contains(bId));
+        VfoWidget* flagB = flagFor(window, bId);
+        QVERIFY(flagB);
+        QCOMPARE(flagB->parentWidget(), grown->spectrumWidget());
+        QVERIFY(flagB->stationPresentationAllowed());
+        QCOMPARE(flagCountFor(window, bId), 1);
+        QCOMPARE(model->slices().size(), count);
+        QCOMPARE(added.count(), 0);
+        QCOMPARE(moved.count(), 0);
+        QCOMPARE(b->panKey(), QStringLiteral("pan-3"));
+        QCOMPARE(ownership->mark(bId).subject(), phone.deviceId);
+        controller.stop();
+    }
+
+    // Slice control plan Task 16 (ruling U2): selecting a slice shown in a
+    // floating pan brings that pan forward and makes the slice this
+    // window's RX. Nothing moves and no second flag appears.
+    void selectingASliceInAFloatingPanBringsItForward()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(applyLayout(window, QStringLiteral("2v")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        stack->setActivePan(QStringLiteral("pan-0"));
+        stack->floatPanadapter(QStringLiteral("pan-1"));
+        QVERIFY(stack->floatingWindowForTest(QStringLiteral("pan-1")));
+        // The floating pan put away. (The offscreen platform keeps no
+        // stacking order and will not move activation off the floating pan,
+        // so a minimized floating pan stands in for one hidden behind other
+        // windows.)
+        PanFloatingWindow* floater = stack->floatingWindowForTest(QStringLiteral("pan-1"));
+        floater->showMinimized();
+        QTRY_VERIFY(floater->isMinimized());
+        QCOMPARE(ownership->activeRxFor(station), aId);
+        SliceModel* b = model->sliceById(bId);
+        QSignalSpy moved(b, &SliceModel::panKeyChanged);
+        const int count = model->slices().size();
+
+        RxApplet* applet = window.findChild<RxApplet*>();
+        QVERIFY(applet);
+        QToolButton* tabB = sliceTabFor(*applet, QLatin1Char('B'));
+        QVERIFY(tabB);
+        tabB->click();
+        QCOMPARE(ownership->activeRxFor(station), bId);
+        QCOMPARE(stack->activePanId(), QStringLiteral("pan-1"));
+        QCOMPARE(stack->floatingWindowForTest(QStringLiteral("pan-1")), floater);
+        QVERIFY(floater->isVisible());
+        QTRY_VERIFY(!floater->isMinimized());
+        QCOMPARE(b->panKey(), QStringLiteral("pan-1"));
+        QCOMPARE(moved.count(), 0);
+        QCOMPARE(flagCountFor(window, bId), 1);
+        QCOMPARE(flagFor(window, bId)->parentWidget(),
+                 stack->panadapter(QStringLiteral("pan-1"))->spectrumWidget());
+        QCOMPARE(model->slices().size(), count);
+        controller.stop();
+    }
+
+    // Slice control plan Task 16 (ruling U3): a click on a pan's background
+    // gives that pan keyboard and scroll focus only. The slice this window
+    // hears and the slice it tunes stay where they were.
+    void panBackgroundClickNeverChangesTheSlice()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(applyLayout(window, QStringLiteral("2v")));
+        auto* stack = window.findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        QCOMPARE(ownership->activeRxFor(station), aId);
+        const int activeBefore = ownership->activeFor(station);
+        const int modelActiveBefore = model->activeSlice() ? model->activeSlice()->sliceIndex() : -1;
+        PanadapterApplet* pan1 = stack->panadapter(QStringLiteral("pan-1"));
+        QVERIFY(pan1);
+        emit pan1->activated(QStringLiteral("pan-1"));
+        QCOMPARE(ownership->activeRxFor(station), aId);
+        QCOMPARE(ownership->activeFor(station), activeBefore);
+        QCOMPARE(model->activeSlice() ? model->activeSlice()->sliceIndex() : -1, modelActiveBefore);
+        controller.stop();
     }
 };
 

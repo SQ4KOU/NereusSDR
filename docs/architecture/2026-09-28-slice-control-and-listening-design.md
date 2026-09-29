@@ -103,8 +103,12 @@ The proposed mapping is:
   different slice is selected for receive. The current active-RX-dependent
   TX applet bindings need a safety audit when implementing this mapping.
 - If a slice is already visible, focus its existing pane, including a
-  floating pane. If unseen, prefer an empty pane; otherwise offer a named
-  destination or another pane. A new view of an existing slice does not
+  floating pane (U2: the floater comes forward and the slice becomes this
+  window's RX; nothing moves). If unseen, it goes into the main window
+  (U1): an empty main-window pane, else the window grows to the next layout
+  that fits in the single window, else the operator picks a destination.
+  Growing adds no slice to any other empty pane and never opens a floating
+  pane. A new view of an existing slice does not
   create a physical receiver or change shared tuning. Replacing or hiding a
   view no longer retains listening: U7 supersedes the earlier proposal that
   listening continue until an explicit leave, and the earlier proposal of

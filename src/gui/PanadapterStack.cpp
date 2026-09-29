@@ -570,6 +570,22 @@ void PanadapterStack::dockPanadapter(const QString& panId)
     });
 }
 
+// Slice control plan Task 16 (ruling U2): a slice selected in a floating
+// pan brings that window forward. The pan stays where it is.
+bool PanadapterStack::raiseFloatingPan(const QString& panId)
+{
+    PanFloatingWindow* floater = m_floating.value(panId, nullptr);
+    if (!floater) { return false; }
+    if (floater->isMinimized()) {
+        floater->showNormal();
+    } else {
+        floater->show();
+    }
+    floater->raise();
+    floater->activateWindow();
+    return true;
+}
+
 // Re-realize only the pans that just came back from a floating window.
 //
 // Everything else in the tree kept its top-level, so it needs nothing: a

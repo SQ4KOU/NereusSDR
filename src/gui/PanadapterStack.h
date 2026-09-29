@@ -71,6 +71,12 @@
 //                                    their graphics owners, including pending
 //                                    removals. AI-assisted adaptation via
 //                                    OpenAI Codex.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 16: isFloating()
+//                                    and raiseFloatingPan(), so selecting a
+//                                    slice shown in a floating pan brings
+//                                    that window forward (ruling U2).
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -200,6 +206,15 @@ public:
     {
         return m_floating.value(panId, nullptr);
     }
+
+    /// Slice control plan Task 16: whether this pan sits in its own
+    /// floating window.
+    bool isFloating(const QString& panId) const { return m_floating.contains(panId); }
+
+    /// Slice control plan Task 16 (ruling U2): bring a floating pan's window
+    /// forward, restored if it was minimized. Nothing moves. False when the
+    /// pan is not floating.
+    bool raiseFloatingPan(const QString& panId);
 
     /// Phase 3F Sub-Epic D Task 6: persist splitter geometry across launches.
     /// Keyed under AppSettings "PanSplitter0Sizes" + "PanLayoutId" (and per-row
