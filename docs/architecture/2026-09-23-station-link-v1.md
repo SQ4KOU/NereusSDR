@@ -792,6 +792,14 @@ exactly the wire it was built for, with neither. The station does not
 declare it, and the desktop's remote window does not: it lists its own
 build's categories.
 
+**`radioModels` 1** (phone wire batch): the client names each radio the
+Core can see by its model, and offers the models that radio can run as. A
+peer that declares it at minor 11 is sent `radioModelsVersion` (section
+6.3) and, when that is 1, `modelLabel` and `models` on each `stationRadios`
+record (section 7.7); a peer that does not sees exactly the wire it was
+built for, with neither. The station does not declare it, and the
+desktop's remote window does not.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -924,6 +932,7 @@ change shows as surface drift and as a change to this table.
 | `vaxVersion` | 1 |
 | `diversityPatternVersion` | 1 |
 | `logCategoryListVersion` | 1 |
+| `radioModelsVersion` | 0 |
 
 <!-- /surface -->
 
@@ -1055,6 +1064,17 @@ When a feature is off, its version is 0:
   the Core keeps with its label. A peer that did not declare the feature
   is sent neither this entry nor the property. An app on a Core that sends
   no entry names each category by its id from `logCategories`.
+- `radioModelsVersion` (phone wire batch): optional, sent only at agreed
+  minor 11 to a peer whose hello declared `radioModels` 1, while the Core
+  has a radio model, after `logCategoryListVersion` (or after the entry
+  before it when that is absent) and before `coreBuildInfo`. 1 on a Core
+  at `stationRadiosVersion` 1, 0 otherwise. At 1 each `stationRadios`
+  record also carries `modelLabel` and `models` (section 7.7). A peer that
+  did not declare the feature is sent neither this entry nor those fields.
+  An app on a Core that sends 0 or no entry shows the model number it has
+  no name for as "Unknown model" and offers no model choice, with "This
+  Core does not say which models this radio can run as. Updating the Core
+  may help." on the disabled choice.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1639,7 +1659,8 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 `txRefusal` entries after it only for a peer that declared `remoteTx`;
 `diversityPatternVersion` only for a peer that declared
 `diversityPattern`; `logCategoryListVersion` only for a peer that declared
-`logCategoryList`. A client ignores a capability it does not know
+`logCategoryList`; `radioModelsVersion` only for a peer that declared
+`radioModels`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -1814,7 +1835,8 @@ older window sees only the values it was built for.
 | 85 | `vaxVersion` | `i64` |
 | 86 | `diversityPatternVersion` | `i64` |
 | 87 | `logCategoryListVersion` | `i64` |
-| 88 | `coreBuildInfo` | `utf8` |
+| 88 | `radioModelsVersion` | `i64` |
+| 89 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -3807,7 +3829,7 @@ the Core keeps:
 | `freedvStations` | 1000 | With `stationFreedvVersion` 1: one station FreeDV Reporter lists, as the Core hears it, `id` its FreeDV Reporter session id: the FreeDV Reporter dialog's 14 columns, `callsign`, `gridSquare` (strings), `distanceKm` and `headingDeg` (numbers, from the Core's own grid square; 0 with `headingCardinal` empty while either grid square is not known), `headingCardinal` (string, `N` to `NNW`), `version` (string), `frequencyHz` (number, whole Hz, 0 not known), `txMode` (string), `status` (string: `Active`, `TX` or `RX Only`), `userMessage` (string), `lastTxUtc` (string, ISO 8601 UTC, empty when never), `lastRxCallsign`, `lastRxMode` (strings), `snrDb` (number, -99 not known) and `lastUpdateUtc` (string, ISO 8601 UTC, empty when not known); then `transmitting` (boolean), `receivingFrom` (string: whom its latest receive report heard, the last callsign it named, while that report stands; empty once a frequency change clears it), `messageChangedAtMs` (number, the Core's clock in ms since the epoch when `userMessage` last changed, 0 never) and `lastRxUtc` (string, ISO 8601 UTC, when its latest receive report came, empty when none stands); with `stationFreedvVersion` 2, `band` (number, the Band as the `spots` record numbers it: 0 160 m, 1 80 m, 2 60 m, 3 40 m, 4 30 m, 5 20 m, 6 17 m, 7 15 m, 8 12 m, 9 10 m, 10 6 m, 11 GEN for a frequency outside those bands, 2 m included, 12 WWV within 5 kHz of 2.5, 5, 10, 15, 20 or 25 MHz; each band's edges belong to it; absent while `frequencyHz` is 0). The list starts again (a reset) each time the Core's connection to FreeDV Reporter connects or ends |
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
-| `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
+| `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). With `radioModelsVersion` 1, and only for a peer that declared `radioModels` 1, also `modelLabel` (string, the name Setup shows for `model`, `displayName` in `HpsdrModel.h`: for example "ANAN-G2 1K") and `models` (array, every model this radio's board can run as, in the desktop model choice's order, each `{"model": number, "label": string}`; the list `station.setRadioModel` accepts, `compatibleModels` in `HardwareProfile.cpp`, Thetis's board check; a board that presents as one model lists one). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
 | `vaxLevels` | 1 | With `vaxVersion` 1: the VAX meters of the computer the Core runs on, one record, `id` `"0"`: `ch1Level` to `ch4Level` and `txLevel` (numbers, 0 to 1, each rounded to a thousandth, as the applet's meters read them: `AudioEngine::vaxRxLevel` and `vaxTxLevel`) and `atMs` (number, the Core's clock in milliseconds when it read them). The Core reads the meters 5 times a second, only while at least one peer subscribes (a device with its VAX tool open), and sends a record only when a meter moved |
 | `txAmModulation` | 1 | With `txModMonitorVersion` 1: the AM Mod Monitor's readings of the transmit I/Q the Core sends its radio (its TX tap, `AmModulationAnalyzer`), one record, `id` `0`, present only while the radio is keyed in AM, SAM or DSB (the transmit slice's mode) and a peer subscribes: `atMs` (number, the Core's clock in ms since the epoch when it read them), `posPeakPct` and `negPeakPct` (numbers, the positive and negative peak modulation in percent since the Core's previous record: the largest of the reads it merged), `posHoldPct` and `negHoldPct` (numbers, the peaks held 1.5 s, then falling as the Core's analyzer lets them fall), `carrierLevel` (number, the carrier in linear envelope units, 0 to 1 at the radio's full scale), `carrierDbfs` (number, that in dB, -120 with no carrier), `carrierPresent`, `carrierLow` and `carrierHigh` (booleans: a carrier is measured, below 0.05, above 0.98), `scopeRateHz` (number, the rate of the scope's points) and `scopePctTenths` (string: the envelope trace, oldest first, each point's percent modulation in tenths as a little-endian int16, in base64; at most 512 points, a longer trace reduced by keeping the largest-magnitude point of each group). Asymmetry is `posHoldPct` minus `negHoldPct` |
 | `txAmModulationFeedback` | 1 | With `txModMonitorVersion` 1: the same record for the PureSignal feedback receiver (the PA's output as the radio samples it), on the receiver `ModMon/FbStream` names (section 8.1); present under the same rule, and measured only while PureSignal's feedback runs on the Core's radio |

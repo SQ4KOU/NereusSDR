@@ -640,6 +640,10 @@
 //   2026-09-28: Phone wire batch: logCategoryListVersion 1 and radio's
 //               logCategoryList the same way. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: radioModelsVersion 1 and stationRadios'
+//               modelLabel and models only to a peer that declared
+//               radioModels 1 (fitRecordBatchToPeer). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1111,6 +1115,22 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
     // The Support dialog's categories with labels (logCategoryListVersion 1).
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+};
+
+// Phone wire batch: record fields that go only to a peer at
+// kRadioIdentitySessionProtocolMinor whose hello declared `feature` 1
+// (StationServer::fitRecordBatchToPeer).
+struct PeerOnlyRecordField {
+    const char* stream;
+    const char* field;
+    const char* feature;
+};
+
+constexpr PeerOnlyRecordField kPeerOnlyRecordFields[] = {
+    // Each radio's model label and the models it can run as
+    // (radioModelsVersion 1).
+    {"stationRadios", "modelLabel", "radioModels"},
+    {"stationRadios", "models", "radioModels"},
 };
 
 bool peerOnlyPropertyApplies(const PeerOnlyProperty& entry, const SessionMessage& message)
@@ -7304,6 +7324,22 @@ bool StationServer::fitPeerOnlyProperties(SessionTransport* transport,
         || !message.updates.isEmpty();
 }
 
+RecordBatch StationServer::fitRecordBatchToPeer(SessionTransport* transport,
+                                                RecordBatch batch) const
+{
+    for (const PeerOnlyRecordField& entry : kPeerOnlyRecordFields) {
+        if (batch.stream != QLatin1String(entry.stream)
+            || peerGetsFeatureProperties(transport, QByteArray(entry.feature))) {
+            continue;
+        }
+        const QString field = QString::fromLatin1(entry.field);
+        for (RecordUpsert& upsert : batch.upserts) {
+            upsert.fields.remove(field);
+        }
+    }
+    return batch;
+}
+
 // ── Slice ownership (iPhone app Task 73) ─────────────────────────────────
 
 bool StationServer::ownershipAllows(SessionTransport* transport,
@@ -9903,6 +9939,13 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // declared logCategoryList 1.
             caps.logCategoryListVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("logCategoryList")) ? 1 : 0;
+            // Phone wire batch: stationRadios' modelLabel and models, for a
+            // peer that declared radioModels 1, on a Core that keeps the
+            // radio list.
+            if (peerGetsFeatureProperties(transport, QByteArrayLiteral("radioModels"))) {
+                caps.radioModelsEntry = true;
+                caps.radioModelsVersion = stationRadiosVersion() >= 1 ? 1 : 0;
+            }
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
@@ -10174,7 +10217,9 @@ void StationServer::flushRecordStreams()
             // (dropPeer unsubscribes it before it goes).
             auto* transport = static_cast<SessionTransport*>(const_cast<void*>(subscriber));
             if (m_peers.contains(transport)) {
-                send(transport, SessionMessages::recordBatch(batch));
+                // Phone wire batch: a declared feature's fields only to a
+                // peer that declared it.
+                send(transport, SessionMessages::recordBatch(fitRecordBatchToPeer(transport, batch)));
             }
         }
     }
@@ -10251,7 +10296,7 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     const int wanted = static_cast<int>(std::min<qint64>(backlog, it->second->capacity()));
     const RecordBatch first = it->second->subscribe(transport, wanted);
     answer(true, QString());
-    send(transport, SessionMessages::recordBatch(first));
+    send(transport, SessionMessages::recordBatch(fitRecordBatchToPeer(transport, first)));
     if (m_modMonitor) {
         m_modMonitor->subscriptionsChanged();
     }

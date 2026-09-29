@@ -422,6 +422,9 @@
 //               fitPeerOnlyProperties(): a declared feature's properties
 //               only to a peer that declared it. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: fitRecordBatchToPeer(): a declared
+//               feature's record fields only to a peer that declared it.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1626,6 +1629,9 @@ private:
     /// the feature, so an older app sees today's wire. False when a delta
     /// has nothing left worth sending.
     bool fitPeerOnlyProperties(SessionTransport* transport, SessionMessage& message) const;
+    /// Takes each declared feature's record fields (kPeerOnlyRecordFields)
+    /// out of a record batch for a peer that did not declare the feature.
+    RecordBatch fitRecordBatchToPeer(SessionTransport* transport, RecordBatch batch) const;
     /// A command, property write or settings write from `transport`'s
     /// device (never a heartbeat).
     void noteActivity(SessionTransport* transport);

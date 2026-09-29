@@ -436,6 +436,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "radioModelsVersion",
+            "value": 0
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
