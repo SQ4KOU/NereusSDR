@@ -56,6 +56,11 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -753,10 +758,27 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
              ? m_hardwareProfile.caps
              : &BoardCapsTable::forBoard(info.boardType);
 
-    // Initialize per-ADC state from profile
+    // Initialize per-ADC state from profile.
+    // Dither and random: Thetis turns both on for every board
+    //   Thetis Console/setup.cs:296-298 [v2.10.3.15]
+    //     //MW0LGE_21k8 initialise these
+    //     chkMercDither.Checked = true;
+    //     chkMercRandom.Checked = true;
+    // but on a Hermes Lite 2 the same two bits (bank 0 C3 bits 3 and 4) are
+    // the HL2 options Band Volts and Disable PS Sync, restored from the HL2
+    // option page instead, both off unless the operator turned them on
+    //   mi0bot Console/setup.cs:2843-2848 [@c26a8a4]
+    //     if (HPSDRModel.HERMESLITE == HardwareSpecific.Model)
+    //     {
+    //         chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
+    //         chkHL2PsSync_CheckedChanged(this, e);
+    //     }
+    // The Thetis HL2 capture shows bank 0 C3 = 0x00
+    // (docs/protocols/openhpsdr-protocol1-capture-reference.md, bank 0 table).
+    const bool hl2 = isHl2();
     for (int i = 0; i < 3; ++i) {
-        m_dither[i] = true;
-        m_random[i] = true;
+        m_dither[i] = hl2 ? m_hl2BandVolts : true;
+        m_random[i] = hl2 ? m_hl2PsSync : true;
         m_rxPreamp[i] = false;
         m_stepAttn[i] = 0;
     }
@@ -1360,6 +1382,62 @@ void P1RadioConnection::setAttenuator(int dB)
     }
     m_stepAttn[0] = dB;
 }
+// ---------------------------------------------------------------------------
+// setHl2BandVolts / setHl2PsSync
+//
+// The HL2 option page's Band Volts and Disable PS Sync. mi0bot sends them as
+// the ADC dither and random bits (bank 0 C3 bits 3 and 4), which the HL2
+// reads as these two options:
+//   mi0bot Console/setup.cs:13376-13390 [@c26a8a4]
+//     // MI0BOT: Control band volts for the HL2
+//     private void chkHL2BandVolts_CheckedChanged(object sender, System.EventArgs e)
+//     {
+//         if (initializing) return;
+//         int v = chkHL2BandVolts.Checked ? 1 : 0;
+//         NetworkIO.SetADCDither(v);
+//     }
+//     // MI0BOT: Control power supply sync for the HL2
+//     private void chkHL2PsSync_CheckedChanged(object sender, System.EventArgs e)
+//     {
+//         if (initializing) return;
+//         int v = chkHL2PsSync.Checked ? 1 : 0;
+//         NetworkIO.SetADCRandom(v);
+//     }
+//   mi0bot ChannelMaster/netInterface.c:435-456 [@c26a8a4]: SetADCDither /
+//     SetADCRandom set adc[0..2].dither / .random and send the frame (CmdRx).
+//   mi0bot ChannelMaster/networkproto1.c:950-953 [@c26a8a4] (WriteMainLoop_HL2):
+//     C3 = ... | ((prn->adc[0].dither << 3) & 0b00001000) |
+//          ((prn->adc[0].random << 4) & 0b00010000) | ...
+// On an HL2 the change reaches the wire on the next frame; on any other board
+// only the stored value changes (it is never sent there).
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::isHl2() const
+{
+    return m_hardwareProfile.model == HPSDRModel::HERMESLITE;
+}
+
+void P1RadioConnection::setHl2BandVolts(bool on)
+{
+    m_hl2BandVolts = on;
+    if (isHl2()) {
+        for (bool& bit : m_dither) {
+            bit = on;
+        }
+        m_forceBank0Next = true;
+    }
+}
+
+void P1RadioConnection::setHl2PsSync(bool on)
+{
+    m_hl2PsSync = on;
+    if (isHl2()) {
+        for (bool& bit : m_random) {
+            bit = on;
+        }
+        m_forceBank0Next = true;
+    }
+}
+
 void P1RadioConnection::setPreamp(bool enabled)
 {
     // v0.4.1 hotfix — flush bank 11 on the next EP2 frame so the new
