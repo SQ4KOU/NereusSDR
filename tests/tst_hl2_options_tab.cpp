@@ -5,6 +5,7 @@
 
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QCheckBox>
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
@@ -159,6 +160,30 @@ private slots:
         QVERIFY(tab.swapAudioChannelsCheckedForTest());
         QCOMPARE(tab.pttHangMsForTest(),  7);
         QCOMPARE(tab.txLatencyMsForTest(), 33);
+    }
+
+    // The power-supply sync option reads as what a tick does: it turns the
+    // radio's power supply clock sync off. mi0bot's check box is
+    // "Disable PS Sync" (setup.designer.cs:11298 [@c26a8a4]), tooltip
+    // "Disables the FPGA synchronisation of the power supply clock"
+    // (:11299); PS there is the power supply, not PureSignal. A tick sets
+    // psSync, which sends the bit that disables it (setup.cs:13384-13390).
+    // The same tab is the remote window's.
+    void power_supply_sync_box_says_what_a_tick_does()
+    {
+        RadioModel model;
+        Hl2OptionsTab tab(&model);
+        auto* box = tab.findChild<QCheckBox*>(QStringLiteral("hl2DisablePsSync"));
+        QVERIFY(box != nullptr);
+        QCOMPARE(box->text(), QStringLiteral("Disable power supply sync"));
+        QCOMPARE(box->toolTip(),
+                 QStringLiteral("Stops the radio synchronizing its power supply clock."));
+        QVERIFY(!box->text().contains(QStringLiteral("PureSignal")));
+        QVERIFY(!model.hl2Options().psSync());
+        box->setChecked(true);
+        QVERIFY(model.hl2Options().psSync());
+        box->setChecked(false);
+        QVERIFY(!model.hl2Options().psSync());
     }
 
     // I/O Pin State output strip starts blank and shows the I/O board's
