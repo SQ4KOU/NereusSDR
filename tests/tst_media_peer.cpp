@@ -13,6 +13,7 @@
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
+#include "fakes/DataChannelStartupEvidence.h"
 
 #include <QCryptographicHash>
 #include <QPointer>
@@ -54,6 +55,23 @@ QJsonObject candidateControl(const QString& connectionId,
         {QStringLiteral("candidate"), candidate},
         {QStringLiteral("mid"), mid},
     };
+}
+
+// Load findings 4: both real peers' ready within the same 10 s as before;
+// when it does not come, the failure says which stage the ICE, DTLS and
+// SCTP handshakes reached (libdatachannel's own stage lines, captured for
+// this wait), not only that it timed out.
+QString waitForBothReady(const QSignalSpy& offerReady, const QSignalSpy& answerReady,
+                         const NereusSDR::Test::DataChannelStartupEvidence& evidence)
+{
+    constexpr int kReadyBoundMs = 10000;
+    if (QTest::qWaitFor([&]() { return offerReady.size() >= 1 && answerReady.size() >= 1; },
+                        kReadyBoundMs)) {
+        return {};
+    }
+    return QStringLiteral("not ready within %1 ms (offerer %2, answerer %3), last stage %4\n%5")
+        .arg(kReadyBoundMs).arg(offerReady.size()).arg(answerReady.size())
+        .arg(evidence.lastLibraryStage(), evidence.diagnostic());
 }
 
 QByteArray rtpPacket(quint16 sequence, quint32 ssrc)
@@ -496,12 +514,15 @@ void TestMediaPeer::realPeersExchangeQueuedControlAndDirectMedia()
     QSignalSpy offerControls(&offerer, &MediaPeer::controlReady);
     QSignalSpy displayReceived(&answerer, &MediaPeer::displayReceived);
     QSignalSpy rtpReceived(&answerer, &MediaPeer::rtpReceived);
+    const NereusSDR::Test::DataChannelStartupEvidence evidence;
     QVERIFY(answerer.start(IMediaTransport::Role::Answerer,
                            QLatin1String(kConnectionA)));
     QVERIFY(offerer.start(IMediaTransport::Role::Offerer,
                           QLatin1String(kConnectionA)));
-    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
-    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+    const QString notReady = waitForBothReady(offerReady, answerReady, evidence);
+    QVERIFY2(notReady.isEmpty(), qPrintable(notReady));
+    QCOMPARE(offerReady.size(), 1);
+    QCOMPARE(answerReady.size(), 1);
     QVERIFY(!controlRejected);
 
     const QByteArray display("media-peer-display");
@@ -743,13 +764,16 @@ void TestMediaPeer::realPeersCarryDeclaredReceiverStreams()
         QSignalSpy offerControls(&offerer, &MediaPeer::controlReady);
         QSignalSpy rtpReceived(&answerer, &MediaPeer::rtpReceived);
         QSignalSpy answerErrors(&answerer, &MediaPeer::errorOccurred);
+        const NereusSDR::Test::DataChannelStartupEvidence evidence;
         QVERIFY(answerer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA),
                                IMediaTransport::kDefaultAudioTargetBitrate, false,
                                answererAsks));
         QVERIFY(offerer.start(IMediaTransport::Role::Offerer, QLatin1String(kConnectionA),
                               IMediaTransport::kDefaultAudioTargetBitrate, false, true));
-        QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
-        QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+        const QString notReady = waitForBothReady(offerReady, answerReady, evidence);
+        QVERIFY2(notReady.isEmpty(), qPrintable(notReady));
+        QCOMPARE(offerReady.size(), 1);
+        QCOMPARE(answerReady.size(), 1);
 
         const QList<quint32> receivers = offerer.receiverAudioSsrcs();
         QCOMPARE(receivers.size(), IMediaTransport::kMaxReceiverAudioStreams);
