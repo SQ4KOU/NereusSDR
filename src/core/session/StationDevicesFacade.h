@@ -57,6 +57,13 @@
 // "" to any other (a window signed in with the old pairing token). Nothing
 // here logs it.
 //
+// The phone's direct addresses (coreAddressesVersion 1): `coreAddresses`
+// is where a device can dial this Core's control listener, as
+// StationServer's CoreAddressWatcher reads them (CoreAddresses.h). It has
+// its own notify signal, so a change never moves `revision`. StationServer
+// sends it only to a connection signed in with a paired device's own key
+// whose hello declared coreAddresses 1, and to no other.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
@@ -79,6 +86,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): numbered names and
 //               shortName in listJson. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: coreAddresses
+//               (coreAddressesVersion 1). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -114,6 +124,8 @@ class StationDevicesFacade final : public QObject {
     // iPhone app Task 14: after keyPath, so every earlier ordinal stays.
     Q_PROPERTY(bool pairingWindowOpen READ pairingWindowOpen NOTIFY devicesStateChanged)
     Q_PROPERTY(QString pairingCode READ pairingCode NOTIFY devicesStateChanged)
+    // Direct addresses: after pairingCode, so every earlier ordinal stays.
+    Q_PROPERTY(QString coreAddresses READ coreAddresses NOTIFY coreAddressesChanged)
 
 public:
     /// The Core-owned setting that holds the acknowledged key's fingerprint.
@@ -147,6 +159,13 @@ public:
     /// header comment for who receives the code.
     bool pairingWindowOpen() const { return m_state.pairingWindowOpen; }
     QString pairingCode() const { return m_state.pairingCode; }
+    /// Where a device can dial this Core, as compact JSON
+    /// {"addresses":["[2001:db8::5]:47910","44.31.0.7:47910"]}
+    /// (CoreAddresses::toJson); an empty list while the Core does not
+    /// listen or has no stable global address.
+    QString coreAddresses() const { return m_coreAddresses; }
+    /// StationServer's CoreAddressWatcher sets it; a change notifies once.
+    void setCoreAddresses(const QString& json);
 
     /// iPhone app Task 14: the Core's pairing window, which the two
     /// properties follow and the two verbs act on. Not owned; must outlive
@@ -190,6 +209,8 @@ signals:
     void stationLabelChanged(const QString& label);
     /// The token was retired through retireToken().
     void tokenRetired();
+    /// coreAddresses changed. Not devicesStateChanged: revision stays.
+    void coreAddressesChanged();
 
 private:
     struct State {
@@ -215,6 +236,7 @@ private:
     QSet<QByteArray> m_connected;
     State m_state;
     quint32 m_revision = 0;
+    QString m_coreAddresses = QStringLiteral("{\"addresses\":[]}");
     int m_hold = 0;
     bool m_refreshWanted = false;
 };

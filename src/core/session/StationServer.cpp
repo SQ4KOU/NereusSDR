@@ -695,6 +695,11 @@
 //               change the transmit settings (takesTransmitSettingsOnAir);
 //               the OC transmit pins and Region still wait. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: devices' coreAddresses from
+//               a CoreAddressWatcher that follows the listener, with
+//               coreAddressesVersion 1, only to a device signed in with its
+//               own key that declared coreAddresses (peerGetsCoreAddresses).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -763,6 +768,7 @@
 #include "core/session/StateMirror.h"
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/session/CoreAddresses.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsBackupTransfer.h"
 #include "core/session/SettingsBackupExportWire.h"
@@ -1161,6 +1167,9 @@ struct PeerOnlyProperty {
     bool keyIsPrefix;
     const char* property;
     const char* feature;
+    // The phone's direct addresses: only to a connection signed in with a
+    // paired device's own key (StationServer::peerGetsCoreAddresses).
+    bool deviceKeyOnly = false;
 };
 
 constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
@@ -1168,6 +1177,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
     // The Support dialog's categories with labels (logCategoryListVersion 1).
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+    // Where a device can dial this Core (coreAddressesVersion 1).
+    {"StationDevicesFacade", "devices", false, "coreAddresses", "coreAddresses", true},
 };
 
 // Phone wire batch: record fields that go only to a peer at
@@ -2209,6 +2220,26 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_pairingHasher = &SpakeExchange::storedData;
     m_devicesFacade = std::make_unique<StationDevicesFacade>(
         *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());
+    // The phone's direct addresses: the addresses a device can dial the
+    // listener at, read while it listens (every 5 s, so a renumbered
+    // address reaches the devices), into the devices object.
+    m_coreAddresses = std::make_unique<CoreAddressWatcher>();
+    connect(m_coreAddresses.get(), &CoreAddressWatcher::addressesChanged, this,
+            [this](const QStringList& addresses) {
+                if (m_devicesFacade) {
+                    m_devicesFacade->setCoreAddresses(CoreAddresses::toJson(addresses));
+                }
+            });
+    connect(this, &StationServer::listeningChanged, this, [this](bool listening) {
+        if (!m_coreAddresses) {
+            return;
+        }
+        if (listening) {
+            m_coreAddresses->start(serverAddress(), serverPort());
+        } else {
+            m_coreAddresses->stop();
+        }
+    });
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         // Remember revocation even if the same key is added again before confirm.
         for (const Peer& peer : std::as_const(m_peers)) {
@@ -3247,6 +3278,11 @@ const StationIdentity& StationServer::stationIdentity() const
 StationDevicesFacade* StationServer::devicesFacade() const
 {
     return m_devicesFacade.get();
+}
+
+CoreAddressWatcher* StationServer::coreAddressWatcher() const
+{
+    return m_coreAddresses.get();
 }
 
 StationCatalog* StationServer::catalog() const
@@ -7635,13 +7671,22 @@ bool StationServer::peerGetsFeatureProperties(SessionTransport* transport,
         && peerDeclares(transport, feature, 1);
 }
 
+bool StationServer::peerGetsCoreAddresses(SessionTransport* transport) const
+{
+    return peerGetsFeatureProperties(transport, QByteArrayLiteral("coreAddresses"))
+        && peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1)
+        && deviceAdminVersion() >= 1 && peerSeesPairingCode(transport);
+}
+
 bool StationServer::fitPeerOnlyProperties(SessionTransport* transport,
                                           SessionMessage& message) const
 {
     const qsizetype before = message.updates.size();
     for (const PeerOnlyProperty& entry : kPeerOnlyProperties) {
-        if (!peerOnlyPropertyApplies(entry, message)
-            || peerGetsFeatureProperties(transport, QByteArray(entry.feature))) {
+        const bool peerGetsIt = entry.deviceKeyOnly
+            ? peerGetsCoreAddresses(transport)
+            : peerGetsFeatureProperties(transport, QByteArray(entry.feature));
+        if (!peerOnlyPropertyApplies(entry, message) || peerGetsIt) {
             continue;
         }
         const QByteArray name(entry.property);
@@ -10384,6 +10429,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.radioModelsEntry = true;
                 caps.radioModelsVersion = stationRadiosVersion() >= 1 ? 1 : 0;
             }
+            // The phone's direct addresses: devices' coreAddresses, for a
+            // device signed in with its own key that declared coreAddresses 1.
+            caps.coreAddressesVersion = peerGetsCoreAddresses(transport) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

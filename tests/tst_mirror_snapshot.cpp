@@ -24,6 +24,12 @@
 // registry AFTER the slices already exist, then calling that method, is
 // what the first test below does, matching
 // tst_mirror_lifecycle.cpp's own backfill test.
+//
+// Modification history (NereusSDR):
+//   2026-09-29 - The unattached forwarder's frequency change carries a
+//                 second notify since the slice's diversityPattern moves
+//                 with it: one emission for each. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -432,10 +438,20 @@ private slots:
 
         QSignalSpy spy(&mirror, &StateMirror::propertiesChanged);
         slice.setFrequency(14200000.0);
-        QCOMPARE(spy.count(), 1);
+        // A frequency change also moves the slice's diversityPattern (phone
+        // wire batch), a second notify: one emission for each, in order.
+        QCOMPARE(spy.count(), 2);
 
         const auto args = spy.takeFirst();
         QCOMPARE(args.at(0).toByteArray(), QByteArray("slice:0"));
+        const auto updates = args.at(1).value<QList<NereusSDR::MirrorUpdate>>();
+        QCOMPARE(updates.size(), 1);
+        QCOMPARE(updates.first().name, QByteArray("frequency"));
+        const auto second = spy.takeFirst();
+        QCOMPARE(second.at(0).toByteArray(), QByteArray("slice:0"));
+        const auto moved = second.at(1).value<QList<NereusSDR::MirrorUpdate>>();
+        QCOMPARE(moved.size(), 1);
+        QCOMPARE(moved.first().name, QByteArray("diversityPattern"));
     }
 
     // ── The coalescer, standalone ────────────────────────────────────────

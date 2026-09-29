@@ -446,6 +446,11 @@
 //               Anthropic Claude Code.
 //   2026-09-29: takesTransmitSettingsOnAir() (transmitSettingsVersion 13).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: coreAddressWatcher() and
+//               peerGetsCoreAddresses(): devices' coreAddresses and
+//               coreAddressesVersion only to a device signed in with its
+//               own key that declared coreAddresses. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -516,6 +521,7 @@ class SetupDescription;
 using SetupDescriptionService = SetupDescription;
 class StationRadios;
 class StationDevicesFacade;
+class CoreAddressWatcher;
 class TokenStore;
 class TransmitHolder;
 class TransmitState;
@@ -746,6 +752,11 @@ public:
     /// iPhone app Task 13 (R-IOS-08): the mirrored `devices` object and the
     /// device administration verbs behind it.
     StationDevicesFacade* devicesFacade() const;
+    /// The phone's direct addresses: what reads the addresses a device can
+    /// dial this Core at into devices' coreAddresses. It follows the
+    /// listener (listeningChanged); a test starts it on a listener and
+    /// interfaces of its own. Never null.
+    CoreAddressWatcher* coreAddressWatcher() const;
     /// 1 when the Core sends `devices` and takes its verbs (its identity
     /// key is usable), else 0.
     int deviceAdminVersion() const;
@@ -1682,6 +1693,12 @@ private:
     /// on a Core with a radio model: that feature's properties reach it.
     bool peerGetsFeatureProperties(SessionTransport* transport,
                                    const QByteArray& feature) const;
+    /// The phone's direct addresses: devices' coreAddresses reach
+    /// `transport` only when it declared coreAddresses 1 (as
+    /// peerGetsFeatureProperties) and deviceAuth 1, the Core sends the
+    /// devices object, and it signed in with a paired device's own key
+    /// (peerSeesPairingCode): never a token sign-in.
+    bool peerGetsCoreAddresses(SessionTransport* transport) const;
     /// Takes each declared feature's properties (kPeerOnlyProperties) out
     /// of a schema, object.create or delta for a peer that did not declare
     /// the feature, so an older app sees today's wire. False when a delta
@@ -2230,6 +2247,8 @@ private:
     std::unique_ptr<DeviceAuthenticator> m_deviceAuth;
     // iPhone app Task 13: after the three it reads, so it goes first.
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
+    // The phone's direct addresses: into m_devicesFacade's coreAddresses.
+    std::unique_ptr<CoreAddressWatcher> m_coreAddresses;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
     std::unique_ptr<SetupDescriptionService> m_setupDescription;

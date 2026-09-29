@@ -1851,7 +1851,7 @@ void P1RadioConnection::setWatchdogEnabled(bool enabled)
 }
 
 // ---------------------------------------------------------------------------
-// txSendStats — G-07
+// txSendStats: G-07
 //
 // The transmit diagnostics' view of this path (the Core's "Transmit ended"
 // line). Protocol 1 counts only what a full ring refused; the send-timing

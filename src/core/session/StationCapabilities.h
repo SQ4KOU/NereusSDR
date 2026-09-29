@@ -181,6 +181,8 @@
 //   2026-09-29 - kTransmitSettingsOnAirVersion (transmitSettingsVersion
 //                13). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29 - The phone's direct addresses: coreAddressesVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -304,6 +306,13 @@ struct StationCapabilities {
     /// and records are today's.
     bool radioModelsEntry = false;
     int radioModelsVersion = 0;
+    /// The phone's direct addresses: 1 means `devices` carries
+    /// `coreAddresses`, where a device can dial this Core. Sent after
+    /// radioModelsVersion, only to a peer at minor 11 whose hello declared
+    /// coreAddresses 1 and deviceAuth 1 and that signed in with a paired
+    /// device's own key, on a Core with a radio model and the devices
+    /// object; any other peer's capabilities and devices object are today's.
+    int coreAddressesVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

@@ -163,6 +163,10 @@
 //                 (diversityPatternVersion 1); RadioModel logCategoryList
 //                 ConstantSnapshot (logCategoryListVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The phone's direct addresses: StationDevicesFacade
+//                 coreAddresses Outbound and in featureGates
+//                 (coreAddressesVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -876,6 +880,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // (StationServer::sendToSession).
     { "StationDevicesFacade", "pairingWindowOpen", MirrorDirection::Outbound },
     { "StationDevicesFacade", "pairingCode", MirrorDirection::Outbound },
+    // The phone's direct addresses (coreAddressesVersion 1): where a device
+    // can dial this Core, Core to device only. Only to a connection signed
+    // in with a paired device's key that declared coreAddresses
+    // (StationServer::fitPeerOnlyProperties).
+    { "StationDevicesFacade", "coreAddresses", MirrorDirection::Outbound },
 
     // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
     // Core owns and an app draws its controls from, read-only. They change
@@ -1120,6 +1129,10 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // categories with their labels, to a peer that declared
         // logCategoryList 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "logCategoryList", "logCategoryList", 1},
+        // The phone's direct addresses (coreAddressesVersion 1): where a
+        // device can dial this Core, to a device signed in with its own key
+        // that declared coreAddresses 1 (StationServer::fitPeerOnlyProperties).
+        {"StationDevicesFacade", "coreAddresses", "coreAddresses", 1},
     };
     return gates;
 }
