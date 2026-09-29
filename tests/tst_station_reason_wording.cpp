@@ -1482,6 +1482,11 @@ const QList<AppSideReason>& appSideReasons()
         // R-IOS-18 (parity Task 21): the Core's radio.
         {"src/core/session/IStationLink.h", "stationRadiosUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // iPhone app plan Task 25 (This Core page): the Core's paired devices.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
+         "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "settingsHygieneUnavailableReason",
          "a remote window's own fallback when its Core cannot validate settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",

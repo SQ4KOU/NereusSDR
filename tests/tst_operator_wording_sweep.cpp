@@ -320,6 +320,9 @@ QString setupInternalNameIn(const QString& text)
         QStringLiteral("minor (fine) grid lines"), // grid lines, not a version
         QStringLiteral("ExpertSDR3 protocol"),     // the TCI mode, by its product's name
         QStringLiteral("PA Telemetry"),            // the radio's PA readings
+        // Hardware Config > Radio Info's row for the radio's protocol
+        // (Protocol 1 or 2), as the desktop tab labels it (R-R3-49).
+        QStringLiteral("Protocol:"),
     };
     QString rest = text;
     for (const QString& phrase : operatorPhrases) {
@@ -1639,7 +1642,7 @@ private slots:
             for (const QString& id : ids) {
                 const QString description =
                     service.property(id.toLatin1().constData()).toString();
-                for (int version = 1; version <= 12; ++version) {
+                for (int version = 1; version <= 13; ++version) {
                     const QString fitted =
                         SetupDescriptionService::fitCategoryForVersion(description, version);
                     collectDescriptionText(

@@ -951,7 +951,7 @@ private slots:
         LoopbackTransport* app = core.signIn(settingsPhone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(10));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         QCOMPARE(pa.value("pages").toArray().size(), 2);
@@ -1127,7 +1127,7 @@ private slots:
         LoopbackTransport* app = core.signIn(phone, features);
         QVERIFY(admitted(app));
         QCOMPARE(capability(app->received(), QStringLiteral("transmitSettingsVersion")),
-                 std::optional<qint64>(9));
+                 std::optional<qint64>(10));
         const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
             QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
         const QJsonArray power = pa.value("pages").toArray().last().toObject()
