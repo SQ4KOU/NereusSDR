@@ -276,9 +276,13 @@ private slots:
         QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band20m));
         QCOMPARE(tx.powerForBand(Band::Band20m), 80);
 
+        QVERIFY(tx.tuneTxBandKnown());
         QSignalSpy txBand(&model, &RadioModel::transmitBandChanged);
         model.disconnectFromRadio();
         QCOMPARE(txBand.count(), 1);
+        // PA on-air gate re-review, Minor: the tune power's transmit band
+        // is forgotten with it.
+        QVERIFY(!tx.tuneTxBandKnown());
 
         tx.setPowerForBand(Band::Band20m, 33);
         slice->setFrequency(7'100'000.0);

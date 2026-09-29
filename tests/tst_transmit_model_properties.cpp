@@ -260,6 +260,7 @@ private slots:
     void tunePowerCommandSetsTheTxBandAndSource();
     void tunePowerCommandRefusals();
     void coreBandChangeMovesTheTunePowerSlider();
+    void firstKnownTransmitBandRepaintsTheTuneSlider();
     void remoteTxAppletControlsReachTheCore();
     void remotePhoneCwControlsReachTheCore();
     void containerMonButtonTogglesTheCoresMon();
@@ -896,6 +897,34 @@ void TstTransmitModelProperties::coreBandChangeMovesTheTunePowerSlider()
     QCOMPARE(coreTx.tunePowerForBand(Band::Band40m), 31);
     s.unkeyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Rx);
+}
+
+// PA on-air gate re-review, Minor: the first transmit band a local window
+// learns repaints the Tune Power slider with that band's tune power, even
+// when that value equals the one cached before the band was known.
+void TstTransmitModelProperties::firstKnownTransmitBandRepaintsTheTuneSlider()
+{
+    RadioModel model;
+    TransmitModel& tx = model.transmitModel();
+    tx.setTunePowerForBand(Band::Band40m, 30);
+    QCOMPARE(tx.tunePowerForBand(Band::Band20m), 50);
+    QVERIFY(!tx.tuneTxBandKnown());
+
+    TxApplet applet(&model);
+    applet.setCurrentBand(Band::Band40m);
+    QSlider* const slider = applet.tunePowerSlider();
+    QVERIFY(slider);
+    QCOMPARE(slider->value(), 30);
+
+    QSignalSpy shown(&tx, &TransmitModel::tunePowerForTxBandChanged);
+    tx.setTuneTxBand(Band::Band20m);
+    QCOMPARE(shown.count(), 1);
+    QCOMPARE(shown.at(0).at(0).toInt(), 50);
+    QCOMPARE(slider->value(), 50);
+
+    // Setting the same band again is not a change.
+    tx.setTuneTxBand(Band::Band20m);
+    QCOMPARE(shown.count(), 1);
 }
 
 void TstTransmitModelProperties::remoteTxAppletControlsReachTheCore()

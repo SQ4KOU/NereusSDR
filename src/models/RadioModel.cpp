@@ -667,6 +667,9 @@
 //                 row the Core holds on the air, and a remote window whose
 //                 Core sends it opens and locks that row. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: a disconnect also forgets the
+//                 tune power's transmit band (clearTuneTxBand). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -22543,6 +22546,10 @@ void RadioModel::teardownConnection()
         m_txBandKnown = false;
         emit transmitBandChanged();
     }
+    // PA on-air gate re-review: the tune power's transmit band goes with
+    // it, so the next band seen repaints the Tune Power slider as a first
+    // band does.
+    m_transmitModel.clearTuneTxBand();
 
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the

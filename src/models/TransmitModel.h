@@ -287,6 +287,11 @@
 //   2026-09-29 - PA on-air gate review: tuneTxBandKnown() for the TX
 //                 applet's Tune Power slider. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: the first transmit band
+//                 repaints the tune power (tunePowerForTxBandChanged) even
+//                 when unchanged; clearTuneTxBand() forgets it at a
+//                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -702,6 +707,9 @@ public:
     /// True once RadioModel has set the transmit band (setTuneTxBand).
     bool tuneTxBandKnown() const noexcept { return m_tuneTxBandKnown; }
     void setTuneTxBand(Band band);
+    /// Forget the transmit band (a disconnect); tuneTxBandKnown() is false
+    /// until the next setTuneTxBand.
+    void clearTuneTxBand();
     /// What the TX applet's Tune Power slider does locally: the transmit
     /// band's tune power, and the tune drive source to TuneSlider. False,
     /// changing nothing, before the transmit band is known.

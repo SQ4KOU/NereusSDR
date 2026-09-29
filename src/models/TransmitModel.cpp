@@ -279,6 +279,11 @@
 //                 (setter and load) keeps only finite values in 0..50 MHz,
 //                 else the band's default. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: the first transmit band
+//                 repaints the tune power (tunePowerForTxBandChanged) even
+//                 when unchanged; clearTuneTxBand() forgets it at a
+//                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -757,9 +762,25 @@ void TransmitModel::refreshTunePowerForTxBand()
 
 void TransmitModel::setTuneTxBand(Band band)
 {
+    const bool firstKnown = !m_tuneTxBandKnown;
     m_tuneTxBand = band;
     m_tuneTxBandKnown = true;
+    if (firstKnown) {
+        // PA on-air gate re-review: until now the slider showed its own
+        // band's tune power, so the first transmit band repaints it even
+        // when its value equals the cached one.
+        m_tunePowerForTxBand = tunePowerForBand(band);
+        emit tunePowerForTxBandChanged(m_tunePowerForTxBand);
+        return;
+    }
     refreshTunePowerForTxBand();
+}
+
+void TransmitModel::clearTuneTxBand()
+{
+    // PA on-air gate re-review: the transmit band belonged to the radio
+    // that went away (RadioModel teardown).
+    m_tuneTxBandKnown = false;
 }
 
 bool TransmitModel::setTunePowerForTxBand(int watts)
