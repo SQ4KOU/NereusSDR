@@ -19,6 +19,9 @@
 //     other sources: off with the plain reason when it could not start.
 //   - The listed frequency follows the Core's RADE slice, and a switch into
 //     RADE shows the station; "Hide my station" keeps it hidden.
+//   - Each freedvStations record carries the station's band
+//     (stationFreedvVersion 2), the band the desktop's own lookup gives its
+//     frequency, as a remote window's band filter reads it.
 //   - In a real remote window, the FreeDV tab and the FreeDV Reporter
 //     dialog wait for the Core, then list its stations with distance and
 //     heading at once, with no Save & Propagate.
@@ -35,6 +38,9 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: each station's band on its record (R-IOS-26,
+//               stationFreedvVersion 2). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -66,6 +72,7 @@
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/FreeDVReporterDialog.h"
 #include "gui/SpotHubDialog.h"
+#include "models/Band.h"
 #include "models/FreeDVStationModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -326,9 +333,9 @@ private slots:
         QTRY_COMPARE(core->freeDvStationModel()->stationCount(), 1);
 
         Session s(core.get(), m_securityDir.path(), this);
-        QCOMPARE(s.server->stationFreedvVersion(), 1);
+        QCOMPARE(s.server->stationFreedvVersion(), 2);
         QVERIFY(s.connect());
-        QCOMPARE(s.client->capabilities().stationFreedvVersion, 1);
+        QCOMPARE(s.client->capabilities().stationFreedvVersion, 2);
         QVERIFY(s.client->stationFreedvAvailable());
         FreeDVStationModel* windowList = s.window.freeDvStationModel();
         QVERIFY(!windowList->computesDistance());
@@ -388,6 +395,11 @@ private slots:
         QCOMPARE(f.value(QStringLiteral("messageChangedAtMs")).toDouble(), 1790000000000.0);
         QCOMPARE(f.value(QStringLiteral("frequencyHz")).toDouble(), 14236000.0);
         QCOMPARE(f.value(QStringLiteral("gridSquare")).toString(), QStringLiteral("FN31"));
+        // stationFreedvVersion 2: the band, as the window's own band filter
+        // finds it for the frequency it was given.
+        QCOMPARE(f.value(QStringLiteral("band")).toInt(-1), static_cast<int>(Band::Band20m));
+        QCOMPARE(f.value(QStringLiteral("band")).toInt(-1),
+                 static_cast<int>(bandFromFrequency(static_cast<double>(w1aw.frequencyHz))));
 
         // A station that leaves, and the Core's list starting again.
         fake.push(QStringLiteral("remove_connection"),
@@ -406,6 +418,71 @@ private slots:
                           QStringLiteral("CM87")));
         s.window.clearStationRecords();
         QCOMPARE(windowList->stationCount(), 0);
+    }
+
+    // stationFreedvVersion 2 (R-IOS-26): a station's record carries the band
+    // the desktop's own Band::bandFromFrequency gives its frequency, numbered
+    // as the spots record numbers its band, and none while its frequency is
+    // not known (the desktop's band filter lists such a station under All
+    // only). Band edges, the gaps between bands, WWV and 2 m.
+    void aStationsRecordCarriesTheDesktopsBand_data()
+    {
+        QTest::addColumn<qint64>("hz");
+        QTest::addColumn<int>("expected");  // -1: no band
+
+        const auto row = [](const char* name, qint64 hz, int expected) {
+            QTest::newRow(name) << hz << expected;
+        };
+        const auto b = [](Band band) { return static_cast<int>(band); };
+        row("not known", 0, -1);
+        row("below 160 m", 1799999, b(Band::GEN));
+        row("160 m low edge", 1800000, b(Band::Band160m));
+        row("160 m high edge", 2000000, b(Band::Band160m));
+        row("above 160 m", 2000001, b(Band::GEN));
+        row("gap 160 to 80 m", 3000000, b(Band::GEN));
+        row("80 m low edge", 3500000, b(Band::Band80m));
+        row("80 m high edge", 4000000, b(Band::Band80m));
+        row("60 m low edge", 5330000, b(Band::Band60m));
+        row("60 m high edge", 5410000, b(Band::Band60m));
+        row("above 60 m", 5410001, b(Band::GEN));
+        row("WWV 5 MHz", 5000000, b(Band::WWV));
+        row("40 m RADE calling", 7177000, b(Band::Band40m));
+        row("40 m high edge", 7300000, b(Band::Band40m));
+        row("above 40 m", 7300001, b(Band::GEN));
+        row("WWV 10 MHz", 10000000, b(Band::WWV));
+        row("30 m high edge", 10150000, b(Band::Band30m));
+        row("20 m RADE calling", 14236000, b(Band::Band20m));
+        row("above 20 m", 14350001, b(Band::GEN));
+        row("17 m low edge", 18068000, b(Band::Band17m));
+        row("15 m high edge", 21450000, b(Band::Band15m));
+        row("12 m low edge", 24890000, b(Band::Band12m));
+        row("10 m high edge", 29700000, b(Band::Band10m));
+        row("gap 10 to 6 m", 40000000, b(Band::GEN));
+        row("6 m low edge", 50000000, b(Band::Band6m));
+        row("6 m high edge", 54000000, b(Band::Band6m));
+        row("2 m", 144500000, b(Band::GEN));
+    }
+
+    void aStationsRecordCarriesTheDesktopsBand()
+    {
+        QFETCH(qint64, hz);
+        QFETCH(int, expected);
+        FreeDVStation info;
+        info.sid = QStringLiteral("sid-band");
+        info.callsign = QStringLiteral("W1AW");
+        info.frequencyHz = static_cast<quint64>(hz);
+        const QJsonObject f = FreeDVStationModel::recordFields(info, 0);
+        if (expected < 0) {
+            QVERIFY(!f.contains(QStringLiteral("band")));
+            return;
+        }
+        QVERIFY(f.value(QStringLiteral("band")).isDouble());
+        QCOMPARE(f.value(QStringLiteral("band")).toInt(), expected);
+        // The desktop's band for the frequency a remote window is given.
+        const FreeDVStation windowCopy =
+            FreeDVStationModel::stationFromRecord(info.sid, f);
+        QCOMPARE(static_cast<int>(bandFromFrequency(static_cast<double>(windowCopy.frequencyHz))),
+                 expected);
     }
 
     // A window's message, QSY request and "Hide my station" reach the Core.

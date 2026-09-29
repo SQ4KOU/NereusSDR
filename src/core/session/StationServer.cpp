@@ -618,6 +618,12 @@
 //               txModMonitor.reset, and a window's ModMon/FbStream applied
 //               to the Core's feedback analyzer. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: spot resolved mode (R-IOS-25): recordStreamVersion 2, each
+//               spots record carrying resolvedMode. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: FreeDV band (R-IOS-26): stationFreedvVersion 2, each
+//               freedvStations record carrying the station's band. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -8621,20 +8627,24 @@ int StationServer::dspInfoVersion() const
 int StationServer::recordStreamVersion() const
 {
     // R-IOS-25 / R-R3-49 (parity Task 19): the spots and the spot sources
-    // are the Core's own, so a local radio model.
+    // are the Core's own, so a local radio model. 2 (spot resolved mode,
+    // R-IOS-25): each spot record also carries resolvedMode
+    // (SpotSourceHost::spotRecordFields); everything 1 brings is unchanged.
     return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
             && m_radioModel->spotSourceHost() != nullptr
-        ? 1
+        ? 2
         : 0;
 }
 
 int StationServer::stationFreedvVersion() const
 {
     // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the Core
-    // runs FreeDV Reporter itself, with the record streams.
+    // runs FreeDV Reporter itself, with the record streams. 2 (R-IOS-26):
+    // each freedvStations record also carries the station's band
+    // (FreeDVStationModel::recordFields); everything 1 brings is unchanged.
     return recordStreamVersion() >= 1 && m_radioModel->freeDvReporter() != nullptr
             && m_radioModel->freeDvStationModel() != nullptr
-        ? 1
+        ? 2
         : 0;
 }
 

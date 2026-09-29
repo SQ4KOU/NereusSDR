@@ -377,7 +377,7 @@
             "kind": "i64",
             "name": "recordStreamVersion",
             "ordinal": 0,
-            "value": 1
+            "value": 2
           },
           {
             "kind": "i64",
@@ -413,7 +413,7 @@
             "kind": "i64",
             "name": "stationFreedvVersion",
             "ordinal": 0,
-            "value": 1
+            "value": 2
           },
           {
             "kind": "i64",

@@ -50,6 +50,9 @@
 //                                    and stop, status message, QSY request
 //                                    and "hide my station". AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Spot resolved mode (R-IOS-25): the
+//                                    spot record's resolvedMode.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -133,7 +136,9 @@ public:
     /// call, mode, source, spotter, comment, band (the Band number the
     /// catalogue uses), dxccColour ("#rrggbb", or empty when the Core does
     /// not colour it) and dxccPriority (4 a new DXCC entity, 3 a new band,
-    /// 2 a new mode, 1 worked before, 0 not known or colouring off).
+    /// 2 a new mode, 1 worked before, 0 not known or colouring off), and
+    /// resolvedMode (recordStreamVersion 2: the DSPMode number
+    /// SpotModeResolver::dspModeForSpot gives the spot, absent when none).
     static QJsonObject spotRecordFields(const SpotData& spot, const DxccColorProvider* dxcc);
 
     /// Why a window cannot write `spotSources`.
