@@ -48,6 +48,7 @@
 #include "core/PaProfileManager.h"
 #include "gui/setup/PaSetupPages.h"
 #include "models/Band.h"
+#include "core/MoxController.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -116,6 +117,7 @@ private slots:
     void auto_cal_checkbox_present_and_toggleable();
     void warning_label_visible_when_profile_diverges();
     void gain_spinbox_bounds_match_thetis_minimum_38_8();  // issue #199
+    void on_air_locks_profiles_and_other_bands_like_thetis();
 };
 
 // ---------------------------------------------------------------------------
@@ -550,6 +552,74 @@ void TstPaGainByBandPageEditor::gain_spinbox_bounds_match_thetis_minimum_38_8()
         QCOMPARE(spin->minimum(), 38.8);
         QCOMPARE(spin->maximum(), 100.0);
     }
+}
+
+// R-R3-49: while the radio is on the air Thetis refuses a profile switch and
+// every band's values but the transmitting band's (setup.cs:23826-23834
+// [v2.10.3.15] OnMoxChangeHandler: PAProfileEnableControls(newMox) and
+// enabledAllPAnuds(false), which leaves _adjustingBand, the TX band). A
+// profile switch reaches the drive at its next recompute, so it could
+// raise the output mid-transmission.
+void TstPaGainByBandPageEditor::on_air_locks_profiles_and_other_bands_like_thetis()
+{
+    RadioModel model;
+    primeModelWithProfiles(model);
+
+    PaGainByBandPage page(&model);
+    page.applyCapabilityVisibility(model.boardCapabilities());
+
+    QList<QWidget*> profileControls{page.profileComboForTest(), page.newButtonForTest(),
+                                    page.copyButtonForTest(), page.deleteButtonForTest(),
+                                    page.resetButtonForTest()};
+    QHash<QWidget*, bool> before;
+    for (QWidget* w : profileControls) {
+        QVERIFY(w != nullptr);
+        before.insert(w, w->isEnabled());
+    }
+    QVERIFY(page.profileComboForTest()->isEnabled());
+    QVERIFY(page.gainSpinForTest(Band::Band40m)->isEnabled());
+    const QString gainTip = page.gainSpinForTest(Band::Band40m)->toolTip();
+
+    MoxController* mox = model.moxController();
+    QVERIFY(mox != nullptr);
+    mox->setMoxCheck({});
+    mox->setMox(true);  // logical test state, no radio transport
+    QTRY_VERIFY(model.isCoreOnAir());
+
+    // No slice is bound, so the Core transmits on its last band.
+    const Band txBand = model.lastBand();
+    QCOMPARE(txBand, Band::Band20m);
+    for (QWidget* w : profileControls) {
+        QVERIFY2(!w->isEnabled(), qPrintable(w->metaObject()->className()));
+        QVERIFY(!w->toolTip().isEmpty());
+    }
+    for (int n = 0; n < PaGainByBandPage::kPaBandCount; ++n) {
+        const Band band = static_cast<Band>(n);
+        const bool open = (band == txBand);
+        QCOMPARE(page.gainSpinForTest(band)->isEnabled(), open);
+        QCOMPARE(page.maxPowerSpinForTest(band)->isEnabled(), open);
+        QCOMPARE(page.useMaxPowerCheckForTest(band)->isEnabled(), open);
+        for (int step = 0; step < PaGainByBandPage::kAutoCalDriveSteps; ++step) {
+            QCOMPARE(page.adjustSpinForTest(band, step)->isEnabled(), open);
+        }
+    }
+    // Thetis leaves New Cal unlocked under MOX.
+    QVERIFY(page.newCalCheckForTest()->isEnabled());
+
+    // A capability pass while keyed keeps the lock.
+    page.applyCapabilityVisibility(model.boardCapabilities());
+    QVERIFY(!page.profileComboForTest()->isEnabled());
+    QVERIFY(!page.gainSpinForTest(Band::Band40m)->isEnabled());
+    QVERIFY(page.gainSpinForTest(txBand)->isEnabled());
+
+    mox->setMox(false);
+    QTRY_VERIFY(!model.isCoreOnAir());
+    for (QWidget* w : profileControls) {
+        QCOMPARE(w->isEnabled(), before.value(w));
+    }
+    QVERIFY(page.gainSpinForTest(Band::Band40m)->isEnabled());
+    QCOMPARE(page.gainSpinForTest(Band::Band40m)->toolTip(), gainTip);
+    QVERIFY(page.adjustSpinForTest(Band::Band40m, 4)->isEnabled());
 }
 
 QTEST_MAIN(TstPaGainByBandPageEditor)

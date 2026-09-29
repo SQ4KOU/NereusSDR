@@ -142,6 +142,15 @@
 //                 the adjust tooltip's stray %, and the Default profile found
 //                 by its real name after a delete). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49: PA Gain follows Thetis's on-the-air lock (found
+//                 bug: a local window could switch, create, copy, delete or
+//                 reset a profile, or change another band's values, while
+//                 the radio transmitted, and a profile switch reaches the
+//                 drive at its next recompute). While the Core is on the
+//                 air the profile controls and every band's row but the
+//                 transmitting band's are disabled, in a local and a remote
+//                 window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -212,6 +221,7 @@
 #include "gui/widgets/MetricLabel.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QCheckBox>
@@ -883,6 +893,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         setTransmitSettingsPermittedAt(6, false, QString());
         setTransmitPermitted(false, QString());
     }
+
+    // R-R3-49: Thetis's on-the-air lock. isCoreOnAir follows the Core's MOX,
+    // TUNE and two-tone in a local and a remote window alike.
+    connect(model, &RadioModel::coreOnAirChanged, this,
+            [this](bool onAir) { applyOnAirState(onAir); });
+    if (model->isCoreOnAir()) {
+        applyOnAirState(true);
+    }
 }
 
 QList<QWidget*> PaGainByBandPage::paSettingsControls() const
@@ -898,6 +916,105 @@ QList<QWidget*> PaGainByBandPage::paSettingsControls() const
     return controls;
 }
 
+QList<QWidget*> PaGainByBandPage::paBandControls(int bandIndex) const
+{
+    QList<QWidget*> controls{m_gainSpins[bandIndex], m_maxPowerSpins[bandIndex],
+                             m_useMaxPowerChecks[bandIndex]};
+    for (int step = 0; step < kAutoCalDriveSteps; ++step) {
+        controls << m_adjustSpins[bandIndex][step];
+    }
+    return controls;
+}
+
+// R-R3-49: what Thetis locks while the radio is on the air.
+// From Thetis setup.cs:23826-23834 [v2.10.3.15] OnMoxChangeHandler:
+//   PAProfileEnableControls(newMox);
+//   if (newMox) enabledAllPAnuds(false); else enabledAllPAnuds(true);
+//   //[2.3.10.6]MW0LGE added (also in ATTOnTX)  [original inline comment from
+//   setup.cs:23838, OnTXBandChanged's TX attenuator label line, not ported]
+// From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+//   //prevent profile switch during a tx
+//   //user can only tweak the NUD's
+//   comboPAProfile.Enabled = !tx; btnNewPAProfile.Enabled = !tx;
+//   if (tx) { btnDeletePAProfile, btnResetPAProfile, btnCopyPAProfile
+//             .Enabled = false; }
+// From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds(false):
+//   // ignore current band
+//   if (b != _adjustingBand) c.Enabled = false;
+// Thetis shows the adjust matrix, max power and use-max for _adjustingBand
+// alone (panelAdjustGain, enabledPAAdjust), so under MOX only that band's
+// values can change; NereusSDR shows every band's row and locks the others.
+// New Cal and the G2E's bypass box are not in Thetis's lock.
+QList<QWidget*> PaGainByBandPage::onAirLockedControls() const
+{
+    if (!m_onAir) {
+        return {};
+    }
+    QList<QWidget*> controls{m_profileCombo, m_btnNew, m_btnCopy, m_btnDelete, m_btnReset};
+    for (int n = 0; n < kPaBandCount; ++n) {
+        if (n != m_onAirBandIndex) {
+            controls << paBandControls(n);
+        }
+    }
+    return controls;
+}
+
+void PaGainByBandPage::applyOnAirState(bool onAir)
+{
+    if (onAir && !m_onAir) {
+        // The band the Core transmits on: the transmit slice's, else its
+        // last band (RadioModel::restoreNormalTxDrive reads the same).
+        RadioModel* const radio = model();
+        Band txBand = radio ? radio->lastBand() : Band::GEN;
+        if (radio) {
+            if (const SliceModel* const txSlice = radio->txBoundSlice()) {
+                txBand = bandFromFrequency(txSlice->frequency());
+            }
+        }
+        // From Thetis setup.cs:23839-23852 [v2.10.3.15] setAdjustingBand: a
+        // band outside 160 m..6 m and the transverter bands has no PA values
+        // to adjust:
+        //   _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+        //   //[2.3.10.6]MW0LGE added (also in ATTOnTX)  [original inline comment
+        //   from setup.cs:23838, OnTXBandChanged's TX attenuator label line, not ported]
+        //   enabledPAAdjust(false);
+        // NereusSDR's XVTR row stands for Thetis's VHF0..VHF13.
+        const int index = static_cast<int>(txBand);
+        const bool adjustable = (txBand >= Band::Band160m && txBand <= Band::Band6m)
+                                || txBand == Band::XVTR;
+        m_onAirBandIndex = (adjustable && index >= 0 && index < kPaBandCount) ? index : -1;
+    }
+    if (onAir == m_onAir) {
+        return;
+    }
+    m_onAir = onAir;
+    if (!onAir) {
+        m_onAirBandIndex = -1;
+    }
+    applyPaSettingsGate();
+}
+
+void PaGainByBandPage::applyPaSettingsGate()
+{
+    const QList<QWidget*> all = paSettingsControls();
+    if (!m_paSettingsPermitted) {
+        gateTransmitControls(all, false, m_paSettingsReason);
+        return;
+    }
+    const QList<QWidget*> locked = onAirLockedControls();
+    QList<QWidget*> open;
+    for (QWidget* control : all) {
+        if (!locked.contains(control)) {
+            open << control;
+        }
+    }
+    gateTransmitControls(open, true, QString());
+    gateTransmitControls(
+        locked, false,
+        tr("While the radio transmits, only the transmitting band's values can change. "
+           "Profiles change on receive."));
+}
+
 QList<QWidget*> PaGainByBandPage::paKeyingControls() const
 {
     // The sweep engages TUNE on every band (Thetis chkAutoPACalibrate), so
@@ -907,7 +1024,7 @@ QList<QWidget*> PaGainByBandPage::paKeyingControls() const
 
 void PaGainByBandPage::applyPaGates()
 {
-    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
+    applyPaSettingsGate();
     gateTransmitControls(paKeyingControls(), m_paKeyingPermitted, m_paKeyingReason);
 }
 
@@ -929,7 +1046,7 @@ void PaGainByBandPage::setTransmitSettingsPermittedAt(int version, bool permitte
     m_paSettingsPermitted = permitted;
     m_paSettingsReason = reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
                                           : reason;
-    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
+    applyPaSettingsGate();
 }
 
 // ── Phase 8 of #167: per-SKU visibility wiring ────────────────────────────────

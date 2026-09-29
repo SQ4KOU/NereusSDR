@@ -577,6 +577,17 @@ private:
     QList<QWidget*> paSettingsControls() const;
     QList<QWidget*> paKeyingControls() const;
     void applyPaGates();
+    // R-R3-49: the version 6 gate with Thetis's on-the-air lock laid over
+    // it (applyOnAirState): one call, so each control follows one helper.
+    void applyPaSettingsGate();
+    // R-R3-49: the Core went on or off the air (RadioModel::coreOnAirChanged).
+    void applyOnAirState(bool onAir);
+    QList<QWidget*> paBandControls(int bandIndex) const;
+    QList<QWidget*> onAirLockedControls() const;
+    bool    m_onAir{false};
+    // Thetis _adjustingBand: the transmitting band when the radio went on
+    // the air, or no band (-1) when that band has no PA values.
+    int     m_onAirBandIndex{-1};
     bool    m_paSettingsPermitted{true};
     QString m_paSettingsReason;
     bool    m_paKeyingPermitted{true};
