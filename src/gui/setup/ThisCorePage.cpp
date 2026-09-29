@@ -20,6 +20,11 @@
 //                                    paired devices (Revoke, Add a device)
 //                                    and its identity and key backup line.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The model choice is the Core's list for
+//                                    the radio's board (stationRadios'
+//                                    models); disabled with a reason on a
+//                                    Core that does not send it. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/setup/ThisCorePage.h"
@@ -48,6 +53,9 @@ namespace NereusSDR {
 namespace {
 
 constexpr int kMacRole = Qt::UserRole + 1;
+// The models the Core accepts for the radio (stationRadios' models), on
+// column 2; empty when the Core did not send them.
+constexpr int kModelsRole = Qt::UserRole + 2;
 
 // An ISO 8601 time from the Core, in this computer's words.
 QString when(const QString& iso)
@@ -373,6 +381,11 @@ QString ThisCorePage::reconnectToChangeRadioReason()
     return tr("Reconnect this window to change the Core's radio.");
 }
 
+QString ThisCorePage::modelListUnavailableReason()
+{
+    return tr("Update the Core to change this radio's model from here.");
+}
+
 QString ThisCorePage::unavailableReason() const
 {
     if (!m_stationAvailable) {
@@ -426,6 +439,11 @@ void ThisCorePage::rebuildList()
         item->setText(4, radio.inUse ? tr("The Core's radio") : QString());
         item->setData(0, kMacRole, radio.mac);
         item->setData(1, kMacRole, radio.model);
+        QVariantList models;
+        for (int m : radio.models) {
+            models.append(m);
+        }
+        item->setData(2, kModelsRole, models);
         if (radio.mac == keep || (keep.isEmpty() && radio.inUse)) {
             current = item;
         }
@@ -449,16 +467,29 @@ void ThisCorePage::refreshControls()
     const bool picked = !selectedMac().isEmpty();
     const bool coresRadio = selectedIsCoresRadio();
 
-    // The model choice follows the selected radio.
+    // The model choice follows the selected radio: the models the Core
+    // accepts for its board (station.setRadioModel's check), as the Core
+    // sent them. The model alone does not name the board (Red Pitaya runs on
+    // a Hermes or an Orion MkII board), so without the Core's list the
+    // choice shows the model the Core runs it as and waits.
     m_fillingModels = true;
     m_modelCombo->clear();
+    bool haveModelList = false;
     if (QTreeWidgetItem* item = m_list->currentItem()) {
-        const auto model = static_cast<HPSDRModel>(item->data(1, kMacRole).toInt());
-        for (HPSDRModel candidate : compatibleModels(boardForModel(model))) {
-            m_modelCombo->addItem(QString::fromLatin1(displayName(candidate)),
-                                  static_cast<int>(candidate));
+        const int model = item->data(1, kMacRole).toInt();
+        const QVariantList models = item->data(2, kModelsRole).toList();
+        haveModelList = !models.isEmpty();
+        if (haveModelList) {
+            for (const QVariant& candidate : models) {
+                m_modelCombo->addItem(
+                    QString::fromLatin1(displayName(static_cast<HPSDRModel>(candidate.toInt()))),
+                    candidate.toInt());
+            }
+        } else {
+            m_modelCombo->addItem(QString::fromLatin1(displayName(static_cast<HPSDRModel>(model))),
+                                  model);
         }
-        m_modelCombo->setCurrentIndex(m_modelCombo->findData(static_cast<int>(model)));
+        m_modelCombo->setCurrentIndex(m_modelCombo->findData(model));
     }
     m_fillingModels = false;
 
@@ -472,8 +503,8 @@ void ThisCorePage::refreshControls()
     gate(m_useButton, usable && picked && !coresRadio,
          !usable ? why : !picked ? noRadio : tr("The Core is already using this radio."),
          tr("Make this the Core's radio."));
-    gate(m_modelCombo, usable && picked && m_modelCombo->count() > 0,
-         !usable ? why : noRadio,
+    gate(m_modelCombo, usable && picked && haveModelList,
+         !usable ? why : !picked ? noRadio : modelListUnavailableReason(),
          tr("The model the Core runs this radio as, from its next connect."));
     gate(m_forgetButton, usable && picked && !coresRadio,
          !usable ? why : !picked ? noRadio : StationRadios::inUseReason(),

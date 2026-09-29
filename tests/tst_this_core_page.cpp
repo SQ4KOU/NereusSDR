@@ -50,6 +50,8 @@
 #include <QTreeWidget>
 
 #include "core/AppSettings.h"
+#include "core/HardwareProfile.h"
+#include "core/HpsdrModel.h"
 #include "core/MoxController.h"
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
@@ -77,6 +79,20 @@ RadioInfo g2Radio()
     info.boardType = HPSDRHW::Saturn;
     info.protocol = ProtocolVersion::Protocol2;
     info.name = QStringLiteral("Bench G2");
+    return info;
+}
+
+const QString kHermesMac = QStringLiteral("AA:BB:CC:DD:EE:33");
+
+// A Hermes board (0x01), which can run as Red Pitaya (Thetis NetworkIO.cs
+// board check, compatibleModels in HardwareProfile.cpp).
+RadioInfo hermesRadio()
+{
+    RadioInfo info;
+    info.macAddress = kHermesMac;
+    info.address = QHostAddress(QStringLiteral("192.168.1.33"));
+    info.boardType = HPSDRHW::Hermes;
+    info.name = QStringLiteral("Bench Pitaya");
     return info;
 }
 
@@ -332,6 +348,81 @@ private slots:
         h.station().setStationRadioWaiting(QString());
         QTRY_COMPARE(page->statusLabel()->text(),
                      QStringLiteral("The Core is waiting for you to choose its radio."));
+    }
+
+    // Manage Radios offers the models the Core accepts for the radio's
+    // board, from the Core's own list: a Hermes board run as Red Pitaya is
+    // offered the Hermes board's models, never Orion MkII's (which the Core
+    // refuses for it).
+    void theModelChoiceIsTheCoresListForTheBoard()
+    {
+        RemoteWindowHarness h;
+        QTemporaryDir dir;
+        AppSettings coreSettings(dir.filePath(QStringLiteral("core.settings")));
+        StationRadios radios(coreSettings);
+        radios.setVisible({hermesRadio()});
+        radios.setCurrent(hermesRadio());
+        QVERIFY(radios.setModel(kHermesMac, static_cast<int>(HPSDRModel::REDPITAYA), nullptr));
+        h.server().setStationRadios(&radios);
+        h.server().setTokenSessionsMayChangeRadioForTest(true);
+        QVERIFY(h.start());
+        QVERIFY(openThisCore(h, QStringLiteral("Change radio…")) != nullptr);
+        h.client()->setSignedInWithDeviceKeyForTest(true);
+        connectWindow(h);
+        QTRY_VERIFY(!h.window()->findChildren<ThisCorePage*>().isEmpty()
+                    && h.window()->findChildren<ThisCorePage*>().constLast()->radioList()
+                               ->topLevelItemCount() == 1);
+        QPointer<ThisCorePage> page = h.window()->findChildren<ThisCorePage*>().constLast();
+        page->radioList()->setCurrentItem(page->radioList()->topLevelItem(0));
+
+        QComboBox* combo = page->modelCombo();
+        QTRY_VERIFY(combo->isEnabled());
+        QList<int> offered;
+        for (int i = 0; i < combo->count(); ++i) {
+            offered.append(combo->itemData(i).toInt());
+        }
+        QList<int> accepted;
+        for (HPSDRModel m : compatibleModels(HPSDRHW::Hermes)) {
+            accepted.append(static_cast<int>(m));
+        }
+        QCOMPARE(offered, accepted);
+        QVERIFY(!offered.contains(static_cast<int>(HPSDRModel::ORIONMKII)));
+        QCOMPARE(combo->currentData().toInt(), static_cast<int>(HPSDRModel::REDPITAYA));
+        // Every choice is one the Core takes: back to Hermes.
+        combo->setCurrentIndex(combo->findData(static_cast<int>(HPSDRModel::HERMES)));
+        QTRY_COMPARE(coreSettings.modelOverride(kHermesMac), HPSDRModel::HERMES);
+    }
+
+    // A Core that does not send the model list: the choice shows the model
+    // the Core runs the radio as, disabled, with the reason.
+    void anOlderCoreLeavesTheModelChoiceDisabled()
+    {
+        RemoteWindowHarness h;
+        QTemporaryDir dir;
+        AppSettings coreSettings(dir.filePath(QStringLiteral("core.settings")));
+        StationRadios radios(coreSettings);
+        radios.setVisible({hermesRadio()});
+        radios.setCurrent(hermesRadio());
+        QVERIFY(radios.setModel(kHermesMac, static_cast<int>(HPSDRModel::REDPITAYA), nullptr));
+        h.server().setStationRadios(&radios);
+        h.server().setTokenSessionsMayChangeRadioForTest(true);
+        QVERIFY(h.start());
+        QVERIFY(openThisCore(h, QStringLiteral("Change radio…")) != nullptr);
+        h.client()->setSignedInWithDeviceKeyForTest(true);
+        h.client()->withholdFeatureForTest(QByteArrayLiteral("radioModels"));
+        connectWindow(h);
+        QTRY_VERIFY(!h.window()->findChildren<ThisCorePage*>().isEmpty()
+                    && h.window()->findChildren<ThisCorePage*>().constLast()->radioList()
+                               ->topLevelItemCount() == 1);
+        QPointer<ThisCorePage> page = h.window()->findChildren<ThisCorePage*>().constLast();
+        page->radioList()->setCurrentItem(page->radioList()->topLevelItem(0));
+        QTRY_VERIFY(page->scanButton()->isEnabled());
+
+        QComboBox* combo = page->modelCombo();
+        QVERIFY(!combo->isEnabled());
+        QCOMPARE(combo->toolTip(), ThisCorePage::modelListUnavailableReason());
+        QCOMPARE(combo->count(), 1);
+        QCOMPARE(combo->currentData().toInt(), static_cast<int>(HPSDRModel::REDPITAYA));
     }
 
     void aCoreThatDoesNotChooseItsRadioSaysSo()

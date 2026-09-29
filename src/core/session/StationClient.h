@@ -374,6 +374,8 @@
 //               Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: withholdFeatureForTest. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1316,6 +1318,9 @@ public:
     /// Test seam: a bench link cannot enrol its key either; a window test
     /// says this token sign-in did (follow-up N1).
     void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
+    /// Test seam: the next hello leaves out `feature`, as a window built
+    /// before it did (a Core then answers as it would that window).
+    void withholdFeatureForTest(const QByteArray& feature) { m_declaredFeatures.remove(feature); }
 #endif
     /// iPhone app plan Task 25: minor 11, deviceAdminVersion (or
     /// pairingVersion) at least 1, and this session signed in with this
