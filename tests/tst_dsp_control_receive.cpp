@@ -69,6 +69,13 @@ constexpr int kSlowBlockUs = 150000;
 constexpr int kSetters = 200;
 constexpr int kTimerIntervalMs = 10;
 constexpr double kMaxTimerGapMs = 25.0;
+// JJ's ruling for the transmit twin (2026-09-28 night), applied here: the
+// loop may gap no more than the larger of kMaxTimerGapMs and the same
+// run's idle worst gap plus this, so the machine's own scheduling (the
+// idle loop alone misses 25 ms at a load of 24) is not charged to the lane.
+constexpr double kIdleAllowanceMs = 15.0;
+// The idle phase's length: about the loaded phase's (73 ticks at load 18).
+constexpr int kIdleTicks = 75;
 // The first OpenChannel in a process plans its FFTs with no wisdom: about
 // 30 s on a quiet machine, over 100 s under a heavy build.
 constexpr int kLaneIdleTimeoutMs = 600000;
@@ -237,6 +244,30 @@ private slots:
         // Let both workers get into their slow blocks.
         QTest::qWait(3 * kSlowBlockUs / 1000);
 
+        // The same run's idle scheduling, under the same slow workers.
+        double idleWorstGapMs = 0.0;
+        int idleTicks = 0;
+        {
+            QEventLoop idleLoop;
+            QTimer idleTicker;
+            idleTicker.setTimerType(Qt::PreciseTimer);
+            idleTicker.setInterval(kTimerIntervalMs);
+            Clock::time_point previous = Clock::now();
+            connect(&idleTicker, &QTimer::timeout, &idleLoop, [&] {
+                const Clock::time_point now = Clock::now();
+                if (idleTicks > 0) {
+                    idleWorstGapMs = std::max(idleWorstGapMs, msBetween(previous, now));
+                }
+                previous = now;
+                if (++idleTicks >= kIdleTicks) {
+                    idleLoop.quit();
+                }
+            });
+            idleTicker.start();
+            idleLoop.exec();
+        }
+        const double gapBoundMs = std::max(kMaxTimerGapMs, idleWorstGapMs + kIdleAllowanceMs);
+
         WdspThreadCheck::install(QThread::currentThread());
 
         double lastTop[2]{0.0, 0.0};
@@ -351,15 +382,16 @@ private slots:
 
         qInfo("%d setters, an off and on, a rate change and a destroy and recreate in "
               "%.2f ms on the event loop; lane busy %.0f ms; %d ticks; worst %d ms timer "
-              "gap %.2f ms (limit %.1f); feeder parked %d times; WDSP calls on the event "
-              "loop %llu",
+              "gap %.2f ms (limit %.1f: idle worst %.2f ms over %d ticks); feeder parked "
+              "%d times; WDSP calls on the event loop %llu",
               kSetters, actionsMs, laneMs, ticks, kTimerIntervalMs, worstGapMs,
-              kMaxTimerGapMs, feeder.pauses(),
+              gapBoundMs, idleWorstGapMs, idleTicks, feeder.pauses(),
               static_cast<unsigned long long>(eventLoopCalls));
 
         QCOMPARE(eventLoopCalls, quint64(0));
         QVERIFY2(laneMs >= kSlowBlockUs / 2000.0, "the lane never waited on a slow block");
-        QVERIFY2(worstGapMs <= kMaxTimerGapMs, "the event loop's 10 ms timer gapped");
+        QCOMPARE(idleTicks, kIdleTicks);
+        QVERIFY2(worstGapMs <= gapBoundMs, "the event loop's 10 ms timer gapped");
         QVERIFY(rateAnswered);
         QVERIFY(rateOk);
         QCOMPARE(top[0], lastTop[0]);
