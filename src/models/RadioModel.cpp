@@ -3553,10 +3553,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Pre-hotfix: ANAN-8000DLE 80m TUN at slider=50 produced wire_byte=127
     // (=> ~300W on a 200W radio).  Post-hotfix: wire_byte=49 (=> ~85W).
     // Ratio matches the band's 50.5 dB PA gain compensation.
-    // Body extracted to RadioModel::restoreNormalTxDrive so the MOX-edge
-    // restore below can share it. Behaviour on this path is unchanged.
+    // drivePowerScroll is shared with the MOX-edge restore below, which
+    // keeps upstream's TUNE and two-tone guard.
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll whatever the tx mode, so a PWR change during TUNE or
+    // two-tone recomputes that mode's drive and saves the band's power.
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
-            [this](int /*power*/) { restoreNormalTxDrive(); });
+            [this](int /*power*/) { drivePowerScroll(); });
 
     // From mi0bot console.cs:30272 [v2.10.3.13-beta2]: the drive byte is
     // recomputed through the normal path on every MOX-to-TX transition, so a
@@ -6008,8 +6011,9 @@ void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
         // From Thetis setup.cs:23351-23352 [v2.10.3.15] nudPAProfileGain_ValueChanged:
         //   if (p.GetGainForBand(b) != fOld) console.PWR = console.PWR; // update the power, which causes these gain values to be queried
         // The PWR setter runs ptbPWR_Scroll whatever the tx mode, so a gain
-        // edit during TUNE or the two-tone test recomputes their drive too.
-        applyDriveSliderPower();
+        // edit during TUNE or the two-tone test recomputes their drive too,
+        // and saves the band's power as ptbPWR_Scroll does.
+        drivePowerScroll();
         break;
     case PaProfileAction::SetAdjust: {
         if (step < 0 || step >= PaProfile::kDriveSteps) {
@@ -6033,11 +6037,15 @@ void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
         const int drive = (step + 1) * 10;
         switch (m_transmitModel.tuneDrivePowerSource()) {
         case DrivePowerSource::DriveSlider:
-            m_transmitModel.setPower(drive); // set drive to the value we are adjusting
-            // The PWR setter runs ptbPWR_Scroll whatever the tx mode, and the
-            // adjust itself changed: the drive at the same slider value is
-            // recomputed too (setPower emits only on a change).
-            applyDriveSliderPower();
+            // The PWR setter runs ptbPWR_Scroll once, whatever the tx mode,
+            // and the adjust itself changed: at the same slider value the
+            // scroll still runs (setPower emits, and so scrolls, only on a
+            // change).
+            if (m_transmitModel.power() == drive) {
+                drivePowerScroll();
+            } else {
+                m_transmitModel.setPower(drive); // set drive to the value we are adjusting
+            }
             break;
         case DrivePowerSource::TuneSlider:
             refreshTransmitTuneBand();
@@ -22689,7 +22697,32 @@ void RadioModel::restoreNormalTxDrive()
     // the HL2 tune carve-out mid-tune.
     if (m_transmitModel.isTune())          { return; }
     if (m_transmitModel.isTwoToneActive()) { return; }
+    // Drive only. Upstream's ptbPWR_Scroll here also stores PWR into
+    // power_by_band[_tx_band], a no-op there because the TXBand setter
+    // (console.cs:17520-17543 [v2.10.3.15]) keeps the two equal. A Core
+    // without the TX applet does not recall PWR on a band change, so a
+    // save on every MOX edge could overwrite a band's stored power.
     applyDriveSliderPower();
+}
+
+void RadioModel::drivePowerScroll()
+{
+    // From Thetis console.cs:28682-28693 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    //   power_by_band[(int)_tx_band] = ptbPWR.Value;
+    // The save follows the drive whatever the tx mode; only
+    // `if (IsSetupFormNull) return;` guards it upstream, so no radio or
+    // profile is needed. setPowerForBand keeps the existing
+    // hardware/<mac>/powerByBand/<band> key.
+    applyDriveSliderPower();
+    if (!ownsLocalDsp()) { return; }
+    // _tx_band is the transmit slice's band. With no slice there is no
+    // transmit band to save to, and the TX applet (which falls back to its
+    // panadapter band) keeps saving its own slider moves.
+    const SliceModel* const txSlice = txBoundSlice();
+    if (!txSlice) { return; }
+    m_transmitModel.setPowerForBand(bandFromFrequency(txSlice->frequency()),
+                                    m_transmitModel.power());
 }
 
 void RadioModel::applyDriveSliderPower()

@@ -639,6 +639,123 @@ private slots:
         pump();
         QCOMPARE(mox->state(), MoxState::Rx);
     }
+
+    // ── The PWR slider during TUNE and two-tone ──────────────────────────────
+    // Thetis PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll (:28682-28693), whose setPowerFromDriveSlider
+    // (:46710-46716) is SetPowerUsingTargetDBM(..., true, false, false). That
+    // takes txMode 1 while chkTUN is checked and 2 while chk2TONE is
+    // (:46724-46747), so moving PWR with the drive-slider source recomputes
+    // the tune or two-tone drive.
+    //   100 W at the 80m gain 50.5 dB: target_dbm = 50 - 50.5 = -0.5;
+    //   volts = sqrt(10^-0.05 * 0.05) = 0.2111; volume = 0.2639;
+    //   wire = int(0.2639 * 1.02 * 255) = 68
+    void pwrSliderDuringTune_recomputesTuneDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+
+        model.transmitModel().setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
+        model.transmitModel().setPower(50);
+        pump();
+        model.setTune(true);
+        pump();
+        QVERIFY(model.transmitModel().isTune());
+
+        conn->txDriveLog.clear();
+        model.transmitModel().setPower(100);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "PWR during TUNE pushed no drive");
+        const int after = conn->txDriveLog.last();
+        QVERIFY2(after >= 66 && after <= 70, qPrintable(QString::number(after)));
+
+        model.setTune(false);
+        pump();
+    }
+
+    void pwrSliderDuringTwoTone_recomputesTwoToneDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+
+        model.transmitModel().setTwoToneDrivePowerSource(DrivePowerSource::DriveSlider);
+        model.transmitModel().setPower(50);
+        pump();
+        model.transmitModel().setTwoToneActive(true);
+
+        conn->txDriveLog.clear();
+        model.transmitModel().setPower(100);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "PWR during two-tone pushed no drive");
+        const int after = conn->txDriveLog.last();
+        QVERIFY2(after >= 66 && after <= 70, qPrintable(QString::number(after)));
+
+        model.transmitModel().setTwoToneActive(false);
+        pump();
+    }
+
+    // ── The PWR slider saves the per-band power in every mode ────────────────
+    // Thetis ptbPWR_Scroll (console.cs:28692-28693 [v2.10.3.15]) writes
+    //   power_by_band[(int)_tx_band] = ptbPWR.Value;
+    // after the drive is set, whatever the transmit mode, and with or without
+    // a radio. The saved key is unchanged (hardware/<mac>/powerByBand/<band>).
+    void pwrSliderSavesPowerByBandDuringTuneAndTwoTone()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        const QString mac = QStringLiteral("AABBCCDDEEFF");
+        model.transmitModel().loadFromSettings(mac);
+        const QString key80 = QStringLiteral("hardware/%1/powerByBand/%2")
+                                  .arg(mac, bandKeyName(Band::Band80m));
+
+        model.transmitModel().setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        model.transmitModel().setTunePowerForBand(Band::Band80m, 30);
+        model.setTune(true);
+        pump();
+        model.transmitModel().setPower(70);
+        pump();
+        QCOMPARE(model.transmitModel().powerForBand(Band::Band80m), 70);
+        QCOMPARE(AppSettings::instance().value(key80).toString(), QStringLiteral("70"));
+        model.setTune(false);
+        pump();
+
+        model.transmitModel().setTwoToneDrivePowerSource(DrivePowerSource::Fixed);
+        model.transmitModel().setTwoToneActive(true);
+        model.transmitModel().setPower(40);
+        pump();
+        QCOMPARE(model.transmitModel().powerForBand(Band::Band80m), 40);
+        QCOMPARE(AppSettings::instance().value(key80).toString(), QStringLiteral("40"));
+        model.transmitModel().setTwoToneActive(false);
+        pump();
+    }
+
+    void pwrSliderSavesPowerByBandWithoutARadio()
+    {
+        AppSettings::instance().clear();
+        RadioModel model;
+        model.addSlice();
+        model.activeSlice()->setFrequency(7100000.0);
+        const QString mac = QStringLiteral("AABBCCDDEEFF");
+        model.transmitModel().loadFromSettings(mac);
+
+        model.transmitModel().setPower(65);
+        pump();
+        QCOMPARE(model.transmitModel().powerForBand(Band::Band40m), 65);
+        QCOMPARE(AppSettings::instance()
+                     .value(QStringLiteral("hardware/%1/powerByBand/%2")
+                                .arg(mac, bandKeyName(Band::Band40m)))
+                     .toString(),
+                 QStringLiteral("65"));
+    }
 };
 
 QTEST_MAIN(TestRadioModelDrivePath)
