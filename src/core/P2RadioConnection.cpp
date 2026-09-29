@@ -85,6 +85,10 @@
 //                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
 //                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
 //                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49: the corrected phase word is Thetis's to the count
+//                 (whole corrected Hz, then integer Freq2PhaseWord;
+//                 NetworkIO.cs [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -4395,11 +4399,9 @@ quint32 P2RadioConnection::hzToPhaseWord(quint64 freqHz) const
     const double factor = m_calController
                           ? m_calController->effectiveFreqCorrectionFactor()
                           : 1.0;
-    // Use floating-point for the correction, then convert to quint32.
-    // When factor == 1.0, the result is byte-identical to the pre-cal formula.
-    // Use 64-bit math to avoid overflow: freq * 2^32 / 122880000
-    const double correctedHz = static_cast<double>(freqHz) * factor;
-    return static_cast<quint32>((correctedHz * 4294967296.0) / 122880000.0);
+    // R-R3-49: the codec's conversion, Thetis's own (NetworkIO.cs VFOfreq
+    // and Freq2PhaseWord [v2.10.3.15]; see P2CodecOrionMkII::hzToPhaseWord).
+    return P2CodecOrionMkII::hzToPhaseWord(freqHz, factor);
 }
 
 // Build Alex0 32-bit register (bytes 1432-1435 in CmdHighPriority).

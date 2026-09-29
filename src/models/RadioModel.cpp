@@ -556,6 +556,9 @@
 //                txAmModulation / txAmModulationFeedback streams
 //                (stationModMonitorSnapshot). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): the Protocol 1 connection gets the
+//                 calibration controller too, for the frequency correction.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -15653,10 +15656,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     }
 
     // Wire CalibrationController to P2RadioConnection so hzToPhaseWord()
-    // applies effectiveFreqCorrectionFactor(). P1 uses raw Hz (not phase words),
-    // so P1 doesn't need this. Phase 3P-G.
+    // applies effectiveFreqCorrectionFactor(). Phase 3P-G.
+    // R-R3-49 (found bug): Protocol 1 too. Thetis corrects every VFO it
+    // sends, as Hz on Protocol 1 (NetworkIO.cs:215-224 VFOfreq [v2.10.3.15]).
     if (auto* p2 = qobject_cast<class P2RadioConnection*>(m_connection)) {
         p2->setCalibrationController(&m_calController);
+    } else if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
+        p1->setCalibrationController(&m_calController);
     }
 
     // Wire IoBoardHl2 so P1CodecHl2 can dequeue I2C transactions into C&C

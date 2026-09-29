@@ -21,6 +21,11 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 (remote-window parity Task 6): m_ep6SeqPrimed.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): the VFO frequencies sent carry the
+//                 calibration correction factor, as Thetis NetworkIO.VFOfreq
+//                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
+//                 wireFrequencyHz). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -56,6 +61,7 @@
 #include "codec/CodecContext.h"
 
 namespace NereusSDR { class OcMatrix; }                  // forward decl — full header in .cpp
+namespace NereusSDR { class CalibrationController; }     // R-R3-49: frequency correction
 namespace NereusSDR { class IoBoardHl2; }                // forward decl — full header in .cpp
 namespace NereusSDR { class HermesLiteBandwidthMonitor; }// forward decl — full header in .cpp
 namespace NereusSDR { class TxMicSource; }               // forward decl — full header in audio/TxMicSource.h
@@ -156,6 +162,10 @@ public:
     // byte from maskFor(currentBand, mox) at C&C compose time.
     // Phase 3P-D Task 3 — called by RadioModel::connectToRadio().
     void setOcMatrix(const OcMatrix* matrix);
+
+    // R-R3-49: Setup > Calibration's frequency correction factor, applied to
+    // every VFO frequency sent (Thetis NetworkIO.VFOfreq). Null: factor 1.0.
+    void setCalibrationController(const CalibrationController* cal);
 
     // Phase 3P-E Task 2: wire IoBoardHl2 for I2C intercept (HL2 only).
     // On HL2, pushes the pointer into P1CodecHl2 and stores it locally for
@@ -920,6 +930,11 @@ private:
     // the legacy m_ocOutput field.  Null in test seams that don't wire
     // RadioModel (falls back to m_ocOutput == 0).  Phase 3P-D Task 3.
     const OcMatrix* m_ocMatrix{nullptr};
+    // R-R3-49: non-owning; RadioModel's CalibrationController.
+    const CalibrationController* m_calController{nullptr};
+    // The frequency the radio is sent for a tuned one: corrected by the
+    // calibration factor as Thetis's VFOfreq does.
+    quint64 wireFrequencyHz(quint64 tunedHz) const;
 
     // Non-owning pointer to RadioModel's IoBoardHl2.  Set via setIoBoard()
     // at connect time; null on non-HL2 boards and in tests that don't wire

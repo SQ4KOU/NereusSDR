@@ -44,6 +44,10 @@
 //                disconnected after the 2 s connect watchdog because the
 //                G2-class branch placed RX1 on DDC2 instead of DDC0.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49: the corrected phase word is Thetis's to the count
+//                 (whole corrected Hz, then integer Freq2PhaseWord;
+//                 NetworkIO.cs [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/console.cs header (lines 1-50) ===
@@ -102,6 +106,8 @@
 // =================================================================
 
 #include "P2CodecOrionMkII.h"
+
+#include <algorithm>
 #include "CodecContext.h"
 
 namespace NereusSDR {
@@ -125,10 +131,25 @@ void P2CodecOrionMkII::writeBE32(quint8* buf, int offset, quint32 value)
 // Freq2PhaseWord (HPSDR/NetworkIO.cs:251-254); we fold it in here so every
 // compose path — direct or via CodecContext — picks up live calibration.
 // factor == 1.0 is byte-identical to the pre-calibration formula.
+//
+// R-R3-49: Thetis's conversion to the count. The corrected frequency is
+// truncated to whole Hz first, then converted in integer arithmetic; the
+// earlier floating-point form differed by up to ~35 counts whenever the
+// factor was not 1.0.
+// From Thetis HPSDR/NetworkIO.cs:219-223 [v2.10.3.15] VFOfreq
+//   f_freq = (int)((f * 1e6) * _freq_correction_factor);
+//   if (f_freq >= 0)
+//       ... else SetVFOfreq(id, Freq2PhaseWord(f_freq), tx);   // sending phaseword to firmware
+// From Thetis HPSDR/NetworkIO.cs:249-253 [v2.10.3.15] Freq2PhaseWord
+//   long pw = (long)Math.Pow(2, 32) * freq / 122880000;
+// NereusSDR tunes in whole Hz, so f * 1e6 is the Hz value itself. A
+// negative corrected frequency (Thetis sends nothing) cannot arise from the
+// 0..2 factor range; it is held at 0.
 quint32 P2CodecOrionMkII::hzToPhaseWord(quint64 freqHz, double factor)
 {
-    const double correctedHz = static_cast<double>(freqHz) * factor;
-    return static_cast<quint32>((correctedHz * 4294967296.0) / 122880000.0);
+    const qint64 correctedHz = std::max<qint64>(
+        0, static_cast<qint64>(static_cast<double>(freqHz) * factor));
+    return static_cast<quint32>((qint64(1) << 32) * correctedHz / 122880000);
 }
 
 // --- CmdGeneral (60 bytes) ---

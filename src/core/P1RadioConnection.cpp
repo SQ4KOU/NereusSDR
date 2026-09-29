@@ -47,6 +47,11 @@
 //                 which mi0bot never reads (networkproto1.c:478-493
 //                 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): the VFO frequencies sent carry the
+//                 calibration correction factor, as Thetis NetworkIO.VFOfreq
+//                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
+//                 wireFrequencyHz). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -337,6 +342,7 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "P1RadioConnection.h"
+#include "CalibrationController.h"
 #include "LogCategories.h"
 #include "OcMatrix.h"
 #include "IoBoardHl2.h"
@@ -2561,6 +2567,34 @@ void P1RadioConnection::setOcMatrix(const OcMatrix* matrix)
     m_ocMatrix = matrix;
 }
 
+void P1RadioConnection::setCalibrationController(const CalibrationController* cal)
+{
+    m_calController = cal;
+}
+
+// R-R3-49 (found bug): Protocol 1 sent the tuned frequencies uncorrected;
+// Thetis corrects every VFO it sends, as Hz on Protocol 1:
+// From Thetis HPSDR/NetworkIO.cs:215-224 [v2.10.3.15] VFOfreq
+//   f_freq = (int)((f * 1e6) * _freq_correction_factor);
+//   if (f_freq >= 0)
+//       if (CurrentRadioProtocol == RadioProtocol.USB)
+//           SetVFOfreq(id, f_freq, tx);                  // sending freq Hz to firmware
+// NereusSDR tunes in whole Hz, so f * 1e6 is the Hz value itself. The frame
+// is composed every time it is sent, so a factor change reaches the radio
+// with the next frame, as FreqCorrectionChanged re-sends the VFOs
+// (NetworkIO.cs:237-248). A negative result (Thetis sends nothing) cannot
+// arise from the 0..2 factor range; it is held at 0.
+quint64 P1RadioConnection::wireFrequencyHz(quint64 tunedHz) const
+{
+    const double factor = m_calController
+                          ? m_calController->effectiveFreqCorrectionFactor() : 1.0;
+    if (factor == 1.0) {
+        return tunedHz;
+    }
+    return static_cast<quint64>(std::max<qint64>(
+        0, static_cast<qint64>(static_cast<double>(tunedHz) * factor)));
+}
+
 // ---------------------------------------------------------------------------
 // setIoBoard — Phase 3P-E Task 2
 //
@@ -2809,8 +2843,9 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // to claim. Bank 10 C4 is the Alex0 word, and Alex0 carries the receive
     // selection while unkeyed (netInterface.c:705-717 [v2.10.3.15]).
     ctx.alexLpfBits    = effectiveAlexLpfBits();
-    ctx.txFreqHz       = m_txFreqHz;
-    for (int i = 0; i < 7; ++i) { ctx.rxFreqHz[i]   = m_rxFreqHz[i]; }
+    // R-R3-49: the frequencies the radio is sent, corrected (wireFrequencyHz).
+    ctx.txFreqHz       = wireFrequencyHz(m_txFreqHz);
+    for (int i = 0; i < 7; ++i) { ctx.rxFreqHz[i]   = wireFrequencyHz(m_rxFreqHz[i]); }
     for (int i = 0; i < 3; ++i) { ctx.rxStepAttn[i] = m_stepAttn[i]; }
     // m_txStepAttn is a single int; broadcast to all 3 ADCs (HL2 codec
     // only uses index 0). Standard codec uses a separate path for
@@ -3837,7 +3872,7 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         return;
 
     case 1: // TX VFO (networkproto1.c:476-482)
-        composeCcBankTxFreq(out, m_txFreqHz);
+        composeCcBankTxFreq(out, wireFrequencyHz(m_txFreqHz));
         return;
 
     case 2: { // RX1 VFO DDC0 (networkproto1.c:484-494)
@@ -3871,7 +3906,7 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         const quint64 freq = (m_psNDdc == 2 && m_mox && m_puresignalRun)
                            ? m_txFreqHz
                            : m_rxFreqHz[0];
-        composeCcBankRxFreq(out, 0, freq);
+        composeCcBankRxFreq(out, 0, wireFrequencyHz(freq));
         return;
     }
 
@@ -3907,7 +3942,7 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         } else {
             freq = m_rxFreqHz[1];         // Hermes (default): RX2 VFO
         }
-        composeCcBankRxFreq(out, 1, freq);
+        composeCcBankRxFreq(out, 1, wireFrequencyHz(freq));
         return;
     }
 
@@ -3923,7 +3958,7 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
         // RX3-RX7 VFOs (networkproto1.c:525-575)
         // Unused DDCs get TX freq as a safe default.
         int rxIdx = bankIdx - 3; // bank 5 → rxIdx 2, bank 9 → rxIdx 6
-        composeCcBankRxFreq(out, rxIdx, m_txFreqHz);
+        composeCcBankRxFreq(out, rxIdx, wireFrequencyHz(m_txFreqHz));
         return;
     }
 
