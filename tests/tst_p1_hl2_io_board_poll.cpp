@@ -8,6 +8,7 @@
 // The poll: mi0bot Console/console.cs:25781-25945 UpdateIOBoard [@c26a8a4],
 // one step every 40 ms, switch (state++):
 //   case 0:            REG_OP_MODE = the TX VFO's DSP mode, when it changed
+//                      (RADE_U as DIGU, RADE_L as DIGL)
 //   case 1, 4, 7, 10:  read REG_INPUT_PINS (four registers from 6)
 //   case 2, 8:         ioBoard.setFrequency(TX VFO Hz): REG_TX_FREQ_BYTE4..0
 //                      when the frequency changed (IoBoardHl2.cs:183-201)
@@ -210,16 +211,29 @@ private slots:
         QCOMPARE(banks, expected);
     }
 
-    void radeModesAreNotWritten()
+    void radeModesWriteTheMatchingDigitalMode()
     {
-        // The I/O board's REG_OP_MODE takes Thetis DSPMode values (LSB 0 ..
-        // DRM 11); RADE is NereusSDR's own and has none.
+        // The I/O board's REG_OP_MODE takes Thetis DSPMode values (mi0bot
+        // enums.cs:252-270: DIGU 7, DIGL 9). RADE is NereusSDR's own, so
+        // it is sent as the digital mode on its sideband (operator ruling
+        // 2026-09-29): RADE_U as DIGU, RADE_L as DIGL.
         P1RadioConnection conn;
         conn.setBoardForTest(HPSDRHW::HermesLite);
         IoBoardHl2 io;
         io.setDetected(true);
         conn.setIoBoard(&io);
         conn.setIoBoardTxState(static_cast<int>(DSPMode::RADE_U), 14236000);
+        compare(step(conn, io), {write(32, 7)});
+        for (int i = 0; i < 11; ++i) {
+            step(conn, io);
+        }
+        conn.setIoBoardTxState(static_cast<int>(DSPMode::RADE_L), 7177000);
+        compare(step(conn, io), {write(32, 9)});
+        for (int i = 0; i < 11; ++i) {
+            step(conn, io);
+        }
+        // Back to DIGL itself: the same value, so nothing is written.
+        conn.setIoBoardTxState(static_cast<int>(DSPMode::DIGL), 7177000);
         compare(step(conn, io), {});
     }
 };
