@@ -128,6 +128,8 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <cmath>
+
 namespace NereusSDR {
 
 namespace {
@@ -285,8 +287,10 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     ++row;
 
     // From mi0bot setup.designer.cs:11166-11176 chkCl2Enable +
-    // :11142-11164 udCl2Freq [v2.10.3.13-beta2] - range 1..200 MHz,
-    // default 116.
+    // :11133-11163 udCl2Freq [@c26a8a4] - range 1..200 MHz, three decimal
+    // places, step 0.1, default 116. The box applies on commit (Enter or
+    // leaving it), as a NumericUpDown does, so typing does not reprogram
+    // the CL2 output at every keystroke.
     //
     // The clock options reach the radio's clock chip over I2C
     // (P1RadioConnection::setHl2Clock, mi0bot setup.cs:21694-21756
@@ -299,9 +303,12 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     m_chkCl2Enable->setProperty("nereusSetupId", "hardware.hl2Io.cl2Enable");
     m_chkCl2Enable->setToolTip(tr("Enable frequency output on CL2"));
     grid->addWidget(m_chkCl2Enable, row, 0);
-    m_udCl2Freq = new QSpinBox(parent);
-    m_udCl2Freq->setRange(Hl2OptionsModel::kCl2FreqMinMHz,
-                          Hl2OptionsModel::kCl2FreqMaxMHz);
+    m_udCl2Freq = new QDoubleSpinBox(parent);
+    m_udCl2Freq->setDecimals(3);
+    m_udCl2Freq->setSingleStep(0.1);
+    m_udCl2Freq->setRange(Hl2OptionsModel::kCl2FreqMinKHz / 1000.0,
+                          Hl2OptionsModel::kCl2FreqMaxKHz / 1000.0);
+    m_udCl2Freq->setKeyboardTracking(false);
     m_udCl2Freq->setSuffix(tr(" MHz"));
     m_udCl2Freq->setObjectName(QStringLiteral("hl2Cl2Freq"));
     m_udCl2Freq->setProperty("nereusSetupId", "hardware.hl2Io.cl2Freq");
@@ -388,7 +395,13 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
 
     bindBool(m_chkSwapAudio,        &Hl2OptionsModel::setSwapAudioChannels);
     bindBool(m_chkCl2Enable,        &Hl2OptionsModel::setCl2Enabled);
-    bindInt (m_udCl2Freq,           &Hl2OptionsModel::setCl2FreqMHz);
+    connect(m_udCl2Freq, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double mhz) {
+                if (m_syncing) { return; }
+                if (m_options) {
+                    m_options->setCl2FreqKHz(static_cast<int>(std::lround(mhz * 1000.0)));
+                }
+            });
     bindBool(m_chkExt10MHz,         &Hl2OptionsModel::setExt10MHz);
     bindBool(m_chkDisconnectReset,  &Hl2OptionsModel::setDisconnectReset);
     bindInt (m_udPttHang,           &Hl2OptionsModel::setPttHangMs);
@@ -596,7 +609,7 @@ void Hl2OptionsTab::syncFromModel()
     if (m_chkCl2Enable)       { QSignalBlocker b(m_chkCl2Enable);
         m_chkCl2Enable->setChecked(m_options->cl2Enabled()); }
     if (m_udCl2Freq)          { QSignalBlocker b(m_udCl2Freq);
-        m_udCl2Freq->setValue(m_options->cl2FreqMHz()); }
+        m_udCl2Freq->setValue(m_options->cl2FreqKHz() / 1000.0); }
     if (m_chkExt10MHz)        { QSignalBlocker b(m_chkExt10MHz);
         m_chkExt10MHz->setChecked(m_options->ext10MHz()); }
     if (m_chkDisconnectReset) { QSignalBlocker b(m_chkDisconnectReset);

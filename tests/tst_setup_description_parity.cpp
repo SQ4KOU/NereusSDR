@@ -1043,8 +1043,13 @@ private slots:
                     QCOMPARE(box->text(), control.value("label").toString());
                     QCOMPARE(box->isChecked(), control.value("default").toBool());
                 } else {
-                    QCOMPARE(control.value("kind"), QJsonValue("integer"));
-                    auto* spin = qobject_cast<QSpinBox*>(widget);
+                    // An integer row is a QSpinBox; a decimal row (the CL2
+                    // frequency) is a QDoubleSpinBox with the row's decimals.
+                    const bool decimal = control.value("kind") == QJsonValue("decimal");
+                    if (!decimal) {
+                        QCOMPARE(control.value("kind"), QJsonValue("integer"));
+                    }
+                    auto* spin = qobject_cast<QAbstractSpinBox*>(widget);
                     QVERIFY2(spin != nullptr, qPrintable(id));
                     // The row label: the grid's label beside the box, or the
                     // box's accessible name where a check box sits there.
@@ -1064,11 +1069,25 @@ private slots:
                         label = text->text();
                     }
                     QCOMPARE(label, control.value("label").toString());
-                    QCOMPARE(spin->minimum(), control.value("min").toInt());
-                    QCOMPARE(spin->maximum(), control.value("max").toInt());
-                    QCOMPARE(spin->singleStep(), control.value("step").toInt());
-                    QCOMPARE(spin->suffix(), QStringLiteral(" ") + control.value("unit").toString());
-                    QCOMPARE(spin->value(), control.value("default").toInt());
+                    const QString suffix = QStringLiteral(" ") + control.value("unit").toString();
+                    if (decimal) {
+                        auto* box = qobject_cast<QDoubleSpinBox*>(widget);
+                        QVERIFY2(box != nullptr, qPrintable(id));
+                        QCOMPARE(box->minimum(), control.value("min").toDouble());
+                        QCOMPARE(box->maximum(), control.value("max").toDouble());
+                        QCOMPARE(box->singleStep(), control.value("step").toDouble());
+                        QCOMPARE(box->decimals(), control.value("decimals").toInt());
+                        QCOMPARE(box->suffix(), suffix);
+                        QCOMPARE(box->value(), control.value("default").toDouble());
+                    } else {
+                        auto* box = qobject_cast<QSpinBox*>(widget);
+                        QVERIFY2(box != nullptr, qPrintable(id));
+                        QCOMPARE(box->minimum(), control.value("min").toInt());
+                        QCOMPARE(box->maximum(), control.value("max").toInt());
+                        QCOMPARE(box->singleStep(), control.value("step").toInt());
+                        QCOMPARE(box->suffix(), suffix);
+                        QCOMPARE(box->value(), control.value("default").toInt());
+                    }
                 }
                 ++compared;
             }

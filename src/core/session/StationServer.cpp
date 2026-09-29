@@ -742,6 +742,7 @@
 #include "core/session/BandLinkFit.h"
 
 #include "core/TxSliceArbiter.h"
+#include "core/Hl2OptionsModel.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/RelayLeg.h"
 #include "core/session/media/IMediaTransport.h"
@@ -1693,6 +1694,26 @@ QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HP
             ? QString() : QStringLiteral("The Core expected this box to be on or off.");
     }
     return {};
+}
+
+// The plain refusal for an HL2 CL2 frequency its Setup box cannot hold;
+// empty when it can, or when the key is not that one. Refused whole, never
+// clamped, as the calibration values are. From mi0bot setup.designer.cs:
+// 11133-11163 [@c26a8a4] udCl2Freq: Maximum = 200, Minimum = 1 (MHz),
+// DecimalPlaces = 3.
+QString hl2ClockKeyValueRefusal(const QString& key, const QVariant& value)
+{
+    const QStringList parts = key.split(QLatin1Char('/'));
+    if (parts.size() != 4 || parts[0].compare(QLatin1String("hardware"), Qt::CaseInsensitive) != 0
+        || parts[2].compare(QLatin1String("hl2"), Qt::CaseInsensitive) != 0
+        || parts[3].compare(QLatin1String("cl2FreqMHz"), Qt::CaseInsensitive) != 0) {
+        return {};
+    }
+    int kHz = 0;
+    return Hl2OptionsModel::parseCl2FreqMHz(value.toString(), &kHz)
+            && kHz >= Hl2OptionsModel::kCl2FreqMinKHz && kHz <= Hl2OptionsModel::kCl2FreqMaxKHz
+        ? QString()
+        : QStringLiteral("Choose a CL2 frequency from 1 to 200 MHz.");
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -6959,6 +6980,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     if (const QString range = calibrationKeyValueRefusal(
             key, message.updates.first().value,
             m_radioModel ? m_radioModel->hardwareProfile().model : HPSDRModel::FIRST);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
+    // An HL2 CL2 frequency outside its box's range, or not a number, is
+    // refused whole, and the Core's value handed back.
+    if (const QString range = hl2ClockKeyValueRefusal(key, message.updates.first().value);
         !range.isEmpty()) {
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;

@@ -952,11 +952,9 @@ void P1RadioConnection::disconnect()
         m_ioBoardPollTimer->stop();
     }
     // Clock chip writes not yet queued are dropped; the next connect sends
-    // the options that are on (hl2ClockOnDataFlowing).
-    m_hl2ClockPending.clear();
-    if (m_hl2ClockRetryTimer) {
-        m_hl2ClockRetryTimer->stop();
-    }
+    // the options that are on, and those whose lists did not finish
+    // (hl2ClockOnDataFlowing).
+    hl2ClockDropPending();
     if (m_ep2PacerTimer) {
         m_ep2PacerTimer->stop();
     }
@@ -1517,8 +1515,9 @@ void P1RadioConnection::setHl2ResetOnDisconnect(bool on)
 // From mi0bot Console/setup.cs:21572-21629 [@c26a8a4]:
 //   // MI0BOT: Data to program clock generator in HL2 to accept external 10MHz on CL2
 //   //         Data in format of Address, Data
-// Four tables of (register, data) pairs, written in order to I2C bus 0,
-// address 0xd4 (WriteVersaClockAsync, setup.cs:21647).
+// That comment heads all four tables below; upstream has it once, above
+// the first. Four tables of (register, data) pairs, written in order to
+// I2C bus 0, address 0xd4 (WriteVersaClockAsync, setup.cs:21647).
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1532,14 +1531,12 @@ const ClockWrites kHl2Clock10MhzEnable = {
     {0x1A, 0x00}, {0x1B, 0x00}, {0x18, 0x00}, {0x17, 0x12}};
 
 // From mi0bot Console/setup.cs:21591-21605 [@c26a8a4] clockRegisterData10MhzDisable
-// MI0BOT: Data to program clock generator in HL2 to accept external 10MHz on CL2
 const ClockWrites kHl2Clock10MhzDisable = {
     {0x10, 0xc0}, {0x13, 0x00}, {0x10, 0x80}, {0x2d, 0x01}, {0x2e, 0x10},
     {0x22, 0x00}, {0x23, 0x00}, {0x24, 0x00}, {0x25, 0x00}, {0x19, 0x00},
     {0x1A, 0x00}, {0x1B, 0x00}, {0x18, 0x40}, {0x17, 0x04}};
 
 // From mi0bot Console/setup.cs:21607-21617 [@c26a8a4] clockRegisterDataCl2
-// MI0BOT: Data to program clock generator in HL2 to accept external 10MHz on CL2
 // Registers 0x3d, 0x3e and 0x32..0x35 (pairs 3..8) carry the divider
 // ControlCl2 computes; the data here is overwritten before every send.
 const ClockWrites kHl2ClockCl2 = {
@@ -1547,12 +1544,11 @@ const ClockWrites kHl2ClockCl2 = {
     {0x32, 0x00}, {0x33, 0x00}, {0x34, 0x00}, {0x35, 0x00}, {0x63, 0x01}};
 
 // From mi0bot Console/setup.cs:21619-21629 [@c26a8a4] clockRegisterDataCl2Off
-// MI0BOT: Data to program clock generator in HL2 to accept external 10MHz on CL2
 const ClockWrites kHl2ClockCl2Off = {
     {0x62, 0x5b}, {0x2c, 0x00}, {0x31, 0x00}, {0x3d, 0x00}, {0x3e, 0x00},
     {0x32, 0x00}, {0x33, 0x00}, {0x34, 0x00}, {0x35, 0x00}, {0x63, 0x00}};
 
-// The CL2 table with the output divider for cl2FreqMHz.
+// The CL2 table with the output divider for cl2FreqKHz.
 // From mi0bot Console/setup.cs:21694-21721 [@c26a8a4] ControlCl2:
 //   // MI0BOT: Support for HL2 Cl2 clock output
 //   Decimal vco = (Decimal)1305.6;
@@ -1569,16 +1565,18 @@ const ClockWrites kHl2ClockCl2Off = {
 //   clockRegisterDataCl2[13] = (Byte)((intFrac >> 14) & 0xff);
 //   clockRegisterDataCl2[15] = (Byte)((intFrac >> 6) & 0xff);
 //   clockRegisterDataCl2[17] = (Byte)((intFrac << 2) & 0xf6);
-// The frequency here is whole MHz, so the Decimal division is done
-// exactly in integers: the VCO in tenths of a MHz (13056 or 14400) over
-// ten times the frequency. That gives the same integer and intFrac as
-// mi0bot's Decimal arithmetic for every whole frequency from 1 to 200.
-ClockWrites hl2Cl2Writes(bool ext10MHz, int freqMHz)
+// udCl2Freq holds three decimal places (setup.designer.cs:11133-11163
+// [@c26a8a4], DecimalPlaces = 3), so the frequency here is whole kHz and
+// the Decimal division is done exactly in integers: the VCO in kHz
+// (1305600 or 1440000) over the frequency in kHz. Checked against Decimal
+// arithmetic for every kHz from 1 MHz to 200 MHz on both VCOs: the same
+// integer and intFrac every time.
+ClockWrites hl2Cl2Writes(bool ext10MHz, int freqKHz)
 {
-    const qint64 vcoTenths = ext10MHz ? 14400 : 13056;
-    const qint64 denom = qint64(freqMHz) * 10;
-    const int integer = static_cast<int>(vcoTenths / denom);
-    const int intFrac = static_cast<int>(((vcoTenths % denom) << 24) / denom);
+    const qint64 vcoKHz = ext10MHz ? 1440000 : 1305600;
+    const qint64 denom = freqKHz;
+    const int integer = static_cast<int>(vcoKHz / denom);
+    const int intFrac = static_cast<int>(((vcoKHz % denom) << 24) / denom);
     ClockWrites writes = kHl2ClockCl2;
     writes[3].second = static_cast<quint8>((integer >> 4) & 0xff);   // [7]
     writes[4].second = static_cast<quint8>((integer << 4) & 0xf0);   // [9]
@@ -1588,6 +1586,11 @@ ClockWrites hl2Cl2Writes(bool ext10MHz, int freqMHz)
     writes[8].second = static_cast<quint8>((intFrac << 2) & 0xf6);   // [17]
     return writes;
 }
+
+// Attempts in a row that may find the I2C queue full, with nothing
+// leaving it, before a list is given up. From mi0bot Console/setup.cs:21658
+// [@c26a8a4]: if (Timeout++ >= 50) break;
+constexpr int kHl2ClockMaxStalledAttempts = 50;
 
 } // namespace
 
@@ -1601,25 +1604,27 @@ ClockWrites hl2Cl2Writes(bool ext10MHz, int freqMHz)
 // ControlCl2(false) sends the CL2 off table, so a frequency change with
 // CL2 off sends it too. mi0bot starts each write list unawaited, so two
 // lists can interleave pair by pair; here they go one after the other,
-// the 10 MHz list first. mi0bot refuses with "Power must be on" while not
-// connected; here the values are stored and sent at the next connect.
-void P1RadioConnection::setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqMHz)
+// the 10 MHz list first, and lists not yet started are rebuilt from the
+// values wanted now (hl2ClockRequest). mi0bot refuses with "Power must be
+// on" while not connected; here the values are stored and sent at the
+// next connect.
+void P1RadioConnection::setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqKHz)
 {
-    // From mi0bot setup.designer.cs udCl2Freq [@c26a8a4]: Minimum 1, Maximum 200.
-    const int freq = std::clamp(cl2FreqMHz, 1, 200);
+    // From mi0bot setup.designer.cs:11133-11163 [@c26a8a4] udCl2Freq:
+    // Minimum 1, Maximum 200 (MHz), three decimal places.
+    const int freq = std::clamp(cl2FreqKHz, 1000, 200000);
     const bool extChanged = (ext10MHz != m_hl2Ext10MHz);
-    const bool cl2Changed = (cl2Enable != m_hl2Cl2Enable) || (freq != m_hl2Cl2FreqMHz);
+    const bool cl2Changed = (cl2Enable != m_hl2Cl2Enable) || (freq != m_hl2Cl2FreqKHz);
     m_hl2Ext10MHz = ext10MHz;
     m_hl2Cl2Enable = cl2Enable;
-    m_hl2Cl2FreqMHz = freq;
+    m_hl2Cl2FreqKHz = freq;
     if (!isHl2() || state() != ConnectionState::Connected) {
         return;
     }
     if (extChanged) {
-        hl2QueueClockSequence(ext10MHz ? kHl2Clock10MhzEnable : kHl2Clock10MhzDisable);
-        hl2QueueCl2Sequence(cl2Enable);
+        hl2ClockRequest(true, true);
     } else if (cl2Changed) {
-        hl2QueueCl2Sequence(cl2Enable);
+        hl2ClockRequest(false, true);
     }
 }
 
@@ -1632,9 +1637,12 @@ void P1RadioConnection::setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqMH
 //       if (SetupForm.Cl2Checked)               // MI0BOT: HL2 CL2 clock output
 //           SetupForm.ControlCl2(SetupForm.Cl2Checked);
 //   }
-// An option left off sends nothing. Called when the first ep6 frame
-// promotes the link to Connected, which a reconnect after a lost link
-// also does, so a radio that reset while the link was down is set again.
+// An option left off sends nothing, unless its list did not finish last
+// time: then its current value goes again (the off table included), and
+// an External 10 MHz list that goes again takes its CL2 list with it, as
+// the checkbox handler does. Called when the first ep6 frame promotes the
+// link to Connected, which a reconnect after a lost link also does, so a
+// radio that reset while the link was down is set again.
 void P1RadioConnection::enterDataFlowing()
 {
     setState(ConnectionState::Connected);
@@ -1648,30 +1656,98 @@ void P1RadioConnection::hl2ClockOnDataFlowing()
     if (!isHl2()) {
         return;
     }
+    hl2ClockDropPending();
+    const bool sendExt = m_hl2Ext10MHz || m_hl2Ext10Incomplete;  // MI0BOT: HL2 external 10 MHz input
+    const bool sendCl2 = m_hl2Cl2Enable || m_hl2Cl2Incomplete    // MI0BOT: HL2 CL2 clock output
+                         || (sendExt && m_hl2Ext10Incomplete);
+    if (sendExt || sendCl2) {
+        hl2ClockRequest(sendExt, sendCl2);
+    }
+}
+
+// Drops every list still waiting and marks its option as not finished.
+void P1RadioConnection::hl2ClockDropPending()
+{
+    for (const Hl2ClockSequence& seq : m_hl2ClockPending) {
+        hl2ClockListDropped(seq);
+    }
     m_hl2ClockPending.clear();
-    if (m_hl2Ext10MHz) {                        // MI0BOT: HL2 external 10 MHz input
-        hl2QueueClockSequence(kHl2Clock10MhzEnable);
-    }
-    if (m_hl2Cl2Enable) {                       // MI0BOT: HL2 CL2 clock output
-        hl2QueueCl2Sequence(true);
+    if (m_hl2ClockRetryTimer) {
+        m_hl2ClockRetryTimer->stop();
     }
 }
 
-void P1RadioConnection::hl2QueueCl2Sequence(bool cl2Enable)
+void P1RadioConnection::hl2ClockListDone(const Hl2ClockSequence& seq)
 {
-    hl2QueueClockSequence(cl2Enable ? hl2Cl2Writes(m_hl2Ext10MHz, m_hl2Cl2FreqMHz)
-                                    : kHl2ClockCl2Off);
+    if (seq.kind == Hl2ClockKind::Ext10) {
+        m_hl2Ext10Incomplete = false;
+    } else {
+        m_hl2Cl2Incomplete = false;
+    }
 }
 
-void P1RadioConnection::hl2QueueClockSequence(std::vector<std::pair<quint8, quint8>> writes)
+void P1RadioConnection::hl2ClockListDropped(const Hl2ClockSequence& seq)
 {
-    // A list queued behind another waits its turn: the earlier list's
-    // retry timer carries on, so this call adds no extra attempt to it.
-    const bool idle = m_hl2ClockPending.empty();
-    Hl2ClockSequence seq;
-    seq.writes = std::move(writes);
-    m_hl2ClockPending.push_back(std::move(seq));
-    if (idle) {
+    if (seq.kind == Hl2ClockKind::Ext10) {
+        m_hl2Ext10Incomplete = true;
+    } else {
+        m_hl2Cl2Incomplete = true;
+    }
+}
+
+// Queues the lists a change needs. A list already started stays at the
+// front (the chip is part way through it); every list behind it is
+// dropped, and what those lists were for is rebuilt from the values
+// wanted now, so rapid changes end on the last one with no stale list in
+// between. A list is left out only when the started list already sends
+// exactly it; a CL2 list always follows an External 10 MHz list, as
+// mi0bot's handler calls ControlCl2 after it.
+void P1RadioConnection::hl2ClockRequest(bool ext10, bool cl2)
+{
+    Hl2ClockSequence* started = nullptr;
+    if (!m_hl2ClockPending.empty() && m_hl2ClockPending.front().next > 0) {
+        started = &m_hl2ClockPending.front();
+    }
+    const std::size_t keep = started ? 1 : 0;
+    for (std::size_t i = keep; i < m_hl2ClockPending.size(); ++i) {
+        if (m_hl2ClockPending[i].kind == Hl2ClockKind::Ext10) {
+            ext10 = true;
+        } else {
+            cl2 = true;
+        }
+    }
+    m_hl2ClockPending.resize(keep);
+    started = keep ? &m_hl2ClockPending.front() : nullptr;
+
+    const quint64 dequeued = m_ioBoard ? m_ioBoard->i2cDequeuedCount() : 0;
+    bool extQueued = false;
+    if (ext10) {
+        if (!(started && started->kind == Hl2ClockKind::Ext10
+              && started->extOn == m_hl2Ext10MHz)) {
+            Hl2ClockSequence seq;
+            seq.kind = Hl2ClockKind::Ext10;
+            seq.extOn = m_hl2Ext10MHz;
+            seq.writes = m_hl2Ext10MHz ? kHl2Clock10MhzEnable : kHl2Clock10MhzDisable;
+            seq.dequeuedAtFailure = dequeued;
+            m_hl2ClockPending.push_back(std::move(seq));
+            extQueued = true;
+        }
+    }
+    if (cl2) {
+        ClockWrites writes = m_hl2Cl2Enable ? hl2Cl2Writes(m_hl2Ext10MHz, m_hl2Cl2FreqKHz)
+                                            : kHl2ClockCl2Off;
+        const bool startedSendsIt = !extQueued && started
+            && started->kind == Hl2ClockKind::Cl2 && started->writes == writes;
+        if (!startedSendsIt) {
+            Hl2ClockSequence seq;
+            seq.kind = Hl2ClockKind::Cl2;
+            seq.writes = std::move(writes);
+            seq.dequeuedAtFailure = dequeued;
+            m_hl2ClockPending.push_back(std::move(seq));
+        }
+    }
+    // A started list keeps its retry timer; otherwise start sending now.
+    if (!started || !(m_hl2ClockRetryTimer && m_hl2ClockRetryTimer->isActive())) {
         hl2ClockPump();
     }
 }
@@ -1691,11 +1767,19 @@ void P1RadioConnection::hl2QueueClockSequence(std::vector<std::pair<quint8, quin
 //       if (status == -1) { MessageBox.Show("IC2 write failed." ...); break; }
 //   }
 //   console.SetI2CPollingPause(false);
-// Timeout counts every attempt in the call, successes included, so a list
-// is given up once an attempt that succeeds is the 50th, or once the 51st
-// attempt is made. I2CWrite fails only when the I2C queue is full
-// (netInterface.c:1535-1564 [@c26a8a4]); a full queue is tried again 1 ms
-// later. The I/O board poll waits while clock writes are pending
+// I2CWrite fails only when the I2C queue is full (netInterface.c:1535-1564
+// [@c26a8a4]). Two departures, both because the queue here drains one
+// write per I2C frame (about every 4 ms) rather than on mi0bot's timing:
+//  - mi0bot's Timeout counts every attempt in the call, successes
+//    included, so a 50-write stretch could time out while the queue was
+//    draining. Here a list is given up only after 50 attempts in a row
+//    found the queue full with nothing leaving it; a write that goes in,
+//    or a queue that moved since the last attempt, starts the count again.
+//  - mi0bot waits 1 ms after every attempt, a write that went in
+//    included. Here writes go in back to back while the queue has room
+//    and a full queue is tried again 1 ms later; the I2C frame cadence
+//    sets the pace on the wire either way.
+// The I/O board poll waits while clock writes are pending
 // (ioBoardPollTick), which is what mi0bot's polling pause does here; the
 // shared pause the manual I2C tool holds is left alone.
 void P1RadioConnection::hl2ClockPump()
@@ -1704,12 +1788,13 @@ void P1RadioConnection::hl2ClockPump()
         m_hl2ClockRetryTimer->stop();
     }
     if (!m_ioBoard) {
-        m_hl2ClockPending.clear();
+        hl2ClockDropPending();
         return;
     }
     while (!m_hl2ClockPending.empty()) {
         Hl2ClockSequence& seq = m_hl2ClockPending.front();
         if (seq.next >= seq.writes.size()) {
+            hl2ClockListDone(seq);
             m_hl2ClockPending.erase(m_hl2ClockPending.begin());
             continue;
         }
@@ -1720,22 +1805,21 @@ void P1RadioConnection::hl2ClockPump()
         txn.writeData = seq.writes[seq.next].second;
         txn.isRead = false;
         txn.needsResponse = false;
-        const bool queued = m_ioBoard->enqueueI2c(txn);
-        ++seq.attempts;
-        if (queued) {
+        if (m_ioBoard->enqueueI2c(txn)) {
             ++seq.next;
-            if (seq.attempts >= 50) {
-                qCWarning(lcConnection) << "HL2: clock chip I2C writes timed out;"
-                                        << (seq.writes.size() - seq.next)
-                                        << "writes not sent";
-                m_hl2ClockPending.erase(m_hl2ClockPending.begin());
-            }
+            seq.failures = 0;
             continue;
         }
-        if (seq.attempts >= 51) {
+        const quint64 dequeued = m_ioBoard->i2cDequeuedCount();
+        if (dequeued != seq.dequeuedAtFailure) {
+            seq.failures = 0;
+            seq.dequeuedAtFailure = dequeued;
+        }
+        if (++seq.failures >= kHl2ClockMaxStalledAttempts) {
             qCWarning(lcConnection) << "HL2: clock chip I2C writes timed out;"
                                     << (seq.writes.size() - seq.next)
                                     << "writes not sent";
+            hl2ClockListDropped(seq);
             m_hl2ClockPending.erase(m_hl2ClockPending.begin());
             continue;
         }

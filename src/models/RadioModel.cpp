@@ -8827,15 +8827,15 @@ void RadioModel::applyHl2Options()
     const bool resetOnDisconnect = m_hl2Options.disconnectReset();
     const bool ext10MHz = m_hl2Options.ext10MHz();
     const bool cl2Enabled = m_hl2Options.cl2Enabled();
-    const int cl2FreqMHz = m_hl2Options.cl2FreqMHz();
+    const int cl2FreqKHz = m_hl2Options.cl2FreqKHz();
     QMetaObject::invokeMethod(p1, [p1, bandVolts, psSync, txLatencyMs, pttHangMs,
-                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqMHz]() {
+                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqKHz]() {
         p1->setHl2BandVolts(bandVolts);
         p1->setHl2PsSync(psSync);
         p1->setHl2TxLatency(txLatencyMs);
         p1->setHl2PttHang(pttHangMs);
         p1->setHl2ResetOnDisconnect(resetOnDisconnect);
-        p1->setHl2Clock(ext10MHz, cl2Enabled, cl2FreqMHz);
+        p1->setHl2Clock(ext10MHz, cl2Enabled, cl2FreqKHz);
     });
 }
 

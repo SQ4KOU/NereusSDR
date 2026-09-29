@@ -114,6 +114,7 @@ class QCheckBox;
 class QLabel;
 class QShowEvent;
 class QPushButton;
+class QDoubleSpinBox;
 class QSpinBox;
 
 namespace NereusSDR {
@@ -221,7 +222,7 @@ private:
     // Hermes Lite Options — 9 controls.
     QCheckBox* m_chkSwapAudio{nullptr};
     QCheckBox* m_chkCl2Enable{nullptr};
-    QSpinBox*  m_udCl2Freq{nullptr};
+    QDoubleSpinBox* m_udCl2Freq{nullptr};
     QCheckBox* m_chkExt10MHz{nullptr};
     QCheckBox* m_chkDisconnectReset{nullptr};
     QSpinBox*  m_udPttHang{nullptr};

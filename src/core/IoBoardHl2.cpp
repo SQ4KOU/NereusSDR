@@ -199,6 +199,11 @@ int IoBoardHl2::i2cQueueDepth() const
     return depth > kMaxI2cQueue ? kMaxI2cQueue : static_cast<int>(depth);
 }
 
+quint64 IoBoardHl2::i2cDequeuedCount() const
+{
+    return m_i2cDequeuePos.load(std::memory_order_acquire);
+}
+
 bool IoBoardHl2::i2cQueueIsEmpty() const { return i2cQueueDepth() == 0; }
 bool IoBoardHl2::i2cQueueIsFull() const  { return i2cQueueDepth() >= kMaxI2cQueue; }
 

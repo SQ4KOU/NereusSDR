@@ -335,19 +335,23 @@ public slots:
     void setHl2ResetOnDisconnect(bool on);
 
     // HL2 only: the clock options External 10 MHz (CL1 input), Enable CL2
-    // and the CL2 frequency (MHz, clamped to 1..200). Each is written to
-    // the HL2's clock chip (I2C bus 0, address 0xd4) as a list of register
+    // and the CL2 frequency (kHz, clamped to 1000..200000: mi0bot's box
+    // holds 1 to 200 MHz to three decimal places). Each is written to the
+    // HL2's clock chip (I2C bus 0, address 0xd4) as a list of register
     // writes. At connect (when the first ep6 frame arrives) an option that
-    // is on is sent; an option left off sends nothing, as mi0bot's connect
-    // path does. On an HL2 already connected, a change is sent at once:
-    // External 10 MHz sends its on or off table and then the CL2 table the
-    // new reference needs, and a CL2 change sends the CL2 table (on) or the
-    // CL2 off table (off). While not connected the values are only stored.
+    // is on is sent, and so is one whose list did not finish last time; an
+    // option left off sends nothing otherwise, as mi0bot's connect path
+    // does. On an HL2 already connected, a change is sent at once: External
+    // 10 MHz sends its on or off table and then the CL2 table the new
+    // reference needs, and a CL2 change sends the CL2 table (on) or the CL2
+    // off table (off). Lists that have not started when a change arrives
+    // are dropped and rebuilt from the values now wanted. While not
+    // connected the values are only stored.
     // From mi0bot Console/setup.cs:21558-21756 and console.cs:28033-28040
     // [@c26a8a4]:
     //   // MI0BOT: Support for HL2 10MHz input
     //   // MI0BOT: Support for HL2 Cl2 clock output
-    void setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqMHz);
+    void setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqKHz);
 
     // HL2 I/O board poll inputs. The TX VFO's DSP mode (Thetis DSPMode
     // value) and frequency in Hz, written to REG_OP_MODE and
@@ -858,27 +862,39 @@ private:
     // create_rnet leaves it (netInterface.c:1724 [@c26a8a4]).
     bool    m_hl2ResetOnDisconnect{false};
     // HL2 clock options (setHl2Clock): off, off and 116 MHz as mi0bot's
-    // designer leaves them (setup.designer.cs udCl2Freq.Value = 116
+    // designer leaves them (setup.designer.cs:11159 udCl2Freq.Value = 116
     // [@c26a8a4]) until the saved options arrive.
     bool    m_hl2Ext10MHz{false};
     bool    m_hl2Cl2Enable{false};
-    int     m_hl2Cl2FreqMHz{116};
+    int     m_hl2Cl2FreqKHz{116000};
     // Clock chip writes waiting for room in the I2C queue, one list per
-    // mi0bot WriteVersaClockAsync call, sent in order. `attempts` is that
-    // call's Timeout count (setup.cs:21641-21665 [@c26a8a4]).
+    // mi0bot WriteVersaClockAsync call, sent in order. `failures` counts
+    // attempts in a row that found the queue full with nothing leaving it
+    // (`dequeuedAtFailure` is the queue's count at the last one).
+    enum class Hl2ClockKind { Ext10, Cl2 };
     struct Hl2ClockSequence {
+        Hl2ClockKind kind{Hl2ClockKind::Cl2};
+        bool extOn{false};                               // Ext10 lists only
         std::vector<std::pair<quint8, quint8>> writes;   // (register, data)
         std::size_t next{0};
-        int attempts{0};
+        int failures{0};
+        quint64 dequeuedAtFailure{0};
     };
     std::vector<Hl2ClockSequence> m_hl2ClockPending;
     QTimer* m_hl2ClockRetryTimer{nullptr};
+    // An option whose list was dropped before it finished (timed out, the
+    // link went down, no I/O board): its current value is sent again at
+    // the next connect even when it is off.
+    bool    m_hl2Ext10Incomplete{false};
+    bool    m_hl2Cl2Incomplete{false};
     // The first ep6 frame promotes Connecting to Connected; the HL2 clock
     // options that are on go to the radio then.
     void enterDataFlowing();
     void hl2ClockOnDataFlowing();
-    void hl2QueueClockSequence(std::vector<std::pair<quint8, quint8>> writes);
-    void hl2QueueCl2Sequence(bool cl2Enable);
+    void hl2ClockRequest(bool ext10, bool cl2);
+    void hl2ClockDropPending();
+    void hl2ClockListDone(const Hl2ClockSequence& seq);
+    void hl2ClockListDropped(const Hl2ClockSequence& seq);
     void hl2ClockPump();
 
     // mi0bot prn->i2c.delay: subframes until the next I2C frame may go
@@ -1232,7 +1248,11 @@ public:
         }
         return n;
     }
-    int hl2Cl2FreqMHzForTest() const { return m_hl2Cl2FreqMHz; }
+    int hl2Cl2FreqKHzForTest() const { return m_hl2Cl2FreqKHz; }
+    bool hl2ClockIncompleteForTest(bool ext10) const
+    {
+        return ext10 ? m_hl2Ext10Incomplete : m_hl2Cl2Incomplete;
+    }
 
     // forceBank0NextForTest — returns m_forceBank0Next (the flush flag state).
     bool forceBank0NextForTest() const { return m_forceBank0Next; }

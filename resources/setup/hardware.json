@@ -2430,7 +2430,7 @@
               "id": "hardware.hl2Io.cl2Freq",
               "label": "CL2 frequency",
               "tooltip": "Output frequency on CL2 output",
-              "kind": "integer",
+              "kind": "decimal",
               "binding": {
                 "radioSetting": "hl2/cl2FreqMHz"
               },
@@ -2442,7 +2442,8 @@
               "requiresDescriptionVersion": 17,
               "min": 1,
               "max": 200,
-              "step": 1,
+              "step": 0.1,
+              "decimals": 3,
               "unit": "MHz",
               "enabledWhen": {
                 "radioSetting": "hl2/cl2Enable",

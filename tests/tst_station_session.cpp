@@ -6765,8 +6765,10 @@ void TstStationSession::coreAppliesHl2ClockWritesLive()
     // (RadioModel::applyHl2Options -> P1RadioConnection::setHl2Clock, whose
     // bytes tst_p1_hl2_clock checks). They are not transmit keys, so a
     // receive-only Core takes them, as mi0bot's handlers carry no MOX check
-    // (setup.cs:21732-21756 [@c26a8a4]). A frequency outside 1..200 MHz is
-    // clamped when the Core loads it.
+    // (setup.cs:21732-21756 [@c26a8a4]). A frequency that is not a number
+    // or is outside 1..200 MHz (udCl2Freq, setup.designer.cs:11133-11163
+    // [@c26a8a4]) is refused with a plain reason, and the Core keeps its
+    // own. Three decimal places carry through.
     AppSettings& settings = AppSettings::instance();
     settings.clearHardwareValues(kHardwareMac);
     const auto cleanSettings = qScopeGuard([&settings] {
@@ -6780,36 +6782,46 @@ void TstStationSession::coreAppliesHl2ClockWritesLive()
     QStringList reloads;
     s.core->setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
     QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     const Hl2OptionsModel& hl2 = s.core->hl2Options();
     QVERIFY(!hl2.cl2Enabled());
-    QCOMPARE(hl2.cl2FreqMHz(), 116);
+    QCOMPARE(hl2.cl2FreqKHz(), 116000);
     QVERIFY(!hl2.ext10MHz());
     const auto hw = [](const char* rest) {
         return QStringLiteral("hardware/%1/%2").arg(kHardwareMac, QLatin1String(rest));
     };
 
     s.proxy->setValue(hw("hl2/cl2Enable"), QStringLiteral("True"));
-    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("25"));
+    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("24.576"));
     s.proxy->setValue(hw("hl2/ext10MHz"), QStringLiteral("True"));
     QTRY_VERIFY(hl2.ext10MHz());
-    QTRY_COMPARE(hl2.cl2FreqMHz(), 25);
+    QTRY_COMPARE(hl2.cl2FreqKHz(), 24576);
     QVERIFY(hl2.cl2Enabled());
     QVERIFY(!reloads.isEmpty());
     for (const QString& name : reloads) {
         QCOMPARE(name, QStringLiteral("hl2"));
     }
-    QCOMPARE(settings.value(hw("hl2/cl2FreqMHz")).toString(), QStringLiteral("25"));
+    QCOMPARE(settings.value(hw("hl2/cl2FreqMHz")).toString(), QStringLiteral("24.576"));
 
-    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("500"));
-    QTRY_COMPARE(hl2.cl2FreqMHz(), 200);
-    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("0"));
-    QTRY_COMPARE(hl2.cl2FreqMHz(), 1);
+    const QString key = hw("hl2/cl2FreqMHz");
+    int expected = 0;
+    for (const char* bad : {"500", "0", "999", "nan", "inf", "abc"}) {
+        s.proxy->setValue(key, QString::fromLatin1(bad));
+        ++expected;
+        QTRY_COMPARE_WITH_TIMEOUT(rejected.count(), expected, 2000);
+        QCOMPARE(rejected.last().at(0).toString(), key);
+        QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("24.576"));
+        QCOMPARE(toast.last().at(0).toString(),
+                 QStringLiteral("Choose a CL2 frequency from 1 to 200 MHz."));
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("24.576"));
+        QCOMPARE(hl2.cl2FreqKHz(), 24576);
+    }
 
     s.proxy->setValue(hw("hl2/cl2Enable"), QStringLiteral("False"));
     s.proxy->setValue(hw("hl2/ext10MHz"), QStringLiteral("False"));
     QTRY_VERIFY(!hl2.ext10MHz());
     QVERIFY(!hl2.cl2Enabled());
-    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(rejected.count(), expected);
 }
 
 void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()

@@ -6,6 +6,7 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QSignalSpy>
 
@@ -37,7 +38,7 @@ private slots:
         Hl2OptionsModel m;
         QVERIFY(!m.swapAudioChannels());
         QVERIFY(!m.cl2Enabled());
-        QCOMPARE(m.cl2FreqMHz(), Hl2OptionsModel::kDefaultCl2FreqMHz); // 116
+        QCOMPARE(m.cl2FreqKHz(), Hl2OptionsModel::kDefaultCl2FreqKHz); // 116 MHz
         QVERIFY(!m.ext10MHz());
         QVERIFY(!m.disconnectReset());
         QCOMPARE(m.pttHangMs(),  Hl2OptionsModel::kDefaultPttHangMs);   // 12
@@ -53,12 +54,12 @@ private slots:
 
         QSignalSpy changedSpy(&m, &Hl2OptionsModel::changed);
 
-        // CL2 freq above max clamps to 200.
-        m.setCl2FreqMHz(500);
-        QCOMPARE(m.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMaxMHz);  // 200
-        // Below min clamps to 1.
-        m.setCl2FreqMHz(0);
-        QCOMPARE(m.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMinMHz);  // 1
+        // CL2 freq above max clamps to 200 MHz.
+        m.setCl2FreqKHz(500000);
+        QCOMPARE(m.cl2FreqKHz(), Hl2OptionsModel::kCl2FreqMaxKHz);  // 200 MHz
+        // Below min clamps to 1 MHz.
+        m.setCl2FreqKHz(0);
+        QCOMPARE(m.cl2FreqKHz(), Hl2OptionsModel::kCl2FreqMinKHz);  // 1 MHz
 
         // PTT hang above max clamps to 30.
         m.setPttHangMs(99);
@@ -98,7 +99,7 @@ private slots:
             writer.setMacAddress(mac);
             writer.setSwapAudioChannels(true);
             writer.setPttHangMs(25);
-            writer.setCl2FreqMHz(50);
+            writer.setCl2FreqKHz(50000);
         }
 
         Hl2OptionsModel reader;
@@ -106,7 +107,7 @@ private slots:
         reader.load();
         QVERIFY(reader.swapAudioChannels());
         QCOMPARE(reader.pttHangMs(), 25);
-        QCOMPARE(reader.cl2FreqMHz(), 50);
+        QCOMPARE(reader.cl2FreqKHz(), 50000);
     }
 
     // The three clock options persist per MAC, and a stored frequency
@@ -121,7 +122,7 @@ private slots:
             writer.setMacAddress(mac);
             writer.load();
             writer.setCl2Enabled(true);
-            writer.setCl2FreqMHz(10);
+            writer.setCl2FreqKHz(10700);
             writer.setExt10MHz(true);
         }
         QCOMPARE(s.hardwareValue(mac, QStringLiteral("hl2/cl2Enable")).toString(),
@@ -132,7 +133,7 @@ private slots:
         reader.setMacAddress(mac);
         reader.load();
         QVERIFY(reader.cl2Enabled());
-        QCOMPARE(reader.cl2FreqMHz(), 10);
+        QCOMPARE(reader.cl2FreqKHz(), 10700);
         QVERIFY(reader.ext10MHz());
 
         // Another radio keeps its own (default) options.
@@ -140,15 +141,57 @@ private slots:
         other.setMacAddress(QStringLiteral("aa:bb:cc:dd:ee:fc"));
         other.load();
         QVERIFY(!other.cl2Enabled());
-        QCOMPARE(other.cl2FreqMHz(), Hl2OptionsModel::kDefaultCl2FreqMHz);
+        QCOMPARE(other.cl2FreqKHz(), Hl2OptionsModel::kDefaultCl2FreqKHz);
         QVERIFY(!other.ext10MHz());
 
         s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), 999);
         reader.load();
-        QCOMPARE(reader.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMaxMHz);
+        QCOMPARE(reader.cl2FreqKHz(), Hl2OptionsModel::kCl2FreqMaxKHz);
         s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), -4);
         reader.load();
-        QCOMPARE(reader.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMinMHz);
+        QCOMPARE(reader.cl2FreqKHz(), Hl2OptionsModel::kCl2FreqMinKHz);
+
+        // A value that is not a number loads the default, not the minimum.
+        for (const char* bad : {"abc", "nan", "inf", ""}) {
+            s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), QString::fromLatin1(bad));
+            reader.load();
+            QCOMPARE(reader.cl2FreqKHz(), Hl2OptionsModel::kDefaultCl2FreqKHz);
+        }
+        s.clearHardwareValues(mac);
+    }
+
+    // The frequency is stored as decimal text in MHz, three places, as
+    // mi0bot's udCl2Freq holds it (setup.designer.cs:11133-11163
+    // [@c26a8a4]); an older whole-number value still loads.
+    void cl2_frequency_stored_as_decimal_text()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:fb");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+        {
+            Hl2OptionsModel writer;
+            writer.setMacAddress(mac);
+            writer.load();
+            writer.setCl2FreqKHz(24576);
+        }
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz")).toString(),
+                 QStringLiteral("24.576"));
+        Hl2OptionsModel reader;
+        reader.setMacAddress(mac);
+        reader.load();
+        QCOMPARE(reader.cl2FreqKHz(), 24576);
+
+        s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), QStringLiteral("50"));
+        reader.load();
+        QCOMPARE(reader.cl2FreqKHz(), 50000);
+
+        int kHz = 0;
+        QVERIFY(Hl2OptionsModel::parseCl2FreqMHz(QStringLiteral("10.7"), &kHz));
+        QCOMPARE(kHz, 10700);
+        QVERIFY(!Hl2OptionsModel::parseCl2FreqMHz(QStringLiteral("nan"), &kHz));
+        QVERIFY(!Hl2OptionsModel::parseCl2FreqMHz(QStringLiteral("abc"), &kHz));
+        QCOMPARE(Hl2OptionsModel::cl2FreqMHzText(116000), QStringLiteral("116"));
+        QCOMPARE(Hl2OptionsModel::cl2FreqMHzText(10700), QStringLiteral("10.7"));
         s.clearHardwareValues(mac);
     }
 
@@ -244,22 +287,30 @@ private slots:
         RadioModel model;
         Hl2OptionsTab tab(&model);
         auto* cl2 = tab.findChild<QCheckBox*>(QStringLiteral("hl2Cl2Enable"));
-        auto* freq = tab.findChild<QSpinBox*>(QStringLiteral("hl2Cl2Freq"));
+        auto* freq = tab.findChild<QDoubleSpinBox*>(QStringLiteral("hl2Cl2Freq"));
         auto* ext = tab.findChild<QCheckBox*>(QStringLiteral("hl2Ext10MHz"));
         QVERIFY(cl2 != nullptr && freq != nullptr && ext != nullptr);
         QCOMPARE(cl2->toolTip(), QStringLiteral("Enable frequency output on CL2"));
         QCOMPARE(freq->toolTip(), QStringLiteral("Output frequency on CL2 output"));
         QCOMPARE(ext->toolTip(), QStringLiteral("Enable external 10 MHz input on CL1"));
-        QCOMPARE(freq->minimum(), 1);
-        QCOMPARE(freq->maximum(), 200);
-        QCOMPARE(freq->value(), 116);
+        QCOMPARE(freq->minimum(), 1.0);
+        QCOMPARE(freq->maximum(), 200.0);
+        QCOMPARE(freq->value(), 116.0);
+        // mi0bot udCl2Freq: DecimalPlaces 3, Increment 0.1
+        // (setup.designer.cs:11133-11163 [@c26a8a4]).
+        QCOMPARE(freq->decimals(), 3);
+        QCOMPARE(freq->singleStep(), 0.1);
+        // The value is taken when the edit is finished, not per keystroke.
+        QVERIFY(!freq->keyboardTracking());
 
         QVERIFY(!freq->isEnabled());
         cl2->setChecked(true);
         QVERIFY(model.hl2Options().cl2Enabled());
         QVERIFY(freq->isEnabled());
-        freq->setValue(50);
-        QCOMPARE(model.hl2Options().cl2FreqMHz(), 50);
+        freq->setValue(24.576);
+        QCOMPARE(model.hl2Options().cl2FreqKHz(), 24576);
+        model.hl2OptionsMutable().setCl2FreqKHz(10700);
+        QCOMPARE(freq->value(), 10.7);
         cl2->setChecked(false);
         QVERIFY(!model.hl2Options().cl2Enabled());
         QVERIFY(!freq->isEnabled());

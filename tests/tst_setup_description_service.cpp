@@ -1356,10 +1356,26 @@ private slots:
             QVERIFY2(!row.contains("availability"), qPrintable(id));
             QVERIFY2(SetupDescriptionService::validateHardwareV17Control(row), qPrintable(id));
             QVERIFY2(!SetupDescriptionService::validateHardwareV16Control(row), qPrintable(id));
-            // Everything else is the version 16 row's.
+            // Everything else is the version 16 row's, except that the
+            // frequency is decimal to three places with a 0.1 step, as
+            // mi0bot's udCl2Freq (setup.designer.cs:11133-11163 [@c26a8a4]).
+            const bool isFreq = id == "hardware.hl2Io.cl2Freq";
             for (const QString& key : {"label", "kind", "binding", "valueEncoding", "applies",
                                        "gate", "min", "max", "step", "unit", "default"}) {
+                if (isFreq && (key == "kind" || key == "step")) {
+                    continue;
+                }
                 QCOMPARE(row.value(key), was.value(key));
+            }
+            if (isFreq) {
+                QCOMPARE(row.value("kind"), QJsonValue("decimal"));
+                QCOMPARE(row.value("step"), QJsonValue(0.1));
+                QCOMPARE(row.value("decimals"), QJsonValue(3));
+                QCOMPARE(was.value("kind"), QJsonValue("integer"));
+                QCOMPARE(was.value("step"), QJsonValue(1));
+                QVERIFY(!was.contains("decimals"));
+            } else {
+                QVERIFY2(!row.contains("decimals"), qPrintable(id));
             }
             QCOMPARE(row.value("enabledWhen"), id == "hardware.hl2Io.cl2Freq"
                 ? QJsonValue(QJsonObject{{"radioSetting", "hl2/cl2Enable"},

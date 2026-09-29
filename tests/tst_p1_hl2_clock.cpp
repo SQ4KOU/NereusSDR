@@ -6,8 +6,9 @@
 // writes to the clock chip at 0xd4 on bus 0, when they go, and that the
 // defaults leave the wire exactly as it was before the options were wired.
 // Expected tables: mi0bot Console/setup.cs:21572-21629 [@c26a8a4]; the CL2
-// divider bytes from ControlCl2 (setup.cs:21694-21721) computed with
-// mi0bot's Decimal arithmetic.
+// divider bytes from ControlCl2 (setup.cs:21694-21721) computed apart from
+// the code under test, with Python's decimal module at 28 digits (C#
+// Decimal's precision) following ControlCl2 step by step.
 
 #include <QtTest/QtTest>
 #include <QLoggingCategory>
@@ -22,6 +23,7 @@ using namespace NereusSDR;
 namespace {
 
 using Writes = std::vector<std::pair<int, int>>;
+
 
 // The 96 subframes an HL2 with the I/O board sends from a fresh start, one
 // I/O board poll step every third subframe, captured from the sources
@@ -110,6 +112,19 @@ private:
         return writes;
     }
 
+    // The clock chip writes left in the I2C queue, filler skipped.
+    static Writes drainQueueClockWrites(IoBoardHl2& io)
+    {
+        Writes writes;
+        IoBoardHl2::I2cTxn txn;
+        while (io.dequeueI2c(txn)) {
+            if (txn.address == 0xd4) {
+                writes.emplace_back(txn.control, txn.writeData);
+            }
+        }
+        return writes;
+    }
+
     static void fillQueue(IoBoardHl2& io)
     {
         IoBoardHl2::I2cTxn filler;
@@ -143,7 +158,7 @@ private slots:
             P1RadioConnection conn;
             IoBoardHl2 io;
             setUpHl2(conn, io);
-            conn.setHl2Clock(false, false, 116);
+            conn.setHl2Clock(false, false, 116000);
             conn.simulateDataFlowingForTest();
             QCOMPARE(conn.hl2ClockPendingForTest(), 0);
             QCOMPARE(wireOf(conn).toHex(), golden.toHex());
@@ -155,7 +170,7 @@ private slots:
             IoBoardHl2 io;
             setUpHl2(conn, io);
             conn.simulateDataFlowingForTest();
-            conn.setHl2Clock(false, false, 116);
+            conn.setHl2Clock(false, false, 116000);
             QCOMPARE(wireOf(conn).toHex(), golden.toHex());
         }
     }
@@ -168,7 +183,7 @@ private slots:
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
-        conn.setHl2Clock(true, false, 116);
+        conn.setHl2Clock(true, false, 116000);
         QCOMPARE(io.i2cQueueDepth(), 0);   // stored only until data flows
         conn.simulateDataFlowingForTest();
         const QByteArray wire = wireOf(conn);
@@ -191,7 +206,7 @@ private slots:
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
-        conn.setHl2Clock(false, true, 116);
+        conn.setHl2Clock(false, true, 116000);
         conn.simulateDataFlowingForTest();
         // VCO 1305.6 MHz / 116: integer 11, fraction 4281082 / 2^24.
         QCOMPARE(drainClockWrites(io), cl2(0x00, 0xB0, 0x01, 0x05, 0x4B, 0xE0));
@@ -202,7 +217,7 @@ private slots:
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
-        conn.setHl2Clock(true, true, 116);
+        conn.setHl2Clock(true, true, 116000);
         conn.simulateDataFlowingForTest();
         // With the external reference the VCO is 1440 MHz: /116 is integer
         // 12, fraction 6942296 / 2^24.
@@ -216,7 +231,7 @@ private slots:
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
-        conn.setHl2Clock(false, true, 116);
+        conn.setHl2Clock(false, true, 116000);
         conn.simulateDataFlowingForTest();
         QCOMPARE(drainClockWrites(io).size(), std::size_t(10));
         conn.simulateDataFlowingForTest();
@@ -233,43 +248,43 @@ private slots:
         QCOMPARE(drainClockWrites(io), Writes{});
 
         // External 10 MHz on: its table, then ControlCl2(false) = CL2 off.
-        conn.setHl2Clock(true, false, 116);
+        conn.setHl2Clock(true, false, 116000);
         QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, kCl2Off));
 
         // CL2 on at 116 MHz on the 1440 MHz VCO.
-        conn.setHl2Clock(true, true, 116);
+        conn.setHl2Clock(true, true, 116000);
         QCOMPARE(drainClockWrites(io), cl2(0x00, 0xC0, 0x01, 0xA7, 0xB9, 0x60));
 
         // A frequency change with CL2 on: the new divider (1440 / 200).
-        conn.setHl2Clock(true, true, 200);
+        conn.setHl2Clock(true, true, 200000);
         QCOMPARE(drainClockWrites(io), cl2(0, 112, 0, 204, 204, 196));
 
         // CL2 off.
-        conn.setHl2Clock(true, false, 200);
+        conn.setHl2Clock(true, false, 200000);
         QCOMPARE(drainClockWrites(io), kCl2Off);
 
         // A frequency change with CL2 off still sends CL2 off, as
         // udCl2Freq_ValueChanged calls ControlCl2(false).
-        conn.setHl2Clock(true, false, 10);
+        conn.setHl2Clock(true, false, 10000);
         QCOMPARE(drainClockWrites(io), kCl2Off);
 
         // External 10 MHz off: its off table, then CL2 off.
-        conn.setHl2Clock(false, false, 10);
+        conn.setHl2Clock(false, false, 10000);
         QCOMPARE(drainClockWrites(io), concat(k10MhzDisable, kCl2Off));
 
         // Turning External 10 MHz off with CL2 on resends CL2 on the
         // internal VCO: 1305.6 / 10.
-        conn.setHl2Clock(true, true, 10);
+        conn.setHl2Clock(true, true, 10000);
         drainClockWrites(io);
-        conn.setHl2Clock(false, true, 10);
+        conn.setHl2Clock(false, true, 10000);
         QCOMPARE(drainClockWrites(io), concat(k10MhzDisable, cl2(8, 32, 2, 61, 112, 160)));
 
         // The same values again send nothing.
-        conn.setHl2Clock(false, true, 10);
+        conn.setHl2Clock(false, true, 10000);
         QCOMPARE(drainClockWrites(io), Writes{});
     }
 
-    // From mi0bot setup.designer.cs udCl2Freq [@c26a8a4]: 1..200 MHz.
+    // From mi0bot setup.designer.cs:11133-11163 [@c26a8a4] udCl2Freq: 1..200 MHz.
     void frequencyClamps()
     {
         P1RadioConnection conn;
@@ -277,13 +292,13 @@ private slots:
         setUpHl2(conn, io);
         conn.simulateDataFlowingForTest();
         conn.setHl2Clock(false, true, 0);
-        QCOMPARE(conn.hl2Cl2FreqMHzForTest(), 1);
+        QCOMPARE(conn.hl2Cl2FreqKHzForTest(), 1000);
         QCOMPARE(drainClockWrites(io), cl2(81, 144, 2, 102, 102, 100));
-        conn.setHl2Clock(false, true, 500);
-        QCOMPARE(conn.hl2Cl2FreqMHzForTest(), 200);
+        conn.setHl2Clock(false, true, 500000);
+        QCOMPARE(conn.hl2Cl2FreqKHzForTest(), 200000);
         QCOMPARE(drainClockWrites(io), cl2(0, 96, 2, 28, 172, 0));
-        conn.setHl2Clock(true, true, -3);
-        QCOMPARE(conn.hl2Cl2FreqMHzForTest(), 1);
+        conn.setHl2Clock(true, true, -3000);
+        QCOMPARE(conn.hl2Cl2FreqKHzForTest(), 1000);
         QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, cl2(90, 0, 0, 0, 0, 0)));
     }
 
@@ -295,8 +310,40 @@ private slots:
         IoBoardHl2 io;
         setUpHl2(conn, io);
         conn.simulateDataFlowingForTest();
-        conn.setHl2Clock(false, true, 3);
+        conn.setHl2Clock(false, true, 3000);
         QCOMPARE(drainClockWrites(io), cl2(0x1B, 0x30, 0x00, 0xCC, 0xCC, 0xC4));
+    }
+
+    // Frequencies with decimals, as udCl2Freq holds three places
+    // (setup.designer.cs:11133-11163 [@c26a8a4]). Expected bytes from
+    // Python's decimal module at 28 digits following ControlCl2, not from
+    // the integer arithmetic under test.
+    void fractionalFrequencies_data()
+    {
+        QTest::addColumn<bool>("ext");
+        QTest::addColumn<int>("kHz");
+        QTest::addColumn<Writes>("expected");
+        QTest::newRow("24.576 internal") << false << 24576 << cl2(0x03, 0x50, 0x00, 0x80, 0x00, 0x00);
+        QTest::newRow("24.576 external") << true  << 24576 << cl2(0x03, 0xA0, 0x02, 0x60, 0x00, 0x00);
+        QTest::newRow("10.7 internal")   << false << 10700 << cl2(0x07, 0xA0, 0x00, 0x13, 0x23, 0xE0);
+        QTest::newRow("10.7 external")   << true  << 10700 << cl2(0x08, 0x60, 0x02, 0x51, 0x58, 0x84);
+        QTest::newRow("1.001 internal")  << false << 1001  << cl2(0x51, 0x80, 0x01, 0x2E, 0xCD, 0x10);
+        QTest::newRow("199.999 internal") << false << 199999 << cl2(0x00, 0x60, 0x02, 0x1C, 0xB4, 0x94);
+        QTest::newRow("116.5 internal")  << false << 116500 << cl2(0x00, 0xB0, 0x00, 0xD3, 0xD4, 0xE4);
+        QTest::newRow("116.5 external")  << true  << 116500 << cl2(0x00, 0xC0, 0x01, 0x71, 0x2A, 0xD0);
+    }
+
+    void fractionalFrequencies()
+    {
+        QFETCH(bool, ext);
+        QFETCH(int, kHz);
+        QFETCH(Writes, expected);
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.setHl2Clock(ext, true, kHz);
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), ext ? concat(k10MhzEnable, expected) : expected);
     }
 
     void nothingSentWhileDisconnected()
@@ -304,8 +351,8 @@ private slots:
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
-        conn.setHl2Clock(true, true, 50);
-        conn.setHl2Clock(false, true, 60);
+        conn.setHl2Clock(true, true, 50000);
+        conn.setHl2Clock(false, true, 60000);
         QCOMPARE(io.i2cQueueDepth(), 0);
         QCOMPARE(conn.hl2ClockPendingForTest(), 0);
     }
@@ -316,9 +363,9 @@ private slots:
         conn.setBoardForTest(HPSDRHW::Hermes);
         IoBoardHl2 io;
         conn.setIoBoard(&io);
-        conn.setHl2Clock(true, true, 116);
+        conn.setHl2Clock(true, true, 116000);
         conn.simulateDataFlowingForTest();
-        conn.setHl2Clock(false, false, 20);
+        conn.setHl2Clock(false, false, 20000);
         QCOMPARE(io.i2cQueueDepth(), 0);
     }
 
@@ -329,31 +376,35 @@ private slots:
         setUpHl2(conn, io);
         fillQueue(io);
         conn.simulateDataFlowingForTest();
-        conn.setHl2Clock(true, false, 116);
+        conn.setHl2Clock(true, false, 116000);
         QCOMPARE(conn.hl2ClockPendingForTest(), 24);
         conn.disconnect();
         QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        // Both lists were cut short, so both go again at the next connect.
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
     }
 
-    // A full I2C queue is tried again; a list is given up at mi0bot's
-    // Timeout of 50 attempts (setup.cs:21649-21660 [@c26a8a4]).
-    void fullQueueRetriesThenGivesUp()
+    // A full I2C queue with nothing leaving it is given up after 50
+    // attempts in a row, mi0bot's Timeout of 50 (setup.cs:21658 [@c26a8a4]).
+    void stalledQueueGivesUpAfterFifty()
     {
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
         conn.simulateDataFlowingForTest();
         fillQueue(io);
-        conn.setHl2Clock(true, false, 116);   // attempt 1 of the 10 MHz list
+        conn.setHl2Clock(true, false, 116000);   // attempt 1 of the 10 MHz list
         QCOMPARE(conn.hl2ClockPendingForTest(), 24);
-        for (int i = 0; i < 49; ++i) {       // attempts 2..50
+        for (int i = 0; i < 48; ++i) {           // attempts 2..49
             conn.hl2ClockPumpForTest();
         }
         QCOMPARE(conn.hl2ClockPendingForTest(), 24);
         QTest::ignoreMessage(QtWarningMsg,
                              QRegularExpression(QStringLiteral("clock chip I2C writes timed out")));
-        conn.hl2ClockPumpForTest();           // attempt 51: the list is dropped
+        conn.hl2ClockPumpForTest();               // attempt 50: the list is dropped
         QCOMPARE(conn.hl2ClockPendingForTest(), 10);
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
 
         // Room in the queue: the retry timer sends the CL2 off list.
         IoBoardHl2::I2cTxn txn;
@@ -361,46 +412,150 @@ private slots:
         }
         QTRY_COMPARE(conn.hl2ClockPendingForTest(), 0);
         QCOMPARE(drainClockWrites(io), kCl2Off);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
     }
 
-    // mi0bot counts successes in Timeout too: a write that goes on the
-    // 50th attempt still ends the list.
-    void successOnFiftiethAttemptEndsList()
+    // A queue that moves between attempts starts the count again: 49
+    // stalled attempts, one write leaves the queue, 49 more stalled
+    // attempts, and the list is still there.
+    void drainResetsTheBudget()
     {
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
         conn.simulateDataFlowingForTest();
         fillQueue(io);
-        conn.setHl2Clock(true, false, 116);   // attempt 1
-        for (int i = 0; i < 48; ++i) {       // attempts 2..49
+        conn.setHl2Clock(true, false, 116000);   // attempt 1
+        for (int i = 0; i < 48; ++i) {           // attempts 2..49
             conn.hl2ClockPumpForTest();
         }
         IoBoardHl2::I2cTxn txn;
-        QVERIFY(io.dequeueI2c(txn));          // one slot free
-        QTest::ignoreMessage(QtWarningMsg,
-                             QRegularExpression(QStringLiteral("clock chip I2C writes timed out")));
-        conn.hl2ClockPumpForTest();           // attempt 50 goes, list ends
+        QVERIFY(io.dequeueI2c(txn));              // one slot frees
+        QVERIFY(io.enqueueI2c(txn));              // and fills again elsewhere
+        for (int i = 0; i < 49; ++i) {
+            conn.hl2ClockPumpForTest();
+        }
+        QCOMPARE(conn.hl2ClockPendingForTest(), 24);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+    }
+
+    // Writes that go in are not counted: a list longer than 50 writes'
+    // worth of attempts, each write finding room only after a few full
+    // tries, still ends complete.
+    void successesAreNotCounted()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        fillQueue(io);
+        conn.setHl2Clock(true, true, 116000);    // 14 + 10 writes waiting
+        IoBoardHl2::I2cTxn txn;
+        int attempts = 1;
+        Writes sent;
+        for (int round = 0; round < 200 && conn.hl2ClockPendingForTest() > 0; ++round) {
+            for (int i = 0; i < 3; ++i) {         // three full tries per write
+                conn.hl2ClockPumpForTest();
+                ++attempts;
+            }
+            QVERIFY(io.dequeueI2c(txn));          // the queue moves by one
+            if (txn.address == 0xd4) {
+                sent.emplace_back(txn.control, txn.writeData);
+            }
+            conn.hl2ClockPumpForTest();
+            ++attempts;
+        }
+        QVERIFY(attempts > 51);
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        sent = concat(sent, drainQueueClockWrites(io));
+        QCOMPARE(sent, concat(k10MhzEnable, cl2(0x00, 0xC0, 0x01, 0xA7, 0xB9, 0x60)));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
+    // Three quick External 10 MHz changes while the queue drains one write
+    // at a time: the lists that had not started are rebuilt, and the last
+    // change lands complete, with no time-out.
+    void rapidTogglesEndOnTheLast()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        fillQueue(io);
+        conn.setHl2Clock(true, false, 116000);   // on: nothing in yet
+        IoBoardHl2::I2cTxn txn;
+        Writes sent;
+        const auto drainOne = [&]() {
+            QVERIFY(io.dequeueI2c(txn));
+            if (txn.address == 0xd4) {
+                sent.emplace_back(txn.control, txn.writeData);
+            }
+            conn.hl2ClockPumpForTest();
+        };
+        drainOne();                               // the first on write goes in
+        conn.setHl2Clock(false, false, 116000);  // off
+        drainOne();
+        conn.setHl2Clock(true, false, 116000);   // on again
+        for (int round = 0; round < 200 && conn.hl2ClockPendingForTest() > 0; ++round) {
+            drainOne();
+            conn.hl2ClockPumpForTest();
+            conn.hl2ClockPumpForTest();
+        }
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        sent = concat(sent, drainQueueClockWrites(io));
+        // The on list that had started runs to its end; the off list never
+        // started and is dropped, since the last change wants on again;
+        // then the CL2 off list the last change needs.
+        QCOMPARE(sent, concat(k10MhzEnable, kCl2Off));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
+    // A frequency changed twice before its list starts sends only the last.
+    void unstartedListIsRebuilt()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        fillQueue(io);
+        conn.setHl2Clock(false, true, 116000);
+        conn.setHl2Clock(false, true, 10700);
+        conn.setHl2Clock(false, true, 24576);
         QCOMPARE(conn.hl2ClockPendingForTest(), 10);
+        IoBoardHl2::I2cTxn txn;
+        while (io.dequeueI2c(txn)) {
+        }
+        conn.hl2ClockPumpForTest();
+        QCOMPARE(drainClockWrites(io), cl2(0x03, 0x50, 0x00, 0x80, 0x00, 0x00));
     }
 
-    // A write that goes on the 49th attempt does not end the list: the
-    // next write keeps trying.
-    void successOnFortyNinthAttemptKeepsList()
+    // A list that did not finish is sent again at the next connect, from
+    // the value wanted then, even when that value is off.
+    void incompleteListResentAtConnect()
     {
         P1RadioConnection conn;
         IoBoardHl2 io;
         setUpHl2(conn, io);
+        conn.setHl2Clock(true, false, 116000);
         conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), k10MhzEnable);
         fillQueue(io);
-        conn.setHl2Clock(true, false, 116);   // attempt 1
-        for (int i = 0; i < 47; ++i) {       // attempts 2..48
-            conn.hl2ClockPumpForTest();
-        }
+        conn.setHl2Clock(false, false, 116000);  // off, cut short by a disconnect
+        conn.disconnect();
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
         IoBoardHl2::I2cTxn txn;
-        QVERIFY(io.dequeueI2c(txn));          // one slot free
-        conn.hl2ClockPumpForTest();           // attempt 49 goes, 50 waits
-        QCOMPARE(conn.hl2ClockPendingForTest(), 23);
+        while (io.dequeueI2c(txn)) {
+        }
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), concat(k10MhzDisable, kCl2Off));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+        // Finished: the connect after that sends nothing for options off.
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), Writes{});
     }
 
     // The I/O board poll waits while clock writes are pending, as mi0bot
@@ -412,7 +567,7 @@ private slots:
         setUpHl2(conn, io);
         conn.simulateDataFlowingForTest();
         fillQueue(io);
-        conn.setHl2Clock(true, false, 116);
+        conn.setHl2Clock(true, false, 116000);
         const int step = io.currentStep();
         conn.ioBoardPollTickForTest();
         QCOMPARE(io.currentStep(), step);

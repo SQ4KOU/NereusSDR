@@ -251,6 +251,10 @@ public:
     bool   i2cQueueIsEmpty() const;
     bool   i2cQueueIsFull() const;
     void   clearI2cQueue();
+    // How many transactions have left the queue since it was made. A
+    // writer that finds the queue full reads it to tell a queue that is
+    // draining from one that has stopped.
+    quint64 i2cDequeuedCount() const;
 
     // ── Pending-read FIFO ──
     // Mi0bot tracks one in-flight read at a time (IoBoardHl2.cs:142-143

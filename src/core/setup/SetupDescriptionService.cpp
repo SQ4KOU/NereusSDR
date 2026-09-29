@@ -162,13 +162,15 @@ constexpr char kHardwareV16Controls[] =
 // 10 MHz, which the Core now sends to its radio (radioHardwareVersion 10).
 // Tooltips are mi0bot's (setup.designer.cs:11158, 11174, 11187 [@c26a8a4]);
 // the frequency row is enabled only while Enable CL2 is on, as mi0bot's
-// ControlCl2 sets udCl2Freq.Enabled. A peer below version 17 gets the
-// version 16 rows, closed with the old reason. Closed as the version 13 rows
-// are.
+// ControlCl2 sets udCl2Freq.Enabled. The frequency is decimal to three
+// places with a 0.1 step, as udCl2Freq (setup.designer.cs:11133-11163
+// [@c26a8a4]). A peer below version 17 gets the version 16 rows, closed with
+// the old reason, so it never writes a value its integer row could not hold.
+// Closed as the version 13 rows are.
 constexpr char kHardwareV17Controls[] =
     R"json([)json"
     R"json({"id":"hardware.hl2Io.cl2Enable","label":"Enable CL2","tooltip":"Enable frequency output on CL2","kind":"toggle","binding":{"radioSetting":"hl2/cl2Enable"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":17,"default":false},)json"
-    R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"Output frequency on CL2 output","kind":"integer","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":17,"min":1,"max":200,"step":1,"unit":"MHz","enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]},"default":116},)json"
+    R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"Output frequency on CL2 output","kind":"decimal","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":17,"min":1,"max":200,"step":0.1,"decimals":3,"unit":"MHz","enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]},"default":116},)json"
     R"json({"id":"hardware.hl2Io.ext10MHz","label":"External 10 MHz reference","tooltip":"Enable external 10 MHz input on CL1","kind":"toggle","binding":{"radioSetting":"hl2/ext10MHz"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":17,"default":false})json"
     R"json(])json";
 
