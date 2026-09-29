@@ -8328,10 +8328,43 @@ if(TEST tst_link_conformance_session)
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=loopback")
     # iPhone app plan Task 28 (R-IOS-16): the first entry runs every other
-    # fixture over both transports (the in-process pipe and the control data
-    # channel), so it gets more time; the connectable fixture over the data
-    # channel runs in its own process, as the in-process one does.
+    # fixture, and it got more time for running them over both transports
+    # (the in-process pipe and the control data channel); the connectable
+    # fixture over the data channel runs in its own process, as the
+    # in-process one does.
+    # Load findings 3: the two transports are now two entries of the same
+    # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
+    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel,
+    # each within the same 300 s (at load 198 to 281 both together took
+    # 397 s; the limit is not raised).
     set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_MODE=loopback")
+    add_test(NAME tst_link_conformance_session_datachannel COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_datachannel PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT 300)
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_datachannel
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_dcall_home
+            "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_datachannel")
+        file(MAKE_DIRECTORY "${_lcs_dcall_home}")
+        set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+            ENVIRONMENT "HOME=${_lcs_dcall_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_datachannel APPEND
+                PROPERTY ENVIRONMENT "CFFIXED_USER_HOME=${_lcs_dcall_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session_datachannel APPEND PROPERTY
+        ENVIRONMENT "NEREUS_LINK_CONNECTABLE=skip" "NEREUS_LINK_MODE=datachannel")
     add_test(NAME tst_link_conformance_session_connectable_datachannel
         COMMAND tst_link_conformance_session)
     set_tests_properties(tst_link_conformance_session_connectable_datachannel PROPERTIES
@@ -8391,7 +8424,8 @@ if(TEST tst_link_conformance_session)
         endif()
     endif()
     foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable
-            tst_link_conformance_session_connectable_datachannel)
+            tst_link_conformance_session_connectable_datachannel
+            tst_link_conformance_session_datachannel)
         set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
     endforeach()
     set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
