@@ -5352,10 +5352,27 @@ int RadioModel::paOnAirBandIndex() const
     return (adjustable && index >= 0 && index < PaProfile::kBandCount) ? index : -1;
 }
 
+bool RadioModel::paOnAirNow() const
+{
+    // From Thetis setup.cs:23826-23834 [v2.10.3.15] OnMoxChangeHandler (the
+    // page's lock follows MOX) and setup.cs:24210-24222 [v2.10.3.15]
+    // nudAdjustGain_ValueChanged:
+    //   if (console.MOX)
+    // The next handler, OnTXBandChanged (ported in paOnAirBandIndex above),
+    // carries: //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   [original inline comment from setup.cs:23838]
+    // The lock and the live apply follow MOX itself: an edit in the
+    // controller's TX to RX handover after MOX drops is an off-air edit.
+    // TUNE and the two-tone test key MOX in Thetis, so they count too.
+    return mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
+        || m_transmitModel.isTwoToneActive()
+        || (m_twoToneController && m_twoToneController->isActive());
+}
+
 QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
                                        bool requesterHoldsTransmit) const
 {
-    if (!stationOnAirRefusal(nullptr)) {
+    if (!paOnAirNow()) {
         return {};
     }
     // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
@@ -5377,6 +5394,67 @@ QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
 }
 
 namespace {
+
+// Why a PA value is out of range, or empty when it is in range: the page's
+// spin boxes, which hold one decimal place. The phone verbs and a window's
+// raw profile key share these checks.
+//   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
+//          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
+//   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
+//   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
+//          one decimal (setup.designer.cs:47541)
+QString paValueRangeRefusal(RadioModel::PaProfileAction action, double value)
+{
+    const double rounded = std::round(value * 10.0) / 10.0;
+    const bool finite = std::isfinite(value);
+    switch (action) {
+    case RadioModel::PaProfileAction::SetGain:
+        if (!finite || rounded < 38.8 || rounded > 100.0) {
+            return QStringLiteral("Choose a PA gain from 38.8 to 100 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetAdjust:
+        if (!finite || rounded < -10.0 || rounded > 10.0) {
+            return QStringLiteral("Choose a drive-step adjust from -10 to 10 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetMaxPower:
+        if (!finite || rounded < 0.0 || rounded > 1500.0) {
+            return QStringLiteral("Choose a max power from 0 to 1500 W.");
+        }
+        break;
+    default:
+        break;
+    }
+    return {};
+}
+
+// The range refusal for PA row `band` of `incoming`, checking only the
+// values that differ from `current` (what the window changed).
+QString paRowRangeRefusal(const PaProfile& incoming, const PaProfile& current, int band)
+{
+    using Action = RadioModel::PaProfileAction;
+    const Band b = static_cast<Band>(band);
+    if (incoming.getGainForBand(b) != current.getGainForBand(b)) {
+        if (const QString r = paValueRangeRefusal(Action::SetGain, incoming.getGainForBand(b));
+            !r.isEmpty()) {
+            return r;
+        }
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(b, step) != current.getAdjust(b, step)) {
+            if (const QString r = paValueRangeRefusal(Action::SetAdjust,
+                                                      incoming.getAdjust(b, step));
+                !r.isEmpty()) {
+                return r;
+            }
+        }
+    }
+    if (incoming.getMaxPower(b) != current.getMaxPower(b)) {
+        return paValueRangeRefusal(Action::SetMaxPower, incoming.getMaxPower(b));
+    }
+    return {};
+}
 
 // hardware/<mac>/pa/<rest>: true, with <rest>, for a PA key of `mac`.
 bool paKeyRest(const QString& key, const QString& mac, QString* rest)
@@ -5421,7 +5499,7 @@ QString RadioModel::paSettingOnAirRefusal(const QString& key, const QString* val
                                           bool requesterHoldsTransmit) const
 {
     QString rest;
-    if (!paKeyRest(key, currentRadioMac(), &rest) || !stationOnAirRefusal(nullptr)) {
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()) {
         return {};
     }
     // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
@@ -5448,14 +5526,21 @@ QString RadioModel::paSettingOnAirRefusal(const QString& key, const QString* val
     if (paProfilesDifferOutsideBand(incoming, *bank->activeProfile(), txBand)) {
         return paOnAirLockedReason();
     }
-    return paOnAirEditRefusal(false, txBand, requesterHoldsTransmit);
+    if (const QString refusal = paOnAirEditRefusal(false, txBand, requesterHoldsTransmit);
+        !refusal.isEmpty()) {
+        return refusal;
+    }
+    // The key's text is not clamped on the way in (PaProfile::dataFromString)
+    // and applyPaSettingOnAir drives the radio from it: the phone verbs'
+    // range checks apply here too.
+    return paRowRangeRefusal(incoming, *bank->activeProfile(), txBand);
 }
 
 void RadioModel::applyPaSettingOnAir(const QString& key, const QString& value)
 {
     QString rest;
     PaProfileManager* const bank = m_paProfileManager;
-    if (!paKeyRest(key, currentRadioMac(), &rest) || !stationOnAirRefusal(nullptr)
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()
         || bank == nullptr || bank->activeProfile() == nullptr
         || rest != QStringLiteral("profile/") + bank->activeProfileName()) {
         return;
@@ -5763,7 +5848,7 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     }
     // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
     // transmitting band's values, from the device that holds transmit.
-    const bool onAir = stationOnAirRefusal(nullptr);
+    const bool onAir = paOnAirNow();
     if (onAir) {
         const bool profileAction = request.action == PaProfileAction::Select
             || request.action == PaProfileAction::New
@@ -5795,14 +5880,10 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         }
         return {};
     };
-    // The page's spin boxes, which hold one decimal place:
-    //   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
-    //          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
-    //   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
-    //   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
-    //          one decimal (setup.designer.cs:47541)
+    // The page's spin boxes, which hold one decimal place
+    // (paValueRangeRefusal).
     const double rounded = std::round(request.value * 10.0) / 10.0;
-    const bool finite = std::isfinite(request.value);
+    const QString rangeRefusal = paValueRangeRefusal(request.action, request.value);
     const bool bandOk = request.band >= 0 && request.band < PaProfile::kBandCount;
     const Band band = static_cast<Band>(bandOk ? request.band : 0);
 
@@ -5878,8 +5959,8 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     PaProfile edited = *bank->activeProfile();
     switch (request.action) {
     case PaProfileAction::SetGain:
-        if (!finite || rounded < 38.8 || rounded > 100.0) {
-            return fail(QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setGainForBand(band, static_cast<float>(rounded));
         break;
@@ -5887,14 +5968,14 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         if (request.step < 0 || request.step >= PaProfile::kDriveSteps) {
             return fail(QStringLiteral("Choose a drive step from 10% to 90%."));
         }
-        if (!finite || rounded < -10.0 || rounded > 10.0) {
-            return fail(QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setAdjust(band, request.step, static_cast<float>(rounded));
         break;
     case PaProfileAction::SetMaxPower:
-        if (!finite || rounded < 0.0 || rounded > 1500.0) {
-            return fail(QStringLiteral("Choose a max power from 0 to 1500 W."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setMaxPower(band, static_cast<float>(rounded));
         break;
@@ -5917,11 +5998,18 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
 // Core's phone verbs, a window's profile key and the local page alike.
 void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
 {
+    // Only while MOX is on (paOnAirNow): an edit made after MOX drops, in
+    // the controller's TX to RX handover, is an off-air edit.
+    if (!paOnAirNow()) {
+        return;
+    }
     switch (action) {
     case PaProfileAction::SetGain:
         // From Thetis setup.cs:23351-23352 [v2.10.3.15] nudPAProfileGain_ValueChanged:
         //   if (p.GetGainForBand(b) != fOld) console.PWR = console.PWR; // update the power, which causes these gain values to be queried
-        restoreNormalTxDrive();
+        // The PWR setter runs ptbPWR_Scroll whatever the tx mode, so a gain
+        // edit during TUNE or the two-tone test recomputes their drive too.
+        applyDriveSliderPower();
         break;
     case PaProfileAction::SetAdjust: {
         if (step < 0 || step >= PaProfile::kDriveSteps) {
@@ -5946,9 +6034,10 @@ void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
         switch (m_transmitModel.tuneDrivePowerSource()) {
         case DrivePowerSource::DriveSlider:
             m_transmitModel.setPower(drive); // set drive to the value we are adjusting
-            // The adjust itself changed: the drive at the same slider value
-            // is recomputed too (setPower emits only on a change).
-            restoreNormalTxDrive();
+            // The PWR setter runs ptbPWR_Scroll whatever the tx mode, and the
+            // adjust itself changed: the drive at the same slider value is
+            // recomputed too (setPower emits only on a change).
+            applyDriveSliderPower();
             break;
         case DrivePowerSource::TuneSlider:
             refreshTransmitTuneBand();
@@ -22600,7 +22689,19 @@ void RadioModel::restoreNormalTxDrive()
     // the HL2 tune carve-out mid-tune.
     if (m_transmitModel.isTune())          { return; }
     if (m_transmitModel.isTwoToneActive()) { return; }
-    if (!m_connection)                     { return; }
+    applyDriveSliderPower();
+}
+
+void RadioModel::applyDriveSliderPower()
+{
+    // From Thetis console.cs:28682-28692 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    // From Thetis console.cs:46710-46716 [v2.10.3.15] setPowerFromDriveSlider:
+    //   nDrv = SetPowerUsingTargetDBM(out bool bConstrainOut, out double targetdBm, true, false, false);
+    // SetPowerUsingTargetDBM (console.cs:46724-46747 [v2.10.3.15]) takes
+    // txMode 1 while chkTUN is checked and 2 while chk2TONE is, so this
+    // recomputes the tune or two-tone drive with the new gain.
+    if (!m_connection) { return; }
 
     // Active-profile resolution. Without a loaded PaProfileManager (MAC scope
     // not set, or first-launch state before factory regen), activeProfile()
@@ -22614,7 +22715,8 @@ void RadioModel::restoreNormalTxDrive()
     const Band currentBand = txSlice ? bandFromFrequency(txSlice->frequency())
                                      : m_lastBand;
 
-    // txMode 0 (normal): bFromTune=false, bTwoTone=false. The wire byte and
+    // bFromTune=false, bTwoTone=false: txMode 0 unless TUNE or the two-tone
+    // test runs, whose own source the transmit model then reads. The wire byte and
     // IQ scalar pump happen inside pumpAudioVolume, wired to
     // TransmitModel::audioVolumeChanged, which setPowerUsingTargetDbm emits.
     const auto result = m_transmitModel.setPowerUsingTargetDbm(

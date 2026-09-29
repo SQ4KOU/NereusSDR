@@ -525,6 +525,120 @@ private slots:
         QCOMPARE(scaleFwdPowerWatts(HPSDRModel::ANAN8000D, 0), 0.0);
         QCOMPARE(scaleFwdPowerWatts(HPSDRModel::ANAN_G2, 5), 0.0);
     }
+    // ── Job B item 4: an on-the-air gain edit during TUNE or two-tone ────────
+    // Thetis nudPAProfileGain_ValueChanged runs `console.PWR = console.PWR`
+    // (setup.cs:23351-23352 [v2.10.3.15]); the PWR setter runs ptbPWR_Scroll
+    // (console.cs:18437-18448), whose SetPowerUsingTargetDBM takes txMode 1
+    // while chkTUN is checked and 2 while chk2TONE is (console.cs:46724-46747).
+    // So the tune or two-tone drive is recomputed with the new gain.
+    static void setGain80m(RadioModel& model, float gain)
+    {
+        PaProfileManager* pm = model.paProfileManager();
+        PaProfile edited = *pm->activeProfile();
+        edited.setGainForBand(Band::Band80m, gain);
+        QVERIFY(pm->saveProfile(pm->activeProfileName(), edited));
+    }
+
+    void onAirGainEditDuringTune_recomputesTuneDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+
+        model.transmitModel().setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        model.transmitModel().setTunePowerForBand(Band::Band80m, 50);
+        model.setTune(true);
+        pump();
+        QVERIFY(!conn->txDriveLog.isEmpty());
+        const int before = conn->txDriveLog.last();
+        QVERIFY2(before >= 47 && before <= 50, qPrintable(QString::number(before)));
+
+        // 80m gain 50.5 -> 40.5 dB at 50 W tune:
+        //   target_dbm = 46.99 - 40.5 = 6.49; volts = sqrt(10^0.649 * 0.05) = 0.4721
+        //   volume = 0.590; wire = int(0.590 * 1.02 * 255) = 153
+        setGain80m(model, 40.5f);
+        conn->txDriveLog.clear();
+        model.applyPaEditOnAir(RadioModel::PaProfileAction::SetGain, -1);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "gain edit during TUNE pushed no drive");
+        const int after = conn->txDriveLog.last();
+        QVERIFY2(after >= 151 && after <= 155, qPrintable(QString::number(after)));
+        QVERIFY(model.transmitModel().isTune());
+
+        model.setTune(false);
+        pump();
+    }
+
+    void onAirGainEditDuringTwoTone_recomputesTwoToneDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+
+        model.transmitModel().setTwoToneDrivePowerSource(DrivePowerSource::DriveSlider);
+        model.transmitModel().setPower(50);
+        pump();
+        model.transmitModel().setPower(100);
+        pump();
+        model.transmitModel().setTwoToneActive(true);
+        QVERIFY(model.paOnAirNow());
+
+        // 80m gain 50.5 -> 40.5 dB at the 100 W drive slider:
+        //   target_dbm = 50 - 40.5 = 9.5; volts = sqrt(10^0.95 * 0.05) = 0.6676
+        //   volume = 0.8345; wire = int(0.8345 * 1.02 * 255) = 217
+        setGain80m(model, 40.5f);
+        conn->txDriveLog.clear();
+        model.applyPaEditOnAir(RadioModel::PaProfileAction::SetGain, -1);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "gain edit during two-tone pushed no drive");
+        const int after = conn->txDriveLog.last();
+        QVERIFY2(after >= 215 && after <= 219, qPrintable(QString::number(after)));
+
+        model.transmitModel().setTwoToneActive(false);
+        pump();
+    }
+
+    // ── Job B item 3: the live apply follows MOX, not the TX to RX flush ─────
+    // Thetis nudAdjustGain_ValueChanged gates on `if (console.MOX)`
+    // (setup.cs:24210-24222 [v2.10.3.15]); OnMoxChangeHandler unlocks the
+    // page as MOX drops (setup.cs:23826-23834). An edit made after MOX drops
+    // but before the controller is back in Rx is an off-air edit.
+    void paEditInTheUnkeyFlush_isAnOffAirEdit()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        QVERIFY(model.paOnAirNow());
+        const int band40 = static_cast<int>(Band::Band40m);
+        QCOMPARE(model.paOnAirEditRefusal(false, band40, true),
+                 RadioModel::paOnAirLockedReason());
+
+        mox->setMox(false); // no pump: the TX to RX handover has not finished
+        QVERIFY(!model.mox());
+        QVERIFY(mox->state() != MoxState::Rx);
+        QVERIFY(model.stationOnAirRefusal(nullptr));
+        QVERIFY(!model.paOnAirNow());
+        QVERIFY(model.paOnAirEditRefusal(false, band40, false).isEmpty());
+        QVERIFY(model.paOnAirEditRefusal(true, band40, false).isEmpty());
+
+        setGain80m(model, 40.5f);
+        conn->txDriveLog.clear();
+        model.applyPaEditOnAir(RadioModel::PaProfileAction::SetGain, -1);
+        QVERIFY2(conn->txDriveLog.isEmpty(), "an edit in the unkey flush moved the drive");
+        pump();
+        QCOMPARE(mox->state(), MoxState::Rx);
+    }
 };
 
 QTEST_MAIN(TestRadioModelDrivePath)

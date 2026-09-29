@@ -536,6 +536,32 @@ private slots:
         QVERIFY(bank->profileNames().contains(QStringLiteral("Raw spare")));
         QCOMPARE(bank->activeProfileName(), active);
 
+        // Refused: a value out of the page's range, with the phone verbs'
+        // words. The key's text is not clamped on the way in, so without the
+        // check a gain of 20 dB would reach the live drive (Job B item 1).
+        const auto rangeRefused = [&](const PaProfile& p, const QString& reason) {
+            const int before = rejects(holder, paKey(active)).first;
+            QSignalSpy volume(&core.model->transmitModel(), &TransmitModel::audioVolumeChanged);
+            const int power = core.model->transmitModel().power();
+            write(holder, paKey(active), p.dataToString());
+            QTRY_COMPARE(rejects(holder, paKey(active)).first, before + 1);
+            QCOMPARE(rejects(holder, paKey(active)).second, reason);
+            QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+            QCOMPARE(bank->activeProfile()->dataToString(), kept);
+            QCOMPARE(core.model->transmitModel().power(), power);
+            QCOMPARE(volume.count(), 0);
+        };
+        PaProfile lowGain = *bank->activeProfile();
+        lowGain.setGainForBand(Band::Band20m, 20.0f);
+        rangeRefused(lowGain, QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        PaProfile wideAdjust = *bank->activeProfile();
+        wideAdjust.setAdjust(Band::Band20m, 3, 11.5f);
+        rangeRefused(wideAdjust, QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        PaProfile bigMax = *bank->activeProfile();
+        bigMax.setMaxPower(Band::Band20m, 1600.0f);
+        rangeRefused(bigMax, QStringLiteral("Choose a max power from 0 to 1500 W."));
+
         // Refused: the transmitting band from a device that does not hold
         // transmit (the Core's transmit gate names the holder first).
         PaProfile notHolder = *bank->activeProfile();

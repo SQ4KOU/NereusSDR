@@ -2678,6 +2678,12 @@ public:
     // transmit slice's band, else the last band, when it is 160 m..6 m or
     // XVTR; -1 when that band has no PA values.
     int paOnAirBandIndex() const;
+    // True while the PA Gain page's on-the-air lock holds: MOX (the
+    // controller's or the transmit model's), TUNE or the two-tone test.
+    // Unlike stationOnAirRefusal it ends when MOX drops, not after the
+    // controller's TX to RX handover: Thetis gates these edits on
+    // console.MOX alone (setup.cs:24210-24222 [v2.10.3.15]).
+    bool paOnAirNow() const;
     // Why an on-the-air PA edit is refused, or empty when it is taken (and
     // empty off the air). `profileAction`: select, new, copy, delete or
     // reset. `band`: the PA row the edit changes. `requesterHoldsTransmit`:
@@ -5479,6 +5485,12 @@ private slots:
     /// powers at or below 51 and carries the level in the post-gen tone
     /// magnitude instead, so a TUNE silences every following SSB transmit.
     void restoreNormalTxDrive();
+    /// Thetis ptbPWR_Scroll's power path (console.cs:28682-28692
+    /// [v2.10.3.15]): SetPowerUsingTargetDBM with bFromTune=false and no
+    /// TUNE or two-tone guard, so the transmit model's own tx mode picks
+    /// the tune or two-tone drive source while either runs. What
+    /// `console.PWR = console.PWR` does after an on-the-air PA edit.
+    void applyDriveSliderPower();
 
     // ── Phase 3J-2 H2: per-source spot-adapter slots ────────────────────────
     //
