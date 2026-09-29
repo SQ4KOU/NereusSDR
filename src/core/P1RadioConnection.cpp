@@ -1612,9 +1612,14 @@ void P1RadioConnection::setMox(bool enabled)
 //
 // Runs on the connection thread, the ring's consumer: advancing the read
 // position and taking the count down is the consumer's own operation, so
-// the SPSC contract holds. The TX channel's RF gate is shut, and its
-// in-flight sends waited for, before MOX off reaches here
-// (TxChannel::closeRfGateAndWaitForSender), so no producer write follows.
+// the SPSC contract holds. When the TX channel's drain finishes normally,
+// its RF gate is shut and its in-flight sends waited for before MOX off
+// reaches here (TxChannel::closeRfGateAndWaitForSender), so no producer
+// write follows. The exception is the drain wait's timeout: then the gate
+// closes through txaFlushed's lambda queued to the TX thread
+// (RadioModel's closeRfGate connection), so one late sendTxIq can land
+// after this discard. At most one 63-sample zone of old audio or zeros
+// then leads the next key.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::discardTxIqOnUnkey() noexcept
 {
