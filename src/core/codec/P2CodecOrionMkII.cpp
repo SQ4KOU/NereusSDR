@@ -44,6 +44,10 @@
 //                disconnected after the 2 s connect watchdog because the
 //                G2-class branch placed RX1 on DDC2 instead of DDC0.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/console.cs header (lines 1-50) ===
@@ -398,7 +402,18 @@ quint32 P2CodecOrionMkII::buildAlex0(const CodecContext& ctx) const
     // because the MOX bit is the unambiguous transmit-keying signal — the
     // host-side relay state may lag (hardware-flip ack) but the radio's
     // antenna routing should track MOX directly.
-    if (ctx.mox) {
+    //
+    // "Disable HF PA" (ctx.txPaDisabled) leaves the relay open while keyed:
+    // Thetis's SetTRXrelay moves _TR_Relay only while the PA is enabled, and
+    // _trx_status follows _TR_Relay.
+    // From Thetis ChannelMaster/netInterface.c:374-383 [v2.10.3.15]
+    //   if (prbpfilter->_TR_Relay != bit)
+    //   {
+    //       if (!prn->tx[0].pa) // disable PA
+    //           prbpfilter->_TR_Relay = bit & 0x1;
+    //       prbpfilter->_trx_status = prbpfilter->_TR_Relay; // TXRX_STATUS
+    //       prbpfilter2->_trx_status = prbpfilter->_TR_Relay; // TXRX_STATUS for Alex1
+    if (ctx.mox && !ctx.txPaDisabled) {
         reg |= (1u << 27);  // _TR_Relay   (ALEX_TX_RELAY)
         reg |= (1u << 18);  // _trx_status (ALEX_PS_BIT)
     }
@@ -522,7 +537,11 @@ quint32 P2CodecOrionMkII::buildAlex1(const CodecContext& ctx) const
     // feedback DDC to receive garbage data on the G2E (calcc never
     // reached LSTAYON regardless of every other fix we tried).
     if (ctx.mox) {
-        reg |= (1u << 18);  // _trx_status mirrors Alex0's _TR_Relay
+        // _trx_status mirrors Alex0's _TR_Relay, which "Disable HF PA" leaves
+        // open (see buildAlex0; netInterface.c:381 [v2.10.3.15]).
+        if (!ctx.txPaDisabled) {
+            reg |= (1u << 18);  // _trx_status mirrors Alex0's _TR_Relay
+        }
 
         // ANAN-G2E bench-fix 2026-05-23 (JJ Boyd): Alex1 bit 8 (_rx2_gnd)
         // on MOX-on per Thetis console.cs:29091 HdwMOXChanged [v2.10.3.13]:

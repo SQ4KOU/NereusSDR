@@ -169,6 +169,11 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -510,6 +515,9 @@ public:
     { return QStringLiteral("This Core cannot reach its radio's I2C bus for this app. Updating the Core may help."); }
     static QString alexHpfSwitchesUnavailableReason()
     { return QStringLiteral("This Core cannot change these high-pass switches for this app. Updating the Core may help."); }
+    // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
+    static QString alexHpfRowsUnavailableReason()
+    { return QStringLiteral("This Core cannot change these filter rows for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.

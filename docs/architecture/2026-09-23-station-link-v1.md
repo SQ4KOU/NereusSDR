@@ -899,7 +899,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 7 |
+| `radioHardwareVersion` | 8 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -910,7 +910,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 10 |
+| `transmitSettingsVersion` | 11 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -4040,6 +4040,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `TxInhibitMonitorEnabled` | station |
 | 3. whole key | `TxInhibitMonitorReversed` | station |
 | 3. whole key | `WindBackPowerSwr` | station |
+| 3. whole key | `DisableHfPa` | station |
 | 3. whole key | `MultimeterDelayMs` | station |
 | 3. whole key | `NetworkWatchdogEnabled` | station |
 | 3. whole key | `MoxTimeOutEnabled` | station |
@@ -4051,7 +4052,6 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `RemoteMoxTimeOutSeconds` | station |
 | 3. whole key | `RxOnly` | station |
 | 3. whole key | `ModMon/FbStream` | station |
-| 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
 

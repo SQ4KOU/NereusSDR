@@ -517,6 +517,32 @@ public slots:
     virtual void setAlexHpfBypass(bool on) { m_alexHpfBypass = on; }
     bool alexHpfBypass() const noexcept { return m_alexHpfBypass; }
 
+    /// "Disable HF PA" (Setup > Transmit > Power, Thetis chkHFTRRelay):
+    /// Thetis's NetworkIO.DisablePA, the radio's PA switched off.
+    ///   From Thetis ChannelMaster/netInterface.c:623-631 [v2.10.3.15]
+    ///     void DisablePA(int bit)
+    ///     { if (prn->tx[0].pa != bit) { prn->tx[0].pa = bit; ... CmdGeneral(); } }
+    /// P1: bank 10 C3 bit 7 (networkproto1.c:586), and on the HL2 bank 10
+    /// C2 bit 3 cleared (mi0bot netInterface.c:628-629). P2: CmdGeneral byte
+    /// 58 clear (network.c:904), and the Alex T/R relay left open while
+    /// keyed (netInterface.c:378 SetTRXrelay). RadioModel hands it the
+    /// saved setting (applyDisableHfPaSetting). Default false, as Thetis
+    /// (netInterface.c:1522 prn->tx[i].pa = 0).
+    virtual void setPaDisabled(bool disabled) { m_paDisabled = disabled; }
+    bool paDisabled() const noexcept { return m_paDisabled; }
+
+    /// The Alex tab's receive filter rows (Setup > Hardware > Alex-1 and
+    /// Alex-2 Filters): each row's edges and per-row bypass for the
+    /// high-pass ladder, the band-pass bank and the Alex-2 bank, and the
+    /// Alex-2 master bypass (codec::alex::AlexHpfEdges). Thetis selects the
+    /// receive high-pass from these (console.cs:6839-7175 [v2.10.3.15]
+    /// setAlexHPF / setBPF1ForOrionIISaturn / setAlex2HPF). RadioModel
+    /// hands it the saved rows; each protocol re-selects at once, as
+    /// Thetis's per-row bypass setters do (console.cs:18823-18833
+    /// Alex1_5BPHPFBypass { ... setAlex1HPF(freq); }).
+    virtual void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) { m_alexHpfEdges = edges; }
+    const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
+
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
     /// Parameter and wire convention match Thetis NetworkIO.SetMicPTT exactly:
@@ -1007,6 +1033,15 @@ protected:
     // "HPF Bypass" (setAlexHpfBypass). Written and read on the connection
     // thread.
     bool m_alexHpfBypass{false};
+
+    // "Disable HF PA" (setPaDisabled), Thetis prn->tx[0].pa. Written and read
+    // on the connection thread.
+    bool m_paDisabled{false};
+
+    // The Alex tab's receive filter rows (setAlexHpfEdges), Thetis's
+    // shipped values until RadioModel hands the saved ones. Written and read
+    // on the connection thread.
+    codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
 
     // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
     // connection thread.

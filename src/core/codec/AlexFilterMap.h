@@ -21,6 +21,11 @@
 //                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
 //                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -81,6 +86,8 @@
 #include <QtGlobal>
 #include "../HpsdrModel.h"
 
+#include <array>
+
 namespace NereusSDR::codec::alex {
 
 // ── Two RX preselector designs, one set of relay bits ────────────────────────
@@ -103,6 +110,62 @@ namespace NereusSDR::codec::alex {
 // Thetis keeps the two apart by dispatching on board model in setAlex1HPF;
 // see computeRxPreselector below.  Call THAT, not computeHpf, from anything
 // that selects a receive filter for a real radio.
+
+// ── The Alex tab's per-row high-pass edges and bypass switches ──────────────
+//
+// Thetis selects each receive high-pass (or band-pass) row by the Setup
+// spinners' edges, `freq >= Start && freq <= End`, row by row in a fixed
+// order, and each row has its own bypass check box that sends 0x20 in place
+// of the row's filter:
+//   From Thetis console.cs:6857-6871 [v2.10.3.15] (setAlexHPF, first row)
+//     if ((decimal)freq >= SetupForm.udAlex1_5HPFStart.Value && // 1.5 MHz HPF
+//          (decimal)freq <= SetupForm.udAlex1_5HPFEnd.Value)
+//     {
+//         if (alex1_5bphpf_bypass)
+//         {
+//             NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+//         ...
+//         else
+//         {
+//             NetworkIO.SetAlexHPFBits(0x10);
+// A frequency no row holds gets the bypass:
+//   From Thetis console.cs:6946-6950 [v2.10.3.15]
+//     else
+//     {
+//         NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+// setBPF1ForOrionIISaturn (console.cs:6953-7067) and setAlex2HPF
+// (console.cs:7069-7175) run the same six rows over their own spinners and
+// check boxes; setAlex2HPF also has its master switch (alex2_hpf_bypass,
+// "ByPass/55 MHz BPF"). The rows are held here in Thetis's order: the
+// 1.5 MHz, 6.5 MHz, 9.5 MHz, 13 MHz, 20 MHz and 6 m BPF/LNA rows, whose
+// selections are 0x10, 0x08, 0x04, 0x01, 0x02 and 0x40. RadioModel reads
+// the saved rows (hardware/<mac>/alex/hpf, alex/bpf1, alex2/hpf) and hands
+// them to the connection; the defaults are the spinners' shipped values.
+struct AlexHpfRow {
+    double startMhz {0.0};
+    double endMhz   {0.0};
+    bool   bypass   {false};
+    bool operator==(const AlexHpfRow&) const noexcept = default;
+};
+
+inline constexpr int kAlexHpfRowCount = 6;
+using AlexHpfRows = std::array<AlexHpfRow, kAlexHpfRowCount>;
+
+struct AlexHpfEdges {
+    AlexHpfRows hpf;    // Alex-1 high-pass ladder (udAlex*HPF*, chkAlex*BPHPF)
+    AlexHpfRows bpf1;   // Alex-1 band-pass bank   (ud*BPF1*, chkBPF1_*BP)
+    AlexHpfRows alex2;  // Alex-2 high-pass bank   (udAlex2*HPF*, chkAlex2*BPHPF)
+    bool alex2Bypass {false};  // chkAlex2HPFBypass -> alex2_hpf_bypass
+
+    // Thetis's shipped spinner values, every bypass off.
+    static AlexHpfEdges thetisDefaults() noexcept;
+    bool operator==(const AlexHpfEdges&) const noexcept = default;
+};
+
+// The row selection: the first row whose edges hold `freqMhz` gives its
+// filter (or 0x20 when its bypass is checked); no row gives 0x20. Compared
+// in whole hertz, as Thetis compares the decimal spinner values.
+quint8 selectAlexHpfRow(double freqMhz, const AlexHpfRows& rows) noexcept;
 
 // Frequency → legacy Alex HIGH-PASS select bits (bank 10 C3 in the P1 packet,
 // or bytes 1432-1435 in the P2 CmdHighPriority packet).
@@ -136,6 +199,39 @@ bool usesBpf1Preselector(NereusSDR::HPSDRHW board) noexcept;
 //
 // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
 quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board);
+
+// The same with the Alex tab's saved rows: the high-pass ladder's rows
+// (setAlexHPF) or, on the band-pass boards, the BPF1 rows
+// (setBPF1ForOrionIISaturn), each with its own per-row bypass.
+quint8 computeRxPreselector(double freqMhz, NereusSDR::HPSDRHW board,
+                            const AlexHpfEdges& edges) noexcept;
+
+// The Alex-2 (second ADC) high-pass word with the saved rows and the
+// Alex-2 master bypass:
+//   From Thetis console.cs:7069-7079 [v2.10.3.15] (setAlex2HPF)
+//     if (alex2_hpf_bypass)
+//     {
+//         NetworkIO.SetAlex2HPFBits(0x20); // Bypass HPF
+//         ...
+//         return;
+//     }
+// followed by the six rows over udAlex2*HPF* and chkAlex2*BPHPF.
+quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept;
+
+// True for the radios on which Thetis sets the Alex-2 high-pass from RX2:
+//   From Thetis console.cs:15435-15444 [v2.10.3.15] (UpdateRX2DDSFreq)
+//   (Upstream inline attribution nearby, preserved verbatim, console.cs:15449:
+//                case HPSDRModel.ANAN_G2E: //N1GP G2E added)
+//     if (HardwareSpecific.Model == HPSDRModel.ORIONMKII ||
+//         HardwareSpecific.Model == HPSDRModel.ANAN7000D ||
+//         HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+//         HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+//         HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K ||
+//         HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 ||
+//         HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+//     {
+//         setAlex2HPF(rx2_dds_freq_mhz);
+bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept;
 
 // Frequency → Alex TRANSMIT low-pass select bits (bank 10 C4 in the P1 packet,
 // or bytes 1428-1431 in the P2 CmdHighPriority packet).

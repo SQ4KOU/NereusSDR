@@ -95,7 +95,11 @@ private slots:
     void lpf_6m_29_7_and_up()   { QCOMPARE(computeLpf(50.0),  quint8(0x10)); }
 
     // Boundary edges — values exactly on the breakpoint go to the upper band
-    void hpf_edge_1_5_MHz_exact()  { QCOMPARE(computeHpf(1.5),  quint8(0x10)); }
+    // The 1.5 MHz high-pass row starts at udAlex1_5HPFStart's shipped 1.8 MHz
+    // (setup.designer.cs:23832 [v2.10.3.15]); below it no row holds the
+    // frequency and setAlexHPF bypasses (console.cs:6946-6950 [v2.10.3.15]).
+    void hpf_edge_1_5_MHz_exact()  { QCOMPARE(computeHpf(1.5),  quint8(0x20)); }
+    void hpf_edge_1_8_MHz_exact()  { QCOMPARE(computeHpf(1.8),  quint8(0x10)); }
     void hpf_edge_50_MHz_exact()   { QCOMPARE(computeHpf(50.0), quint8(0x40)); }
     void lpf_edge_2_0_MHz_exact()  { QCOMPARE(computeLpf(2.0),  quint8(0x04)); }
     void lpf_edge_29_7_MHz_exact() { QCOMPARE(computeLpf(29.7), quint8(0x10)); }

@@ -569,6 +569,15 @@
 //                window's pans take the Core's per-band grid range.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -819,6 +828,7 @@ warren@wpratt.com
 #include "models/FilterPresetStore.h"
 #include "core/accessories/N2adrPreset.h"
 #include "core/codec/AlexFilterMap.h"  // Phase 3F: per-ADC BPF -> HPF bits
+#include "core/AlexSettingsKeys.h"
 #include "core/TxChannel.h"
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
 // TX DSP pump (replaces D.1/E.1/L.4 chain).
@@ -8237,6 +8247,73 @@ bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& v
         return true;
     }
     return false;
+}
+
+// ── Setup > Transmit > Power: "Disable HF PA" ───────────────────────────────
+//
+// The box was saved and read by nothing. Thetis hands it to the console,
+// whose setter re-runs the VFO A update at once:
+//   From Thetis setup.cs:16750-16754 [v2.10.3.15]
+//     private void chkHFTRRelay_CheckedChanged(object sender, EventArgs e)
+//     { if (initializing) return; console.HFTRRelay = chkHFTRRelay.Checked; }
+//   From Thetis console.cs:10891-10901 [v2.10.3.15]
+//     public bool HFTRRelay
+//     { set { hf_tr_relay = value; if (!initializing) txtVFOAFreq_LostFocus(this, EventArgs.Empty); } }
+// and that update sends DisablePA with it while the radio is on HF, which
+// with no transverter bands in NereusSDR is always:
+//   From Thetis console.cs:31619-31630 [v2.10.3.15] (txtVFOAFreq_LostFocus)
+//     if (rx1_xvtr_index < 0)
+//     { ... if (hf_tr_relay) NetworkIO.DisablePA(1); else NetworkIO.DisablePA(0);
+// The same flag lets a high SWR pass the protection:
+//   From Thetis console.cs:26109-26110 [v2.10.3.15] (PollPAPWR)
+//     if (tx_xvtr_index >= 0 || hf_tr_relay) swr_pass = true;
+//   Upstream inline attribution preserved verbatim (console.cs:26113):
+//     if (HardwareSpecific.Model == HPSDRModel.ANAN8000D)        // K2UE idea:  try to determine if Hi-Z or Lo-Z load
+// Thetis runs the handler once at start-up (setup.cs:2866 [v2.10.3.15]), so the saved
+// value applies from the first packet; here the connect path calls this.
+
+bool RadioModel::hfPaSwitchAvailable(HPSDRModel model) noexcept
+{
+    // From Thetis setup.cs:6321-6334 [v2.10.3.15]
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMES ||
+    //      (HardwareSpecific.Model == HPSDRModel.HPSDR))
+    //   { ... chkHFTRRelay.Checked = false; chkHFTRRelay.Enabled = false; chkHFTRRelay.Visible = false; }
+    //   else { ... chkHFTRRelay.Visible = true; chkHFTRRelay.Enabled = true; }
+    // mi0bot leaves the box as it is on the Hermes Lite 2 (shown), and routes
+    // its DisablePA through the HL2's PA enable (mi0bot setup.cs:6449-6466
+    // [@c26a8a4]).
+    return model != HPSDRModel::HERMES && model != HPSDRModel::HPSDR;
+}
+
+QString RadioModel::hfPaSwitchUnavailableReason()
+{
+    return QStringLiteral("This radio cannot switch off its HF PA from here.");
+}
+
+void RadioModel::applyDisableHfPaSetting()
+{
+    applyDisableHfPaSetting(AppSettings::instance().value(QLatin1String(kDisableHfPaKey)));
+}
+
+void RadioModel::applyDisableHfPaSetting(const QVariant& value)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    // Default off: console.cs:10891 [v2.10.3.15] hf_tr_relay = false.
+    const bool saved = value.isValid() && value.toString() == QStringLiteral("True");
+    // Thetis unchecks the box on a radio that does not offer it
+    // (setup.cs:6325), so there it is off whatever was saved; the saved
+    // value is kept for a radio that does.
+    const bool disabled = saved && hfPaSwitchAvailable(m_hardwareProfile.model);
+    m_swrProt.setHfPaDisabled(disabled);
+    if (m_connection == nullptr) {
+        return;
+    }
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, disabled]() {
+        conn->setPaDisabled(disabled);
+    });
 }
 
 void RadioModel::reportStationSettingChanged(const QString& key)
@@ -19278,7 +19355,25 @@ void RadioModel::republishAlexAdcSlices()
     // pairs because this grouping step, not AlexController itself, was
     // comparing the wrong filter identity.
     const bool ocFilterPath = boardCapabilities().hasIoBoardHl2;
-    auto addToChain = [&bands, &preselectors, &counts, &lowestHz, alexBoard,
+    // Each chain's selection with the Alex tab's receive filter rows
+    // (applyAlexHpfSwitchSettings). Chain 1 is the Alex-2 bank on the radios
+    // Thetis sets it for, over its own rows and master bypass:
+    //   From Thetis console.cs:15435-15444 [v2.10.3.15] (UpdateRX2DDSFreq)
+    //     ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //     {
+    //         setAlex2HPF(rx2_dds_freq_mhz);
+    //   Upstream inline attribution preserved verbatim (console.cs:15449):
+    //                case HPSDRModel.ANAN_G2E: //N1GP G2E added
+    // (codec::alex::usesAlex2Hpf). Every other chain takes the Alex-1 rows
+    // for the board's ladder, as before.
+    const bool alex2Chain = codec::alex::usesAlex2Hpf(m_hardwareProfile.model);
+    const codec::alex::AlexHpfEdges edges = m_alexHpfEdges;
+    const auto preselectorFor = [alexBoard, alex2Chain, edges](int chain, double hz) {
+        return (chain == 1 && alex2Chain)
+            ? codec::alex::computeAlex2Hpf(hz / 1.0e6, edges)
+            : codec::alex::computeRxPreselector(hz / 1.0e6, alexBoard, edges);
+    };
+    auto addToChain = [&bands, &preselectors, &counts, &lowestHz, &preselectorFor,
                         ocFilterPath, this](
                           int chain, Band band, double hz) {
         if (chain < 0 || chain >= kAdcCount) { return; }
@@ -19305,7 +19400,7 @@ void RadioModel::republishAlexAdcSlices()
             physicalFilter = m_ocMatrix.maskFor(band, /*tx=*/false);
         }
         if (physicalFilter == 0) {
-            physicalFilter = codec::alex::computeRxPreselector(hz / 1.0e6, alexBoard);
+            physicalFilter = preselectorFor(chain, hz);
         }
 
         // Compatibility is a property of the relay selection, not the Band
@@ -19381,9 +19476,7 @@ void RadioModel::republishAlexAdcSlices()
         AlexController::SwitchBypass chain0Switch = AlexController::SwitchBypass::None;
         if (boardCapabilities().hasAlexFilters) {
             static constexpr quint8 k6mBpfLna = 0x40;
-            const bool on6mLna = counts[0] > 0
-                && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
-                       == k6mBpfLna;
+            const bool on6mLna = counts[0] > 0 && preselectorFor(0, lowestHz[0]) == k6mBpfLna;
             const NereusSDR::CodecContext radioState = currentCodecContext();
             const bool keyed = radioState.mox;
             if (m_alexHpfBypassSwitch) {
@@ -19420,7 +19513,7 @@ void RadioModel::republishAlexAdcSlices()
     // prbpfilter2's HPF nibble.
     // Upstream inline attribution preserved verbatim (console.cs:15441):
     //   HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-    auto hpfBitsFor = [this, &counts, &lowestHz, chainCount](int adc) -> int {
+    auto hpfBitsFor = [this, &counts, &lowestHz, &preselectorFor, chainCount](int adc) -> int {
         // Defect D4. A board that does not drive this chain never gets a word
         // composed for it, whatever the slice grouping says. chainForStream
         // already folds every stream onto chain 0 on such a board, so this is
@@ -19456,8 +19549,9 @@ void RadioModel::republishAlexAdcSlices()
         // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
         // Upstream inline attribution preserved verbatim (console.cs:6830):
         //    || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
-        return int(codec::alex::computeRxPreselector(lowestHz[adc] / 1.0e6,
-                                                     boardCapabilities().board));
+        // With the Alex tab's rows, and on chain 1 the Alex-2 bank where
+        // Thetis sets it (preselectorFor above).
+        return int(preselectorFor(adc, lowestHz[adc]));
     };
 
     AlexRxBpf bpf;
@@ -21476,6 +21570,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // Plan Task 14 and its fix wave: and the Alex tab's saved high-pass
         // switches.
         applyAlexHpfSwitchSettings();
+        // And Setup > Transmit > Power's "Disable HF PA", which Thetis
+        // applies from start-up (setup.cs:2866 [v2.10.3.15]).
+        applyDisableHfPaSetting();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the
@@ -24985,9 +25082,15 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
                || rest.compare(QLatin1String("alex/master/disable6mLnaOnRx"),
                                Qt::CaseInsensitive) == 0
                || rest.compare(QLatin1String("alex/master/disable6mLnaOnTx"),
+                               Qt::CaseInsensitive) == 0
+               || rest.startsWith(QLatin1String("alex/hpf/"), Qt::CaseInsensitive)
+               || rest.startsWith(QLatin1String("alex/bpf1/"), Qt::CaseInsensitive)
+               || rest.startsWith(QLatin1String("alex2/hpf/"), Qt::CaseInsensitive)
+               || rest.compare(QLatin1String("alex2/master/bypass55MhzBpf"),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
-        // applied to the connection.
+        // applied to the connection. radioHardwareVersion 8: and its
+        // receive filter rows (savedAlexHpfEdges).
         reload = QStringLiteral("alex");
     } else {
         return;
@@ -25161,7 +25264,10 @@ void RadioModel::flushRemoteHardwareApply()
 // ---------------------------------------------------------------------------
 void RadioModel::applyAlexHpfSwitchSettings()
 {
-    // The 6 m LNA gain offset reads the LNA and bypass switches.
+    // The 6 m LNA gain offset reads the LNA and bypass switches, and the
+    // Alex HPF and BPF1 6 m rows' bypass (savedAlexHpfEdges' keys below), so
+    // a row change reaches the meters and the spectrum at once, not at the
+    // next band change.
     refreshRxMeterOffset();
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
@@ -25182,12 +25288,18 @@ void RadioModel::applyAlexHpfSwitchSettings()
     const bool lnaOffRx = flag("alex/master/disable6mLnaOnRx", "False");
     // Default True: chkDisable6mLNAonTX.Checked = true (setup.designer.cs).
     const bool lnaOffTx = flag("alex/master/disable6mLnaOnTx", "True");
+    // And the tab's receive filter rows: each row's edges and bypass, and
+    // the Alex-2 master bypass (savedAlexHpfEdges).
+    const codec::alex::AlexHpfEdges edges = savedAlexHpfEdges(mac);
+    const bool edgesChanged = !(edges == m_alexHpfEdges);
+    m_alexHpfEdges = edges;
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
         conn->setAlexHpfBypass(bypass);
         conn->setDisable6mLna(lnaOffRx, lnaOffTx);
+        conn->setAlexHpfEdges(edges);
     });
     // Re-review N4: the two receive-side switches also decide what the
     // chain reports (republishAlexAdcSlices), so the WIDE badge and
@@ -25195,7 +25307,10 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // sent for the chains are the same as before.
     // Task 14 follow-up 2: the three keyed switches as well, for the bypass
     // they put on the wire while keyed.
-    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
+    // The rows decide each chain's selection there too. (The 6 m LNA gain
+    // offset they also decide is refreshed at the top.)
+    if (edgesChanged || bypass != m_alexHpfBypassSwitch
+        || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
         || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch
         || lnaOffTx != m_alexDisable6mLnaOnTxSwitch) {
         m_alexHpfBypassSwitch = bypass;
@@ -25205,6 +25320,67 @@ void RadioModel::applyAlexHpfSwitchSettings()
         m_alexDisable6mLnaOnTxSwitch = lnaOffTx;
         republishAlexAdcSlices();
     }
+}
+
+// ---------------------------------------------------------------------------
+// savedAlexHpfEdges: the Alex tab's receive filter rows for one radio.
+//
+// Thetis reads each row's edges from the Setup spinners and each row's
+// bypass from its check box at every selection (console.cs:6839-7175
+// [v2.10.3.15]: setAlexHPF, setBPF1ForOrionIISaturn, setAlex2HPF), and the
+// check boxes reach the console through their setters:
+//   From Thetis setup.cs:15497-15501 [v2.10.3.15]
+//     private void chkAlex1_5BPHPF_CheckedChanged(object sender, EventArgs e)
+//     { if (initializing) return; console.Alex1_5BPHPFBypass = chkAlex1_5BPHPF.Checked; }
+//   From Thetis setup.cs:18320-18323 [v2.10.3.15]
+//     private void chkBPF1_1_5BP_CheckedChanged(object sender, EventArgs e)
+//     { console.BPF1_1_5BPBypass = chkBPF1_1_5BP.Checked; }
+//   From Thetis setup.cs:15533-15537 [v2.10.3.15]
+//     console.Alex21_5BPHPFBypass = chkAlex21_5BPHPF.Checked;
+//   From Thetis setup.cs:15395-15398 [v2.10.3.15]
+//     private void chkAlex2HPFBypass_CheckedChanged(object sender, EventArgs e)
+//     { console.Alex2HPFBypass = chkAlex2HPFBypass.Checked; }
+// The tabs save them per radio (AntennaAlexAlex1Tab, AntennaAlexAlex2Tab):
+// hardware/<mac>/alex/hpf, alex/bpf1 and alex2/hpf, each row
+// <slug>/{enabled,start,end} ("enabled" is the row's Bypass box), and
+// alex2/master/bypass55MhzBpf. A value never saved is Thetis's default.
+// ---------------------------------------------------------------------------
+codec::alex::AlexHpfEdges RadioModel::savedAlexHpfEdges(const QString& mac)
+{
+    codec::alex::AlexHpfEdges edges = codec::alex::AlexHpfEdges::thetisDefaults();
+    if (mac.isEmpty()) {
+        return edges;
+    }
+    auto& settings = AppSettings::instance();
+    const auto readRows = [&settings, &mac](const QString& prefix,
+                                            codec::alex::AlexHpfRows& rows) {
+        for (size_t i = 0; i < rows.size(); ++i) {
+            const QString slug = QString::fromLatin1(alexKeys::kPreselectorSlugs[i]);
+            const QString base = QStringLiteral("%1/%2/").arg(prefix, slug);
+            codec::alex::AlexHpfRow& row = rows[i];
+            bool ok = false;
+            const double start = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafStart), QString()).toString().toDouble(&ok);
+            if (ok) {
+                row.startMhz = start;
+            }
+            const double end = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafEnd), QString()).toString().toDouble(&ok);
+            if (ok) {
+                row.endMhz = end;
+            }
+            row.bypass = settings.hardwareValue(
+                mac, base + QLatin1String(alexKeys::kLeafEnabled), QStringLiteral("False"))
+                .toString() == QStringLiteral("True");
+        }
+    };
+    readRows(QLatin1String(alexKeys::kAlex1HpfPrefix), edges.hpf);
+    readRows(QLatin1String(alexKeys::kAlex1Bpf1Prefix), edges.bpf1);
+    readRows(QStringLiteral("alex2/hpf"), edges.alex2);
+    edges.alex2Bypass = settings.hardwareValue(
+        mac, QStringLiteral("alex2/master/bypass55MhzBpf"), QStringLiteral("False"))
+        .toString() == QStringLiteral("True");
+    return edges;
 }
 
 // Group B fix wave (group A's follow-ups): work a window's change left

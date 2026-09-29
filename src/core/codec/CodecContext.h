@@ -288,6 +288,19 @@ struct CodecContext {
     // Populated by buildCodecContext() from P1RadioConnection::m_trxRelay.
     bool    trxRelay{false};
 
+    // "Disable HF PA" (RadioConnection::setPaDisabled), Thetis prn->tx[0].pa
+    // = 1. P1: bank 10 C3 bit 7 set, and on the HL2 bank 10 C2 bit 3 clear.
+    // P2: the Alex T/R relay (Alex0 bits 27 and 18, Alex1 bit 18) left open
+    // while keyed. P2's CmdGeneral byte 58 reads p2TxPa, which the P2
+    // connection sets from the same flag.
+    // From Thetis ChannelMaster/networkproto1.c:583-586 [v2.10.3.15]
+    //   C3 = ... | ((prbpfilter->_6M_preamp & 1) << 6) | ((prn->tx[0].pa & 1) << 7);
+    // From Thetis ChannelMaster/netInterface.c:374-383 [v2.10.3.15] SetTRXrelay
+    //   if (!prn->tx[0].pa) // disable PA
+    //       prbpfilter->_TR_Relay = bit & 0x1;
+    //   prbpfilter->_trx_status = prbpfilter->_TR_Relay; // TXRX_STATUS
+    bool    txPaDisabled{false};
+
     // P1 mic-jack boost bit — bank 10 (C0=0x12) C2 bit 0 (0x01).
     // Polarity: 1 = boost on (no inversion).
     // Source: Thetis ChannelMaster/networkproto1.c:581 [v2.10.3.13]

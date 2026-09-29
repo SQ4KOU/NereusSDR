@@ -316,7 +316,10 @@ void TstRemoteTransmitSetupPages::swrProtectionKeysApplyToTheCoresController()
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("SwrProtectionEnabled")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("TxInhibitMonitorEnabled")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("TxInhibitMonitorReversed")));
-    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("DisableHfPa")));
+    // transmitSettingsVersion 11: Disable HF PA, taken on and off the air
+    // as Thetis applies it (no MOX check).
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(QStringLiteral("DisableHfPa")));
+    QVERIFY(StationServer::isTransmitSettingKeyTakenOnAir(QStringLiteral("DisableHfPa")));
 
     s.proxy.setValue(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("True"));
     QTRY_VERIFY(swr.isEnabled());
@@ -742,10 +745,15 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     QVERIFY(!swrOn->isEnabled());
     QCOMPARE(swrOn->toolTip(), IStationLink::transmitSettingsUnavailableReason());
     QVERIFY(!attOnTx->isEnabled() && !maxPower->isEnabled() && !fixed->isEnabled());
-    // Disable HF PA writes nothing either window reads; it is left as it is.
-    QVERIFY(hfPa->isEnabled());
+    // Disable HF PA follows version 11, closed until the dialog pushes it.
+    QVERIFY(!hfPa->isEnabled());
+    QCOMPARE(hfPa->toolTip(), IStationLink::transmitSettingsUnavailableReason());
     page.setTransmitSettingsPermittedAt(5, true, QString());
     QVERIFY(swrOn->isEnabled() && attOnTx->isEnabled() && maxPower->isEnabled());
+    QVERIFY(!hfPa->isEnabled());
+    page.setTransmitSettingsPermittedAt(11, true, QString());
+    QVERIFY(hfPa->isEnabled());
+    QCOMPARE(hfPa->toolTip(), QStringLiteral("Disables HF PA."));
 
     // The Core's values.
     QVERIFY(swrOn->isChecked());
@@ -783,6 +791,11 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     inhibitReverse->setChecked(true);
     QTRY_COMPARE(s.settings.value(QStringLiteral("TxInhibitMonitorReversed")).toString(),
                  QStringLiteral("True"));
+    // Disable HF PA reaches the Core's SWR protection (and its radio).
+    QVERIFY(!swr.hfPaDisabled());
+    hfPa->setChecked(true);
+    QTRY_VERIFY(swr.hfPaDisabled());
+    QCOMPARE(s.settings.value(QStringLiteral("DisableHfPa")).toString(), QStringLiteral("True"));
 
     // The Core's own changes show on the page.
     s.stepAtt.setAttOnTxValue(25);
@@ -791,6 +804,8 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     QTRY_COMPARE(maxPower->value(), 44);
     s.settings.setValue(QStringLiteral("WindBackPowerSwr"), QStringLiteral("False"));
     QTRY_VERIFY(!windBack->isChecked());
+    s.settings.setValue(QStringLiteral("DisableHfPa"), QStringLiteral("False"));
+    QTRY_VERIFY(!hfPa->isChecked());
 
     // On the air the change is refused and the box goes back to the Core's.
     s.keyCore();
@@ -798,6 +813,11 @@ void TstRemoteTransmitSetupPages::remotePowerPageShowsAndChangesTheCoresValues()
     swrTune->setChecked(false);
     QTRY_VERIFY(swrTune->isChecked());
     QVERIFY(swr.disableOnTune());
+    // Disable HF PA is taken on the air, as Thetis applies it.
+    hfPa->setChecked(true);
+    QTRY_VERIFY(swr.hfPaDisabled());
+    hfPa->setChecked(false);
+    QTRY_VERIFY(!swr.hfPaDisabled());
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);

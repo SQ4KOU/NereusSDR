@@ -13,6 +13,10 @@
 //                Claude Code. HL2-only codec; mirrors mi0bot's
 //                literal WriteMainLoop_HL2 vs WriteMainLoop split.
 //                Fixes reported HL2 S-ATT bug at the wire layer.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot networkproto1.c header (lines 1-19) ===
@@ -211,9 +215,9 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
         // C2 bit 3 = HL2 PA-enable (repurposed `ApolloTuner` slot per mi0bot).
         // mi0bot routes DisablePA() on HL2 through EnableApolloTuner(!bit), so
         // the bit follows tx[0].pa polarity inverted: PA enabled ⇒ bit set,
-        // PA disabled ⇒ bit cleared.  We emit bit set always — NereusSDR has
-        // no user-facing "Disable PA" wiring for HL2 yet, and PA-enabled is
-        // the only state in which TUNE / MOX produce RF.  Without this bit,
+        // PA disabled ⇒ bit cleared.  Setup > Transmit > Power's "Disable HF
+        // PA" clears it (ctx.txPaDisabled); otherwise it is set, as PA-enabled
+        // is the only state in which TUNE / MOX produce RF.  Without this bit,
         // the HL2 FPGA sees MOX asserted with PA-not-enabled and the T/R
         // relay flutters because it cannot reconcile.  This was the root
         // cause of the "rapid relay clicking on TUNE" bench symptom.
@@ -233,9 +237,13 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
             out[2] = quint8(
                 (ctx.p1MicBoost ? 0x01 : 0x00) |
                 (ctx.p1LineIn   ? 0x02 : 0x00) |
-                /*HL2 PA enable*/ 0x08 |
+                /*HL2 PA enable*/ (ctx.txPaDisabled ? 0x00 : 0x08) |
                 /*always-on*/     0x40);
-            out[3] = quint8(ctx.alexHpfBits | (ctx.trxRelay ? 0x00 : 0x80));  // T/R relay engaged (INVERTED: 1 = disabled)
+            // C3 bit 7 also carries tx[0].pa on the HL2, as on every P1 board:
+            // From mi0bot ChannelMaster/networkproto1.c:1081-1084 [@c26a8a4]
+            //   C3 = ... | ((prbpfilter->_6M_preamp & 1) << 6) | ((prn->tx[0].pa & 1) << 7);
+            out[3] = quint8(ctx.alexHpfBits
+                            | ((!ctx.trxRelay || ctx.txPaDisabled) ? 0x80 : 0x00));  // T/R relay engaged (INVERTED: 1 = disabled)
             out[4] = quint8(ctx.alexLpfBits);
             return;
 

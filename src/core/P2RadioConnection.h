@@ -69,6 +69,15 @@
 //                 buffer, which sheds a standing excess only in silence; the key-on cushion is the
 //                 radio's target lead plus one frame (16.25 ms, was 20 ms), so no standing 5 ms
 //                 stays in the ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-R3-46: Setup > Transmit > Power's Disable HF PA
+//                applied (Thetis DisablePA and hf_tr_relay,
+//                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -286,6 +295,8 @@ public slots:
     void setHpfBypassOnTx(bool on) override;
     void setHpfBypassOnPs(bool on) override;
     void setAlexHpfBypass(bool on) override;
+    void setPaDisabled(bool disabled) override;
+    void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
     void setDisable6mLna(bool onRx, bool onTx) override;
     void onBandOutputPinsChanged() override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;

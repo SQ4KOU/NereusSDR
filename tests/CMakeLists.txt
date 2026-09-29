@@ -2063,6 +2063,16 @@ nereus_add_test(tst_hpf_bypass_on_tx)
 # reach the wire as Thetis's setAlexHPF / setBPF1ForOrionIISaturn apply them
 # (console.cs:6839-6962). NereusSDR-original tests: no Thetis port.
 nereus_add_test(tst_alex_hpf_switches)
+# Setup > Transmit > Power's "Disable HF PA" (transmitSettingsVersion 11)
+# reaches the wire as Thetis's DisablePA sends it (P1 bank 10 C3 bit 7 and the
+# HL2's C2 bit 3; P2 CmdGeneral byte 58 and the Alex T/R relay) and the SWR
+# protection's pass (console.cs:26109-26110). NereusSDR-original tests.
+nereus_add_test(tst_disable_hf_pa)
+# radioHardwareVersion 8: the Alex Filters tabs' receive filter rows (each
+# row's bypass and edges, the Alex-2 master bypass) select the receive
+# high-pass as Thetis's setAlexHPF / setBPF1ForOrionIISaturn / setAlex2HPF
+# do (console.cs:6839-7175). NereusSDR-original tests.
+nereus_add_test(tst_alex_hpf_rows)
 # Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window

@@ -24,6 +24,11 @@
 //   2026-09-26 - R-R3-46 / R-R3-49 (parity Task 14): forwards the Alex-1
 //                high-pass switches' availability. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-49: the Alex Filters tabs' receive filter rows
+//                (per-row bypass and edges, Alex-2 master bypass) select the
+//                receive high-pass as Thetis's setAlexHPF /
+//                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
+//                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -108,6 +113,11 @@ public:
     // R-R3-46 / R-R3-49 (parity Task 14): see
     // AntennaAlexAlex1Tab::setHpfSwitchesAvailable.
     void setHpfSwitchesAvailable(bool available, const QString& reason);
+    // radioHardwareVersion 8: the Alex-1 and Alex-2 Filters tabs' receive
+    // filter rows (each row's Bypass, Start and End, and Alex-2's master
+    // bypass) follow whether the Core takes them, disabled with `reason`
+    // when it does not. Always available locally.
+    void setHpfRowsAvailable(bool available, const QString& reason);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

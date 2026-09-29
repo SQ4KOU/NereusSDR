@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 7
+            "value": 8
         },
         {
             "kind": "i64",
@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 10
+            "value": 11
         },
         {
             "kind": "i64",
@@ -7708,7 +7708,6 @@
             }
         ],
         "operatorLocalKeys": [
-            "DisableHfPa",
             "ExtendedTxAllowed",
             "PreventTxOnDifferentBandToRx"
         ],
@@ -7751,6 +7750,7 @@
             "TxInhibitMonitorEnabled",
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
+            "DisableHfPa",
             "MultimeterDelayMs",
             "NetworkWatchdogEnabled",
             "MoxTimeOutEnabled",
