@@ -298,7 +298,8 @@ private slots:
         QCOMPARE(ok("paProfile.select", {name("Nothing")}),
                  QStringLiteral("There is no PA profile called Nothing."));
 
-        // On the air, a receive-only Core takes none of them.
+        // On the air, a device that does not hold transmit changes nothing
+        // (onAirPaProfileVerbsFollowThetisForTheHolderOnly has the rest).
         const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
         allowTransmit(core);
         core.model->setReceiveOnlyStationPolicy(true);
@@ -307,7 +308,9 @@ private slots:
         mox->setMox(true); // logical test state, no radio transport
         QTRY_COMPARE(mox->state(), MoxState::Tx);
         QCOMPARE(ok("paProfile.setGain", {band(5), value(48.0)}),
-                 QStringLiteral("The radio is on the air. Try again when it stops."));
+                 QStringLiteral("Only the device that is transmitting can change this."));
+        QCOMPARE(ok("paProfile.select", {name(factory)}),
+                 QStringLiteral("Can't change while transmitting."));
         QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
@@ -323,6 +326,110 @@ private slots:
         const QJsonObject refused = core.invoke(old, "paProfile.select", {name(factory)});
         QVERIFY(!refused.value("accepted").toBool(true));
         QVERIFY(!refused.value("reason").toString().isEmpty());
+    }
+
+    // R-R3-49 / R-IOS-18 / R-IOS-27 (JJ's ruling, follow Thetis): on the
+    // air the device that holds transmit changes the transmitting band's
+    // gain, drive-step adjust, max power and use-max, and an adjust moves
+    // the drive to the step it adjusts (Thetis nudAdjustGain_ValueChanged,
+    // setup.cs:24199-24225 [v2.10.3.15]). Every profile action and every
+    // other band is refused (OnMoxChangeHandler, setup.cs:23826-23834), and
+    // a device that does not hold transmit changes nothing.
+    void onAirPaProfileVerbsFollowThetisForTheHolderOnly()
+    {
+        Core core(true);
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        const QString factory = bank->activeProfileName();
+        QVERIFY(bank->saveProfile(QStringLiteral("On-air spare"), *bank->activeProfile()));
+        Device holderDevice(QStringLiteral("PA holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("PA other iPad"), QStringLiteral("tablet"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        QHash<QByteArray, int> features = kTransmitter;
+        features.insert("paProfiles", 1);
+        auto* holder = core.signIn(holderDevice, features);
+        auto* other = core.signIn(otherDevice, features);
+        QVERIFY(admitted(holder) && admitted(other));
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(holderDevice.key.fingerprint()));
+
+        const auto ok = [&core](LoopbackTransport* app, const QByteArray& verb,
+                                const QList<MirrorUpdate>& args) {
+            const QJsonObject result = core.invoke(app, verb, args);
+            return result.value("accepted").toBool()
+                ? QString() : result.value("reason").toString(QStringLiteral("(no answer)"));
+        };
+        const auto name = [](const QString& n) {
+            return MirrorUpdate{0, "name", MirrorWireKind::Utf8, n};
+        };
+        const auto band = [](int b) { return MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(b)}; };
+        const auto step = [](int s) { return MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(s)}; };
+        const auto value = [](double v) { return MirrorUpdate{0, "value", MirrorWireKind::Float64, v}; };
+        const auto on = [](bool b) { return MirrorUpdate{0, "on", MirrorWireKind::Bool, b}; };
+        const QString locked = QStringLiteral("Can't change while transmitting.");
+
+        // Allowed: the transmitting band's four values, from the holder.
+        QCOMPARE(ok(holder, "paProfile.setGain", {band(5), value(47.0)}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.0f);
+        core.model->transmitModel().setPower(100);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(3), value(-1.5)}), QString());
+        QCOMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 3), -1.5f);
+        // DRIVE_SLIDER: the drive moves to the step being adjusted (40%).
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        QCOMPARE(ok(holder, "paProfile.setMaxPower", {band(5), value(60.0)}), QString());
+        QCOMPARE(ok(holder, "paProfile.setUseMax", {band(5), on(true)}), QString());
+        QVERIFY(bank->activeProfile()->getMaxPowerUse(Band::Band20m));
+        // TUNE_SLIDER: the tune power moves instead.
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(5), value(0.5)}), QString());
+        QCOMPARE(core.model->transmitModel().tunePowerForTxBand(), 60);
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        // FIXED: neither moves.
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::Fixed);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(1), value(0.2)}), QString());
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        QCOMPARE(core.model->transmitModel().tunePowerForTxBand(), 60);
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
+
+        // Refused: any other band, and every profile action.
+        const PaProfile before = *bank->activeProfile();
+        QCOMPARE(ok(holder, "paProfile.setGain", {band(3), value(47.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(3), step(3), value(1.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setMaxPower", {band(3), value(50.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setUseMax", {band(3), on(true)}), locked);
+        QCOMPARE(ok(holder, "paProfile.select", {name(QStringLiteral("On-air spare"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.new", {name(QStringLiteral("On-air new"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.copy", {name(QStringLiteral("On-air new"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.delete", {name(QStringLiteral("On-air spare"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.reset", {}), locked);
+        QCOMPARE(bank->activeProfileName(), factory);
+        QVERIFY(bank->profileNames().contains(QStringLiteral("On-air spare")));
+        QVERIFY(!bank->profileNames().contains(QStringLiteral("On-air new")));
+        QCOMPARE(bank->activeProfile()->dataToString(), before.dataToString());
+
+        // Refused: every edit from a device that does not hold transmit.
+        // With remote transmit on, the Core's transmit gate answers first
+        // and names the holder; on a receive-only Core the PA rule does
+        // (pairedPaProfileVerbsChangeTheCoresBankOffTheAirOnly).
+        const QString holderNamed = QStringLiteral("PA holder iPhone has the transmitter.");
+        QCOMPARE(ok(other, "paProfile.setGain", {band(5), value(48.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setAdjust", {band(5), step(3), value(1.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setMaxPower", {band(5), value(70.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setUseMax", {band(5), on(false)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.select", {name(QStringLiteral("On-air spare"))}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setGain", {band(3), value(48.0)}), holderNamed);
+        QCOMPARE(bank->activeProfile()->dataToString(), before.dataToString());
+        QCOMPARE(core.model->transmitModel().power(), 40);
     }
 
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()

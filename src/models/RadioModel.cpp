@@ -5324,6 +5324,58 @@ QString RadioModel::onAirReason()
     return QStringLiteral("The radio is on the air. Try again when it stops.");
 }
 
+QString RadioModel::paOnAirLockedReason()
+{
+    return QStringLiteral("Can't change while transmitting.");
+}
+
+QString RadioModel::paHolderOnlyReason()
+{
+    return QStringLiteral("Only the device that is transmitting can change this.");
+}
+
+int RadioModel::paOnAirBandIndex() const
+{
+    // The band the Core transmits on: the transmit slice's, else its last
+    // band (restoreNormalTxDrive reads the same).
+    const SliceModel* const txSlice = txBoundSlice();
+    const Band txBand = txSlice ? bandFromFrequency(txSlice->frequency()) : m_lastBand;
+    // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+    //   setAdjustingBand(newBand);
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   if (!((b >= Band.B160M && b <= Band.B6M) || (b >= Band.VHF0 && b <= Band.VHF13)))
+    //       _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+    // NereusSDR's XVTR row stands for Thetis's VHF0..VHF13.
+    const bool adjustable = (txBand >= Band::Band160m && txBand <= Band::Band6m)
+                            || txBand == Band::XVTR;
+    const int index = static_cast<int>(txBand);
+    return (adjustable && index >= 0 && index < PaProfile::kBandCount) ? index : -1;
+}
+
+QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
+                                       bool requesterHoldsTransmit) const
+{
+    if (!stationOnAirRefusal(nullptr)) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    const int txBand = paOnAirBandIndex();
+    if (profileAction || txBand < 0 || band != txBand) {
+        return paOnAirLockedReason();
+    }
+    // JJ's ruling: only the device that holds transmit changes the
+    // transmitting band's values while it transmits.
+    if (!requesterHoldsTransmit) {
+        return paHolderOnlyReason();
+    }
+    return {};
+}
+
 bool RadioModel::stationOnAirRefusal(QString* reason) const
 {
     // On the air: MOX (the controller's or the transmit model's), TUNE, or
@@ -5602,8 +5654,20 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     if (m_role != Role::Local || bank == nullptr || bank->activeProfile() == nullptr) {
         return fail(QStringLiteral("The Core has no PA profiles for a radio."));
     }
-    if (stationOnAirRefusal(reason)) {
-        return false;
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
+    // transmitting band's values, from the device that holds transmit.
+    const bool onAir = stationOnAirRefusal(nullptr);
+    if (onAir) {
+        const bool profileAction = request.action == PaProfileAction::Select
+            || request.action == PaProfileAction::New
+            || request.action == PaProfileAction::Copy
+            || request.action == PaProfileAction::Delete
+            || request.action == PaProfileAction::Reset;
+        const QString refusal = paOnAirEditRefusal(profileAction, request.band,
+                                                   request.requesterHoldsTransmit);
+        if (!refusal.isEmpty()) {
+            return fail(refusal);
+        }
     }
     const HPSDRModel model = m_hardwareProfile.model;
     const QString active = bank->activeProfileName();
@@ -5733,8 +5797,67 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     default:
         break;
     }
-    return bank->saveProfile(active, edited)
-        || fail(QStringLiteral("The Core did not save the PA profile."));
+    if (!bank->saveProfile(active, edited)) {
+        return fail(QStringLiteral("The Core did not save the PA profile."));
+    }
+    if (onAir) {
+        applyPaEditOnAir(request.action, request.step);
+    }
+    return true;
+}
+
+// R-R3-49 / R-IOS-27: what Thetis does after an on-the-air PA edit, for the
+// Core's phone verbs, a window's profile key and the local page alike.
+void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
+{
+    switch (action) {
+    case PaProfileAction::SetGain:
+        // From Thetis setup.cs:23351-23352 [v2.10.3.15] nudPAProfileGain_ValueChanged:
+        //   if (p.GetGainForBand(b) != fOld) console.PWR = console.PWR; // update the power, which causes these gain values to be queried
+        restoreNormalTxDrive();
+        break;
+    case PaProfileAction::SetAdjust: {
+        if (step < 0 || step >= PaProfile::kDriveSteps) {
+            break;
+        }
+        // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
+        //   p.SetAdjust(_adjustingBand, nNumber / 10, (float)nud.Value);
+        //   if (console.MOX)
+        //   {
+        //       switch (console.TuneDrivePowerOrigin)
+        //       {
+        //           case DrivePowerSource.DRIVE_SLIDER:
+        //               console.PWR = nNumber + 10; // set drive to the value we are adjusting
+        //               break;
+        //           case DrivePowerSource.TUNE_SLIDER:
+        //               console.TunePWR = nNumber + 10;
+        //               break;
+        //       }
+        //   }
+        // nNumber is 0 for the 10% step, so the drive is (step + 1) * 10.
+        const int drive = (step + 1) * 10;
+        switch (m_transmitModel.tuneDrivePowerSource()) {
+        case DrivePowerSource::DriveSlider:
+            m_transmitModel.setPower(drive); // set drive to the value we are adjusting
+            // The adjust itself changed: the drive at the same slider value
+            // is recomputed too (setPower emits only on a change).
+            restoreNormalTxDrive();
+            break;
+        case DrivePowerSource::TuneSlider:
+            refreshTransmitTuneBand();
+            m_transmitModel.setTunePowerForTxBand(drive);
+            break;
+        case DrivePowerSource::Fixed:
+            break;
+        }
+        break;
+    }
+    default:
+        // Max power and use-max change Thetis's labels only
+        // (nudMaxPowerForBandPA_ValueChanged, setup.cs:24248-24262
+        // [v2.10.3.15]); the next drive computation reads them.
+        break;
+    }
 }
 
 bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)

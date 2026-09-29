@@ -406,6 +406,10 @@ public:
         /// Task 42: session-only transmit admission for accessory changes;
         /// the idle holder is handled by the shared-setting question.
         std::function<TxRefusal(const QByteArray& requester)> accessory;
+        /// R-R3-49 / R-IOS-27: whether `requester` holds transmit, for the
+        /// PA profile verbs on the air (RadioModel::paOnAirEditRefusal).
+        /// Unset, no requester holds it.
+        std::function<bool(const QByteArray& requester)> holdsTransmit;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
     /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which

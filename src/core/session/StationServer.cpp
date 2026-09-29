@@ -3018,6 +3018,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             return TxRefusals::otherDeviceHolds(holder->name);
         };
+        // R-R3-49 / R-IOS-27: the PA profile verbs on the air.
+        access.holdsTransmit = [this](const QByteArray& requester) {
+            return !requester.isEmpty() && m_transmitHolder->isHeldBy(requester);
+        };
         access.accessory = [this](const QByteArray& requester) -> TxRefusal {
             SessionTransport* const transport = m_dispatchingTransport;
             if (transport == nullptr || peerInfoFor(transport).deviceId != requester) {

@@ -2667,6 +2667,22 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): the PA Gain page's
+    // on-the-air lock (Thetis OnMoxChangeHandler, setup.cs:23826-23834
+    // [v2.10.3.15]). While the radio is on the air only the transmitting
+    // band's gain, drive-step adjust, max power and use-max change, and
+    // only from the device that holds transmit.
+    static QString paOnAirLockedReason();   // "Can't change while transmitting."
+    static QString paHolderOnlyReason();    // "Only the device that is transmitting ..."
+    // The PA band the radio transmits on (Thetis _adjustingBand): the
+    // transmit slice's band, else the last band, when it is 160 m..6 m or
+    // XVTR; -1 when that band has no PA values.
+    int paOnAirBandIndex() const;
+    // Why an on-the-air PA edit is refused, or empty when it is taken (and
+    // empty off the air). `profileAction`: select, new, copy, delete or
+    // reset. `band`: the PA row the edit changes. `requesterHoldsTransmit`:
+    // the device asking holds transmit.
+    QString paOnAirEditRefusal(bool profileAction, int band, bool requesterHoldsTransmit) const;
     // iPhone app plan Task 77 fix round 3: the Power Genius's OPERATE and
     // STANDBY also wait while a Tuner Genius cycle runs (the Core's own
     // cycle, from its standby wait to its restore, or the tuner reporting
@@ -3448,8 +3464,15 @@ public:
         int step = -1;     // drive step 0 (10%) .. 8 (90%)
         double value = 0.0;
         bool on = false;
+        // The device asking holds transmit (paOnAirEditRefusal).
+        bool requesterHoldsTransmit = false;
     };
     bool paProfileActionForStation(const PaProfileRequest& request, QString* reason);
+    // R-R3-49 / R-IOS-27: after a PA edit taken on the air, what Thetis
+    // does: a gain re-applies the drive; an adjust moves the drive (or the
+    // tune power) to the step being adjusted (setup.cs:24210-24222
+    // [v2.10.3.15]). Max power and use-max: nothing more.
+    void applyPaEditOnAir(PaProfileAction action, int step);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.

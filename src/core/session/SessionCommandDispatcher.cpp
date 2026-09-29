@@ -3572,6 +3572,8 @@ void SessionCommandDispatcher::handlePaProfile(const SessionMessage& invoke)
     }
     request.band = band;
     request.step = step;
+    request.requesterHoldsTransmit = m_transmitAccess.holdsTransmit
+        && m_transmitAccess.holdsTransmit(m_requester);
     QString reason;
     if (!m_radioModel->paProfileActionForStation(request, &reason)) {
         emitResult(verb, invoke.commandId, false,
