@@ -131,6 +131,15 @@ public:
             + QLatin1Char('\n') + m_state->libraryStages.join(QLatin1Char('\n'));
     }
 
+    /// Load findings 2: the last library stage recorded ("ice:checking",
+    /// "dtls-start", ...), or "none", so a stalled open says where.
+    QString lastLibraryStage() const
+    {
+        const QMutexLocker lock(&m_state->mutex);
+        if (m_state->libraryStages.isEmpty()) { return QStringLiteral("none"); }
+        return m_state->libraryStages.constLast().section(QLatin1Char(' '), 4);
+    }
+
 private:
     struct State {
         QElapsedTimer elapsed;
