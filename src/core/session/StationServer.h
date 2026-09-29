@@ -434,6 +434,13 @@
 //               questionPlanner(), closeForTake's listenedBy and
 //               tellListeners(). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: invokeAsStationDevice() and
+//               setStationNoticeHandler(): the hosting desktop's slice
+//               requests run as the station device through the same
+//               dispatcher, checks, confirm step and SliceAccessController
+//               as a remote device's, answered through callbacks. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -513,6 +520,10 @@ class TransmitState;
 class RemoteKeying;
 class RemoteTxWatchdog;
 class TxWatchServer;
+
+/// Slice control plan Task 10: how the hosting desktop hears what a
+/// request as the station device answers, asks or tells.
+using StationAnswer = std::function<void(const SessionMessage&)>;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -1276,6 +1287,23 @@ public:
     /// and refused on the air, in the desktop's words. Unset on a Core no
     /// desktop hosts: the station device's own keys are "Radio".
     void setStationDeviceWords(const QString& name, const QString& shortName);
+    /// Slice control plan Task 10: a command.invoke from the hosting
+    /// desktop, run as the station device through the same dispatcher,
+    /// checks, confirm step and SliceAccessController a remote device's
+    /// goes through. `answer` gets its command.result (now or on a later
+    /// turn); `question` gets any confirm.request it raises, and every
+    /// later one for the station device until another invoke names its
+    /// own. Only the slice verbs the desktop uses are taken (removeSlice,
+    /// addSlice, addSliceOnPan, setActiveSliceById, slice.listen,
+    /// slice.stopListening, slice.takeControl, slice.release,
+    /// slice.setListenLevel, confirm.proceed, confirm.cancel,
+    /// notice.takeBack); any other is refused.
+    void invokeAsStationDevice(const SessionMessage& invoke, StationAnswer answer,
+                               StationAnswer question);
+    /// Slice control plan Task 10: where the station device's notices go
+    /// (a slice it listened to closed, a take of its slice). Unset, they
+    /// wait as an away device's do; set, any waiting are handed over.
+    void setStationNoticeHandler(StationAnswer notice);
     /// iPhone app plan Task 77 (ruling 8.9a, D64): the hosting desktop's
     /// MOX or TUNE while another device holds transmit takes only through
     /// tx.take's rules. AtOnce runs the take (`done(taken)` when it ends;
@@ -2269,6 +2297,32 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
+    /// Slice control plan Task 10: the station device as a peer for the
+    /// hosting desktop's requests. Never in m_peers, so every loop over
+    /// the peers skips it; peerFor() and peerPtr() find it by its sentinel
+    /// transport, and send() hands what reaches that transport to the
+    /// callbacks below.
+    std::unique_ptr<SessionTransport> m_stationTransport;
+    Peer m_stationPeer;
+    QHash<ResultKey, StationAnswer> m_stationAnswers;
+    StationAnswer m_stationQuestion;
+    StationAnswer m_stationNotice;
+    /// The peer for `transport` (a copy, empty when none): the station
+    /// peer for its sentinel, else m_peers' entry.
+    Peer peerFor(SessionTransport* transport) const;
+    /// The same by pointer, through peerKey(), or nullptr.
+    const Peer* peerPtr(SessionTransport* transport) const;
+    bool hasPeer(SessionTransport* transport) const;
+    bool isStationTransport(SessionTransport* transport) const
+    {
+        return transport != nullptr && transport == m_stationTransport.get();
+    }
+    void deliverToStation(const SessionMessage& message);
+    /// The command.invoke dispatch every admitted peer's request and the
+    /// station device's share: the owner, requester and sharing set for
+    /// it, the refusals, the confirm step, the dispatcher, and a result
+    /// still owed routed back to it.
+    void runInvoke(SessionTransport* transport, const SessionMessage& message);
     struct SettingsExportJob {
         SettingsBackupTransferSource source;
         QByteArray transferId;

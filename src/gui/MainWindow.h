@@ -54,6 +54,11 @@
 //                listened flag's "Your volume" (setFlagListenVolume,
 //                listenVolumeFor, m_remoteListenVolumes). AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 10: the
+//                hosting desktop's slice requests run as the station device
+//                (m_hostingSlices, hostingSlices(), selectSliceForWindow,
+//                addSliceForWindow, closeSliceForWindow). AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -137,6 +142,7 @@
 class QProgressDialog;
 class QSplitter;
 class QMenu;
+class QDialog;
 
 namespace NereusSDR {
 
@@ -191,6 +197,9 @@ class ChromeBarController;
 class SystemTile;
 class StatusBadge;
 class MultiDeviceController;
+class HostingSliceActions;
+class NoticeCard;
+struct SessionMessage;
 class AdcOverloadBadge;
 class OverflowChip;
 class PsaIndicatorWidget;
@@ -921,6 +930,18 @@ private:
     // volume" and Mute, sent as this device's own listening level
     // (slice.setListenLevel), and the level a flag shows. level is 0..100.
     void setFlagListenVolume(int sliceId, int level, bool muted);
+    // Slice control plan Task 10: while this desktop hosts, its slice
+    // requests run as the station device through m_hostingSlices, with the
+    // checks, questions and slice access a remote device's take. Otherwise
+    // RadioModel's own entry points, as before.
+    HostingSliceActions* hostingSlices() const;
+    void wireHostingSlices();
+    bool selectSliceForWindow(int sliceId);
+    void addSliceForWindow(const QString& panId);
+    void closeSliceForWindow(int sliceId);
+    void showHostingQuestion(const SessionMessage& question);
+    void showHostingNotice(const SessionMessage& notice);
+    void layoutHostingNoticeCards();
     std::pair<int, bool> listenVolumeFor(int sliceId);
     void finishSliceChooserRequest(const QByteArray& verb, bool accepted,
                                    const QString& reason);
@@ -1121,6 +1142,10 @@ private:
     QPointer<DesktopStationController> m_desktopStationController;
     QPointer<class TakeTransmitDialog> m_desktopTakeDialog;
     QPointer<class StationServer> m_desktopBoundServer;
+    // Slice control plan Task 10: bound to m_desktopBoundServer.
+    std::unique_ptr<HostingSliceActions> m_hostingSlices;
+    QPointer<QDialog> m_hostingQuestionDialog;
+    QList<QPointer<NoticeCard>> m_hostingNoticeCards;
     QMetaObject::Connection m_desktopHolderConnection;
     QMetaObject::Connection m_desktopDevicesConnection;
     QMetaObject::Connection m_desktopPresenceConnection;

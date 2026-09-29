@@ -664,6 +664,12 @@
 //                                    slice.setListenLevel behind the same
 //                                    sliceAccess gate. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: the station device as a peer
+//               for the hosting desktop (invokeAsStationDevice, runInvoke,
+//               peerFor, the notice handler): its slice requests take the
+//               same dispatcher, checks and confirm step as a remote
+//               device's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -688,6 +694,7 @@
 #include "core/session/IStationLink.h"
 #include "core/session/StationTelemetry.h"
 #include <QDateTime>
+#include <limits>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include "core/station/StationRadios.h"
@@ -798,6 +805,18 @@ struct StationServer::PendingRelayWatch {
 };
 
 namespace {
+
+// Slice control plan Task 10: the station device's stand-in transport.
+// Nothing is written to it: send() hands what is addressed to it to the
+// hosting desktop's callbacks (StationServer::deliverToStation).
+class StationDeviceTransport final : public SessionTransport {
+public:
+    void sendText(const QByteArray&) override {}
+    void ping() override {}
+    void closeLink(const QString&) override {}
+    bool isOpen() const override { return true; }
+    QString peerDescription() const override { return QStringLiteral("this computer"); }
+};
 Q_LOGGING_CATEGORY(lcStation, "nereus.station")
 
 // The wire identities the five singleton mirrored models are watched
@@ -1630,6 +1649,24 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
     m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
                             m_supportedMajors.end());
+    // Slice control plan Task 10: the station device as a peer that shares
+    // slices, for the hosting desktop's requests (invokeAsStationDevice).
+    m_stationTransport = std::make_unique<StationDeviceTransport>();
+    m_stationPeer.transport = m_stationTransport.get();
+    m_stationPeer.description = QStringLiteral("this computer");
+    m_stationPeer.helloReceived = true;
+    m_stationPeer.authenticated = true;
+    m_stationPeer.snapshotComplete = true;
+    m_stationPeer.agreedMajor = kSessionProtocolMajor;
+    m_stationPeer.agreedMinor = kSessionProtocolMinor;
+    m_stationPeer.features = {{QByteArrayLiteral("deviceAuth"), 1},
+                              {QByteArrayLiteral("sessionHolder"), 1},
+                              {QByteArrayLiteral("sliceAccess"), 1}};
+    m_stationPeer.deviceId = SliceOwnership::stationDevice();
+    m_stationPeer.sessionDeviceId = SliceOwnership::stationDevice();
+    m_stationPeer.placeSettled = true;
+    // Above any id ++m_nextSessionId gives an admitted session.
+    m_stationPeer.sessionId = std::numeric_limits<quint64>::max();
     // iPhone app plan Task 34: the Core's blanket receive-only policy is now
     // its remote_transmit setting (setRemoteTransmitAllowed). Deny, the
     // default, keeps it as before: the hardware-owning model refuses every
@@ -2338,8 +2375,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     return;
                 }
                 SessionTransport* to = nullptr;
-                const auto dispatching = m_peers.constFind(m_dispatchingTransport);
-                if (dispatching != m_peers.cend() && dispatching->sessionId == key.sessionId) {
+                const Peer* dispatching = m_dispatchingTransport != nullptr
+                                              ? peerPtr(m_dispatchingTransport)
+                                              : nullptr;
+                if (dispatching != nullptr && dispatching->sessionId == key.sessionId) {
                     to = m_dispatchingTransport;
                     m_resultSentInDispatch = true;
                 } else {
@@ -3121,7 +3160,7 @@ void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
         ? held.result
         : SessionMessages::commandResult(held.result.commandVerb, held.result.commandId, false,
                                          refusal, {});
-    if (to != nullptr && m_peers.contains(to)) {
+    if (to != nullptr && hasPeer(to)) {
         sendToPeer(to, answer);
     }
     if (held.proceed) {
@@ -3146,18 +3185,129 @@ QSslConfiguration StationServer::tlsConfiguration() const
 
 quint16 StationServer::peerAgreedMajor(SessionTransport* peer) const
 {
-    const auto it = m_peers.constFind(peerKey(peer));
-    return it != m_peers.constEnd() ? it->agreedMajor : quint16(0);
+    const Peer* it = peerPtr(peer);
+    return it != nullptr ? it->agreedMajor : quint16(0);
 }
 
 bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& feature,
                                  int minVersion) const
 {
-    const auto it = m_peers.constFind(peerKey(peer));
-    if (it == m_peers.constEnd() || !it->features.contains(feature)) {
+    const Peer* it = peerPtr(peer);
+    if (it == nullptr || !it->features.contains(feature)) {
         return false;
     }
     return it->features.value(feature) >= minVersion;
+}
+
+StationServer::Peer StationServer::peerFor(SessionTransport* transport) const
+{
+    if (isStationTransport(transport)) {
+        return m_stationPeer;
+    }
+    return m_peers.value(transport);
+}
+
+const StationServer::Peer* StationServer::peerPtr(SessionTransport* transport) const
+{
+    if (isStationTransport(transport)) {
+        return &m_stationPeer;
+    }
+    const auto it = m_peers.constFind(peerKey(transport));
+    return it != m_peers.constEnd() ? &it.value() : nullptr;
+}
+
+bool StationServer::hasPeer(SessionTransport* transport) const
+{
+    return isStationTransport(transport) || m_peers.contains(transport);
+}
+
+void StationServer::deliverToStation(const SessionMessage& message)
+{
+    // Slice control plan Task 10: what the Core sends the station device
+    // goes to the hosting desktop's callbacks, never onto a wire.
+    switch (message.kind) {
+    case SessionMessageKind::CommandResult: {
+        const ResultKey key{m_stationPeer.sessionId, message.commandVerb, message.commandId};
+        const auto it = m_stationAnswers.find(key);
+        if (it == m_stationAnswers.end()) {
+            return;
+        }
+        const StationAnswer answer = it.value();
+        // "Waiting for you to confirm." is not the last answer: the final
+        // one follows the question, under the same verb and id.
+        bool awaiting = false;
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == "phase"
+                && update.value.toString() == QLatin1String("needsConfirmation")) {
+                awaiting = !message.accepted;
+            }
+        }
+        if (!awaiting && isLastResult(message)) {
+            m_stationAnswers.erase(it);
+        }
+        if (answer) {
+            answer(message);
+        }
+        return;
+    }
+    case SessionMessageKind::ConfirmRequest:
+        if (m_stationQuestion) {
+            m_stationQuestion(message);
+        }
+        return;
+    case SessionMessageKind::Notice:
+        if (m_stationNotice) {
+            m_stationNotice(message);
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+void StationServer::invokeAsStationDevice(const SessionMessage& invoke, StationAnswer answer,
+                                          StationAnswer question)
+{
+    static const QList<QByteArray> kHostVerbs = {
+        QByteArrayLiteral("removeSlice"),        QByteArrayLiteral("addSlice"),
+        QByteArrayLiteral("addSliceOnPan"),      QByteArrayLiteral("setActiveSliceById"),
+        QByteArrayLiteral("slice.listen"),       QByteArrayLiteral("slice.stopListening"),
+        QByteArrayLiteral("slice.takeControl"),  QByteArrayLiteral("slice.release"),
+        QByteArrayLiteral("slice.setListenLevel"), QByteArrayLiteral("confirm.proceed"),
+        QByteArrayLiteral("confirm.cancel"),     QByteArrayLiteral("notice.takeBack"),
+    };
+    if (invoke.kind != SessionMessageKind::CommandInvoke
+        || !kHostVerbs.contains(invoke.commandVerb)) {
+        if (answer) {
+            answer(SessionMessages::commandResult(
+                invoke.commandVerb, invoke.commandId, false,
+                QStringLiteral("The Core does not know this request. Updating the Core may help."),
+                {}));
+        }
+        return;
+    }
+    if (answer) {
+        m_stationAnswers.insert(
+            ResultKey{m_stationPeer.sessionId, invoke.commandVerb, invoke.commandId}, answer);
+    }
+    if (question) {
+        m_stationQuestion = std::move(question);
+    }
+    runInvoke(m_stationTransport.get(), invoke);
+}
+
+void StationServer::setStationNoticeHandler(StationAnswer notice)
+{
+    m_stationNotice = std::move(notice);
+    if (!m_stationNotice) {
+        return;
+    }
+    // Any waiting as an away device's do are handed over now.
+    const QList<ConfirmStep::Notice> waiting =
+        m_confirm->takePending(SliceOwnership::stationDevice());
+    for (const ConfirmStep::Notice& notice : waiting) {
+        sendNotice(m_stationTransport.get(), notice);
+    }
 }
 
 quint16 StationServer::serverPort() const
@@ -3404,8 +3554,12 @@ bool StationServer::peerHoldsSessions(SessionTransport* transport) const
 
 bool StationServer::peerHasSessionHolderVersion(SessionTransport* transport) const
 {
-    const auto it = m_peers.constFind(transport);
-    return it != m_peers.cend() && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+    const Peer* it = isStationTransport(transport) ? &m_stationPeer : nullptr;
+    if (it == nullptr) {
+        const auto found = m_peers.constFind(transport);
+        it = found != m_peers.cend() ? &found.value() : nullptr;
+    }
+    return it != nullptr && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerHoldsSessions(transport) && sessionHolderVersion() >= 1;
 }
 
@@ -4568,59 +4722,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // A revoke of the requester's own device, or a token session
             // retiring the token, ends this connection only after its
             // result (sent synchronously by dispatch()) has gone out.
-            m_dispatchingTransport = transport;
-            m_pendingEnd.reset();
-            m_resultSentInDispatch = false;
-            // iPhone app Task 72 (ruling 5.8): the command acts for this
-            // session, so a DSP-asset job it starts is this device's.
-            m_dispatcher->setSessionOwner(sessionOwner(m_peers.value(transport).sessionId));
-            // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
-            // off the air, set per dispatch like the owner (checkpoint join).
-            m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
-            // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
-            // whose slices it may name and whose active slice it sets.
-            m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
-            // Slice control plan Task 4: and whether it shares slices.
-            m_dispatcher->setRequesterSharesSlices(peerHasSliceAccess(transport));
-            // iPhone app Task 74: a receiver change may be the anchor's
-            // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
-            // iPhone app Task 75: a setting that affects every device
-            // (the several-devices design, 7.1) is asked first.
-            // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
-            // or moving it to another band, waits for the radio's press to
-            // end.
-            const QString antennaRefusal = radioAntennaRowRefusal(transport, message);
-            const TxRefusal frozen = antennaRefusal.isEmpty() ? freezeRefusalFor(message)
-                                                                 : TxRefusal{};
-            if (!antennaRefusal.isEmpty()) {
-                send(transport, SessionMessages::commandResult(
-                    message.commandVerb, message.commandId, false, antennaRefusal, {}));
-                m_resultSentInDispatch = true;
-            } else if (!frozen.isEmpty()) {
-                send(transport, SessionMessages::commandResult(
-                    message.commandVerb, message.commandId, false, frozen.text, {},
-                    {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
-                     {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
-                m_resultSentInDispatch = true;
-            } else if (!handleSharedSetting(transport, message)
-                && !handleReceiverCommand(transport, message)) {
-                m_dispatcher->dispatch(message);
-            }
-            sendHeldQuestions();
-            m_dispatcher->setRequester({});
-            m_dispatcher->setRequesterSharesSlices(false);
-            m_dispatcher->setPureSignalArmingOffered(false);
-            m_dispatcher->setSessionOwner({});
-            m_dispatchingTransport = nullptr;
-            // iPhone app Task 71: a result still owed (it arrives on a later
-            // turn), or a PureSignal action's later phases, goes to this
-            // session, not to whichever session holds media.
-            if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
-                m_resultRoutes.insert(
-                    ResultKey{m_peers.value(transport).sessionId, message.commandVerb,
-                              message.commandId},
-                    QPointer<SessionTransport>(transport));
-            }
+            runInvoke(transport, message);
             if (m_pendingEnd) {
                 const auto [reason, code] = *m_pendingEnd;
                 m_pendingEnd.reset();
@@ -4642,7 +4744,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     case SessionMessageKind::MediaControl: {
         // iPhone app Task 76 (the link, section 11): from each admitted
         // session, for its own media.
-        const quint64 epoch = m_peers.value(transport).mediaEpoch;
+        const quint64 epoch = peerFor(transport).mediaEpoch;
         if (epoch != 0 && mediaAvailable(epoch)) {
             emit mediaControlReceived(message.mediaPayload, epoch);
         }
@@ -5262,7 +5364,7 @@ void StationServer::refreshHeld()
     const QList<HeldQuestion> questions = m_heldQueue;
     for (const HeldQuestion& q : questions) {
         if (q.transport && m_peers.contains(q.transport)
-            && m_peers.value(q.transport).heldSerial == q.serial) {
+            && peerFor(q.transport).heldSerial == q.serial) {
             if (m_deviceSessions->now() >= q.deadlineMs) {
                 dropPeer(q.transport, QString::fromLatin1(kCoreFullReason), true, false,
                          QString::fromLatin1(SessionEndCode::kCoreFull));
@@ -5321,7 +5423,7 @@ void StationServer::handleTakeover(SessionTransport* transport, const SessionMes
     // move can invalidate what the app last displayed.
     sendHeld(transport);
     if (!self) return;
-    if (!m_peers.contains(transport) || m_peers.value(transport).heldSerial != serial) return;
+    if (!m_peers.contains(transport) || peerFor(transport).heldSerial != serial) return;
     if (message.heldRevision != m_heldRevision) return;
     const QJsonArray candidates = heldCandidates();
     bool selectable = false;
@@ -5473,7 +5575,7 @@ void StationServer::finishTakeover(quint64 serial, const QByteArray& targetId,
         auto current = std::find_if(m_heldQueue.begin(), m_heldQueue.end(),
                                     [serial](const HeldQuestion& q) { return q.serial == serial; });
         if (current == m_heldQueue.end() || !taker || !m_peers.contains(taker)
-            || m_peers.value(taker).heldSerial != serial) return;
+            || peerFor(taker).heldSerial != serial) return;
         const HeldQuestion selected = *current;
         m_heldQueue.erase(current);
         m_peers[taker].heldSerial = 0;
@@ -5506,7 +5608,7 @@ void StationServer::sendPairFail(SessionTransport* transport, const QString& rea
                                  qint64 retryAfterMs)
 {
     send(transport, SessionMessages::pairFail(reason, std::max<qint64>(0, retryAfterMs)));
-    qCInfo(lcStation) << "Pairing refused for" << m_peers.value(transport).description << ":"
+    qCInfo(lcStation) << "Pairing refused for" << peerFor(transport).description << ":"
                       << reason;
     // A code this connection took is burned here (dropPeer).
     dropPeer(transport, reason, false, /*retryable=*/false);
@@ -5932,7 +6034,7 @@ void StationServer::handlePairFailFromDevice(SessionTransport* transport)
 
 void StationServer::promoteToSession(SessionTransport* transport)
 {
-    const QString description = m_peers.value(transport).description;
+    const QString description = peerFor(transport).description;
 
     // iPhone app Task 71: no other session is ended here, ever. The remote
     // design's section 7.1 preemption is gone (the several-devices design,
@@ -6003,7 +6105,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     qCInfo(lcStation) << "Session established with" << description;
     emit clientAuthenticated(description);
-    const quint64 epoch = m_peers.value(transport).mediaEpoch;
+    const quint64 epoch = peerFor(transport).mediaEpoch;
     if (sharesChanged) {
         emit displayBudgetChanged();
     }
@@ -6179,7 +6281,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             result.reason = QStringLiteral("The Core owns Setup descriptions.");
             results.append(result);
         }
-        if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+        if (peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor
             && message.writeId != 0) {
             send(transport,
                  SessionMessages::propertyResult(message.objectKey, message.writeId, results));
@@ -6192,7 +6294,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     {
         QString refusal;
         bool withValues = false;
-        const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+        const QByteArray requester = peerFor(transport).sessionDeviceId;
         if (message.objectKey.startsWith("slice:")) {
             bool ok = false;
             const int sliceId = message.objectKey.mid(6).toInt(&ok);
@@ -6237,7 +6339,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                 }
                 results.append(result);
             }
-            if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+            if (peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor
                 && message.writeId != 0) {
                 send(transport,
                      SessionMessages::propertyResult(message.objectKey, message.writeId, results));
@@ -6293,21 +6395,21 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         previous.insert(value.name, value);
     }
     QHash<QByteArray, QString> refusals;
-    const bool negotiated = m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor;
+    const bool negotiated = peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor;
     // R-R3-46: only a peer that was offered the object may change it, and
     // only while the Core's controller is behind it.
     const bool stepAttWrite = message.objectKey == kStepAttKey;
     const bool alexWrite = message.objectKey == kAlexAntennasKey;
     QString stepAttRefusal;
     if (stepAttWrite
-        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         stepAttRefusal =
             QStringLiteral("Update this app to change the radio's attenuator on this Core.");
     } else if (stepAttWrite
                && (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound())) {
         stepAttRefusal = QStringLiteral("The Core has no attenuator ready.");
     } else if (alexWrite
-               && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+               && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         stepAttRefusal =
             QStringLiteral("Update this app to change the radio's antennas on this Core.");
     } else if (alexWrite && radioHardwareVersion() < 2) {
@@ -6360,7 +6462,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     // transmit verbs' (the transmit safety boundary).
     const bool transmitObjectWrite = message.objectKey == QByteArray(kTransmitKey);
     const TxDecision txDecision = txDecisionFor(transport);
-    const QByteArray writer = m_peers.value(transport).sessionDeviceId;
+    const QByteArray writer = peerFor(transport).sessionDeviceId;
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
@@ -6512,7 +6614,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // Ruling 5.7: this session's write. Its changes, here and on other
         // objects, are withheld from its own view and reach every other.
         const MirrorApplyResult result = m_mirror->applyInbound(
-            message.objectKey, update.name, update.value, m_peers.value(transport).view.data());
+            message.objectKey, update.name, update.value, peerFor(transport).view.data());
         if (!result.accepted) {
             refusals.insert(update.name, result.reason);
         } else if (transmitObjectWrite && update.name == "voxEnabled" && !writer.isEmpty()
@@ -6593,12 +6695,12 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     }
     // An older peer was never offered `stepAtt`; it gets nothing back for it.
     const bool olderStepAttPeer = (stepAttWrite || alexWrite)
-        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
+        && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
     if (!corrections.isEmpty() && !olderStepAttPeer) {
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
-        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)) {
+        if (fitNnrLimitToPeer(delta, peerFor(transport).agreedMinor)) {
             send(transport, delta);
         }
     }
@@ -6729,7 +6831,7 @@ QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const Q
     if (!match.hasMatch() || m_radioModel.isNull()) {
         return {};
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return {};
     }
@@ -7023,7 +7125,7 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
         return;
     }
     expireSettingsExports();
-    const quint64 sessionId = m_peers.value(transport).sessionId;
+    const quint64 sessionId = peerFor(transport).sessionId;
     const auto stringField = [](const QByteArray& name, const QString& value) {
         return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(value)};
     };
@@ -7066,7 +7168,7 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
         // A caller may reenter during serialization. Never hand its bytes to
         // a replacement or a closing session.
         if (!settingsExportEligible(transport)
-            || m_peers.value(transport).sessionId != sessionId) return;
+            || peerFor(transport).sessionId != sessionId) return;
         if (m_settingsExports.contains(sessionId) || m_settingsExports.size() >= 4) {
             reply(false, QStringLiteral("The Core is busy sending settings. Try again shortly."));
             return;
@@ -7139,9 +7241,70 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
     reply(false, QStringLiteral("The Core does not know this settings export request."));
 }
 
+void StationServer::runInvoke(SessionTransport* transport, const SessionMessage& message)
+{
+    m_dispatchingTransport = transport;
+    m_pendingEnd.reset();
+    m_resultSentInDispatch = false;
+    // iPhone app Task 72 (ruling 5.8): the command acts for this
+    // session, so a DSP-asset job it starts is this device's.
+    m_dispatcher->setSessionOwner(sessionOwner(peerFor(transport).sessionId));
+    // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
+    // off the air, set per dispatch like the owner (checkpoint join).
+    m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
+    // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
+    // whose slices it may name and whose active slice it sets.
+    m_dispatcher->setRequester(peerFor(transport).sessionDeviceId);
+    // Slice control plan Task 4: and whether it shares slices.
+    m_dispatcher->setRequesterSharesSlices(peerHasSliceAccess(transport));
+    // iPhone app Task 74: a receiver change may be the anchor's
+    // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
+    // iPhone app Task 75: a setting that affects every device
+    // (the several-devices design, 7.1) is asked first.
+    // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
+    // or moving it to another band, waits for the radio's press to
+    // end.
+    const QString antennaRefusal = radioAntennaRowRefusal(transport, message);
+    const TxRefusal frozen = antennaRefusal.isEmpty() ? freezeRefusalFor(message)
+                                                         : TxRefusal{};
+    if (!antennaRefusal.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false, antennaRefusal, {}));
+        m_resultSentInDispatch = true;
+    } else if (!frozen.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false, frozen.text, {},
+            {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+             {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
+        m_resultSentInDispatch = true;
+    } else if (!handleSharedSetting(transport, message)
+        && !handleReceiverCommand(transport, message)) {
+        m_dispatcher->dispatch(message);
+    }
+    sendHeldQuestions();
+    m_dispatcher->setRequester({});
+    m_dispatcher->setRequesterSharesSlices(false);
+    m_dispatcher->setPureSignalArmingOffered(false);
+    m_dispatcher->setSessionOwner({});
+    m_dispatchingTransport = nullptr;
+    // iPhone app Task 71: a result still owed (it arrives on a later
+    // turn), or a PureSignal action's later phases, goes to this
+    // session, not to whichever session holds media.
+    if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
+        m_resultRoutes.insert(
+            ResultKey{peerFor(transport).sessionId, message.commandVerb,
+                      message.commandId},
+            QPointer<SessionTransport>(transport));
+    }
+}
+
 void StationServer::send(SessionTransport* transport, const SessionMessage& message)
 {
     if (transport == nullptr) {
+        return;
+    }
+    if (isStationTransport(transport)) {
+        deliverToStation(message);
         return;
     }
     transport->sendText(SessionMessages::encode(message));
@@ -7245,6 +7408,10 @@ bool StationServer::isLastResult(const SessionMessage& result)
 
 void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage& original)
 {
+    if (isStationTransport(transport)) {
+        deliverToStation(original);
+        return;
+    }
     if (transport == nullptr || !m_peers.contains(transport)) {
         return;
     }
@@ -8567,7 +8734,7 @@ void StationServer::publishBudgetToChangedSessions()
             continue;
         }
         const QByteArray entries = budgetEntriesFor(transport);
-        if (entries == m_peers.value(transport).publishedBudget) {
+        if (entries == peerFor(transport).publishedBudget) {
             continue;
         }
         m_peers[transport].publishedBudget = entries;
@@ -8822,13 +8989,13 @@ QList<quint64> StationServer::mediaSessionEpochs() const
 quint64 StationServer::mediaSessionEpoch() const
 {
     SessionTransport* primary = primaryMediaSession();
-    return primary != nullptr ? m_peers.value(primary).mediaEpoch : 0;
+    return primary != nullptr ? peerFor(primary).mediaEpoch : 0;
 }
 
 QByteArray StationServer::mediaSessionDevice(quint64 epoch) const
 {
     SessionTransport* transport = mediaSessionFor(epoch);
-    return transport != nullptr ? m_peers.value(transport).sessionDeviceId : QByteArray();
+    return transport != nullptr ? peerFor(transport).sessionDeviceId : QByteArray();
 }
 
 bool StationServer::mediaSessionControlsSlice(quint64 epoch, int sliceId) const
@@ -9028,7 +9195,7 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
         // What a first session would be given: the whole total.
         return displayBudgetTotalFor(nullptr);
     }
-    return displayBudgetLimits(m_peers.value(primary).mediaEpoch);
+    return displayBudgetLimits(peerFor(primary).mediaEpoch);
 }
 
 std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits(quint64 epoch) const
@@ -9130,7 +9297,7 @@ bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
 {
     // Sent only at agreed minor 11 (the minor-11 capabilities block).
     return transport != nullptr
-        && m_peers.value(transport).agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerFor(transport).agreedMinor >= kRadioIdentitySessionProtocolMinor
         && transmitSettingsVersion() >= 1;
 }
 
@@ -9407,7 +9574,7 @@ void StationServer::handleTxWatchTicket(SessionTransport* transport,
         answer(false, QStringLiteral("The Core cannot provide a separate transmit watch connection for this device."));
         return;
     }
-    const Peer& peer = m_peers.value(transport);
+    const Peer& peer = peerFor(transport);
     const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
                                                peer.txWatchGeneration,
                                                m_deviceAuth->newChallenge());
@@ -9489,7 +9656,7 @@ void StationServer::handleTxWatchRelay(SessionTransport* transport,
         answer(false, QStringLiteral("A transmit watch ticket or path is already in use. Try again shortly."));
         return;
     }
-    const Peer peer = m_peers.value(transport);
+    const Peer peer = peerFor(transport);
     const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
                                                peer.txWatchGeneration,
                                                m_deviceAuth->newChallenge());
@@ -10597,7 +10764,7 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
                                                        accepted, reason, {}));
     };
-    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+    if (peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         answer(false, QStringLiteral("Update this app to see the Core's spots."));
         return;
     }
@@ -10859,7 +11026,7 @@ void StationServer::handleModMonitorReset(SessionTransport* transport,
         send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
                                                        accepted, reason, {}));
     };
-    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+    if (peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         answer(false, QStringLiteral("Update this app to see the Core's modulation monitor."));
         return;
     }

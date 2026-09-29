@@ -91,6 +91,9 @@
 //               device that is not here is never named in a question. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: requesters are read through
+//               peerFor, so the station device is one. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1274,7 +1277,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
         return false;
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return false;
     }
@@ -1515,7 +1518,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         later.closedDevices = closedDevices;
         // Fix wave I1: keyed by the asking session, so another device's
         // rate change with the same command id never finishes this one.
-        const quint64 session = m_peers.value(transport).sessionId;
+        const quint64 session = peerFor(transport).sessionId;
         m_deferredProceeds.insert(
             ResultKey{session, question.original.commandVerb, question.original.commandId},
             later);
@@ -1585,7 +1588,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     if (result.accepted && m_holdingRadioChange && !m_heldRadioChange
         && question.target == QLatin1String("radio")) {
         HeldRadioChange held;
-        held.key = ResultKey{m_peers.value(transport).sessionId, invoke.commandVerb,
+        held.key = ResultKey{peerFor(transport).sessionId, invoke.commandVerb,
                              invoke.commandId};
         held.result = result;
         held.proceed = true;
@@ -1619,7 +1622,7 @@ bool StationServer::finishDeferredProceed(const ResultKey& key, const SessionMes
     // The proceed's own route (recorded because its answer came later) is
     // used here, and goes.
     m_resultRoutes.remove(ResultKey{key.sessionId, later.proceedVerb, later.proceedId});
-    if (!later.transport.isNull() && m_peers.contains(later.transport.data())) {
+    if (!later.transport.isNull() && hasPeer(later.transport.data())) {
         sendToPeer(later.transport.data(),
                    SessionMessages::commandResult(later.proceedVerb, later.proceedId,
                                                   result.accepted, result.reason,

@@ -14,6 +14,10 @@
 //               controlTaken notice and the slice access refusals and holds
 //               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: questionDialog() builds the
+//               question's dialog, and stackNoticeCards() places the notice
+//               cards, for the hosting desktop too. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -148,6 +152,33 @@ void MultiDeviceController::askTakeTransmit()
     m_dialogQuestionId = 0;
 }
 
+QDialog* MultiDeviceController::questionDialog(const SessionPrompt& prompt,
+                                               QWidget* parent,
+                                               std::function<qint64()>* choice)
+{
+    std::function<qint64()> picked = []() { return qint64(-1); };
+    QDialog* dialog = nullptr;
+    if (prompt.kind == QStringLiteral("takeTransmit")) {
+        dialog = new TakeTransmitDialog(
+            TakeTransmitDialog::fromHolderEntry(prompt.holder.value_or(QJsonObject{})),
+            parent);
+    } else if (prompt.kind == QStringLiteral("takeReceiver")
+               || prompt.kind == QStringLiteral("takeSlice")) {
+        auto* chooser = new TakeReceiverDialog(prompt, parent);
+        const QPointer<TakeReceiverDialog> guard(chooser);
+        picked = [guard]() { return guard ? guard->pickedChoice() : qint64(-1); };
+        dialog = chooser;
+    } else {
+        // sharedSetting, panMove, and any kind a newer Core adds: the one
+        // shape that shows the change and who it reaches.
+        dialog = new ConfirmChangeDialog(prompt, parent);
+    }
+    if (choice != nullptr) {
+        *choice = std::move(picked);
+    }
+    return dialog;
+}
+
 void MultiDeviceController::onQuestionChanged()
 {
     if (!m_client) {
@@ -166,23 +197,8 @@ void MultiDeviceController::onQuestionChanged()
     }
     const SessionPrompt& prompt = question->prompt;
     const qint64 id = prompt.id;
-    QDialog* dialog = nullptr;
-    std::function<qint64()> choice = []() { return qint64(-1); };
-    if (prompt.kind == QStringLiteral("takeTransmit")) {
-        dialog = new TakeTransmitDialog(
-            TakeTransmitDialog::fromHolderEntry(prompt.holder.value_or(QJsonObject{})),
-            m_dialogParent);
-    } else if (prompt.kind == QStringLiteral("takeReceiver")
-               || prompt.kind == QStringLiteral("takeSlice")) {
-        auto* chooser = new TakeReceiverDialog(prompt, m_dialogParent);
-        const QPointer<TakeReceiverDialog> guard(chooser);
-        choice = [guard]() { return guard ? guard->pickedChoice() : qint64(-1); };
-        dialog = chooser;
-    } else {
-        // sharedSetting, panMove, and any kind a newer Core adds: the one
-        // shape that shows the change and who it reaches.
-        dialog = new ConfirmChangeDialog(prompt, m_dialogParent);
-    }
+    std::function<qint64()> choice;
+    QDialog* dialog = questionDialog(prompt, m_dialogParent, &choice);
     const QPointer<QDialog> self(dialog);
     connect(dialog, &QDialog::accepted, this, [this, self, id, choice]() {
         if (m_dialog != self) { return; }
@@ -286,13 +302,17 @@ void MultiDeviceController::setNoticeHost(QWidget* host)
 
 void MultiDeviceController::layoutNoticeCards()
 {
-    if (!m_noticeHost) {
+    stackNoticeCards(m_noticeHost, noticeCards());
+}
+
+void MultiDeviceController::stackNoticeCards(QWidget* host, QList<NoticeCard*> cards)
+{
+    if (!host) {
         return;
     }
     // Stacked from the foot of the band upwards, newest at the foot.
-    const int width = std::min(kCardMaxWidth, m_noticeHost->width() - 2 * kCardMargin);
-    int bottom = m_noticeHost->height() - kCardMargin;
-    QList<NoticeCard*> cards = noticeCards();
+    const int width = std::min(kCardMaxWidth, host->width() - 2 * kCardMargin);
+    int bottom = host->height() - kCardMargin;
     std::sort(cards.begin(), cards.end(), [](const NoticeCard* a, const NoticeCard* b) {
         return a->noticeId() > b->noticeId();
     });

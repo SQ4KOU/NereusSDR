@@ -37,6 +37,9 @@
 //               controlTaken notice and the slice access refusals and holds
 //               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: questionDialog(), shared with
+//               the hosting desktop's HostingSliceActions. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -46,6 +49,8 @@
 #include <QPointer>
 #include <QVector>
 
+#include <functional>
+
 class QDialog;
 class QWidget;
 
@@ -53,6 +58,7 @@ namespace NereusSDR {
 
 class NoticeCard;
 class RemoteDevicesState;
+struct SessionPrompt;
 class StationClient;
 
 class MultiDeviceController : public QObject {
@@ -78,6 +84,17 @@ public:
     /// Other devices' slices, as a panadapter draws them.
     static QVector<SpectrumWidget::ForeignSliceMarker> foreignMarkers(
         const RemoteDevicesState& devices);
+
+    /// The dialog for a confirm.request question: TakeTransmitDialog,
+    /// TakeReceiverDialog (takeReceiver, takeSlice) or ConfirmChangeDialog.
+    /// `choice`, when given, is set to what the answer's choice is read
+    /// from when the dialog is accepted (-1 for none). A remote window and
+    /// the hosting desktop ask with the same dialogs.
+    static QDialog* questionDialog(const SessionPrompt& prompt, QWidget* parent,
+                                   std::function<qint64()>* choice);
+    /// Notice cards stacked from the foot of `host` upwards, newest at the
+    /// foot (a remote window's and the hosting desktop's alike).
+    static void stackNoticeCards(QWidget* host, QList<NoticeCard*> cards);
 
     /// The dialog open now (a question, or the window's own take question),
     /// or null.

@@ -8032,6 +8032,11 @@ target_compile_definitions(tst_radio_bound_antenna_rows PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Slice control and shared listening plan Task 10: the hosting desktop's
+# slice requests run as the station device (HostingSliceActions).
+nereus_add_test(tst_hosting_slice_operations
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 nereus_add_test(tst_device_layout_store EXTRA_LABELS session)
 # Parity Task 19 (R-IOS-25, R-R3-49): the link's record streams: backlog,
 # merged changes, a slow peer bounded to a reset, the record.batch codec.

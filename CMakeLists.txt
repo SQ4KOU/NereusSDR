@@ -1537,6 +1537,8 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/DesktopStationController.cpp
     src/gui/DesktopStationController.h
+    src/gui/HostingSliceActions.cpp
+    src/gui/HostingSliceActions.h
     src/gui/GuiDesktopStationRuntime.cpp
     src/gui/GuiDesktopStationRuntime.h
     src/gui/SliceFlagPresentationBinding.cpp

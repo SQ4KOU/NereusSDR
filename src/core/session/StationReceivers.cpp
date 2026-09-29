@@ -77,6 +77,10 @@
 //               listeners and asks again when one joined, and every
 //               listener of a closed slice is told. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: the station device is a peer
+//               (peerFor), so the hosting desktop's slice requests and
+//               notices take the remote path. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -492,6 +496,11 @@ ReceiverPlanner StationServer::questionPlanner(SessionTransport* transport) cons
 
 SessionTransport* StationServer::liveTransportFor(const QByteArray& deviceId) const
 {
+    // Slice control plan Task 10: the hosting desktop, once it takes its
+    // notices, is here as the station device.
+    if (deviceId == SliceOwnership::stationDevice() && m_stationNotice) {
+        return m_stationTransport.get();
+    }
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
         if (it->sessionDeviceId == deviceId && it->snapshotComplete && !it->view.isNull()) {
             return it.key();
@@ -547,7 +556,7 @@ bool StationServer::handleReceiverCommand(SessionTransport* transport, const Ses
         || m_radioModel->streamAllocator().streamCount() <= 0) {
         return false;
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return false;
     }
@@ -864,7 +873,7 @@ bool StationServer::handleSliceRetune(SessionTransport* transport, const Session
         || m_radioModel->streamAllocator().streamCount() <= 0) {
         return false;
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     double frequencyHz = 0.0;
     if (requester.isEmpty() || !readDouble(message.updates, "frequency", &frequencyHz)) {
         return false;
@@ -940,7 +949,7 @@ bool StationServer::handleSliceRetune(SessionTransport* transport, const Session
 void StationServer::answerWrite(SessionTransport* transport, const SessionMessage& write,
                                 const QString& reason)
 {
-    if (m_peers.value(transport).agreedMinor < kDspControlSessionProtocolMinor
+    if (peerFor(transport).agreedMinor < kDspControlSessionProtocolMinor
         || write.writeId == 0) {
         return;
     }
@@ -1007,7 +1016,7 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
                                  SessionPrompt prompt)
 {
     question.id = m_confirm->nextId();
-    question.device = m_peers.value(transport).sessionDeviceId;
+    question.device = peerFor(transport).sessionDeviceId;
     question.askedAtMs = m_deviceSessions->now();
     prompt.id = question.id;
     prompt.kind = question.kind;
@@ -1061,7 +1070,7 @@ void StationServer::sendHeldQuestions()
     m_holdQuestions = false;
     const QList<QPair<SessionTransport*, SessionMessage>> held = std::exchange(m_heldQuestions, {});
     for (const auto& [transport, request] : held) {
-        if (m_peers.contains(transport)) {
+        if (hasPeer(transport)) {
             send(transport, request);
         }
     }
@@ -1157,7 +1166,7 @@ bool StationServer::askTakeSlice(SessionTransport* transport, const SessionMessa
     }
     QList<ReceiverPlanner::Choice> offered = choices;
     const ReceiverPlanner planner = questionPlanner(transport);
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     bool anyTakeable = false;
     for (ReceiverPlanner::Choice& candidate : offered) {
         const ReceiverPlanner::AddPlacement placement =
@@ -1326,7 +1335,7 @@ SessionMessage StationServer::applyHeld(SessionTransport* transport,
     if (original.commandVerb.startsWith("ps3.") && result.accepted && !isLastResult(result)) {
         // Fix wave I1: a PureSignal action re-run on proceed answers in
         // later phases; they are the requester's.
-        m_resultRoutes.insert(ResultKey{m_peers.value(transport).sessionId, original.commandVerb,
+        m_resultRoutes.insert(ResultKey{peerFor(transport).sessionId, original.commandVerb,
                                         original.commandId},
                               QPointer<SessionTransport>(transport));
     }
@@ -1565,7 +1574,7 @@ QString StationServer::olderWindowWithoutSliceReason(SessionTransport* transport
         || peerHoldsSessions(transport)) {
         return {};
     }
-    const QByteArray device = m_peers.value(transport).sessionDeviceId;
+    const QByteArray device = peerFor(transport).sessionDeviceId;
     if (device.isEmpty() || !m_radioModel->sliceOwnership()->ownedBy(device).isEmpty()) {
         return {};
     }
@@ -1622,7 +1631,7 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
                                               {});
     };
     SessionTransport* transport = m_dispatchingTransport;
-    const QByteArray device = m_peers.value(transport).sessionDeviceId;
+    const QByteArray device = peerFor(transport).sessionDeviceId;
     // A question this answer raises follows the answer itself.
     m_holdQuestions = true;
     if (transport == nullptr || device.isEmpty() || m_radioModel.isNull()) {
@@ -1994,7 +2003,7 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
 SessionMessage StationServer::askTakeBack(SessionTransport* transport, const SessionMessage& invoke,
                                           int noticeId)
 {
-    const QByteArray device = m_peers.value(transport).sessionDeviceId;
+    const QByteArray device = peerFor(transport).sessionDeviceId;
     const std::optional<ConfirmStep::Notice> record = m_confirm->takeBackRecord(device, noticeId);
     if (!record) {
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,

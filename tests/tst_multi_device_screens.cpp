@@ -29,6 +29,9 @@
 //               listening level; the capture of a listened flag's audio
 //               tab. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-29: slice control plan Task 10: the hosting desktop's Add at
+//               full capacity asks with the remote window's chooser. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -58,6 +61,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/HostingSliceActions.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
@@ -501,6 +505,64 @@ private slots:
         QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
         const QJsonObject told = ofType(appB->received(), QStringLiteral("notice")).last();
         QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
+    }
+
+    // Slice control plan Task 10: the hosting desktop's Add at full
+    // capacity asks with the chooser a remote window shows, and Take sends
+    // the pick as the station device's answer.
+    void theHostingDesktopsAddAsksWithTheSameChooser()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        const QByteArray& station = SliceOwnership::stationDevice();
+        core.server->deviceSessions()->registerHostingDevice(station, QStringLiteral("Mac"),
+                                                              QStringLiteral("Mac"));
+        core.server->setStationDeviceWords(QStringLiteral("Mac"), QStringLiteral("Mac"));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->adoptUnowned(station);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const int bSlice = ownership->ownedBy(b.key.fingerprint()).first();
+        core.model->sliceById(bSlice)->setFrequency(14074000.0);
+
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy asked(&host, &HostingSliceActions::question);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+        host.addOnPan(QStringLiteral("pan-host-2"));
+        QTRY_COMPARE(asked.count(), 1);
+        const SessionMessage question = asked.first().at(0).value<SessionMessage>();
+        std::function<qint64()> choice;
+        QWidget parent;
+        QDialog* dialog = MultiDeviceController::questionDialog(question.prompt, &parent, &choice);
+        auto* chooser = qobject_cast<TakeReceiverDialog*>(dialog);
+        QVERIFY(chooser != nullptr);
+        QVERIFY(chooser->choiceList()->count() >= 2);
+        bool namesIpad = false;
+        for (int i = 0; i < chooser->choiceList()->count(); ++i) {
+            const QString text = chooser->choiceList()->item(i)->text();
+            QVERIFY(OperatorWording::isPlain(text));
+            namesIpad = namesIpad || text.contains(QStringLiteral("iPad"));
+        }
+        QVERIFY(namesIpad);
+        QVERIFY(chooser->pickedChoice() >= 0);
+        QObject::connect(dialog, &QDialog::accepted, &host, [&host, &question, &choice]() {
+            host.proceed(question.prompt.id, choice());
+        });
+        QTest::mouseClick(chooser->takeButton(), Qt::LeftButton);
+        QTRY_VERIFY(!finished.isEmpty()
+                    && finished.last().at(0).toByteArray() == QByteArrayLiteral("confirm.proceed"));
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        bool onNewPan = false;
+        for (int id : ownership->ownedBy(station)) {
+            onNewPan = onNewPan
+                       || core.model->sliceById(id)->panKey() == QStringLiteral("pan-host-2");
+        }
+        QVERIFY(onNewPan);
+        delete dialog;
     }
 
     // Slice control plan Task 14b (ruling U5): the hosting desktop listens
