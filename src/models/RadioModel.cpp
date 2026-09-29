@@ -3571,9 +3571,19 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
             [this](int /*power*/) {
         if (ownsLocalDsp() && !m_txBandKnown) {
+            // The initializing TXBand pass for the adopted band, less the
+            // power load (this PWR set is the band's value): its limits,
+            // tune power and FM TX offset (console.cs:17539-17550
+            // [v2.10.3.15]).
             m_txBand = transmitSliceBand();
             m_txBandKnown = true;
+            m_transmitModel.setPowerLimit(
+                m_transmitModel.limitPowerForBand(m_txBand));
+            m_transmitModel.setTunePowerLimit(
+                m_transmitModel.limitTunePowerForBand(m_txBand));
             m_transmitModel.setTuneTxBand(m_txBand);
+            m_transmitModel.setFmTxOffsetMhz(
+                m_transmitModel.fmTxOffsetForBandMhz(m_txBand));
         }
         drivePowerScroll();
     });
@@ -6134,11 +6144,18 @@ Band RadioModel::transmitSliceBand() const
 //       ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
 //       PWR = power_by_band[(int)value];
 //       TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+//       // save FM TX Offset
+//       if (!initializing)
+//       {
+//           fm_tx_offset_by_band_mhz[(int)old_band] = fm_tx_offset_mhz;
+//       }
+//       FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+//   }
 // TunePWR is TransmitModel::setTuneTxBand, inside the same MOX guard: a
 // retune while keyed (TUNE keys MOX) holds the tune power too.
-// Not ported here: the slider limits (NereusSDR has no per-band PWR limit
-// store), the XVTR lo_band lookup ("Fix Penny O/C VHF control Vk4xv") and
-// the FM TX offset save that follow in the setter.
+// The rest of the setter (the 60 m TX filter save and restore,
+// DisplayAriesTXAntenna and TXBandChangeHandlers) is not power and is not
+// ported here.
 void RadioModel::applyTransmitBand(Band band, bool initializing)
 {
     if (m_role != Role::Local) {
@@ -6165,6 +6182,15 @@ void RadioModel::applyTransmitBand(Band band, bool initializing)
     m_txBand = band;
     m_txBandKnown = true;
 
+    // From Thetis console.cs:17525-17528 [v2.10.3.15]:
+    //   Band lo_band = Band.FIRST;
+    //   if (tx_xvtr_index >= 0)
+    //       // Fix Penny O/C VHF control Vk4xv
+    //       lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+    // lo_band is never read again in the setter, so the lookup changes
+    // nothing here. NereusSDR has no transverter form to translate through
+    // (the XVTR band is Band::XVTR, a per-band state slot of its own).
+
     if (band == oldBand && !initializing) {
         return;
     }
@@ -6176,11 +6202,33 @@ void RadioModel::applyTransmitBand(Band band, bool initializing)
     }
     m_transmitModel.setPowerForBand(oldBand, oldPwr);
 
+    // ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    // ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setPowerLimit(m_transmitModel.limitPowerForBand(band));
+    m_transmitModel.setTunePowerLimit(
+        m_transmitModel.limitTunePowerForBand(band));
+
     // PWR = power_by_band[(int)value]; powerChanged runs drivePowerScroll,
     // which recomputes the drive and saves the same value to m_txBand.
-    m_transmitModel.setPower(m_transmitModel.powerForBand(band));
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll even when the value is unchanged, so the new band's
+    // limit and gain reach the drive; setPower only signals a change.
+    const int newPwr = m_transmitModel.powerForBand(band);
+    if (m_transmitModel.power() == newPwr) {
+        drivePowerScroll();
+    } else {
+        m_transmitModel.setPower(newPwr);
+    }
     // TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
     m_transmitModel.setTuneTxBand(band);
+
+    // save FM TX Offset
+    if (!initializing) {
+        m_transmitModel.setFmTxOffsetForBandMhz(
+            oldBand, m_transmitModel.fmTxOffsetMhz());
+    }
+    m_transmitModel.setFmTxOffsetMhz(
+        m_transmitModel.fmTxOffsetForBandMhz(band)); //MW0LGE_21k9
 }
 
 // ---------------------------------------------------------------------------

@@ -916,6 +916,170 @@ private slots:
         pump();
         QCOMPARE(tx.tunePowerForTxBand(), 60);
     }
+
+    // The TXBand setter assigns the band's slider limits
+    // (console.cs:17539-17540 [v2.10.3.15]:
+    //   ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    //   ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b)
+    // and SetPowerUsingTargetDBM runs the drive through the slider's limit
+    // (console.cs:46798 [v2.10.3.15]:
+    //   if(bConstrain) new_pwr = slider.ConstrainAValue(new_pwr);).
+    void bandChange_assignsPowerLimits_constrainsDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        const PaProfile* profile = model.paProfileManager()->activeProfile();
+        QVERIFY(profile != nullptr);
+        pump();
+
+        // Defaults: every band's limit is 100 (console.cs:1824-1831).
+        QCOMPARE(tx.limitPowerForBand(Band::Band40m), 100);
+        QCOMPARE(tx.limitTunePowerForBand(Band::Band40m), 100);
+        QCOMPARE(tx.powerLimit(), 100);
+        QCOMPARE(tx.tunePowerLimit(), 100);
+
+        tx.setLimitPowerForBand(Band::Band40m, 30);
+        tx.setLimitTunePowerForBand(Band::Band40m, 20);
+        tx.setPowerForBand(Band::Band40m, 70);
+        tx.setTunePowerForBand(Band::Band40m, 60);
+        tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+
+        slice->setFrequency(7100000.0);
+        pump();
+        QCOMPARE(tx.power(), 70);
+        QCOMPARE(tx.powerLimit(), 30);
+        QCOMPARE(tx.tunePowerLimit(), 20);
+        QCOMPARE(tx.setPowerUsingTargetDbm(*profile, Band::Band40m, false,
+                                           false, false, HPSDRModel::ANAN8000D)
+                     .newPower, 30);
+        QCOMPARE(tx.setPowerUsingTargetDbm(*profile, Band::Band40m, false,
+                                           true, false, HPSDRModel::ANAN8000D)
+                     .newPower, 20);
+        // The slider keeps its value; only the drive is constrained.
+        QCOMPARE(tx.powerForBand(Band::Band40m), 70);
+
+        // The drive the band change pushed was the constrained one.
+        const double atLimit = tx.setPowerUsingTargetDbm(
+            *profile, Band::Band40m, false, false, false,
+            HPSDRModel::ANAN8000D).audioVolume;
+        tx.setLimitPowerForBand(Band::Band40m, 100);
+        tx.setPowerLimit(100);
+        const double unlimited = tx.setPowerUsingTargetDbm(
+            *profile, Band::Band40m, false, false, false,
+            HPSDRModel::ANAN8000D).audioVolume;
+        QVERIFY(atLimit < unlimited);
+        tx.setLimitPowerForBand(Band::Band40m, 30);
+
+        // Back on 80 m the 80 m limits (100) apply again.
+        slice->setFrequency(3700000.0);
+        pump();
+        QCOMPARE(tx.powerLimit(), 100);
+        QCOMPARE(tx.tunePowerLimit(), 100);
+
+        // FIXED is never constrained (bConstrain = false).
+        slice->setFrequency(7100000.0);
+        pump();
+        tx.setTuneDrivePowerSource(DrivePowerSource::Fixed);
+        tx.setTunePower(80);
+        QCOMPARE(tx.setPowerUsingTargetDbm(*profile, Band::Band40m, false,
+                                           true, false, HPSDRModel::ANAN8000D)
+                     .newPower, 80);
+    }
+
+    // A band change the limit does not allow still recomputes the drive:
+    // Thetis's PWR setter always runs ptbPWR_Scroll (console.cs:18437-18447
+    // [v2.10.3.15]), even when the value is unchanged.
+    void bandChange_samePower_newLimit_recomputesDrive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        pump();
+        tx.setPowerForBand(Band::Band80m, 50);
+        tx.setPower(50);
+        tx.setPowerForBand(Band::Band40m, 50);
+        tx.setLimitPowerForBand(Band::Band40m, 10);
+        pump();
+        conn->txDriveLog.clear();
+        slice->setFrequency(7100000.0);
+        pump();
+        QCOMPARE(tx.power(), 50);
+        QVERIFY(!conn->txDriveLog.isEmpty());
+        const int limitedByte = conn->txDriveLog.last();
+        slice->setFrequency(3700000.0);
+        pump();
+        QVERIFY(!conn->txDriveLog.isEmpty());
+        QVERIFY(conn->txDriveLog.last() > limitedByte);
+    }
+
+    // The per-band limits persist per radio like power_by_band
+    // (console.cs:3101-3109 save, 4921-4935 load [v2.10.3.15]).
+    void powerLimits_persistPerRadio()
+    {
+        AppSettings::instance().clear();
+        {
+            TransmitModel tx;
+            tx.loadFromSettings(QStringLiteral("AABBCCDDEEFF"));
+            tx.setLimitPowerForBand(Band::Band20m, 35);
+            tx.setLimitTunePowerForBand(Band::Band20m, 25);
+            tx.setLimitPowerForBand(Band::Band6m, 150);  // clamps to 100
+            QCOMPARE(tx.limitPowerForBand(Band::Band6m), 100);
+        }
+        TransmitModel tx;
+        tx.loadFromSettings(QStringLiteral("AABBCCDDEEFF"));
+        QCOMPARE(tx.limitPowerForBand(Band::Band20m), 35);
+        QCOMPARE(tx.limitTunePowerForBand(Band::Band20m), 25);
+        QCOMPARE(tx.limitPowerForBand(Band::Band40m), 100);
+    }
+
+    // The TXBand setter saves the FM TX offset into the old band and loads
+    // the new band's (console.cs:17546-17550 [v2.10.3.15]:
+    //   if (!initializing) fm_tx_offset_by_band_mhz[(int)old_band] = fm_tx_offset_mhz;
+    //   FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9),
+    // defaults 1 MHz on 6 m and 0.1 MHz elsewhere (console.cs:1833-1841).
+    void bandChange_savesAndLoadsFmTxOffset()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        pump();
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band6m), 1.0);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band10m), 0.1);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band2m), 0.1);
+
+        slice->setFrequency(50100000.0);
+        pump();
+        QCOMPARE(tx.fmTxOffsetMhz(), 1.0);
+        tx.setFmTxOffsetMhz(0.6);
+        // Out of udFMOffset's 0..50 MHz range: ignored.
+        tx.setFmTxOffsetMhz(60.0);
+        QCOMPARE(tx.fmTxOffsetMhz(), 0.6);
+
+        slice->setFrequency(28500000.0);
+        pump();
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band6m), 0.6);
+        QCOMPARE(tx.fmTxOffsetMhz(), 0.1);
+
+        slice->setFrequency(50200000.0);
+        pump();
+        QCOMPARE(tx.fmTxOffsetMhz(), 0.6);
+    }
 };
 
 QTEST_MAIN(TestRadioModelDrivePath)

@@ -279,6 +279,11 @@
 //                 Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49: the per-band PWR and tune slider limits and
+//                 FM TX offsets from Thetis console.cs:1824-1841, 17539-17550
+//                 [v2.10.3.15]; setPowerUsingTargetDbm constrains the drive
+//                 to the slider limit (ConstrainAValue). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -471,11 +476,10 @@ public:
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
     //     power_by_band = new int[(int)Band.LAST];
     //     for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
-    // (Thetis safety-first default — users dial up from 50 per band.
-    // limitPower_by_band[14] (console.cs:1816-1817 [v2.10.3.13]) is a
-    // separate band-max ceiling array we do NOT port here.  Phase 3C's
-    // setPowerUsingTargetDbm txMode 0 branch writes back into
-    // m_powerByBand[band] via setPower side-effect.)
+    // (Thetis safety-first default: users dial up from 50 per band.
+    // limitPower_by_band is the separate band-max ceiling array; see
+    // limitPowerForBand below.  Phase 3C's setPowerUsingTargetDbm txMode 0
+    // branch writes back into m_powerByBand[band] via setPower side-effect.)
     //
     // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
@@ -492,6 +496,51 @@ public:
     ///   hardware/<mac>/powerByBand/<bandKeyName>
     /// (mirrors the per-MAC tx/ namespace pattern).
     void setPowerForBand(Band band, int watts);
+
+    // ── Per-band slider limits and FM TX offset (R-R3-49) ─────────────────
+    //
+    // The rest of the Thetis TXBand setter's power half
+    // (console.cs:17511-17580 [v2.10.3.15]):
+    //   ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    //   ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    //   ...
+    //   FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+    // Defaults (console.cs:1824-1841 [v2.10.3.15]): limits 100 on every
+    // band; FM offset 1 MHz on 6 m, 0.1 MHz elsewhere.  Persisted per radio
+    // under hardware/<mac>/limitPowerByBand/, limitTunePowerByBand/ and
+    // fmTxOffsetByBandMhz/ (Thetis saves pipe-delimited strings,
+    // console.cs:3101-3115 save, 4921-4944 load).
+
+    /// PWR slider limit (watts, 0..100) stored for a band.  100 for an
+    /// out-of-range band.
+    int  limitPowerForBand(Band band) const;
+    /// Store a band's PWR slider limit, clamped to 0..100 (PrettyTrackBar's
+    /// LimitValue setter clamps to the slider's Min/Max).
+    void setLimitPowerForBand(Band band, int watts);
+    /// Tune slider limit (watts, 0..100) stored for a band.
+    int  limitTunePowerForBand(Band band) const;
+    /// Store a band's tune slider limit, clamped to 0..100.
+    void setLimitTunePowerForBand(Band band, int watts);
+
+    /// The PWR slider's current limit (ptbPWR.LimitValue).  The band change
+    /// assigns it from limitPowerForBand; setPowerUsingTargetDbm constrains
+    /// the drive to it.
+    int  powerLimit() const noexcept { return m_powerLimit; }
+    void setPowerLimit(int watts);
+    /// The tune slider's current limit (ptbTune.LimitValue).
+    int  tunePowerLimit() const noexcept { return m_tunePowerLimit; }
+    void setTunePowerLimit(int watts);
+
+    /// The FM TX offset in MHz for the transmit band (Thetis
+    /// fm_tx_offset_mhz, initially 0).
+    double fmTxOffsetMhz() const noexcept { return m_fmTxOffsetMhz; }
+    /// Set the FM TX offset.  A value outside udFMOffset's 0..50 MHz range
+    /// is ignored, as in Thetis's FMTXOffsetMHz setter.
+    void   setFmTxOffsetMhz(double mhz);
+    /// FM TX offset (MHz) stored for a band.
+    double fmTxOffsetForBandMhz(Band band) const;
+    /// Store a band's FM TX offset (MHz).
+    void   setFmTxOffsetForBandMhz(Band band, double mhz);
 
     // ── ATT-on-TX-on-power-change safety properties (#167 Phase 3A) ──────
     //
@@ -766,6 +815,10 @@ public:
     ///      //[2.10.3.5]MW0LGE).
     ///   3. Emits audioVolumeChanged(audio_volume) signal so RadioModel
     ///      call sites can pump it to TxChannel + RadioConnection.
+    ///
+    /// The drive is constrained to the active slider's limit (powerLimit,
+    /// or tunePowerLimit on the tune-slider source) unless the source is
+    /// FIXED.
     ///
     /// XVTR translation NOT ported (NereusSDR has only one XVTR slot;
     /// sentinel fallback in computeAudioVolume catches that case).
@@ -2554,6 +2607,20 @@ private:
     // the dBm compensator (Phase 3A scaffolding for #167 Phase 3C math
     // kernel).  Initialised in the constructor.
     std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_powerByBand{};  // per-band state slots (2 m at 14)
+
+    // R-R3-49: per-band slider limits and FM TX offsets, and the current
+    // slider limits and offset (see limitPowerForBand).  Filled in the
+    // constructor from console.cs:1824-1841 [v2.10.3.15].
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitPowerByBand{};
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitTunePowerByBand{};
+    std::array<double, static_cast<std::size_t>(kPerBandStateCount)> m_fmTxOffsetByBandMhz{};
+    // Thetis's Designer gives both sliders LimitValue = 50
+    // (console.Designer.cs:3688, 3944 [v2.10.3.15]), but the initializing
+    // TXBand pass assigns limitPower_by_band (100 by default) before any
+    // drive is computed, so the effective start value is 100.
+    int    m_powerLimit{100};
+    int    m_tunePowerLimit{100};
+    double m_fmTxOffsetMhz{0.0};
 
     // ── ATT-on-TX-on-power-change safety state (#167 Phase 3A) ────────────
     // From Thetis console.cs:29285-29310 [v2.10.3.13].  Defaults match
