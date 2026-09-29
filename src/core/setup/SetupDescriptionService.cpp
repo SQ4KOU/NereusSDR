@@ -13,6 +13,14 @@
 #include "core/SkuUiProfile.h"
 #include "core/ControlRanges.h"
 #include "core/settings/SettingsScope.h"
+#include "core/setup/SetupDescriptionV14.h"
+#include "core/dsp/DspAssetService.h"
+#include "models/AccessoryDataModel.h"
+#include "models/AccessorySettingsModel.h"
+#include "models/AmplifierModel.h"
+#include "models/RadioModel.h"
+#include "models/RfKitModel.h"
+#include "models/TunerModel.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -224,16 +232,39 @@ QJsonObject expectedSettingsHygienePanel()
 bool validDiagnosticsEnvelope(const QJsonObject& root)
 {
     const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
-    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(3)
+    // Version 14 adds Radio Status and Connection Quality before Settings
+    // Validation (the desktop's order); their rows are version 14 rows.
+    const bool v14 = root.value(QStringLiteral("version"))
+        == QJsonValue(SetupDescriptionV14::kVersion);
+    if (root.size() != 3
+        || (root.value(QStringLiteral("version")) != QJsonValue(3) && !v14)
         || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
             {QStringLiteral("id"), QStringLiteral("diagnostics")},
             {QStringLiteral("title"), QStringLiteral("Diagnostics")},
             {QStringLiteral("where"), QStringLiteral("station")},
             {QStringLiteral("coverage"), QStringLiteral("partial")}})
-        || pages.size() != 1) {
+        || pages.isEmpty() || (!v14 && pages.size() != 1)) {
         return false;
     }
-    const QJsonObject page = pages.first().toObject();
+    int validation = -1;
+    for (int p = 0; p < pages.size(); ++p) {
+        if (pages.at(p).toObject().value(QStringLiteral("id"))
+            == QJsonValue(QStringLiteral("diagnostics.settingsValidation"))) {
+            if (validation >= 0) { return false; }
+            validation = p;
+            continue;
+        }
+        for (const QJsonValue& section : pages.at(p).toObject().value(QStringLiteral("sections")).toArray()) {
+            for (const QJsonValue& control : section.toObject().value(QStringLiteral("controls")).toArray()) {
+                if (control.toObject().value(QStringLiteral("requiresDescriptionVersion"))
+                    != QJsonValue(SetupDescriptionV14::kVersion)) {
+                    return false;
+                }
+            }
+        }
+    }
+    if (validation < 0) { return false; }
+    const QJsonObject page = pages.at(validation).toObject();
     const QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
     if (page.size() != 5
         || page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("diagnostics.settingsValidation"))
@@ -318,7 +349,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(5))
          && !(id == QLatin1String("hardware")
-              && root.value(QStringLiteral("version")) == QJsonValue(6)))
+              && root.value(QStringLiteral("version")) == QJsonValue(6))
+         && !(SetupDescriptionV14::isCategory(id)
+              && root.value(QStringLiteral("version"))
+                  == QJsonValue(SetupDescriptionV14::kVersion)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
@@ -343,9 +377,27 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 || section.value(QStringLiteral("controls")).toArray().isEmpty()) {
                 return {};
             }
+            if (!SetupDescriptionV14::validateSection(
+                    id, section.value(QStringLiteral("controls")).toArray())) {
+                return {};
+            }
             for (const QJsonValue& rawControl : section.value(QStringLiteral("controls")).toArray()) {
                 const QJsonObject control = rawControl.toObject();
                 const QString controlId = control.value(QStringLiteral("id")).toString();
+                // Version 14 rows are checked against the Core's own sources
+                // (SetupDescriptionV14::validateControl, run by
+                // validateSection above), not the older category rules.
+                if (control.value(QStringLiteral("requiresDescriptionVersion"))
+                    == QJsonValue(SetupDescriptionV14::kVersion)) {
+                    if (controlId.isEmpty() || ids.contains(controlId)
+                        || !SetupDescriptionV14::isCategory(id)
+                        || root.value(QStringLiteral("version"))
+                            != QJsonValue(SetupDescriptionV14::kVersion)) {
+                        return {};
+                    }
+                    ids.insert(controlId);
+                    continue;
+                }
                 if (controlId.isEmpty() || ids.contains(controlId)
                     || control.value(QStringLiteral("label")).toString().isEmpty()
                     || !control.value(QStringLiteral("binding")).isObject()
@@ -578,6 +630,47 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Version 14: rows and sections that depend on the Core's radio.
+    if (SetupDescriptionV14::isCategory(id)) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                if (!SetupDescriptionV14::keepSectionForRadio(&section, caps)) {
+                    sections.removeAt(s--);
+                    continue;
+                }
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    if (control.value(QStringLiteral("requiresDescriptionVersion"))
+                        != QJsonValue(SetupDescriptionV14::kVersion)) {
+                        continue;
+                    }
+                    if (!SetupDescriptionV14::projectForRadio(&control, caps, model)) {
+                        controls.removeAt(c--);
+                        continue;
+                    }
+                    controls[c] = control;
+                }
+                if (controls.isEmpty()) {
+                    sections.removeAt(s--);
+                    continue;
+                }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            if (sections.isEmpty()) {
+                pages.removeAt(p--);
+                continue;
             }
             page.insert(QStringLiteral("sections"), sections);
             pages[p] = page;
@@ -1537,7 +1630,15 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
             return fail(QStringLiteral("TNF Add must use the exact selected owned slice contract"));
         }
     }
+    // Version 14: a choice whose choices come from the Core's names sends
+    // the chosen name.
+    const bool v14 = control.value(QStringLiteral("requiresDescriptionVersion"))
+        == QJsonValue(SetupDescriptionV14::kVersion);
     const MirrorWireKind controlKind = kind == QLatin1String("toggle") ? MirrorWireKind::Bool
+        : kind == QLatin1String("choice") && (control.contains(QStringLiteral("choicesFrom"))
+              || control.value(QStringLiteral("options")).toArray().first().toObject()
+                     .value(QStringLiteral("value")).isString())
+          ? MirrorWireKind::Utf8
         : kind == QLatin1String("integer") || kind == QLatin1String("slider")
           || kind == QLatin1String("choice") ? MirrorWireKind::Int64
         : kind == QLatin1String("decimal") ? MirrorWireKind::Float64
@@ -1580,7 +1681,23 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
         const QMetaObject* meta = object == QLatin1String("stationTci")
             ? &StationTciModel::staticMetaObject
             : object == QLatin1String("slice:active")
-              ? &SliceModel::staticMetaObject : nullptr;
+              ? &SliceModel::staticMetaObject
+            : object == QLatin1String("transmit")
+              ? &TransmitModel::staticMetaObject
+            : object == QLatin1String("dspAssets")
+              ? &DspAssetService::staticMetaObject
+            : object == QLatin1String("radio")
+              ? &RadioModel::staticMetaObject
+            : object == QLatin1String("amplifier")
+              ? &AmplifierModel::staticMetaObject
+            : object == QLatin1String("tuner")
+              ? &TunerModel::staticMetaObject
+            : object == QLatin1String("rfkit")
+              ? &RfKitModel::staticMetaObject
+            : object == QLatin1String("accessoryData")
+              ? &AccessoryDataModel::staticMetaObject
+            : object == QLatin1String("accessorySettings")
+              ? &AccessorySettingsModel::staticMetaObject : nullptr;
         if (!meta) {
             return MirrorWireKind::Unsupported;
         }
@@ -1588,8 +1705,10 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
             ref.value(QStringLiteral("name")).toString().toUtf8());
         return property ? property->kind : MirrorWireKind::Unsupported;
     };
-    if (command.contains(QStringLiteral("valueProperty"))
-        && propertyKind(command.value(QStringLiteral("valueProperty"))) != controlKind) {
+    const MirrorWireKind valueKind = command.contains(QStringLiteral("valueProperty"))
+        ? propertyKind(command.value(QStringLiteral("valueProperty"))) : controlKind;
+    if (command.contains(QStringLiteral("valueProperty")) && valueKind != controlKind
+        && !(v14 && valueKind == MirrorWireKind::Enum && controlKind == MirrorWireKind::Int64)) {
         return fail(QStringLiteral("command valueProperty is missing or has the wrong type"));
     }
     if (!command.value(QStringLiteral("arguments")).isObject()) {
@@ -1619,15 +1738,39 @@ bool SetupDescription::validateCommandBinding(const QJsonObject& control, QStrin
                 }
                 supplied = controlKind;
             } else if (source.contains(QStringLiteral("$selectedOwnedSliceId"))) {
-                if (control.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("dsp.tnf.add"))
-                    || control.value(QStringLiteral("requiresDescriptionVersion")) != QJsonValue(2)
-                    || verb != "notch.addAtSlice" || name != QLatin1String("sliceId")
+                // Version 14: any verb's sliceId may come from the selected
+                // owned slice, with the same checks as TNF Add.
+                const bool tnfAdd = control.value(QStringLiteral("id"))
+                        == QJsonValue(QStringLiteral("dsp.tnf.add"))
+                    && control.value(QStringLiteral("requiresDescriptionVersion")) == QJsonValue(2)
+                    && verb == "notch.addAtSlice";
+                if (!(tnfAdd || v14) || name != QLatin1String("sliceId")
                     || source.value(QStringLiteral("$selectedOwnedSliceId")) != QJsonValue(true)) {
                     return fail(QStringLiteral("invalid selected owned slice source"));
                 }
                 supplied = MirrorWireKind::Int64;
+            } else if (source.contains(QStringLiteral("$prompt"))) {
+                // Version 14: the text the button's `prompt` asked for.
+                if (!v14 || kind != QLatin1String("button")
+                    || !control.value(QStringLiteral("prompt")).isObject()
+                    || source.value(QStringLiteral("$prompt")) != QJsonValue(true)) {
+                    return fail(QStringLiteral("invalid prompt source"));
+                }
+                supplied = MirrorWireKind::Utf8;
+            } else if (source.contains(QStringLiteral("$control"))) {
+                // Version 14: a staged row of the same section; its kind is
+                // checked with the section (SetupDescriptionV14::validateSection).
+                if (!v14 || !source.value(QStringLiteral("$control")).isString()) {
+                    return fail(QStringLiteral("invalid staged control source"));
+                }
+                supplied = expected.kind;
             } else if (source.contains(QStringLiteral("$property"))) {
                 supplied = propertyKind(source.value(QStringLiteral("$property")));
+                // Version 14: a mirrored enum's number fills an integer argument.
+                if (v14 && supplied == MirrorWireKind::Enum
+                    && expected.kind == MirrorWireKind::Int64) {
+                    supplied = MirrorWireKind::Int64;
+                }
             } else {
                 return fail(QStringLiteral("unknown command argument source"));
             }
@@ -1850,12 +1993,34 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         if (!sections.isEmpty()) {
             page.insert(QStringLiteral("sections"), sections);
+            // Version 14: a page's coverage as a version 14 peer sees it
+            // (an empty string: the page is complete).
+            if (page.contains(QStringLiteral("coverageV14"))) {
+                if (version >= SetupDescriptionV14::kVersion) {
+                    const QString coverage = page.value(QStringLiteral("coverageV14")).toString();
+                    if (coverage.isEmpty()) {
+                        page.remove(QStringLiteral("coverage"));
+                    } else {
+                        page.insert(QStringLiteral("coverage"), coverage);
+                    }
+                }
+                page.remove(QStringLiteral("coverageV14"));
+            }
             pages.append(page);
         }
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const int ceiling = categoryId == QLatin1String("hardware") ? 6
+    if (category.contains(QStringLiteral("coverageV14"))) {
+        if (version >= SetupDescriptionV14::kVersion) {
+            category.insert(QStringLiteral("coverage"),
+                            category.value(QStringLiteral("coverageV14")).toString());
+        }
+        category.remove(QStringLiteral("coverageV14"));
+    }
+    const int ceiling = SetupDescriptionV14::isCategory(categoryId)
+            && version >= SetupDescriptionV14::kVersion ? SetupDescriptionV14::kVersion
+        : categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
@@ -1867,7 +2032,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4) : qMin(version, ceiling));
-    if (version >= 2 && category.value(QStringLiteral("category")).toObject()
+    if (version >= 2 && version < SetupDescriptionV14::kVersion
+        && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(
             "partial: Filter Presets and other listed page controls remain incomplete"));

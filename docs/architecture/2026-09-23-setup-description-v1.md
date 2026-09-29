@@ -1,4 +1,4 @@
-# Setup description versions 1–12
+# Setup description versions 1–14
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -148,11 +148,12 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 12. Hardware has a version-6 ceiling, PA a
+future declaration at version 14. Hardware has a version-6 ceiling, PA a
 version-5 ceiling, Display a version-12 ceiling, and Appearance a version-12
 ceiling with its prior version-4 projection for V4–V6 and version-7
-projection for V7–V11; the other categories on this source retain
-version 3.
+projection for V7–V11. DSP, Transmit, Audio, Diagnostics and CAT & Network
+are version 14 to a V14 peer and version 3 to a V3 to V13 peer (see Version
+14); General and Test retain version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -413,6 +414,223 @@ gradient editor kind), the Waterfall Low Level Color (unbuilt) and the
 Multimeter peak hold, text hold, averaging window, digital delay and history
 enable (unbuilt). Derived readouts (bin width, delay, effective rewind) and
 the cross-links are not controls.
+
+Version 14 describes the rest of Setup > DSP, Transmit, Audio, Diagnostics
+and CAT & Network (R-R3-49, R-IOS-18, R-IOS-27). Every new row has
+`requiresDescriptionVersion:14`. A peer that declares 14 or higher receives
+these five categories as version 14; a V3 to V13 peer receives each exactly
+as before, as version 3 (V1 and V2 keep their own), with the same pages,
+controls and coverage words. The source files carry the older coverage and
+a `coverageV14` value (on the category or a page) that replaces it for a V14
+peer; an empty `coverageV14` removes the page's coverage, meaning the page is
+complete. `coverageV14` itself is never sent. Version 13 is another lane's
+(PA and Hardware Config); these rows do not use it.
+
+A version 14 row is not a copy the Core compares; the Core checks it against
+its own sources (`SetupDescriptionV14::validateControl`). A `property` binding
+names a mirrored object this peer receives (`slice:active`, `transmit`,
+`stepAtt`, `dspAssets`, `radio`, `txState`, `amplifier`, `tuner`, `rfkit`,
+`accessoryData`, `accessorySettings`) and a property its schema has; an
+editable row needs a writable property the Core takes inbound, of the row's
+kind (a toggle a Boolean, an integer or slider an integer, a decimal a
+number, a choice an enum or integer, text a string). A `setting` binding
+names a Station key the Core owns through the settings proxy. A `telemetry`
+binding names a radio telemetry field and gates on the
+`stationTelemetryVersion` that first sends it. A `command` binding names a
+verb the Core runs, with its capability gate and argument types, as before.
+A `phone` binding names a value or action the phone keeps (below). Missing,
+stale or malformed values are unavailable, never zero; a row whose gate the
+renderer cannot evaluate is disabled.
+
+New closed fields and sources in version 14:
+
+- `applies:"staged"`: the row holds a value the operator is preparing; it
+  starts from its `property` (or `setting`) and sends nothing. A button in
+  the same section sends it with the argument source `{"$control":"<id>"}`.
+  The desktop's Apply buttons (NNR Diagnostics, device network settings)
+  work this way.
+- `{"$selectedOwnedSliceId":true}` may fill any verb's `sliceId` (it was TNF
+  Add's only), with the same checks: the selected slice, owned, this session
+  and epoch.
+- `{"$prompt":true}` fills a text argument with what the button's `prompt`
+  asked for. `prompt` is `{title, label, initial, overwrite}`: the question's
+  title and field label, `initial` a `$property` the field starts with, and
+  `overwrite` `{title, question, namesFrom}`: when the trimmed name is already
+  one of the JSON array of names `namesFrom` holds, ask `question` (its `%1`
+  is the name) with Yes and No, No the default, and send only on Yes. An
+  empty name sends nothing.
+- `confirm` (the version 12 field) may carry `%1`: the value the command's
+  first text argument resolves to (the profile name), or on Filter Presets
+  the mode's label.
+- `choicesFrom`: `{"jsonNames":{"object":"transmit","name":"txProfilesJson"}}`
+  lists the names in that JSON array as the choices, each value its name;
+  `{"dspAssets":"nr3"}` lists, after the row's `options`, the valid NR3
+  models from the phone's `dspAssets.list` result (value the asset id, label
+  its label, or a short id when the label is empty). The chosen value is
+  sent as text. A value the list does not hold shows as "Missing model".
+- `options` may carry text values (with `choicesFrom`) or `false`/`true` (a
+  pair of radio buttons that set a Boolean, such as Mic In / Line In).
+- `enabledWhen:{"property":{object,name},"oneOf":[...]}` enables a row only
+  while that mirrored value is one of the values; the desktop disables the
+  same rows.
+- `valueOffset`: the row shows and edits the property plus this number
+  (APF Center Freq is the CW pitch, 600 Hz, plus the slice's `apfTuneHz`);
+  `min` and `max` are shown values.
+- `rangeFrom:{"catalogueTransmit":"tunePower"|"micGainDb"}`: the range,
+  step and shown values come from the Core's catalogue `board.transmit`
+  entry of that name (catalog ranges), the same the desktop reads.
+- `unsavedChanges` (TX Profile's choice): `{title, question, saveVerb,
+  watch}`. While any `transmit` property in `watch` changed since the page
+  opened or the active profile last changed, choosing another profile first
+  asks `question` (its `%1` the current profile) with Yes, No and Cancel:
+  Yes sends `saveVerb` with the current name and then the choice, No sends
+  the choice, Cancel keeps the current profile.
+- `format` on a readout says how the value shows, in the desktop's words:
+  `nnrLimit` (0 hidden; 1 "Noise reduction is using the Standard model. The
+  Core computer could not keep up with Premium."; 2 "Noise reduction was
+  turned off. The Core computer could not keep up."), `nnrModelSlot` (0
+  Standard, 1 Premium), `nnrStatus` (`nnrLastError`, else `nnrStatus`),
+  `positiveOrNone` ("none yet" at 0 or below), `enabledOff` ("enabled" /
+  "off"), `phaseRotator` ("ON · <freq> Hz · <stages> stages" / "OFF", from
+  the transmit phase rotator values), `cfcBands` ("ON · 10 bands" / "OFF"),
+  `cessb` ("ON"; "OFF" while CPDR is on; "OFF (gated on CPDR)"), `radioName`
+  (`radio.name`, else `radio.model`, else "–"), `uptime` ("<m>m <ss>s", or
+  "<h>h <mm>m <ss>s"; "–" when absent), `txMode` ("TX" / "RX (idle)"),
+  `paTemperature` (Celsius in the viewer's own PA temperature unit, one
+  decimal), `wattsWhileKeyed` ("<w> W" to one decimal while `txState.keyed`,
+  else "– W"), `swrWhileKeyed` ("<swr>:1" to one decimal while keyed, else
+  "1.0:1"), `kilobytesPerSecond` (bytes per second / 1024, one decimal,
+  "KB/s"), `throttleActive` ("Active" / "None active"), `throttledOk`
+  ("THROTTLED" / "ok"). A Boolean readout without a format shows Yes or No.
+- `gate.micLine:true`: the row needs this device's own microphone line to
+  the Core open (the desktop's VOX rule); the Core refuses VOX without it.
+- `binding.phone` on a button is a phone action: `openTxEq` opens the phone's
+  TX equalizer; `openSetupPage` with `target` (a page id) opens that Setup
+  page. On another kind it is a value the phone keeps: `NotchVisualEnabled`
+  (TNF's Visual Notch, a display preference the phone draws itself) and
+  `filterPresetsMode` (the Filter Presets page's mode).
+
+DSP version 14 (10 pages). NR/ANF gains the RNNoise Model (Global) section
+(the Core's NR3 model, `dspAssets.selectNr3Model`, `dspAssetVersion` 2, and
+its status), the NNR limit (a readout and Try again, `nnr.tryAgain`, enabled
+while a limit is in force) and an NNR Diagnostics section: fourteen readouts
+of the selected slice's NNR state, the staged Test mode and Output mode, and
+Apply until reconnect (`nnr.setDiagnostics`, enabled while NNR is ready;
+the modes last until the app reconnects). CW gains APF Center Freq. TNF gains
+Visual Notch (phone-local) and is complete. The new Filter Presets page has
+the mode choice (LSB to DRM, the desktop's order, default USB), the Presets
+table and the three resets; Options gains the high-resolution filter graph
+setting (`dspInfoVersion` 1; the Core sends the curve through
+`dsp.filterResponse`) and the time to the last change, and is complete.
+
+The Filter Presets table (`binding.filterPresets.modeFrom` names the mode
+row) is closed: its rows are the Core catalogue's `filterPresets` entry for
+the chosen mode's label, one row per slot, in order, with columns # (the slot
+plus one), Name (text, at most 32 characters), Low (Hz) and High (Hz)
+(integers, -10000 to 10000), Width (Hz) (|high - low|) and Reorder (up on
+every row but the first, down on every row but the last). An edit of a row
+writes the slot's three Station settings together, as text:
+`filters/<MODE>/<slot>/name`, `/low` and `/high` (an empty name is "F<slot
+plus one>"). Moving a row swaps two slots and rewrites every slot of the mode
+in its new order, after removing the mode's keys for slots 0 to 9. Reset
+Selected Row removes the selected slot's three keys; Reset All Rows for This
+Mode removes the mode's keys for slots 0 to 9; Reset Every Mode to Defaults
+removes them for every mode. The Core's defaults (Thetis's) return for any
+slot without all three keys; the catalogue follows every change.
+
+Not described in DSP, with the reason: the NR3 and NNR model files (Models…
+opens a manager that adds and saves files; the phone's own), the per-band CFC
+editor (it edits `cfcParaEqData` through a curve and band editor; the phone
+needs a verb such as TX EQ's `txEq.setCurve` for CFC), the Options warning
+marks (worked out from the combos, not settings), the hidden unbuilt CW
+keyer, CW timing, APF bandwidth and gain, SAM, AM squelch tail, FM deviation
+and FM transmit, and the static notes.
+
+Transmit version 14 (3 pages). Power gains ATT on TX, ATT on TX (dB) and
+Force ATT on Tx to 31 when PS-A is off (the `stepAtt` object; the value's
+range is the Core radio's attenuator minimum to 31, filled in with its
+tooltip), a Tune section (Drive Source; Fixed Tune Power, enabled with Use
+Fixed Drive, its range and shown values from the catalogue) and PA Control's
+Disable HF PA (`DisableHfPa`, `transmitSettingsVersion` 11, taken on the air
+as Thetis does; on a radio without the switch it is sent with
+`availability` disabled and the reason). The TX TUN Meter choice is not
+described: it is wired to nothing on the desktop. The new Speech Processor
+page shows the active profile and the state of each stage (TX EQ, Leveler,
+Phase Rotator, CFC, CESSB, DEXP) with the buttons that open where each is set
+up; ALC's row is the static "always-on" and is not a row. DEXP/VOX gains
+Enable VOX (`transmit` `voxEnabled`, `remoteTxVersion` 1, transmit
+permission and this device's microphone line) and is complete.
+
+Audio version 14 (2 pages). The new TX Input page has Mic Gain
+(`micGainDb`, catalogue range) and, on a radio with a microphone jack, its
+family's Radio Mic section: Hermes / Atlas (Mic In or Line In, +20 dB Mic
+Boost, Line In Gain -34 to 12 dB), Orion-MkII (Mic Tip-Ring, Mic Bias, Mic PTT
+Disabled, +20 dB Mic Boost) or Saturn G2 (3.5 mm Jack or XLR, Mic PTT
+Disabled, Mic Bias, +20 dB Mic Boost). They gate on `transmitSettingsVersion`
+3 and off the air, as the desktop does. The microphone source and the
+microphone device, buffer and test are each computer's own and are not
+described (the source is not on the link). TX Profile gains the profile
+choice (`txProfile.select`, with the unsaved-changes question), Save... (a
+name prompt, then `txProfile.save`) and Delete (confirm, then
+`txProfile.delete` of the active profile; the Core refuses the last
+profile and says so), and is complete. Devices, VAX, TCI and Advanced are
+each computer's own (Advanced's Core-side DSP group is hidden, unbuilt).
+
+Diagnostics version 14 (3 pages). Radio Status (its status bar, PA Status,
+Forward / Reflected / SWR and Connection Quality readouts) and Connection
+Quality (its Live Counters) come before Settings Validation, the desktop's
+order. PA Voltage reads `supplyVolts` on the ANAN-G2E and `paVolts`
+elsewhere, as RadioModel::paRowVolts does. Not described: the PTT source card
+(its history is not on the link), the Settings Hygiene card (the same panel
+as Settings Validation) and the hidden 60 s history.
+
+CAT & Network version 14 (5 pages: TCI Server, then 4O3A, PowerGenius XL and
+Tuner Genius XL, the 4O3A page's three tabs, then RF-Kit). The rows are the
+remote window's: its captions, and the Core's verbs, each gated on the
+capability its verb or object names. 4O3A: the master switch
+(`setFourO3AEnabled`), the FlexAPI listener's status, a Host IP, Port,
+Connect, Disconnect and Status row set for each device (address edits send
+`setTgxlAddress` / `setPgxlAddress` with the other field's current value;
+Host, Port and Connect are enabled while the device is disabled, disconnected
+or in error, Disconnect while it is on its way or connected; the desktop
+shows one button whose caption follows), the Power Genius's band follow and
+the TX interlock (Interlock Mode, Grace Period, Enable SWR Gate, Max SWR:
+each edit sends `setTxInterlockPolicy` with its own new value and the other
+three current values). PowerGenius XL: Nickname (`setPgxlName`), Fan Mode and
+LED Intensity (`setPgxlHardware`, one field each), the soft power cap
+(`setPgxlPowerCap`), Network (staged Use DHCP, IP Address, Netmask and
+Gateway, then Apply Network Settings with its question, `setPgxlNetwork`),
+Auto-pair on connect (`PGXL_PairAttempt`), eight Diagnostics readouts, Clear
+All faults, Revert and Save & Reboot Amp (with its question). Tuner Genius
+XL: Nickname, the three antenna labels (`TGXL_Ant<N>_Label`), Network,
+Auto-recall tune memory (`TGXL_AutoTuneMemoryRecall`), eight Diagnostics
+readouts, Revert and Save & Reboot Tuner. RF-Kit: the integration switch
+(`setRfKitEnabled`), its status and band follow, Host and Port
+(`setRfKitAddress`), Auto-reconnect and Poll interval (`RfKit_AutoReconnect`,
+`RfKit_PollIntervalMs`), Connect (`configureRfKit` with the shown address),
+Disconnect, Set amp to TCI mode (off the air, while connected), Reset amp
+error state, the four antenna labels (`RfKit_Ant<N>_Label`, at most 12
+characters) and six live diagnostics readouts. Setting rows write as they are
+edited; the desktop's RF-Kit Save writes the same keys at once. More formats:
+`connectionPhase` (0 "Disabled at the Core", 1 "Disconnected", 2
+"Discovering at the Core", 3 "Connecting at the Core", 4 "Identifying
+device", 5 "Retrying at the Core" (with ": <error>" when there is one), 6
+"Connected: <model> <serial>", 7 "Error: <error>", from the same object's
+`connectionError`, `deviceModel` and `deviceSerial`), `bandFollow` and
+`rfkitBandFollow` (the desktop's band-follow sentences; RF-Kit's third names
+`bandFollowAddress` and `bandFollowPort`), `fourO3AListener` ("Core listening
+on TCP 4992", "Core listener error: <error>", "Core listener starting",
+"Disabled at Core"), `sinceMs` (the time since that epoch, "<h>h <mm>m
+<ss>s", "<m>m <ss>s" or "<s>s"; "--" at 0), `bytes` ("<n> B", or KB, MB, GB
+to one decimal, by 1024), `rttAverage` ("<n> ms avg", "--" at 0) and
+`clockTime` ("HH:mm:ss" local time of that epoch, "--" at 0). Not described:
+Scan LAN (the scan result is a list the description has no kind for), the
+fault history and tune memory tables and their clear buttons, the Core-side
+Power Genius tab of a remote window (Operate and Standby are on the phone's
+amplifier controls; connection settings keep their defaults), the Power
+Genius's Bias Mode, TX Antenna and Follows slice (radio buttons without a
+group the description can name; to be grouped on the desktop first) and the
+static notes.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

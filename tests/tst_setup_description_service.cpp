@@ -3,6 +3,8 @@
 #include <QRegularExpression>
 
 #include "core/setup/SetupDescriptionService.h"
+#include "core/setup/SetupDescriptionV14.h"
+#include "core/settings/SettingsScope.h"
 #include "core/BoardCapabilities.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorPolicy.h"
@@ -36,6 +38,44 @@ QJsonObject projectedCategory(const QString& description, int version)
 {
     return QJsonDocument::fromJson(
         SetupDescriptionService::fitCategoryForVersion(description, version).toUtf8()).object();
+}
+
+// Controls of a category (0: all; otherwise those needing `version`).
+int controlCount(const QJsonObject& category, int version)
+{
+    int count = 0;
+    for (const QJsonValue& page : category.value("pages").toArray()) {
+        for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+            for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                if (version == 0
+                    || raw.toObject().value("requiresDescriptionVersion") == QJsonValue(version)) {
+                    ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
+QStringList pageIdsOf(const QJsonObject& category)
+{
+    QStringList ids;
+    for (const QJsonValue& page : category.value("pages").toArray()) {
+        ids << page.toObject().value("id").toString();
+    }
+    return ids;
+}
+
+QJsonObject controlById(const QJsonObject& category, const QString& id)
+{
+    for (const QJsonValue& page : category.value("pages").toArray()) {
+        for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+            for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                if (raw.toObject().value("id") == QJsonValue(id)) { return raw.toObject(); }
+            }
+        }
+    }
+    return {};
 }
 }
 
@@ -238,6 +278,126 @@ QJsonObject resolveTciArguments(const QJsonObject& control, bool changed,
 class SetupDescriptionServiceTest : public QObject {
     Q_OBJECT
 private slots:
+    void dspV14DescribesTheRestOfDspAndKeepsOlderProjections()
+    {
+        SetupDescriptionService service;
+        const QString dsp = service.dsp();
+        QVERIFY(!dsp.isEmpty());
+        // Version 13 and older keep what they had: 105 controls on 9 pages,
+        // version 3, the old coverage words.
+        const QJsonObject v13 = projectedCategory(dsp, 13);
+        QCOMPARE(v13.value("version"), QJsonValue(3));
+        QCOMPARE(controlCount(v13, 0), 105);
+        QCOMPARE(controlCount(v13, 14), 0);
+        QVERIFY(!pageIdsOf(v13).contains("dsp.filterPresets"));
+        QVERIFY(!QJsonDocument(v13).toJson().contains("coverageV14"));
+        QVERIFY(v13.value("coverage").toString().startsWith("partial: Filter Presets"));
+        // Version 14: 30 new rows, Filter Presets before Options.
+        const QJsonObject v14 = projectedCategory(dsp, 14);
+        QCOMPARE(v14.value("version"), QJsonValue(14));
+        QCOMPARE(controlCount(v14, 0), 135);
+        QCOMPARE(controlCount(v14, 14), 30);
+        QCOMPARE(pageIdsOf(v14), (QStringList{"dsp.agcAlc", "dsp.nrAnf", "dsp.nbSnb", "dsp.cw",
+                                              "dsp.amSam", "dsp.fm", "dsp.cfc", "dsp.tnf",
+                                              "dsp.filterPresets", "dsp.options"}));
+        QVERIFY(!QJsonDocument(v14).toJson().contains("coverageV14"));
+        for (const QJsonValue& raw : v14.value("pages").toArray()) {
+            const QJsonObject page = raw.toObject();
+            if (page.value("id") == QJsonValue("dsp.tnf") || page.value("id") == QJsonValue("dsp.options")
+                || page.value("id") == QJsonValue("dsp.filterPresets")) {
+                QVERIFY2(!page.contains("coverage"), qPrintable(page.value("id").toString()));
+            }
+            for (const QJsonValue& section : page.value("sections").toArray()) {
+                QString why;
+                QVERIFY2(SetupDescriptionV14::validateSection(
+                             "dsp", section.toObject().value("controls").toArray(), &why),
+                         qPrintable(why));
+            }
+        }
+    }
+
+    void v14RowsAreCheckedAgainstTheCoresOwnSources()
+    {
+        const auto base = [](const QJsonObject& extra) {
+            QJsonObject control{{"id", "dsp.cw.apfCenter"}, {"label", "Center Freq"},
+                                {"tooltip", ""}, {"kind", "slider"},
+                                {"binding", QJsonObject{{"property", QJsonObject{
+                                    {"object", "slice:active"}, {"name", "apfTuneHz"}}}}},
+                                {"applies", "live"}, {"requiresDescriptionVersion", 14},
+                                {"min", 100}, {"max", 1100}, {"step", 1}, {"unit", "Hz"},
+                                {"valueOffset", 600}};
+            for (auto it = extra.constBegin(); it != extra.constEnd(); ++it) {
+                if (it.value().isNull()) { control.remove(it.key()); }
+                else { control.insert(it.key(), it.value()); }
+            }
+            return control;
+        };
+        QString why;
+        QVERIFY2(SetupDescriptionV14::validateControl("dsp", base({}), &why), qPrintable(why));
+        // An outbound-only value cannot be edited, an unknown value or
+        // field is refused, and the id belongs to its category.
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"binding", QJsonObject{
+            {"property", QJsonObject{{"object", "slice:active"}, {"name", "nnrLimit"}}}}}})));
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"binding", QJsonObject{
+            {"property", QJsonObject{{"object", "slice:active"}, {"name", "noSuchValue"}}}}}})));
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"surprise", true}})));
+        QVERIFY(!SetupDescriptionV14::validateControl("transmit", base({})));
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"requiresDescriptionVersion", 13}})));
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"kind", "toggle"}})));
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", base({{"min", QJsonValue::Null}})));
+        // A key the Core's own model keeps is not a raw setting row.
+        const QJsonObject owned{{"id", "dsp.tnf.owned"}, {"label", "Global"}, {"tooltip", ""},
+                                {"kind", "toggle"},
+                                {"binding", QJsonObject{{"setting", "NotchGlobalEnabled"}}},
+                                {"applies", "live"}, {"requiresDescriptionVersion", 14},
+                                {"valueEncoding", QJsonObject{{"true", "True"}, {"false", "False"}}}};
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", owned));
+        // A window's own key (not the Core's) is not either.
+        QJsonObject local = owned;
+        local.insert("binding", QJsonObject{{"setting", "TciLogWindowAutoScroll"}});
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", local));
+        // A button's staged argument must name a staged row of its section
+        // whose value fits the verb.
+        const QJsonObject apply{{"id", "dsp.nrAnf.apply"}, {"label", "Apply"}, {"tooltip", ""},
+            {"kind", "button"}, {"applies", "live"}, {"requiresDescriptionVersion", 14},
+            {"gate", QJsonObject{{"capability", "nnrVersion"}, {"min", 1}}},
+            {"binding", QJsonObject{{"command", QJsonObject{{"verb", "nnr.setDiagnostics"},
+                {"arguments", QJsonObject{
+                    {"sliceId", QJsonObject{{"$selectedOwnedSliceId", true}}},
+                    {"testMode", QJsonObject{{"$control", "dsp.nrAnf.test"}}},
+                    {"outputMode", QJsonObject{{"$control", "dsp.nrAnf.output"}}}}}}}}}};
+        const auto staged = [](const QString& id, const QString& name, const QString& kind) {
+            QJsonObject control{{"id", id}, {"label", "Mode"}, {"tooltip", ""}, {"kind", kind},
+                {"applies", "staged"}, {"requiresDescriptionVersion", 14},
+                {"binding", QJsonObject{{"property", QJsonObject{
+                    {"object", "slice:active"}, {"name", name}}}}}};
+            if (kind == QLatin1String("choice")) {
+                control.insert("options", QJsonArray{QJsonObject{{"value", 0}, {"label", "A"}}});
+            }
+            return control;
+        };
+        QVERIFY2(SetupDescriptionV14::validateSection("dsp", QJsonArray{
+            staged("dsp.nrAnf.test", "nnrTestMode", "choice"),
+            staged("dsp.nrAnf.output", "nnrOutputMode", "choice"), apply}, &why), qPrintable(why));
+        QVERIFY(!SetupDescriptionV14::validateSection("dsp", QJsonArray{
+            staged("dsp.nrAnf.test", "nnrTestMode", "choice"), apply}));
+        QVERIFY(!SetupDescriptionV14::validateSection("dsp", QJsonArray{
+            staged("dsp.nrAnf.test", "nnrTestMode", "decimal"),
+            staged("dsp.nrAnf.output", "nnrOutputMode", "choice"), apply}));
+        // Filter Presets rows are closed.
+        const QJsonObject dsp = QJsonDocument::fromJson(SetupDescriptionService().dsp().toUtf8()).object();
+        const QJsonObject table = controlById(dsp, "dsp.filterPresets.presets");
+        QVERIFY(SetupDescriptionV14::validateControl("dsp", table));
+        QJsonObject changed = table;
+        changed.insert("label", "Other");
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", changed));
+        changed = table;
+        QJsonArray columns = changed.value("columns").toArray();
+        columns.removeLast();
+        changed.insert("columns", columns);
+        QVERIFY(!SetupDescriptionV14::validateControl("dsp", changed));
+    }
+
     void antennaRowsRequireVersionSixAndAlex()
     {
         SetupDescriptionService service;
@@ -802,16 +962,21 @@ private slots:
         for (const QString& id : {QStringLiteral("general"), QStringLiteral("test"),
                                   QStringLiteral("catNetwork"), QStringLiteral("dsp")}) {
             const QJsonObject category = service.category(id);
+            // Version 14 carries DSP and CAT & Network rows.
             QCOMPARE(category.value(QStringLiteral("version")).toInt(),
-                     id == QLatin1String("dsp") ? 2 : 1);
+                     id == QLatin1String("dsp") || id == QLatin1String("catNetwork") ? 14 : 1);
             QCOMPARE(category.value(QStringLiteral("category")).toObject()
                          .value(QStringLiteral("id")).toString(), id);
             QVERIFY(!category.value(QStringLiteral("pages")).toArray().isEmpty());
             QVERIFY(!service.property(id.toLatin1().constData()).toString().isEmpty());
         }
         const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
-        QCOMPARE(diagnostics.value(QStringLiteral("version")), QJsonValue(3));
-        QCOMPARE(diagnostics.value(QStringLiteral("pages")).toArray().size(), 1);
+        // Version 14: Radio Status and Connection Quality before Settings
+        // Validation, the desktop's order.
+        QCOMPARE(diagnostics.value(QStringLiteral("version")), QJsonValue(14));
+        QCOMPARE(pageIdsOf(diagnostics), (QStringList{"diagnostics.radioStatus",
+                                                      "diagnostics.connectionQuality",
+                                                      "diagnostics.settingsValidation"}));
         QVERIFY(!service.diagnostics().isEmpty());
         QCOMPARE(service.revision(), quint32(1));
         const MirrorSchema& schema = MirrorSchema::forObject(&service);
@@ -826,7 +991,7 @@ private slots:
         const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
         QCOMPARE(diagnostics.value("category").toObject().value("where"), QJsonValue("station"));
         QCOMPARE(diagnostics.value("category").toObject().value("coverage"), QJsonValue("partial"));
-        const QJsonObject page = diagnostics.value("pages").toArray().first().toObject();
+        const QJsonObject page = diagnostics.value("pages").toArray().last().toObject();
         QCOMPARE(page.value("id"), QJsonValue("diagnostics.settingsValidation"));
         QCOMPARE(page.value("title"), QJsonValue("Settings Validation"));
         const QJsonObject section = page.value("sections").toArray().first().toObject();
@@ -1065,6 +1230,11 @@ private slots:
             for (const QJsonValue& rawSection : rawPage.toObject().value(QStringLiteral("sections")).toArray()) {
                 for (const QJsonValue& raw : rawSection.toObject().value(QStringLiteral("controls")).toArray()) {
                     const QJsonObject control = raw.toObject();
+                    // Version 14 rows are checked against the Core's sources
+                    // (dspV14... and transmitV14... below).
+                    if (control.value(QStringLiteral("requiresDescriptionVersion")) == QJsonValue(14)) {
+                        continue;
+                    }
                     QVERIFY(SetupDescriptionService::validateTransmitPropertyBinding(control)
                         || SetupDescriptionService::validateTransmitSettingBinding(control));
                     QVERIFY(control.value(QStringLiteral("gate")).toObject()
@@ -1074,9 +1244,7 @@ private slots:
             }
         }
         QCOMPARE(count, 24);
-        QJsonObject invalid = transmit.value(QStringLiteral("pages")).toArray().last()
-            .toObject().value(QStringLiteral("sections")).toArray().first()
-            .toObject().value(QStringLiteral("controls")).toArray().first().toObject();
+        QJsonObject invalid = controlById(transmit, QStringLiteral("transmit.dexpVox.dexpEnabled"));
         QJsonObject gate = invalid.value(QStringLiteral("gate")).toObject();
         gate.remove(QStringLiteral("transmit"));
         invalid.insert(QStringLiteral("gate"), gate);
@@ -1092,9 +1260,10 @@ private slots:
         SetupDescriptionService service;
         const QJsonObject audio = service.category(QStringLiteral("audio"));
         QVERIFY(!audio.isEmpty());
+        // Version 14 put TX Input first and the profile rows before TX Filter.
         const QJsonArray described = audio.value(QStringLiteral("pages")).toArray()
-            .first().toObject().value(QStringLiteral("sections")).toArray()
-            .first().toObject().value(QStringLiteral("controls")).toArray();
+            .last().toObject().value(QStringLiteral("sections")).toArray()
+            .last().toObject().value(QStringLiteral("controls")).toArray();
         QCOMPARE(described.size(), 3);
         for (const QJsonValue& raw : described) {
             QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(raw.toObject()));
@@ -1301,7 +1470,7 @@ private slots:
         SetupDescriptionService service;
         const QJsonArray pages = service.category(QStringLiteral("dsp"))
                                      .value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 9);
+        QCOMPARE(pages.size(), 10);
         const MirrorSchema& sliceSchema = MirrorSchema::forMetaObject(
             &SliceModel::staticMetaObject);
         const MirrorSchema& transmitSchema = MirrorSchema::forMetaObject(
@@ -1318,6 +1487,10 @@ private slots:
                      .value(QStringLiteral("sections")).toArray()) {
                 for (const QJsonValue& rawControl : rawSection.toObject()
                          .value(QStringLiteral("controls")).toArray()) {
+                    // Version 14 rows: dspV14DescribesTheRestOfDsp...
+                    if (rawControl.toObject().value("requiresDescriptionVersion") == QJsonValue(14)) {
+                        continue;
+                    }
                     if (rawControl.toObject().value("kind") == QJsonValue("table")) {
                         QString error;
                         QVERIFY2(SetupDescriptionService::validateTnfTable(
@@ -1383,7 +1556,7 @@ private slots:
         bad = valid;
         bad.insert("binding", binding);
         QVERIFY(!SetupDescriptionService::validateActiveSlicePropertyBinding(bad));
-        QJsonObject options = pages.at(8).toObject().value("sections").toArray()
+        QJsonObject options = pages.at(9).toObject().value("sections").toArray()
             .first().toObject().value("controls").toArray().first().toObject();
         QVERIFY(SetupDescriptionService::validateDspSettingBinding(options));
         bad = options;
@@ -1584,11 +1757,12 @@ private slots:
                 QVERIFY(diagnostics.isEmpty());
             } else {
                 const QJsonObject panel = QJsonDocument::fromJson(diagnostics.toUtf8()).object();
-                QCOMPARE(panel.value("version"), QJsonValue(3));
-                QCOMPARE(panel.value("pages").toArray().size(), 1);
+                QCOMPARE(panel.value("version"), QJsonValue(expected >= 14 ? 14 : 3));
+                QCOMPARE(panel.value("pages").toArray().size(), expected >= 14 ? 3 : 1);
             }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
-            QCOMPARE(category.value("version").toInt(), qMin(expected, 3));
+            QCOMPARE(category.value("version").toInt(), expected >= 14 ? 14 : qMin(expected, 3));
+            QCOMPARE(category.value("pages").toArray().size(), expected >= 14 ? 10 : 9);
             bool hasTable = false;
             bool hasAdd = false;
             for (const QJsonValue& page : category.value("pages").toArray()) {
@@ -1628,7 +1802,9 @@ private slots:
         check(10, kSessionProtocolMinor, 10);
         check(11, kSessionProtocolMinor, 11);
         check(12, kSessionProtocolMinor, 12);
-        check(13, kSessionProtocolMinor, 12);
+        check(13, kSessionProtocolMinor, 13);
+        check(14, kSessionProtocolMinor, 14);
+        check(15, kSessionProtocolMinor, 14);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
