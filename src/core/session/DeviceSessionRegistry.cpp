@@ -11,6 +11,9 @@
 //   2026-09-25: iPhone app plan Task 73 (R-IOS-02): graceEnded. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 8: away generations and
+//               isCurrentAbsence. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DeviceSessionRegistry.h"
@@ -89,6 +92,7 @@ DeviceSessionRegistry::AdmitResult DeviceSessionRegistry::admit(const Entry& dev
         held.session = session;
         held.state = State::Listening;
         held.awaySinceMs = 0;
+        held.awayGeneration = 0;
         held.name = device.name;
         held.shortName = device.shortName;
         held.deviceKind = device.deviceKind;
@@ -111,6 +115,7 @@ DeviceSessionRegistry::AdmitResult DeviceSessionRegistry::admit(const Entry& dev
     admitted.order = m_nextOrder++;
     admitted.connectedSinceMs = time;
     admitted.awaySinceMs = 0;
+    admitted.awayGeneration = 0;
     admitted.reportedActivityMs = time;
     admitted.lastActivityMs = time;
     admitted.session = session;
@@ -149,6 +154,7 @@ void DeviceSessionRegistry::sessionEnded(const QByteArray& deviceId, const QObje
         held.state = State::Away;
         held.session = nullptr;
         held.awaySinceMs = now();
+        held.awayGeneration = m_nextAwayGeneration++;
     }
     emitChanges(placesBefore);
 }
@@ -209,11 +215,13 @@ QList<QByteArray> DeviceSessionRegistry::expireAway()
 {
     const qint64 time = now();
     QList<QByteArray> expired;
+    QList<quint64> generations;
     const int placesBefore = placesTaken();
     for (int i = m_entries.size() - 1; i >= 0; --i) {
         const Entry& held = m_entries.at(i);
         if (held.state == State::Away && time - held.awaySinceMs >= kGraceMs) {
             expired.prepend(held.deviceId);
+            generations.prepend(held.awayGeneration);
             // Ruling 4.11: kept for graceEnded (Task 74) and placeFreed
             // (Task 41) until its next admission, a revoke, or a restart.
             m_timeRanOut.insert(held.deviceId, time);
@@ -223,10 +231,21 @@ QList<QByteArray> DeviceSessionRegistry::expireAway()
     if (!expired.isEmpty()) {
         emitChanges(placesBefore);
     }
-    for (const QByteArray& id : std::as_const(expired)) {
-        emit graceEnded(id);
+    for (int i = 0; i < expired.size(); ++i) {
+        emit graceEnded(expired.at(i), generations.at(i));
     }
     return expired;
+}
+
+bool DeviceSessionRegistry::isCurrentAbsence(const QByteArray& deviceId,
+                                             quint64 awayGeneration) const
+{
+    const int index = indexOf(deviceId);
+    if (index < 0) {
+        return true;
+    }
+    const Entry& held = m_entries.at(index);
+    return held.state == State::Away && held.awayGeneration == awayGeneration;
 }
 
 std::optional<qint64> DeviceSessionRegistry::nextExpiryMs() const

@@ -587,6 +587,10 @@
 //                with no slice saves no layout (ruling Q10).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 8, Amendment 8a: a slice of a
+//                device that is not here does not count in the preselector
+//                choice. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1243,6 +1247,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         };
         connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
         connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);
+        // Slice control plan Task 8, Amendment 8a: an away device's slices
+        // leave the preselector choice and count again when it is back
+        // (its hold returns, or it is no longer away).
+        connect(m_sliceOwnership, &SliceOwnership::awayChanged, this,
+                [this]() { republishAlexAdcSlices(); });
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this,
+                [this](int sliceId, const QByteArray&, const QByteArray& oldHeldFor) {
+                    if (!oldHeldFor.isEmpty() || m_sliceOwnership->mark(sliceId).isHeld()) {
+                        republishAlexAdcSlices();
+                    }
+                });
     }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
@@ -19130,6 +19145,14 @@ void RadioModel::republishAlexAdcSlices()
 
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s == nullptr) { continue; }
+
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it)
+        // never widens a filter for the devices that are.
+        if (m_role == Role::Local && m_sliceOwnership != nullptr
+            && m_sliceOwnership->isAwaySlice(s->sliceIndex())) {
+            continue;
+        }
 
         // An unbound slice has no DDC, so it is not on any chain and must not
         // drag a filter wide on behalf of a receiver that is not running.

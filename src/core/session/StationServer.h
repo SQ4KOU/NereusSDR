@@ -1712,21 +1712,28 @@ private:
     // ── iPhone app Task 73: slice ownership ─────────────────────────────
     /// Ruling 5.2: held slices, saved slices, adoption, a first slice.
     void placeSlicesForAdmission(const QByteArray& deviceId);
-    /// Rulings 4.11, 4.12: a device's slices when its 180 s end or it
-    /// leaves (a token window: when its session ends).
-    void releaseDeviceSlices(const QByteArray& deviceId);
-    /// Slice control fix wave (Important 2): `deviceId` leaves every slice
-    /// it listens to without controlling (revoke, leave, the end of its
-    /// 180 s); a slice nobody is on afterwards closes.
-    void leaveListenedSlices(const QByteArray& deviceId);
+    /// Slice control plan Task 8 (approved policy 6): every claim of
+    /// `deviceId` goes when its 180 s end (`awayGeneration`, acted on only
+    /// while that absence is still the current one), it leaves, a token
+    /// window's session ends, it is revoked, or a fifth device takes its
+    /// place (nullopt). Each slice it controlled keeps running with no
+    /// controller for its other listeners, or closes with nobody left
+    /// (saved for a paired device); it leaves every slice it only listened
+    /// to, which closes with nobody left. No slice is held for it (Q12).
+    /// Its C-Tune pins go.
+    void releaseDeviceClaims(const QByteArray& deviceId,
+                             std::optional<quint64> awayGeneration);
     /// Fix wave 2: at the end of an away device's 180 s, the slices other
     /// devices took from it (kept by its waiting Take it back notices) are
     /// saved in its DeviceLayoutStore, so its next admission restores them.
     void saveTakenSlicesFor(const QByteArray& deviceId);
     /// Closes slice `sliceId` for a reason other than its owner's own
     /// request, saving it for `saveFor` when set; false (nothing done)
-    /// when it is the Core's last slice.
-    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr);
+    /// when it is the Core's last slice. Slice control plan Task 8:
+    /// `unclaimed` closes only a slice nobody controls or listens to,
+    /// whatever the count (RadioModel::closeUnclaimedSlice).
+    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr,
+                       bool unclaimed = false);
     /// Fix wave C2 (ruling 5.2, its last paragraph): the paired device a
     /// slice another device's take, pan move or rate change is about to
     /// close must be saved for, because it has left (no registry entry)

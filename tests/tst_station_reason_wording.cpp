@@ -879,6 +879,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("moved ? QString() : QString::fromLatin1(kCentreRefusedReason)"),
           QStringLiteral("affected.isEmpty() ? QString::fromLatin1(kChangedReason) : QString()"),
           QStringLiteral("pinReason(planDevice(anchor).name)"),
+          // Slice control plan Task 8: the same, the anchor not connected.
+          QStringLiteral("awayPinReason(planDevice(anchor).name)"),
           QStringLiteral("olderWindowAskReason(namesOf(check.named))"),
           QStringLiteral("takenOverReason(planDevice(taker).name)"),
           QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),

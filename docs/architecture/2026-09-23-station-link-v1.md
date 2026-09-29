@@ -3118,8 +3118,9 @@ joins any receiver whose window covers its frequency, whoever claimed it,
 as it always has; two devices' slices can therefore share one receiver.
 
 **The anchor.** The device whose slice claimed a receiver anchors it.
-When the anchor's last slice leaves the receiver, the anchor passes to the
-device whose slice has been on it longest; nobody is asked or told. When
+When the anchor's last slice leaves the receiver, or its control passes to
+nobody, the anchor passes to the device whose slice has been on it
+longest; nobody is asked or told. When
 the last slice leaves, the receiver is free. A shared receiver's window
 does not follow a slice's tuning inside it (the slice moves only its own
 shift, as several slices on one receiver always have).
@@ -3127,7 +3128,10 @@ shift, as several slices on one receiver always have).
 **The C-Tune pin** of a shared receiver is its anchor's.
 `requestStreamCtunPinned` from another device is refused with "This
 panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
-<anchor's name>'s.".
+<anchor's name>'s.", or while the anchor is not connected "This
+panadapter shows the receiver of <anchor's name>, which is not connected
+now. Its C-Tune setting stays with <anchor's name> until it is back or
+its three minutes are up.".
 A pin lasts through its anchor's link dropping and its coming back as the
 same device (its `streamCtunPinned` is as it left it); it ends when the
 anchor leaves for good (`session.leave`, a token window's end, the end of
@@ -3226,7 +3230,9 @@ object says who controls and who listens. The verbs (section 9.1):
   is transmitting. Take control once it stops."; and when its controller
   cannot stay on as a listener: a session without the feature ("<name>
   needs an update before control of slice <letter> can pass to another
-  device."), a device that is away, or the Core's own position. When the
+  device."), or the Core's own position (a slice the Core keeps for a
+  device may be taken, and so may an away device's slice within its 3
+  minutes). When the
   former controller holds transmit on the slice, the transmit flag moves
   to another of its slices, or with none transmit is released; its
   remembered transmit choice no longer names the slice, and the new
@@ -5077,21 +5083,33 @@ device, away or not. The heartbeat timeout stays retryable: that end is
 what starts a device's 3 minutes.
 
 **What happens to a device's slices** (iPhone app plan Task 73; the
-several-devices design, rulings 4.11, 4.12 and 5.2). An away device's
-slices keep running, its own, their markers `ownerAway`. When its 3
-minutes end, or it leaves with `session.leave`, its slices close and the
-Core saves them for its return, with each slice's own settings; if no
-other device is on the Core they keep running instead, held for it. A
-token window's slices are not saved (it cannot be recognised again): with
-another device on the Core they close, otherwise they pass to nobody.
-Removing a device closes its slices, held ones included, and forgets what
-was saved for it. The Core never closes its last slice for another
-device's reason; that one stays, held, or when it is left owned by nobody
-with nobody listening, closes, and the Core has no slice. When a device is let in, the
-Core returns the slices held for it, restores its saved slices where they
-fit (a receiver window that covers each or a free receiver; its old
-letter when free, else the lowest free), keeps any that do not fit for
-next time, and, if it still owns none, gives it one (section 7.1).
+several-devices design, rulings 4.11, 4.12 and 5.2; slice control plan
+Task 8). An away device's slices keep running, its own, their markers
+`ownerAway`, and it stays a listener of what it listened to. When its 3
+minutes end (for that absence only: a device that came back, or dropped
+again since, keeps its claims), or it leaves with `session.leave`, every
+claim it has goes at once. A slice it controlled that another device
+listens to keeps running with no controller for that listener; one
+nobody else is on closes, and the Core saves it for the device's return,
+with the slice's own settings, the Core's last slice included (the Core
+then has no slice). It leaves every slice it only listened to, and one
+with nobody left closes. No slice is held for it. A token window's
+claims go the same way when its session ends; its slices are not saved
+(it cannot be recognised again). Removing a device, and a fifth device
+taking its place, release its claims the same way; removing it also
+forgets what was saved for it. Slices held for a device (a layout
+restored after a restart, ruling 5.3) are released with its other claims.
+While a device is away within its 3 minutes, another device may take
+control of its idle slice (`slice.takeControl`); the away device stays a
+listener and, back, finds it so. A device's slices while it is away, or
+held for it, never count in the receive filter choice and are never
+named in a question about a change that would affect other devices
+(section 7.3); such a change reaching only them applies at once. When a
+device is let in, the Core returns the slices held for it, restores its
+saved slices where they fit (a receiver window that covers each or a
+free receiver; its old letter when free, else the lowest free), never
+over a slice that still exists, keeps any that do not fit for next time,
+and, if it still owns none, gives it one (section 7.1).
 
 **Routing with several devices** (iPhone app plan Task 72; the
 several-devices design, ruling 5.8). Each session has its own view of the
@@ -5789,7 +5807,7 @@ same on every machine.
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
 | `slice-access` | This device declares `sliceAccess` with `sessionHolder` (slice control plan Task 4): its capabilities end with `sliceAccessVersion` 1, its burst carries the `SliceAccess` schema and `access:0` (the incarnation and control revision recorded, controller and only listener this device, its active receive slice, not transmitting). `slice.listen` on its own slice is accepted and changes nothing, returning the revision; `slice.stopListening` is refused "You control slice A. Use Release to leave it."; `slice.takeControl` with the revision seen is accepted with no change; `slice.release` with another revision is refused "Someone else changed who controls slice A. Look again and try once more."; each verb with a renamed argument is refused "The Core could not read this request.". Runs on the station alone |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
-| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
+| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: nobody else is on its slice, so the slice closes and is saved for it (the Core has no slice). This device, let in meanwhile, gets a slice of its own; the other device signs in again and its saved slice is restored under the lowest free letter, which this device sees as a marker with `ownerAway` false |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`) and whose device's media carries a microphone line (stationSetup `microphoneLine`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Each key and unkey also moves `txState` (section 18.8): `keyed`, who keyed and how (`keyedTrigger` `screen`, `tci`, `tune`), `keyedSinceMs` on the runner's virtual clock and 180 s left for the phone. Runs on the station and the app |
 | `key-without-microphone` | On the same Core as `unheld-key` but with no microphone line for the device (stationSetup `microphoneLine` absent): a person's `tx.key {trigger:"screen"}` is refused `micNotReady`, "This device's microphone is not connected to the Core yet. Wait a moment and try again.", and nothing keys; a program's key on unheld transmit is still refused `programNeedsTransmit` first. Runs on the station and the app |

@@ -653,6 +653,13 @@
 //               whatever the count (the Core may have none). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 8 (approved policy 6):
+//               releaseDeviceClaims at the end of a device's 180 s (for
+//               that absence only), leave, a token window's end, revoke and
+//               a fifth device's take; no new holds; an away device's slice
+//               may be taken during its 180 s; the away devices published
+//               for Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2029,33 +2036,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         }
     });
     // iPhone app Task 73 (ruling 4.11): revoking a device closes its slices,
-    // held ones included, and forgets its saved layout. The Core's last
-    // slice is not closed for another device's reason; it stays, owned by
-    // nobody, and (slice control plan Task 7) closes as well when nobody is
-    // on it, leaving the Core with none.
+    // held ones included, and forgets its saved layout. Slice control plan
+    // Task 8: a slice it controlled that others listen to stays for them.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
-        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
-            // Fix wave: and its C-Tune pins.
-            m_radioModel->clearStreamCtunPinsAnchoredBy(id);
-            SliceOwnership* ownership = m_radioModel->sliceOwnership();
-            QList<int> slices = ownership->ownedBy(id);
-            slices += ownership->heldFor(id);
-            for (int sliceId : std::as_const(slices)) {
-                if (!closeSliceFor(sliceId, QByteArray())) {
-                    ownership->setOwner(sliceId, QByteArray());
-                    // Slice control plan Task 3: a change of owner keeps
-                    // the former controller listening; a revoked device
-                    // leaves.
-                    ownership->leave(id, sliceId);
-                    // Slice control plan Task 7: the Core's last slice,
-                    // with nobody on it now, closes too.
-                    m_radioModel->closeUnclaimedSlice(sliceId);
-                }
-            }
-            // Slice control fix wave (Important 2): and the slices it only
-            // listened to.
-            leaveListenedSlices(id);
-        }
+        // Slice control plan Task 8: every claim goes, as at the end of its
+        // 180 s; its saved layout is forgotten below.
+        releaseDeviceClaims(id, std::nullopt);
         DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
         m_slicesNotRestored.remove(id);
         m_explicitTxSlice.remove(id);
@@ -2064,16 +2050,38 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     });
     // iPhone app Task 73 (ruling 4.11): the end of a device's 180 s.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
-            [this](const QByteArray& deviceId) {
+            [this](const QByteArray& deviceId, quint64 awayGeneration) {
+                // Slice control plan Task 8: only for the absence that
+                // ended (never a later one, never after it came back).
+                if (!m_deviceSessions->isCurrentAbsence(deviceId, awayGeneration)) {
+                    return;
+                }
                 // Fix wave 2: a slice another device took while this one
                 // was away lived only in its Take it back notice; now that
                 // Take it back is gone it is saved like the device's own.
                 saveTakenSlicesFor(deviceId);
-                releaseDeviceSlices(deviceId);
+                releaseDeviceClaims(deviceId, awayGeneration);
             });
+    // Slice control plan Task 8, Amendment 8a: the devices away within
+    // their 180 s, for the preselector and the several-devices questions.
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, this, [this]() {
+        if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+            return;
+        }
+        QSet<QByteArray> away;
+        for (const DeviceSessionRegistry::Entry& entry : m_deviceSessions->entries()) {
+            if (entry.state == DeviceSessionRegistry::State::Away) {
+                away.insert(entry.deviceId);
+            }
+        }
+        m_radioModel->sliceOwnership()->setAwayDevices(away);
+    });
     // iPhone app plan Task 34 (ruling 8.15): its 180 s ended.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
-            [this](const QByteArray& id) {
+            [this](const QByteArray& id, quint64 awayGeneration) {
+                if (!m_deviceSessions->isCurrentAbsence(id, awayGeneration)) {
+                    return;
+                }
                 m_transmitHolder->release(id, QStringLiteral("The device was away too long."));
             });
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
@@ -3825,7 +3833,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // give up their slices now. A paired device that dropped keeps them
         // for its 180 s (graceEnded).
         if (leaving || sessionDevice.startsWith("token:")) {
-            releaseDeviceSlices(sessionDevice);
+            releaseDeviceClaims(sessionDevice, std::nullopt);
             if (!self) { return; }
         }
         // iPhone app plan Task 34 (ruling 8.15): the holder that left on
@@ -3870,7 +3878,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
                 if (!self) { return; }
             }
             // Fix wave: the C-Tune pins are not the session's. They end
-            // when their device leaves for good (releaseDeviceSlices and
+            // when their device leaves for good (releaseDeviceClaims and
             // revocation), so a device coming back keeps them (ruling 4.8).
         } else if (m_ps3SubscriberEpoch == mediaEpoch) {
             m_ps3SubscriberEpoch = 0;
@@ -5429,7 +5437,7 @@ void StationServer::finishTakeover(quint64 serial, const QByteArray& targetId,
         // cannot restore the incumbent's slices or place.
         saveTakenSlicesFor(targetId);
         if (!self) return;
-        releaseDeviceSlices(targetId);
+        releaseDeviceClaims(targetId, std::nullopt);
         if (!self) return;
         const auto afterSlices = m_deviceSessions->entry(targetId);
         if (!afterSlices) return;
@@ -8026,7 +8034,8 @@ void StationServer::placeSlicesForAdmission(const QByteArray& deviceId)
     m_connectedDevices->refresh();
 }
 
-bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed)
+bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed,
+                                  bool unclaimed)
 {
     const QPointer<StationServer> self(this);
     if (m_radioModel.isNull()) {
@@ -8034,8 +8043,11 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedS
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);
     // The Core keeps one slice: its last is never closed for another
-    // device's reason.
-    if (slice == nullptr || m_radioModel->slices().size() <= 1) {
+    // device's reason. Slice control plan Task 8: a slice nobody is on
+    // closes whatever the count (the claims rule).
+    if (slice == nullptr
+        || (unclaimed ? !m_radioModel->sliceOwnership()->unclaimed().contains(sliceId)
+                      : m_radioModel->slices().size() <= 1)) {
         return false;
     }
     SavedSlice saved;
@@ -8045,7 +8057,11 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedS
     saved.dspMode = slice->dspMode();
     const QString mac = m_radioModel->currentRadioMac();
     // Removing saves the slice's own settings to its keys first.
-    m_radioModel->removeSlice(sliceId);
+    if (unclaimed) {
+        m_radioModel->closeUnclaimedSlice(sliceId);
+    } else {
+        m_radioModel->removeSlice(sliceId);
+    }
     if (!self || !m_radioModel) return false;
     if (m_radioModel->sliceById(sliceId) != nullptr) {
         return false;
@@ -8116,11 +8132,17 @@ void StationServer::saveTakenSlicesFor(const QByteArray& deviceId)
     }
 }
 
-void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
+void StationServer::releaseDeviceClaims(const QByteArray& deviceId,
+                                        std::optional<quint64> awayGeneration)
 {
     const QPointer<StationServer> self(this);
     if (m_radioModel.isNull() || deviceId.isEmpty()
         || m_radioModel->role() != RadioModel::Role::Local) {
+        return;
+    }
+    // Slice control plan Task 8: an old expiry never acts on a device that
+    // came back (or dropped again since).
+    if (awayGeneration && !m_deviceSessions->isCurrentAbsence(deviceId, *awayGeneration)) {
         return;
     }
     // Fix wave: a device gone for good takes its C-Tune pins with it; the
@@ -8128,64 +8150,44 @@ void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
     m_radioModel->clearStreamCtunPinsAnchoredBy(deviceId);
     if (!self || !m_radioModel) return;
     SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    const QList<int> owned = ownership->ownedBy(deviceId);
+    // Ruling Q8: the transmit selection of each slice it controlled goes
+    // with its control.
+    QList<int> controlled = ownership->ownedBy(deviceId);
+    controlled += ownership->heldFor(deviceId);
+    for (int sliceId : std::as_const(controlled)) {
+        clearTransmitSelection(deviceId, sliceId);
+        if (!self || !m_radioModel) return;
+    }
+    // Approved policy 6: every control and listening claim goes at once.
+    // No slice is held for it (Q12).
+    const SliceOwnership::ClaimsRemoved removed = ownership->removeClaims(deviceId);
+    if (!self || !m_radioModel) return;
+    // A slice with nobody left on it closes, the Core's last included; one
+    // it controlled is saved for a paired device, whose next admission
+    // restores it. A slice others still listen to stays, with no
+    // controller, for them.
     const bool token = deviceId.startsWith("token:");
-    // Ruling 4.11: with another device on the Core they close (saved for a
-    // paired device); with none they keep running, the station device's,
-    // held for their owner, as a Core with one client keeps its slices. A
-    // token window cannot be recognised again: its slices pass to nobody.
-    const bool others = anotherDeviceHoldsAPlace(deviceId);
-    for (int sliceId : owned) {
-        if (others) {
-            const bool closed = closeSliceFor(sliceId, token ? QByteArray() : deviceId);
-            if (!self) return;
-            if (closed) continue;
-        }
-        if (token) {
-            ownership->setOwner(sliceId, QByteArray());
-            // Slice control plan Task 3: the window cannot come back, so
-            // it does not stay listening as a former controller would.
-            ownership->leave(deviceId, sliceId);
-        } else {
-            ownership->hold(sliceId, deviceId);
-        }
-        if (!self) return;
-    }
-    // Slice control fix wave (Important 2): a device gone for good (it
-    // left, or its 180 s ended) stops listening to the slices it did not
-    // control, so none is kept, receiver and all, for a listener that is
-    // not there.
-    leaveListenedSlices(deviceId);
-    if (!self) return;
-    m_connectedDevices->refresh();
-}
-
-void StationServer::leaveListenedSlices(const QByteArray& deviceId)
-{
-    const QPointer<StationServer> self(this);
-    if (m_radioModel.isNull() || deviceId.isEmpty()) {
-        return;
-    }
-    SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    const QList<int> joined = ownership->joinedBy(deviceId);
-    // Its own slices (controlled, or held for it) are the caller's: the
-    // same lists revoke and release walk.
-    const QList<int> controlled = ownership->ownedBy(deviceId);
-    const QList<int> held = ownership->heldFor(deviceId);
-    for (int sliceId : joined) {
-        if (controlled.contains(sliceId) || held.contains(sliceId)) {
+    const bool saves = !token && deviceId != SliceOwnership::stationDevice();
+    // A token window alone on the Core keeps today's rule: its slices pass
+    // to nobody and stay, so the window signing in again (with the token,
+    // or with the key it enrolled) adopts them with their tuning. It cannot
+    // be recognised, and nothing is saved for it.
+    const bool keptForAdoption = token && !anotherDeviceHoldsAPlace(deviceId);
+    for (int sliceId : removed.releasedControl) {
+        if (keptForAdoption || !ownership->unclaimed().contains(sliceId)) {
             continue;
         }
-        ownership->leave(deviceId, sliceId);
+        closeSliceFor(sliceId, saves ? deviceId : QByteArray(), nullptr, /*unclaimed=*/true);
         if (!self || !m_radioModel) return;
-        // A slice nobody is on any more closes, as a stop listening leaves
-        // it (the Core's last slice stays).
-        if (ownership->isLive(sliceId) && ownership->mark(sliceId).owner.isEmpty()
-            && ownership->listenersOf(sliceId).isEmpty()) {
-            closeSliceNobodyIsOn(sliceId);
+    }
+    for (int sliceId : removed.leftListening) {
+        if (ownership->unclaimed().contains(sliceId)) {
+            m_radioModel->closeUnclaimedSlice(sliceId);
             if (!self || !m_radioModel) return;
         }
     }
+    m_explicitTxSlice.remove(deviceId);
+    m_connectedDevices->refresh();
 }
 
 void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
@@ -8351,6 +8353,11 @@ QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId)
     // listener, which a window that does not share slices cannot do. The
     // Core's own position is not a device that can be asked.
     if (controller == SliceOwnership::stationDevice()) {
+        // Slice control plan Task 8: a slice the Core keeps for a device
+        // that is not here may be taken, as an away device's slice may.
+        if (!m_radioModel.isNull() && m_radioModel->sliceOwnership()->mark(sliceId).isHeld()) {
+            return {};
+        }
         return QStringLiteral("Slice %1 is run by the Core itself, so control of it cannot "
                               "pass to this device.")
             .arg(letter);
@@ -8358,6 +8365,13 @@ QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId)
     const QString name = planDevice(controller).name;
     SessionTransport* transport = liveTransportFor(controller);
     if (transport == nullptr) {
+        // Slice control plan Task 8: a device away within its 180 s stays
+        // joined as a listener and finds itself one when it returns.
+        const std::optional<DeviceSessionRegistry::Entry> away =
+            m_deviceSessions->entry(controller);
+        if (away && away->state == DeviceSessionRegistry::State::Away) {
+            return {};
+        }
         return QStringLiteral("%1 is away, so control of slice %2 cannot pass now. Try again "
                               "when it is back.")
             .arg(name, letter);
@@ -8439,7 +8453,10 @@ bool StationServer::closeSliceNobodyIsOn(int sliceId)
 void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
                                      const QByteArray& taker)
 {
-    if (m_radioModel.isNull() || former.isEmpty()) {
+    // Slice control plan Task 8: the station device is the former
+    // controller only of a slice it kept for a device that is not here;
+    // nobody there listens.
+    if (m_radioModel.isNull() || former.isEmpty() || former == SliceOwnership::stationDevice()) {
         return;
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);

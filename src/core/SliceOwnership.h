@@ -119,6 +119,11 @@
 //               device adopts only unclaimed slices (ruling Q9). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control and shared listening plan Task 8: a slice
+//               released to nobody passes its receiver as ruling 6.2
+//               does, and away devices (setAwayDevices, isAwaySlice) for
+//               Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -259,6 +264,16 @@ public:
     /// Live slices with no controller and no listener, in creation order.
     QList<int> unclaimed() const;
 
+    // ---- Away devices (slice control plan Task 8, Amendment 8a) ----
+    /// The devices away within their 180 s (StationServer keeps it in step
+    /// with the session registry). Emits awayChanged when it changes.
+    void setAwayDevices(const QSet<QByteArray>& devices);
+    /// Whether `sliceId` belongs to a device that is not here: one away in
+    /// its 180 s, or a slice the Core keeps for a device (held). Such a
+    /// slice does not count in the preselector choice or in a question
+    /// asked of the devices a change would disturb.
+    bool isAwaySlice(int sliceId) const;
+
     // ---- Marks ----
 
     /// A live slice's mark, or a slice's being removed; empty otherwise.
@@ -342,6 +357,8 @@ signals:
     /// A live slice's listenersOf() changed (a join, a leave, a change of
     /// controller). Not sent for a slice being made or removed.
     void listenersChanged(int sliceId);
+    /// Amendment 8a: the set of away devices changed.
+    void awayChanged();
     /// activeRxFor(device) now reads differently.
     void activeRxChanged(const QByteArray& device);
 
@@ -396,6 +413,7 @@ private:
     QHash<int, int> m_streamOf;
     QHash<int, QList<int>> m_joinOrder;
     QHash<int, QByteArray> m_anchor;
+    QSet<QByteArray> m_away;
 };
 
 } // namespace NereusSDR

@@ -29,6 +29,11 @@
 //               device adopts only unclaimed slices (ruling Q9). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control and shared listening plan Task 8: a slice
+//               released to nobody passes its receiver as ruling 6.2
+//               does, and away devices (setAwayDevices, isAwaySlice) for
+//               Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -298,6 +303,24 @@ SliceOwnership::ClaimsRemoved SliceOwnership::removeClaims(const QByteArray& dev
     return removed;
 }
 
+void SliceOwnership::setAwayDevices(const QSet<QByteArray>& devices)
+{
+    if (devices == m_away) {
+        return;
+    }
+    m_away = devices;
+    emit awayChanged();
+}
+
+bool SliceOwnership::isAwaySlice(int sliceId) const
+{
+    if (!isLive(sliceId)) {
+        return false;
+    }
+    const Mark mark = m_marks.value(sliceId);
+    return mark.isHeld() || (!mark.owner.isEmpty() && m_away.contains(mark.owner));
+}
+
 QList<int> SliceOwnership::unclaimed() const
 {
     QList<int> ids;
@@ -448,7 +471,19 @@ bool SliceOwnership::changeMark(int sliceId, const Mark& requested, const QByteA
             }
         }
         if (!otherOfOld) {
-            m_anchor.insert(*stream, next.subject());
+            // Slice control plan Task 8: released to nobody, the receiver
+            // passes as ruling 6.2 passes it when a slice leaves, to the
+            // device whose slice has been there longest.
+            QByteArray nextAnchor = next.subject();
+            if (nextAnchor.isEmpty()) {
+                for (int other : m_joinOrder.value(*stream)) {
+                    if (other != sliceId && !subjectOf(other).isEmpty()) {
+                        nextAnchor = subjectOf(other);
+                        break;
+                    }
+                }
+            }
+            m_anchor.insert(*stream, nextAnchor);
         }
     }
     // Task 1 (slice control plan): each change of owner is one control

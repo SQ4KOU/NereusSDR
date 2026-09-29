@@ -14,6 +14,10 @@
 //   2026-09-26: Task 77 fix wave, M1: the choosers' txSlice is the TX mark
 //               (ruling 5.4a), as on slice: and marker:. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8, Amendment 8a: a slice of a
+//               device that is not here is neither named as disturbed nor
+//               offered to close. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ReceiverPlanner.h"
@@ -79,6 +83,11 @@ ReceiverPlanner::WindowMove ReceiverPlanner::planWindowMove(int stream, double c
         const QByteArray subject = subjectOf(id);
         if (!requester.isEmpty() && subject == requester) {
             plan.ownOutside.append(id);
+            continue;
+        }
+        // Slice control plan Task 8, Amendment 8a: a slice of a device that
+        // is not here is not named; the move reaches it as it reaches any.
+        if (m_model.sliceOwnership()->isAwaySlice(id)) {
             continue;
         }
         Disturbed d;
@@ -177,6 +186,11 @@ QList<ReceiverPlanner::Choice> ReceiverPlanner::sliceChoices(const QByteArray& r
     for (const int id : m_model.sliceOwnership()->liveSlices()) {
         const QByteArray subject = subjectOf(id);
         if (subject.isEmpty() || subject == requester || m_model.sliceById(id) == nullptr) {
+            continue;
+        }
+        // Slice control plan Task 8, Amendment 8a: a slice of a device that
+        // is not here is not offered to close.
+        if (m_model.sliceOwnership()->isAwaySlice(id)) {
             continue;
         }
         Choice c;

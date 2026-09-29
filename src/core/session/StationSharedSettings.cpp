@@ -87,6 +87,10 @@
 //               (changeRefusal) is left to the dispatcher's refusal.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8, Amendment 8a: a slice of a
+//               device that is not here is never named in a question. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -380,6 +384,12 @@ DisturbanceCheck::Topology StationServer::sharedTopology() const
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
     for (const SliceModel* slice : m_radioModel->slices()) {
         if (slice == nullptr) {
+            continue;
+        }
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it) is
+        // never named in a question; the change still reaches it.
+        if (ownership != nullptr && ownership->isAwaySlice(slice->sliceIndex())) {
             continue;
         }
         DisturbanceCheck::SliceInfo info;

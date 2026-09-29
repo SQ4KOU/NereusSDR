@@ -21,6 +21,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8: each away period's generation
+//               and isCurrentAbsence. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -84,6 +87,7 @@ private slots:
     void aTokenWindowFreesItsPlaceAtOnce();
     void leavingOnPurposeFreesThePlaceAtOnce();
     void revokingAnAwayDeviceFreesItsPlaceAtOnce();
+    void eachAbsenceHasItsOwnGeneration();
 
     // ---- Activity and change ----
     void activityIsReportedAtMostOnceAMinute();
@@ -254,6 +258,51 @@ void TstDeviceSessionRegistry::theSameLiveDeviceReplacesItsOwnSessionOnly()
     QCOMPARE(registry.entries().first().deviceId, QByteArray("a"));
     QCOMPARE(registry.entry("b")->session, b);
     QCOMPARE(registry.entry("b")->state, Registry::State::Listening);
+}
+
+// Slice control plan Task 8: each away period has a generation, graceEnded
+// carries it, and only the current absence is current.
+void TstDeviceSessionRegistry::eachAbsenceHasItsOwnGeneration()
+{
+    Registry registry;
+    qint64 now = 0;
+    registry.setClock([&now]() { return now; });
+    Sessions sessions;
+    const QObject* first = sessions.make();
+    registry.admit(paired("a"), first);
+    registry.admit(paired("b"), sessions.make());
+    QCOMPARE(registry.entry("a")->awayGeneration, quint64(0));
+    QSignalSpy ended(&registry, &Registry::graceEnded);
+
+    registry.sessionEnded("a", first, Registry::EndKind::Dropped);
+    const quint64 g1 = registry.entry("a")->awayGeneration;
+    QVERIFY(g1 != 0);
+    QVERIFY(registry.isCurrentAbsence("a", g1));
+    // Back: no absence is current.
+    now = 170000;
+    const QObject* second = sessions.make();
+    registry.admit(paired("a"), second);
+    QCOMPARE(registry.entry("a")->awayGeneration, quint64(0));
+    QVERIFY(!registry.isCurrentAbsence("a", g1));
+    // Away again: a new generation, the old one never current again.
+    now = 175000;
+    registry.sessionEnded("a", second, Registry::EndKind::Dropped);
+    const quint64 g2 = registry.entry("a")->awayGeneration;
+    QVERIFY(g2 != g1 && g2 != 0);
+    QVERIFY(!registry.isCurrentAbsence("a", g1));
+    QVERIFY(registry.isCurrentAbsence("a", g2));
+    now = 180000;
+    QVERIFY(registry.expireAway().isEmpty());
+    QCOMPARE(ended.count(), 0);
+    now = 175000 + Registry::kGraceMs;
+    QCOMPARE(registry.expireAway(), QList<QByteArray>{QByteArray("a")});
+    QCOMPARE(ended.count(), 1);
+    QCOMPARE(ended.first().at(0).toByteArray(), QByteArray("a"));
+    QCOMPARE(ended.first().at(1).value<quint64>(), g2);
+    // No place held: the ended absence is still the current one.
+    QVERIFY(registry.isCurrentAbsence("a", g2));
+    // A device that never dropped holds no absence.
+    QVERIFY(!registry.isCurrentAbsence("b", g2));
 }
 
 void TstDeviceSessionRegistry::anAwayDeviceComesBackAt179Seconds()

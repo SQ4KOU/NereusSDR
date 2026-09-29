@@ -164,6 +164,11 @@
 //               keeps every audio sender and owner mix, and a leave
 //               retires the leaver's display. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8: a device that leaves, or whose
+//               180 s end, no longer has its slices held (Q12); the held
+//               cases make their holds as a restored layout does. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -2178,11 +2183,10 @@ private slots:
         core.pair(c);
         core.model->configureStreamPool(5, 5, 192000);
         core.model->sliceById(0)->setFrequency(14200000.0);
-        // A signs in and leaves: its slice is held for it.
-        LoopbackTransport* appA = core.signIn(a);
-        QVERIFY(admitted(appA));
-        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
-        QTRY_VERIFY(!appA->isOpen());
+        // A's slice is held for it, as a layout restored after a restart
+        // holds it (slice control plan Task 8: a device that leaves no longer
+        // has its slice held, Q12).
+        core.model->sliceOwnership()->hold(0, a.key.fingerprint());
         QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, a.key.fingerprint());
         LoopbackTransport* appB = core.signIn(b);
         LoopbackTransport* appC = core.signIn(c);
@@ -2563,17 +2567,18 @@ private slots:
         QVERIFY(heldKeys(appB, QStringLiteral("pan:")).isEmpty());
     }
 
-    void theLastDeviceLeavingPassesItsSlicesToTheStationHeldForIt()
+    // Slice control plan Task 8: a device leaving no longer has its slices
+    // held for it (Q12); a slice the Core holds for a device comes from a
+    // layout restored after a restart (ruling 5.3), made here directly. What
+    // a hold means is unchanged.
+    void aSliceHeldForADeviceIsTheStationsUntilItReturns()
     {
         Core core;
         Device a;
         Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
         core.pair(a);
         core.pair(b);
-        LoopbackTransport* appA = core.signIn(a);
-        QVERIFY(admitted(appA));
-        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
-        QTRY_VERIFY(!appA->isOpen());
+        core.model->sliceOwnership()->hold(0, a.key.fingerprint());
         const SliceOwnership* own = core.model->sliceOwnership();
         // Still running, the station device's, held for A.
         QVERIFY(core.model->sliceById(0) != nullptr);
@@ -2696,7 +2701,10 @@ private slots:
         QCOMPARE(core.model->sliceOwnership()->mark(2).owner, b.key.fingerprint());
     }
 
-    void theLastDevicesSlicesAreHeldForItWhenIts180SecondsEnd()
+    // Slice control plan Task 8 (approved policy 6, Q12): at the end of the
+    // last device's 180 s its slice, with nobody else on it, closes and is
+    // saved for it; nothing is held.
+    void theLastDevicesSlicesCloseAndAreSavedWhenIts180SecondsEnd()
     {
         Core core;
         Device a;
@@ -2709,8 +2717,12 @@ private slots:
         QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
         core.now = DeviceSessionRegistry::kGraceMs;
         QCOMPARE(core.sessions().expireAway().size(), 1);
-        QVERIFY(core.model->sliceById(0) != nullptr);
-        QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, a.key.fingerprint());
+        QVERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(core.model->sliceOwnership()->heldFor(a.key.fingerprint()).isEmpty());
+        QCOMPARE(DeviceLayoutStore::load(AppSettings::instance(), core.model->currentRadioMac(),
+                                         a.key.fingerprint())
+                     .size(),
+                 1);
     }
 
     void revokingADeviceClosesItsSlicesHeldOnesIncludedAndForgetsItsLayout()
@@ -2720,12 +2732,11 @@ private slots:
         Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
         core.pair(a);
         core.pair(b);
-        LoopbackTransport* appA = core.signIn(a);
-        QVERIFY(admitted(appA));
-        QVERIFY(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})
-                    .value(QStringLiteral("accepted")).toBool());
-        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
-        QTRY_VERIFY(!appA->isOpen());
+        // A's two slices held for it, as a layout restored after a restart
+        // holds them (slice control plan Task 8: leaving no longer holds).
+        QCOMPARE(core.model->addSlice(QStringLiteral("pan-0")), 1);
+        core.model->sliceOwnership()->hold(0, a.key.fingerprint());
+        core.model->sliceOwnership()->hold(1, a.key.fingerprint());
         QCOMPARE(core.model->sliceOwnership()->heldFor(a.key.fingerprint()), (QList<int>{0, 1}));
         const QString mac = core.model->currentRadioMac();
         SavedSlice earlier;
@@ -2940,10 +2951,13 @@ private slots:
         QVERIFY(admitted(back));
         QVERIFY(m.core.model->sliceById(0)->streamCtunPinned());
 
-        // A leaves for good: the pin ends.
+        // A leaves for good: the pin ends. Slice control plan Task 8: with
+        // nobody else on it the slice closes (saved for A), and its pin with
+        // it.
         m.core.invoke(back, "session.leave");
         QTRY_VERIFY(!back->isOpen());
-        QVERIFY(!m.core.model->sliceById(0)->streamCtunPinned());
+        const SliceModel* after = m.core.model->sliceById(0);
+        QVERIFY(after == nullptr || !after->streamCtunPinned());
     }
 
     void aDspAssetJobEndsWithItsOwnDeviceOnly()

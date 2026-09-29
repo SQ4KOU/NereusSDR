@@ -68,6 +68,10 @@
 //               (changeRefusal), so a listener changes nothing. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 8: a C-Tune refusal names a
+//               receiver's device that is not connected as such. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -148,6 +152,15 @@ std::optional<QString> addPanIdFor(const SessionMessage& command)
 QString pinReason(const QString& anchorName)
 {
     return QStringLiteral("This panadapter shows %1's receiver. Its C-Tune setting is %1's.")
+        .arg(anchorName);
+}
+
+// Slice control plan Task 8: the same, when that device is not connected.
+QString awayPinReason(const QString& anchorName)
+{
+    return QStringLiteral("This panadapter shows the receiver of %1, which is not connected "
+                          "now. Its C-Tune setting stays with %1 until it is back or its "
+                          "three minutes are up.")
         .arg(anchorName);
 }
 
@@ -459,7 +472,16 @@ bool StationServer::handleReceiverCommand(SessionTransport* transport, const Ses
             const QByteArray anchor =
                 m_radioModel->sliceOwnership()->anchorOf(slice->streamIndex());
             if (!anchor.isEmpty() && anchor != requester) {
-                refusal = pinReason(planDevice(anchor).name);
+                // Slice control plan Task 8 (JJ's bench): a device that is
+                // not connected is named as such, never by a bare name the
+                // operator reads as this computer's own.
+                const bool notConnected = anchor != SliceOwnership::stationDevice()
+                    && liveTransportFor(anchor) == nullptr;
+                if (notConnected) {
+                    refusal = awayPinReason(planDevice(anchor).name);
+                } else {
+                    refusal = pinReason(planDevice(anchor).name);
+                }
             }
         }
         if (refusal.isEmpty()) {

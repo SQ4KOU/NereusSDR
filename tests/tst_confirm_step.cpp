@@ -80,6 +80,9 @@
 //               whose slice id was reused by the same device's new slice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8: the held slice is made
+//               directly, as a restored layout makes it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -998,11 +1001,11 @@ private slots:
         core.model->sliceById(0)->setFrequency(7074000.0);
         core.pair(phone);
         core.pair(desktop);
-        LoopbackTransport* appPhone = core.signIn(phone);
-        QVERIFY(admitted(appPhone));
+        // Slice control plan Task 8: a device that leaves no longer has its
+        // slice held for it (Q12); a hold comes from a layout restored after
+        // a restart (ruling 5.3), made here directly.
         core.model->sliceById(0)->setAfGain(17);
-        QVERIFY(core.invoke(appPhone, "session.leave").value(QStringLiteral("accepted")).toBool());
-        QTRY_VERIFY(!appPhone->isOpen());
+        core.model->sliceOwnership()->hold(0, phone.key.fingerprint());
         QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, phone.key.fingerprint());
         const int heldReceiver = streamOf(core, 0);
         QVERIFY(heldReceiver >= 0);

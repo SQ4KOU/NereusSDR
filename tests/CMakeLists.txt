@@ -7929,6 +7929,13 @@ nereus_add_test(tst_slice_access_verbs
 # it leaves, a working new slice from zero, and every first-slice reader at
 # zero. No radio, no RF.
 nereus_add_test(tst_zero_slice_core)
+# Slice control and shared listening plan Task 8: a device's claims at the
+# end of its 180 s, at leave and on its return, fenced by the away period's
+# generation; Amendment 8a (an away device's slices in the preselector and
+# the several-devices questions). No radio, no RF.
+nereus_add_test(tst_slice_claims_expiry
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # Slice control and shared listening plan Task 5: the remote window's side
 # of listening to and taking a slice (SliceAccessMirror, the four verbs, a
 # listened slice held read-only, the refusals and the controlTaken notice
