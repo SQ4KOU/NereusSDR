@@ -64,6 +64,8 @@ private slots:
     // absent reading shown as unavailable.
     void refreshPaReadings();
     void onPowerChanged(double forward, double reflected, double swr);
+    // The power readouts from the model's RadioStatus as it stands now.
+    void refreshPower();
     void onPttChanged();
     void onIssuesChanged();
     void onUptimeTick();

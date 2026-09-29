@@ -1794,12 +1794,24 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 [publishTransmitting](MoxState) { publishTransmitting(false); });
         connect(m_moxController, &MoxController::moxStateChanged, this,
                 [publishTransmitting](bool) { publishTransmitting(false); });
+        // The Radio Status page's PTT source follows the key itself.
+        connect(m_moxController, &MoxController::moxStateChanged, this,
+                [this](bool) { refreshRadioStatusPtt(); });
     }
 
     // R-R3-49 (parity Task 1): isCoreOnAir() follows the radio's
     // `transmitting`, the transmit model's TUNE and PureSignal's two-tone.
     connect(this, &RadioModel::transmittingChanged, this,
             [this](bool) { updateCoreOnAir(); });
+    // The Radio Status page's PTT source follows the key, TUNE and the
+    // two-tone test (a remote window's also follows the Core's txState,
+    // setStationTransmitState).
+    connect(this, &RadioModel::transmittingChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
+    connect(&m_transmitModel, &TransmitModel::tuneChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
+    connect(&m_transmitModel, &TransmitModel::twoToneActiveChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
     connect(&m_transmitModel, &TransmitModel::tuneChanged, this,
             [this](bool) { updateCoreOnAir(); });
     if (m_pureSignalFacade) {
@@ -8216,8 +8228,49 @@ TransmitState* RadioModel::stationTransmitState() const
 void RadioModel::setStationTransmitState(TransmitState* state)
 {
     if (m_role == Role::Remote) {
+        disconnect(m_stationTransmitStateConnection);
         m_stationTransmitState = state;
+        if (state != nullptr) {
+            m_stationTransmitStateConnection = connect(
+                state, &TransmitState::stateChanged, this,
+                &RadioModel::refreshRadioStatusPtt);
+        }
+        refreshRadioStatusPtt();
     }
+}
+
+void RadioModel::refreshRadioStatusPtt()
+{
+    PttSource source = PttSource::None;
+    if (m_role == Role::Remote) {
+        // The Core's key as its `txState` carries it: keyedByKind is
+        // "station" for the station's own keys, a device's kind otherwise.
+        // `keyed` also covers the radio's TX to RX handover and an end of
+        // over tail, when nothing holds the key any more (the Core names no
+        // keyer then, or it is ending), so those read as released, as the
+        // Core's own window reads them.
+        if (const TransmitState* state = m_stationTransmitState.data()) {
+            const QString kind = state->keyedByKind();
+            const QString trigger = state->keyedTrigger();
+            const bool deviceKey = !kind.isEmpty() && kind != QLatin1String("station");
+            const bool held = state->keyed() && !state->txEnding()
+                && (!kind.isEmpty() || !trigger.isEmpty());
+            source = pttSourceForKey(held, deviceKey, state->tuning(),
+                                     state->twoTone(), trigger);
+        }
+    } else {
+        // The key itself (MOX, not the radio's TX to RX handover after it).
+        // A paired device's key shows from the moment it holds the key.
+        const bool deviceKey = !m_keyedBy.isEmpty()
+            && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+        const bool keyed = (m_moxController != nullptr && m_moxController->isMox())
+            || deviceKey;
+        source = pttSourceForKey(keyed, deviceKey,
+                                 m_transmitModel.isTune(),
+                                 m_transmitModel.isTwoToneActive(),
+                                 QString::fromLatin1(m_keyedBy.trigger));
+    }
+    m_radioStatus.setActivePttSource(source);
 }
 
 void RadioModel::setStationTxDisplayVersion(int version)
@@ -13683,26 +13736,10 @@ void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
     if (role() != Role::Local || m_keyedBy == keyedBy) {
         return;
     }
-    const bool wasRemoteVox = m_keyedBy.trigger == QByteArrayLiteral("vox")
-        && !m_keyedBy.isEmpty()
-        && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
     m_keyedBy = keyedBy;
-    // The Radio Status page's PTT source: a paired device's key is Remote.
-    // Only Remote is set and cleared here; the other sources are not this
-    // record's.
-    const bool remote = !keyedBy.isEmpty()
-        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
-    // iPhone app plan Task 36: a device's VOX key (VOX listening to its
-    // microphone) shows as VOX, attributed to it by keyedBy.
-    const bool remoteVox = remote && keyedBy.trigger == QByteArrayLiteral("vox");
-    if (remoteVox) {
-        m_radioStatus.setActivePttSource(PttSource::Vox);
-    } else if (remote) {
-        m_radioStatus.setActivePttSource(PttSource::Remote);
-    } else if (m_radioStatus.activePttSource() == PttSource::Remote
-               || (m_radioStatus.activePttSource() == PttSource::Vox && wasRemoteVox)) {
-        m_radioStatus.setActivePttSource(PttSource::None);
-    }
+    // The Radio Status page's PTT source follows the key (a paired device's
+    // key is Remote, its VOX key VOX; iPhone app plan Task 36).
+    refreshRadioStatusPtt();
     // Fix wave C2: the writer follows who is keyed.
     updateRemoteMicSource();
     emit keyedByChanged();
@@ -24103,15 +24140,36 @@ QString RadioModel::connectionUptimeText() const
                              static_cast<long long>(s));
 }
 
+void RadioModel::applyCoreConnectionAge(std::optional<qint64> ageMs)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    m_coreConnectionAgeMs = ageMs;
+    if (ageMs) {
+        m_coreConnectionAgeClock.start();
+    } else {
+        m_coreConnectionAgeClock.invalidate();
+    }
+}
+
 std::optional<qint64> RadioModel::connectionAgeMs() const
 {
+    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
+    if (m_role == Role::Remote) {
+        // The Core's radio connection, counting on between its samples.
+        if (!m_coreConnectionAgeMs || !m_coreConnectionAgeClock.isValid()) {
+            return std::nullopt;
+        }
+        return std::clamp<qint64>(*m_coreConnectionAgeMs + m_coreConnectionAgeClock.elapsed(),
+                                  0, kMaxExactJsonInteger);
+    }
     if (m_connectionState != ConnectionState::Connected
         || !m_connectionStartedAt.isValid()
         || m_connectionAgeOwner != m_connection
         || (m_connectionAgeHadOwner && !m_connectionAgeOwner)) {
         return std::nullopt;
     }
-    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
     return std::clamp<qint64>(m_connectionStartedAt.elapsed(), 0,
                               kMaxExactJsonInteger);
 }

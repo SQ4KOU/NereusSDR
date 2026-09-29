@@ -53,4 +53,40 @@ inline QString pttSourceLabel(PttSource s) {
     }
 }
 
+// Which source the Radio Status page shows for the radio's key, from what
+// both kinds of window know about it: whether the radio is keyed, whether a
+// paired device (not the station itself) holds the key, TUNE, the two-tone
+// test, and the key's trigger (RadioModel::KeyedBy::trigger, which the Core
+// sends to its windows as `txState`'s keyedTrigger). A local window and a
+// remote window give the same inputs for the same key, so both pages agree.
+inline PttSource pttSourceForKey(bool keyed, bool deviceKey, bool tuning,
+                                 bool twoTone, const QString& trigger)
+{
+    if (!keyed) {
+        return PttSource::None;
+    }
+    // A paired device's key is Remote; its VOX key shows as VOX.
+    if (deviceKey) {
+        return trigger == QLatin1String("vox") ? PttSource::Vox : PttSource::Remote;
+    }
+    if (twoTone || trigger == QLatin1String("twoTone")) {
+        return PttSource::TwoTone;
+    }
+    if (tuning || trigger == QLatin1String("tune")) {
+        return PttSource::Tune;
+    }
+    // The station's own keys (RemoteKeying::stationTrigger). A TCI key has
+    // no pill of its own and shows with the other program keys as CAT.
+    if (trigger == QLatin1String("radioPtt")) {
+        return PttSource::MicPtt;
+    }
+    if (trigger == QLatin1String("vox")) {
+        return PttSource::Vox;
+    }
+    if (trigger == QLatin1String("cat") || trigger == QLatin1String("tci")) {
+        return PttSource::Cat;
+    }
+    return PttSource::Mox;
+}
+
 } // namespace NereusSDR

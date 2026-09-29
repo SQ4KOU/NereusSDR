@@ -3487,8 +3487,14 @@ public:
     // The monotonic connection age is started by setConnectionState() on
     // Connected and invalidated on every retirement, independent of a
     // remote client's telemetry session.
+    // In a remote window it is the Core's radio connection age (station
+    // telemetry version 6, applyCoreConnectionAge), counting on between
+    // samples, and absent while the Core's measurements are not current.
     std::optional<qint64> connectionAgeMs() const;
     QString connectionUptimeText() const;     // "14m 32s" / "—"
+    /// Remote role only: the Core's connection age from its latest current
+    /// telemetry sample, or absent. Local windows ignore it.
+    void applyCoreConnectionAge(std::optional<qint64> ageMs);
     QString connectedRadioName() const;       // RadioInfo.name / "—"
     QString connectionProtocolText() const;   // "1" or "2" / "—"
     QString connectionFirmwareText() const;   // "v27" / "—"
@@ -7556,6 +7562,10 @@ private:
     PaReadings m_corePaReadings;
     // R-R3-32 (parity Task 14): the Core's HL2 link in a remote window.
     Hl2LinkFigures m_coreHl2LinkFigures;
+    // Remote role: the Core's connection age at m_coreConnectionAgeClock's
+    // start (applyCoreConnectionAge).
+    std::optional<qint64> m_coreConnectionAgeMs;
+    QElapsedTimer m_coreConnectionAgeClock;
     // R-R3-46 (parity Task 14): HL2 Options' I2C reads waiting on the
     // radio (local: the Core's own and a local window's), and a remote
     // window's I2C and output pin requests waiting on the Core.
@@ -7583,6 +7593,11 @@ private:
     // R-R3-49 (parity Task 1): isCoreOnAir() as last announced.
     bool m_coreOnAir{false};
     void updateCoreOnAir();
+    // The Radio Status page's PTT source (RadioStatus::activePttSource):
+    // in a local window from this model's key, in a remote window from the
+    // Core's mirrored `txState`, both through pttSourceForKey.
+    void refreshRadioStatusPtt();
+    QMetaObject::Connection m_stationTransmitStateConnection;
     bool m_remoteFourO3AListening{false};
     QString m_remoteFourO3AListenerError;
     QTimer* m_accessoryBandTimer{nullptr};

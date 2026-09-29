@@ -777,6 +777,13 @@ void RadioStatusPage::refreshPaReadings()
     }
 }
 
+void RadioStatusPage::refreshPower()
+{
+    if (!m_model) { return; }
+    const RadioStatus& rs = m_model->radioStatus();
+    onPowerChanged(rs.forwardPowerWatts(), rs.reflectedPowerWatts(), rs.swrRatio());
+}
+
 void RadioStatusPage::onPowerChanged(double forward, double reflected, double swr)
 {
     if (!m_model) { return; }
@@ -810,6 +817,8 @@ void RadioStatusPage::onPttChanged()
 
     m_pttActiveLabel->setText(QStringLiteral("Active: %1").arg(pttSourceLabel(src)));
     m_modeLabel->setText(tx ? QStringLiteral("TX") : QStringLiteral("RX (idle)"));
+    // The power readouts show only while keyed, so they follow the key too.
+    refreshPower();
 
     // Refresh history list
     m_pttHistoryList->clear();
