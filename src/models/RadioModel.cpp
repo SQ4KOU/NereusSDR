@@ -670,6 +670,11 @@
 //   2026-09-29 - PA on-air gate re-review: a disconnect also forgets the
 //                 tune power's transmit band (clearTuneTxBand). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring (found bug): the two-tone controller
+//                 gets the PA profile manager, so the start drives the PA
+//                 gain for the held transmit band (setup.cs:11153
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2399,6 +2404,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // PA on-air gate re-review: the start drives Thetis TXBand, the band
     // the drive math holds while keyed (driveTxBand).
     m_twoToneController->setTxBandFn([this]() { return driveTxBand(); });
+    // Two-tone PA wiring: Thetis's start computes the drive through
+    // SetPowerUsingTargetDBM with the PA gain (setup.cs:11153 [v2.10.3.15],
+    // //MW0LGE_22b), so the controller needs the PA profile manager.
+    m_twoToneController->setPaProfileManager(m_paProfileManager);
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key

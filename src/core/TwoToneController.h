@@ -69,6 +69,10 @@
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code. setTxBandFn:
 //                 the PA-gain drive reads the held transmit band, as Thetis's
 //                 GainByBand(TXBand, ...) does (console.cs:46808 [v2.10.3.15]).
+//   2026-09-29 : Two-tone PA wiring, by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. restoreSavedPower: the FIXED
+//                 source's stop turns the PWR slider limit back on before
+//                 restoring PWR (setup.cs:11196-11201 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -344,6 +348,9 @@ private slots:
     void onMoxRejected(const QString& reason);
 
 private:
+    // The FIXED source's stop: PWR slider limit on, PWR restored.
+    void restoreSavedPower();
+
     // Continue the activation flow after any pending settle delay.
     // Reads parameters, applies TXPostGen* setters, computes magnitude,
     // engages MOX.

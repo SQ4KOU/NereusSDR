@@ -55,6 +55,7 @@
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TxChannel.h"
+#include "core/TwoToneController.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -1065,6 +1066,194 @@ private slots:
         QVERIFY2(!conn->txDriveLog.isEmpty(), "the seed pushed no drive");
         const int wireByte = conn->txDriveLog.last();
         QVERIFY2(wireByte >= 66 && wireByte <= 70, qPrintable(QString::number(wireByte)));
+    }
+
+    // ── The two-tone start drives through the PA gain ────────────────────────
+    // From Thetis setup.cs:11153 [v2.10.3.15] (chkTestIMD_CheckedChanged):
+    //   //MW0LGE_22b
+    //   // remember old power //MW0LGE_22b
+    //   if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
+    //       console.PreviousPWR = console.PWR;
+    //   // set power
+    //   int new_pwr = console.SetPowerUsingTargetDBM(out bool bUseConstrain, out double targetdBm, true, true, true);
+    // before console.TwoTone = true; // MW0LGE_21a and console.MOX = true
+    // (setup.cs:11162-11165). The drive is GainByBand(TXBand, new_pwr)
+    // (console.cs:46808 [v2.10.3.15]), the held transmit band.
+    //   25 W tune power at the 80m gain 50.5 dB: wire 33..35.
+    //   The 100 W PWR drive the MOX-edge restore would push: 66..70.
+    // Runs RadioModel's own controller, wired as in production.
+    static void startTwoTone(RadioModel& model)
+    {
+        model.setTwoTone(true);
+        for (int i = 0; i < 10; ++i) { pump(); }
+    }
+    static void stopTwoTone(RadioModel& model)
+    {
+        model.setTwoTone(false);
+        for (int i = 0; i < 10; ++i) { pump(); }
+    }
+    static void attachTwoTone(RadioModel& model, TxChannel& tx)
+    {
+        TwoToneController* twoTone = model.twoToneController();
+        QVERIFY(twoTone != nullptr);
+        twoTone->setTxChannel(&tx);
+        twoTone->setPowerOn(true);
+        twoTone->setSettleDelaysMs(/*moxReleaseMs=*/0, /*tuneReleaseMs=*/0);
+        model.moxController()->setMoxCheck({});
+    }
+
+    void twoToneStart_drivesThePaGainForTheHeldTxBand()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        TxChannel txChannel{/*channelId=*/1};
+        auto detach = qScopeGuard([&]{
+            if (model.twoToneController()) {
+                model.twoToneController()->setTxChannel(nullptr);
+            }
+            model.injectConnectionForTest(nullptr);
+        });
+        attachTwoTone(model, txChannel);
+        TransmitModel& tx = model.transmitModel();
+        tx.setTwoToneDrivePowerSource(DrivePowerSource::TuneSlider);
+        tx.setTunePowerForBand(Band::Band80m, 25);
+        tx.setTunePowerForBand(Band::Band40m, 60);
+        tx.setPower(50);
+        pump();
+        tx.setPower(100);
+        pump();
+        holdEightyWithSliceOnForty(model);
+
+        // console.TwoTone = true before console.MOX = true.
+        bool activeAtKey = false;
+        QMetaObject::Connection c = connect(
+            model.moxController(), &MoxController::moxChanging, this,
+            [&activeAtKey, &tx](int, bool, bool on) { if (on) { activeAtKey = tx.isTwoToneActive(); } });
+        conn->txDriveLog.clear();
+        startTwoTone(model);
+        disconnect(c);
+        QVERIFY(model.twoToneController()->isActive());
+        QVERIFY(model.moxController()->isMox());
+        QVERIFY(tx.isTwoToneActive());
+        QVERIFY(activeAtKey);
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "two-tone start pushed no drive");
+        const int wireByte = conn->txDriveLog.last();
+        QVERIFY2(wireByte >= 33 && wireByte <= 35, qPrintable(QString::number(wireByte)));
+
+        stopTwoTone(model);
+        QVERIFY(!model.twoToneController()->isActive());
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(!model.moxController()->isMox());
+    }
+
+    // FIXED source: PWRSliderLimitEnabled = false around the start, so the
+    // band's PWR limit does not cut the two-tone power (setup.cs:11155-11159
+    // [v2.10.3.15]); the stop turns it back on and restores PWR:
+    //   //MW0LGE_22b
+    //   if (console.TwoToneDrivePowerOrigin == DrivePowerSource.FIXED)
+    //   {
+    //       console.PWRSliderLimitEnabled = true;
+    //       console.PWR = console.PreviousPWR;
+    //   }
+    // (setup.cs:11196-11201 [v2.10.3.15]).
+    //   60 W at the 80m gain 50.5 dB: wire 51..55; the 30 W limit: about 37.
+    void twoToneStart_fixedSource_ignoresThePwrLimit_stopRestores()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        TxChannel txChannel{/*channelId=*/1};
+        auto detach = qScopeGuard([&]{
+            if (model.twoToneController()) {
+                model.twoToneController()->setTxChannel(nullptr);
+            }
+            model.injectConnectionForTest(nullptr);
+        });
+        attachTwoTone(model, txChannel);
+        TransmitModel& tx = model.transmitModel();
+        tx.setLimitPowerForBand(Band::Band80m, 30);
+        tx.setPowerLimit(30);   // the 80 m band's limit, as the TXBand setter assigns
+        tx.setTwoToneDrivePowerSource(DrivePowerSource::Fixed);
+        tx.setTwoTonePower(60);
+        tx.setPower(20);
+        pump();
+        QCOMPARE(tx.powerLimit(), 30);
+
+        conn->txDriveLog.clear();
+        startTwoTone(model);
+        QVERIFY(model.twoToneController()->isActive());
+        QVERIFY(tx.isTwoToneActive());
+        QVERIFY(!tx.powerSliderLimitEnabled());
+        QCOMPARE(tx.power(), 60);
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "two-tone start pushed no drive");
+        const int wireByte = conn->txDriveLog.last();
+        QVERIFY2(wireByte >= 51 && wireByte <= 55, qPrintable(QString::number(wireByte)));
+
+        stopTwoTone(model);
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(tx.powerSliderLimitEnabled());
+        QCOMPARE(tx.power(), 20);
+        QCOMPARE(tx.powerForBand(Band::Band80m), 20);
+    }
+
+    // The stop by unkey (chkMOX_Click unchecks chk2TONE) and by an error
+    // (the emergency stop, and a refused key: if (!console.MOX) {
+    // chkTestIMD.Checked = false; return; }, setup.cs:11166-11170
+    // [v2.10.3.15]) each end with console.TwoTone = false.
+    void twoToneStop_byUnkeyStopAllAndRefusal_clearsTwoToneActive()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        TxChannel txChannel{/*channelId=*/1};
+        auto detach = qScopeGuard([&]{
+            if (model.twoToneController()) {
+                model.twoToneController()->setTxChannel(nullptr);
+            }
+            model.injectConnectionForTest(nullptr);
+        });
+        attachTwoTone(model, txChannel);
+        TransmitModel& tx = model.transmitModel();
+        tx.setTwoToneDrivePowerSource(DrivePowerSource::Fixed);
+        tx.setTwoTonePower(40);
+        tx.setPower(20);
+        pump();
+
+        startTwoTone(model);
+        QVERIFY(tx.isTwoToneActive());
+        model.setMoxFromButton(false);
+        for (int i = 0; i < 10; ++i) { pump(); }
+        QVERIFY(!model.twoToneController()->isActive());
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(tx.powerSliderLimitEnabled());
+        QCOMPARE(tx.power(), 20);
+
+        startTwoTone(model);
+        QVERIFY(tx.isTwoToneActive());
+        model.stopAllTx(QStringLiteral("test stop"));
+        for (int i = 0; i < 10; ++i) { pump(); }
+        QVERIFY(!model.twoToneController()->isActive());
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(tx.powerSliderLimitEnabled());
+        QCOMPARE(tx.power(), 20);
+
+        model.moxController()->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{
+                false, QStringLiteral("test refusal")};
+        });
+        QSignalSpy activeSpy(&tx, &TransmitModel::twoToneActiveChanged);
+        startTwoTone(model);
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY(!model.twoToneController()->isActive());
+        QVERIFY(!tx.isTwoToneActive());
+        QVERIFY(tx.powerSliderLimitEnabled());
+        QCOMPARE(tx.power(), 20);
+        // It went true for the key, as console.TwoTone does, then false.
+        QCOMPARE(activeSpy.count(), 2);
     }
 
     // The TXBand setter assigns the band's slider limits

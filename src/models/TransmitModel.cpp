@@ -289,6 +289,10 @@
 //                 [v2.10.3.15]); the load still falls back to the band's
 //                 default. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 - Two-tone PA wiring: setPowerUsingTargetDbm skips the PWR
+//                 slider limit while powerSliderLimitEnabled is off
+//                 (PrettyTrackBar.ConstrainAValue [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -1894,14 +1898,18 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
     //     else return _nLimitValue;
     // The slider is ptbTune on the TUNE_SLIDER source, else ptbPWR; both
     // have LimitEnabled = true (console.Designer.cs:3686, 3942
-    // [v2.10.3.15]).  PWRSliderLimitEnabled only turns it off around the
-    // FIXED source, where bConstrain is already false.  The 0..100 clamp
-    // stands for the slider's own Min/Max.  bConstrain==false is the
-    // FIXED-drive path: the setup-page value bypasses the slider.
+    // [v2.10.3.15]).  The two-tone start turns ptbPWR's off
+    // (PWRSliderLimitEnabled = false, setup.cs:11154-11158 [v2.10.3.15])
+    // around its FIXED source, so the PWR set to the two-tone power and
+    // its txMode 0 scroll run past the band's limit; the stop turns it
+    // back on.  The 0..100 clamp stands for the slider's own Min/Max.
+    // bConstrain==false is the FIXED-drive path: the setup-page value
+    // bypasses the slider.
     if (result.bConstrain) {
         new_pwr = std::clamp(new_pwr, 0, 100);
+        const bool limitEnabled = sliderIsTune || m_powerSliderLimitEnabled;
         const int limit = sliderIsTune ? m_tunePowerLimit : m_powerLimit;
-        if (new_pwr > limit) {
+        if (limitEnabled && new_pwr > limit) {
             new_pwr = limit;
         }
     }

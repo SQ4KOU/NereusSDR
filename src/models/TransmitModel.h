@@ -292,6 +292,11 @@
 //                 when unchanged; clearTuneTxBand() forgets it at a
 //                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring: powerSliderLimitEnabled (Thetis
+//                 PWRSliderLimitEnabled, console.cs:30237 [v2.10.3.15]),
+//                 honoured by setPowerUsingTargetDbm's constrain on the PWR
+//                 slider. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 #pragma once
 
@@ -535,6 +540,11 @@ public:
     /// the drive to it.
     int  powerLimit() const noexcept { return m_powerLimit; }
     void setPowerLimit(int watts);
+    /// Whether the PWR slider limit applies (Thetis PWRSliderLimitEnabled,
+    /// ptbPWR.LimitEnabled; on by default).  The two-tone test turns it off
+    /// around its FIXED drive source and back on at the stop.
+    bool powerSliderLimitEnabled() const noexcept { return m_powerSliderLimitEnabled; }
+    void setPowerSliderLimitEnabled(bool enabled) noexcept { m_powerSliderLimitEnabled = enabled; }
     /// The tune slider's current limit (ptbTune.LimitValue).
     int  tunePowerLimit() const noexcept { return m_tunePowerLimit; }
     void setTunePowerLimit(int watts);
@@ -2633,6 +2643,8 @@ private:
     // TXBand pass assigns limitPower_by_band (100 by default) before any
     // drive is computed, so the effective start value is 100.
     int    m_powerLimit{100};
+    // ptbPWR.LimitEnabled (console.Designer.cs:3686 [v2.10.3.15]): true.
+    bool   m_powerSliderLimitEnabled{true};
     int    m_tunePowerLimit{100};
     double m_fmTxOffsetMhz{0.0};
 
