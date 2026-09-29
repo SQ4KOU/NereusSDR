@@ -955,6 +955,15 @@ Change:
 - Restoring a returning device's saved layout (`placeSlicesForAdmission`,
   `StationServer.cpp:7670-7736`) never displaces a current controller or
   listener and never recreates a control claim on a slice that still exists.
+- Lead ruling (2026-09-29), a deviation from "token end" above: a token
+  window alone on the Core keeps today's rule. Its claims go, and its slices
+  pass to nobody and stay, so the window signing in again (with the token,
+  or with the key it enrolled) adopts them. Closing them would lose the
+  operator's slice at first pairing. With another device on the Core the
+  claims rule applies (close with nobody left, nothing saved).
+- Lead ruling (2026-09-29), Amendment 8a below: an away device's slices stay
+  in the take-a-receiver choices (the take closes them); only the list of
+  slices offered to close leaves them out.
 
 Amendment 8a (JJ approved, 2026-09-28 night). Slices held for away devices
 never count in:
