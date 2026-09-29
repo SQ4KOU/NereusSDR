@@ -140,7 +140,14 @@ struct Session {
         QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
         client->startSession(windowEnd, server->token());
         server->acceptTransport(coreEnd);
-        return completed.wait(5000) || completed.count() == 1;
+        if (!completed.wait(30000) && completed.count() != 1) {
+            return false;
+        }
+        // The handshake completes before the capability descriptor and the
+        // settings snapshot land. Wait for both, bounded, rather than leaving
+        // it to a later QTRY's default five seconds, which a loaded machine
+        // can overrun.
+        return QTest::qWaitFor([this] { return client->settingsHygieneAvailable(); }, 30000);
     }
     void keyCore()
     {
@@ -613,7 +620,7 @@ void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReaso
 {
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    QTRY_VERIFY(s.client->settingsHygieneAvailable());
+    QVERIFY(s.client->settingsHygieneAvailable());
     QVERIFY(!s.client->signedInWithDeviceKey());
 
     SettingsValidationPage validation(&s.window);
