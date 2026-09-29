@@ -152,6 +152,11 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42 item 4: the tooltip for a
 //                mode that cannot transmit matches the refusal's words.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: MOX, TUN, 2TONE and VOX are disabled
+//                with the reason while a TX inhibit holds (the HL2 I/O
+//                board's fault code, say), as Thetis's TXInhibit setter
+//                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -1383,6 +1388,16 @@ void TxApplet::wireControls()
             removeReceiveOnlyLock();
             applyReceiveOnlyLock();
         });
+        // HL2 port part 2: a TX inhibit locks the same buttons, with its
+        // reason (the HL2 I/O board's fault code, say), as Thetis's
+        // TXInhibit setter disables them (console.cs:15341-15363
+        // [v2.10.3.15]).
+        const auto relock = [this]() {
+            removeReceiveOnlyLock();
+            applyReceiveOnlyLock();
+        };
+        connect(m_model, &RadioModel::txInhibitedChanged, this, relock);
+        connect(m_model, &RadioModel::txInhibitReasonChanged, this, relock);
         applyReceiveOnlyLock();
     }
 
@@ -2351,10 +2366,11 @@ void TxApplet::removeReceiveOnlyLock()
 
 void TxApplet::applyReceiveOnlyLock()
 {
-    if (!m_model || !m_model->isRxOnly()) {
+    // HL2 port part 2: receive only or a TX inhibit (transmitButtonsLocked).
+    if (!m_model || !m_model->transmitButtonsLocked()) {
         return;
     }
-    const QString reason = m_model->rxOnlyReasonAlongside(
+    const QString reason = m_model->transmitLockReasonAlongside(
         m_transmitPermitted ? QString() : m_transmitPermissionReason);
     const auto lock = [&reason](QWidget* control) {
         if (!control || control->property(kRxOnlySavedTooltip).isValid()) {
@@ -2367,7 +2383,7 @@ void TxApplet::applyReceiveOnlyLock()
         control->setToolTip(reason);
         control->setAccessibleDescription(reason);
     };
-    if (m_model->receiveOnlyDisablesMoxButton()) {
+    if (m_model->transmitLockCoversMox()) {
         lock(m_moxBtn);
     }
     lock(m_tuneBtn);

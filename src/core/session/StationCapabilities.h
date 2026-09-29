@@ -195,6 +195,8 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: txInhibitReasonVersion. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -353,6 +355,12 @@ struct StationCapabilities {
     /// writes. Only for a peer at minor 11 that declared paProfiles 1, after
     /// adcAttenuatorVersion.
     int paProfileVersion = 0;
+    /// HL2 port part 2: 1 means `radio` carries `txInhibitReason`, why the
+    /// Core's transmit is held off in plain words (the HL2 I/O board's
+    /// "I/O Board: Fault Code N"), empty when the reason is the plain TX
+    /// inhibit or none. Only for a peer at minor 11 that declared
+    /// txInhibitReason 1, after paProfileVersion.
+    int txInhibitReasonVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

@@ -328,6 +328,9 @@
 //   2026-09-29: R-R3-46 / R-R3-11: adcAttenuatorsAvailable() for the Setup
 //               RX2 row. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29: HL2 port part 2: the hello declares txInhibitReason 1, and
+//               the Core's reason applies as observed state.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -713,6 +716,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // attenuator for the slices on it (stepAtt rx2AttenuationDb,
     // rx2SliceMask; adcAttenuatorVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("adcAttenuators"), 1);
+    // HL2 port part 2: this window shows why the Core's transmit is held
+    // off (radio's txInhibitReason; txInhibitReasonVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("txInhibitReason"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -4020,6 +4026,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.stationRadioWaiting"),
         // Parity Task 22: likewise the Core's logging categories.
         QByteArrayLiteral("RadioModel.logCategories"),
+        // HL2 port part 2: likewise the Core's TX inhibit reason.
+        QByteArrayLiteral("RadioModel.txInhibitReason"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),

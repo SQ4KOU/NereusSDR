@@ -48,6 +48,11 @@
 //                                    Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: TUN, MOX and 2TONE are unavailable
+//                with the reason while a TX inhibit holds (the HL2 I/O
+//                board's fault code, say), as Thetis's TXInhibit setter
+//                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -233,9 +238,12 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         // the radio; with a remote window's missing transmit as well, both
         // reasons show, so turning receive only off does not leave the
         // button blocked for a reason never named (fix wave M6).
-        if (m_model->isRxOnly()
-            && (id != Id::Mox || m_model->receiveOnlyDisablesMoxButton())) {
-            unavailable(m_model->rxOnlyReasonAlongside(
+        // HL2 port part 2: a TX inhibit the same way, with its reason (the
+        // HL2 I/O board's fault code), as Thetis's TXInhibit setter
+        // disables them (console.cs:15341-15363 [v2.10.3.15]).
+        if (m_model->transmitButtonsLocked()
+            && (id != Id::Mox || m_model->transmitLockCoversMox())) {
+            unavailable(m_model->transmitLockReasonAlongside(
                 transmitBlockedRemotely() ? remoteReason : QString()));
         } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);

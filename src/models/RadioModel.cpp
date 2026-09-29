@@ -633,6 +633,13 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - HL2 port part 2: the HL2 I/O board's fault register holds
+//                 transmit off (mi0bot console.cs UpdateIOBoard 25876-25885
+//                 [@c26a8a4]); txInhibitReason names it on every window, and
+//                 the transmit buttons are disabled with the reason while any
+//                 TX inhibit holds, as Thetis's TXInhibit setter does
+//                 (console.cs:15341-15363 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1680,7 +1687,35 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_role != Role::Remote) {
         connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
                 [this](bool inhibited, safety::TxInhibitMonitor::Source) {
+            refreshTxInhibitReason();
             emit txInhibitedChanged(inhibited);
+        });
+        // HL2 port part 2: a new fault code while the fault already holds
+        // transmit off changes only the reason.
+        connect(&m_txInhibit, &safety::TxInhibitMonitor::ioBoardFaultChanged, this,
+                [this](quint8) { refreshTxInhibitReason(); });
+        // HL2 port part 2: each answered read of the HL2 I/O board's general
+        // registers (REG_INPUT_PINS onward: input pins, tuner, fault,
+        // firmware major) sets or clears the fault.
+        // From mi0bot console.cs:25876-25885 [@c26a8a4] (UpdateIOBoard):
+        //   if (0 != ioBoard.readRegister(IOBoard.Registers.REG_FAULT))
+        //   {
+        //       TXInhibit = true;
+        //       infoBar.Warning("I/O Board: Fault Code " + ioBoard.readRegister(IOBoard.Registers.REG_FAULT).ToString());
+        //       AutoTuningHL2(ProtocolEvent.Idle);
+        //   }
+        // Held while the last read is non-zero and cleared by a read of
+        // zero (operator ruling 2026-09-29); mi0bot never clears it here.
+        // Only a radio with the I/O board reads it.
+        connect(&m_ioBoard, &IoBoardHl2::i2cReadAnswered, this,
+                [this](quint8 address, quint8 reg, quint8, quint8, quint8, quint8) {
+            if (address != IoBoardHl2::kI2cAddrGeneral
+                || reg != static_cast<quint8>(IoBoardHl2::Register::REG_INPUT_PINS)
+                || !boardCapabilities().hasIoBoardHl2) {
+                return;
+            }
+            m_txInhibit.notifyIoBoardFault(static_cast<quint8>(
+                m_ioBoard.registerValue(IoBoardHl2::Register::REG_FAULT)));
         });
     }
 
@@ -2084,6 +2119,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](bool /*inhibited*/, safety::TxInhibitMonitor::Source /*source*/) {
                 applyTxKeyBlock();
             });
+    // HL2 port part 2: a new I/O board fault code carries its own reason.
+    connect(&m_txInhibit, &safety::TxInhibitMonitor::ioBoardFaultChanged, this,
+            [this](quint8) { applyTxKeyBlock(); });
     connect(this, &RadioModel::paTrippedChanged, this,
             [this](bool /*tripped*/) { applyTxKeyBlock(); });
     // Task 16: receive only is the third gate. The board decides it too
@@ -3797,6 +3835,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_dspOptionsLastApplyMs != ms) {
                 m_dspOptionsLastApplyMs = ms;
                 emit dspOptionsLastApplyMsChanged(ms);
+            }
+            return {};
+        }
+        if (propertyName == "txInhibitReason") {
+            // HL2 port part 2 (txInhibitReasonVersion 1): the Core's reason.
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected the TX inhibit reason as text."); }
+            if (m_txInhibitReason != value.toString()) {
+                m_txInhibitReason = value.toString();
+                emit txInhibitReasonChanged(m_txInhibitReason);
             }
             return {};
         }
@@ -7204,6 +7251,11 @@ void RadioModel::clearRemoteTransmittingState()
         m_remoteTxInhibited = false;
         emit txInhibitedChanged(false);
     }
+    // HL2 port part 2: and its reason.
+    if (!m_txInhibitReason.isEmpty()) {
+        m_txInhibitReason.clear();
+        emit txInhibitReasonChanged(m_txInhibitReason);
+    }
     if (!m_remoteTransmitting) { return; }
     m_remoteTransmitting = false;
     emit transmittingChanged(false);
@@ -7214,6 +7266,35 @@ bool RadioModel::isTxInhibited() const
     // R-R3-49 (parity Task 6): a remote window holds the Core's value.
     if (m_role == Role::Remote) { return m_remoteTxInhibited; }
     return m_txInhibit.inhibited();
+}
+
+QString RadioModel::txInhibitReason() const
+{
+    return m_txInhibitReason;
+}
+
+QString RadioModel::ioBoardFaultReason(quint8 code)
+{
+    // From mi0bot console.cs:25876-25885 [@c26a8a4]:
+    //   infoBar.Warning("I/O Board: Fault Code " + ioBoard.readRegister(IOBoard.Registers.REG_FAULT).ToString());
+    return QStringLiteral("I/O Board: Fault Code %1").arg(code);
+}
+
+void RadioModel::refreshTxInhibitReason()
+{
+    if (m_role == Role::Remote) {
+        return;
+    }
+    const QString reason =
+        m_txInhibit.inhibited()
+                && m_txInhibit.lastSource() == safety::TxInhibitMonitor::Source::IoBoardFault
+            ? ioBoardFaultReason(m_txInhibit.ioBoardFaultCode())
+            : QString();
+    if (reason == m_txInhibitReason) {
+        return;
+    }
+    m_txInhibitReason = reason;
+    emit txInhibitReasonChanged(reason);
 }
 
 RadioModel::PaReadings RadioModel::paReadings() const
@@ -24342,7 +24423,8 @@ void RadioModel::applyTxKeyBlock()
         return;
     }
     const bool inhibited = m_txInhibit.inhibited();
-    m_moxController->setTxInhibited(inhibited);
+    // HL2 port part 2: an I/O board fault refuses with its own words.
+    m_moxController->setTxInhibited(inhibited, m_role == Role::Remote ? QString() : m_txInhibitReason);
     m_moxController->setPaTripped(m_paTripped);
     // Task 16: receive only, the third gate (console.RXOnly,
     // console.cs:15312-15334 [v2.10.3.15]: if (_rx_only && chkMOX.Checked)
@@ -24474,6 +24556,43 @@ QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
         return otherReason;
     }
     return joinTransmitReasons(rxOnlyReason(), otherReason, m_rxOnlyForced);
+}
+
+bool RadioModel::transmitButtonsLocked() const
+{
+    return m_rxOnlyEffective || isTxInhibited();
+}
+
+bool RadioModel::transmitLockCoversMox() const
+{
+    if (m_rxOnlyEffective) {
+        return receiveOnlyDisablesMoxButton();
+    }
+    // From Thetis console.cs:15341-15363 [v2.10.3.15] (TXInhibit setter):
+    //   if (_rx1_dsp_mode != DSPMode.SPEC &&
+    //       _rx1_dsp_mode != DSPMode.DRM &&
+    //       chkPower.Checked)
+    //       chkMOX.Enabled = !_tx_inhibit;
+    //   chkTUN.Enabled = !_tx_inhibit;
+    //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+    //   chkVOX.Enabled = !_tx_inhibit;
+    // As for receive only (fix wave I3), MOX is disabled in every mode,
+    // SPEC and DRM included: the gate refuses the key in every mode.
+    return isTxInhibited();
+}
+
+QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) const
+{
+    if (m_rxOnlyEffective) {
+        return rxOnlyReasonAlongside(otherReason);
+    }
+    if (!isTxInhibited()) {
+        return otherReason;
+    }
+    // The fault's own words, else the plain TX inhibit's refusal.
+    const QString reason = m_txInhibitReason.isEmpty() ? TxRefusals::txInhibited().text
+                                                       : m_txInhibitReason;
+    return joinTransmitReasons(reason, otherReason, false);
 }
 
 QString RadioModel::transmitBlockReasonAlongside(const QString& otherReason) const

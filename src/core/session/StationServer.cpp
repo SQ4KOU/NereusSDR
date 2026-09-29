@@ -42,6 +42,10 @@
 //               object and the paProfile verbs (peerGetsPaProfiles,
 //               paProfileRefusal), and Setup description version 14.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: HL2 port part 2: txInhibitReasonVersion 1 and radio's
+//               txInhibitReason only to a peer that declared
+//               txInhibitReason 1 (fitPeerOnlyProperties). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -1219,6 +1223,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
     // The Support dialog's categories with labels (logCategoryListVersion 1).
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+    // Why the Core's transmit is held off (txInhibitReasonVersion 1).
+    {"RadioModel", "radio", false, "txInhibitReason", "txInhibitReason"},
     // Where a device can dial this Core (coreAddressesVersion 1).
     {"StationDevicesFacade", "devices", false, "coreAddresses", "coreAddresses", true},
 };
@@ -10767,6 +10773,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // declared logCategoryList 1.
             caps.logCategoryListVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("logCategoryList")) ? 1 : 0;
+            // HL2 port part 2: radio's txInhibitReason, for a peer that
+            // declared txInhibitReason 1.
+            caps.txInhibitReasonVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("txInhibitReason")) ? 1 : 0;
             // Phone wire batch: stationRadios' modelLabel and models, for a
             // peer that declared radioModels 1, on a Core that keeps the
             // radio list.

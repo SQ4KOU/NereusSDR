@@ -157,6 +157,7 @@
         {"id": "session-verbs-vax", "file": "sessions/verbs-vax.json", "kind": "session", "requires": {"vaxVersion": 1}},
         {"id": "session-diversity-pattern", "file": "sessions/diversity-pattern.json", "kind": "session", "requires": {"diversityPatternVersion": 1}},
         {"id": "session-log-category-list", "file": "sessions/log-category-list.json", "kind": "session", "requires": {"logCategoryListVersion": 1}},
+        {"id": "session-tx-inhibit-reason", "file": "sessions/tx-inhibit-reason.json", "kind": "session", "requires": {"txInhibitReasonVersion": 1}},
         {"id": "session-core-addresses", "file": "sessions/core-addresses.json", "kind": "session", "requires": {"coreAddressesVersion": 1}},
         {"id": "session-core-addresses-token", "file": "sessions/core-addresses-token.json", "kind": "session", "requires": {"deviceAdminVersion": 1}},
         {"id": "session-station-radio-models", "file": "sessions/station-radio-models.json", "kind": "session", "requires": {"stationRadiosVersion": 1, "radioModelsVersion": 1}},

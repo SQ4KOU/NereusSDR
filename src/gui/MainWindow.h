@@ -59,6 +59,10 @@
 //                transmitSettingsPermitted follows a Core at
 //                transmitSettingsVersion 13 on the air. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the TX badge tooltip and toast name the
+//                TX inhibit's reason (the HL2 I/O board's fault code) and
+//                the transmit buttons follow the inhibit. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -418,6 +422,8 @@ public slots:
     // Update TX Inhibit label visibility. Wired by Task 17 to
     // TxInhibitMonitor::txInhibitedChanged.
     void setTxInhibited(bool inhibited);
+    // HL2 port part 2: the TX badge tooltip and toast for the current reason.
+    void showTxInhibitReason();
 
     // Task 3.6: live-apply CPU meter update rate from GeneralOptionsPage spinbox.
     // hz is clamped to [1, 30]. Restarts m_cpuTimer with the new interval.

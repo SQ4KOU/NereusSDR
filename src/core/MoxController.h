@@ -245,6 +245,12 @@
 //               took is still down (a second press during the take is
 //               refused and keys nothing later). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: HL2 port part 2: setTxInhibited takes the reason the
+//               inhibit is shown with ("I/O Board: Fault Code N" for the
+//               HL2 I/O board fault, mi0bot console.cs:25876-25885
+//               [@c26a8a4]); the refusal and transmitBlockReason carry it.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -722,7 +728,12 @@ public slots:
     // refuses every other key with moxRejected; setting it unkeys an active
     // transmission (if (_tx_inhibit && chkMOX.Checked) chkMOX.Checked =
     // false). The manual key is left as it is.
-    void setTxInhibited(bool on);
+    // `reason` is the words the inhibit is shown and refused with; empty
+    // keeps the TX inhibit input's own refusal (TxRefusals::txInhibited).
+    // HL2 port part 2: the HL2 I/O board fault passes mi0bot's
+    // "I/O Board: Fault Code N" (console.cs:25876-25885 [@c26a8a4]).
+    void setTxInhibited(bool on, const QString& reason = QString());
+    const QString& txInhibitReason() const noexcept { return m_txInhibitReason; }
 
     // setPaTripped: Thetis _ganymede_pa_issue. RadioModel feeds it from
     // RadioModel::paTripped() and on every trip message. Same gates as
@@ -1651,6 +1662,7 @@ private:
     // m_txInhibited / m_paTripped: Thetis _tx_inhibit and
     // _ganymede_pa_issue (console.cs:25470 [v2.10.3.15]).
     bool     m_txInhibited{false};
+    QString  m_txInhibitReason;   // setTxInhibited's reason; empty for the input's own
     bool     m_paTripped{false};
     // m_rxOnly: Thetis _rx_only (Task 16), with the words a refusal shows.
     bool     m_rxOnly{false};

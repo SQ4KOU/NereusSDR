@@ -375,6 +375,10 @@
 //                 receive offset of the ADC its stream is on
 //                 (RadioModel::rxMeterOffsetDbForStream), not slice A's.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the TX badge tooltip and toast name the
+//                TX inhibit's reason (the HL2 I/O board's fault code) and
+//                the transmit buttons follow the inhibit. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -5728,6 +5732,9 @@ void MainWindow::buildUI()
         connect(&m_radioModel->transmitModel(), &TransmitModel::tuneChanged, this, refresh);
         // Task 16: receive only disables TUN, MOX and 2TONE.
         connect(m_radioModel, &RadioModel::rxOnlyChanged, this, refresh);
+        // HL2 port part 2: so does a TX inhibit, with its reason.
+        connect(m_radioModel, &RadioModel::txInhibitedChanged, this, refresh);
+        connect(m_radioModel, &RadioModel::txInhibitReasonChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);
@@ -7220,6 +7227,9 @@ void MainWindow::buildUI()
     // `txInhibited` in a remote window, so both show the radio's inhibit.
     connect(m_radioModel, &RadioModel::txInhibitedChanged,
             this, &MainWindow::setTxInhibited);
+    // HL2 port part 2: a new reason while inhibited (a new fault code).
+    connect(m_radioModel, &RadioModel::txInhibitReasonChanged,
+            this, [this](const QString&) { showTxInhibitReason(); });
     setTxInhibited(m_radioModel->isTxInhibited());
 }
 
@@ -10844,6 +10854,30 @@ void MainWindow::setPaTripped(bool tripped)
 // §4.5) -- dims to 14% opacity when inactive rather than hiding, so this
 // never resizes the slot. setVisible() would be a no-op here in the wrong
 // direction: the label stays Qt-visible at all times once inside its slot.
+// HL2 port part 2: the badge's tooltip and the toast name the reason when
+// it is more than the external input (the HL2 I/O board's fault code,
+// RadioModel::txInhibitReason), and follow it when the code changes.
+void MainWindow::showTxInhibitReason()
+{
+    if (!m_txStatusBadge || !m_txInhibited) { return; }
+    const QString reason = m_radioModel ? m_radioModel->txInhibitReason() : QString();
+    if (m_txInhibitToast) {
+        m_txInhibitToast->close();
+        m_txInhibitToast = nullptr;
+    }
+    if (reason.isEmpty()) {
+        m_txStatusBadge->setToolTip(
+            tr("Transmit blocked by an external TX Inhibit signal."));
+        m_txInhibitToast = showToast(
+            tr("Transmit blocked: external TX Inhibit asserted."),
+            ToastSeverity::Error, 8000);
+        return;
+    }
+    m_txStatusBadge->setToolTip(tr("Transmit blocked. %1").arg(reason));
+    m_txInhibitToast = showToast(tr("Transmit blocked. %1").arg(reason),
+                                 ToastSeverity::Error, 8000);
+}
+
 void MainWindow::setTxInhibited(bool inhibited)
 {
     if (!m_txStatusBadge) { return; }
@@ -10857,17 +10891,12 @@ void MainWindow::setTxInhibited(bool inhibited)
         // not read the source (bench report, 2026-08-03).
         m_txStatusBadge->setSvgIcon(QStringLiteral(":/icons/badge-prohibited.svg"));
         m_txStatusBadge->setVariant(StatusBadge::Variant::Tx);
-        m_txStatusBadge->setToolTip(
-            tr("Transmit blocked by an external TX Inhibit signal."));
-
         // The symbol says transmit is blocked; the toast says why, once, at
         // the moment it happens. Error severity because an interlock is
         // actively refusing the operator, which is what that level means.
         // Held so it can be taken down the instant inhibit clears rather
         // than aging out and leaving a stale notice on screen.
-        m_txInhibitToast = showToast(
-            tr("Transmit blocked: external TX Inhibit asserted."),
-            ToastSeverity::Error, 8000);
+        showTxInhibitReason();
         return;
     }
 
