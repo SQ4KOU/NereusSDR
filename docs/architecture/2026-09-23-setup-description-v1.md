@@ -450,7 +450,10 @@ the point with a plain reason (the table was saved for another model). An
 edit first writes `boardClass` when it is absent or `0`, then the point. The
 Core applies the table at once, and while the radio transmits it refuses the
 write and hands back its value (the settings proxy's off-air rule for these
-keys, as for the desktop's).
+keys, as for the desktop's). A value outside the row's range, a
+non-number, or a `boardClass` other than the Core's radio's is refused whole
+with the range in plain words (for example "Choose a calibration point from
+0 to 10 W."), and the Core hands back its value; nothing is clamped.
 
 `pa.values.paTemperature` is a readout of the optional station telemetry
 `{"telemetry":{"object":"radio","name":"paTemperatureCelsius"}}`, one decimal,

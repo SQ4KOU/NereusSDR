@@ -135,6 +135,67 @@ private slots:
         QVERIFY(!core.model->tune());
     }
 
+    // R-R3-49 (lead's ruling): the Core refuses a calibration write whole
+    // when the value is outside the control's range, says the range in plain
+    // words, and hands back its own value; an in-range write is taken.
+    void calibrationWritesOutsideTheirRangeAreRefusedWhole()
+    {
+        Core core;
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        core.model->setReceiveOnlyStationPolicy(true);
+        Device phone(QStringLiteral("Calibration range iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 13);
+        auto* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        const auto key = [&mac](const QString& rest) {
+            return QStringLiteral("hardware/%1/%2").arg(mac, rest);
+        };
+        const auto rejectReason = [app](const QString& k) {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == k) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const auto write = [app](const QString& k, const QString& value) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::settingsWrite(k, value, QStringLiteral("phone"))));
+        };
+        struct Case { QString rest; QString bad; QString good; QString reason; };
+        // The Core's radio is an HL2: the ANAN-10 class table (point 3 up
+        // to 10 W, point 10 up to 12 W).
+        const QList<Case> cases{
+            {"paCalibration/calPoint3", "10.5", "9.5", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/calPoint10", "12.5", "11.9", "Choose a calibration point from 0 to 12 W."},
+            {"paCalibration/calPoint1", "-1", "0.5", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/calPoint2", "plenty", "2", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/boardClass", "2", "1", "The Core expected this radio's power calibration table."},
+            {"cal/txDisplayOffset", "100.5", "-99.5", "Choose a TX display offset from -100 to 100 dB."},
+            {"paCalibration/cal/txDisplayOffset", "-101", "5", "Choose a TX display offset from -100 to 100 dB."},
+            {"cal/freqFactor", "2.5", "1.0000001", "Choose a correction factor from 0 to 2."},
+            {"cal/freqFactor10M", "-0.1", "0.9999999", "Choose a correction factor from 0 to 2."},
+            {"cal/using10M", "yes", "True", "The Core expected this box to be on or off."},
+            {"cal/rx1_6mLna", "26", "13", "Choose a 6 m LNA offset from 0 to 25 dB."},
+            {"cal/rx2_6mLna", "-1", "0", "Choose a 6 m LNA offset from 0 to 25 dB."},
+            {"cal/paSens", "0", "120", "Choose an amp sensitivity from 0.001 to 5000."},
+            {"cal/paOffset", "5001", "360", "Choose an amp voltage offset from 0 to 5000."},
+        };
+        for (const Case& c : cases) {
+            write(key(c.rest), c.bad);
+            QTRY_COMPARE_WITH_TIMEOUT(rejectReason(key(c.rest)), c.reason, 5000);
+            QVERIFY2(core.settings->value(key(c.rest)).toString() != c.bad, qPrintable(c.rest));
+            write(key(c.rest), c.good);
+            QTRY_COMPARE_WITH_TIMEOUT(core.settings->value(key(c.rest)).toString(), c.good, 5000);
+        }
+    }
+
     void pairedV12PublishesTheRestOfDisplayAndKeepsV11Projection()
     {
         Core core;

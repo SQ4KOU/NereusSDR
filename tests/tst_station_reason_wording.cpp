@@ -717,7 +717,10 @@ const QList<ReasonSource>& reasonSources()
           // DeviceStore validates the replacement device's own name; the
           // takeover sentence uses describe(selection.deviceId) or the
           // registry's saved selection.name, both operator labels.
-          QStringLiteral("takerName")},
+          QStringLiteral("takerName"),
+          // R-R3-49: a Watt Meter calibration point's maximum, a number of
+          // watts (calibrationKeyValueRefusal).
+          QStringLiteral("spec.maximum")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),

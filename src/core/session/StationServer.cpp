@@ -8,6 +8,13 @@
 //                                    AI-assisted implementation via Codex.
 // 2026-09-27: Preserve final pairing output through connection drain.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+//   2026-09-28: R-R3-49 (lead's ruling): a calibration settings write
+//               outside its control's range (the Watt Meter points and
+//               their class, TX Display Cal, the correction factors, the
+//               10 MHz box, the 6 m LNA offsets, Volts/Amps) is refused
+//               whole with the range in plain words
+//               (calibrationKeyValueRefusal). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -716,7 +723,9 @@
 #include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
 #include "core/setup/SetupDescriptionService.h"
+#include "core/PaCalProfile.h"
 
+#include <cmath>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <array>
@@ -1414,6 +1423,85 @@ QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
     return text == QLatin1String("True") || text == QLatin1String("False")
         ? QString()
         : QStringLiteral("The Core expected this box to be on or off.");
+}
+
+// R-R3-49 (lead's ruling, PA and Hardware Config publication): the plain
+// refusal for a calibration value its Setup control cannot hold; empty when
+// it can, or when the key is not one of these. The value is refused whole,
+// never clamped, as the TX EQ band arrays are. The ranges are the controls'
+// own, Thetis's where the control carries them:
+//   Watt Meter points: paCalPointSpec (setup.designer.cs ud{10|100|200}PA{N}W
+//     [v2.10.3.15]) for the Core's radio's class; its boardClass is that class.
+//   TX Display Cal:  From Thetis setup.designer.cs:11870 [v2.10.3.15]
+//     udTXDisplayCalOffset Maximum = 100, Minimum = -100
+//   6 m LNA offsets: From Thetis setup.designer.cs:12096 [v2.10.3.15]
+//     ud6mLNAGainOffset Maximum = 25, Minimum = 0 (ud6mRx2LNAGainOffset :12054)
+//   Volts/Amps:      From Thetis setup.designer.cs:11789 [v2.10.3.15]
+//     udAmpSens Maximum = 5000, Minimum = 0.001; :11819 udAmpVoff 0 to 5000
+//   Correction factors: the Calibration tab's 0 to 2 (Thetis's boxes allow
+//     up to 65, setup.designer.cs:11983 [v2.10.3.15]; the tab's range stands).
+// The Calibration tab also keeps its own copies under paCalibration/cal/.
+QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HPSDRModel model)
+{
+    const QStringList parts = key.split(QLatin1Char('/'));
+    if (parts.size() < 4 || parts[0].compare(QLatin1String("hardware"), Qt::CaseInsensitive) != 0) {
+        return {};
+    }
+    QString rest = parts.mid(2).join(QLatin1Char('/'));
+    if (rest.startsWith(QLatin1String("paCalibration/cal/"), Qt::CaseInsensitive)) {
+        rest = QStringLiteral("cal/") + rest.mid(QStringLiteral("paCalibration/cal/").size());
+    }
+    const QString text = value.toString();
+    bool ok = false;
+    const double number = text.toDouble(&ok);
+    const bool finite = ok && std::isfinite(number);
+    const auto within = [&](double lo, double hi) { return finite && number >= lo && number <= hi; };
+    if (rest.startsWith(QLatin1String("paCalibration/calPoint"), Qt::CaseInsensitive)) {
+        bool pointOk = false;
+        const int point = rest.mid(QStringLiteral("paCalibration/calPoint").size()).toInt(&pointOk);
+        const PaCalPointSpec spec = paCalPointSpec(paCalBoardClassFor(model), point);
+        if (!pointOk || spec.maximum <= 0.0) {
+            return QStringLiteral("This radio has no power meter calibration.");
+        }
+        return within(0.0, spec.maximum)
+            ? QString()
+            : QStringLiteral("Choose a calibration point from 0 to %1 W.").arg(spec.maximum);
+    }
+    if (rest.compare(QLatin1String("paCalibration/boardClass"), Qt::CaseInsensitive) == 0) {
+        const PaCalBoardClass boardClass = paCalBoardClassFor(model);
+        return boardClass != PaCalBoardClass::None
+                && text == QString::number(static_cast<int>(boardClass))
+            ? QString()
+            : QStringLiteral("The Core expected this radio's power calibration table.");
+    }
+    if (rest.compare(QLatin1String("cal/txDisplayOffset"), Qt::CaseInsensitive) == 0) {
+        return within(-100.0, 100.0)
+            ? QString() : QStringLiteral("Choose a TX display offset from -100 to 100 dB.");
+    }
+    if (rest.compare(QLatin1String("cal/freqFactor"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/freqFactor10M"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 2.0) ? QString()
+                                : QStringLiteral("Choose a correction factor from 0 to 2.");
+    }
+    if (rest.compare(QLatin1String("cal/rx1_6mLna"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/rx2_6mLna"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 25.0) ? QString()
+                                 : QStringLiteral("Choose a 6 m LNA offset from 0 to 25 dB.");
+    }
+    if (rest.compare(QLatin1String("cal/paSens"), Qt::CaseInsensitive) == 0) {
+        return within(0.001, 5000.0)
+            ? QString() : QStringLiteral("Choose an amp sensitivity from 0.001 to 5000.");
+    }
+    if (rest.compare(QLatin1String("cal/paOffset"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 5000.0)
+            ? QString() : QStringLiteral("Choose an amp voltage offset from 0 to 5000.");
+    }
+    if (rest.compare(QLatin1String("cal/using10M"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/logVoltsAmps"), Qt::CaseInsensitive) == 0) {
+        return text == QLatin1String("True") || text == QLatin1String("False")
+            ? QString() : QStringLiteral("The Core expected this box to be on or off.");
+    }
+    return {};
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -6442,6 +6530,18 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     // R-R3-49 (parity Task 5): a Power page key the page's own control
     // could not have written is refused, and the Core's value handed back.
     if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
+    // R-R3-49 (lead's ruling): a calibration value outside its control's
+    // range is refused whole, and the Core's value handed back.
+    if (const QString range = calibrationKeyValueRefusal(
+            key, message.updates.first().value,
+            m_radioModel ? m_radioModel->hardwareProfile().model : HPSDRModel::FIRST);
         !range.isEmpty()) {
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
