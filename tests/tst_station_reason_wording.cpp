@@ -1490,6 +1490,12 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own fallback when its Core cannot validate settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
+        // iPhone app plan Task 25 (This Core in a remote window): the
+        // Core's paired devices.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot manage devices"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
+         "a remote window's own reason when it is not signed in as a paired device"},
         // R-IOS-26 / R-R3-49: 2 m as its own band.
         {"src/core/session/IStationLink.h", "band2mUnavailableReason",
          "a remote window's own reason when its Core does not have the 2 m band"},
