@@ -597,6 +597,11 @@
 //                such wait and start none, and Stop All TX acts during one.
 //                NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Stop All TX and the time-out also act while a release is
+//                still on the air (transmitReleaseInProgress: the TX
+//                channel's drain, the send ring's wait, mox_delay).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -6582,6 +6587,12 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::transmitReleaseInProgress() const
+{
+    return m_role != Role::Remote && m_moxController != nullptr
+        && m_moxController->isReleasing();
 }
 
 bool RadioModel::endOfOverTailActive() const
@@ -22173,9 +22184,12 @@ void RadioModel::stopAllTx(const QString& message)
     // RADE end-of-over callsigns: the radio is still on the air during an
     // end-of-over tail (MOX is already off), so a stop then stops it too.
     const bool tailOn = endOfOverTailActive();
-    // G-05: likewise while a release waits for the send ring to drain.
-    const bool ringWaitOn = m_moxController && m_moxController->isSendRingWaitActive();
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn && !ringWaitOn) {
+    // Likewise for the rest of a release that has not yet dropped the
+    // hardware: the TX channel's drain, the send ring's wait (G-05) and
+    // mox_delay. Thetis runs its unkey synchronously, so a StopAllTx can
+    // never land inside it; here it can, and must still stop the radio.
+    const bool releasing = transmitReleaseInProgress();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn && !releasing) {
         return;
     }
 
@@ -22242,7 +22256,10 @@ void RadioModel::onTxTimeOut(const QString& which, int limitSeconds)
     const bool twoToneOn = m_twoToneController
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight());
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+    // NereusSDR: a release still on the air (see stopAllTx) is keyed too;
+    // Thetis's synchronous unkey has no such stretch.
+    const bool releasing = transmitReleaseInProgress();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !releasing) {
         return;
     }
 

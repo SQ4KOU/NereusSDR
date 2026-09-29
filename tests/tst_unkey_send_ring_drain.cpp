@@ -40,9 +40,16 @@
 //                                    time-out, the SWR and amplifier stops)
 //                                    never waits, before or during a wait.
 //   disconnectIsImmediate            a disconnect never waits.
+//   stopsActDuringTheTxDrain         Stop All TX and the time-out act at
+//                                    once while a release waits for the TX
+//                                    channel's drain (MOX already off, the
+//                                    hardware still keyed): MOX off reaches
+//                                    the radio before they return.
 //
 // Modification history (NereusSDR):
 //   2026-09-29  J.J. Boyd / KG4VCF  Unkey waits for the send ring (G-05).
+//                 AI tooling: Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Stops act during the TX drain window.
 //                 AI tooling: Anthropic Claude Code.
 
 #include <QtTest/QtTest>
@@ -469,6 +476,42 @@ private slots:
             QVERIFY(rig.conn.log.contains(QStringLiteral("mox=0")));
             QTRY_COMPARE_WITH_TIMEOUT(rig.mox()->state(), MoxState::Rx, 2000);
         }
+    }
+
+    void stopsActDuringTheTxDrain_data()
+    {
+        QTest::addColumn<bool>("timeOut");
+        QTest::newRow("stop all tx") << false;
+        QTest::newRow("time-out") << true;
+    }
+    void stopsActDuringTheTxDrain()
+    {
+        QFETCH(bool, timeOut);
+        ModelRig rig;
+        rig.conn.drained = true;
+        // A TX channel whose drain never reports: the walk holds in the
+        // drain wait, as it does while a real drain runs.
+        rig.mox()->setAwaitsTxDrain(true);
+        rig.mox()->setTxDrainTimeoutMsForTest(60000);
+        rig.key();
+        rig.mox()->setMox(false);
+        pump();
+        QVERIFY(!rig.mox()->isMox());
+        QCOMPARE(rig.mox()->state(), MoxState::TxToRxInFlight);
+        QVERIFY(!rig.mox()->isSendRingWaitActive());
+
+        rig.conn.log.clear();
+        QSignalSpy stopped(&rig.model, &RadioModel::transmitStopped);
+        if (timeOut) {
+            rig.model.onTxTimeOut(QStringLiteral("MOX"), 600);
+        } else {
+            rig.model.stopAllTx(QStringLiteral("Stop"));
+        }
+        QCOMPARE(stopped.count(), 1);
+        QVERIFY(rig.conn.log.contains(QStringLiteral("mox=0")));
+        QVERIFY(rig.conn.log.contains(QStringLiteral("relay=0")));
+        rig.mox()->setAwaitsTxDrain(false);
+        QTRY_COMPARE_WITH_TIMEOUT(rig.mox()->state(), MoxState::Rx, 2000);
     }
 
     void disconnectIsImmediate()

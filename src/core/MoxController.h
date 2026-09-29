@@ -146,6 +146,9 @@
 //                 FreeDV's end-of-over frame before the TX→RX walk).
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 : isReleasing (MOX off, hardware still keyed), so the
+//                 Core's stops act during the TX drain window. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 : G-05 (JJ's ruling 2026-09-28): SendRingDrain,
 //                 setSendRingDrain, abortSendRingWait, kSendRingPollMs (an
 //                 operator's release waits for the transmit I/Q send ring
@@ -575,6 +578,16 @@ public:
     void onEndOfOverTailDone();
     void abortEndOfOverTail();
     bool isEndOfOverTailActive() const noexcept { return m_waitingForEndOfOverTail; }
+    // isReleasing: MOX is off and the TX to RX walk has not yet released the
+    // hardware (an end-of-over tail, the TX channel's drain, the send ring's
+    // wait or mox_delay), so the radio is still on the air. Thetis's unkey
+    // runs this stretch synchronously inside chkMOX_CheckedChanged2, so
+    // nothing can ask about it there; here the walk is timer-driven and the
+    // stops must treat this stretch as transmitting.
+    bool isReleasing() const noexcept
+    {
+        return !m_mox && m_state == MoxState::TxToRxInFlight;
+    }
 
     // ── Task 33: the TX drain in the TX→RX walk ──────────────────────────────
     //
