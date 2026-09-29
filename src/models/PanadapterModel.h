@@ -14,6 +14,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-28 - Parity ruling C12: setFollowsBandGrid and
+//                 applyStationGridSetting, so a remote window's pan takes
+//                 the Core's per-band dB max and min. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -183,6 +187,22 @@ public:
     int gridStep() const { return m_gridStep; }
     void setGridStep(int step);
 
+    // Parity ruling C12: whether a band crossing pushes this pan's per-band
+    // dB max and min into dBmCeiling/dBmFloor (true, the default). A remote
+    // window's pan sets false: the Core's pan applies its own per-band
+    // values on the crossing and they reach the window through the pan's
+    // mirrored range, so the Core's values win.
+    void setFollowsBandGrid(bool follows) { m_followsBandGrid = follows; }
+    bool followsBandGrid() const { return m_followsBandGrid; }
+
+    // Parity ruling C12: a per-band dB max or min setting changed under
+    // this pan (a remote window's edit arriving at the Core, or the Core's
+    // value arriving at a remote window). Re-reads that band's pair; an
+    // empty key (a whole settings snapshot) re-reads every band. When the
+    // band is this pan's and it follows the band grid, the new range
+    // applies at once. Any other key is ignored.
+    void applyStationGridSetting(const QString& key);
+
 signals:
     void centerFrequencyChanged(double freq);
     void bandwidthChanged(double bw);
@@ -210,6 +230,7 @@ private:
     Band m_band{Band::Band20m};    // Matches default center freq 14.225 MHz.
     QHash<Band, BandGridSettings> m_perBandGrid;
     int m_gridStep{10};            // NereusSDR divergence from Thetis 2.
+    bool m_followsBandGrid{true};  // Parity ruling C12.
 };
 
 } // namespace NereusSDR

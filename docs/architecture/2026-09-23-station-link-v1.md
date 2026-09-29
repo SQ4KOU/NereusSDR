@@ -3716,6 +3716,8 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 2. prefix | `Snb` | station |
 | 2. prefix | `Rade` | station |
 | 2. prefix | `filters/` | station |
+| 2. prefix | `DisplayGridMax_` | station |
+| 2. prefix | `DisplayGridMin_` | station |
 | 2. prefix | `Tci` | operatorLocal |
 | 2. prefix | `radios/` | operatorLocal |
 | 2. prefix | `ConnectionTargets/` | operatorLocal |
@@ -3908,6 +3910,20 @@ several-devices design, table 7.1, "Transmit antenna"). From an older
 peer they stay refused with the transmit reason, and a window whose Core
 does not offer 7 shows them disabled with "This Core cannot change these
 high-pass switches for this app. Updating the Core may help."
+
+Setup > Display > Grid & Scales' dB Max and dB Min per band,
+`DisplayGridMax_<band>` and `DisplayGridMin_<band>` (`<band>` the band's
+key name, `20m`, `GEN`), are station-scoped (parity ruling C12): the
+Core's per-band values win. A taken key, or its removal, reaches the
+Core's panadapters at once (`RadioModel::applyPanGridSetting`); a pan on
+that band takes the new range (a removal returns the band's default,
+-40 and -140 dB), which reaches every window through the pan's mirrored
+`dBmFloor` and `dBmCeiling`. A window's pan never applies its own per-band
+values on a band crossing; the Core's pan applies its own and the window
+shows them. A window re-reads a band when its key arrives, and every band
+on a snapshot. The change is to the display only, so it is taken on and
+off the air, as a local window changes it. The rest of the `Display`
+family, `DisplayGridStep` included, stays each window's own.
 
 ### 8.2 Keys the Core owns by code
 

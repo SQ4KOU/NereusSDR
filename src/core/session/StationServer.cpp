@@ -8,6 +8,8 @@
 //                                    AI-assisted implementation via Codex.
 // 2026-09-27: Preserve final pairing output through connection drain.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+// 2026-09-28: Parity ruling C12: a window's per-band grid write reaches the
+// Core's pans. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -6592,6 +6594,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the Mod Monitor's
         // feedback receiver reaches the Core's feedback analyzer at once.
         m_radioModel->applyModMonitorSetting(key, m_settings.value(key));
+        // Parity ruling C12: a band's grid dB max or min reaches the Core's
+        // pans at once; on that band the new range goes to every window.
+        m_radioModel->applyPanGridSetting(key);
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
@@ -6711,6 +6716,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyRemoteTxDisplaySetting(key);
         // R-IOS-13 / R-R3-49: the Mod Monitor's feedback receiver, rx1.
         m_radioModel->applyModMonitorSetting(key, QVariant());
+        // Parity ruling C12: the band's default grid range.
+        m_radioModel->applyPanGridSetting(key);
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);

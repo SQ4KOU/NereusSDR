@@ -612,6 +612,11 @@ private slots:
             << QStringLiteral("DisplayHzPerBinTarget") << int(SettingsScope::Station);
         QTest::newRow("DisplaySpectrumFps is Station (the straddle -- see SettingsScope.cpp)")
             << QStringLiteral("DisplaySpectrumFps") << int(SettingsScope::Station);
+        // Parity ruling C12: the per-band grid dB max and min are the Core's.
+        QTest::newRow("DisplayGridMax_20m is Station (the Core's per-band grid)")
+            << QStringLiteral("DisplayGridMax_20m") << int(SettingsScope::Station);
+        QTest::newRow("DisplayGridMin_160m is Station (the Core's per-band grid)")
+            << QStringLiteral("DisplayGridMin_160m") << int(SettingsScope::Station);
 
         // The "audio/" split: DspRate/DspBlockSize are real WDSP engine
         // parameters (Station); Speakers/DeviceName is local sound
