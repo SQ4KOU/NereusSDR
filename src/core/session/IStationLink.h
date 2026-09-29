@@ -167,6 +167,9 @@
 //                                    device verbs (deviceAdminAvailable,
 //                                    pairingAvailable, requestDeviceAdmin).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11:
+//                                    adcAttenuatorsAvailable(). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -263,6 +266,9 @@ public:
     /// that sends `txStateVersion` 1 has it (txState carries the time left);
     /// an older Core stores the settings and ignores them.
     virtual bool transmitTimeOutAvailable() const { return false; }
+    /// R-R3-46 / R-R3-11: the Core sends the other receive ADC's own
+    /// attenuator (`stepAtt` rx2AttenuationDb, adcAttenuatorVersion 1).
+    virtual bool adcAttenuatorsAvailable() const { return false; }
     /// R-R3-47 / R-R3-22: the Core reports its Power Genius XL (the
     /// `amplifier` object) and its RF-Kit RF2K-S (the `rfkit` object) to
     /// this app. Both false on an older Core or link.

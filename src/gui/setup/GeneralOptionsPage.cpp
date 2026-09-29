@@ -64,6 +64,12 @@
 //                 transmitter it is checked and disabled with the reason.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-11: the RX2 row shows and sets the other
+//                 receive ADC's own attenuator, disabled with its reason on
+//                 a one-ADC radio or an older Core; RX2 Enable follows RX1
+//                 Enable and Auto Attenuate RX2 is shown disabled (RX1's
+//                 settings run both). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -220,6 +226,12 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
                 [this](bool) { syncReceiveOnly(); });
         connect(model, &RadioModel::currentRadioChanged,
                 this, &GeneralOptionsPage::onCurrentRadioChanged);
+        // R-R3-46 / R-R3-11: the RX2 row follows the radio's board and, in
+        // a remote window, whether the Core sends RX2's value.
+        connect(model, &RadioModel::currentRadioChanged,
+                this, [this]() { refreshRx2StepAtt(); });
+        connect(model, &RadioModel::stationLinkStateChanged,
+                this, [this]() { refreshRx2StepAtt(); });
     }
     syncReceiveOnly();
 
@@ -1043,23 +1055,20 @@ void GeneralOptionsPage::buildStepAttGroup()
     vbox->addLayout(rx1Row);
 
     // --- RX2 row ---
-    // Issue #259: RX2 step-att UI is constructed (m_chkRx2StepAttEnable +
-    // m_spnRx2StepAttValue) and added to the layout, then hidden until the
-    // controller gains independent RX2 state (m_stepAttEnabledRx2 / m_attDbRx2)
-    // plus its own rx2Enabled / rx2Value / rx2Band/<band> persistence schema.
-    // Hiding rather than removing keeps the existing widget members alive so
-    // the connectController() / initFromController() blocks below stay
-    // structurally identical to the eventual RX2-enabled wiring. The Thetis
-    // contract — independent RX1/RX2 storage with a click-time
-    // RX1↔RX2 mirror when nRX1ADCinUse == nRX2ADCinUse (setup.cs:15741-15760
-    // [v2.10.3.13]) — is the follow-up implementation target.
+    // R-R3-46 / R-R3-11: the value is the other receive ADC's own
+    // attenuator (StepAttenuatorController::rx2AttenuatorDb, Thetis
+    // RX2AttenuatorData / udRX2StepAttData), shown with the rest. NereusSDR
+    // keeps one step attenuator enable for both, so RX2 Enable shows RX1's
+    // and is disabled with that reason (refreshRx2StepAtt). The row was
+    // built and hidden by issue #259 until the controller held RX2's value.
     auto* rx2Row = new QHBoxLayout;
     m_chkRx2StepAttEnable = new QCheckBox(QStringLiteral("RX2 Enable"), group);
-    m_chkRx2StepAttEnable->setToolTip(QStringLiteral("Enable the step attenuator."));
-    m_chkRx2StepAttEnable->setVisible(false);
+    m_chkRx2StepAttEnable->setObjectName(QStringLiteral("chkRx2StepAttEnable"));
+    m_chkRx2StepAttEnable->setEnabled(false);
     m_spnRx2StepAttValue = makeDbSpinBox(group);
+    m_spnRx2StepAttValue->setObjectName(QStringLiteral("spnRx2StepAttValue"));
+    m_spnRx2StepAttValue->setProperty("nereusSetupId", "general.options.rx2StepAtt");
     m_spnRx2StepAttValue->setEnabled(false);
-    m_spnRx2StepAttValue->setVisible(false);
     rx2Row->addWidget(m_chkRx2StepAttEnable);
     rx2Row->addWidget(m_spnRx2StepAttValue);
     rx2Row->addStretch();
@@ -1085,6 +1094,7 @@ void GeneralOptionsPage::buildStepAttGroup()
         } else if (m_stepAtt) {
             m_stepAtt->setEnabled(on);
         }
+        refreshRx2StepAtt();
     });
 
     // --- Spinbox → controller ---
@@ -1097,6 +1107,16 @@ void GeneralOptionsPage::buildStepAttGroup()
             m_ctrl->setAttenuation(dB, 0);
         } else if (m_stepAtt) {
             m_stepAtt->setAttenuationDb(dB);
+        }
+    });
+
+    // R-R3-46 / R-R3-11: RX2's value is the other ADC's own attenuator
+    // (Thetis udRX2StepAttData -> console.RX2AttenuatorData).
+    connect(m_spnRx2StepAttValue, &QSpinBox::valueChanged, this, [this](int dB) {
+        if (m_ctrl) {
+            m_ctrl->setRx2Attenuation(dB);
+        } else if (m_stepAtt) {
+            m_stepAtt->setRx2AttenuationDb(dB);
         }
     });
 
@@ -1224,14 +1244,12 @@ void GeneralOptionsPage::buildAutoAttGroup()
 
         contentLayout()->addWidget(group);
 
-        // Issue #259: hide the Auto-Att RX2 group alongside the hidden
-        // RX2 step-att row. The controller is single-RX (auto-att is
-        // RX1-only too); independent RX2 auto-att lands with the
-        // controller-side RX2 refactor. From Thetis groupBoxTS47 the
-        // Auto-Att RX1 / RX2 boxes are independent — same Phase 3F
-        // follow-up scope as RX2 step-att.
+        // R-R3-46 / R-R3-11: auto-attenuate runs on RX2's ADC too, with
+        // the RX1 group's settings (NereusSDR keeps one set), so the RX2
+        // group is shown disabled with that reason rather than hidden.
         if (rx == 1) {
-            group->setVisible(false);
+            group->setEnabled(false);
+            group->setToolTip(autoAttRx2Reason());
         }
     };
 
@@ -1278,7 +1296,12 @@ void GeneralOptionsPage::connectController()
             m_chkRx1StepAttEnable->setChecked(on);
         }
         m_spnRx1StepAttValue->setEnabled(on);
+        refreshRx2StepAtt();
     });
+
+    // R-R3-46 / R-R3-11: the other ADC's own attenuator.
+    connect(m_ctrl, &StepAttenuatorController::rx2AttenuationChanged,
+            this, [this](int) { refreshRx2StepAtt(); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1323,6 +1346,7 @@ void GeneralOptionsPage::initFromController()
         m_spnRx1StepAttValue->setValue(attDb);
     }
     m_spnRx1StepAttValue->setEnabled(stepOn);
+    refreshRx2StepAtt();
 
     // Auto-att group — same lazy-construct problem. Issue #259 PR #260
     // review fix: previously this only pulled enable + mode, leaving
@@ -1434,7 +1458,7 @@ void GeneralOptionsPage::connectFacade()
     }
     for (auto signal : {&F::attenuationDbChanged, &F::autoAttModeChanged,
                         &F::autoAttUndoDelayMsChanged, &F::autoAttHoldMsChanged,
-                        &F::minDbChanged, &F::maxDbChanged}) {
+                        &F::minDbChanged, &F::maxDbChanged, &F::rx2AttenuationDbChanged}) {
         connect(m_stepAtt, signal, this, [this](int) { syncFromFacade(); });
     }
     connect(m_stepAtt, &F::windowAvailabilityChanged,
@@ -1454,6 +1478,11 @@ void GeneralOptionsPage::syncFromFacade()
         m_spnRx1StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
         m_spnRx1StepAttValue->setValue(m_stepAtt->attenuationDb());
     }
+    {
+        QSignalBlocker blk(m_spnRx2StepAttValue);
+        m_spnRx2StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
+    }
+    refreshRx2StepAtt();
     {
         QSignalBlocker blk(m_chkRx1StepAttEnable);
         m_chkRx1StepAttEnable->setChecked(stepOn);
@@ -1495,12 +1524,67 @@ void GeneralOptionsPage::applyRadioHardwareAvailability()
     }
     const bool available = m_stepAtt->windowAvailable();
     const QString reason = available ? QString() : m_stepAtt->windowUnavailableReason();
-    for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
+    for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
         if (auto* group = findChild<QGroupBox*>(QLatin1String(name))) {
             group->setEnabled(available);
             group->setToolTip(reason);
         }
     }
+    // R-R3-46 / R-R3-11: RX2's auto-attenuate group stays disabled; it
+    // follows the RX1 group's settings.
+    if (auto* group = findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx2"))) {
+        group->setEnabled(false);
+        group->setToolTip(available ? autoAttRx2Reason() : reason);
+    }
+    refreshRx2StepAtt();
+}
+
+QString GeneralOptionsPage::autoAttRx2Reason()
+{
+    return tr("Auto Attenuate RX1's settings run both receivers.");
+}
+
+// R-R3-46 / R-R3-11: the RX2 row. Its value is the other receive ADC's own
+// attenuator; it is usable on a radio with a second receive ADC while the
+// step attenuator is on (and, in a remote window, when the Core sends it).
+// Otherwise it is shown disabled with the reason.
+void GeneralOptionsPage::refreshRx2StepAtt()
+{
+    if (!m_spnRx2StepAttValue || !m_chkRx2StepAttEnable) {
+        return;
+    }
+    const RadioModel* radio = model();
+    const bool twoAdc = radio && radio->boardCapabilities().attenuator.present
+        && radio->boardCapabilities().adcCount >= 2;
+    bool stepOn = false;
+    int dB = m_spnRx2StepAttValue->value();
+    bool sent = true;
+    if (m_ctrl) {
+        stepOn = m_ctrl->stepAttEnabled();
+        dB = m_ctrl->rx2AttenuatorDb();
+    } else if (m_stepAtt) {
+        stepOn = m_stepAtt->enabled();
+        dB = m_stepAtt->rx2AttenuationDb();
+        const IStationLink* link = radio ? radio->stationLink() : nullptr;
+        sent = link != nullptr && link->adcAttenuatorsAvailable();
+    }
+    {
+        QSignalBlocker blk(m_chkRx2StepAttEnable);
+        m_chkRx2StepAttEnable->setChecked(stepOn);
+    }
+    m_chkRx2StepAttEnable->setEnabled(false);
+    m_chkRx2StepAttEnable->setToolTip(tr("RX2 is switched on and off with RX1 Enable."));
+    {
+        QSignalBlocker blk(m_spnRx2StepAttValue);
+        m_spnRx2StepAttValue->setValue(dB);
+    }
+    const bool usable = twoAdc && sent && stepOn;
+    m_spnRx2StepAttValue->setEnabled(usable);
+    m_spnRx2StepAttValue->setToolTip(
+        !twoAdc  ? tr("This radio has one receiver input, so RX1 Attenuation covers every slice.")
+        : !sent  ? tr("This Core does not send the second receiver's attenuator. Updating the Core may help.")
+        : !stepOn ? tr("The step attenuator is off.")
+                  : tr("Attenuation for slices on the second receiver input (EXT1 or EXT2)."));
 }
 
 } // namespace NereusSDR

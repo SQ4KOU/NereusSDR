@@ -306,6 +306,25 @@
               "gate": {
                 "board": "attenuator.present"
               }
+            },
+            {
+              "id": "general.options.rx2StepAtt",
+              "label": "RX2 Attenuation",
+              "tooltip": "Attenuation for slices on the second receiver input (EXT1 or EXT2).",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "rx2AttenuationDb"
+                }
+              },
+              "rangeSource": "board.attenuator",
+              "applies": "live",
+              "gate": {
+                "capability": "adcAttenuatorVersion",
+                "min": 1,
+                "board": "attenuator.secondAdc"
+              }
             }
           ]
         },

@@ -564,6 +564,14 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         controls.removeAt(c--);
                         continue;
                     }
+                    // R-R3-46 / R-R3-11: RX2 Attenuation, the other receive
+                    // ADC's own attenuator, only on a radio with a second
+                    // receive ADC (the desktop row is disabled there).
+                    if (boardGate == QLatin1String("attenuator.secondAdc")
+                        && !(caps.attenuator.present && caps.adcCount >= 2)) {
+                        controls.removeAt(c--);
+                        continue;
+                    }
                     if (control.value(QStringLiteral("rangeSource")).toString()
                         == QLatin1String("board.attenuator")) {
                         control.insert(QStringLiteral("min"), caps.attenuator.minDb);

@@ -305,6 +305,9 @@
 //               without adcAttenuatorVersion every slice reads the Core's
 //               attenuationDb. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: R-R3-46 / R-R3-11: adcAttenuatorsAvailable() for the Setup
+//               RX2 row. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -6616,6 +6619,12 @@ bool StationClient::transmitTimeOutAvailable() const
     // The time-out (Task 38) and txState (Task 39) ship together; a Core
     // that sends txStateVersion 1 counts the time-out's time left.
     return stationLinkReady() && m_capabilities.txStateVersion >= 1;
+}
+
+bool StationClient::adcAttenuatorsAvailable() const
+{
+    // R-R3-46 / R-R3-11: stepAtt carries rx2AttenuationDb only with this.
+    return stationLinkReady() && m_capabilities.adcAttenuatorVersion >= 1;
 }
 
 bool StationClient::remoteAmplifierStatusAvailable() const

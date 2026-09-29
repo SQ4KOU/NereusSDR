@@ -1115,6 +1115,48 @@ private slots:
         QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
     }
 
+    // R-R3-46 / R-R3-11: Setup > General > Options describes RX2
+    // Attenuation (the other ADC's own attenuator) on a two-ADC radio, bound
+    // to stepAtt.rx2AttenuationDb and gated on adcAttenuatorVersion 1; a
+    // one-ADC radio has no such control.
+    void generalDescribesRx2AttenuationOnTwoAdcRadios()
+    {
+        const auto find = [](const SetupDescriptionService& service) {
+            for (const QJsonValue& page : service.category(QStringLiteral("general"))
+                     .value(QStringLiteral("pages")).toArray()) {
+                for (const QJsonValue& section : page.toObject()
+                         .value(QStringLiteral("sections")).toArray()) {
+                    for (const QJsonValue& control : section.toObject()
+                             .value(QStringLiteral("controls")).toArray()) {
+                        if (control.toObject().value(QStringLiteral("id")).toString()
+                            == QStringLiteral("general.options.rx2StepAtt")) {
+                            return control.toObject();
+                        }
+                    }
+                }
+            }
+            return QJsonObject{};
+        };
+        SetupDescriptionService g2;
+        g2.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Saturn));
+        const QJsonObject rx2 = find(g2);
+        QVERIFY(!rx2.isEmpty());
+        QCOMPARE(rx2.value(QStringLiteral("label")).toString(), QStringLiteral("RX2 Attenuation"));
+        QCOMPARE(rx2.value(QStringLiteral("binding")).toObject().value(QStringLiteral("property")),
+                 QJsonValue(QJsonObject{{QStringLiteral("object"), QStringLiteral("stepAtt")},
+                                        {QStringLiteral("name"), QStringLiteral("rx2AttenuationDb")}}));
+        QCOMPARE(rx2.value(QStringLiteral("gate")).toObject().value(QStringLiteral("capability")),
+                 QJsonValue(QStringLiteral("adcAttenuatorVersion")));
+        QCOMPARE(rx2.value(QStringLiteral("gate")).toObject().value(QStringLiteral("min")),
+                 QJsonValue(1));
+        QCOMPARE(rx2.value(QStringLiteral("max")).toInt(),
+                 BoardCapsTable::forBoard(HPSDRHW::Saturn).attenuator.maxDb);
+
+        SetupDescriptionService hl2;
+        hl2.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
+        QVERIFY(find(hl2).isEmpty());
+    }
+
     void boardRefreshOnlyMovesRevisionOnChange()
     {
         SetupDescriptionService service;

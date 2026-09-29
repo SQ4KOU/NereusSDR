@@ -904,6 +904,7 @@ public:
     bool stationLinkReady() const override;
     // Merge of Tasks 38 and 39: see IStationLink.
     bool transmitTimeOutAvailable() const override;
+    bool adcAttenuatorsAvailable() const override;
     bool remoteAmplifierStatusAvailable() const override;
     bool remoteRfKitStatusAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
