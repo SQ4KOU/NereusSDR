@@ -111,8 +111,10 @@
 
 #include <QObject>
 #include <QString>
+#include <QElapsedTimer>
 #include <array>
 #include <atomic>
+#include <functional>
 
 namespace NereusSDR {
 
@@ -270,6 +272,20 @@ public:
     int  pendingReadDepth() const;
     void clearPendingReads();
 
+    // A read the radio does not answer is given up, as mi0bot's poll gives
+    // up on it (console.cs:25866-25872 [@c26a8a4]):
+    //   do { await Task.Delay(1); status = ioBoard.readResponse();
+    //        if (timeout++ >= 20) break; } while (1 == status);
+    // and the next read then takes the answer slot (netInterface.c:1471-1497
+    // I2CReadInitiate clears i2c_control). Here a read that went out
+    // kReadAnswerMs or more before the next one is dropped from the
+    // pending-read FIFO when that next read goes out, so its missing answer
+    // cannot take the next read's answer.
+    static constexpr qint64 kReadAnswerMs = 21;
+    // Tests drive the clock the FIFO ages reads by (milliseconds, any
+    // origin, never going back). Null restores the monotonic clock.
+    void setClockForTest(std::function<qint64()> nowMs);
+
     // ── 12-step state machine ──
     // Mirrors the switch(state++) in mi0bot console.cs:25844-25928 [@c26a8a4].
     int     currentStep() const;
@@ -365,6 +381,12 @@ private:
     int  m_i2cHead{0};
     int  m_i2cTail{0};
     int  m_i2cCount{0};
+
+    // When each pending read went out (nowMs()), parallel to m_pendingReads.
+    std::array<qint64, kMaxI2cQueue> m_pendingSentMs{};
+    QElapsedTimer m_clock;
+    std::function<qint64()> m_nowForTest;
+    qint64 nowMs() const;
 
     int  m_currentStep{0};
     std::atomic<bool> m_pollingPaused{false};

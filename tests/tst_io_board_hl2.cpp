@@ -150,6 +150,55 @@ private slots:
         io.setDetected(true);  // same value
         QCOMPARE(spy.count(), 0);
     }
+
+    // ── Unanswered reads ──
+
+    // A read the radio never answers must not take the next read's answer
+    // (mi0bot gives it up after its 20 one-millisecond polls, and the next
+    // read takes the answer slot).
+    void unansweredRead_isGivenUpWhenTheNextReadGoesOut() {
+        IoBoardHl2 io;
+        qint64 now = 1000;
+        io.setClockForTest([&now]() { return now; });
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 6}));
+        now += IoBoardHl2::kReadAnswerMs;
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 169}));
+        QSignalSpy answered(&io, &IoBoardHl2::i2cReadAnswered);
+        io.applyI2cReadResponse(0x80 | (0x3d << 1), 0x00, 0x00, 0x00, 0x04);
+        QCOMPARE(answered.count(), 1);
+        QCOMPARE(answered.at(0).at(1).value<quint8>(), quint8(169));
+        QCOMPARE(io.registerValue(IoBoardHl2::Register::REG_OUT_PINS), quint8(0x04));
+        QCOMPARE(io.pendingReadDepth(), 0);
+    }
+
+    // Reads still inside their answer time keep their order.
+    void readsInsideTheirAnswerTime_keepTheirOrder() {
+        IoBoardHl2 io;
+        qint64 now = 1000;
+        io.setClockForTest([&now]() { return now; });
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 9}));
+        now += IoBoardHl2::kReadAnswerMs - 1;
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 10}));
+        QSignalSpy answered(&io, &IoBoardHl2::i2cReadAnswered);
+        io.applyI2cReadResponse(0x80 | (0x3d << 1), 0x00, 0x00, 0x00, 0x01);
+        io.applyI2cReadResponse(0x80 | (0x3d << 1), 0x00, 0x00, 0x00, 0x02);
+        QCOMPARE(answered.count(), 2);
+        QCOMPARE(answered.at(0).at(1).value<quint8>(), quint8(9));
+        QCOMPARE(answered.at(1).at(1).value<quint8>(), quint8(10));
+    }
+
+    // A late answer with no newer read waiting still lands on its read.
+    void lateAnswer_withNoNewerRead_landsOnItsRead() {
+        IoBoardHl2 io;
+        qint64 now = 1000;
+        io.setClockForTest([&now]() { return now; });
+        QVERIFY(io.pushPendingRead({IoBoardHl2::kI2cAddrGeneral, 6}));
+        now += 10 * IoBoardHl2::kReadAnswerMs;
+        QSignalSpy answered(&io, &IoBoardHl2::i2cReadAnswered);
+        io.applyI2cReadResponse(0x80 | (0x3d << 1), 0x00, 0x00, 0x00, 0x08);
+        QCOMPARE(answered.count(), 1);
+        QCOMPARE(answered.at(0).at(1).value<quint8>(), quint8(6));
+    }
 };
 
 QTEST_APPLESS_MAIN(TestIoBoardHl2)

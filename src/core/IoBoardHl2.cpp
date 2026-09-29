@@ -114,6 +114,17 @@ IoBoardHl2::IoBoardHl2(QObject* parent) : QObject(parent)
     // Per mi0bot IoBoardHl2.cs:121-125 [@c26a8a4]:
     //   for (int i = 0; i < 256; i++) { registers[i] = 0; }
     m_registers.fill(0);
+    m_clock.start();
+}
+
+qint64 IoBoardHl2::nowMs() const
+{
+    return m_nowForTest ? m_nowForTest() : m_clock.elapsed();
+}
+
+void IoBoardHl2::setClockForTest(std::function<qint64()> nowMs)
+{
+    m_nowForTest = std::move(nowMs);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,8 +177,21 @@ void IoBoardHl2::clearI2cQueue()
 
 bool IoBoardHl2::pushPendingRead(const PendingRead& r)
 {
+    // A read that went out kReadAnswerMs or more ago has been given up, as
+    // mi0bot's poll gives it up after its 20 one-millisecond waits
+    // (console.cs:25866-25872 [@c26a8a4]); this newer read takes the answer
+    // slot, as mi0bot's I2CReadInitiate does (netInterface.c:1471-1497).
+    const qint64 now = nowMs();
+    while (m_pendingCount > 0 && now - m_pendingSentMs[m_pendingHead] >= kReadAnswerMs) {
+        qDebug("HL2 I2C: read of %02X/%02X unanswered, given up",
+               m_pendingReads[m_pendingHead].deviceAddress,
+               m_pendingReads[m_pendingHead].subAddress);
+        m_pendingHead = (m_pendingHead + 1) % kMaxI2cQueue;
+        --m_pendingCount;
+    }
     if (m_pendingCount >= kMaxI2cQueue) { return false; }
     m_pendingReads[m_pendingTail] = r;
+    m_pendingSentMs[m_pendingTail] = now;
     m_pendingTail = (m_pendingTail + 1) % kMaxI2cQueue;
     ++m_pendingCount;
     return true;
