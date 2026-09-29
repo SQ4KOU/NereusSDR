@@ -2078,9 +2078,9 @@ private slots:
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
             // General: Region, Network Watchdog (R-R3-49), Receive Only
-            // (Task 16), and the Time Out Timers group (iPhone app plan
-            // Task 38, gated as one).
-            {QStringLiteral("Options"), 4},
+            // (Task 16), the Time Out Timers group (iPhone app plan
+            // Task 38, gated as one) and Extended (addendum G-42).
+            {QStringLiteral("Options"), 5},
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
@@ -4336,6 +4336,23 @@ private slots:
             QVERIFY(regionCombo->isEnabled());
             regionCombo->setCurrentIndex(3);
             QTRY_COMPARE(stationSettings.value(QStringLiteral("BandPlanRegion")).toInt(), 3);
+            // Addendum G-42: Extended is the Core's setting. The window's box
+            // is live at transmitSettingsVersion 11 off the air; this
+            // receive-only session has no transmit permission, so the Core
+            // refuses the tick and the box goes back to the Core's value.
+            // A change on the Core reaches the window's box.
+            QVERIFY(client->transmitSettingsAvailable(11));
+            auto* extendedBox = regionPage.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
+            QVERIFY(extendedBox);
+            QVERIFY(extendedBox->isEnabled());
+            QVERIFY(!extendedBox->isChecked());
+            extendedBox->setChecked(true);
+            QTRY_VERIFY(!extendedBox->isChecked());
+            QVERIFY(!stationSettings.contains(QStringLiteral("ExtendedTransmit")));
+            stationSettings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("True"));
+            QTRY_VERIFY(extendedBox->isChecked());
+            stationSettings.remove(QStringLiteral("ExtendedTransmit"));
+            QTRY_VERIFY(!extendedBox->isChecked());
             QPushButton* const lev = txApplet->findChild<QPushButton*>(QStringLiteral("TxLevButton"));
             QPushButton* const vox = txApplet->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
             auto* const phone = window->findChild<PhoneCwApplet*>();
@@ -4353,6 +4370,9 @@ private slots:
             coreMox->setMox(true);
             QTRY_VERIFY(window->radioModel()->isCoreOnAir());
             QTRY_VERIFY(!regionCombo->isEnabled());
+            QTRY_VERIFY(!extendedBox->isEnabled());
+            QCOMPARE(extendedBox->toolTip(),
+                     QStringLiteral("The radio is on the air. Try again when it stops."));
             QTRY_VERIFY(!txApplet->rfPowerSlider()->isEnabled());
             QCOMPARE(txApplet->rfPowerSlider()->toolTip(),
                      QStringLiteral("The radio is on the air. Try again when it stops."));
@@ -4375,6 +4395,7 @@ private slots:
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
             QTRY_VERIFY(regionCombo->isEnabled());
+            QTRY_VERIFY(extendedBox->isEnabled());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
             QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
             QTRY_VERIFY(lev->isEnabled());

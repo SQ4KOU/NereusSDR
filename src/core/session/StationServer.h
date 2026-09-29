@@ -422,6 +422,10 @@
 //               fitTxEqCurveToPeer(): transmit's txEqCurve and
 //               txEqCurveVersion only to a peer that declared txEqCurve.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: addendum G-42: transmitGateSettingRefusal(), the Core's
+//               Extended transmit setting taken only with transmit
+//               permission, off the air, as True or False. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1349,6 +1353,15 @@ private:
     /// remove of a key on isTransmitSettingKeyAcceptedOffAir's list on a
     /// receive-only Core; empty when the key may be applied now.
     QString transmitSettingOnAirRefusal(const QString& key) const;
+    /// Addendum G-42 (JJ's ruling 2026-09-28): a key the transmit gate
+    /// reads (RadioModel::kExtendedTransmitKey). Its write or removal needs
+    /// this session's transmit permission (txDecisionFor), waits while the
+    /// radio is on the air, and a write must be "True" or "False".
+    static bool isTransmitGateSettingKey(const QString& key);
+    /// The refusal for that write (`value` set) or removal (`value` null);
+    /// empty when it may be applied now.
+    QString transmitGateSettingRefusal(SessionTransport* transport, const QString& key,
+                                       const QVariant* value) const;
     /// R-R3-49 (parity Task 1): this peer agreed minor 11 and was offered
     /// transmitSettingsVersion 1.
     bool transmitSettingsOffered(SessionTransport* transport) const;

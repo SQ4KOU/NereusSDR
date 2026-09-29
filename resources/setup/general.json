@@ -92,15 +92,21 @@
             {
               "id": "general.options.extended",
               "label": "Extended",
-              "tooltip": "Extended transmit is not available on this Core.",
+              "tooltip": "Enable extended TX (out of band)",
               "kind": "toggle",
               "binding": {
-                "phone": "ExtendedTxAllowed"
+                "setting": "ExtendedTransmit"
               },
               "applies": "live",
-              "availability": {
-                "enabled": false,
-                "reason": "Extended transmit is not available on this Core."
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 11,
+                "offAir": true,
+                "transmit": true
               }
             },
             {

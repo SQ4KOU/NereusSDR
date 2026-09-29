@@ -71,6 +71,9 @@
 //               the radio's PTT's frozen transmit receiver is not takeable
 //               (M5). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-28: addendum G-42: the Core's Extended transmit setting needs
+//               transmit permission and waits for receive. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -2868,6 +2871,83 @@ private slots:
             QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("3"));
         }
         s.core.model->transmitModel().setMox(false);
+    }
+
+    // Addendum G-42 (JJ's ruling 2026-09-28): Extended transmit is one
+    // Core setting. A device changes it only with transmit permission (the
+    // station transmit gate: remote transmit allowed, an app that
+    // transmits, nobody else holding transmit), never while the radio is
+    // on the air, and only to True or False. Every device hears the Core's
+    // value. No RF: MOX here is the transmit model's latch only.
+    void extendedTransmitNeedsTransmitPermissionAndWaitsForReceive()
+    {
+        Shared s(2, 5, kTransmitter);
+        const QString key = QStringLiteral("ExtendedTransmit");
+        const auto refusedWith = [&](LoopbackTransport* app, const QString& value) {
+            const int before = countOf(app, QStringLiteral("settings.reject"));
+            app->sendText(SessionMessages::encode(
+                value.isNull() ? SessionMessages::settingsRemove(key)
+                               : SessionMessages::settingsWrite(key, value, QStringLiteral("ext"))));
+            const QJsonObject reject = waitForLast(app, QStringLiteral("settings.reject"), before);
+            return reject.value(QStringLiteral("key")).toString() == key
+                ? reject.value(QStringLiteral("reason")).toString() : QString();
+        };
+        const auto heardValue = [&](const LoopbackTransport* app) {
+            QString last;
+            for (const QJsonObject& m : messagesOfType(app, QStringLiteral("settings.value"))) {
+                if (m.value(QStringLiteral("key")).toString() == key) {
+                    const QJsonArray props = m.value(QStringLiteral("properties")).toArray();
+                    last = props.isEmpty() ? QStringLiteral("<absent>")
+                        : props.first().toObject().value(QStringLiteral("value")).toString();
+                }
+            }
+            return last;
+        };
+
+        // A receive-only Core (remote transmit denied) refuses it.
+        QCOMPARE(refusedWith(s.appB, QStringLiteral("True")),
+                 QStringLiteral("This Core is set to receive only."));
+        QVERIFY(!s.core.settings->contains(key));
+
+        allowTransmit(s.core);
+        // An app that does not transmit is refused.
+        QCOMPARE(refusedWith(s.appA, QStringLiteral("True")),
+                 QStringLiteral("Update this app to transmit through this Core."));
+        // Only on or off.
+        QCOMPARE(refusedWith(s.appB, QStringLiteral("yes")),
+                 QStringLiteral("Extended transmit is either on or off."));
+        QVERIFY(!s.core.settings->contains(key));
+
+        // A device with transmit permission, off the air: taken, and every
+        // device hears it.
+        s.appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(key, QStringLiteral("True"), QStringLiteral("ext-on"))));
+        QTRY_COMPARE(s.core.settings->value(key).toString(), QStringLiteral("True"));
+        QTRY_COMPARE(heardValue(s.appA), QStringLiteral("True"));
+        QTRY_COMPARE(heardValue(s.appB), QStringLiteral("True"));
+
+        // On the air: neither a change nor a removal.
+        s.core.model->transmitModel().setMox(true);
+        QCOMPARE(refusedWith(s.appB, QStringLiteral("False")), kRadioOnAir);
+        QCOMPARE(refusedWith(s.appB, QString()), kRadioOnAir);
+        QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("True"));
+        s.core.model->transmitModel().setMox(false);
+
+        // Another device holds transmit: this one may not change it.
+        TransmitHolder* holder = s.core.server->transmitHolder();
+        TransmitHolder::KeyRequest take;
+        take.deviceId = s.a.key.fingerprint();
+        QCOMPARE(holder->askKey(take).verdict, KeyingVerdict::Admit);
+        const QString heldReason = refusedWith(s.appB, QStringLiteral("False"));
+        QVERIFY(!heldReason.isEmpty());
+        QVERIFY(heldReason != QStringLiteral("Extended transmit is either on or off."));
+        QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("True"));
+        holder->release(s.a.key.fingerprint(), QStringLiteral("test"));
+
+        // Removing it turns Extended off again.
+        s.appB->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        QTRY_VERIFY(!s.core.settings->contains(key));
+        QTRY_COMPARE(heardValue(s.appA), QStringLiteral("<absent>"));
     }
 
     void theTransmittersCoreSettingsAskTheHolder()

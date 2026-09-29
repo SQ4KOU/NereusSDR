@@ -41,6 +41,10 @@
 //                 Anthropic Claude Code. The RadioModel band-plan case keys
 //                 from the radio mic; new cases pin the pre-check order
 //                 (remote, band plan, PC microphone).
+//   2026-09-28 : Addendum G-42 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Extended is the Core's
+//                 ExtendedTransmit setting; the old ExtendedTxAllowed is
+//                 ignored.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
@@ -455,6 +459,62 @@ private slots:
         QCOMPARE(rejected.size(), allowed ? 0 : 1);
         model.moxController()->setMox(false);
         QCoreApplication::processEvents();
+    }
+
+    // Addendum G-42 (JJ's ruling 2026-09-28): Extended is one Core
+    // setting, ExtendedTransmit, read at every key. Thetis's
+    // CheckValidTXFreq returns true while it is on (console.cs:6780
+    // [v2.10.3.15]), past the band edges, the filter edges and the US 60 m
+    // mode rule. An old saved ExtendedTxAllowed never turns it on, and
+    // only exactly "True" does.
+    void extendedTransmitIsTheCoresSettingAndTheOldKeyIsIgnored_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<double>("carrier");
+        QTest::newRow("usb-carrier-above-20m") << int(DSPMode::USB) << 14360000.0;
+        QTest::newRow("usb-filter-edge-above-20m") << int(DSPMode::USB) << 14349000.0;
+        QTest::newRow("lsb-filter-edge-below-20m") << int(DSPMode::LSB) << 14001000.0;
+        QTest::newRow("am-on-us-60m") << int(DSPMode::AM) << 5357000.0;
+    }
+
+    void extendedTransmitIsTheCoresSettingAndTheOldKeyIsIgnored()
+    {
+        QFETCH(int, mode);
+        QFETCH(double, carrier);
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        slice->setDspMode(static_cast<DSPMode>(mode));
+        slice->setFrequency(carrier);
+        model.transmitModel().setFilterLow(100);
+        model.transmitModel().setFilterHigh(2900);
+
+        const auto keyed = [&model]() {
+            model.moxController()->setMox(true);
+            QCoreApplication::processEvents();
+            const bool on = model.moxController()->isMox();
+            model.moxController()->setMox(false);
+            QCoreApplication::processEvents();
+            return on;
+        };
+        auto& settings = AppSettings::instance();
+        // Off by default.
+        QVERIFY(!keyed());
+        // The old per-computer key is ignored.
+        settings.setValue(QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"));
+        QVERIFY(!keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("true"));
+        QVERIFY(!keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("True"));
+        QVERIFY(keyed());
+        settings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("False"));
+        QVERIFY(!keyed());
+        settings.remove(QStringLiteral("ExtendedTransmit"));
+        QVERIFY(!keyed());
     }
 
     void invalidStoredRegionCannotWrapIntoAnAllowedRegion_data()

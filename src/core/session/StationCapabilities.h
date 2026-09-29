@@ -331,6 +331,8 @@ struct StationCapabilities {
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
     /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
+    /// 11 (addendum G-42) adds the Core's Extended transmit setting,
+    /// `ExtendedTransmit`, taken with transmit permission and off the air.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode

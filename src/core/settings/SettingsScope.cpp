@@ -518,6 +518,14 @@ const Rule kWholeKeys[] = {
     // clearest possible case for Station in a genuinely remote session.
     { "BandPlanName", SettingsScope::Station },
     { "BandPlanRegion", SettingsScope::Station },
+    // JJ's ruling (2026-09-28, addendum G-42): Extended transmit is one
+    // setting of the Core's, default off, read by the Core's transmit gate
+    // (RadioModel::installBandPlanMoxCheck). A new key on purpose: an old
+    // saved ExtendedTxAllowed (below, still OperatorLocal) is never read,
+    // so no computer's or Core's old tick can turn Extended on; the
+    // operator ticks it again. Written only with transmit permission and
+    // never while the radio is on the air (StationServer).
+    { "ExtendedTransmit", SettingsScope::Station },
     { "Region", SettingsScope::Station }, // GeneralOptionsPage.cpp's FRS
                                             // region combo, same reasoning.
 
@@ -621,6 +629,9 @@ const Rule kWholeKeys[] = {
     // audit that DOES wire one of these into real enforcement trips over
     // an explicit line to change instead of a silent default.
     { "DisableHfPa", SettingsScope::OperatorLocal },
+    // Superseded by the Core's ExtendedTransmit (above). Kept pinned so a
+    // saved value from an older version stays on the computer that saved
+    // it and is ignored: it never turns Extended transmit on.
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
     { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },
 };

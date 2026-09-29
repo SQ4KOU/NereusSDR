@@ -639,6 +639,10 @@
 //               declared txEqCurve 1; every other peer's schema, snapshot
 //               and deltas stay as they were. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-28: addendum G-42 (JJ's ruling): Extended transmit is the
+//               Core's ExtendedTransmit setting, changed only with transmit
+//               permission and off the air; transmitSettingsVersion 11.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -6489,6 +6493,19 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
             return;
         }
     }
+    // Addendum G-42: a setting the transmit gate reads is changed only by a
+    // session with transmit permission, off the air, and only to on or off.
+    if (isTransmitGateSettingKey(key)) {
+        const QVariant value = message.updates.first().value;
+        if (const QString refusal = transmitGateSettingRefusal(transport, key, &value);
+            !refusal.isEmpty()) {
+            const QVariant restored = m_settings.value(key);
+            qCInfo(lcStation) << "Refused remote settings write" << key << ":" << refusal;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(), refusal));
+            return;
+        }
+    }
     // R-R3-49 (parity Task 1): a transmit setting a receive-only Core takes
     // off the air (DSP > Options TX) waits while the radio is on the air,
     // and the Core hands back its own value so the combo settles on it.
@@ -6601,7 +6618,7 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
                                        QString* refusal)
 {
     const QString key = QString::fromUtf8(message.objectKey);
-    if (key == QLatin1String("BandPlanRegion")) {
+    if (key == QLatin1String("BandPlanRegion") || isTransmitGateSettingKey(key)) {
         QString reason = transmitSettingOnAirRefusal(key);
         if (reason.isEmpty()) {
             reason = bandPlanRefusal(key, message.updates.first().value);
@@ -6666,6 +6683,10 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
+    // Addendum G-42: the Core's own Setup page shows a device's change.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->reportTransmitGateSettingChanged(key);
+    }
     return true;
 }
 
@@ -6714,6 +6735,17 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
             send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                             restored.toString(),
                                                             decision.refusal.text));
+            return;
+        }
+    }
+    // Addendum G-42: removing it restores off, under the same rule.
+    if (isTransmitGateSettingKey(key)) {
+        if (const QString refusal = transmitGateSettingRefusal(transport, key, nullptr);
+            !refusal.isEmpty()) {
+            const QVariant restored = m_settings.value(key);
+            qCInfo(lcStation) << "Refused remote settings remove" << key << ":" << refusal;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(), refusal));
             return;
         }
     }
@@ -6787,6 +6819,11 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);
+    // Addendum G-42: removing ExtendedTransmit turns it off; the Core's
+    // own Setup page shows it.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->reportTransmitGateSettingChanged(key);
+    }
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────
@@ -8706,8 +8743,11 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 {
     QString reason;
     // Changing a transmit region, including removing it to restore the
-    // default, always waits for RX, regardless of who holds transmit.
-    if (key == QLatin1String("BandPlanRegion") && m_radioModel) {
+    // default, always waits for RX, regardless of who holds transmit. So
+    // does Extended transmit (addendum G-42: refused while anyone is
+    // transmitting).
+    if ((key == QLatin1String("BandPlanRegion") || isTransmitGateSettingKey(key))
+        && m_radioModel) {
         m_radioModel->stationOnAirRefusal(&reason);
         return reason;
     }
@@ -8732,6 +8772,39 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     }
     m_radioModel->stationOnAirRefusal(&reason);
     return reason;
+}
+
+bool StationServer::isTransmitGateSettingKey(const QString& key)
+{
+    return key == QLatin1String(RadioModel::kExtendedTransmitKey);
+}
+
+QString StationServer::transmitGateSettingRefusal(SessionTransport* transport,
+                                                  const QString& key,
+                                                  const QVariant* value) const
+{
+    if (!isTransmitGateSettingKey(key)) {
+        return {};
+    }
+    if (m_radioModel.isNull()) {
+        return QStringLiteral("This Core has no radio to transmit with.");
+    }
+    // JJ's ruling (2026-09-28): changing it needs transmit permission, the
+    // station transmit gate's (remote transmit allowed, this device paired
+    // and ready, nobody else holding transmit).
+    const TxDecision decision = txDecisionFor(transport);
+    if (!decision.permitted) {
+        return decision.refusal.text;
+    }
+    // ... and it is refused while anyone is transmitting.
+    if (const QString onAir = transmitSettingOnAirRefusal(key); !onAir.isEmpty()) {
+        return onAir;
+    }
+    if (value != nullptr && value->toString() != QLatin1String("True")
+        && value->toString() != QLatin1String("False")) {
+        return QStringLiteral("Extended transmit is either on or off.");
+    }
+    return {};
 }
 
 int StationServer::bandSelectVersion() const
@@ -9598,7 +9671,12 @@ int StationServer::transmitSettingsVersion() const
     // 10: the mic mute, `transmit.micMuted` (iPhone app plan Task 40),
     // under the same gates as the mic level; muting sets the Core's mic
     // preamp to 0.0 as Thetis's chkMicMute does.
-    return m_radioModel.isNull() ? 0 : 10;
+    // 11: General Options' Extended, the Core's ExtendedTransmit setting
+    // ("True"/"False", default off), read by the Core's transmit gate;
+    // changed only with transmit permission and off the air (addendum
+    // G-42). An older peer's ExtendedTxAllowed stays its own and is
+    // ignored.
+    return m_radioModel.isNull() ? 0 : 11;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

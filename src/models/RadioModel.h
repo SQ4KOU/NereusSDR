@@ -1034,6 +1034,21 @@ public:
     // MoxController holds the gate (setRxOnly); rxOnlyChanged tells Setup
     // and the transmit buttons.
     static bool rxOnlySetting();
+
+    // JJ's ruling (2026-09-28, addendum G-42): Thetis's Extended
+    // (chkExtended, console.Extended; console.cs:6780 and :6818
+    // [v2.10.3.15] return true from CheckValidTXFreq and
+    // checkValidTXFreq_local while it is on) as one Core setting,
+    // "ExtendedTransmit" (SettingsScope::Station), default off. The old
+    // per-computer "ExtendedTxAllowed" is never read. The transmit gate
+    // reads this at every key; StationServer takes a device's change only
+    // with transmit permission and off the air.
+    static constexpr const char* kExtendedTransmitKey = "ExtendedTransmit";
+    static bool extendedTransmitSetting();
+    /// A local window, or the Core a device changed it on, tells the pages
+    /// that show it (transmitGateSettingChanged).
+    void reportTransmitGateSettingChanged(const QString& key);
+
     void setRxOnly(bool on);
     void applyRxOnlySetting(bool on);
     bool isRxOnly() const noexcept { return m_rxOnlyEffective; }
@@ -4879,6 +4894,10 @@ signals:
                                  bool shownOnPage);
     /// Remote window: a Core station setting changed (empty: a snapshot).
     void stationSettingChanged(const QString& key);
+    /// A setting the transmit gate reads (ExtendedTransmit) changed on
+    /// this model's own settings: a local window's edit, or a device's
+    /// edit the Core took. A remote window hears stationSettingChanged.
+    void transmitGateSettingChanged(const QString& key);
     /// R-R3-22 fix wave: see reportStationCommandFinished. The one
     /// per-command result signal: the amp applets' pending requests and
     /// the TCI switch's request wait both match their own id here (an

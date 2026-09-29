@@ -884,7 +884,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 10 |
+| `transmitSettingsVersion` | 11 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1204,7 +1204,20 @@ When a feature is off, its version is 0:
   air only) and never keys. Muting sets the Core's mic preamp to 0.0 and
   unmuting restores the mic level, as Thetis's setAudioMicGain does
   (console.cs:28856-28868 [v2.10.3.15]). It is never saved: the mic starts
-  in use after every Core start.
+  in use after every Core start. Version 11 (addendum G-42) adds General
+  Options' Extended as the Core's settings key `ExtendedTransmit` ("True" or
+  "False"; absent means off). The Core's transmit gate reads it at every
+  key: while it is "True" the band, filter-edge and US 60 m mode checks are
+  skipped, as Thetis's CheckValidTXFreq returns true while Extended is on
+  (console.cs:6780 [v2.10.3.15]). A `settings.write` or `settings.remove`
+  of it is taken only from a session the station transmit gate permits
+  (otherwise refused with that gate's words, for example "This Core is set
+  to receive only."), never while the radio is on the air ("The radio is
+  on the air. Try again when it stops."), and a write that is neither
+  "True" nor "False" is refused "Extended transmit is either on or off."
+  The Core's value reaches every device as `settings.value`. The older
+  per-device key `ExtendedTxAllowed` stays each app's own
+  (`settings.reject`, as before) and never turns Extended on.
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -3989,6 +4002,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `audio/DspBlockSize` | station |
 | 3. whole key | `BandPlanName` | station |
 | 3. whole key | `BandPlanRegion` | station |
+| 3. whole key | `ExtendedTransmit` | station |
 | 3. whole key | `Region` | station |
 | 3. whole key | `CWPitch` | station |
 | 3. whole key | `Nr3ModelPath` | station |

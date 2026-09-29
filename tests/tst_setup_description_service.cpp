@@ -934,7 +934,7 @@ private slots:
         const QStringList generalKeys = {
             QStringLiteral("RxOnly"), QStringLiteral("NetworkWatchdogEnabled"),
             QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("PingTimeOutEnabled"),
-            QStringLiteral("RemoteMoxTimeOutEnabled")};
+            QStringLiteral("RemoteMoxTimeOutEnabled"), QStringLiteral("ExtendedTransmit")};
         int generalCount = 0;
         for (const QJsonValue& page : service.category(QStringLiteral("general"))
                  .value(QStringLiteral("pages")).toArray()) {
@@ -955,7 +955,7 @@ private slots:
                 }
             }
         }
-        QCOMPARE(generalCount, 5);
+        QCOMPARE(generalCount, 6);
 
         const QJsonObject watchdog = findControl(QStringLiteral("general"),
             QStringLiteral("general.options.networkWatchdog"));
@@ -988,6 +988,7 @@ private slots:
         const QStringList keys = {QStringLiteral("RxOnly"),
             QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("PingTimeOutEnabled"),
             QStringLiteral("RemoteMoxTimeOutEnabled"), QStringLiteral("NetworkWatchdogEnabled"),
+            QStringLiteral("ExtendedTransmit"),
             QStringLiteral("DspOptionsCacheImpulse"),
             QStringLiteral("DspOptionsCacheImpulseSaveRestore")};
         QHash<QString, QVariant> oldValues;
@@ -1012,6 +1013,7 @@ private slots:
             QStringLiteral("general.options.pingTimeoutEnabled"),
             QStringLiteral("general.options.remoteTimeoutEnabled"),
             QStringLiteral("general.options.networkWatchdog"),
+            QStringLiteral("general.options.extended"),
             QStringLiteral("dsp.options.DspOptionsCacheImpulse"),
             QStringLiteral("dsp.options.DspOptionsCacheImpulseSaveRestore")};
         for (const QString& id : ids) {
@@ -1036,6 +1038,9 @@ private slots:
                     QCOMPARE(RadioModel::networkWatchdogSetting(), on);
                 } else if (key == QLatin1String("RxOnly")) {
                     QCOMPARE(RadioModel::rxOnlySetting(), on);
+                } else if (key == QLatin1String("ExtendedTransmit")) {
+                    // Addendum G-42: the transmit gate's reader.
+                    QCOMPARE(RadioModel::extendedTransmitSetting(), on);
                 } else if (key == QLatin1String("MoxTimeOutEnabled")) {
                     QCOMPARE(RadioModel::txTimeOutSettingsFor(QStringLiteral("station")).moxEnabled, on);
                 } else if (key == QLatin1String("PingTimeOutEnabled")) {
