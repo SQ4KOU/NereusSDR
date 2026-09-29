@@ -168,6 +168,7 @@ private slots:
                                         QStringLiteral("hardware")).toString();
         QVERIFY(hardware.contains(QStringLiteral("hardware.alex1Filters.bpf1.6mBP.bypass")));
         QVERIFY(hardware.contains(QStringLiteral("hardware.alex2Filters.bypass55MhzBpf")));
+        QVERIFY(hardware.contains(QStringLiteral("hardware.alex1Filters.hpfBypassOnTx")));
         QVERIFY(hardware.contains(QStringLiteral("hardware.radioInfo.sampleRate")));
 
         QHash<QByteArray, int> v12Features = kHolder;
@@ -190,6 +191,14 @@ private slots:
         v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
             key, QStringLiteral("1.9"), QStringLiteral("phone"))));
         QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("1.9"));
+
+        // A switch above the rows, written the same way: Disable 6m LNA
+        // on RX.
+        const QString lnaKey = QStringLiteral("hardware/%1/alex/master/disable6mLnaOnRx")
+            .arg(info.macAddress);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            lnaKey, QStringLiteral("True"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(lnaKey).toString(), QStringLiteral("True"));
     }
 
     // R-R3-49 (lead's ruling): the Core refuses a calibration write whole

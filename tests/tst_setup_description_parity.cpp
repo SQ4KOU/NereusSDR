@@ -1006,7 +1006,11 @@ private slots:
                     }
                     QVERIFY2(group != nullptr, qPrintable(id));
                     QCOMPARE(group->title(), section.value("title").toString());
-                    if (id == QLatin1String("hardware.alex2Filters.bypass55MhzBpf")) {
+                    // A switch above the rows (the Alex-1 tab's five and the
+                    // Alex-2 master): its box's text and default.
+                    if (id == QLatin1String("hardware.alex2Filters.bypass55MhzBpf")
+                        || control.value("binding").toObject().value("radioSetting")
+                               .toString().startsWith(QLatin1String("alex/master/"))) {
                         auto* box = qobject_cast<QCheckBox*>(widget);
                         QVERIFY(box != nullptr);
                         QCOMPARE(box->text(), control.value("label").toString());
@@ -1046,8 +1050,9 @@ private slots:
                 }
             }
         }
-        // Three banks of six rows of three, and the Alex-2 master.
-        QCOMPARE(compared, 3 * 6 * 3 + 1);
+        // The Alex-1 tab's five switches, three banks of six rows of three,
+        // and the Alex-2 master.
+        QCOMPARE(compared, 5 + 3 * 6 * 3 + 1);
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()

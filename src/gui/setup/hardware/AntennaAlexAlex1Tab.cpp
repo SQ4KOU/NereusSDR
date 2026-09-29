@@ -33,6 +33,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
 //                Setup description ids (version 13). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the five switches above the rows carry
+//                their Setup description ids (version 13). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -398,6 +401,16 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     m_hpfBypassOnTx->setObjectName(QStringLiteral("alexHpfBypassOnTx"));
     m_hpfBypassOnPs->setObjectName(QStringLiteral("alexHpfBypassOnPs"));
     m_disable6mLnaOnTx->setObjectName(QStringLiteral("alexDisable6mLnaOnTx"));
+    // Setup description version 13: the same five switches on the phone.
+    m_hpfBypass->setProperty("nereusSetupId", QStringLiteral("hardware.alex1Filters.hpfBypass"));
+    m_hpfBypassOnTx->setProperty("nereusSetupId",
+                                 QStringLiteral("hardware.alex1Filters.hpfBypassOnTx"));
+    m_hpfBypassOnPs->setProperty("nereusSetupId",
+                                 QStringLiteral("hardware.alex1Filters.hpfBypassOnPs"));
+    m_disable6mLnaOnTx->setProperty("nereusSetupId",
+                                    QStringLiteral("hardware.alex1Filters.disable6mLnaOnTx"));
+    m_disable6mLnaOnRx->setProperty("nereusSetupId",
+                                    QStringLiteral("hardware.alex1Filters.disable6mLnaOnRx"));
 
     auto wireMaster = [this](QCheckBox* chk, const QString& key) {
         connect(chk, &QCheckBox::toggled, this,

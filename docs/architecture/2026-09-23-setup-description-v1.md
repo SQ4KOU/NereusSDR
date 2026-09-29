@@ -543,6 +543,21 @@ defaulting to Thetis's spinner values. Every row has the gate
 `radioHardwareVersion:8` and no off-air rule: the Core applies a change to
 its radio at once, on or off the air, as Thetis's setters do.
 
+Alex HPF Bands opens with the tab's five switches above its rows, in the
+desktop's order: HPF Bypass (master), HPF Bypass on TX, HPF Bypass on
+PureSignal feedback, Disable 6m LNA on TX and Disable 6m LNA on RX (ids
+`hardware.alex1Filters.hpfBypass`, `.hpfBypassOnTx`, `.hpfBypassOnPs`,
+`.disable6mLnaOnTx`, `.disable6mLnaOnRx`; `radioSetting`
+`alex/master/<the same name>`). Each is a `True`/`False` toggle with an
+empty tooltip, defaulting as the desktop does (on PureSignal feedback and
+6 m LNA on TX checked, the other three clear), gate
+`radioHardwareVersion:8` and no off-air rule. The three the Core counts as
+transmit hardware (on TX, on PureSignal feedback, 6 m LNA on TX) add
+`transmit:true`: with remote transmit allowed, the Core takes a write of them
+only from a session permitted to transmit. The desktop asks before clearing
+HPF Bypass on PureSignal feedback (the IMD warning); the description carries
+no such confirmation, so a phone clears it at once.
+
 Transmit > Power gains a PA Control section last with Disable HF PA
 (`transmit.power.DisableHfPa`, `setting` `DisableHfPa`, `True`/`False`,
 default false, gate `transmitSettingsVersion:11` plus `transmit:true` and
@@ -556,9 +571,9 @@ Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
 bank is serialized per profile and no closed profile state or command exists
 on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
 auto-calibration sweep (it keys the radio from the desktop's own window);
-the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
-Alex-1 Filters tab's five switches above its rows (HPF Bypass, on TX and
-on PureSignal feedback, and the two 6 m LNA boxes) and both tabs' LPF edges (the LPF edges stay hidden on the desktop too); OC Outputs; the rest of Calibration (frequency and level calibration,
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); both
+Alex Filters tabs' LPF edges (hidden on the desktop too: the Core does not
+apply them yet, as nothing selects the transmit low-pass from them); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
 HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or

@@ -1212,9 +1212,10 @@ private slots:
         // Every resource row is closed.
         const QList<QJsonObject> rows = resourceRows(QStringLiteral("hardware"), 13);
         // Radio Info's seven, its sample rate and copy button, TX Display
-        // Cal, N2ADR, and the Alex receive filter rows: three banks of six
-        // rows of three, and the Alex-2 master.
-        QCOMPARE(rows.size(), 11 + 3 * 6 * 3 + 1);
+        // Cal, N2ADR, the Alex-1 tab's five switches, and the Alex receive
+        // filter rows: three banks of six rows of three, and the Alex-2
+        // master.
+        QCOMPARE(rows.size(), 11 + 5 + 3 * 6 * 3 + 1);
         for (const QJsonObject& row : rows) {
             QVERIFY2(SetupDescriptionService::validateHardwareV13Control(row),
                      qPrintable(row.value("id").toString()));
@@ -1374,8 +1375,38 @@ private slots:
         };
         const QStringList hpfLabels{"1.5 MHz HPF", "6.5 MHz HPF", "9.5 MHz HPF", "13 MHz HPF",
                                     "20 MHz HPF", "6m Bypass"};
-        checkBank(alex1Sections.at(0).toObject().value("controls").toArray(),
-                  "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
+        // The five switches above the rows, in the desktop's order, each a
+        // True/False radioSetting under alex/master (radioHardwareVersion 8,
+        // no off-air rule). The three the Core counts as transmit hardware
+        // (isTransmitHardwareKey) carry the transmit gate.
+        QJsonArray hpfSection = alex1Sections.at(0).toObject().value("controls").toArray();
+        QCOMPARE(hpfSection.size(), 5 + 18);
+        struct Switch { const char* field; const char* label; bool transmit; bool on; };
+        const Switch switches[] = {
+            {"hpfBypass", "HPF Bypass (master)", false, false},
+            {"hpfBypassOnTx", "HPF Bypass on TX", true, false},
+            {"hpfBypassOnPs", "HPF Bypass on PureSignal feedback", true, true},
+            {"disable6mLnaOnTx", "Disable 6m LNA on TX", true, true},
+            {"disable6mLnaOnRx", "Disable 6m LNA on RX", false, false}};
+        for (const Switch& expected : switches) {
+            const QJsonObject row = hpfSection.takeAt(0).toObject();
+            const QString field = QString::fromLatin1(expected.field);
+            QCOMPARE(row.value("id"), QJsonValue("hardware.alex1Filters." + field));
+            QCOMPARE(row.value("label"), QJsonValue(QString::fromLatin1(expected.label)));
+            QCOMPARE(row.value("tooltip"), QJsonValue(""));
+            QCOMPARE(row.value("kind"), QJsonValue("toggle"));
+            QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                   "alex/master/" + field}}));
+            QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(row));
+            QCOMPARE(row.value("default"), QJsonValue(expected.on));
+            QJsonObject gate{{"capability", "radioHardwareVersion"}, {"min", 8}};
+            if (expected.transmit) {
+                gate.insert("transmit", true);
+            }
+            QCOMPARE(row.value("gate"), QJsonValue(gate));
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(13));
+        }
+        checkBank(hpfSection, "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
         checkBank(alex1Sections.at(1).toObject().value("controls").toArray(),
                   "hardware.alex1Filters.bpf1.", "alex/bpf1/",
                   QStringList{"160m BPF", "80/60m BPF", "40/30m BPF", "20/17/15m BPF",

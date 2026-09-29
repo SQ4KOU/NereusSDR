@@ -1139,6 +1139,109 @@
           "title": "Alex HPF Bands",
           "controls": [
             {
+              "id": "hardware.alex1Filters.hpfBypass",
+              "label": "HPF Bypass (master)",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/hpfBypass"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpfBypassOnTx",
+              "label": "HPF Bypass on TX",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/hpfBypassOnTx"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpfBypassOnPs",
+              "label": "HPF Bypass on PureSignal feedback",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/hpfBypassOnPs"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 13,
+              "default": true
+            },
+            {
+              "id": "hardware.alex1Filters.disable6mLnaOnTx",
+              "label": "Disable 6m LNA on TX",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/disable6mLnaOnTx"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 13,
+              "default": true
+            },
+            {
+              "id": "hardware.alex1Filters.disable6mLnaOnRx",
+              "label": "Disable 6m LNA on RX",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/disable6mLnaOnRx"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
               "id": "hardware.alex1Filters.hpf.1_5MHz.bypass",
               "label": "1.5 MHz HPF Bypass",
               "tooltip": "",

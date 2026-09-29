@@ -155,7 +155,8 @@ constexpr std::array<const char*, 6> kAlexBpf1RowLabels = {
 QHash<QString, QJsonObject> controlsById(const char* json);
 
 // Hardware version 13 (R-R3-46, R-R3-49): the Alex receive filter rows the
-// Core applies (radioHardwareVersion 8): each row's Bypass, Start and End on
+// Core applies (radioHardwareVersion 8), after the Alex-1 tab's five
+// switches above them: each row's Bypass, Start and End on
 // the Alex-1 high-pass and BPF1 banks and the Alex-2 bank, and the Alex-2
 // master bypass. Defaults are Thetis's spinner values
 // (codec::alex::AlexHpfEdges::thetisDefaults); the edge boxes are the
@@ -189,6 +190,26 @@ QString alexFilterRowsJson()
             }
         }
     };
+    // The Alex-1 tab's five switches above its rows, in its order, which the
+    // Core applies on a change (RadioModel::applyAlexHpfSwitchSettings, by
+    // radioHardwareVersion 8). Defaults are the desktop's, from Thetis's
+    // designer (chkDisableHPFonPSb and chkDisable6mLNAonTX checked). The
+    // three the Core takes as transmit hardware (isTransmitHardwareKey) need
+    // transmit permission, as a settings write of them does.
+    struct MasterSwitch { const char* field; const char* label; bool transmit; bool on; };
+    const std::array<MasterSwitch, 5> switches{{
+        {"hpfBypass", "HPF Bypass (master)", false, false},
+        {"hpfBypassOnTx", "HPF Bypass on TX", true, false},
+        {"hpfBypassOnPs", "HPF Bypass on PureSignal feedback", true, true},
+        {"disable6mLnaOnTx", "Disable 6m LNA on TX", true, true},
+        {"disable6mLnaOnRx", "Disable 6m LNA on RX", false, false}}};
+    for (const MasterSwitch& master : switches) {
+        rows << QString::fromLatin1(
+            R"j({"id":"hardware.alex1Filters.%1","label":"%2","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex/master/%1"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8%3},"requiresDescriptionVersion":13,"default":%4})j")
+            .arg(QString::fromLatin1(master.field), QString::fromLatin1(master.label),
+                 master.transmit ? QStringLiteral(",\"transmit\":true") : QString(),
+                 master.on ? QStringLiteral("true") : QStringLiteral("false"));
+    }
     bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("hpf"),
          QString::fromLatin1(alexKeys::kAlex1HpfPrefix), kAlexHpfRowLabels, defaults.hpf);
     bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("bpf1"),
