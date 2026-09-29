@@ -4591,6 +4591,11 @@ target_compile_definitions(tst_p1_hl2_tx_timing_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_hl2_reset_on_disconnect_wire)
 target_compile_definitions(tst_p1_hl2_reset_on_disconnect_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# HL2 I/O board ongoing poll and the I2C frame spacing. Source: mi0bot
+# Console/console.cs:25781-25945, ChannelMaster/networkproto1.c:898-942 [@c26a8a4].
+nereus_add_test(tst_p1_hl2_io_board_poll)
+target_compile_definitions(tst_p1_hl2_io_board_poll PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.2: P2 line_in wire-byte snapshot ──────────────────────
 # 10 tests pin the line_in bit (CmdTx byte 50 bit 0 = 0x01) in
 # P2RadioConnection::setLineIn():
