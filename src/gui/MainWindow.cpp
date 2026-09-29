@@ -414,6 +414,9 @@
 //               stays on the active pan it was docked on before its pan key
 //               arrived. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29 - Slice control fix wave (whole-branch review, Minor 1):
+//               the unanswered slice request toast drops "yet". J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2726,7 +2729,7 @@ void MainWindow::runFlagAccessAction(SliceChooserAction action, int sliceId)
     if (!m_radioModel) { return; }
     ensureSliceChooser();
     if (!m_sliceChooser->requestInFlight().isEmpty()) {
-        showToast(tr("The Core has not answered the last slice request yet."),
+        showToast(tr("The Core has not answered the last slice request."),
                   ToastSeverity::Info, 3000);
         return;
     }
