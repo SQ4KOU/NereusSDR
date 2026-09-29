@@ -47,6 +47,8 @@
 #include <functional>
 #include <memory>
 
+#include <QTimer>
+
 namespace NereusSDR::Test {
 
 // Owns a P1FakeRadio loopback fake and a RadioModel connected to it.
@@ -107,11 +109,18 @@ public:
     // Receiver and transmit gaps plan Task 1: `board` is the board type the
     // RadioInfo announces (Protocol 1, the P1FakeRadio's wire either way),
     // so a test can connect a smaller board than the Hermes Lite 2 default.
+    //
+    // Load findings 4: `stream` false keeps the fake from streaming ep6 on
+    // its own; the harness then sends one frame every 500 ms, enough to
+    // keep the link alive (P1RadioConnection's 3 s silence rule) and far
+    // too few for the receiver to finish a block (about 228 frames), so a
+    // test feeds exactly the blocks it wants (fake().sendEp6Frames()).
     static std::unique_ptr<ConnectableRadioModel> create(
         int timeoutMs = 10000,
         NereusSDR::RadioModel::Role role = NereusSDR::RadioModel::Role::Local,
         std::function<void(NereusSDR::RadioModel&)> beforeConnect = {},
-        NereusSDR::HPSDRHW board = NereusSDR::HPSDRHW::HermesLite);
+        NereusSDR::HPSDRHW board = NereusSDR::HPSDRHW::HermesLite,
+        bool stream = true);
 
     NereusSDR::RadioModel&       model()       { return *m_model; }
     const NereusSDR::RadioModel& model() const { return *m_model; }
@@ -132,6 +141,8 @@ private:
     // fake to talk to. Keep m_fake declared first.
     std::unique_ptr<P1FakeRadio>           m_fake;
     std::unique_ptr<NereusSDR::RadioModel> m_model;
+    // The link's keep-alive when the fake does not stream (see create()).
+    std::unique_ptr<QTimer>                m_keepAlive;
     NereusSDR::RadioInfo                   m_info;
 };
 

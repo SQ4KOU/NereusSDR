@@ -421,7 +421,10 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
 
     const QString radio = setup.value(QStringLiteral("radio")).toString(QStringLiteral("static"));
     if (radio == QStringLiteral("connectable")) {
-        station->harness = ConnectableRadioModel::create();
+        // Load findings 4: the fake radio does not stream on its own; the
+        // runner feeds the receiver's first block below (buildStation).
+        station->harness = ConnectableRadioModel::create(
+            10000, RadioModel::Role::Local, {}, HPSDRHW::HermesLite, /*stream=*/false);
         if (!station->harness) {
             return QStringLiteral("the connectable radio model did not connect");
         }
@@ -665,6 +668,41 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
             return QStringLiteral("the connectable station has no meter pump");
         }
         QSignalSpy polls(pump, &SliceMeterPump::polled);
+        // Load findings 4 (lead's ruling, 2026-09-29): the snapshot carries
+        // the slice's live meter readings, so the receiver must have
+        // measured before the client attaches, and the readings must hold
+        // still until the snapshot is sent. A receiver block is about 228
+        // of the fake's ep6 frames, and each block moves the readings (the
+        // tone's leak through the filter decays about 3.7 dB a block), so
+        // the fake does not stream on its own here (the harness keeps the
+        // link alive with a frame every 500 ms, far short of a block) and
+        // the runner feeds the first block itself: 16 frames at a time,
+        // each time waiting three of the pump's polls for the reading (the
+        // pump reads the receive lane's cached meters, a poll behind),
+        // until the ADC peak leaves the no-reading value.
+        NereusSDR::Test::P1FakeRadio& fake = station->harness->fake();
+        const auto firstBlockMeasured = [station]() {
+            for (SliceModel* slice : station->model->slices()) {
+                if (slice->adcPeakDbfs() <= SliceMeterPump::kNoReadingDbm) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        QSignalSpy feedPolls(pump, &SliceMeterPump::polled);
+        QElapsedTimer feeding;
+        feeding.start();
+        bool measured = firstBlockMeasured();
+        while (!measured && feeding.elapsed() < 30000) {
+            fake.sendEp6Frames(16);
+            const qsizetype pollsBefore = feedPolls.size();
+            measured = QTest::qWaitFor([&]() {
+                return firstBlockMeasured() || feedPolls.size() >= pollsBefore + 3;
+            }, 5000) && firstBlockMeasured();
+        }
+        if (!measured) {
+            return QStringLiteral("the connectable station's receiver did not measure a block");
+        }
         const bool readings = QTest::qWaitFor([station, &polls]() {
             if (polls.isEmpty()) {
                 return false;
@@ -1823,8 +1861,11 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     QVERIFY(!LinkFixtures::match(hello, withMajors({2, 1}), &none).isEmpty());
     QVERIFY(!LinkFixtures::match(hello, withMajors({2, 3}), &none).isEmpty());
     QVERIFY(!LinkFixtures::match(hello, withMajors({}), &none).isEmpty());
-    // connect-connectable's signal readings never admit the meter pump's
-    // no-reading value: a reading of -400 fails the fixture.
+    // connect-connectable's meter readings never admit the meter pump's
+    // no-reading value: a reading of -400 fails the fixture. Load findings
+    // 4: nor the floor an unmeasured receiver reads (-400 plus the meter
+    // offset, -399.02, which the fixture used to pin): the eight readings
+    // are the receiver's first measured block.
     int readings = 0;
     for (const QJsonValue& step :
          fixture(QStringLiteral("session-connect-connectable")).value(QStringLiteral("steps")).toArray()) {
@@ -1838,10 +1879,12 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
                 ++readings;
                 QVERIFY2(!LinkFixtures::match(value, SliceMeterPump::kNoReadingDbm, &none).isEmpty(),
                          qPrintable(value.toString()));
+                QVERIFY2(!LinkFixtures::match(value, -399.02, &none).isEmpty(),
+                         qPrintable(value.toString()));
             }
         }
     }
-    QCOMPARE(readings, 3);
+    QCOMPARE(readings, 8);
 
     // A value the station sends, changed: the failure names the step, the
     // path inside the message and what the station really sent.
