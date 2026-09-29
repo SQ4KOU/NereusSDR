@@ -101,8 +101,11 @@ private slots:
     void hpf_edge_1_5_MHz_exact()  { QCOMPARE(computeHpf(1.5),  quint8(0x20)); }
     void hpf_edge_1_8_MHz_exact()  { QCOMPARE(computeHpf(1.8),  quint8(0x10)); }
     void hpf_edge_50_MHz_exact()   { QCOMPARE(computeHpf(50.0), quint8(0x40)); }
-    void lpf_edge_2_0_MHz_exact()  { QCOMPARE(computeLpf(2.0),  quint8(0x04)); }
-    void lpf_edge_29_7_MHz_exact() { QCOMPARE(computeLpf(29.7), quint8(0x10)); }
+    // setAlexLPF compares both ends inclusively and tests 20m first
+    // (console.cs:7188-7240 [v2.10.3.15]): 2.0 MHz is the 160m row's end,
+    // 29.7 MHz the 10m row's end.
+    void lpf_edge_2_0_MHz_exact()  { QCOMPARE(computeLpf(2.0),  quint8(0x08)); }
+    void lpf_edge_29_7_MHz_exact() { QCOMPARE(computeLpf(29.7), quint8(0x20)); }
 
     // ── Saturn-class MkII band-pass preselector ───────────────────────────
     //

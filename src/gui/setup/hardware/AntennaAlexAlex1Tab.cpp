@@ -46,6 +46,10 @@
 //                BPF1 group and moves the five switches with it, as Thetis
 //                setup.cs:6336-6360 and the per-model cases do. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -99,12 +103,12 @@
 
 #include "AntennaAlexAlex1Tab.h"
 #include "HardwareTransmitGate.h"
-#include "gui/UnbuiltFeatures.h"
 
 #include "core/AlexSettingsKeys.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
+#include "core/codec/AlexFilterMap.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -536,7 +540,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
 
     // ── Column 2: Alex LPF Bands ──────────────────────────────────────────────
     // Source: Thetis tpAlexFilterControl LPF controls (setup.designer.cs:23414-23435) [@501e3f5]
-    // Note: "TX-side filters always engaged when keyed" — no master toggle in Thetis.
+    // Note: "TX-side filters always engaged when keyed". The one switch is
+    // chkLPFBypass, 6m/ByPass on RX (setup.designer.cs:23484-23495
+    // [v2.10.3.15]), which selects the 6 m low-pass while not keyed.
     auto* lpfGroup = new QGroupBox(tr("Alex LPF Bands"), content);
     auto* lpfVBox  = new QVBoxLayout(lpfGroup);
     lpfVBox->setContentsMargins(8, 8, 8, 8);
@@ -559,13 +565,16 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         LpfRowWidgets w;
         w.start = makeFreqSpin(band.startMhz, lpfFormWidget);
         w.end   = makeFreqSpin(band.endMhz,   lpfFormWidget);
-        // R-R3-49 (remote-window parity Task 13, plan C5): the band edges
-        // are not applied in any window yet, so they are hidden until built
-        // (the row's LED stays); their saved values stay in the file.
+        // radioHardwareVersion 10: the band edges select the low-pass
+        // (RadioModel::savedAlexLpfEdges → RadioConnection::setAlexLpfEdges,
+        // as Thetis's setAlexLPF reads udAlex<band>LPFStart/End).
         w.start->setObjectName(QStringLiteral("alexLpfStart_%1").arg(QLatin1String(band.slug)));
         w.end->setObjectName(QStringLiteral("alexLpfEnd_%1").arg(QLatin1String(band.slug)));
-        UnbuiltFeatures::hideUnlessBuilt(w.start, UnbuiltFeature::AlexTxFilterOptions);
-        UnbuiltFeatures::hideUnlessBuilt(w.end, UnbuiltFeature::AlexTxFilterOptions);
+        // Setup description version 16: the same rows on the phone.
+        w.start->setProperty("nereusSetupId",
+            QStringLiteral("hardware.alex1Filters.lpf.%1.start").arg(QLatin1String(band.slug)));
+        w.end->setProperty("nereusSetupId",
+            QStringLiteral("hardware.alex1Filters.lpf.%1.end").arg(QLatin1String(band.slug)));
 
         auto* led = new QFrame(lpfFormWidget);
         led->setFixedSize(12, 12);
@@ -586,15 +595,33 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         const QString startKey = QStringLiteral("alex/lpf/%1/start").arg(slug);
         const QString endKey   = QStringLiteral("alex/lpf/%1/end").arg(slug);
 
+        const std::size_t row = m_lpfRows.size();
         connect(w.start, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this, startKey](double v) { onLpfSpinChanged(v, startKey); });
+                [this, startKey, row](double v) {
+                    onLpfSpinChanged(v, startKey);
+                    adjustLpfNeighbours(row, /*isStart=*/true);
+                });
         connect(w.end, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this, endKey](double v) { onLpfSpinChanged(v, endKey); });
+                [this, endKey, row](double v) {
+                    onLpfSpinChanged(v, endKey);
+                    adjustLpfNeighbours(row, /*isStart=*/false);
+                });
 
         m_lpfRows.push_back(w);
     }
 
     lpfVBox->addWidget(lpfFormWidget);
+
+    // From Thetis setup.designer.cs:23484-23495 [v2.10.3.15] (chkLPFBypass)
+    //   this.chkLPFBypass.Text = "6m/ByPass on RX";
+    //   "Selects the 6m LPF during receive reguardless of frequency."
+    // The tooltip's spelling is corrected here.
+    m_lpfBypass = new QCheckBox(tr("6m/ByPass on RX"), lpfGroup);
+    m_lpfBypass->setObjectName(QStringLiteral("alexLpfBypass"));
+    m_lpfBypass->setToolTip(tr("Selects the 6m LPF during receive regardless of frequency."));
+    m_lpfBypass->setProperty("nereusSetupId", QStringLiteral("hardware.alex1Filters.lpfBypass"));
+    lpfVBox->addWidget(m_lpfBypass);
+    connect(m_lpfBypass, &QCheckBox::toggled, this, &AntennaAlexAlex1Tab::onLpfBypassChanged);
     lpfVBox->addStretch();
     colLayout->addWidget(lpfGroup);
 
@@ -696,6 +723,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
                 [this, subscribeToSlice](int sliceId) {
                     subscribeToSlice(m_model->sliceById(sliceId));
                 });
+        // The low-pass lamp follows the bits the radio has in use.
+        connect(m_model, &RadioModel::alexLpfBitsChanged, this,
+                [this]() { updateActiveLeds(); });
     }
 
     // Recompute when the master bypass or any per-row bypass toggles so
@@ -803,15 +833,32 @@ void AntennaAlexAlex1Tab::updateActiveLeds()
         }
     }
 
-    // LPF selection (no master bypass / per-row bypass for LPF)
+    // LPF selection. The lamp is the low-pass the radio has in use
+    // (RadioModel::alexLpfBits, from the connection, or from the Core in a
+    // remote window), as Thetis's setAlexLPF lights rad<band>LPFled with
+    // the bits it writes (console.cs:7177-7243 [v2.10.3.15]). With no
+    // radio, or a Core that does not send it, the tab's own rows and the
+    // tuned frequency stand in, selected the same way.
+    int lpfBits = m_model ? m_model->alexLpfBits() : -1;
+    if (lpfBits < 0 && m_lpfRows.size() == codec::alex::kAlexLpfRowCount) {
+        if (m_lpfBypass && m_lpfBypass->isChecked() && m_lpfBypass->isEnabled()) {
+            lpfBits = 0x10;
+        } else {
+            codec::alex::AlexLpfEdges edges;
+            for (std::size_t i = 0; i < m_lpfRows.size(); ++i) {
+                edges.rows[i].startMhz = m_lpfRows[i].start ? m_lpfRows[i].start->value() : 0.0;
+                edges.rows[i].endMhz   = m_lpfRows[i].end   ? m_lpfRows[i].end->value()   : 0.0;
+            }
+            lpfBits = codec::alex::selectAlexLpf(freqMhz, edges);
+        }
+    }
     int lpfIdx = -1;
-    for (std::size_t i = 0; i < m_lpfRows.size(); ++i) {
-        const double startMhz =
-            m_lpfRows[i].start ? m_lpfRows[i].start->value() : 0.0;
-        const double endMhz =
-            m_lpfRows[i].end   ? m_lpfRows[i].end->value()   : 0.0;
-        if (freqMhz >= startMhz && freqMhz <= endMhz) {
-            lpfIdx = static_cast<int>(i);
+    // Rows in lpfBands() order (160, 80, 40, 20, 15, 10, 6 m) and the bit
+    // each one writes (console.cs:7177-7243 [v2.10.3.15]).
+    static constexpr int kRowBits[] = {0x08, 0x04, 0x02, 0x01, 0x40, 0x20, 0x10};
+    for (int i = 0; i < int(std::size(kRowBits)); ++i) {
+        if (lpfBits == kRowBits[i]) {
+            lpfIdx = i;
             break;
         }
     }
@@ -970,6 +1017,21 @@ void AntennaAlexAlex1Tab::restoreSettings(const QString& macAddress)
         }
     }
 
+    // 6m/ByPass on RX, unchecked and disabled on the radios Thetis hides
+    // it on (codec::alex::lpfBypassAvailable, setup.cs:6190-6205
+    // [v2.10.3.15]); the Core applies it off there too.
+    m_lpfBypassOnThisRadio = !m_model
+        || codec::alex::lpfBypassAvailable(m_model->hardwareProfile().model);
+    {
+        QSignalBlocker b(m_lpfBypass);
+        const bool v = settings.hardwareValue(macAddress,
+            QString::fromLatin1(alexKeys::kLpfBypass), QStringLiteral("False"))
+            .toString() == QStringLiteral("True");
+        m_lpfBypass->setChecked(v && m_lpfBypassOnThisRadio);
+    }
+    applyLpfGates();
+    updateActiveLeds();
+
     // Restore BPF1 band rows.  Slugs deliberately match the HPF rows so that
     // edges persisted before bpf1Bands() existed still load; the defaults,
     // however, come from the BPF1 table, because the MkII band-pass bank has
@@ -1042,7 +1104,87 @@ void AntennaAlexAlex1Tab::onLpfSpinChanged(double value, const QString& settings
         AppSettings::instance().setHardwareValue(m_currentMac, settingsKey, value);
         AppSettings::instance().save();
     }
+    // radioHardwareVersion 10: the connection stores the edges for its next
+    // low-pass selection; nothing is re-selected now, keyed or not, as
+    // Thetis's spinner handlers only move the neighbouring edge and
+    // setAlexLPF reads them when next called (setup.cs:15888-15994
+    // [v2.10.3.15]). In a remote window the save goes to the Core.
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
+    }
     emit settingChanged(settingsKey, value);
+}
+
+// From Thetis setup.cs:15888-15994 [v2.10.3.15]
+//   udAlex160mLPFStart: if (Start >= End + 0.000001) End = Start + 0.000001;
+//   udAlex160mLPFEnd:   if (End <= Start) Start = End - 0.000001;
+//                       else if (End >= udAlex80mLPFStart) 80m Start = End + 0.000001;
+//   udAlex<b>LPFStart:  if (Start <= <prev>End) <prev>End = Start - 0.000001;
+//   udAlex<b>LPFEnd:    if (End >= <next>Start) <next>Start = End + 0.000001;
+//   (80, 40, 20, 15 and 10 m ends; udAlex6mLPFEnd has no handler.)
+// Setting the neighbour runs its own handler, which saves it, as Thetis's
+// Value set raises its ValueChanged.
+void AntennaAlexAlex1Tab::adjustLpfNeighbours(std::size_t row, bool isStart)
+{
+    constexpr double kStep = 0.000001;
+    if (row >= m_lpfRows.size()) {
+        return;
+    }
+    QDoubleSpinBox* start = m_lpfRows[row].start;
+    QDoubleSpinBox* end   = m_lpfRows[row].end;
+    if (!start || !end) {
+        return;
+    }
+    if (row == 0) {
+        if (isStart) {
+            if (start->value() >= end->value() + kStep) {
+                end->setValue(start->value() + kStep);
+            }
+            return;
+        }
+        if (end->value() <= start->value()) {
+            start->setValue(end->value() - kStep);
+        } else if (m_lpfRows.size() > 1 && m_lpfRows[1].start
+                   && end->value() >= m_lpfRows[1].start->value()) {
+            m_lpfRows[1].start->setValue(end->value() + kStep);
+        }
+        return;
+    }
+    if (isStart) {
+        QDoubleSpinBox* prevEnd = m_lpfRows[row - 1].end;
+        if (prevEnd && start->value() <= prevEnd->value()) {
+            prevEnd->setValue(start->value() - kStep);
+        }
+        return;
+    }
+    if (row + 1 < m_lpfRows.size()) {
+        QDoubleSpinBox* nextStart = m_lpfRows[row + 1].start;
+        if (nextStart && end->value() >= nextStart->value()) {
+            nextStart->setValue(end->value() + kStep);
+        }
+    }
+}
+
+// From Thetis setup.cs:18832-18835 [v2.10.3.15] (chkLPFBypass_CheckedChanged)
+//   if (initializing) return;
+//   console.LPFBypass = chkLPFBypass.Checked;
+// The LPFBypass setter re-selects the low-pass at once (console.cs:
+// 18775-18790 [v2.10.3.15]); RadioModel::applyAlexHpfSwitchSettings hands
+// the saved value to the connection, which does the same. In a remote
+// window the save goes to the Core, which applies it there.
+void AntennaAlexAlex1Tab::onLpfBypassChanged(bool checked)
+{
+    const QString key = QString::fromLatin1(alexKeys::kLpfBypass);
+    if (!m_currentMac.isEmpty()) {
+        AppSettings::instance().setHardwareValue(
+            m_currentMac, key, checked ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
+    }
+    if (m_model) {
+        m_model->applyAlexHpfSwitchSettings();
+    }
+    updateActiveLeds();
+    emit settingChanged(key, checked);
 }
 
 void AntennaAlexAlex1Tab::onBpf1CheckChanged(bool checked, const QString& settingsKey)
@@ -1078,14 +1220,6 @@ void AntennaAlexAlex1Tab::onBpf1SpinChanged(double value, const QString& setting
     emit settingChanged(settingsKey, value);
 }
 
-void AntennaAlexAlex1Tab::setTransmitPermitted(bool permitted, const QString& reason)
-{
-    for (const LpfRowWidgets& row : m_lpfRows) {
-        HardwareTransmitGate::apply(row.start, permitted, reason);
-        HardwareTransmitGate::apply(row.end, permitted, reason);
-    }
-}
-
 void AntennaAlexAlex1Tab::setHpfSwitchesAvailable(bool available, const QString& reason)
 {
     for (QWidget* w : std::initializer_list<QWidget*>{
@@ -1102,6 +1236,33 @@ void AntennaAlexAlex1Tab::setHpfRowsAvailable(bool available, const QString& rea
                 HardwareTransmitGate::apply(w, available, reason);
             }
         }
+    }
+}
+
+void AntennaAlexAlex1Tab::setLpfRowsAvailable(bool available, const QString& reason)
+{
+    m_lpfRowsAvailable = available;
+    m_lpfRowsReason = reason;
+    applyLpfGates();
+}
+
+QString AntennaAlexAlex1Tab::lpfBypassNotOnThisRadioReason()
+{
+    return RadioModel::lpfBypassUnavailableReason();
+}
+
+void AntennaAlexAlex1Tab::applyLpfGates()
+{
+    for (const LpfRowWidgets& row : m_lpfRows) {
+        HardwareTransmitGate::apply(row.start, m_lpfRowsAvailable, m_lpfRowsReason);
+        HardwareTransmitGate::apply(row.end, m_lpfRowsAvailable, m_lpfRowsReason);
+    }
+    // Shown disabled with its reason where Thetis hides it (setup.cs:
+    // 6190-6205 [v2.10.3.15]); the Core's own gate otherwise.
+    if (!m_lpfBypassOnThisRadio) {
+        HardwareTransmitGate::apply(m_lpfBypass, false, lpfBypassNotOnThisRadioReason());
+    } else {
+        HardwareTransmitGate::apply(m_lpfBypass, m_lpfRowsAvailable, m_lpfRowsReason);
     }
 }
 

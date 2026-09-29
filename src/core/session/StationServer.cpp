@@ -28,6 +28,11 @@
 // 2026-09-28: Parity ruling C4: radioHardwareVersion 9, setRadioSampleRate
 // for a paired device, off the air. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10), and radio's
+//                alexLpfBits goes to a peer that declared alexLpf 1. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28: R-R3-49 (lead's ruling): a calibration settings write
 //               outside its control's range (the Watt Meter points and
 //               their class, TX Display Cal, the correction factors, the
@@ -1247,6 +1252,9 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
     {"SliceModel", "slice:", true, "radeSynced", "radeStatus"},
     {"SliceModel", "slice:", true, "radeFreqOffsetHz", "radeStatus"},
+    // The Alex-1 low-pass in use, for the Alex tab's lamps (alexLpf 1,
+    // radioHardwareVersion 10).
+    {"RadioModel", "radio", false, "alexLpfBits", "alexLpf"},
 };
 
 // Phone wire batch: record fields that go only to a peer at
@@ -1783,6 +1791,26 @@ bool isAlexHpfTransmitSwitchKey(const QString& rawKey)
             return field == QLatin1String("hpfbypassontx")
                 || field == QLatin1String("hpfbypassonps")
                 || field == QLatin1String("disable6mlnaontx");
+        }
+    }
+    return false;
+}
+
+// R-R3-46 / R-R3-49 (radioHardwareVersion 10): the Alex-1 Filters tab's
+// low-pass rows, under any .../alex/lpf/. The Core stores them for its
+// connection's next selection (RadioModel::applyAlexHpfSwitchSettings), as
+// Thetis's spinner handlers store them with no MOX check and no re-select
+// (setup.cs:15888-15994 [v2.10.3.15]). A receive-only Core takes them from
+// a peer offered version 10, on the air too.
+bool isAlexLpfRowKey(const QString& rawKey)
+{
+    const QStringList parts = rawKey.toLower().split(QLatin1Char('/'));
+    if (parts.isEmpty() || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    for (int i = 1; i + 1 < parts.size(); ++i) {
+        if (parts[i] == QLatin1String("alex") && parts[i + 1] == QLatin1String("lpf")) {
+            return true;
         }
     }
     return false;
@@ -7742,7 +7770,8 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 15);
+            // 16: Hardware's Alex-1 low-pass rows (radioHardwareVersion 10).
+            const int version = qMin(declared, 16);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -9536,6 +9565,14 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
             || peer->agreedMinor < kRadioIdentitySessionProtocolMinor
             || radioHardwareVersion() < 7;
     }
+    // radioHardwareVersion 10: the Alex-1 low-pass rows (isAlexLpfRowKey),
+    // likewise on and off the air.
+    if (isAlexLpfRowKey(key)) {
+        const auto peer = m_peers.constFind(transport);
+        return peer == m_peers.cend()
+            || peer->agreedMinor < kRadioIdentitySessionProtocolMinor
+            || radioHardwareVersion() < 10;
+    }
     // R-R3-49 (parity Task 1): a key on the off-air list, from a peer that
     // was offered it, is the on-air check's (transmitSettingOnAirRefusal).
     return !(isTransmitSettingKeyAcceptedOffAir(key) && transmitSettingsOffered(transport));
@@ -10619,7 +10656,15 @@ int StationServer::radioHardwareVersion() const
     // 9 (parity ruling C4): the radio's sample rate from a window
     // (setRadioSampleRate), every receiver and the radio's own rate, as a
     // local window's Radio Info change; for a paired device, off the air.
-    return m_radioModel->ioBoardFacade()->isBound() ? 9 : 2;
+    //
+    // 10: the Alex-1 Filters tab's low-pass rows (hardware/<mac>/alex/lpf/
+    // <slug>/{start,end}) and 6m/ByPass on RX (alex/master/lpfBypass),
+    // through the "alex" reload (RadioModel::savedAlexLpfEdges). The rows
+    // are stored for the next selection, the bypass re-selects at once, on
+    // and off the air, as Thetis's handlers do (setup.cs:15888-15994,
+    // 18832-18835 [v2.10.3.15]). radio's alexLpfBits (the low-pass in use)
+    // goes to a peer that declared alexLpf 1.
+    return m_radioModel->ioBoardFacade()->isBound() ? 10 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
@@ -10755,7 +10800,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 15) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 16) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

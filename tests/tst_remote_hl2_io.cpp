@@ -297,7 +297,7 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.client->radioHardwareAvailable(7));
     s.window.alexAntennaFacade()->setWindowAvailability(true, {});
     HardwarePage page(&s.window);
@@ -693,9 +693,11 @@ void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
     QCOMPARE(s.settings.value(hw(QStringLiteral("alex/master/hpfBypassOnPs"))).toString(),
              QStringLiteral("False"));
     QCOMPARE(rejected.count(), 1);
-    // The LPF band edges stay refused.
+    // The LPF band edges are taken from a window offered hardware version 10.
     s.proxy.setValue(hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0"));
-    QTRY_COMPARE(rejected.count(), 2);
+    QTRY_COMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/20m/start"))).toString(),
+                 QStringLiteral("10.0"));
+    QCOMPARE(rejected.count(), 1);
 }
 
 void TstRemoteHl2Io::localAlexHpfSwitchesStayLiveOnTheAir()

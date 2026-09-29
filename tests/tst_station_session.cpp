@@ -1412,9 +1412,11 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
 
     // The gated properties of features this window did not declare really
     // were left out of what it received, so the comparison below exercised
-    // the gate rather than passing vacuously. The one gated feature it
-    // declares (radeStatus: its VFO flag's RADE row) arrives.
-    const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus")};
+    // the gate rather than passing vacuously. The gated features it
+    // declares (radeStatus: its VFO flag's RADE row; alexLpf: the Alex-1
+    // tab's low-pass lamps) arrive.
+    const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus"),
+                                                 QByteArrayLiteral("alexLpf")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {
@@ -6411,8 +6413,9 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // step (2), and its I/O board and the per-band antenna verb (3, fix
     // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
     // R-R3-21); 7 since parity Task 14; 8 with the Alex Filters tabs'
-    // receive filter rows; 9 with setRadioSampleRate (parity ruling C4).
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 9);
+    // receive filter rows; 9 with setRadioSampleRate (parity ruling C4);
+    // 10 with the Alex-1 Filters tab's low-pass rows.
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 10);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -6945,10 +6948,9 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
         {QStringLiteral("hardware/oc/extPa/model"), QStringLiteral("2")},
         {QStringLiteral("hardware/oc/extPa/biasDelayMs"), QStringLiteral("50")},
         // Follow-up item 4. The three transmit high-pass switches are taken
-        // from a window at radioHardwareVersion 7 since parity Task 14
-        // (tst_remote_hl2_io); the LPF edges stay refused.
-        {hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0")},
-        {hw(QStringLiteral("antennaAlex/alex/lpf/20m/end")), QStringLiteral("30.0")},
+        // from a window at radioHardwareVersion 7 since parity Task 14, and
+        // the Alex-1 low-pass rows at version 10 (tst_remote_hl2_io,
+        // tst_alex_lpf_rows), so neither is listed here.
         {QStringLiteral("hardware/oc/allowHotSwitching"), QStringLiteral("True")},
     };
     int expected = 0;
@@ -7046,7 +7048,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -7096,7 +7098,7 @@ void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.client->remoteTransmitAntennasAvailable());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
@@ -7195,7 +7197,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
@@ -7464,7 +7466,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 
@@ -7576,7 +7578,7 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
     if (QTest::currentTestFailed()) { return; }
     NEREUS_TRY_COMPARE(s.window->slices().size(), 3);
     NEREUS_TRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.window->radioSampleRateReachesEveryReceiver());
     s.window->alexAntennaFacade()->setWindowAvailability(true, {});
 

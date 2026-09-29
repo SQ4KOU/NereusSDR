@@ -293,6 +293,12 @@ public slots:
     // The Alex tab's receive filter rows: the high-pass is re-selected at
     // once (RadioConnection::setAlexHpfEdges).
     void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
+    // The Alex-1 low-pass rows: stored for the next selection
+    // (RadioConnection::setAlexLpfEdges).
+    void setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges) override;
+    // 6m/ByPass on RX: re-selects the low-pass at once
+    // (RadioConnection::setAlexLpfBypass).
+    void setAlexLpfBypass(bool on) override;
     void setTxStepAttenuation(int dB) override;
     void setMicBoost(bool on) override;
     void setLineIn(bool on) override;
@@ -784,6 +790,16 @@ private:
     // whose frequency just moved, or -1 when the stand-in itself moved.
     void recomputeReceiveFilters(int changedSlot);
 
+    // setAlexLPF (codec::alex::setAlexLpf) on m_alexLpfBitsRx / Tx, the Alex0
+    // and Alex1 masks, then reports the low-pass in use. `freqIsTx` is
+    // Thetis's freqIsTX; the keyed state is m_mox.
+    void applyAlexLpf(double freqMhz, bool freqIsTx);
+    // UpdateAlexTXFilter: the receive-frequency selection, unkeyed only.
+    void applyReceiveAlexLpf(quint64 rx1Hz, quint64 fallbackHz);
+    // Whether setAlexLPF's alexpresent holds: an Alex board, or the HL2,
+    // whose firmware and N2ADR board read the same bits.
+    bool alexLpfPresent() const;
+
     // The frequency whose band selects the OC outputs: the transmitting
     // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
     quint64 ocBandFrequencyHz() const;
@@ -905,8 +921,12 @@ private:
     // setTxFrequency on Connected and queues setReceiverFrequency before
     // connectToRadio, so both masks carry a real selection before the
     // operator can key.
-    quint8  m_alexLpfBitsRx{0};  // from the receive frequency (unkeyed)
-    quint8  m_alexLpfBitsTx{0};  // from the transmit frequency (keyed)
+    // Thetis's two masks (netInterface.c AlexLPFMask / Alex1LPFMask
+    // [v2.10.3.15]), written as SetAlexLPFBits writes them: unkeyed, the
+    // receive selection goes to Alex0 and the transmit selection to Alex1;
+    // keyed, the transmit selection goes to both.
+    quint8  m_alexLpfBitsRx{0};  // Alex0: the receive selection (unkeyed)
+    quint8  m_alexLpfBitsTx{0};  // Alex1: the transmit selection
 
     // Phase 3F: AlexController's decision for the single P1 filter chain.
     // -1 = no decision yet, use the RX0-frequency-derived m_alexHpfBits.

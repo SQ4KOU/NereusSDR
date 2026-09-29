@@ -31,6 +31,10 @@
 //                BPF1 Bands with the five switches (Thetis setup.cs:6336-6360);
 //                isAlexHpfVisible() for the tests. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -141,10 +145,6 @@ public:
     // Call when a radio is connected.
     void restoreSettings(const QString& macAddress);
 
-    // R-R3-46: the TX low-pass table follows the transmit permission with
-    // its reason. Always permitted locally.
-    void setTransmitPermitted(bool permitted, const QString& reason);
-
     // R-R3-46 / R-R3-49 (parity Task 14): the three TX master switches (HPF
     // bypass on TX and on PureSignal feedback, 6 m LNA off on TX) follow
     // whether the Core takes them (radioHardwareVersion 7), disabled with
@@ -159,6 +159,18 @@ public:
     // setters apply at once with no MOX check (console.cs:18823-19040
     // [v2.10.3.15]).
     void setHpfRowsAvailable(bool available, const QString& reason);
+
+    // radioHardwareVersion 10: the low-pass rows (Start, End) and
+    // 6m/ByPass on RX follow whether the Core takes them, disabled with
+    // `reason` when it does not. Always available locally. No on-air rule:
+    // Thetis's spinner and check box handlers have no MOX check
+    // (setup.cs:15888-15994, 18832-18835 [v2.10.3.15]). A receive-only
+    // Core takes them too, so they do not follow the transmit permission.
+    void setLpfRowsAvailable(bool available, const QString& reason);
+
+    // The reason 6m/ByPass on RX is disabled on the radios Thetis hides it
+    // on (codec::alex::lpfBypassAvailable).
+    static QString lpfBypassNotOnThisRadioReason();
 
     // Test seam — returns whether the Saturn BPF1 groupbox is visible.
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRLib globally). Used by
@@ -196,6 +208,7 @@ private slots:
     void onHpfCheckChanged(bool checked, const QString& settingsKey);
     void onHpfSpinChanged(double value, const QString& settingsKey);
     void onLpfSpinChanged(double value, const QString& settingsKey);
+    void onLpfBypassChanged(bool checked);
     void onBpf1CheckChanged(bool checked, const QString& settingsKey);
     void onBpf1SpinChanged(double value, const QString& settingsKey);
     void onMasterCheckChanged(bool checked, const QString& settingsKey);
@@ -245,7 +258,7 @@ private:
         QDoubleSpinBox* end{nullptr};
     };
 
-    // Per-band widget set (LPF rows — no bypass checkbox).
+    // Per-band widget set (LPF rows; 6m/ByPass on RX is one box for all).
     struct LpfRowWidgets {
         QDoubleSpinBox* start{nullptr};
         QDoubleSpinBox* end{nullptr};
@@ -277,6 +290,19 @@ private:
 
     // Column 2 — Alex LPF rows (7 rows: 160m/80m/40m/20m/15m/10m/6m)
     std::vector<LpfRowWidgets> m_lpfRows;
+    QCheckBox* m_lpfBypass{nullptr};           // chkLPFBypass [v2.10.3.15:23484]
+
+    // The low-pass gates: the Core takes the rows (setLpfRowsAvailable)
+    // and the radio has 6m/ByPass on RX (restoreSettings).
+    bool    m_lpfRowsAvailable{true};
+    QString m_lpfRowsReason;
+    bool    m_lpfBypassOnThisRadio{true};
+    void applyLpfGates();
+
+    // Thetis's udAlex<band>LPFStart/End_ValueChanged: keep the rows
+    // contiguous by moving the neighbouring edge (setup.cs:15888-15994
+    // [v2.10.3.15]). `row` indexes lpfBands().
+    void adjustLpfNeighbours(std::size_t row, bool isStart);
 
     // Column 3 — Saturn BPF1 rows (same 6-row shape as HPF)
     QGroupBox*                 m_bpf1Group{nullptr};

@@ -297,6 +297,10 @@ public slots:
     void setAlexHpfBypass(bool on) override;
     void setPaDisabled(bool disabled) override;
     void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
+    // The Alex-1 low-pass rows (stored for the next selection) and
+    // 6m/ByPass on RX (re-selects at once).
+    void setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges) override;
+    void setAlexLpfBypass(bool on) override;
     void setDisable6mLna(bool onRx, bool onTx) override;
     void onBandOutputPinsChanged() override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
@@ -1001,8 +1005,8 @@ private:
         // Defaults are 0x10 (6 m, the widest low-pass) rather than 0 —
         // the LPF has no bypass encoding, and Thetis's fall-through arm
         // picks 6 m too (console.cs:7237-7241 [v2.10.3.15]).
-        int lpfBitsRx{0x10};  // Alex0 LPF — from the receive frequency
-        int lpfBitsTx{0x10};  // Alex1 LPF — from the transmit frequency
+        int lpfBitsRx{0x10};  // Alex0 LPF: the receive selection (unkeyed)
+        int lpfBitsTx{0x10};  // Alex1 LPF: the transmit selection
 
         // Phase 3F: per-ADC RX band-pass decision from AlexController, which
         // reviews every slice band on a chain instead of taking whichever
@@ -1058,6 +1062,12 @@ private:
     // Recompute m_alex.hpfBits and m_alex.lpfBitsRx from the RX1 stand-in
     // (and, for the low-pass, the receiver beside it).
     void recomputeReceiveFilters();
+
+    // setAlexLPF (codec::alex::setAlexLpf) on m_alex.lpfBitsRx / Tx, the
+    // Alex0 and Alex1 masks, then reports the low-pass in use.
+    void applyAlexLpf(double freqMhz, bool freqIsTx);
+    // UpdateAlexTXFilter: the receive-frequency selection, unkeyed only.
+    void applyReceiveAlexLpf();
 
     // Each DDC's slice VFO frequency (setReceiverVfoFrequencies); 0 = not
     // told, and the band falls back to the DDC's centre.

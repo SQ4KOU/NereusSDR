@@ -8845,6 +8845,11 @@ QString RadioModel::hfPaSwitchUnavailableReason()
     return QStringLiteral("This radio cannot switch off its HF PA from here.");
 }
 
+QString RadioModel::lpfBypassUnavailableReason()
+{
+    return QStringLiteral("This radio does not have the 6m low-pass bypass on receive.");
+}
+
 // The HL2 options a Hermes Lite 2 takes on the wire, pushed whole to the
 // P1 connection on its own thread (each setter is idempotent):
 //   Band Volts and Disable PS Sync, bank 0 C3 bits 3 and 4
@@ -14915,6 +14920,15 @@ void RadioModel::connectBandOutputsReport()
                 onBandOutputsComposed(ocByte, band, keyed);
             },
             Qt::QueuedConnection);
+    // The low-pass in use, for the Alex tab's lamps in every window.
+    connect(conn, &RadioConnection::alexLpfBitsComposed, this,
+            [this, conn](quint8 bits) {
+                if (m_connection != conn) {
+                    return;
+                }
+                onAlexLpfBitsComposed(bits);
+            },
+            Qt::QueuedConnection);
     // Fix wave M2: a pin edit (this window's, or a remote window's through
     // the "oc" reload, which reloads this same matrix) reaches the
     // connection, which sends it at once on Protocol 2.
@@ -14998,6 +15012,43 @@ void RadioModel::clearStationBandOutputs()
         return;
     }
     resetBandOutputs();
+}
+
+// The Alex-1 low-pass the connection selected (Thetis lights the matching
+// rad*LPFled at each selection, console.cs:7177-7243 [v2.10.3.15]).
+void RadioModel::onAlexLpfBitsComposed(quint8 bits)
+{
+    if (!ownsLocalDsp() || m_alexLpfBits == int(bits)) {
+        return;
+    }
+    m_alexLpfBits = int(bits);
+    emit alexLpfBitsChanged();
+}
+
+bool RadioModel::applyStationAlexLpfValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp() || name != "alexLpfBits") {
+        return false;
+    }
+    bool ok = false;
+    const int bits = value.toInt(&ok);
+    if (!ok || bits < -1 || bits > 0x7F) {
+        return false;
+    }
+    if (m_alexLpfBits != bits) {
+        m_alexLpfBits = bits;
+        emit alexLpfBitsChanged();
+    }
+    return true;
+}
+
+void RadioModel::clearStationAlexLpf()
+{
+    if (ownsLocalDsp() || m_alexLpfBits == -1) {
+        return;
+    }
+    m_alexLpfBits = -1;
+    emit alexLpfBitsChanged();
 }
 
 
@@ -22356,6 +22407,11 @@ void RadioModel::setConnectionState(ConnectionState s)
         // Plan Task 14 fix wave: nothing is on the wire now.
         if (ownsLocalDsp()) {
             resetBandOutputs();
+            // No low-pass is selected with no radio.
+            if (m_alexLpfBits != -1) {
+                m_alexLpfBits = -1;
+                emit alexLpfBitsChanged();
+            }
         }
     }
     // Retirement can notify direct filter observers. A reentrant transition
@@ -26037,10 +26093,14 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
                || rest.startsWith(QLatin1String("alex/bpf1/"), Qt::CaseInsensitive)
                || rest.startsWith(QLatin1String("alex2/hpf/"), Qt::CaseInsensitive)
                || rest.compare(QLatin1String("alex2/master/bypass55MhzBpf"),
+                               Qt::CaseInsensitive) == 0
+               || rest.startsWith(QLatin1String("alex/lpf/"), Qt::CaseInsensitive)
+               || rest.compare(QLatin1String(alexKeys::kLpfBypass),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
         // applied to the connection. radioHardwareVersion 8: and its
-        // receive filter rows (savedAlexHpfEdges).
+        // receive filter rows (savedAlexHpfEdges). radioHardwareVersion 10:
+        // and its low-pass rows and 6m/ByPass on RX (savedAlexLpfEdges).
         reload = QStringLiteral("alex");
     } else {
         return;
@@ -26243,13 +26303,24 @@ void RadioModel::applyAlexHpfSwitchSettings()
     const codec::alex::AlexHpfEdges edges = savedAlexHpfEdges(mac);
     const bool edgesChanged = !(edges == m_alexHpfEdges);
     m_alexHpfEdges = edges;
+    // And the low-pass rows and 6m/ByPass on RX (savedAlexLpfEdges). Thetis
+    // unchecks chkLPFBypass on the boards that hide it, so it is off there
+    // whatever was saved (codec::alex::lpfBypassAvailable).
+    const codec::alex::AlexLpfEdges lpfEdges = savedAlexLpfEdges(mac);
+    m_alexLpfEdges = lpfEdges;
+    const bool lpfBypass = flag(alexKeys::kLpfBypass, "False")
+        && codec::alex::lpfBypassAvailable(m_hardwareProfile.model);
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges,
+                                     lpfEdges, lpfBypass]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
         conn->setAlexHpfBypass(bypass);
         conn->setDisable6mLna(lnaOffRx, lnaOffTx);
         conn->setAlexHpfEdges(edges);
+        // Edges first: the bypass setter re-selects with them.
+        conn->setAlexLpfEdges(lpfEdges);
+        conn->setAlexLpfBypass(lpfBypass);
     });
     // Re-review N4: the two receive-side switches also decide what the
     // chain reports (republishAlexAdcSlices), so the WIDE badge and
@@ -26330,6 +26401,41 @@ codec::alex::AlexHpfEdges RadioModel::savedAlexHpfEdges(const QString& mac)
     edges.alex2Bypass = settings.hardwareValue(
         mac, QStringLiteral("alex2/master/bypass55MhzBpf"), QStringLiteral("False"))
         .toString() == QStringLiteral("True");
+    return edges;
+}
+
+// ---------------------------------------------------------------------------
+// savedAlexLpfEdges: the Alex tab's low-pass rows for one radio.
+//
+// Thetis reads each row's edges from the Setup spinners at every selection
+// (console.cs:7177-7243 [v2.10.3.15], setAlexLPF). The tab saves them per
+// radio: hardware/<mac>/alex/lpf/<slug>/{start,end}. A value never saved is
+// Thetis's default.
+// ---------------------------------------------------------------------------
+codec::alex::AlexLpfEdges RadioModel::savedAlexLpfEdges(const QString& mac)
+{
+    codec::alex::AlexLpfEdges edges = codec::alex::AlexLpfEdges::thetisDefaults();
+    if (mac.isEmpty()) {
+        return edges;
+    }
+    auto& settings = AppSettings::instance();
+    for (size_t i = 0; i < edges.rows.size(); ++i) {
+        const QString base = QStringLiteral("%1/%2/").arg(
+            QLatin1String(alexKeys::kAlex1LpfPrefix),
+            QLatin1String(codec::alex::kAlexLpfRowSlugs[i]));
+        codec::alex::AlexLpfRow& row = edges.rows[i];
+        bool ok = false;
+        const double start = settings.hardwareValue(
+            mac, base + QLatin1String(alexKeys::kLeafStart), QString()).toString().toDouble(&ok);
+        if (ok) {
+            row.startMhz = start;
+        }
+        const double end = settings.hardwareValue(
+            mac, base + QLatin1String(alexKeys::kLeafEnd), QString()).toString().toDouble(&ok);
+        if (ok) {
+            row.endMhz = end;
+        }
+    }
     return edges;
 }
 

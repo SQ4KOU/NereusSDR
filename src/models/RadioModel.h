@@ -742,6 +742,13 @@ class RadioModel : public QObject {
     // the snapshot only, and only to a peer that declared logCategoryList.
     // Declared last so every earlier property keeps its wire ordinal.
     Q_PROPERTY(QString logCategoryList READ logCategoryList CONSTANT)
+    // The Alex-1 low-pass filter bits (Thetis SetAlexLPFBits: 0x01 20m,
+    // 0x02 40m, 0x04 80m, 0x08 160m, 0x10 6m, 0x20 10m, 0x40 15m) the Core's
+    // connection last selected, or -1 before any. Station-owned, never
+    // remotely writable; every window's Alex tab lamp shows it. Sent only
+    // to a peer that declared alexLpf. Declared after logCategoryList so
+    // every earlier property keeps its wire ordinal.
+    Q_PROPERTY(int alexLpfBits READ alexLpfBits NOTIFY alexLpfBitsChanged)
 
 
 public:
@@ -1086,6 +1093,10 @@ public:
     static constexpr const char* kDisableHfPaKey = "DisableHfPa";
     static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
     static QString hfPaSwitchUnavailableReason();
+    // Alex-1 Filters' "6m/ByPass on RX" on a radio Thetis hides it on
+    // (codec::alex::lpfBypassAvailable): the desktop's box and the Setup
+    // description's row are shown disabled with this reason.
+    static QString lpfBypassUnavailableReason();
     // Reads this computer's saved value.
     void applyDisableHfPaSetting();
     // `value` is the saved string; an invalid QVariant (the key removed)
@@ -1589,6 +1600,17 @@ public:
     // Test seam: the production connection -> model report, for a test that
     // injects a connection (injectConnectionForTest does no wiring).
     void wireBandOutputsReportForTest() { connectBandOutputsReport(); }
+
+    // The Alex-1 low-pass filter bits the Core's connection selected (see
+    // the Q_PROPERTY), or -1 before any.
+    int alexLpfBits() const noexcept { return m_alexLpfBits; }
+    // Remote role: the value from the Core. False for any other name or an
+    // out-of-range value.
+    bool applyStationAlexLpfValue(const QByteArray& name, const QVariant& value);
+    // Remote role: the session ended; nothing is known until the next one.
+    void clearStationAlexLpf();
+    // Test seam: stands in for the connection's report (local role).
+    void reportAlexLpfBitsForTest(quint8 bits) { onAlexLpfBitsComposed(bits); }
 
     // ── Phase 3F: per-panadapter RX preselector bypass state (WIDE badge) ────
     // NereusSDR-original; no upstream port. Design doc
@@ -3614,6 +3636,8 @@ signals:
     // bandOutputsByte / bandOutputsBand / bandOutputsKeyed / bandOutputsKnown
     // changed.
     void bandOutputsChanged();
+    // alexLpfBits() changed.
+    void alexLpfBitsChanged();
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -3817,6 +3841,10 @@ public:
     // bypass, and the Alex-2 master bypass), each default Thetis's.
     static codec::alex::AlexHpfEdges savedAlexHpfEdges(const QString& mac);
     const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
+    // The Alex tab's low-pass filter rows saved for `mac` (each row's start
+    // and end), each default Thetis's.
+    static codec::alex::AlexLpfEdges savedAlexLpfEdges(const QString& mac);
+    const codec::alex::AlexLpfEdges& alexLpfEdges() const noexcept { return m_alexLpfEdges; }
     // Task 14's name for the same apply, kept for its callers.
     void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
 
@@ -5811,6 +5839,7 @@ private:
     // wireConnectionSignals.
     void connectBandOutputsReport();
     void onBandOutputsComposed(quint8 ocByte, int band, bool keyed);
+    void onAlexLpfBitsComposed(quint8 bits);
     void resetBandOutputs();
 
     // Issue #177 — deferred completion of the TUN-off path.
@@ -6944,6 +6973,9 @@ private:
     // (applyAlexHpfSwitchSettings): the chain decisions select each chain's
     // high-pass from them, as the connection does.
     codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
+    codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
+    // alexLpfBits(): -1 until the connection (or the Core) reports one.
+    int m_alexLpfBits{-1};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

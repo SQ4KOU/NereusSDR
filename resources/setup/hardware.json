@@ -1,5 +1,5 @@
 {
-  "version": 13,
+  "version": 16,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -1991,6 +1991,339 @@
               "decimals": 6,
               "unit": "MHz",
               "default": 61.44
+            }
+          ]
+        },
+        {
+          "title": "Alex LPF Bands",
+          "controls": [
+            {
+              "id": "hardware.alex1Filters.lpf.160m.start",
+              "label": "160m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/160m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 0
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.160m.end",
+              "label": "160m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/160m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.5
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.80m.start",
+              "label": "80m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/80m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.500001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.80m.end",
+              "label": "80m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/80m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.40m.start",
+              "label": "60/40m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/40m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5.000001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.40m.end",
+              "label": "60/40m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/40m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 8
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.20m.start",
+              "label": "30/20m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/20m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 8.000001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.20m.end",
+              "label": "30/20m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/20m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 16.5
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.15m.start",
+              "label": "17/15m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/15m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 16.500001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.15m.end",
+              "label": "17/15m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/15m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 24
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.10m.start",
+              "label": "12/10m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/10m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 24.000001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.10m.end",
+              "label": "12/10m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/10m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 35.6
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.6m.start",
+              "label": "6m LPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/6m/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 35.600001
+            },
+            {
+              "id": "hardware.alex1Filters.lpf.6m.end",
+              "label": "6m LPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/lpf/6m/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 16,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 61.44
+            },
+            {
+              "id": "hardware.alex1Filters.lpfBypass",
+              "label": "6m/ByPass on RX",
+              "tooltip": "Selects the 6m LPF during receive regardless of frequency.",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/master/lpfBypass"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 10
+              },
+              "requiresDescriptionVersion": 16,
+              "default": false
             }
           ]
         }

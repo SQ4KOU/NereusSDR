@@ -257,6 +257,43 @@ QString alexFilterRowsJson()
     return QLatin1Char('[') + rows.join(QLatin1Char(',')) + QLatin1Char(']');
 }
 
+// Hardware version 16 (R-R3-46, R-R3-49): the Alex-1 tab's low-pass rows
+// and 6m/ByPass on RX, which the Core applies as Thetis's setAlexLPF
+// selects (radioHardwareVersion 10). The rows are the transmit low-pass
+// table (isTransmitHardwareKey), so a write needs transmit permission; the
+// Core takes them on the air and keeps them for the next selection, as
+// Thetis's spinner handlers do (setup.cs:15888-15994 [v2.10.3.15]). The
+// bypass acts on receive only. Defaults are Thetis's spinner values
+// (codec::alex::AlexLpfEdges::thetisDefaults); the labels and edge boxes
+// are the desktop tab's (AntennaAlexAlex1Tab).
+QString alexLpfRowsJson()
+{
+    const codec::alex::AlexLpfEdges defaults = codec::alex::AlexLpfEdges::thetisDefaults();
+    const auto number = [](double value) { return QString::number(value, 'g', 10); };
+    static constexpr std::array<const char*, codec::alex::kAlexLpfRowCount> kLabels = {
+        "160m", "80m", "60/40m", "30/20m", "17/15m", "12/10m", "6m"};
+    QStringList rows;
+    for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
+        const QString slug = QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[i]);
+        const QString label = QString::fromLatin1(kLabels[i]);
+        const std::array<std::pair<const char*, double>, 2> leaves{{
+            {"start", defaults.rows[i].startMhz}, {"end", defaults.rows[i].endMhz}}};
+        for (const auto& [leaf, value] : leaves) {
+            const QString leafName = QString::fromLatin1(leaf);
+            const QString word = leafName == QLatin1String("start")
+                ? QStringLiteral("Start") : QStringLiteral("End");
+            rows << QString::fromLatin1(
+                R"j({"id":"hardware.alex1Filters.lpf.%1.%2","label":"%3 LPF %4","tooltip":"","kind":"decimal","binding":{"radioSetting":"alex/lpf/%1/%2"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":200,"step":0.001,"decimals":6,"unit":"MHz","default":%5})j")
+                .arg(slug, leafName, label, word, number(value));
+        }
+    }
+    // From Thetis setup.designer.cs:23484-23495 [v2.10.3.15] (chkLPFBypass):
+    // the desktop checkbox's text and tooltip ("reguardless" spelled right).
+    rows << QString::fromLatin1(
+        R"j({"id":"hardware.alex1Filters.lpfBypass","label":"6m/ByPass on RX","tooltip":"Selects the 6m LPF during receive regardless of frequency.","kind":"toggle","binding":{"radioSetting":"alex/master/lpfBypass"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10},"requiresDescriptionVersion":16,"default":false})j");
+    return QLatin1Char('[') + rows.join(QLatin1Char(',')) + QLatin1Char(']');
+}
+
 QHash<QString, QJsonObject> controlsById(const char* json)
 {
     QHash<QString, QJsonObject> controls;
@@ -300,6 +337,8 @@ const QHash<QString, QJsonObject>& hardwareV13Controls()
         QHash<QString, QJsonObject> controls = controlsById(kHardwareV13Controls);
         const QByteArray alex = alexFilterRowsJson().toUtf8();
         controls.insert(controlsById(alex.constData()));
+        const QByteArray lpf = alexLpfRowsJson().toUtf8();
+        controls.insert(controlsById(lpf.constData()));
         return controls;
     }();
     return table;
@@ -570,8 +609,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(14))
-         && !((id == QLatin1String("hardware") || id == QLatin1String("transmit"))
+         && !(id == QLatin1String("transmit")
               && root.value(QStringLiteral("version")) == QJsonValue(13))
+         && !(id == QLatin1String("hardware")
+              && root.value(QStringLiteral("version")) == QJsonValue(16))
          && !(SetupDescriptionV15::isCategory(id)
               && root.value(QStringLiteral("version"))
                   == QJsonValue(SetupDescriptionV15::kVersion)))
@@ -672,7 +713,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(13))
                                 && !(id == QLatin1String("pa")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(14)))))
+                                         == QJsonValue(14))
+                                && !(id == QLatin1String("hardware")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(16)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -1039,6 +1083,36 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     controls[c] = control;
                 }
                 if (controls.isEmpty()) { sections.removeAt(s--); continue; }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Hardware version 16: 6m/ByPass on RX stays on a radio that has no
+    // such bypass, disabled with the desktop's reason
+    // (AntennaAlexAlex1Tab::applyLpfGates, codec::alex::lpfBypassAvailable).
+    if (id == QLatin1String("hardware") && !codec::alex::lpfBypassAvailable(model)) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    if (control.value(QStringLiteral("id"))
+                        != QJsonValue(QStringLiteral("hardware.alex1Filters.lpfBypass"))) {
+                        continue;
+                    }
+                    control.insert(QStringLiteral("availability"), QJsonObject{
+                        {QStringLiteral("enabled"), false},
+                        {QStringLiteral("reason"), RadioModel::lpfBypassUnavailableReason()}});
+                    controls[c] = control;
+                }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;
             }
@@ -2542,8 +2616,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     const int ceiling = SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
-        : categoryId == QLatin1String("hardware")
-            || categoryId == QLatin1String("transmit") ? 13
+        // Hardware changed at 16 (the Alex-1 low-pass rows).
+        : categoryId == QLatin1String("hardware") ? (version >= 16 ? 16 : 13)
+        : categoryId == QLatin1String("transmit") ? 13
         : categoryId == QLatin1String("pa") ? 14
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
@@ -2555,7 +2630,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4)
-                        // Hardware changed at 6 and 13, PA at 5 and 13.
+                        // Hardware changed at 6, 13 and 16, PA at 5 and 13.
                         : categoryId == QLatin1String("hardware") && version < 13
                             ? qMin(version, 6)
                         : categoryId == QLatin1String("pa") && version < 13
@@ -2578,7 +2653,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.insert(QStringLiteral("pages"), fittedPages);
     }
-    // PA changed at 5, 13 and 14; hardware at 6 and 13; transmit at 13;
+    // PA changed at 5, 13 and 14; hardware at 6, 13 and 16; transmit at 13;
     // DSP, Transmit, Audio, Diagnostics and CAT & Network at 15.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()

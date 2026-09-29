@@ -4,7 +4,8 @@
 //
 // Ported from Thetis sources:
 //   Project Files/Source/Console/console.cs:6830-6942 (setAlexHPF)
-//   Project Files/Source/Console/console.cs:7168-7234 (setAlexLPF)
+//   Project Files/Source/Console/console.cs:7177-7243 (setAlexLPF) [v2.10.3.15]
+//   Project Files/Source/ChannelMaster/netInterface.c:680-725 (SetAlexLPFBits) [v2.10.3.15]
 //   original licence from Thetis source is included below
 //
 // =================================================================
@@ -26,6 +27,11 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's setAlexLPF
+//                does, written to the Alex0 / Alex1 masks as netInterface.c
+//                SetAlexLPFBits writes them (radioHardwareVersion 10). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -79,6 +85,27 @@
 //============================================================================================//
 //
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+// --- From netInterface.c ---
+/*
+ * netinterface.c
+ * Copyright (C) 2006,2007  Bill Tracey (bill@ejwt.com) (KD5TFD)
+ * Copyright (C) 2010-2020 Doug Wigley (W5WC)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ */
 // =================================================================
 
 #include "AlexFilterMap.h"
@@ -308,6 +335,22 @@ quint8 computeAlex2Hpf(double freqMhz, const AlexHpfEdges& edges) noexcept
     return selectAlexHpfRow(freqMhz, edges.alex2);
 }
 
+// From Thetis setup.cs:6190-6205 [v2.10.3.15] (quoted in the header)
+bool lpfBypassAvailable(NereusSDR::HPSDRModel model) noexcept
+{
+    // REDPITAYA keeps the box (//DH1KLM), as does every other board.
+    switch (model) {
+        case NereusSDR::HPSDRModel::ANAN8000D:
+        case NereusSDR::HPSDRModel::ANAN7000D:
+        case NereusSDR::HPSDRModel::ANAN_G2:
+        case NereusSDR::HPSDRModel::ANAN_G2_1K:
+        case NereusSDR::HPSDRModel::ANVELINAPRO3:
+            return false;
+        default:
+            return true;
+    }
+}
+
 bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept
 {
     switch (model) {
@@ -324,23 +367,118 @@ bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept
     }
 }
 
-// From Thetis console.cs:7168-7234 [@501e3f5]
+// From Thetis console.cs:7177-7243 [v2.10.3.15]
 // Decision rationale: spec §6.3.1
 //
-// TX low-pass only, and board-independent by design. Thetis has a single
-// setAlexLPF with no HardwareSpecific branch (console.cs:7177-7270
-// [v2.10.3.15]) and deskhpsdr agrees at alex.h:110 [@f3d857c]: "The TX bits
-// are just as for the generic case."  The MkII boards changed the RX front
-// end, not this bank, so there is no BPF1 equivalent to add here.
+// Board-independent by design. Thetis has a single setAlexLPF with no
+// HardwareSpecific branch (console.cs:7177-7270 [v2.10.3.15]) and deskhpsdr
+// agrees at alex.h:110 [@f3d857c]: "The TX bits are just as for the generic
+// case."  The MkII boards changed the RX front end, not this bank, so there
+// is no BPF1 equivalent to add here. The selection is setAlexLPF's over the
+// rows' shipped values; the connections select over the saved rows.
 quint8 computeLpf(double freqMhz)
 {
-    if (freqMhz < 2.0)   { return 0x08; }   // 160m LPF
-    if (freqMhz < 4.0)   { return 0x04; }   // 80m LPF
-    if (freqMhz < 7.3)   { return 0x02; }   // 60/40m LPF
-    if (freqMhz < 14.35) { return 0x01; }   // 30/20m LPF
-    if (freqMhz < 21.45) { return 0x40; }   // 17/15m LPF
-    if (freqMhz < 29.7)  { return 0x20; }   // 12/10m LPF
-    return 0x10;                             // 6m LPF
+    return selectAlexLpf(freqMhz, AlexLpfEdges::thetisDefaults());
+}
+
+// ---------------------------------------------------------------------------
+// The Alex-1 Filters tab's low-pass rows (see the declaration).
+// ---------------------------------------------------------------------------
+
+// From Thetis setup.designer.cs [v2.10.3.15], the udAlex*LPFStart / End
+// spinners' shipped values:
+//   udAlex160mLPFStart 0 (:24881)        udAlex160mLPFEnd 2.5 (:24851)
+//   udAlex80mLPFStart 2.500001 (:24821)  udAlex80mLPFEnd 5 (:24791)
+//   udAlex40mLPFStart 5.000001 (:24761)  udAlex40mLPFEnd 8 (:24731)
+//   udAlex20mLPFStart 8.000001 (:24611)  udAlex20mLPFEnd 16.5 (:24671)
+//   udAlex15mLPFStart 16.500001 (:24641) udAlex15mLPFEnd 24.0 (:24701)
+//   udAlex10mLPFStart 24.000001 (:24522) udAlex10mLPFEnd 35.6 (:24492)
+//   udAlex6mLPFStart 35.600001 (:24581)  udAlex6mLPFEnd 61.44 (:24552)
+AlexLpfEdges AlexLpfEdges::thetisDefaults() noexcept
+{
+    AlexLpfEdges e;
+    e.rows = {{
+        {0.0, 2.5},             // 160m
+        {2.500001, 5.0},        // 80m
+        {5.000001, 8.0},        // 40m
+        {8.000001, 16.5},       // 20m
+        {16.500001, 24.0},      // 15m
+        {24.000001, 35.6},      // 10m
+        {35.600001, 61.44},     // 6m
+    }};
+    return e;
+}
+
+namespace {
+
+// setAlexLPF's test order and each test's selection, as row indices into
+// AlexLpfRows (160m 0, 80m 1, 40m 2, 20m 3, 15m 4, 10m 5, 6m 6).
+// From Thetis console.cs:7188-7234 [v2.10.3.15]
+struct LpfTest {
+    int row;
+    quint8 bits;
+};
+constexpr std::array<LpfTest, kAlexLpfRowCount> kLpfTestOrder = {{
+    {3, 0x01},  // 30/20m LPF
+    {2, 0x02},  // 60/40m LPF
+    {1, 0x04},  // 80m LPF
+    {0, 0x08},  // 160m LPF
+    {6, 0x10},  // 6m LPF
+    {5, 0x20},  // 12/10m LPF
+    {4, 0x40},  // 17/15 LPF
+}};
+constexpr quint8 kLpf6m = 0x10;
+
+} // namespace
+
+quint8 selectAlexLpf(double freqMhz, const AlexLpfEdges& edges) noexcept
+{
+    const qint64 hz = toHz(freqMhz);
+    for (const LpfTest& t : kLpfTestOrder) {
+        const AlexLpfRow& row = edges.rows[static_cast<size_t>(t.row)];
+        if (hz >= toHz(row.startMhz) && hz <= toHz(row.endMhz)) {
+            return t.bits;
+        }
+    }
+    return kLpf6m;  // 6m LPF
+}
+
+// From Thetis ChannelMaster/netInterface.c:680-725 [v2.10.3.15]
+// if not MOX, write to alex1 if a TX setting else write to alex0
+bool setAlexLpfBits(AlexLpfMasks& masks, quint8 bits, bool isTx, bool isMox) noexcept
+{
+    bool alex0Changed = false;
+    bool alex1Changed = false;
+
+    if (isMox || isTx) {        // true if Alex1 should be written
+        if (masks.alex1 != bits) {
+            alex1Changed = true;
+            masks.alex1 = bits;
+        }
+    }
+
+    if (isMox || !isTx) {       // true if Alex0 should be written
+        if (masks.alex0 != bits) {
+            alex0Changed = true;
+            masks.alex0 = bits;
+        }
+    }
+
+    return alex1Changed || alex0Changed;
+}
+
+// From Thetis console.cs:7177-7243 [v2.10.3.15]
+bool setAlexLpf(AlexLpfMasks& masks, double freqMhz, bool freqIsTx, bool mox,
+                bool lpfBypass, bool alexPresent, const AlexLpfEdges& edges) noexcept
+{
+    if (!mox && lpfBypass) {
+        return setAlexLpfBits(masks, kLpf6m, false, mox);  // 6m LPF
+    }
+
+    if (alexPresent) {  // Thetis: alexpresent && !initializing
+        return setAlexLpfBits(masks, selectAlexLpf(freqMhz, edges), freqIsTx, mox);
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------------------

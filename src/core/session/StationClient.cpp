@@ -332,6 +332,10 @@
 //                Core's radeSynced and radeFreqOffsetHz, so the window's VFO
 //                flag shows RADE sync and offset. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the hello declares alexLpf 1 and radio
+//                takes the Core's alexLpfBits, so the Alex-1 Filters tab's
+//                lamps show the Core's low-pass (radioHardwareVersion 10).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -720,6 +724,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // The VFO flag's RADE row shows the Core's decoder sync and frequency
     // offset (radeStatusVersion 1), as a local window's flag does.
     m_declaredFeatures.insert(QByteArrayLiteral("radeStatus"), 1);
+    // The Alex-1 Filters tab's lamps show the low-pass the Core's radio is
+    // using (radio's alexLpfBits, radioHardwareVersion 10).
+    m_declaredFeatures.insert(QByteArrayLiteral("alexLpf"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -2105,6 +2112,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
         m_radioModel->clearStationFilterState();
         m_radioModel->clearStationBandOutputs();
+        m_radioModel->clearStationAlexLpf();
         for (SliceModel* slice : m_radioModel->slices()) {
             slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
                                               slice->stationAutoAgcNoiseFloorGeneration());
@@ -4072,6 +4080,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
             return true;
         }
         if (m_radioModel->applyStationBandOutputsValue(propertyName, native)) {
+            return true;
+        }
+        if (m_radioModel->applyStationAlexLpfValue(propertyName, native)) {
             return true;
         }
         return m_radioModel->applyStationFilterValue(propertyName, native);

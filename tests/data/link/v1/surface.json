@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 9
+            "value": 10
         },
         {
             "kind": "i64",
@@ -5071,6 +5071,12 @@
                     "kind": "utf8",
                     "name": "logCategoryList",
                     "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "alexLpfBits",
+                    "ordinal": 28
                 }
             ]
         },

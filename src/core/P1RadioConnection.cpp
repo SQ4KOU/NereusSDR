@@ -1118,10 +1118,11 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
     //     private void UpdateAlexTXFilter()
     //     { if (!_mox) { ... setAlexLPF(rx1_dds_freq_mhz, false); } }
     //
-    // The gate is upstream fidelity rather than the load-bearing RF guard:
-    // effectiveAlexLpfBits() already hands the wire the transmit mask while
-    // keyed, so a retune arriving mid-transmission cannot reach the byte
-    // either way. Both are kept, for the same reason P2 keeps both.
+    // RF-SAFETY: the gate is load-bearing. setAlexLPF writes BOTH masks
+    // while keyed (SetAlexLPFBits `isMox || ...`), so a receive selection
+    // reaching it mid-transmission would put the receive frequency's
+    // low-pass on the transmitter. Thetis never calls it keyed; neither
+    // does this.
     //
     // Which receive frequency wins is receiveLpfFrequencyMhz's job. On a
     // board whose RX2 shares this filter it is the HIGHER of the two, because
@@ -1131,9 +1132,21 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
     // Same hardware carve-out as the high-pass above: the HL2 has no Alex
     // card, but its firmware and the optional N2ADR I/O board read these bits
     // (mi0bot networkproto1.c:1085-1088 [v2.10.3.14-beta1]).
-    if (!m_mox
-        && (   (fcaps && fcaps->hasAlexFilters)
-            || m_hardwareProfile.model == HPSDRModel::HERMESLITE)) {
+    if (!m_mox) {
+        applyReceiveAlexLpf(rx1Hz, frequencyHz);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// applyReceiveAlexLpf: UpdateAlexTXFilter's receive-frequency selection.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::applyReceiveAlexLpf(quint64 rx1Hz, quint64 fallbackHz)
+{
+    if (rx1Hz == 0 && fallbackHz == 0) {
+        return;  // no receiver tuned yet: nothing to select from
+    }
+    const BoardCapabilities* const fcaps = filterCaps();
+    {
         // m_rxFreqHz[m_rx1Slot] / [1] are Thetis's rx1_dds_freq_mhz /
         // rx2_dds_freq_mhz; m_rx1Slot is 0 whenever slot 0 is live (Phase 3F
         // section 16.3.2, see setLiveReceiverSlots).
@@ -1158,7 +1171,7 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
         // so a stale entry can only ever hold the corner HIGHER than needed.
         const double rx1Mhz = (rx1Hz != 0)
             ? double(rx1Hz) / 1e6
-            : double(frequencyHz) / 1e6;
+            : double(fallbackHz) / 1e6;
         double rx2Mhz = 0.0;
         bool rx2Live  = false;
         if (m_liveSlotMask != 0) {
@@ -1175,22 +1188,24 @@ void P1RadioConnection::recomputeReceiveFilters(int changedSlot)
             rx2Live = (m_rxFreqHz[1] != 0);
         }
 
-        const quint8 newRxLpf = codec::alex::computeLpf(
-            codec::alex::receiveLpfFrequencyMhz(
-                rx1Mhz, rx2Mhz, rx2Live,
-                fcaps ? fcaps->rx2PreampPresent : false));
-        if (newRxLpf != m_alexLpfBitsRx) {
+        // setAlexLPF(freq, false) over the saved rows, with 6m/ByPass on RX.
+        const quint8 oldRxLpf = m_alexLpfBitsRx;
+        applyAlexLpf(codec::alex::receiveLpfFrequencyMhz(
+                         rx1Mhz, rx2Mhz, rx2Live,
+                         fcaps ? fcaps->rx2PreampPresent : false),
+                     /*freqIsTx=*/false);
+        const quint8 newRxLpf = m_alexLpfBitsRx;
+        if (newRxLpf != oldRxLpf) {
             // Receive-side counterpart of the setTxFrequency line. Logged on
             // change so a bench can see whether a band button actually
             // reaches the receive filter path at all.
-            qCDebug(lcConnection) << "P1::setReceiverFrequency rx" << changedSlot
+            qCDebug(lcConnection) << "P1::setReceiverFrequency"
                                   << "rxLpf=" << Qt::hex << newRxLpf << Qt::dec
                                   << "hpf=" << Qt::hex << m_alexHpfBits << Qt::dec
                                   << "for" << bandLabel(bandFromFrequency(
-                                         double(frequencyHz)))
-                                  << "rx=" << frequencyHz << "Hz";
+                                         double(fallbackHz)))
+                                  << "rx=" << fallbackHz << "Hz";
         }
-        m_alexLpfBitsRx = newRxLpf;
     }
 }
 
@@ -1198,7 +1213,7 @@ void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
 {
     m_txFreqHz = frequencyHz;
     // TX freq drives Alex LPF — recompute on every change.
-    // Source: console.cs:7168-7234 [@501e3f5]
+    // Source: console.cs:7177-7243 [v2.10.3.15]
     //
     // RF-SAFETY: this is the only writer of the transmit mask, and it is fed
     // from the TX-bound slice's frequency (plus XIT) by
@@ -1220,12 +1235,13 @@ void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
     // networkproto1.c:1085-1088 [v2.10.3.14-beta1] emits these bits on HL2
     // even though it has no Alex card. (Was cited as 1090-1093, which is the
     // case-11 preamp block, not the C4 low-pass byte.)
-    const BoardCapabilities* const fcaps = filterCaps();
-    if (   (fcaps && fcaps->hasAlexFilters)
-        || m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
-        const quint8 newLpfBitsTx =
-            codec::alex::computeLpf(double(frequencyHz) / 1e6);
-        if (newLpfBitsTx != m_alexLpfBitsTx) {
+    // setAlexLPF(tx_dds_freq_mhz, true) over the saved rows: Alex1 unkeyed,
+    // both words keyed, and 6m/ByPass on RX on Alex0 while unkeyed.
+    {
+        const quint8 oldLpfBitsTx = m_alexLpfBitsTx;
+        applyAlexLpf(double(frequencyHz) / 1e6, /*freqIsTx=*/true);
+        const quint8 newLpfBitsTx = m_alexLpfBitsTx;
+        if (newLpfBitsTx != oldLpfBitsTx) {
             // The one line that makes the transmit low-pass observable on a
             // bench. Logged on change only, so it marks the event rather than
             // the C&C round-robin cadence.
@@ -1235,8 +1251,33 @@ void P1RadioConnection::setTxFrequency(quint64 frequencyHz)
                                          double(frequencyHz)))
                                   << "tx=" << frequencyHz << "Hz";
         }
-        m_alexLpfBitsTx = newLpfBitsTx;
     }
+}
+
+// ---------------------------------------------------------------------------
+// applyAlexLpf: Thetis's setAlexLPF on this connection's two masks.
+// From Thetis console.cs:7177-7243 [v2.10.3.15]
+//   if (!_mox && lpf_bypass) { NetworkIO.SetAlexLPFBits(0x10, false, _mox); ... }
+//   if (alexpresent && !initializing) { ... SetAlexLPFBits(bits, freqIsTX, _mox); }
+// Bank 10 C4 carries Alex0 (networkproto1.c:587-590 [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P1RadioConnection::applyAlexLpf(double freqMhz, bool freqIsTx)
+{
+    codec::alex::AlexLpfMasks masks{m_alexLpfBitsRx, m_alexLpfBitsTx};
+    codec::alex::setAlexLpf(masks, freqMhz, freqIsTx, m_mox, m_alexLpfBypass,
+                            alexLpfPresent(), m_alexLpfEdges);
+    m_alexLpfBitsRx = masks.alex0;
+    m_alexLpfBitsTx = masks.alex1;
+    publishAlexLpfBits(effectiveAlexLpfBits());
+}
+
+// HL2 carve-out: mi0bot networkproto1.c:1085-1088 [v2.10.3.14-beta1] emits
+// these bits on HL2 even though it has no Alex card.
+bool P1RadioConnection::alexLpfPresent() const
+{
+    const BoardCapabilities* const fcaps = filterCaps();
+    return (fcaps && fcaps->hasAlexFilters)
+        || m_hardwareProfile.model == HPSDRModel::HERMESLITE;
 }
 // The panadapter axis of the announced receiver count. Was a bare assignment
 // to m_activeRxCount, which both ignored the DDC configuration's needs and
@@ -1670,6 +1711,23 @@ void P1RadioConnection::setMox(bool enabled)
         discardTxIqOnUnkey();
     }
     m_mox = enabled;
+
+    // The low-pass on both MOX edges, as HdwMOXChanged re-drives it:
+    //   From Thetis console.cs:29097-29099 (key) and 29146-29148 (unkey)
+    //   [v2.10.3.15]
+    //     UpdateRX1DDSFreq();   // -> UpdateAlexTXFilter, if (!_mox) only
+    //     UpdateRX2DDSFreq();
+    //     UpdateTXDDSFreq();    // -> setAlexLPF(tx_dds_freq_mhz, true)
+    // Keyed, the transmit selection goes to both words; unkeyed, the receive
+    // selection returns to Alex0 and the transmit one stays on Alex1.
+    if (!m_mox) {
+        applyReceiveAlexLpf(m_rxFreqHz[m_rx1Slot], m_rxFreqHz[m_rx1Slot]);
+    }
+    if (m_txFreqHz != 0) {  // Thetis's tx_dds_freq_mhz is always set
+        applyAlexLpf(double(m_txFreqHz) / 1e6, /*freqIsTx=*/true);
+    }
+    publishAlexLpfBits(effectiveAlexLpfBits());
+    m_forceBank10Next = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2272,6 +2330,46 @@ void P1RadioConnection::setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges)
     }
     RadioConnection::setAlexHpfEdges(edges);
     recomputeReceiveFilters(-1);
+    m_forceBank10Next = true;
+}
+
+// ---------------------------------------------------------------------------
+// setAlexLpfEdges: the Alex-1 low-pass rows. Thetis's udAlex*LPF spinner
+// handlers only keep the rows contiguous; none re-selects the low-pass
+// (setup.cs:15888-15994 [v2.10.3.15]), so the rows are read by the next
+// selection (a retune, a key or an unkey), keyed or not.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges)
+{
+    RadioConnection::setAlexLpfEdges(edges);
+}
+
+// ---------------------------------------------------------------------------
+// setAlexLpfBypass: 6m/ByPass on RX re-selects at once.
+//   From Thetis console.cs:18775-18790 [v2.10.3.15]
+//     lpf_bypass = value;
+//     if (chkPower.Checked)
+//     { double freq = VFOAFreq; if (_mox) freq = tx_dds_freq_mhz;
+//       setAlexLPF(freq, _mox); ... txtVFOAFreq_LostFocus(...) }
+// The LostFocus re-runs the receive selection, so unkeyed this is the
+// receive selection over the live receivers.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setAlexLpfBypass(bool on)
+{
+    if (on == m_alexLpfBypass) {
+        return;
+    }
+    RadioConnection::setAlexLpfBypass(on);
+    if (m_mox) {
+        if (m_txFreqHz != 0) {
+            applyAlexLpf(double(m_txFreqHz) / 1e6, /*freqIsTx=*/true);
+        }
+    } else {
+        const quint64 rx1Hz = m_rxFreqHz[m_rx1Slot];
+        if (rx1Hz != 0) {
+            applyReceiveAlexLpf(rx1Hz, rx1Hz);
+        }
+    }
     m_forceBank10Next = true;
 }
 
