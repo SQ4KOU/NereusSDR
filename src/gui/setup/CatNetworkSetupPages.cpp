@@ -590,7 +590,7 @@ void CatTciServerPage::refreshCoreGroup()
                 combo->setCurrentIndex(value.toInt());
             }
         }
-        // Not built yet: in view, disabled, with the reason.
+        // Unbuilt: in view, disabled, with the reason.
         const bool unbuilt = m_coreUnbuilt.contains(it.key());
         control->setEnabled(settingsAvailable && !onAir && !unbuilt);
         control->setToolTip(unbuilt ? UnbuiltFeatures::notBuiltReason()
@@ -989,7 +989,7 @@ void CatTciServerPage::buildVfoQuirksGroup()
     contentLayout()->addWidget(group);
     // R-R3-49: the three RX2 VFO options are not applied yet; hidden until
     // they are.
-    // Not built yet: in view, disabled, with the reason (JJ's rule
+    // Unbuilt: in view, disabled, with the reason (JJ's rule
     // "disabled, never hidden").
     for (QCheckBox* quirk : {m_forgetRx2VfoBCheck, m_useRx1VfoaForRx2Check,
                              m_copyRx2VfobToVfoaCheck}) {

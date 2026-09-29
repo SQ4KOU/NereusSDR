@@ -103,7 +103,7 @@ void disableUnlessBuilt(QWidget* widget, UnbuiltFeature feature, const QString& 
 
 QString notBuiltReason()
 {
-    return QStringLiteral("Not built yet. NereusSDR's TCI server does not use this option.");
+    return QStringLiteral("This option does not change anything in NereusSDR at the moment.");
 }
 
 void hideUnlessBuilt(QWidget* widget, UnbuiltFeature feature)

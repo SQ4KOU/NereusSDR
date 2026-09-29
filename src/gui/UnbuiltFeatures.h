@@ -73,7 +73,7 @@ void hideUnlessBuilt(QWidget* widget, UnbuiltFeature feature);
 /// with `reason` as its tooltip, until `feature` is built.
 void disableUnlessBuilt(QWidget* widget, UnbuiltFeature feature, const QString& reason);
 
-/// The words a control that is not built yet shows.
+/// The words an unbuilt control shows: what it does today, no promise.
 QString notBuiltReason();
 
 // Hide the labelled row `control` sits in: its QFormLayout row, its

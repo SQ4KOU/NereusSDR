@@ -160,7 +160,7 @@ void AudioTciPage::buildFormatGroup()
     });
     form->addRow(tr("Channels:"), m_channelsCombo);
     // R-R3-49: the stream channel count is not applied yet; hidden until it is.
-    // Not built yet: in view, disabled, with the reason.
+    // Unbuilt: in view, disabled, with the reason.
     UnbuiltFeatures::disableUnlessBuilt(m_channelsCombo, UnbuiltFeature::TciExtras,
                                         UnbuiltFeatures::notBuiltReason());
 

@@ -439,7 +439,7 @@
               },
               "availability": {
                 "enabled": false,
-                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             },
             {
@@ -468,7 +468,7 @@
               },
               "availability": {
                 "enabled": false,
-                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             },
             {
@@ -497,7 +497,7 @@
               },
               "availability": {
                 "enabled": false,
-                "reason": "Not built yet. NereusSDR's TCI server does not use this option."
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             }
           ]
