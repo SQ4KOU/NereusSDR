@@ -189,7 +189,8 @@ class NotchModel : public QObject {
     // travels as one JSON array (id, centreHz, widthHz, active) because the
     // mirror has no list type; revision moves with every list change. The
     // two flags are two-way. visualEnabled is deliberately NOT a property:
-    // it is each window's own display preference.
+    // it is one Core-wide setting, NotchVisualEnabled, which every window
+    // reads and writes through the settings proxy.
     Q_PROPERTY(QString listJson READ listJson NOTIFY listChanged)
     Q_PROPERTY(quint32 revision READ revision NOTIFY listChanged)
     Q_PROPERTY(bool globalEnabled READ globalEnabled WRITE setGlobalEnabled
@@ -329,8 +330,9 @@ public:
     // ── Remote window mirror mode (R-R3-21 / R-R3-09) ────────────────────
     //
     // Set by StationClient when the Core advertises notchControlVersion. In
-    // mirror mode the model never reads or writes Notch* settings (only the
-    // window's own NotchVisualEnabled display preference); its list is
+    // mirror mode the model never reads or writes Notch* settings (only
+    // NotchVisualEnabled, one Core-wide setting it reaches through the
+    // settings proxy); its list is
     // replaced from the Core's mirrored listJson, keeping the Core's ids;
     // and every mutator sends a request instead of deciding. Moves, width
     // changes and active toggles show at once and are held over the

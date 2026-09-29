@@ -438,7 +438,8 @@ names a Station key the Core owns through the settings proxy. A `telemetry`
 binding names a radio telemetry field and gates on the
 `stationTelemetryVersion` that first sends it. A `command` binding names a
 verb the Core runs, with its capability gate and argument types, as before.
-A `phone` binding names a value or action the phone keeps (below). Missing,
+A `phone` binding names a value the phone draws or chooses, or an action
+it takes (below). Missing,
 stale or malformed values are unavailable, never zero; a row whose gate the
 renderer cannot evaluate is disabled.
 
@@ -506,9 +507,12 @@ New closed fields and sources in version 14:
   the Core open (the desktop's VOX rule); the Core refuses VOX without it.
 - `binding.phone` on a button is a phone action: `openTxEq` opens the phone's
   TX equalizer; `openSetupPage` with `target` (a page id) opens that Setup
-  page. On another kind it is a value the phone keeps: `NotchVisualEnabled`
-  (TNF's Visual Notch, a display preference the phone draws itself) and
-  `filterPresetsMode` (the Filter Presets page's mode).
+  page. On another kind it names a value: `NotchVisualEnabled` (TNF's
+  Visual Notch; the phone draws the dent itself, but the value is the
+  Core-wide Station setting of that name, read with `settings.snapshot` and
+  changed with `settings.write`, shared with every window) and
+  `filterPresetsMode` (the Filter Presets page's mode, which the phone
+  keeps).
 
 DSP version 14 (10 pages). NR/ANF gains the RNNoise Model (Global) section
 (the Core's NR3 model, `dspAssets.selectNr3Model`, `dspAssetVersion` 2, and
@@ -517,7 +521,7 @@ while a limit is in force) and an NNR Diagnostics section: fourteen readouts
 of the selected slice's NNR state, the staged Test mode and Output mode, and
 Apply until reconnect (`nnr.setDiagnostics`, enabled while NNR is ready;
 the modes last until the app reconnects). CW gains APF Center Freq. TNF gains
-Visual Notch (phone-local) and is complete. The new Filter Presets page has
+Visual Notch (the Core-wide `NotchVisualEnabled` setting) and is complete. The new Filter Presets page has
 the mode choice (LSB to DRM, the desktop's order, default USB), the Presets
 table and the three resets; Options gains the high-resolution filter graph
 setting (`dspInfoVersion` 1; the Core sends the curve through

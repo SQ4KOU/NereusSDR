@@ -551,10 +551,12 @@ bool validateControl(const QString& categoryId, const QJsonObject& control, QStr
         return fail(why, QStringLiteral("%1: table binding").arg(id));
     }
     if (binding.contains(QStringLiteral("phone"))) {
-        // A phone-local value: a display preference the phone keeps, or the
-        // page's own choice (the Filter Presets mode). No Core write. On a
-        // button it names a phone action: open the TX equalizer, or open
-        // the Setup page `target` names.
+        // A value the phone draws or chooses itself: NotchVisualEnabled
+        // (the phone draws the notch dent; the value is the Core-wide
+        // Station key of that name, read and written through the settings
+        // proxy) or the page's own choice (the Filter Presets mode, which
+        // the phone keeps). On a button it names a phone action: open the
+        // TX equalizer, or open the Setup page `target` names.
         const QString phone = binding.value(QStringLiteral("phone")).toString();
         const QString target = control.value(QStringLiteral("target")).toString();
         const bool action = kind == QLatin1String("button");

@@ -708,8 +708,9 @@ void NotchModel::clear()
 
 void NotchModel::persist()
 {
-    // Mirror mode: the Core persists its own list and flags. The window's
-    // display preference is written by setVisualEnabled itself.
+    // Mirror mode: the Core persists its own list and flags.
+    // NotchVisualEnabled (Core-wide, through the settings proxy) is written
+    // by setVisualEnabled itself.
     if (m_restoring || m_mirrorMode) {
         return;
     }
@@ -720,8 +721,9 @@ void NotchModel::saveToSettings() const
 {
     auto& s = AppSettings::instance();
 
-    // R-R3-21: a remote window never writes the Core's notch settings. Its
-    // one notch setting is its own display preference.
+    // R-R3-21: a remote window never writes the Core's notch list or its two
+    // flags. Its one notch write is NotchVisualEnabled, a Station key the
+    // settings proxy carries to the Core, so the value is Core-wide.
     if (m_mirrorMode) {
         s.setValue(QStringLiteral("NotchVisualEnabled"), boolStr(m_visualEnabled));
         return;
@@ -768,7 +770,8 @@ void NotchModel::restoreFromSettings()
     m_restoring = true;
 
     // R-R3-21: a remote window's list and flags come from the Core's mirror,
-    // never from settings. Only its display preference is its own.
+    // never from settings. Only NotchVisualEnabled is read here: the Core's
+    // one Core-wide value, through the settings proxy.
     if (m_mirrorMode) {
         if (s.contains(QStringLiteral("NotchVisualEnabled"))) {
             setVisualEnabled(boolFrom(s.value(QStringLiteral("NotchVisualEnabled"))));

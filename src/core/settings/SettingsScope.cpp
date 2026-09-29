@@ -640,7 +640,8 @@ bool isModelOwnedNotchSettingsKey(QStringView rawKey)
     // Exactly the keys NotchModel::saveToSettings writes for the list and
     // its two flags: NotchCount, Notch<N>Center|Width|Active (N written
     // without leading zeros), NotchGlobalEnabled and NotchAutoIncrease.
-    // NotchVisualEnabled is the window's own display preference.
+    // NotchVisualEnabled is not model-owned: a plain Station key (the
+    // "Notch" prefix rule), one Core-wide value any window may write.
     static const QRegularExpression kNotchKey(
         QStringLiteral("^notch(?:count|globalenabled|autoincrease"
                        "|(?:0|[1-9][0-9]*)(?:center|width|active))$"),
