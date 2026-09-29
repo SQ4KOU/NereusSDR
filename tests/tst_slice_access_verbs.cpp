@@ -820,6 +820,33 @@ private slots:
         QCOMPARE(core.server->explicitTxSliceFor(b.key.fingerprint()), -1);
     }
 
+    // Slice control plan Task 8b: two windows of one computer, one run with
+    // a profile, are two devices; a refusal names the other plainly.
+    void aRefusalNamesTheOtherProfilePlainly()
+    {
+        Core core;
+        Device plain(QStringLiteral("MacBook-Pro"), QStringLiteral("computer"));
+        Device profiled(QStringLiteral("MacBook-Pro (radxa_5c_r3)"), QStringLiteral("computer"));
+        core.pair(plain);
+        core.pair(profiled);
+        LoopbackTransport* appPlain = core.signIn(plain, kShares);
+        LoopbackTransport* appProfiled = core.signIn(profiled, kShares);
+        QVERIFY(admitted(appPlain) && admitted(appProfiled));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        const int profiledSlice = ownership->ownedBy(profiled.key.fingerprint()).first();
+        const QJsonObject r =
+            core.invoke(appPlain, "nnr.resetTuning", {int64("sliceId", profiledSlice)});
+        QVERIFY(!accepted(r));
+        QVERIFY2(reasonOf(r).contains(QStringLiteral("MacBook-Pro (radxa_5c_r3)")),
+                 qPrintable(reasonOf(r)));
+        const int plainSlice = ownership->ownedBy(plain.key.fingerprint()).first();
+        const QJsonObject back =
+            core.invoke(appProfiled, "nnr.resetTuning", {int64("sliceId", plainSlice)});
+        QVERIFY(!accepted(back));
+        QVERIFY(reasonOf(back).contains(QStringLiteral("MacBook-Pro")));
+        QVERIFY2(!reasonOf(back).contains(QStringLiteral("radxa")), qPrintable(reasonOf(back)));
+    }
+
     void onlyAnExplicitSelectionMarksATransmitSliceChosen()
     {
         Core core;

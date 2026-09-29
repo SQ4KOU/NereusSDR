@@ -271,6 +271,21 @@ not carry it: `pair.start`'s `device` block and the code-mode box keep
 `{"publicKey", "name", "kind"}`, and a device signs in straight after
 pairing.
 
+**The name at sign-in** (slice control plan Task 8b). The Core also
+replaces the device's stored `name` at every sign-in whose `name` is
+usable (`DeviceStore::isValidName`, at most 64 bytes of UTF-8, validated
+as above); an unusable one changes nothing and refuses nothing. So a
+device's name on the Core is the one it last signed in with, for a device
+paired by code or by a pairing request as much as for one that enrolled
+through the token: a phone's name follows what it sends at sign-in, and
+renaming the phone renames it on the Core at its next sign-in. The desktop
+names a window run with a profile other than the default "<host>
+(<profile>)", its name and short name both
+(`ClientDeviceIdentity::machineName(profile)` and
+`machineShortName(profile)`), so two profiles on one computer, which are
+two devices with two keys, are told apart; the default profile's names are
+unchanged.
+
 | Case | `auth.result` reason | `retryable` | `code` |
 | --- | --- | --- | --- |
 | Admitted | `""`, accepted true | false | none |
