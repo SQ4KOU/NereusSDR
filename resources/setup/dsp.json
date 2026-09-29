@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 19,
   "category": {
     "id": "dsp",
     "title": "DSP",
@@ -2029,6 +2029,129 @@
               "max": 24,
               "step": 1,
               "unit": " dB"
+            },
+            {
+              "id": "dsp.cfc.bands",
+              "label": "Configure CFC bands…",
+              "tooltip": "Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ.",
+              "kind": "table",
+              "binding": {
+                "cfcProfile": {
+                  "object": "transmit",
+                  "name": "cfcProfile",
+                  "command": "cfc.setProfile"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 15,
+                "offAir": true
+              },
+              "requiresDescriptionVersion": 19,
+              "bandCounts": [
+                5,
+                10,
+                18
+              ],
+              "minSpanHz": 1000,
+              "fields": [
+                {
+                  "id": "minHz",
+                  "label": "Low",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 20000,
+                  "step": 1,
+                  "decimals": 0,
+                  "unit": " Hz"
+                },
+                {
+                  "id": "maxHz",
+                  "label": "High",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 20000,
+                  "step": 1,
+                  "decimals": 0,
+                  "unit": " Hz"
+                },
+                {
+                  "id": "parametric",
+                  "label": "Use Q Factors",
+                  "kind": "toggle"
+                },
+                {
+                  "id": "precompDb",
+                  "label": "Pre-Comp",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 16,
+                  "step": 0.1,
+                  "decimals": 1,
+                  "unit": " dB"
+                },
+                {
+                  "id": "postEqGainDb",
+                  "label": "Post-EQ",
+                  "kind": "decimal",
+                  "min": -24,
+                  "max": 24,
+                  "step": 0.1,
+                  "decimals": 1,
+                  "unit": " dB"
+                }
+              ],
+              "columns": [
+                {
+                  "id": "frequencyHz",
+                  "label": "Freq",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 20000,
+                  "step": 1,
+                  "decimals": 0,
+                  "unit": " Hz"
+                },
+                {
+                  "id": "compressionDb",
+                  "label": "Comp",
+                  "kind": "decimal",
+                  "min": 0,
+                  "max": 16,
+                  "step": 0.1,
+                  "decimals": 1,
+                  "unit": " dB"
+                },
+                {
+                  "id": "compressionQ",
+                  "label": "Comp Q",
+                  "kind": "decimal",
+                  "min": 0.2,
+                  "max": 20,
+                  "step": 0.01,
+                  "decimals": 2
+                },
+                {
+                  "id": "postEqGainDb",
+                  "label": "Gain",
+                  "kind": "decimal",
+                  "min": -24,
+                  "max": 24,
+                  "step": 0.1,
+                  "decimals": 1,
+                  "unit": " dB"
+                },
+                {
+                  "id": "postEqQ",
+                  "label": "EQ Q",
+                  "kind": "decimal",
+                  "min": 0.2,
+                  "max": 20,
+                  "step": 0.01,
+                  "decimals": 2
+                }
+              ]
             }
           ]
         },
@@ -2056,7 +2179,8 @@
           ]
         }
       ],
-      "coverageV15": "partial: the per-band CFC editor is not described"
+      "coverageV15": "partial: the per-band CFC editor is not described",
+      "coverageV19": ""
     },
     {
       "id": "dsp.tnf",
@@ -2911,5 +3035,6 @@
       "coverageV15": ""
     }
   ],
-  "coverageV15": "partial: the NR3 and NNR model files and the per-band CFC editor are not described"
+  "coverageV15": "partial: the NR3 and NNR model files and the per-band CFC editor are not described",
+  "coverageV19": "partial: the NR3 and NNR model files are not described"
 }

@@ -2570,8 +2570,11 @@ CfcSetupPage::CfcSetupPage(RadioModel* model, QWidget* parent)
     m_cfcBandsBtn = new QPushButton("Configure CFC bands…");
     m_cfcBandsBtn->setObjectName(QStringLiteral("btnCFCBandsConfigure"));
     m_cfcBandsBtn->setAutoDefault(false);
+    // Setup description version 19 publishes this editor as dsp.cfc.bands;
+    // the row's tooltip is this one.
+    m_cfcBandsBtn->setProperty("nereusSetupId", QStringLiteral("dsp.cfc.bands"));
     m_cfcBandsBtn->setToolTip(QStringLiteral(
-        "Open the per-band CFC editor (10-band ParaEQ + compression sliders)"));
+        "Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ."));
     cfcLay->addWidget(m_cfcBandsBtn);
 
     // ── Wiring: CFC widgets ↔ TransmitModel ──────────────────────────────────

@@ -369,6 +369,24 @@ constexpr char kPaV14Controls[] =
     R"json({"id":"pa.gain.table","label":"PA Gain by Band (dB)","tooltip":"","kind":"table","binding":{"paProfileGrid":{"object":"paProfiles"}},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"rows":[{"band":0,"label":"160m"},{"band":1,"label":"80m"},{"band":2,"label":"60m"},{"band":3,"label":"40m"},{"band":4,"label":"30m"},{"band":5,"label":"20m"},{"band":6,"label":"17m"},{"band":7,"label":"15m"},{"band":8,"label":"12m"},{"band":9,"label":"10m"},{"band":10,"label":"6m"},{"band":11,"label":"GEN"},{"band":12,"label":"WWV"},{"band":13,"label":"XVTR"}],"columns":[{"id":"gain","label":"Gain (dB)","field":"gain","kind":"decimal","min":38.8,"max":100,"step":0.1,"decimals":1,"tooltip":"PA gain for %1 in dB. The Core subtracts it from the power you ask for to set the drive."},{"id":"adjust1","label":"10%","field":"adjust","driveStep":0,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 10% drive for %1."},{"id":"adjust2","label":"20%","field":"adjust","driveStep":1,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 20% drive for %1."},{"id":"adjust3","label":"30%","field":"adjust","driveStep":2,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 30% drive for %1."},{"id":"adjust4","label":"40%","field":"adjust","driveStep":3,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 40% drive for %1."},{"id":"adjust5","label":"50%","field":"adjust","driveStep":4,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 50% drive for %1."},{"id":"adjust6","label":"60%","field":"adjust","driveStep":5,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 60% drive for %1."},{"id":"adjust7","label":"70%","field":"adjust","driveStep":6,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 70% drive for %1."},{"id":"adjust8","label":"80%","field":"adjust","driveStep":7,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 80% drive for %1."},{"id":"adjust9","label":"90%","field":"adjust","driveStep":8,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 90% drive for %1."},{"id":"maxPower","label":"Max W","field":"maxPower","kind":"decimal","min":0,"max":1500,"step":0.1,"decimals":1,"tooltip":"Per-band max-power ceiling in watts for %1."},{"id":"useMax","label":"Use Max","field":"useMax","kind":"toggle","tooltip":"Apply the per-band max-power ceiling on %1."}]})json"
     R"json(])json";
 
+// DSP version 19 (R-R3-49): CFC's band editor, bound to transmit's
+// cfcProfile (transmitSettingsVersion 15) and applied with cfc.setProfile.
+// The ranges are CfcProfile's (CfcProfile.h: each from Thetis
+// frmCFCConfig.Designer.cs [v2.10.3.15]); steps and decimals are the
+// dialog's spin boxes (nudCFC_f step 1; nudCFC_c and nudCFC_gain 0.1, one
+// decimal; nudCFC_cq and nudCFC_q 0.01, two decimals). Closed as the
+// version 16 rows are.
+constexpr char kDspV19Controls[] =
+    R"json([)json"
+    R"json({"id":"dsp.cfc.bands","label":"Configure CFC bands\u2026","tooltip":"Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ.","kind":"table","binding":{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":15,"offAir":true},"requiresDescriptionVersion":19,"bandCounts":[5,10,18],"minSpanHz":1000,"fields":[{"id":"minHz","label":"Low","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"maxHz","label":"High","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"parametric","label":"Use Q Factors","kind":"toggle"},{"id":"precompDb","label":"Pre-Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqGainDb","label":"Post-EQ","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"}],"columns":[{"id":"frequencyHz","label":"Freq","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"compressionDb","label":"Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"compressionQ","label":"Comp Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2},{"id":"postEqGainDb","label":"Gain","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqQ","label":"EQ Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2}]})json"
+    R"json(])json";
+
+const QHash<QString, QJsonObject>& dspV19Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kDspV19Controls);
+    return table;
+}
+
 const QHash<QString, QJsonObject>& paV14Controls()
 {
     static const QHash<QString, QJsonObject> table = controlsById(kPaV14Controls);
@@ -671,6 +689,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(14))
+         && !(id == QLatin1String("dsp")
+              && root.value(QStringLiteral("version")) == QJsonValue(19))
          && !(id == QLatin1String("transmit")
               && root.value(QStringLiteral("version")) == QJsonValue(13))
          && !(id == QLatin1String("hardware")
@@ -716,8 +736,23 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     == QJsonValue(SetupDescriptionV15::kVersion)) {
                     if (controlId.isEmpty() || ids.contains(controlId)
                         || !SetupDescriptionV15::isCategory(id)
-                        || root.value(QStringLiteral("version"))
-                            != QJsonValue(SetupDescriptionV15::kVersion)) {
+                        || (root.value(QStringLiteral("version"))
+                                != QJsonValue(SetupDescriptionV15::kVersion)
+                            && !(id == QLatin1String("dsp")
+                                 && root.value(QStringLiteral("version")) == QJsonValue(19)))) {
+                        return {};
+                    }
+                    ids.insert(controlId);
+                    continue;
+                }
+                // Version 19: DSP > CFC's band editor, accepted only as the
+                // exact closed row (validateDspV19Control).
+                if (id == QLatin1String("dsp")
+                    && control.value(QStringLiteral("requiresDescriptionVersion"))
+                        == QJsonValue(19)) {
+                    if (controlId.isEmpty() || ids.contains(controlId)
+                        || root.value(QStringLiteral("version")) != QJsonValue(19)
+                        || !SetupDescription::validateDspV19Control(control)) {
                         return {};
                     }
                     ids.insert(controlId);
@@ -2147,6 +2182,13 @@ bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
     return row != hardwareV13Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateDspV19Control(const QJsonObject& control)
+{
+    const auto row = dspV19Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != dspV19Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateHardwareV16Control(const QJsonObject& control)
 {
     const auto row = hardwareV16Controls().constFind(
@@ -2696,6 +2738,18 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                 }
                 page.remove(QStringLiteral("coverageV15"));
             }
+            // Version 19: likewise, a page's coverage to a version 19 peer.
+            if (page.contains(QStringLiteral("coverageV19"))) {
+                if (version >= 19) {
+                    const QString coverage = page.value(QStringLiteral("coverageV19")).toString();
+                    if (coverage.isEmpty()) {
+                        page.remove(QStringLiteral("coverage"));
+                    } else {
+                        page.insert(QStringLiteral("coverage"), coverage);
+                    }
+                }
+                page.remove(QStringLiteral("coverageV19"));
+            }
             pages.append(page);
         }
     }
@@ -2708,7 +2762,16 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.remove(QStringLiteral("coverageV15"));
     }
-    const int ceiling = SetupDescriptionV15::isCategory(categoryId)
+    if (category.contains(QStringLiteral("coverageV19"))) {
+        if (version >= 19) {
+            category.insert(QStringLiteral("coverage"),
+                            category.value(QStringLiteral("coverageV19")).toString());
+        }
+        category.remove(QStringLiteral("coverageV19"));
+    }
+    // DSP changed at 15 and 19 (CFC's band editor): 15 to 18 see 15.
+    const int ceiling = categoryId == QLatin1String("dsp") && version >= 19 ? 19
+        : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
         // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
         // rows) and 18 (HL2 Options' clock rows).
@@ -2751,7 +2814,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         category.insert(QStringLiteral("pages"), fittedPages);
     }
     // PA changed at 5, 13 and 14; hardware at 6, 13, 16, 17 and 18; transmit
-    // at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at 15.
+    // at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at 15; DSP at
+    // 19.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {

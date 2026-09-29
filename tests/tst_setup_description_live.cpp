@@ -49,7 +49,8 @@ private slots:
         };
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
-            {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {99, 18, 18}, {15, 15, 13}};
+            {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {99, 19, 18},
+            {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
             Core core;
@@ -524,6 +525,51 @@ private slots:
             const QString text = latest(v14->received(), QStringLiteral("setup"), name).toString();
             QVERIFY2(!text.contains(QStringLiteral("\"requiresDescriptionVersion\":15")), qPrintable(name));
             QVERIFY2(!text.contains(QStringLiteral("coverageV15")), qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("\"requiresDescriptionVersion\":19")), qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("coverageV19")), qPrintable(name));
+        }
+    }
+
+    // Version 19: a paired phone reads DSP > CFC's band editor; a version 18
+    // phone keeps DSP version 15 without it.
+    void pairedV19PhoneReadsCfcBands()
+    {
+        Core core;
+        const auto cfcBandsOf = [](const QJsonObject& dsp) {
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue("dsp.cfc.bands")) {
+                            return raw.toObject();
+                        }
+                    }
+                }
+            }
+            return QJsonObject();
+        };
+        // {declared, capability sent back, DSP version the phone reads}
+        const QList<std::tuple<int, int, int>> declarations{{19, 19, 19}, {18, 18, 15}};
+        for (const auto& [declared, granted, received] : declarations) {
+            Device phone(QStringLiteral("CFC V%1 iPhone").arg(declared), QStringLiteral("phone"));
+            core.pair(phone);
+            QHash<QByteArray, int> features = kHolder;
+            features.insert("setupDescription", declared);
+            auto* peer = core.signIn(phone, features);
+            QVERIFY(admitted(peer));
+            QCOMPARE(capability(peer->received(), QStringLiteral("setupDescriptionVersion")),
+                     std::optional<qint64>(granted));
+            const QString text = latest(peer->received(), QStringLiteral("setup"),
+                                        QStringLiteral("dsp")).toString();
+            QVERIFY(!text.contains(QStringLiteral("coverageV19")));
+            const QJsonObject dsp = QJsonDocument::fromJson(text.toUtf8()).object();
+            QCOMPARE(dsp.value("version"), QJsonValue(received));
+            const QJsonObject bands = cfcBandsOf(dsp);
+            QCOMPARE(bands.isEmpty(), received != 19);
+            if (received == 19) {
+                QVERIFY(SetupDescriptionService::validateDspV19Control(bands));
+                QCOMPARE(dsp.value("coverage"),
+                         QJsonValue("partial: the NR3 and NNR model files are not described"));
+            }
         }
     }
 
