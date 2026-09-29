@@ -7946,6 +7946,11 @@ nereus_add_test(tst_slice_claims_expiry
 nereus_add_test(tst_slice_chooser
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS gui)
+# Slice control and shared listening plan Task 14a: a slice flag says who
+# controls the slice; a listened flag disables the shared tuning controls
+# with that reason, never writes the slice, and offers Take control and
+# Stop listening; a controlled flag offers Release. No radio, no RF.
+nereus_add_test(tst_vfo_widget_slice_access EXTRA_LABELS gui)
 # Slice control and shared listening plan Task 5: the remote window's side
 # of listening to and taking a slice (SliceAccessMirror, the four verbs, a
 # listened slice held read-only, the refusals and the controlTaken notice

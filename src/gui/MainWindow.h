@@ -905,8 +905,12 @@ private:
     void refreshTakeReceiverOffer();
     // Slice control plan Task 13: the bottom RX area's all-slice chooser.
     enum class SliceChooserAction { Listen, TakeControl, Release, StopListening, Select, NewSlice };
+    void ensureSliceChooser();
     void openSliceChooser();
     void refreshSliceChooser();
+    // Slice control plan Task 14a: a flag's menu action sent as the
+    // chooser's request.
+    void runFlagAccessAction(SliceChooserAction action, int sliceId);
     void runSliceChooserAction(SliceChooserAction action, int sliceId);
     void finishSliceChooserRequest(const QByteArray& verb, bool accepted,
                                    const QString& reason);
@@ -1118,6 +1122,10 @@ private:
     bool m_desktopHostStopConfirmed{true};
     bool desktopHosting() const;
     bool desktopSliceAllowed(int sliceId) const;
+    // Slice control plan Task 14a: a slice the hosting window listens to
+    // while another device controls it (not one held for an absent device).
+    // Its flag shows, read-only, in place of a foreign marker.
+    bool desktopListensTo(int sliceId) const;
     SliceModel* activeSliceForWindow() const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
@@ -1545,6 +1553,9 @@ private:
     // Slice control plan Task 13: the chooser (a popup), the request it
     // waits on (the verb, or "addSlice"), and the words for its success.
     QPointer<SliceChooser> m_sliceChooser;
+    // Task 14a: the flag whose menu sent the request in flight (-1: none);
+    // it shows the wait and then the Core's answer.
+    int m_flagRequestSlice{-1};
 
     // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
     // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5

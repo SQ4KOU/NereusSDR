@@ -275,6 +275,70 @@ private slots:
         QCOMPARE(chooser.message(), QStringLiteral("Asking the Core…"));
     }
 
+    // Task 14a: the slice flag's words come from the same row.
+    void aFlagSaysWhoControlsTheSlice()
+    {
+        using State = VfoWidget::SliceAccess::State;
+
+        Row mine = row(0, Controller::ThisWindow);
+        mine.listeningHere = true;
+        const VfoWidget::SliceAccess controlled = SliceChooser::flagAccessFor(mine);
+        QCOMPARE(controlled.state, State::Controlled);
+        QCOMPARE(controlled.line, QStringLiteral("You control"));
+        QVERIFY(controlled.heldReason.isEmpty());
+
+        Row theirs = row(1, Controller::OtherDevice, QStringLiteral("Jo's iPhone"));
+        theirs.listeningHere = true;
+        const VfoWidget::SliceAccess listened = SliceChooser::flagAccessFor(theirs);
+        QCOMPARE(listened.state, State::Listening);
+        QCOMPARE(listened.line, QStringLiteral("Listening \u00b7 controlled by Jo's iPhone"));
+        QCOMPARE(listened.heldReason, QStringLiteral("Jo's iPhone controls this slice"));
+
+        Row core = row(2, Controller::CoreDesktop);
+        core.listeningHere = true;
+        const VfoWidget::SliceAccess coreAccess = SliceChooser::flagAccessFor(core);
+        QCOMPARE(coreAccess.state, State::Listening);
+        QCOMPARE(coreAccess.line,
+                 QStringLiteral("Listening \u00b7 controlled by the Core's own window"));
+        QCOMPARE(coreAccess.heldReason,
+                 QStringLiteral("The Core's own window controls this slice"));
+
+        Row nobody = row(3, Controller::Nobody);
+        nobody.listeningHere = true;
+        const VfoWidget::SliceAccess unclaimed = SliceChooser::flagAccessFor(nobody);
+        QCOMPARE(unclaimed.state, State::Listening);
+        QCOMPARE(unclaimed.line, QStringLiteral("Listening \u00b7 nobody controls it"));
+        QCOMPARE(unclaimed.heldReason,
+                 QStringLiteral("Nobody controls this slice. Take control to change it."));
+
+        // A slice this window neither controls nor listens to has no flag
+        // access of its own.
+        const Row other = row(1, Controller::OtherDevice, QStringLiteral("Jo's iPhone"));
+        QCOMPARE(SliceChooser::flagAccessFor(other).state, State::Unshared);
+    }
+
+    // Task 14a: the flag waits for the same answer the chooser shows.
+    void everyAnswerIsAnnounced()
+    {
+        SliceChooser chooser;
+        chooser.setInventory({row(0, Controller::OtherDevice, QStringLiteral("Jo's iPhone"))});
+        QSignalSpy shown(&chooser, &SliceChooser::resultShown);
+        chooser.beginRequest(QByteArrayLiteral("slice.takeControl"),
+                             QStringLiteral("Asking the Core\u2026"),
+                             QStringLiteral("You control it."));
+        QCOMPARE(shown.count(), 0);
+        QVERIFY(chooser.finishRequest(QByteArrayLiteral("slice.takeControl"), true, QString()));
+        QCOMPARE(shown.count(), 1);
+        QCOMPARE(shown.first().first().toString(), QStringLiteral("You control it."));
+
+        chooser.beginRequest(QByteArrayLiteral("slice.listen"),
+                             QStringLiteral("Asking the Core\u2026"),
+                             QStringLiteral("Listening to slice A."));
+        chooser.linkLost();
+        QCOMPARE(shown.count(), 2);
+        QCOMPARE(shown.last().first().toString(), QStringLiteral("The Core did not answer"));
+    }
+
     // No slice: honest words, and New slice.
     void anEmptyWindowOffersNewSlice()
     {

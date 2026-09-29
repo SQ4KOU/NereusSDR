@@ -26,7 +26,10 @@
 #include <QMenu>
 #include <QPointer>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QSpinBox>
+#include <QWheelEvent>
+#include <QApplication>
 #include <QSslSocket>
 #include <QTcpServer>
 #include <QTemporaryDir>
@@ -352,6 +355,9 @@ private slots:
         QVERIFY(flagA->txSliceShown());
 
         ownership->setOwner(b->sliceIndex(), QByteArrayLiteral("token:phone"));
+        // The former controller stays a listener (Task 3); leaving makes B
+        // wholly the phone's, shown as its marker.
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), b->sliceIndex()));
         QVERIFY(flagA->stationPresentationAllowed());
         QVERIFY(!flagB->stationPresentationAllowed());
         QVERIFY(!flagB->txSliceShown());
@@ -424,6 +430,9 @@ private slots:
         QVERIFY(spectrum);
         SliceOwnership* ownership = model->sliceOwnership();
         ownership->setOwner(bId, phone.deviceId);
+        // The former controller stays a listener (Task 3); leaving makes B
+        // wholly the phone's, shown as its marker.
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), bId));
         QVERIFY(flagFor(window, aId)->stationPresentationAllowed());
         QVERIFY(!flagFor(window, bId)->stationPresentationAllowed());
         QCOMPARE(spectrum->sliceMarkerGeometry().size(), 1);
@@ -470,15 +479,103 @@ private slots:
         QVERIFY(spectrum->foreignSliceMarkers().first().away);
         QCOMPARE(spectrum->sliceMarkerGeometry().size(), 1);
         ownership->setOwner(bId, phone.deviceId);
+        // Still a listener: B keeps a read-only flag, not a marker.
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+        QCOMPARE(spectrum->sliceMarkerGeometry().size(), 2);
+        QVERIFY(flagFor(window, bId)->isListening());
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), bId));
         QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
 
         ownership->setOwner(aId, phone.deviceId);
+        QVERIFY(ownership->leave(SliceOwnership::stationDevice(), aId));
         QVERIFY(spectrum->sliceMarkerGeometry().isEmpty());
         QCOMPARE(spectrum->foreignSliceMarkers().size(), 2);
         model->removeSlice(bId);
         QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
         controller.stop();
         QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+    }
+
+    // Slice control plan Task 14a: a slice the hosting window listens to
+    // keeps its flag, says who controls it, never writes the slice, and its
+    // Stop listening leaves the slice.
+    void hostListensToAnotherDevicesSlice()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        DeviceSessionRegistry::Entry phone;
+        phone.deviceId = QByteArrayLiteral("phone-device-id-for-listening-01");
+        phone.kind = DeviceSessionRegistry::Kind::Paired;
+        phone.name = QStringLiteral("Living room iPhone");
+        phone.shortName = QStringLiteral("iPhone");
+        phone.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(phone, &phoneSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        auto* spectrum = window.findChild<PanadapterStack*>()->panadapter(
+            QStringLiteral("pan-0"))->spectrumWidget();
+        QVERIFY(spectrum);
+        SliceOwnership* ownership = model->sliceOwnership();
+        ownership->setOwner(bId, phone.deviceId);
+        VfoWidget* flagA = flagFor(window, aId);
+        VfoWidget* flagB = flagFor(window, bId);
+        QVERIFY(flagA && flagB);
+        // The phone took the slice; this window, its former controller,
+        // stays a listener.
+        QVERIFY(ownership->isListening(SliceOwnership::stationDevice(), bId));
+        QVERIFY(flagB->stationPresentationAllowed());
+        QVERIFY(flagB->isListening());
+        QVERIFY(flagB->accessLineText().startsWith(QStringLiteral("Listening")));
+        QVERIFY(flagB->accessLineText().contains(QStringLiteral("iPhone")));
+        QCOMPARE(flagA->sliceAccess().state, VfoWidget::SliceAccess::State::Controlled);
+        QCOMPARE(flagA->accessLineText(), QStringLiteral("You control"));
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+        QCOMPARE(spectrum->sliceMarkerGeometry().size(), 2);
+
+        // The listener never writes the slice.
+        const double before = b->frequency();
+        QSignalSpy freq(b, &SliceModel::frequencyChanged);
+        QSignalSpy af(b, &SliceModel::afGainChanged);
+        QSignalSpy mute(b, &SliceModel::mutedChanged);
+        const QPointF at(flagB->width() / 2.0, flagB->height() / 2.0);
+        QWheelEvent wheel(at, flagB->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(flagB, &wheel);
+        QCOMPARE(freq.count(), 0);
+        QCOMPARE(af.count(), 0);
+        QCOMPARE(mute.count(), 0);
+        QCOMPARE(b->frequency(), before);
+
+        // Stop listening from the flag: the Core answers, nothing is left
+        // waiting, and the slice is the phone's marker again.
+        emit flagB->stopListeningRequested(bId);
+        QVERIFY(!ownership->isListening(SliceOwnership::stationDevice(), bId));
+        QVERIFY(!flagB->sliceAccessPending());
+        QVERIFY(!flagB->stationPresentationAllowed());
+        QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
+
+        // Listening again brings the read-only flag back.
+        QVERIFY(ownership->join(SliceOwnership::stationDevice(), bId));
+        QVERIFY(flagB->stationPresentationAllowed());
+        QVERIFY(flagB->isListening());
+        QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+        controller.stop();
     }
 
     void appletAndContainerAskWithoutOptimisticKey()

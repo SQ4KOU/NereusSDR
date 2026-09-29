@@ -1536,6 +1536,15 @@ bool MainWindow::desktopSliceAllowed(int sliceId) const
         && !ownership.mark(sliceId).isHeld();
 }
 
+bool MainWindow::desktopListensTo(int sliceId) const
+{
+    if (!desktopHosting() || !m_radioModel || !m_radioModel->sliceOwnership()
+        || !m_radioModel->sliceById(sliceId) || desktopSliceAllowed(sliceId)) { return false; }
+    const SliceOwnership& ownership = *m_radioModel->sliceOwnership();
+    return !ownership.mark(sliceId).isHeld()
+        && ownership.isListening(SliceOwnership::stationDevice(), sliceId);
+}
+
 SliceModel* MainWindow::activeSliceForWindow() const
 {
     if (!m_radioModel) { return nullptr; }
@@ -1746,9 +1755,15 @@ void MainWindow::refreshDesktopStationState()
         if (VfoWidget* flag = it.value()) {
             const bool mine = !hosting || std::any_of(visibleSlices.cbegin(), visibleSlices.cend(),
                 [id = it.key()](const SliceModel* slice) { return slice->sliceIndex() == id; });
-            flag->setStationPresentationAllowed(mine);
-            if (hosting) { flag->setTxSlice(mine && desktopOwnsTransmit() && it.key() == txId); }
-            else { flag->setTxSlice(it.key() == txId); }
+            // Slice control plan Task 14a: a slice this window listens to
+            // keeps its flag (held read-only by its slice access); its TX
+            // badge is red while the slice is on the air.
+            const bool listened = hosting && !mine && desktopListensTo(it.key());
+            flag->setStationPresentationAllowed(mine || listened);
+            if (hosting) {
+                flag->setTxSlice(mine ? (desktopOwnsTransmit() && it.key() == txId)
+                                      : (listened && server && server->sliceOnAir(it.key())));
+            } else { flag->setTxSlice(it.key() == txId); }
         }
     }
     if (m_rxApplet) {
@@ -2066,6 +2081,8 @@ void MainWindow::refreshForeignMarkers()
             const SliceOwnership::Mark mark = ownership->mark(slice->sliceIndex());
             const QByteArray subject = mark.subject();
             if (subject.isEmpty() || subject == SliceOwnership::stationDevice()) { continue; }
+            // Task 14a: a slice this window listens to has its own flag.
+            if (desktopListensTo(slice->sliceIndex())) { continue; }
             SpectrumWidget::ForeignSliceMarker marker;
             marker.sliceId = slice->sliceIndex();
             marker.centreHz = slice->frequency();
@@ -2093,7 +2110,8 @@ void MainWindow::refreshForeignMarkers()
             bool hasOwnSlice = !hosting;
             if (hosting && ownership && m_radioModel) {
                 for (SliceModel* slice : m_radioModel->slices()) {
-                    if (slice && desktopSliceAllowed(slice->sliceIndex())
+                    if (slice && (desktopSliceAllowed(slice->sliceIndex())
+                                  || desktopListensTo(slice->sliceIndex()))
                         && spectrumForSlice(slice) == spectrum) {
                         hasOwnSlice = true;
                         break;
@@ -2107,11 +2125,8 @@ void MainWindow::refreshForeignMarkers()
 
 // ── Slice control plan Task 13: the bottom RX area's slice chooser ──────
 
-void MainWindow::openSliceChooser()
+void MainWindow::ensureSliceChooser()
 {
-    if (!m_rxDashboard || !m_radioModel) {
-        return;
-    }
     if (!m_sliceChooser) {
         m_sliceChooser = new SliceChooser(this);
         m_sliceChooser->setWindowFlag(Qt::Popup, true);
@@ -2128,7 +2143,26 @@ void MainWindow::openSliceChooser()
                 [this](int id) { runSliceChooserAction(SliceChooserAction::Select, id); });
         connect(m_sliceChooser, &SliceChooser::newSliceRequested, this,
                 [this]() { runSliceChooserAction(SliceChooserAction::NewSlice, -1); });
+        // Task 14a: a flag that sent the request shows the answer too.
+        connect(m_sliceChooser, &SliceChooser::resultShown, this,
+                [this](const QString& words) {
+            const int id = m_flagRequestSlice;
+            if (id < 0) { return; }
+            m_flagRequestSlice = -1;
+            if (VfoWidget* flag = m_vfoWidgetsBySlice.value(id)) {
+                flag->setSliceAccessPending(QString());
+            }
+            if (!words.isEmpty()) { showToast(words, ToastSeverity::Info, 4000); }
+        });
     }
+}
+
+void MainWindow::openSliceChooser()
+{
+    if (!m_rxDashboard || !m_radioModel) {
+        return;
+    }
+    ensureSliceChooser();
     refreshSliceChooser();
     // A wait left from a request that is no longer in flight is cleared.
     m_sliceChooser->reopened();
@@ -2169,6 +2203,44 @@ void MainWindow::refreshSliceChooser()
         m_sliceChooser->setInventory(rows);
         m_sliceChooser->setNoRoomForNewSlice(
             m_radioModel->slices().size() >= m_radioModel->sliceCapForDevices());
+    }
+    // Slice control plan Task 14a: each flag says who controls its slice
+    // (Unshared everywhere when the Core does not share slices).
+    for (auto it = m_vfoWidgetsBySlice.constBegin(); it != m_vfoWidgetsBySlice.constEnd(); ++it) {
+        VfoWidget* flag = it.value();
+        if (!flag) { continue; }
+        VfoWidget::SliceAccess access;
+        if (shared) {
+            for (const SliceChooser::Row& row : rows) {
+                if (row.sliceId == it.key()) {
+                    access = SliceChooser::flagAccessFor(row);
+                    break;
+                }
+            }
+        }
+        flag->setSliceAccess(access);
+    }
+}
+
+void MainWindow::runFlagAccessAction(SliceChooserAction action, int sliceId)
+{
+    if (!m_radioModel) { return; }
+    ensureSliceChooser();
+    if (!m_sliceChooser->requestInFlight().isEmpty()) {
+        showToast(tr("The Core has not answered the last slice request yet."),
+                  ToastSeverity::Info, 3000);
+        return;
+    }
+    // Pending before the call: the hosting desktop's answer comes at once,
+    // inside runSliceChooserAction, through resultShown.
+    VfoWidget* flag = m_vfoWidgetsBySlice.value(sliceId);
+    m_flagRequestSlice = sliceId;
+    if (flag) { flag->setSliceAccessPending(tr("Asking the Core…")); }
+    runSliceChooserAction(action, sliceId);
+    if (m_flagRequestSlice == sliceId && !m_sliceChooser->isPending()) {
+        // Nothing was sent and nothing answered: do not leave it waiting.
+        m_flagRequestSlice = -1;
+        if (flag) { flag->setSliceAccessPending(QString()); }
     }
 }
 
@@ -3366,6 +3438,15 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             [this](int idx) {
         if (m_radioModel) { m_radioModel->removeSlice(idx); }
     });
+    // Slice control plan Task 14a: the flag's access actions are the
+    // chooser's requests (the close button of a listened flag is Stop
+    // listening).
+    connect(newFlag, &VfoWidget::takeControlRequested, this,
+            [this](int idx) { runFlagAccessAction(SliceChooserAction::TakeControl, idx); });
+    connect(newFlag, &VfoWidget::releaseRequested, this,
+            [this](int idx) { runFlagAccessAction(SliceChooserAction::Release, idx); });
+    connect(newFlag, &VfoWidget::stopListeningRequested, this,
+            [this](int idx) { runFlagAccessAction(SliceChooserAction::StopListening, idx); });
     // Phase 3F (Bug 3): clicking this flag activates its slice so the RX
     // applet, the pan the flag sits on, and every other active-slice surface
     // follow it. Every flag runs through here, Slice A's included, since the
@@ -3665,7 +3746,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         const bool mine =
             SliceAccessPolicy::mayChange(*ownership, SliceOwnership::stationDevice(), sliceIndex)
             && !ownership->mark(sliceIndex).isHeld();
-        newFlag->setStationPresentationAllowed(mine);
+        // Task 14a: a slice this window listens to shows its flag too.
+        const bool listened = !mine && desktopListensTo(sliceIndex);
+        newFlag->setStationPresentationAllowed(mine || listened);
         newFlag->setTxSlice(mine && desktopOwnsTransmit()
             && m_radioModel->txSliceArbiter()
             && m_radioModel->txSliceArbiter()->txBoundSliceId() == sliceIndex);
@@ -3677,6 +3760,8 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(slice, &SliceModel::txSliceChanged, newFlag,
             [this](bool) { if (desktopHosting()) { refreshForeignMarkers(); } });
     refreshForeignMarkers();
+    // Task 14a: the new flag says who controls its slice.
+    refreshSliceChooser();
     return newFlag;
 }
 
@@ -6085,8 +6170,12 @@ void MainWindow::buildUI()
     if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
         connect(ownership, &SliceOwnership::markChanged, this,
                 [this](int, const QByteArray&, const QByteArray&) { refreshSliceChooser(); });
-        connect(ownership, &SliceOwnership::listenersChanged, this,
-                [this](int) { refreshSliceChooser(); });
+        connect(ownership, &SliceOwnership::listenersChanged, this, [this](int) {
+            refreshSliceChooser();
+            // Task 14a: a slice this window starts or stops listening to
+            // gains or loses its flag.
+            if (desktopHosting()) { refreshDesktopStationState(); }
+        });
     }
 
     // Phase 3F: the status overlay's per-slice triggers. Topology changes

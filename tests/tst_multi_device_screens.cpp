@@ -800,6 +800,52 @@ private slots:
         flag.setInUseByRadio(true);
         saveShot(&flag, QStringLiteral("flag-in-use-by-radio"));
 
+        // Slice control plan Task 14a: a flag says who controls its slice.
+        VfoWidget::SliceAccess controlled;
+        controlled.state = VfoWidget::SliceAccess::State::Controlled;
+        controlled.line = QStringLiteral("You control");
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by Jo's iPhone");
+        listened.heldReason = QStringLiteral("Jo's iPhone controls this slice");
+        QVERIFY(OperatorWording::isPlain(listened.line));
+        QVERIFY(OperatorWording::isPlain(listened.heldReason));
+        VfoWidget flagControlled;
+        flagControlled.setSliceIndex(0);
+        flagControlled.setFrequency(14'074'000.0);
+        flagControlled.setSliceAccess(controlled);
+        saveShot(&flagControlled, QStringLiteral("flag-controlled"));
+        VfoWidget flagListened;
+        flagListened.setSliceIndex(1);
+        flagListened.setFrequency(14'230'000.0);
+        flagListened.setSliceAccess(listened);
+        QVERIFY(flagListened.isListening());
+        saveShot(&flagListened, QStringLiteral("flag-listened"));
+        VfoWidget flagOnAir;
+        flagOnAir.setSliceIndex(1);
+        flagOnAir.setFrequency(14'230'000.0);
+        flagOnAir.setSliceAccess(listened);
+        flagOnAir.setTxSlice(true);
+        QVERIFY(flagOnAir.txSliceShown());
+        saveShot(&flagOnAir, QStringLiteral("flag-listened-on-air"));
+
+        // Two flags on one panadapter: this window controls A and listens
+        // to B; they stack by today's rule.
+        SpectrumWidget stackPan;
+        stackPan.resize(800, 400);
+        stackPan.setFrequencyRange(14'200'000.0, 96'000.0);
+        VfoWidget* stackA = stackPan.addVfoWidget(0);
+        VfoWidget* stackB = stackPan.addVfoWidget(1);
+        QVERIFY(stackA && stackB);
+        stackA->setFrequency(14'190'000.0);
+        stackB->setFrequency(14'215'000.0);
+        stackA->setSliceAccess(controlled);
+        stackB->setSliceAccess(listened);
+        stackPan.setVfoFrequency(14'190'000.0);
+        stackPan.updateVfoPositions();
+        QVERIFY(stackA->x() != stackB->x());
+        saveShot(&stackPan, QStringLiteral("flags-stacked-on-one-pan"), false);
+
         // The markers on a panadapter.
         SpectrumWidget sw;
         sw.resize(800, 400);

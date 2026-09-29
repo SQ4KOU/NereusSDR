@@ -189,6 +189,37 @@ void SliceChooser::showResult(const QString& words)
     m_pending = false;
     m_message->setText(words);
     rebuild();
+    emit resultShown(words);
+}
+
+VfoWidget::SliceAccess SliceChooser::flagAccessFor(const Row& row)
+{
+    VfoWidget::SliceAccess access;
+    if (row.controller == Controller::ThisWindow) {
+        access.state = VfoWidget::SliceAccess::State::Controlled;
+        access.line = tr("You control");
+        return access;
+    }
+    if (!row.listeningHere) {
+        return access;
+    }
+    access.state = VfoWidget::SliceAccess::State::Listening;
+    switch (row.controller) {
+    case Controller::CoreDesktop:
+        access.line = tr("Listening · controlled by the Core's own window");
+        access.heldReason = tr("The Core's own window controls this slice");
+        break;
+    case Controller::OtherDevice:
+        access.line = tr("Listening · controlled by %1").arg(row.controllerName);
+        access.heldReason = tr("%1 controls this slice").arg(row.controllerName);
+        break;
+    case Controller::Nobody:
+    case Controller::ThisWindow:
+        access.line = tr("Listening · nobody controls it");
+        access.heldReason = tr("Nobody controls this slice. Take control to change it.");
+        break;
+    }
+    return access;
 }
 
 QString SliceChooser::message() const

@@ -32,6 +32,8 @@
 #include <QString>
 #include <QWidget>
 
+#include "gui/widgets/VfoWidget.h"
+
 class QLabel;
 class QPushButton;
 class QVBoxLayout;
@@ -121,6 +123,10 @@ public:
     /// The banner's words for this window's active slice: "You control",
     /// "Listening", or "Choose a slice" with none.
     static QString bannerState(const QList<Row>& rows);
+    /// Task 14a: the slice flag's access for `row`. Controlled when this
+    /// window controls it, Listening (naming the controller) when this
+    /// window only listens to it, Unshared otherwise.
+    static VfoWidget::SliceAccess flagAccessFor(const Row& row);
 
 signals:
     void listenRequested(int sliceId);
@@ -130,6 +136,9 @@ signals:
     void newSliceRequested();
     void selectRequested(int sliceId);
     void closeRequested();
+    /// Every answer shown (the Core's, a refusal before sending, or "The
+    /// Core did not answer"), so a flag that sent the request can show it.
+    void resultShown(const QString& words);
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;

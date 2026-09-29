@@ -1653,6 +1653,11 @@ private slots:
             }
             return false;
         }());
+        // Slice control plan Task 14a: a Core that does not share slices
+        // gives the flag no access line and holds nothing.
+        QCOMPARE(flag->sliceAccess().state, VfoWidget::SliceAccess::State::Unshared);
+        QVERIFY(flag->accessLineText().isEmpty());
+        QVERIFY(!flag->isListening());
         SliceModel* coreSlice = h.station().sliceById(0);
         QVERIFY(coreSlice);
         const double before = coreSlice->frequency();
