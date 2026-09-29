@@ -5767,6 +5767,9 @@ nereus_add_test(tst_tci_sensor_formats)
 # blind: no Qt6WebSockets dependency.
 # TestMockRadioModel.cpp provides the moc vtable for the QObject-derived mock.
 nereus_add_test(tst_tci_dispatch_seam TestMockRadioModel.cpp)
+# The TCI Server page's settings that were saved and never read, made to do
+# what Thetis's TCI server does (tci-extras).
+nereus_add_test(tst_tci_server_settings_real TestMockRadioModel.cpp)
 
 # ── Phase 3J-1 Task 4.1: TciProtocol init burst smoke ──────────────────────
 # Verifies buildInitBurst() returns non-empty, first entry starts with

@@ -86,6 +86,10 @@ public:
         return 0;
     }
 
+    // The frequency of the VFO that transmits (RadioModel::transmitVfoHz).
+    Q_INVOKABLE qint64 transmitVfoHz() const { return m_transmitVfoHz; }
+    void setTransmitVfoHzForTest(qint64 hz) { m_transmitVfoHz = hz; }
+
     // Set the DSP mode string for a given slice (e.g. "USB", "LSB", "CW").
     // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol modulation handler.
     Q_INVOKABLE void setMode(int slice, const QString& mode)
@@ -624,6 +628,7 @@ public:
     }
 
 private:
+    qint64 m_transmitVfoHz{0};
     // 2 slices x 2 channels is sufficient for Phase 1; expand in later phases.
     std::array<std::array<qint64, 2>, 2> m_vfoHz{};
     std::array<QString, 2> m_mode{};

@@ -2061,8 +2061,8 @@ QString TciProtocol::handleLockCommand(const QStringList& args)
 //   args.size() == 1 → query (return current mode uppercase)
 // CWLUbecomesCW transform at TCIServer.cs:2148-2153 [v2.10.3.13] is DEFERRED
 //   (send-side, Phase 11/12 follow-up — wiring requires touching buildModulationLine).
-// CWbecomesCWUabove10mhz transform at TCIServer.cs:3868-3895 [v2.10.3.13] is DEFERRED
-//   (needs VFOATX/VFOBTX accessors on TestMockRadioModel — future phase).
+// CWbecomesCWUabove10mhz: TCIServer.cs:4003-4025 [v2.10.3.15], ported at the
+//   `cw` case below.
 QString TciProtocol::handleModulationCommand(const QStringList& args)
 {
     if (args.size() < 1) {
@@ -2103,9 +2103,46 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
             modeOut = QStringLiteral("FM");
         }
         else if (modeIn == QStringLiteral("cw")) {
-            // CWbecomesCWUabove10mhz transform at TCIServer.cs:3868-3895 [v2.10.3.13] is
-            // DEFERRED — `cw` → CWL until VFOATX/VFOBTX state arrives.
-            modeOut = QStringLiteral("CWL");
+            // From Thetis TCIServer.cs:4003-4025 [v2.10.3.15]:
+            //   case "cw":
+            //       //change if needed [2.10.3.6]MW0LGE fixes #365
+            //       bool bChange = false;
+            //       if (m_server != null && consoleThreadSafe != null)
+            //       {
+            //           if(m_server.CWbecomesCWUabove10mhz)
+            //           {
+            //               bool bVFOA10orAbove = consoleThreadSafe.VFOAFreq >= 10.0;
+            //               bool bVFOB10orAbove = consoleThreadSafe.VFOBFreq >= 10.0;
+            //               if (rx == 0)
+            //               {
+            //                   if(consoleThreadSafe.VFOATX) bChange = bVFOA10orAbove;
+            //                   else bChange = bVFOB10orAbove;
+            //               }
+            //               else if (rx == 1)
+            //               {
+            //                   if (consoleThreadSafe.VFOBTX) bChange = bVFOB10orAbove;
+            //                   else bChange = bVFOA10orAbove;
+            //               }
+            //           }
+            //       }
+            //       mode = bChange ? DSPMode.CWU : DSPMode.CWL;
+            // For either receiver the VFO tested is the one that transmits
+            // (VFO A when VFOATX, otherwise VFO B; VFO B when VFOBTX,
+            // otherwise VFO A). NereusSDR has no VFO A/B: that VFO is the
+            // transmitting slice's frequency (RadioModel::transmitVfoHz).
+            // The setting is the page's TciCwBecomesCwuAbove10mhz
+            // (Thetis m_bCWbecomesCWUabove10mhz, TCIServer.cs:6679
+            // [v2.10.3.15]: //[2.10.3.9]MW0LGE fixes issue #559).
+            bool bChange = false;
+            if (AppSettings::instance().value(QStringLiteral("TciCwBecomesCwuAbove10mhz"),
+                                              QStringLiteral("False")).toString()
+                == QStringLiteral("True")) {
+                qint64 txHz = 0;
+                QMetaObject::invokeMethod(m_radio, "transmitVfoHz", Qt::DirectConnection,
+                                          Q_RETURN_ARG(qint64, txHz));
+                bChange = txHz >= 10'000'000;
+            }
+            modeOut = bChange ? QStringLiteral("CWU") : QStringLiteral("CWL");
         }
         else if (modeIn == QStringLiteral("cwl"))  { modeOut = QStringLiteral("CWL"); }
         else if (modeIn == QStringLiteral("cwu"))  { modeOut = QStringLiteral("CWU"); }
