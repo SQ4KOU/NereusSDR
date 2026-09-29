@@ -36,6 +36,10 @@
 //  13. (Merge of Tasks 37 to 39) The watchdog's stop of a link gone quiet,
 //      the starvation's stop and the time-out's stop each reach the keyed
 //      phone and the other device with their own reason and words.
+//  14. (Unkey drain review) The keyed device revoked is the Core's stop:
+//      with transmit audio queued on a Protocol 1 or Protocol 2 connection
+//      its unkey never waits for the send ring (G-05) before the radio
+//      reaches receive.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -62,6 +66,11 @@
 
 #include "MultiDeviceHarness.h"
 
+#include <QElapsedTimer>
+#include <QScopeGuard>
+
+#include "core/P1RadioConnection.h"
+#include "core/P2RadioConnection.h"
 #include "core/RadioConnection.h"
 #include "core/RadioStatus.h"
 #include "core/TwoToneController.h"
@@ -73,6 +82,8 @@
 #include "core/session/TransmitStateFacade.h"
 
 #include <functional>
+#include <memory>
+#include <vector>
 
 namespace {
 
@@ -629,6 +640,52 @@ private slots:
         QTRY_COMPARE(latest(p.appB->received(), QStringLiteral("txState"),
                             QStringLiteral("stopReason")).toString(),
                      QStringLiteral("revoked"));
+    }
+
+    // 14. A revoke is the Core's stop: its unkey never waits for the send
+    //     ring, on either protocol, whatever transmit audio is queued.
+    void revokingTheKeyedDeviceNeverWaitsForTheSendRing_data()
+    {
+        QTest::addColumn<int>("protocol");
+        QTest::newRow("protocol 1") << 1;
+        QTest::newRow("protocol 2") << 2;
+    }
+    void revokingTheKeyedDeviceNeverWaitsForTheSendRing()
+    {
+        QFETCH(int, protocol);
+        Pair p;
+        // An unconnected connection: nothing sends, so what is queued stays.
+        std::unique_ptr<RadioConnection> conn;
+        if (protocol == 1) {
+            conn = std::make_unique<P1RadioConnection>();
+        } else {
+            conn = std::make_unique<P2RadioConnection>();
+        }
+        p.core.model->injectConnectionForTest(conn.get());
+        auto unplug = qScopeGuard([&p]() { p.core.model->injectConnectionForTest(nullptr); });
+        MoxController* mox = p.core.model->moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+
+        QVERIFY(admitted(p.appA) && admitted(p.appB));
+        QVERIFY(p.keyA());
+        QTRY_VERIFY(p.state().keyed());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        std::vector<float> iq(2 * 2, 0.1f);
+        conn->sendTxIq(iq.data(), 1);
+        QVERIFY(!conn->txIqRingDrained());
+
+        QVERIFY(p.core.server->deviceStore()->remove(p.a.key.fingerprint()));
+        bool waited = mox->isSendRingWaitActive();
+        QElapsedTimer t;
+        t.start();
+        while ((mox->isMox() || mox->state() != MoxState::Rx) && t.elapsed() < 3000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+            waited = waited || mox->isSendRingWaitActive();
+        }
+        QVERIFY(!waited);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(p.state().stopReason(), QStringLiteral("revoked"));
     }
 
     void anUnkeyTheDeviceAskedForIsNoStop()
