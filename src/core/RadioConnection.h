@@ -266,6 +266,17 @@ public slots:
 
     // --- Hardware Control ---
     virtual void setAttenuator(int dB) = 0;
+    // R-R3-46 / R-R3-11: the receive step attenuator of one ADC (0, 1 or 2),
+    // Thetis NetworkIO.SetADC1/2/3StepAttenData (netInterface.c:849-879
+    // [v2.10.3.15], prn->adc[n].rx_step_attn, which both protocols send).
+    // Non-pure so existing test mocks compile unchanged: the default hands
+    // ADC 0 to setAttenuator and drops the others. P1 and P2 override.
+    virtual void setAttenuatorForAdc(int adc, int dB)
+    {
+        if (adc == 0) {
+            setAttenuator(dB);
+        }
+    }
     virtual void setPreamp(bool enabled) = 0;
     virtual void setTxDrive(int level) = 0;
     virtual void setMox(bool enabled) = 0;

@@ -189,6 +189,9 @@
 //                Code.
 //   2026-09-29 - The phone's direct addresses: coreAddressesVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-46 / R-R3-11: adcAttenuatorVersion, the other ADC's
+//                own attenuator on `stepAtt`. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -332,6 +335,14 @@ struct StationCapabilities {
     /// that declared stationTciSettings 1 on a Core at stationTciVersion 2.
     /// 0 (absent): the peer sees today's `stationTci`.
     int stationTciSettingsVersion = 0;
+    /// R-R3-46 / R-R3-11: 1 means `stepAtt` carries rx2AttenuationDb (the
+    /// attenuator of the ADC slice A is not on, two-way) and rx2SliceMask
+    /// (the slices on that ADC). Sent at minor 11 only to a peer whose hello
+    /// declared adcAttenuators 1, after stationTciSettingsVersion, and only
+    /// by a Core that offers `stepAtt` (radioHardwareVersion 1 or more); that
+    /// peer alone gets the two properties. 0 (absent): the peer sees today's
+    /// wire, and every slice reads attenuationDb.
+    int adcAttenuatorVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

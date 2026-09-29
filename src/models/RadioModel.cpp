@@ -4489,6 +4489,16 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
                 this, [recompute](PreampMode) { recompute(); });
         connect(c, &StepAttenuatorController::stepAttEnabledChanged,
                 this, [recompute](bool) { recompute(); });
+        // R-R3-46 / R-R3-11: the other ADC's attenuator, its preamp and
+        // which ADC carries which attenuator move that ADC's offset.
+        connect(c, &StepAttenuatorController::rx2AttenuationChanged,
+                this, [this](int) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx1PreampChanged,
+                this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx2StepAttEnabledChanged,
+                this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::adcRoutingChanged,
+                this, &RadioModel::rxAdcMeterOffsetsChanged);
         // Initial emit so subscribers seed their cache with the current
         // value rather than waiting for the first controller change.
         recompute();
@@ -4546,6 +4556,14 @@ void RadioModel::followReceiveSliceWithStepAttenuator()
                 syncStepAttenuatorToReceiveSlice();
             }
         });
+        // R-R3-46 / R-R3-11: any slice can be the one controlling the other
+        // ADC's attenuator; its band, its DDC and diversity move it.
+        connect(slice, &SliceModel::bandChanged, this,
+                [this](Band) { syncStepAttenuatorAdcRouting(); });
+        connect(slice, &SliceModel::ddcIndexChanged, this,
+                [this](int) { syncStepAttenuatorAdcRouting(); });
+        connect(slice, &SliceModel::diversityEnabledChanged, this,
+                [this](bool) { syncStepAttenuatorAdcRouting(); });
     };
     for (SliceModel* const slice : m_slices) {
         wireSlice(slice);
@@ -4560,6 +4578,12 @@ void RadioModel::followReceiveSliceWithStepAttenuator()
         connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged, this,
                 [this](int, int) { syncStepAttenuatorToReceiveSlice(); });
     }
+    // R-R3-46 / R-R3-11: a slice leaving, or a stream moving to the other
+    // ADC, moves which attenuator an ADC carries.
+    connect(this, &RadioModel::sliceRemoved, this,
+            [this](int) { syncStepAttenuatorAdcRouting(); });
+    connect(this, &RadioModel::streamAdcRoutingChanged, this,
+            &RadioModel::syncStepAttenuatorAdcRouting);
     syncStepAttenuatorToReceiveSlice();
 }
 
@@ -4579,6 +4603,58 @@ void RadioModel::syncStepAttenuatorToReceiveSlice()
         m_stepAttController->setTxBand(tx->band());
         m_stepAttController->setCurrentDspMode(tx->dspMode());
     }
+    syncStepAttenuatorAdcRouting();
+}
+
+// R-R3-46 / R-R3-11: which ADC carries which step attenuator. Thetis sends
+// RX1's to the ADC RX1 uses and RX2's to the ADC RX2 uses (GetADCInUse,
+// console.cs:15110-15133 [v2.10.3.15]); see StepAttenuatorController.h.
+// Slice A is RX1. The other ADC in use is RX2's, controlled by the
+// lowest-numbered slice on it: Thetis has two receivers, so it has no rule
+// for a third, and the lowest slice is the one that stands in for RX2 the
+// way slice A stands in for RX1. Diversity (slice A only, both ADCs mixed)
+// links the two, with slice A's band.
+void RadioModel::syncStepAttenuatorAdcRouting()
+{
+    if (m_role != Role::Local || !m_stepAttController) {
+        return;
+    }
+    const auto receiveAdc = [](int adc) { return adc == 0 || adc == 1; };
+    const SliceModel* const sliceA = sliceById(kStepAttReceiveSliceId);
+    int rx1Adc = sliceAdcIndex(kStepAttReceiveSliceId);
+    if (!receiveAdc(rx1Adc)) {
+        rx1Adc = 0;
+    }
+    int rx2Adc = -1;
+    Band rx2Band = sliceA ? sliceA->band() : Band::GEN;
+    int rx2SliceId = std::numeric_limits<int>::max();
+    for (const SliceModel* const slice : std::as_const(m_slices)) {
+        if (!slice || slice->sliceIndex() == kStepAttReceiveSliceId
+            || slice->sliceIndex() >= rx2SliceId) {
+            continue;
+        }
+        const int adc = sliceAdcIndex(slice->sliceIndex());
+        if (receiveAdc(adc) && adc != rx1Adc) {
+            rx2Adc = adc;
+            rx2Band = slice->band();
+            rx2SliceId = slice->sliceIndex();
+        }
+    }
+    const bool linked = diversityActive() && boardCapabilities().adcCount >= 2;
+    if (linked && rx2Adc < 0) {
+        rx2Adc = rx1Adc == 0 ? 1 : 0;
+    }
+    // Every slice on the other ADC reads and sets its value.
+    quint32 rx2SliceMask = 0;
+    if (rx2Adc >= 0 && !linked) {
+        for (const SliceModel* const slice : std::as_const(m_slices)) {
+            if (slice && slice->sliceIndex() >= 0 && slice->sliceIndex() < 32
+                && sliceAdcIndex(slice->sliceIndex()) == rx2Adc) {
+                rx2SliceMask |= (1u << slice->sliceIndex());
+            }
+        }
+    }
+    m_stepAttController->setAdcRouting(rx1Adc, rx2Adc, rx2Band, linked, rx2SliceMask);
 }
 
 // R-R3-22: moved from MainWindow's existing PGXL/SmartSDR wiring. A
@@ -8537,6 +8613,14 @@ double RadioModel::rxMeterOffsetDb() const
     if (m_role == Role::Remote) {
         return 0.0;
     }
+    // RXCalibrationOffset(1) (console.cs:21062-21067 [v2.10.3.15]):
+    //   fOffset = _rx1_meter_cal_offset + _rx1_xvtr_gain_offset + _rx1_6m_gain_offset;
+    // The XVTR term rides the transverter work.
+    return rxPreampOffsetDb() + rxMeterCalOffsetDb() + rx6mGainOffsetDb();
+}
+
+double RadioModel::rxMeterCalOffsetDb() const
+{
     const HPSDRModel model = m_hardwareProfile.model;
 
     // Per-radio factory cal default + user override (AppSettings key
@@ -8551,11 +8635,81 @@ double RadioModel::rxMeterOffsetDb() const
     const float meterCalOffset = keyOk
         ? static_cast<float>(userOverride)
         : factoryDefault;
+    return static_cast<double>(meterCalOffset);
+}
 
-    // RXCalibrationOffset(1) (console.cs:21062-21067 [v2.10.3.15]):
-    //   fOffset = _rx1_meter_cal_offset + _rx1_xvtr_gain_offset + _rx1_6m_gain_offset;
-    // The XVTR term rides the transverter work.
-    return rxPreampOffsetDb() + static_cast<double>(meterCalOffset) + rx6mGainOffsetDb();
+double RadioModel::rxPreampOffsetDbForAdc(int adc) const
+{
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
+    if (!m_stepAttController || m_stepAttController->adcUsesRx1Attenuator(adc)) {
+        return rxPreampOffsetDb();
+    }
+    // RX2's half of Thetis RXPreampOffset. Every board with a second ADC is
+    // in its list, so RX2 reads its own values there.
+    // From Thetis console.cs:21038-21052 [v2.10.3.15]:
+    //   else //rx2
+    //   {
+    //       if (_rx2_preamp_present ||
+    //           HardwareSpecific.Model == HPSDRModel.ANAN100D ||
+    //           ...
+    //           HardwareSpecific.Model == HPSDRModel.REDPITAYA //DH1KLM
+    //           )
+    //       {
+    //           fOffset = _rx2_step_att_enabled ? (float)rx2_attenuator_data : rx2_preamp_offset[(int)rx2_preamp_mode];
+    //       }
+    // RX2 has its own step attenuator enable (_rx2_step_att_enabled). The
+    // second ADC's preamp is one switch (rx1Preamp): rx2_preamp_offset
+    // HPSDR_ON 0 dB, HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the
+    // same two entries rxPreampOffsetDbFor holds for RX1.
+    if (m_stepAttController->rx2StepAttEnabled()) {
+        return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
+    }
+    const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;
+    return static_cast<double>(::NereusSDR::rxPreampOffsetDbFor(static_cast<int>(rx2Preamp)));
+}
+
+double RadioModel::rxMeterOffsetDbForAdc(int adc) const
+{
+    if (m_role == Role::Remote) {
+        return 0.0;
+    }
+    if (!m_stepAttController || m_stepAttController->adcUsesRx1Attenuator(adc)) {
+        return rxMeterOffsetDb();
+    }
+    // RXCalibrationOffset(2) with RXOffset(rx) = RXPreampOffset(rx) +
+    // RXCalibrationOffset(rx):
+    // From Thetis console.cs:21069-21083 [v2.10.3.15]:
+    //   else //rx2
+    //   {
+    //       fOffset = _rx2_meter_cal_offset + _rx2_xvtr_gain_offset;
+    //
+    //       if (HardwareSpecific.Model == HPSDRModel.ANAN7000D || HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+    //           HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 || HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+    //           HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //           fOffset += _rx2_6m_gain_offset;
+    //   }
+    //   return fOffset;
+    //   }
+    //   public float RXOffset(int rx)
+    //   {
+    //       return RXPreampOffset(rx) + RXCalibrationOffset(rx);
+    // _rx2_meter_cal_offset starts from the same per-radio value as RX1's
+    // (console.cs:999, RX2MeterCalOffset = rx_meter_cal_offset_by_radio[...])
+    // and NereusSDR keeps one meter cal. The XVTR and 6 m LNA terms of RX2
+    // are not ported (the second Alex's 6 m switches are not applied yet).
+    return rxPreampOffsetDbForAdc(adc) + rxMeterCalOffsetDb();
+}
+
+double RadioModel::rxMeterOffsetDbForSlice(int sliceId) const
+{
+    return rxMeterOffsetDbForAdc(sliceAdcIndex(sliceId));
+}
+
+double RadioModel::rxMeterOffsetDbForStream(int stream) const
+{
+    return rxMeterOffsetDbForAdc(adcForStream(stream));
 }
 
 double RadioModel::rxPreampOffsetDb() const
@@ -8671,6 +8825,7 @@ void RadioModel::refreshRxMeterOffset()
     if (!qFuzzyCompare(1.0 + v, 1.0 + m_lastEmittedRxMeterOffsetDb)) {
         m_lastEmittedRxMeterOffsetDb = v;
         emit rxMeterOffsetChanged(v);
+        emit rxAdcMeterOffsetsChanged();
     }
 }
 

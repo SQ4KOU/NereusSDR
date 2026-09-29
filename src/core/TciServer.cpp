@@ -109,6 +109,9 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-28 - R-R3-46 / R-R3-11: the RX1 sensor takes slice 0's ADC
+//                offset (rxMeterOffsetDbForSlice). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -416,8 +419,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         } else if (m_model) {
             if (auto* wdsp = m_model->wdspEngine()) {
                 if (auto* rx = wdsp->rxChannel(0)) {
+                    // R-R3-46 / R-R3-11: channel 0 is slice 0's; its
+                    // ADC's offset.
                     rx1Dbm = rx->getMeter(RxMeterType::SignalAvg)
-                           + m_model->rxMeterOffsetDb();
+                           + m_model->rxMeterOffsetDbForSlice(0);
                 }
             }
         }

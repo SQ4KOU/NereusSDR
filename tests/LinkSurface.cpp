@@ -122,6 +122,12 @@
 //                                    coreAddressesVersion and devices'
 //                                    coreAddresses are captured.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the capture
+//                                    declares adcAttenuators, so
+//                                    adcAttenuatorVersion and stepAtt's
+//                                    rx2AttenuationDb and rx2SliceMask are
+//                                    captured. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -596,7 +602,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // coreAddresses (the capture signs in
                                   // with its own key).
                                   {"coreAddresses", 1},
-                                  {"audioQuality", 1}, {"stationTciSettings", 1}})));
+                                  {"audioQuality", 1}, {"stationTciSettings", 1},
+                                  // R-R3-46 / R-R3-11: stepAtt's other ADC.
+                                  {"adcAttenuators", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -654,6 +662,8 @@ QJsonArray captureCapabilities()
     // JJ's ruling of 2026-09-28: sent to a peer that declared
     // stationTciSettings.
     caps.stationTciSettingsVersion = 1;
+    // R-R3-46 / R-R3-11: sent to a peer that declared adcAttenuators.
+    caps.adcAttenuatorVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

@@ -312,6 +312,43 @@
               "gate": {
                 "board": "attenuator.present"
               }
+            },
+            {
+              "id": "general.options.rx2StepAttEnable",
+              "label": "RX2 Enable",
+              "tooltip": "Enable the step attenuator.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "rx2StepAttEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "adcAttenuatorVersion",
+                "min": 1,
+                "board": "attenuator.secondAdc"
+              }
+            },
+            {
+              "id": "general.options.rx2StepAtt",
+              "label": "RX2 Attenuation",
+              "tooltip": "Attenuation for slices on the second receiver input (EXT1 or EXT2).",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "rx2AttenuationDb"
+                }
+              },
+              "rangeSource": "board.attenuator",
+              "applies": "live",
+              "gate": {
+                "capability": "adcAttenuatorVersion",
+                "min": 1,
+                "board": "attenuator.secondAdc"
+              }
             }
           ]
         },
@@ -368,6 +405,47 @@
               "applies": "live",
               "gate": {
                 "board": "attenuator.present"
+              }
+            }
+          ]
+        },
+        {
+          "title": "RX2 Auto Attenuate",
+          "controls": [
+            {
+              "id": "general.options.rx2AutoAttEnable",
+              "label": "Enable",
+              "tooltip": "Auto attenuate RX2 on ADC overload",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "rx2AutoAttEnabled"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "adcAttenuatorVersion",
+                "min": 1,
+                "board": "attenuator.secondAdc"
+              }
+            },
+            {
+              "id": "general.options.rx2AutoAttUndo",
+              "label": "Undo",
+              "tooltip": "Undo the changes made after the hold period.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "rx2AutoAttUndo"
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "adcAttenuatorVersion",
+                "min": 1,
+                "board": "attenuator.secondAdc"
               }
             }
           ]

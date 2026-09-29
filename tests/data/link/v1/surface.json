@@ -466,6 +466,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "adcAttenuatorVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -6839,6 +6844,42 @@
                     "kind": "bool",
                     "name": "forceAttWhenPsOff",
                     "ordinal": 17
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rx2AttenuationDb",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rx2SliceMask",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2StepAttEnabled",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2AutoAttEnabled",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "rx2AutoAttUndo",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rx2AutoAttUndoDelayMs",
+                    "ordinal": 23
                 }
             ]
         },

@@ -15,7 +15,13 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 
+#include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
+#include "models/Band.h"
+#include "models/SliceModel.h"
+#include <QComboBox>
+#include <QLabel>
+#include <QStackedWidget>
 #include "gui/applets/RxApplet.h"
 #include "models/RadioModel.h"
 
@@ -78,6 +84,72 @@ private slots:
         stepAtt->applyRemoteProperty("maxDb", 31);
         QCOMPARE(applet.stepAttMinForTest(), -28);
         QCOMPARE(applet.stepAttMaxForTest(), 31);
+    }
+
+    // R-R3-46 / R-R3-11: the ATT / S-ATT / A-ATT label and which control
+    // shows follow the step attenuator of the slice's own ADC (Thetis RX2's
+    // enable and auto-attenuate for a slice on the other ADC). The preamp
+    // choice there is slice A's input's, so it is disabled with the reason.
+    void localLabelFollowsTheSlicesAdc()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Saturn);
+        auto* ctrl = new StepAttenuatorController(&model);
+        ctrl->setTickTimerEnabled(false);
+        model.setStepAttController(ctrl);
+        SliceModel* a = model.sliceById(model.addSlice());
+        SliceModel* b = model.sliceById(model.addSlice());
+        QVERIFY(a && b);
+        ctrl->setAdcRouting(0, 1, Band::Band20m, false, 1u << b->sliceIndex());
+        ctrl->setStepAttEnabled(true);
+        ctrl->setRx2StepAttEnabled(false);
+        RxApplet applet(nullptr, &model);
+        auto* label = applet.findChild<QLabel*>(QStringLiteral("RxAttLabel"));
+        auto* stack = applet.findChild<QStackedWidget*>(QStringLiteral("RxAttenuatorStack"));
+        auto* combo = applet.findChild<QComboBox*>(QStringLiteral("RxPreampCombo"));
+        QVERIFY(label && stack && combo);
+
+        applet.setSlice(a);
+        QCOMPARE(label->text(), QStringLiteral("S-ATT"));
+        QCOMPARE(stack->currentIndex(), 1);
+
+        applet.setSlice(b);
+        QCOMPARE(label->text(), QStringLiteral("ATT"));
+        QCOMPARE(stack->currentIndex(), 0);
+        QVERIFY(!combo->isEnabled());
+        QVERIFY(!combo->toolTip().isEmpty());
+
+        ctrl->setRx2StepAttEnabled(true);
+        QCOMPARE(label->text(), QStringLiteral("S-ATT"));
+        QCOMPARE(stack->currentIndex(), 1);
+        ctrl->setRx2AutoAttEnabled(true);
+        QCOMPARE(label->text(), QStringLiteral("A-ATT"));
+
+        applet.setSlice(a);
+        QCOMPARE(label->text(), QStringLiteral("S-ATT"));
+        QVERIFY(combo->isEnabled());
+    }
+
+    void remoteLabelFollowsTheSlicesAdc()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setBoardForTest(HPSDRHW::Saturn);
+        RxApplet applet(nullptr, &remote);
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        stepAtt->setWindowAvailability(true, QString());
+        stepAtt->applyRemoteProperty("rx2SliceMask", 1 << 1);
+        auto* label = applet.findChild<QLabel*>(QStringLiteral("RxAttLabel"));
+        auto* stack = applet.findChild<QStackedWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(label && stack);
+        SliceModel b(1);
+        applet.setSlice(&b);
+        QCOMPARE(label->text(), QStringLiteral("ATT"));
+        stepAtt->setRx2StepAttEnabled(true);
+        QCOMPARE(label->text(), QStringLiteral("S-ATT"));
+        QCOMPARE(stack->currentIndex(), 1);
+        stepAtt->setRx2AutoAttEnabled(true);
+        QCOMPARE(label->text(), QStringLiteral("A-ATT"));
+        applet.setSlice(nullptr);
     }
 };
 

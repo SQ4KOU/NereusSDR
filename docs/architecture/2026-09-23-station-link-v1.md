@@ -829,6 +829,15 @@ in with the token whatever it declares. The station does not declare it,
 and the desktop's remote window does not: it dials the address it was
 given and the ones it last reached.
 
+**`adcAttenuators` 1** (R-R3-46, R-R3-11): the client shows each slice the
+step attenuator of the ADC that slice is on. A peer that declares it at
+minor 11, on a Core that offers `stepAtt`, is sent `adcAttenuatorVersion`
+(section 6.3) and `stepAtt`'s `rx2AttenuationDb`, `rx2SliceMask` and
+RX2's own enable and auto-attenuate settings (section 7.1); a peer that
+does not sees exactly the wire it was built for, with neither, and every
+slice reads `attenuationDb`. The station does not declare it; the
+desktop's remote window does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -993,6 +1002,7 @@ change shows as surface drift and as a change to this table.
 | `coreAddressesVersion` | 1 |
 | `audioQualityVersion` | 1 |
 | `stationTciSettingsVersion` | 1 |
+| `adcAttenuatorVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1214,6 +1224,17 @@ When a feature is off, its version is 0:
   and the Core takes `setStationTciSettings` with any of them. A peer that
   did not declare the feature is sent neither this entry nor those
   properties.
+- `adcAttenuatorVersion` (R-R3-46, R-R3-11): optional, sent only at agreed
+  minor 11 to a peer whose hello declared `adcAttenuators` 1, while the
+  Core offers `stepAtt` (`radioHardwareVersion` 1 or more), after
+  `stationTciSettingsVersion` (or after the last entry before it when
+  that is absent) and before `coreBuildInfo`.
+  At 1, `stepAtt` carries `rx2AttenuationDb`, `rx2SliceMask`,
+  `rx2StepAttEnabled`, `rx2AutoAttEnabled`, `rx2AutoAttUndo` and
+  `rx2AutoAttUndoDelayMs` (section
+  7.1). A peer that did not declare the feature is sent neither this entry
+  nor the two properties. Without it a client shows every slice
+  `attenuationDb`, as before.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1856,7 +1877,8 @@ declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 `diversityPattern`; `logCategoryListVersion` only for a peer that declared
 `logCategoryList`; `radioModelsVersion` only for a peer that declared
 `radioModels`; `coreAddressesVersion` only for a device signed in with its
-own key that declared `coreAddresses`. A client ignores a capability it does not know
+own key that declared `coreAddresses`; `adcAttenuatorVersion` only for
+a peer that declared `adcAttenuators` (section 6.1). A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2037,7 +2059,8 @@ older window sees only the values it was built for.
 | 91 | `coreAddressesVersion` | `i64` |
 | 92 | `audioQualityVersion` | `i64` |
 | 93 | `stationTciSettingsVersion` | `i64` |
-| 94 | `coreBuildInfo` | `utf8` |
+| 94 | `adcAttenuatorVersion` | `i64` |
+| 95 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2598,7 +2621,7 @@ An enum property lists the values its domain allows.
 | 16 | `txSlice` | `utf8` | outbound |  |
 | 17 | `txGain` | `f64` | bidirectional |  |
 
-**StepAttenuatorFacade** (18 properties)
+**StepAttenuatorFacade** (24 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2620,6 +2643,12 @@ An enum property lists the values its domain allows.
 | 15 | `attOnTxEnabled` | `bool` | bidirectional |  |
 | 16 | `attOnTxValue` | `i64` | bidirectional |  |
 | 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
+| 18 | `rx2AttenuationDb` | `i64` | bidirectional |  |
+| 19 | `rx2SliceMask` | `i64` | outbound |  |
+| 20 | `rx2StepAttEnabled` | `bool` | bidirectional |  |
+| 21 | `rx2AutoAttEnabled` | `bool` | bidirectional |  |
+| 22 | `rx2AutoAttUndo` | `bool` | bidirectional |  |
+| 23 | `rx2AutoAttUndoDelayMs` | `i64` | bidirectional |  |
 
 **TransmitModel** (88 properties)
 
@@ -3265,6 +3294,32 @@ Notes on the keys:
   takes them from a peer offered `transmitSettingsVersion` while its radio
   is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
   sets the radio's TX attenuator; it keys nothing.
+- **`stepAtt`, one attenuator per receive ADC** (R-R3-46, R-R3-11;
+  `adcAttenuatorVersion` 1). The Core keeps a step attenuator per receive
+  ADC, as Thetis keeps RX1's and RX2's and sends each to the ADC its
+  receiver uses. `attenuationDb` is the attenuator of the ADC slice A is on
+  (Thetis RX1's), with the band memory that follows slice A's band.
+  `rx2AttenuationDb` (i64, two-way, the same range as `attenuationDb`) is
+  the other ADC's own attenuator (Thetis RX2's), with its own band memory
+  following the band of the lowest-numbered slice on that ADC.
+  `rx2SliceMask` (i64, outbound) has bit n set for each slice n on the
+  other ADC: those slices read and set `rx2AttenuationDb`, every other
+  slice `attenuationDb`. It is 0 when every slice is on slice A's ADC, on a
+  one-ADC radio (the Hermes Lite 2 among them), and while diversity links
+  the two ADCs, when both carry `attenuationDb` and a write of either
+  property sets both. Each slice's S-meter readings and each stream's
+  spectrum frames already carry the offset of their own ADC, so a client
+  adds nothing. RX2 has its own step attenuator enable
+  (`rx2StepAttEnabled`, bool, two-way) and its own auto-attenuate settings
+  (`rx2AutoAttEnabled`, `rx2AutoAttUndo`, bool, and `rx2AutoAttUndoDelayMs`,
+  i64, whole seconds in ms, all two-way; Thetis's `_rx2_step_att_enabled`,
+  `_auto_att_rx2`, `_auto_att_undo_rx2`, `_auto_att_hold_delay_rx2`, default
+  off, off, 5 s), saved by the Core for the radio. RX2's auto-attenuate runs
+  on the other ADC's overload with its own history; with its undo off a
+  raise stays when the overload clears. While every slice is on slice A's
+  ADC, or diversity links them, the two enables are one: a write of either
+  sets both. Declared after `forceAttWhenPsOff`; sent only to a peer
+  that declared `adcAttenuators` 1.
 - **`transmit`'s `txEqCurve`** (R-IOS-13, R-R3-49; `txEqCurveVersion`
   1). Outbound, `utf8`, declared last in `TransmitModel`: the parametric
   curve of the TX EQ dialog, read from `txEqParaEqData` into a documented
@@ -3972,7 +4027,8 @@ A change that touches rows of both tiers at once asks.
 | Change | Arrives as | What it reaches | Tier |
 | --- | --- | --- | --- |
 | Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody | Asks first |
-| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers | Applies at once and tells |
+| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers; `attenuationDb` the receivers of the ADC slice A is on | Applies at once and tells |
+| The other ADC's attenuator | `stepAtt` `rx2AttenuationDb`, `rx2StepAttEnabled`, `rx2AutoAtt...` | the receivers of the other ADC in use (both ADCs' while diversity links them) | Applies at once and tells |
 | ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers | Applies at once and tells |
 | Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices | Asks first |
 | Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain | Applies at once and tells |

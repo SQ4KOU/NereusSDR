@@ -897,6 +897,9 @@ private slots:
                                 const QVector<float>& binsLinear,
                                 double windowEnb,
                                 double dbmOffset);
+    /// R-R3-46 / R-R3-11: every pan's receive offset from the ADC of the
+    /// stream it shows (slice A's for a pan fed nothing yet).
+    void pushSpectrumCalToPans();
 
 private:
     // Parity Task 21 (R-IOS-18, B6.2, B6.3): the Core's radio from a remote

@@ -2468,6 +2468,10 @@ public:
     /// band and mode now. Called before loadSettings on connect, which
     /// restores the per-band slot for the controller's current band.
     void syncStepAttenuatorToReceiveSlice();
+    /// R-R3-46 / R-R3-11: hand the controller which ADC slice A is on, the
+    /// other ADC in use and the band of the slice controlling it (the
+    /// lowest-numbered slice there), and whether diversity links the two.
+    void syncStepAttenuatorAdcRouting();
     /// R-R3-46: the step attenuator and preamp as the mirrored `stepAtt`
     /// object. A Local model binds it to its controller (the Core's, or a
     /// local window's, where nothing reads it); a Remote model leaves it
@@ -3507,6 +3511,26 @@ public:
     // the radio has an Alex and the 6 m LNA is in circuit, else 0. 0 on a
     // Remote model.
     double rx6mGainOffsetDb() const;
+    // R-R3-46 / R-R3-11: the receive offset of one ADC, Thetis
+    // RXOffset(rx) (console.cs:21080-21083 [v2.10.3.15]) for the receiver
+    // whose attenuator that ADC carries. Slice A's ADC (and any ADC while
+    // diversity links them, or an ADC not in use) is RX1's:
+    // rxMeterOffsetDb(). The other ADC in use is RX2's: its own attenuator
+    // (or, with the step attenuator off, its preamp,
+    // rx2_preamp_offset[rx2_preamp_mode]) plus the receive calibration,
+    // whose meter cal Thetis starts from the same per-radio value
+    // (console.cs:999). The RX2 XVTR and 6 m LNA terms are not ported, as
+    // RX1's XVTR term is not. 0 on a Remote model.
+    double rxMeterOffsetDbForAdc(int adc) const;
+    // The preamp half of rxMeterOffsetDbForAdc (RXPreampOffset(rx)).
+    double rxPreampOffsetDbForAdc(int adc) const;
+    // The offset for what a slice hears, and for a stream's spectrum: the
+    // ADC it is on (sliceAdcIndex / adcForStream).
+    double rxMeterOffsetDbForSlice(int sliceId) const;
+    double rxMeterOffsetDbForStream(int stream) const;
+    // The meter cal term of the receive calibration: Setup's value
+    // (RX1_MeterCalOffsetDb) or the radio's factory default.
+    double rxMeterCalOffsetDb() const;
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
@@ -3529,6 +3553,10 @@ signals:
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
     // refresh its cached offset value.
     void rxMeterOffsetChanged(double db);
+    // R-R3-46 / R-R3-11: an ADC's offset (rxMeterOffsetDbForAdc) may have
+    // moved: the other ADC's attenuator or preamp, or which ADC carries
+    // which attenuator. Emitted with rxMeterOffsetChanged too.
+    void rxAdcMeterOffsetsChanged();
 
 public:
 

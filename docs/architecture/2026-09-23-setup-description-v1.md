@@ -72,6 +72,21 @@ control; a permission gate disables its control with the Core's reason.
 unavailable desktop control visible with the same plain reason. General's
 Extended control uses this pending its migration policy; no edit is sent while
 unavailable. Region requires transmitSettingsVersion 9 and the offAir gate.
+General > Options' RX2 Attenuation (`general.options.rx2StepAtt`, integer,
+`stepAtt.rx2AttenuationDb`, the board attenuator's range) is the attenuator of
+the receive input slice A is not on, for the slices on that input (R-R3-46,
+R-R3-11). It gates on `adcAttenuatorVersion:1` and on the board flag
+`attenuator.secondAdc` (a step attenuator and a second receive ADC); the Core
+removes it on a one-ADC radio. RX2's own step attenuator enable
+(`general.options.rx2StepAttEnable`, toggle, `stepAtt.rx2StepAttEnabled`) and
+the RX2 Auto Attenuate section (`general.options.rx2AutoAttEnable`,
+`stepAtt.rx2AutoAttEnabled`; `general.options.rx2AutoAttUndo`,
+`stepAtt.rx2AutoAttUndo`) carry the same gate; the section goes with its
+controls on a one-ADC radio. As for RX1, the hold time is not described.
+Phone note: a phone that has not declared
+`adcAttenuators` 1 receives no `adcAttenuatorVersion`, so it shows the control
+disabled; one that has shows and sets it, and shows each slice the value
+`stepAtt.rx2SliceMask` names for it.
 
 Appearance > Colors & Theme currently publishes a partial phone-owned page of
 ten built spectrum swatches. Each is `kind:"colour"`, `applies:"live"`, and has

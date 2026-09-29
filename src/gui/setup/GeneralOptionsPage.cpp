@@ -69,6 +69,13 @@
 //                 transmitter it is checked and disabled with the reason.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-11: the RX2 row shows and sets the other
+//                 receive ADC's own attenuator and RX2's own enable, and
+//                 Auto Attenuate RX2 sets RX2's own Enable, Undo and Hold
+//                 (Thetis chkRX2StepAtt, chkAutoATTRx2, chkAutoAttUndoRX2,
+//                 nudAutoAttHoldRX2), locally and on the Core; disabled
+//                 with the reason on a one-ADC radio or an older Core.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -254,6 +261,12 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
                 [this](bool) { syncReceiveOnly(); });
         connect(model, &RadioModel::currentRadioChanged,
                 this, &GeneralOptionsPage::onCurrentRadioChanged);
+        // R-R3-46 / R-R3-11: the RX2 row follows the radio's board and, in
+        // a remote window, whether the Core sends RX2's value.
+        connect(model, &RadioModel::currentRadioChanged,
+                this, [this]() { refreshRx2StepAtt(); });
+        connect(model, &RadioModel::stationLinkStateChanged,
+                this, [this]() { refreshRx2StepAtt(); });
     }
     syncReceiveOnly();
 
@@ -1143,23 +1156,23 @@ void GeneralOptionsPage::buildStepAttGroup()
     vbox->addLayout(rx1Row);
 
     // --- RX2 row ---
-    // Issue #259: RX2 step-att UI is constructed (m_chkRx2StepAttEnable +
-    // m_spnRx2StepAttValue) and added to the layout, then hidden until the
-    // controller gains independent RX2 state (m_stepAttEnabledRx2 / m_attDbRx2)
-    // plus its own rx2Enabled / rx2Value / rx2Band/<band> persistence schema.
-    // Hiding rather than removing keeps the existing widget members alive so
-    // the connectController() / initFromController() blocks below stay
-    // structurally identical to the eventual RX2-enabled wiring. The Thetis
-    // contract — independent RX1/RX2 storage with a click-time
-    // RX1↔RX2 mirror when nRX1ADCinUse == nRX2ADCinUse (setup.cs:15741-15760
-    // [v2.10.3.13]) — is the follow-up implementation target.
+    // R-R3-46 / R-R3-11: the value is the other receive ADC's own
+    // attenuator (StepAttenuatorController::rx2AttenuatorDb, Thetis
+    // RX2AttenuatorData / udRX2StepAttData) and RX2 Enable its own enable
+    // (Thetis chkRX2StepAtt -> console.RX2StepAttEnabled), both usable on a
+    // radio with a second receive ADC (refreshRx2StepAtt). The row was built
+    // and hidden by issue #259 until the controller held RX2's state.
     auto* rx2Row = new QHBoxLayout;
     m_chkRx2StepAttEnable = new QCheckBox(QStringLiteral("RX2 Enable"), group);
+    m_chkRx2StepAttEnable->setObjectName(QStringLiteral("chkRx2StepAttEnable"));
+    m_chkRx2StepAttEnable->setProperty("nereusSetupId", "general.options.rx2StepAttEnable");
+    // From Thetis setup.cs: chkRX2StepAtt
     m_chkRx2StepAttEnable->setToolTip(QStringLiteral("Enable the step attenuator."));
-    m_chkRx2StepAttEnable->setVisible(false);
+    m_chkRx2StepAttEnable->setEnabled(false);
     m_spnRx2StepAttValue = makeDbSpinBox(group);
+    m_spnRx2StepAttValue->setObjectName(QStringLiteral("spnRx2StepAttValue"));
+    m_spnRx2StepAttValue->setProperty("nereusSetupId", "general.options.rx2StepAtt");
     m_spnRx2StepAttValue->setEnabled(false);
-    m_spnRx2StepAttValue->setVisible(false);
     rx2Row->addWidget(m_chkRx2StepAttEnable);
     rx2Row->addWidget(m_spnRx2StepAttValue);
     rx2Row->addStretch();
@@ -1185,6 +1198,7 @@ void GeneralOptionsPage::buildStepAttGroup()
         } else if (m_stepAtt) {
             m_stepAtt->setEnabled(on);
         }
+        refreshRx2StepAtt();
     });
 
     // --- Spinbox → controller ---
@@ -1197,6 +1211,28 @@ void GeneralOptionsPage::buildStepAttGroup()
             m_ctrl->setAttenuation(dB, 0);
         } else if (m_stepAtt) {
             m_stepAtt->setAttenuationDb(dB);
+        }
+    });
+
+    // R-R3-46 / R-R3-11: RX2's own enable (Thetis chkRX2StepAtt_Checked
+    // Changed -> console.RX2StepAttEnabled; on one ADC the controller keeps
+    // the two enables one, as Thetis's Setup mirrors them).
+    connect(m_chkRx2StepAttEnable, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_ctrl) {
+            m_ctrl->setRx2StepAttEnabled(on);
+        } else if (m_stepAtt) {
+            m_stepAtt->setRx2StepAttEnabled(on);
+        }
+        refreshRx2StepAtt();
+    });
+
+    // R-R3-46 / R-R3-11: RX2's value is the other ADC's own attenuator
+    // (Thetis udRX2StepAttData -> console.RX2AttenuatorData).
+    connect(m_spnRx2StepAttValue, &QSpinBox::valueChanged, this, [this](int dB) {
+        if (m_ctrl) {
+            m_ctrl->setRx2Attenuation(dB);
+        } else if (m_stepAtt) {
+            m_stepAtt->setRx2AttenuationDb(dB);
         }
     });
 
@@ -1223,25 +1259,32 @@ void GeneralOptionsPage::buildAutoAttGroup()
         // Enable checkbox
         chkEnable = new QCheckBox(QStringLiteral("Enable"), group);
         if (rx == 0) chkEnable->setProperty("nereusSetupId", "general.options.autoAttEnable");
+        if (rx == 1) chkEnable->setProperty("nereusSetupId", "general.options.rx2AutoAttEnable");
         // From Thetis setup.cs: chkAutoATTRx1 / chkAutoATTRx2
         chkEnable->setToolTip(
             QStringLiteral("Auto attenuate RX%1 on ADC overload").arg(rx + 1));
         vbox->addWidget(chkEnable);
 
-        // Mode combo row
-        auto* modeRow = new QHBoxLayout;
-        auto* modeLabel = new QLabel(QStringLiteral("Mode:"), group);
-        cmbMode = makeModeCombo(group);
-        if (rx == 0) cmbMode->setProperty("nereusSetupId", "general.options.autoAttMode");
-        cmbMode->setEnabled(false);
-        modeRow->addWidget(modeLabel);
-        modeRow->addWidget(cmbMode);
-        modeRow->addStretch();
-        vbox->addLayout(modeRow);
+        // Mode combo row. R-R3-46 / R-R3-11: RX1 only. Adaptive is a
+        // NereusSDR extension of RX1's; Thetis's RX2 group has Enable, Undo
+        // and Hold (chkAutoATTRx2, chkAutoAttUndoRX2, nudAutoAttHoldRX2).
+        cmbMode = nullptr;
+        if (rx == 0) {
+            auto* modeRow = new QHBoxLayout;
+            auto* modeLabel = new QLabel(QStringLiteral("Mode:"), group);
+            cmbMode = makeModeCombo(group);
+            cmbMode->setProperty("nereusSetupId", "general.options.autoAttMode");
+            cmbMode->setEnabled(false);
+            modeRow->addWidget(modeLabel);
+            modeRow->addWidget(cmbMode);
+            modeRow->addStretch();
+            vbox->addLayout(modeRow);
+        }
 
         // Undo/Decay checkbox
         chkUndo = new QCheckBox(QStringLiteral("Undo"), group);
         if (rx == 0) chkUndo->setProperty("nereusSetupId", "general.options.autoAttUndo");
+        if (rx == 1) chkUndo->setProperty("nereusSetupId", "general.options.rx2AutoAttUndo");
         // From Thetis setup.cs: chkAutoATTRx1Undo concept
         chkUndo->setToolTip(
             QStringLiteral("Undo the changes made after the hold period."));
@@ -1261,7 +1304,9 @@ void GeneralOptionsPage::buildAutoAttGroup()
         // --- Enable/disable cascade ---
         // mode + undo + hold only enabled when auto-att enabled
         connect(chkEnable, &QCheckBox::toggled, this, [cmbMode, chkUndo, spnHold](bool on) {
-            cmbMode->setEnabled(on);
+            if (cmbMode) {
+                cmbMode->setEnabled(on);
+            }
             chkUndo->setEnabled(on);
             spnHold->setEnabled(on && chkUndo->isChecked());
         });
@@ -1272,13 +1317,43 @@ void GeneralOptionsPage::buildAutoAttGroup()
         });
 
         // Mode change → relabel undo checkbox
-        connect(cmbMode, &QComboBox::currentIndexChanged, this, [chkUndo](int idx) {
-            if (idx == static_cast<int>(AutoAttMode::Adaptive)) {
-                chkUndo->setText(QStringLiteral("Decay"));
-            } else {
-                chkUndo->setText(QStringLiteral("Undo"));
-            }
-        });
+        if (cmbMode) {
+            connect(cmbMode, &QComboBox::currentIndexChanged, this, [chkUndo](int idx) {
+                if (idx == static_cast<int>(AutoAttMode::Adaptive)) {
+                    chkUndo->setText(QStringLiteral("Decay"));
+                } else {
+                    chkUndo->setText(QStringLiteral("Undo"));
+                }
+            });
+        }
+
+        // R-R3-46 / R-R3-11: RX2's own auto-attenuate settings, locally
+        // and on the Core (Thetis chkAutoATTRx2 -> console.AutoAttRX2,
+        // chkAutoAttUndoRX2 -> AutoAttUndoRX2, nudAutoAttHoldRX2 ->
+        // AutoAttUndoDelayRX2, in whole seconds).
+        if (rx == 1) {
+            connect(chkEnable, &QCheckBox::toggled, this, [this](bool on) {
+                if (m_ctrl) {
+                    m_ctrl->setRx2AutoAttEnabled(on);
+                } else if (m_stepAtt) {
+                    m_stepAtt->setRx2AutoAttEnabled(on);
+                }
+            });
+            connect(chkUndo, &QCheckBox::toggled, this, [this](bool on) {
+                if (m_ctrl) {
+                    m_ctrl->setRx2AutoAttUndo(on);
+                } else if (m_stepAtt) {
+                    m_stepAtt->setRx2AutoAttUndo(on);
+                }
+            });
+            connect(spnHold, &QSpinBox::valueChanged, this, [this](int sec) {
+                if (m_ctrl) {
+                    m_ctrl->setRx2AutoUndoDelaySec(sec);
+                } else if (m_stepAtt) {
+                    m_stepAtt->setRx2AutoAttUndoDelayMs(sec * 1000);
+                }
+            });
+        }
 
         // --- Wire to controller (RX1 only — controller is single-RX) ---
         if (m_ctrl && rx == 0) {
@@ -1324,14 +1399,10 @@ void GeneralOptionsPage::buildAutoAttGroup()
 
         contentLayout()->addWidget(group);
 
-        // Issue #259: hide the Auto-Att RX2 group alongside the hidden
-        // RX2 step-att row. The controller is single-RX (auto-att is
-        // RX1-only too); independent RX2 auto-att lands with the
-        // controller-side RX2 refactor. From Thetis groupBoxTS47 the
-        // Auto-Att RX1 / RX2 boxes are independent — same Phase 3F
-        // follow-up scope as RX2 step-att.
+        // R-R3-46 / R-R3-11: the RX2 group is usable on a radio with a
+        // second receive ADC (refreshRx2StepAtt sets it).
         if (rx == 1) {
-            group->setVisible(false);
+            group->setEnabled(false);
         }
     };
 
@@ -1378,7 +1449,20 @@ void GeneralOptionsPage::connectController()
             m_chkRx1StepAttEnable->setChecked(on);
         }
         m_spnRx1StepAttValue->setEnabled(on);
+        refreshRx2StepAtt();
     });
+
+    // R-R3-46 / R-R3-11: the other ADC's own attenuator, enable and
+    // auto-attenuate settings.
+    connect(m_ctrl, &StepAttenuatorController::rx2AttenuationChanged,
+            this, [this](int) { refreshRx2StepAtt(); });
+    for (auto signal : {&StepAttenuatorController::rx2StepAttEnabledChanged,
+                        &StepAttenuatorController::rx2AutoAttEnabledChanged,
+                        &StepAttenuatorController::rx2AutoAttUndoChanged}) {
+        connect(m_ctrl, signal, this, [this](bool) { refreshRx2StepAtt(); });
+    }
+    connect(m_ctrl, &StepAttenuatorController::rx2AutoUndoDelayChanged,
+            this, [this](int) { refreshRx2StepAtt(); });
 }
 
 // ---------------------------------------------------------------------------
@@ -1423,6 +1507,7 @@ void GeneralOptionsPage::initFromController()
         m_spnRx1StepAttValue->setValue(attDb);
     }
     m_spnRx1StepAttValue->setEnabled(stepOn);
+    refreshRx2StepAtt();
 
     // Auto-att group — same lazy-construct problem. Issue #259 PR #260
     // review fix: previously this only pulled enable + mode, leaving
@@ -1529,12 +1614,15 @@ void GeneralOptionsPage::connectFacade()
     Q_ASSERT(m_stepAtt);
     using F = StepAttenuatorFacade;
     for (auto signal : {&F::enabledChanged, &F::autoAttEnabledChanged,
-                        &F::autoAttUndoChanged, &F::adcLinkedChanged}) {
+                        &F::autoAttUndoChanged, &F::adcLinkedChanged,
+                        &F::rx2StepAttEnabledChanged, &F::rx2AutoAttEnabledChanged,
+                        &F::rx2AutoAttUndoChanged}) {
         connect(m_stepAtt, signal, this, [this](bool) { syncFromFacade(); });
     }
     for (auto signal : {&F::attenuationDbChanged, &F::autoAttModeChanged,
                         &F::autoAttUndoDelayMsChanged, &F::autoAttHoldMsChanged,
-                        &F::minDbChanged, &F::maxDbChanged}) {
+                        &F::minDbChanged, &F::maxDbChanged, &F::rx2AttenuationDbChanged,
+                        &F::rx2AutoAttUndoDelayMsChanged}) {
         connect(m_stepAtt, signal, this, [this](int) { syncFromFacade(); });
     }
     connect(m_stepAtt, &F::windowAvailabilityChanged,
@@ -1554,6 +1642,11 @@ void GeneralOptionsPage::syncFromFacade()
         m_spnRx1StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
         m_spnRx1StepAttValue->setValue(m_stepAtt->attenuationDb());
     }
+    {
+        QSignalBlocker blk(m_spnRx2StepAttValue);
+        m_spnRx2StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
+    }
+    refreshRx2StepAtt();
     {
         QSignalBlocker blk(m_chkRx1StepAttEnable);
         m_chkRx1StepAttEnable->setChecked(stepOn);
@@ -1595,11 +1688,99 @@ void GeneralOptionsPage::applyRadioHardwareAvailability()
     }
     const bool available = m_stepAtt->windowAvailable();
     const QString reason = available ? QString() : m_stepAtt->windowUnavailableReason();
-    for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
+    for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
         if (auto* group = findChild<QGroupBox*>(QLatin1String(name))) {
             group->setEnabled(available);
             group->setToolTip(reason);
         }
+    }
+    // R-R3-46 / R-R3-11: RX2's auto-attenuate group also needs a second
+    // receive ADC and a Core that sends RX2's settings (refreshRx2StepAtt).
+    refreshRx2StepAtt();
+}
+
+// R-R3-46 / R-R3-11: the RX2 row. Its value is the other receive ADC's own
+// attenuator; it is usable on a radio with a second receive ADC while the
+// step attenuator is on (and, in a remote window, when the Core sends it).
+// Otherwise it is shown disabled with the reason.
+void GeneralOptionsPage::refreshRx2StepAtt()
+{
+    if (!m_spnRx2StepAttValue || !m_chkRx2StepAttEnable) {
+        return;
+    }
+    const RadioModel* radio = model();
+    const bool twoAdc = radio && radio->boardCapabilities().attenuator.present
+        && radio->boardCapabilities().adcCount >= 2;
+    bool stepOn = false;
+    bool autoOn = false;
+    bool undoOn = false;
+    int undoSec = m_spnAutoAttHoldRx2 ? m_spnAutoAttHoldRx2->value() : 5;
+    int dB = m_spnRx2StepAttValue->value();
+    bool sent = true;
+    bool available = true;
+    QString unavailable;
+    if (m_ctrl) {
+        stepOn = m_ctrl->rx2StepAttEnabled();
+        autoOn = m_ctrl->rx2AutoAttEnabled();
+        undoOn = m_ctrl->rx2AutoAttUndo();
+        undoSec = m_ctrl->rx2AutoUndoDelaySec();
+        dB = m_ctrl->rx2AttenuatorDb();
+    } else if (m_stepAtt) {
+        stepOn = m_stepAtt->rx2StepAttEnabled();
+        autoOn = m_stepAtt->rx2AutoAttEnabled();
+        undoOn = m_stepAtt->rx2AutoAttUndo();
+        undoSec = m_stepAtt->rx2AutoAttUndoDelayMs() / 1000;
+        dB = m_stepAtt->rx2AttenuationDb();
+        const IStationLink* link = radio ? radio->stationLink() : nullptr;
+        sent = link != nullptr && link->adcAttenuatorsAvailable();
+        available = m_stepAtt->windowAvailable();
+        unavailable = m_stepAtt->windowUnavailableReason();
+    }
+    const QString reason =
+        !available ? unavailable
+        : !twoAdc  ? tr("This radio has one receiver input, so RX1's attenuator covers every slice.")
+        : !sent    ? tr("This Core does not send the second receiver's attenuator. Updating the Core may help.")
+                   : QString();
+    const bool rx2Usable = reason.isEmpty();
+
+    {
+        QSignalBlocker blk(m_chkRx2StepAttEnable);
+        m_chkRx2StepAttEnable->setChecked(stepOn);
+    }
+    m_chkRx2StepAttEnable->setEnabled(rx2Usable);
+    m_chkRx2StepAttEnable->setToolTip(rx2Usable ? tr("Enable the step attenuator.") : reason);
+    {
+        QSignalBlocker blk(m_spnRx2StepAttValue);
+        m_spnRx2StepAttValue->setValue(dB);
+    }
+    m_spnRx2StepAttValue->setEnabled(rx2Usable && stepOn);
+    // With RX2's own enable off the value waits beside its RX2 Enable box,
+    // as RX1's does; the tooltip says what it is.
+    m_spnRx2StepAttValue->setToolTip(
+        !rx2Usable ? reason
+                   : tr("Attenuation for slices on the second receiver input (EXT1 or EXT2)."));
+
+    // Auto Attenuate RX2 (Thetis setupAttRXControls(2): Undo and Hold follow
+    // Enable, Hold follows Undo).
+    if (auto* group = findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx2"))) {
+        group->setEnabled(rx2Usable);
+        group->setToolTip(reason);
+    }
+    if (m_chkAutoAttRx2 && m_chkAutoAttUndoRx2 && m_spnAutoAttHoldRx2) {
+        {
+            QSignalBlocker blk(m_chkAutoAttRx2);
+            m_chkAutoAttRx2->setChecked(autoOn);
+        }
+        {
+            QSignalBlocker blk(m_chkAutoAttUndoRx2);
+            m_chkAutoAttUndoRx2->setChecked(undoOn);
+        }
+        {
+            QSignalBlocker blk(m_spnAutoAttHoldRx2);
+            m_spnAutoAttHoldRx2->setValue(undoSec);
+        }
+        m_chkAutoAttUndoRx2->setEnabled(autoOn);
+        m_spnAutoAttHoldRx2->setEnabled(autoOn && undoOn);
     }
 }
 

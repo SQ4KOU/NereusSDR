@@ -642,6 +642,17 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StepAttenuatorFacade", "overloadAdc0", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "overloadAdc1", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "adcLinked", MirrorDirection::Outbound },
+    // R-R3-46 / R-R3-11 (adcAttenuatorVersion 1): the other ADC's own
+    // attenuator (two-way, applied through the Core's controller) and the
+    // slices on that ADC (the Core's to report). Sent only to a peer whose
+    // hello declared adcAttenuators 1 (StationServer).
+    { "StepAttenuatorFacade", "rx2AttenuationDb", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx2SliceMask", MirrorDirection::Outbound },
+    // RX2's own enable and auto-attenuate settings, two-way, same gate.
+    { "StepAttenuatorFacade", "rx2StepAttEnabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx2AutoAttEnabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx2AutoAttUndo", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "rx2AutoAttUndoDelayMs", MirrorDirection::Bidirectional },
 
     // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
     // The receive settings are two-way; the Core applies each through its

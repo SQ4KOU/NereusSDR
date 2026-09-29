@@ -303,6 +303,7 @@ public slots:
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;
     void setAttenuator(int dB) override;
+    void setAttenuatorForAdc(int adc, int dB) override;
     void setPreamp(bool enabled) override;
     void setTxDrive(int level) override;
     void setMox(bool enabled) override;
