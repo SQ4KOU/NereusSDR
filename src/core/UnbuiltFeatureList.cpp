@@ -8,6 +8,8 @@
 //
 // NereusSDR-original; no upstream port. See header for full
 // Modification history (NereusSDR).
+//   2026-09-29 - HL2 port part 1: Hl2TxTiming removed (built). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/UnbuiltFeatureList.h"
@@ -147,14 +149,12 @@ const QList<Entry>& all()
         {F::FmTones, QStringLiteral("fm-tone"),
          QStringLiteral("CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and "
                         "tone choices")},
-        // Plan C5 and C6 (parity Task 13): nothing reads these keys in any
-        // window; the HL2 wire always carries PTT hang 12 and TX latency 20.
+        // Plan C5 (parity Task 13): nothing reads these keys in any window.
         // The Alex-1 high-pass switches C5 also named are applied since plan
-        // Task 14 and stay shown.
+        // Task 14 and stay shown. (Plan C6, the HL2 TX buffer latency and
+        // PTT hang, is built: bank 17 carries the saved values.)
         {F::AlexTxFilterOptions, QStringLiteral("alex-tx-filters"),
          QStringLiteral("Setup > Hardware > Alex-1 Filters: the LPF band edges")},
-        {F::Hl2TxTiming, QStringLiteral("hl2-tx-timing"),
-         QStringLiteral("Setup > Hardware > HL2 Options: TX buffer latency, PTT hang")},
         {F::GanymedeTrip, QStringLiteral("ganymede-trip"),
          QStringLiteral("Status PA badge: Andromeda/Ganymede CAT trip input is not ported")},
         {F::PbSnr, QStringLiteral("pb-snr"),

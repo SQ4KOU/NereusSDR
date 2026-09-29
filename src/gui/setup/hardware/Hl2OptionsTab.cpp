@@ -38,6 +38,13 @@
 //                 register + 3 on the left, C4 at the register on the right)
 //                 with its per-box tooltips. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the TX buffer latency and PTT hang
+//                 reach the radio (bank 17), so their rows are shown again.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the power supply sync box says what a
+//                 tick does, "Disable power supply sync" (mi0bot's "Disable
+//                 PS Sync"), not "PureSignal sync". J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -231,10 +238,6 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     m_udTxLatency->setSuffix(tr(" ms"));
     m_udTxLatency->setObjectName(QStringLiteral("hl2TxBufferLatency"));
     grid->addWidget(m_udTxLatency, row, 1);
-    // R-R3-49 (remote-window parity Task 13, plan C6): the wire always
-    // sends 20 ms (P1RadioConnection), so the row is hidden until built;
-    // its saved value stays in the settings file.
-    UnbuiltFeatures::hideRowUnlessBuilt(m_udTxLatency, UnbuiltFeature::Hl2TxTiming, grid);
     ++row;
 
     // From mi0bot setup.designer.cs:11235-11258 udPTTHang (PTT hang,
@@ -246,9 +249,6 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     m_udPttHang->setSuffix(tr(" ms"));
     m_udPttHang->setObjectName(QStringLiteral("hl2PttHang"));
     grid->addWidget(m_udPttHang, row, 1);
-    // R-R3-49 (remote-window parity Task 13, plan C6): the wire always
-    // sends 12 ms, so the row is hidden until built; its saved value stays.
-    UnbuiltFeatures::hideRowUnlessBuilt(m_udPttHang, UnbuiltFeature::Hl2TxTiming, grid);
     ++row;
 
     // From mi0bot setup.designer.cs:11166-11176 chkCl2Enable +
@@ -273,8 +273,15 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     grid->addWidget(m_chkDisconnectReset, row, 0, 1, 2);
     ++row;
 
-    // From mi0bot setup.designer.cs:11293+ chkHL2PsSync
-    m_chkPsSync = new QCheckBox(tr("PureSignal sync"), parent);
+    // From mi0bot setup.designer.cs:11293-11301 chkHL2PsSync [@c26a8a4]:
+    //   this.chkHL2PsSync.Text = "Disable PS Sync";
+    //   this.toolTip1.SetToolTip(this.chkHL2PsSync, "Disables the FPGA synchronisation of the power supply clock");
+    // PS is the power supply, not PureSignal: a tick disables the power
+    // supply clock sync (setup.cs:13384-13390, // MI0BOT: Control power
+    // supply sync for the HL2). Spelled out so it cannot read as PureSignal.
+    m_chkPsSync = new QCheckBox(tr("Disable power supply sync"), parent);
+    m_chkPsSync->setObjectName(QStringLiteral("hl2DisablePsSync"));
+    m_chkPsSync->setToolTip(tr("Stops the radio synchronizing its power supply clock."));
     grid->addWidget(m_chkPsSync, row, 0, 1, 2);
     ++row;
 

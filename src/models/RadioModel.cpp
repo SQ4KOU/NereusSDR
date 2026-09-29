@@ -594,6 +594,17 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: bank 18 carries the saved Reset on
+//                Ethernet disconnect, as mi0bot setup.cs:21257-21262
+//                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: rebindIoBoardSlice feeds the HL2 I/O
+//                board poll the TX VFO's mode and frequency. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1901,6 +1912,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
             this, [this](int, int) {
         rebindAccessorySlice();
+        rebindIoBoardSlice();
         // R-R3-49 (parity Task 2): the transmit band's tune power.
         refreshTransmitTuneBand();
         pushTxFrequencyFromTxSlice();
@@ -4598,6 +4610,42 @@ void RadioModel::rebindAccessorySlice()
             if (txBoundSlice() == bound) { publishAccessoryBand(); }
         });
     publishAccessoryBand();
+}
+
+// The HL2 I/O board poll takes the TX VFO's DSP mode and frequency
+// (P1RadioConnection::ioBoardPollTick, REG_OP_MODE and REG_TX_FREQ_BYTE*).
+// From mi0bot Console/console.cs:25835-25842, 25904-25915 [@c26a8a4]: the frequency of
+// the VFO selected for transmit, (long)(VFOAFreq * 1000000.0), and its mode
+// (_rx1_dsp_mode, or _rx2_dsp_mode on VFO B). Here the transmit-bound
+// slice is that VFO.
+void RadioModel::rebindIoBoardSlice()
+{
+    QObject::disconnect(m_ioBoardFrequencyConnection);
+    QObject::disconnect(m_ioBoardModeConnection);
+    auto* p1 = qobject_cast<P1RadioConnection*>(m_connection);
+    if (m_role != Role::Local || p1 == nullptr) {
+        return;
+    }
+    SliceModel* const bound = txBoundSlice();
+    if (bound == nullptr) {
+        return;
+    }
+    const auto push = [p1](int mode, qint64 hz) {
+        QMetaObject::invokeMethod(p1, [p1, mode, hz]() { p1->setIoBoardTxState(mode, hz); });
+    };
+    push(static_cast<int>(bound->dspMode()), static_cast<qint64>(bound->frequency()));
+    m_ioBoardFrequencyConnection = connect(bound, &SliceModel::frequencyChanged, this,
+        [this, bound, push](double hz) {
+            if (txBoundSlice() == bound) {
+                push(static_cast<int>(bound->dspMode()), static_cast<qint64>(hz));
+            }
+        });
+    m_ioBoardModeConnection = connect(bound, &SliceModel::dspModeChanged, this,
+        [this, bound, push](DSPMode mode) {
+            if (txBoundSlice() == bound) {
+                push(static_cast<int>(mode), static_cast<qint64>(bound->frequency()));
+            }
+        });
 }
 
 void RadioModel::publishAccessoryBand()
@@ -8315,6 +8363,41 @@ bool RadioModel::hfPaSwitchAvailable(HPSDRModel model) noexcept
 QString RadioModel::hfPaSwitchUnavailableReason()
 {
     return QStringLiteral("This radio cannot switch off its HF PA from here.");
+}
+
+// The HL2 options a Hermes Lite 2 takes on the wire, pushed whole to the
+// P1 connection on its own thread (each setter is idempotent):
+//   Band Volts and Disable PS Sync, bank 0 C3 bits 3 and 4
+//     From mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4]:
+//       chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
+//       // MI0BOT: Control band volts for the HL2
+//       // MI0BOT: Control power supply sync for the HL2
+//   TX buffer latency and PTT hang, bank 17 C4 and C3
+//     From mi0bot Console/setup.cs:21236-21248 [@c26a8a4]:
+//       // MI0BOT: Controls the hardware tx buffer in the HL2
+//       // MI0BOT: Controls the hardware PTT hang in the HL2
+//   Reset on Ethernet disconnect, bank 18 C4
+//     From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
+//       // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+void RadioModel::applyHl2Options()
+{
+    auto* p1 = qobject_cast<P1RadioConnection*>(m_connection);
+    if (p1 == nullptr) {
+        return;
+    }
+    const bool bandVolts = m_hl2Options.bandVolts();
+    const bool psSync = m_hl2Options.psSync();
+    const int txLatencyMs = m_hl2Options.txLatencyMs();
+    const int pttHangMs = m_hl2Options.pttHangMs();
+    const bool resetOnDisconnect = m_hl2Options.disconnectReset();
+    QMetaObject::invokeMethod(p1, [p1, bandVolts, psSync, txLatencyMs, pttHangMs,
+                                   resetOnDisconnect]() {
+        p1->setHl2BandVolts(bandVolts);
+        p1->setHl2PsSync(psSync);
+        p1->setHl2TxLatency(txLatencyMs);
+        p1->setHl2PttHang(pttHangMs);
+        p1->setHl2ResetOnDisconnect(resetOnDisconnect);
+    });
 }
 
 void RadioModel::applyDisableHfPaSetting()
@@ -16134,21 +16217,17 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         p1->setBandwidthMonitor(&m_bwMonitor);
     }
 
-    // HL2 Band Volts and Disable PS Sync (bank 0 C3 bits 3 and 4 on a Hermes
-    // Lite 2), from the saved HL2 options loaded above, before the
-    // connection thread starts; later changes follow on that thread.
-    // From mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4]:
-    //   chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
-    //   // MI0BOT: Control band volts for the HL2
-    //   // MI0BOT: Control power supply sync for the HL2
+    // The saved HL2 options the radio takes on the wire, from the options
+    // loaded above, before the connection thread starts; later changes
+    // follow on that thread (applyHl2Options). changed() also fires when a
+    // remote window's edit reloads them on the Core (reload "hl2").
     if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
-        p1->setHl2BandVolts(m_hl2Options.bandVolts());
-        p1->setHl2PsSync(m_hl2Options.psSync());
-        connect(&m_hl2Options, &Hl2OptionsModel::bandVoltsChanged,
-                p1, &P1RadioConnection::setHl2BandVolts);
-        connect(&m_hl2Options, &Hl2OptionsModel::psSyncChanged,
-                p1, &P1RadioConnection::setHl2PsSync);
+        applyHl2Options();
+        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
+                [this]() { applyHl2Options(); });
     }
+    // The HL2 I/O board's poll writes the TX VFO's mode and frequency.
+    rebindIoBoardSlice();
 
     // Per-MAC P1 ADC routing override (Thetis `P1_adc_cntrl`).
     //

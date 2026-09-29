@@ -61,6 +61,20 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: bank 18 carries the saved Reset on
+//                Ethernet disconnect, as mi0bot setup.cs:21257-21262
+//                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 I/O board's ongoing poll (mode,
+//                TX frequency, aerial registers, input-pin reads) and mi0bot's
+//                I2C frame spacing with the round-robin kept on an I2C
+//                subframe (console.cs:25781-25945, networkproto1.c:898-906
+//                [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*
@@ -354,6 +368,7 @@ mw0lge@grange-lane.co.uk
 #include "LogCategories.h"
 #include "OcMatrix.h"
 #include "IoBoardHl2.h"
+#include "WdspTypes.h"
 #include "HermesLiteBandwidthMonitor.h"
 #include "PerfMonitor.h"
 #include "audio/TxMicSource.h"
@@ -706,6 +721,12 @@ void P1RadioConnection::init()
 
     connect(m_socket, &QUdpSocket::readyRead, this, &P1RadioConnection::onReadyRead);
 
+    // HL2 I/O board poll: one step every 40 ms once the probe finds the
+    // board (mi0bot console.cs:25929-25934 [@c26a8a4], await Task.Delay(40)).
+    m_ioBoardPollTimer = new QTimer(this);
+    m_ioBoardPollTimer->setInterval(kIoBoardPollMs);
+    connect(m_ioBoardPollTimer, &QTimer::timeout, this, &P1RadioConnection::ioBoardPollTick);
+
     // Watchdog timer — polls every kWatchdogTickMs ms; started in connectToRadio.
     // Source: NereusSDR design doc §3.6 — silence detection + reconnect state machine.
     m_watchdogTimer = new QTimer(this);
@@ -898,6 +919,9 @@ void P1RadioConnection::disconnect()
 
     if (m_watchdogTimer) {
         m_watchdogTimer->stop();
+    }
+    if (m_ioBoardPollTimer) {
+        m_ioBoardPollTimer->stop();
     }
     if (m_ep2PacerTimer) {
         m_ep2PacerTimer->stop();
@@ -1436,6 +1460,21 @@ void P1RadioConnection::setHl2PsSync(bool on)
         }
         m_forceBank0Next = true;
     }
+}
+
+void P1RadioConnection::setHl2TxLatency(int ms)
+{
+    m_hl2TxLatencyMs = ms;
+}
+
+void P1RadioConnection::setHl2PttHang(int ms)
+{
+    m_hl2PttHangMs = ms;
+}
+
+void P1RadioConnection::setHl2ResetOnDisconnect(bool on)
+{
+    m_hl2ResetOnDisconnect = on;
 }
 
 void P1RadioConnection::setPreamp(bool enabled)
@@ -2971,15 +3010,27 @@ CodecContext P1RadioConnection::buildCodecContext() const
     for (int i = 0; i < 3; ++i) { ctx.rxPreamp[i]   = m_rxPreamp[i]; }
     for (int i = 0; i < 3; ++i) { ctx.dither[i]     = m_dither[i]; }
     for (int i = 0; i < 3; ++i) { ctx.random[i]     = m_random[i]; }
-    // HL2-only fields.  ptt_hang and tx_latency MUST be the mi0bot HL2
-    // defaults (12 and 20) — without them the HL2 firmware drops the PTT
+    // HL2-only fields.  ptt_hang and tx_latency start at the mi0bot HL2
+    // defaults (12 and 20); without them the HL2 firmware drops the PTT
     // immediately on any TX-buffer underrun and the T/R relay flutters.
     // Source: mi0bot ChannelMaster/netInterface.c:1713-1714 [v2.10.3.14-beta1]
     //   prn->tx[i].tx_latency = 20;  // MI0BOT: HL2
     //   prn->tx[i].ptt_hang   = 12;  // MI0BOT: HL2
+    // The HL2 Options page's saved values replace them, as mi0bot's
+    // udTxBufferLat / udPTTHang handlers do (setup.cs:21236-21248 [@c26a8a4]):
+    //   // MI0BOT: Controls the hardware tx buffer in the HL2
+    //   NetworkIO.SetTxLatency((int)udTxBufferLat.Value);
+    //   // MI0BOT: Controls the hardware PTT hang in the HL2
+    //   NetworkIO.SetPttHang((int)udPTTHang.Value);
     if (m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
-        ctx.hl2PttHang   = 12;   // 5-bit field (bank 17 C3): 12 frames hang
-        ctx.hl2TxLatency = 20;   // 7-bit field (bank 17 C4): 20 sample latency
+        ctx.hl2PttHang   = m_hl2PttHangMs;    // 5-bit field (bank 17 C3), ms
+        ctx.hl2TxLatency = m_hl2TxLatencyMs;  // 7-bit field (bank 17 C4), ms
+        // Bank 18 C4: reset on Ethernet disconnect, the HL2 Options check
+        // box, as mi0bot's chkDisconnectReset handler sends it
+        // (setup.cs:21257-21262 [@c26a8a4]):
+        //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+        //   NetworkIO.SetResetOnDisconnect(v);
+        ctx.hl2ResetOnDisconnect = m_hl2ResetOnDisconnect;
     }
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P1 wire byte.
@@ -3442,6 +3493,218 @@ void P1RadioConnection::sendMetisStop()
 // 17-bank round-robin sequence. Each call advances m_ccRoundRobinIdx by 2.
 // Source: networkproto1.c:216-236 MetisWriteFrame + :597-884 WriteMainLoop
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// composeSubframe
+//
+// One subframe's five C&C bytes. On an HL2 a queued I2C transaction takes
+// the subframe when its spacing allows, and the round-robin stays on the
+// bank it was due to send; otherwise the bank goes and the round-robin
+// moves on.
+// From mi0bot ChannelMaster/networkproto1.c:898-906, 943-944 and
+// 1180-1183 [@c26a8a4] (WriteMainLoop_HL2):
+//   if (0 != prn->i2c.delay)
+//   {
+//       prn->i2c.delay--;
+//   }
+//   if ((0 >= --prn->i2c.delay) &&
+//       (prn->i2c.in_index != prn->i2c.out_index))
+//   {
+//       prn->i2c.delay = 5;
+//       ...                               // the I2C frame
+//   }
+//   else
+//   {
+//       switch (out_control_idx) { ... }  // the bank
+//       if (out_control_idx < 18)         // ready for next USB frame
+//           out_control_idx++;
+//       else
+//           out_control_idx = 0;
+//   }
+// So an I2C frame goes at most every third subframe. mi0bot's delay is a
+// signed char that keeps falling while nothing is queued and wraps; here
+// it stops at -1, so a transaction queued after a quiet spell goes on the
+// next subframe.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::composeSubframe(quint8 out[5], int maxBank)
+{
+    if (m_i2cDelay != 0) {
+        --m_i2cDelay;
+    }
+    const bool i2cDue = (--m_i2cDelay <= 0);
+    if (m_i2cDelay < -1) {
+        m_i2cDelay = -1;
+    }
+    if (i2cDue && composeI2cFrame(out)) {
+        m_i2cDelay = 5;
+        return;
+    }
+    composeBank(m_ccRoundRobinIdx, out);
+    m_ccRoundRobinIdx++;
+    if (m_ccRoundRobinIdx > maxBank) { m_ccRoundRobinIdx = 0; }
+}
+
+int P1RadioConnection::ccMaxBank() const
+{
+    return m_codec
+        ? m_codec->maxBank()
+        : ((m_hardwareProfile.model == HPSDRModel::ANVELINAPRO3) ? 17 : 16);
+}
+
+// ---------------------------------------------------------------------------
+// HL2 I/O board ongoing poll
+//
+// From mi0bot Console/console.cs:25781-25945 UpdateIOBoard [@c26a8a4], the
+// loop after the board is found, one step per 40 ms:
+//   switch (state++)
+//   {
+//       case 3:
+//       case 6: // Secondary receive selection
+//           if (IOBoardAerialMode != old_IOBoardAerialMode)
+//           {
+//               ioBoard.writeRequest(IOBoard.Registers.REG_RF_INPUTS, IOBoardAerialMode);
+//               old_IOBoardAerialMode = IOBoardAerialMode;
+//           }
+//           break;
+//       case 1:
+//       case 4:
+//       case 7:
+//       case 10:
+//           // Read the input pins
+//           while (0 != ioBoard.readRequest(IOBoard.Registers.REG_INPUT_PINS)) ...
+//           ... status = ioBoard.readResponse();      // [3] Input pins, [2] Ant tuner, [1] Fault, [0] Major Version
+//           break;
+//       case 8:
+//       case 2: // Write current transmission frequency
+//           ioBoard.setFrequency(currentFreq);
+//           break;
+//       case 9:
+//       case 5: // Aerial selection
+//           if (IOBoardAerialPorts != old_IOBoardAerialPorts)
+//           {
+//               ioBoard.writeRequest(IOBoard.Registers.REG_ANTENNA, IOBoardAerialPorts);
+//               old_IOBoardAerialPorts = IOBoardAerialPorts;
+//           }
+//           break;
+//       case 0: // Mode selection
+//           ... CurrentMode = (Byte) _rx1_dsp_mode;  (the TX VFO's mode)
+//           if (CurrentMode != old_IOBoardMode)
+//           {
+//               ioBoard.writeRequest(IOBoard.Registers.REG_OP_MODE, CurrentMode);
+//               old_IOBoardMode = CurrentMode;
+//           }
+//           break;
+//       case 11:
+//       default:
+//           state = 0;
+//           break;
+//   }
+// IOBoard (HPSDR/IoBoardHl2.cs:129-201 [@c26a8a4]) sends every register to
+// bus 1 at 0x1d: readRequest is NetworkIO.I2CReadInitiate(1, 0x1d, reg),
+// writeRequest NetworkIO.I2CWrite(1, 0x1d, reg, data), and setFrequency,
+// when the frequency changed, five writes of REG_TX_FREQ_BYTE4..BYTE0 with
+// (frequency >> 32), >> 24, >> 16, >> 08, >> 00.
+//
+// Read answers land in IoBoardHl2's registers (applyI2cReadResponse), four
+// from REG_INPUT_PINS: input pins, antenna tuner, fault, firmware major.
+// A read goes only when the queue is empty, as I2CReadInitiate starts one
+// only then (netInterface.c:1470-1497); where mi0bot then waits and gives
+// up the whole loop after 20 tries, this step skips its read. The TX state
+// arrives from RadioModel (setIoBoardTxState) rather than being read from
+// the VFOs each step. RADE modes are not Thetis DSPMode values and are not
+// written. Not here yet: the fault reaction (TX inhibit), the aerial values
+// from the antenna selection, the LED strip and the auto-tune protocol.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setIoBoardTxState(int dspMode, qint64 frequencyHz)
+{
+    m_ioTxMode = dspMode;
+    m_ioTxFrequencyHz = frequencyHz;
+}
+
+void P1RadioConnection::setIoBoardAerials(quint8 aerialMode, quint8 aerialPorts)
+{
+    m_ioAerialMode = aerialMode;
+    m_ioAerialPorts = aerialPorts;
+}
+
+void P1RadioConnection::ioBoardPollTick()
+{
+    if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard || !m_ioBoard->isDetected()) {
+        return;
+    }
+    using Reg = IoBoardHl2::Register;
+    const auto write = [this](Reg reg, quint8 data) {
+        IoBoardHl2::I2cTxn txn;
+        txn.bus = IoBoardHl2::kI2cBusIndex;
+        txn.address = IoBoardHl2::kI2cAddrGeneral;
+        txn.control = static_cast<quint8>(reg);
+        txn.writeData = data;
+        txn.isRead = false;
+        txn.needsResponse = false;
+        m_ioBoard->enqueueI2c(txn);
+    };
+
+    switch (m_ioBoard->currentStep()) {
+        case 3:
+        case 6: // Secondary receive selection
+            if (m_ioAerialMode != m_ioWrittenAerialMode) {
+                write(Reg::REG_RF_INPUTS, m_ioAerialMode);
+                m_ioWrittenAerialMode = m_ioAerialMode;
+            }
+            break;
+
+        case 1:
+        case 4:
+        case 7:
+        case 10: // Read the input pins
+            if (m_ioBoard->i2cQueueIsEmpty()) {
+                IoBoardHl2::I2cTxn txn;
+                txn.bus = IoBoardHl2::kI2cBusIndex;
+                txn.address = IoBoardHl2::kI2cAddrGeneral;
+                txn.control = static_cast<quint8>(Reg::REG_INPUT_PINS);
+                txn.writeData = 0x00;
+                txn.isRead = true;
+                txn.needsResponse = true;
+                m_ioBoard->enqueueI2c(txn);
+            }
+            break;
+
+        case 8:
+        case 2: // Write current transmission frequency
+            if (m_ioTxFrequencyHz != m_ioWrittenFrequencyHz) {
+                const qint64 f = m_ioTxFrequencyHz;
+                write(Reg::REG_TX_FREQ_BYTE4, static_cast<quint8>(f >> 32));
+                write(Reg::REG_TX_FREQ_BYTE3, static_cast<quint8>(f >> 24));
+                write(Reg::REG_TX_FREQ_BYTE2, static_cast<quint8>(f >> 16));
+                write(Reg::REG_TX_FREQ_BYTE1, static_cast<quint8>(f >> 8));
+                write(Reg::REG_TX_FREQ_BYTE0, static_cast<quint8>(f >> 0));
+                m_ioWrittenFrequencyHz = f;
+            }
+            break;
+
+        case 9:
+        case 5: // Aerial selection
+            if (m_ioAerialPorts != m_ioWrittenAerialPorts) {
+                write(Reg::REG_ANTENNA, m_ioAerialPorts);
+                m_ioWrittenAerialPorts = m_ioAerialPorts;
+            }
+            break;
+
+        case 0: // Mode selection
+            if (m_ioTxMode >= static_cast<int>(DSPMode::LSB)
+                && m_ioTxMode <= static_cast<int>(DSPMode::DRM)
+                && m_ioTxMode != m_ioWrittenMode) {
+                write(Reg::REG_OP_MODE, static_cast<quint8>(m_ioTxMode));
+                m_ioWrittenMode = m_ioTxMode;
+            }
+            break;
+
+        case 11:
+        default:
+            break;
+    }
+    m_ioBoard->advanceStep();
+}
+
 void P1RadioConnection::sendCommandFrame()
 {
     if (!m_socket) { return; }
@@ -3451,9 +3714,7 @@ void P1RadioConnection::sendCommandFrame()
     // range. Standard = 16. The legacy compose path (m_codec == nullptr under
     // NEREUS_USE_LEGACY_P1_CODEC=1) retains the pre-refactor model-keyed
     // constant to preserve the regression-freeze byte-identical guarantee.
-    const int maxBank = m_codec
-        ? m_codec->maxBank()
-        : ((m_hardwareProfile.model == HPSDRModel::ANVELINAPRO3) ? 17 : 16);
+    const int maxBank = ccMaxBank();
 
     quint8 frame[1032];
     memset(frame, 0, sizeof(frame));
@@ -3500,22 +3761,16 @@ void P1RadioConnection::sendCommandFrame()
     // Subframe 0: current bank
     frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
     quint8 cc0[5] = {};
-    composeCcForBank(m_ccRoundRobinIdx, cc0);
+    composeSubframe(cc0, maxBank);
     frame[11] = cc0[0]; frame[12] = cc0[1]; frame[13] = cc0[2];
     frame[14] = cc0[3]; frame[15] = cc0[4];
-
-    m_ccRoundRobinIdx++;
-    if (m_ccRoundRobinIdx > maxBank) { m_ccRoundRobinIdx = 0; }
 
     // Subframe 1: next bank
     frame[520] = 0x7F; frame[521] = 0x7F; frame[522] = 0x7F;
     quint8 cc1[5] = {};
-    composeCcForBank(m_ccRoundRobinIdx, cc1);
+    composeSubframe(cc1, maxBank);
     frame[523] = cc1[0]; frame[524] = cc1[1]; frame[525] = cc1[2];
     frame[526] = cc1[3]; frame[527] = cc1[4];
-
-    m_ccRoundRobinIdx++;
-    if (m_ccRoundRobinIdx > maxBank) { m_ccRoundRobinIdx = 0; }
 
     // 3M-1a E.2: fill the two 504-byte TX I/Q zones from the ring buffer.
     // Each zone holds 63 samples × 8 bytes = 504 bytes.
@@ -4195,14 +4450,17 @@ void P1RadioConnection::composeCcForBankLegacy(int bankIdx, quint8 out[5]) const
 // ---------------------------------------------------------------------------
 void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
 {
-    if (m_useLegacyCodec || !m_codec) {
-        composeCcForBankLegacy(bankIdx, out);
-        if (bankIdx == 0) {
-            publishBank0BandOutputs(out);
-        }
-        return;
+    if (composeI2cFrame(out)) {
+        return;  // I2C frame written; skip normal bank compose
     }
+    composeBank(bankIdx, out);
+}
 
+bool P1RadioConnection::composeI2cFrame(quint8 out[5]) const
+{
+    if (m_useLegacyCodec || !m_codec) {
+        return false;
+    }
     // Phase 3P-E Task 2: HL2 I2C intercept — when IoBoardHl2 has pending
     // I2C transactions, the next C&C frame carries I2C TLV bytes instead of
     // the normal bank payload.
@@ -4215,8 +4473,20 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
         auto* hl2Codec = const_cast<P1CodecHl2*>(
             dynamic_cast<const P1CodecHl2*>(m_codec.get()));
         if (hl2Codec && hl2Codec->tryComposeI2cFrame(out, m_mox)) {
-            return;  // I2C frame written; skip normal bank compose
+            return true;
         }
+    }
+    return false;
+}
+
+void P1RadioConnection::composeBank(int bankIdx, quint8 out[5]) const
+{
+    if (m_useLegacyCodec || !m_codec) {
+        composeCcForBankLegacy(bankIdx, out);
+        if (bankIdx == 0) {
+            publishBank0BandOutputs(out);
+        }
+        return;
     }
 
     const CodecContext ctx = buildCodecContext();
@@ -4452,6 +4722,12 @@ void P1RadioConnection::hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr)
             // Writes don't have responses we wait for; advance immediately.
             m_hl2ProbeStep = Hl2ProbeStep::Done;
             qCInfo(lcConnection) << "HL2: I/O board init complete";
+            // The ongoing poll starts once the board is found (mi0bot
+            // console.cs:25809-25822 [@c26a8a4]: the loop runs while the
+            // board is present).
+            if (m_ioBoardPollTimer) {
+                m_ioBoardPollTimer->start();
+            }
             return;
 
         case Hl2ProbeStep::WaitingForControlInitAck:

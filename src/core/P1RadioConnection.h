@@ -35,6 +35,20 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: bank 18 carries the saved Reset on
+//                Ethernet disconnect, as mi0bot setup.cs:21257-21262
+//                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 I/O board's ongoing poll (mode,
+//                TX frequency, aerial registers, input-pin reads) and mi0bot's
+//                I2C frame spacing with the round-robin kept on an I2C
+//                subframe (console.cs:25781-25945, networkproto1.c:898-906
+//                [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*
@@ -284,6 +298,30 @@ public slots:
     void setHl2BandVolts(bool on);
     void setHl2PsSync(bool on);
 
+    // HL2 only: the TX buffer latency (ms, 0..70) and PTT hang (ms, 0..30)
+    // bank 17 carries (C4 and C3). Stored; the next round of the banks sends
+    // them, as mi0bot's SetTxLatency / SetPttHang only store the value.
+    // From mi0bot Console/setup.cs:21236-21248 [@c26a8a4]:
+    //   // MI0BOT: Controls the hardware tx buffer in the HL2
+    //   // MI0BOT: Controls the hardware PTT hang in the HL2
+    void setHl2TxLatency(int ms);
+    void setHl2PttHang(int ms);
+
+    // HL2 only: Reset on Ethernet disconnect, bank 18 C4. Stored; the next
+    // round of the banks sends it, as mi0bot's SetResetOnDisconnect only
+    // stores the bit.
+    // From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
+    //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+    void setHl2ResetOnDisconnect(bool on);
+
+    // HL2 I/O board poll inputs. The TX VFO's DSP mode (Thetis DSPMode
+    // value) and frequency in Hz, written to REG_OP_MODE and
+    // REG_TX_FREQ_BYTE4..0; and the aerial mode and ports written to
+    // REG_RF_INPUTS and REG_ANTENNA (console.cs SetIOBoardAerialPorts).
+    // From mi0bot Console/console.cs:25781-25945 UpdateIOBoard [@c26a8a4].
+    void setIoBoardTxState(int dspMode, qint64 frequencyHz);
+    void setIoBoardAerials(quint8 aerialMode, quint8 aerialPorts);
+
     // Set the P1-only per-DDC ADC routing word (Thetis `P1_adc_cntrl`).
     //
     // 14 bits wide, 2 bits per DDC, layout 66554433221100 per
@@ -444,6 +482,16 @@ private:
     // round-robin bank sequence (0-17). Each call advances m_ccRoundRobinIdx
     // by 2 (one per subframe). Source: networkproto1.c:597-884 WriteMainLoop.
     void sendCommandFrame();
+    // One subframe's C&C bytes (sendCommandFrame sends two per frame).
+    void composeSubframe(quint8 out[5], int maxBank);
+    // The last round-robin bank for this codec.
+    int ccMaxBank() const;
+    // The I2C frame for this subframe, if one is queued (false otherwise),
+    // and the ordinary bank.
+    bool composeI2cFrame(quint8 out[5]) const;
+    void composeBank(int bankIdx, quint8 out[5]) const;
+    // One 40 ms step of the HL2 I/O board poll (UpdateIOBoard).
+    void ioBoardPollTick();
     // Send `countPerBank` ep2 command frames in two bursts with a 10ms gap.
     // Replaces the old ForceCandCFrame pattern — now simply drives the
     // round-robin forward, ensuring all banks get primed.
@@ -766,6 +814,30 @@ private:
     // (setHl2BandVolts / setHl2PsSync), off until the saved options arrive.
     bool    m_hl2BandVolts{false};
     bool    m_hl2PsSync{false};
+    // HL2 bank 17: TX buffer latency and PTT hang, mi0bot's create_rnet
+    // defaults (netInterface.c:1709-1710 [@c26a8a4]) until the saved
+    // values arrive.
+    int     m_hl2TxLatencyMs{20};
+    int     m_hl2PttHangMs{12};
+    // HL2 bank 18: reset on Ethernet disconnect, off as mi0bot's
+    // create_rnet leaves it (netInterface.c:1724 [@c26a8a4]).
+    bool    m_hl2ResetOnDisconnect{false};
+
+    // mi0bot prn->i2c.delay: subframes until the next I2C frame may go
+    // (composeSubframe).
+    int     m_i2cDelay{0};
+    // HL2 I/O board poll (ioBoardPollTick): 40 ms steps, the TX state and
+    // aerial values to write, and what was last written.
+    static constexpr int kIoBoardPollMs = 40;
+    QTimer* m_ioBoardPollTimer{nullptr};
+    int     m_ioTxMode{-1};
+    qint64  m_ioTxFrequencyHz{0};
+    quint8  m_ioAerialMode{0};
+    quint8  m_ioAerialPorts{0};
+    int     m_ioWrittenMode{-1};
+    qint64  m_ioWrittenFrequencyHz{0};
+    quint8  m_ioWrittenAerialMode{0};
+    quint8  m_ioWrittenAerialPorts{0};
     // The radio is run as a Hermes Lite 2 (HPSDRModel::HERMESLITE).
     bool    isHl2() const;
     bool    m_rxPreamp[3]{};
@@ -1073,6 +1145,10 @@ public:
 
     // roundRobinIdxForTest — returns the current m_ccRoundRobinIdx value.
     int roundRobinIdxForTest() const { return m_ccRoundRobinIdx; }
+    // The next subframe as sendCommandFrame composes it (I2C spacing and
+    // the round-robin included), without a socket.
+    void composeNextSubframeForTest(quint8 out[5]) { composeSubframe(out, ccMaxBank()); }
+    void ioBoardPollTickForTest() { ioBoardPollTick(); }
 
     // forceBank0NextForTest — returns m_forceBank0Next (the flush flag state).
     bool forceBank0NextForTest() const { return m_forceBank0Next; }

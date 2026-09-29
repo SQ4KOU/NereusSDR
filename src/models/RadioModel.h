@@ -382,6 +382,13 @@
 //   2026-09-29 - Remote parity on the air: the five station transmit
 //                commands take `takenOnAir` (transmitSettingsVersion 13).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: rebindIoBoardSlice feeds the HL2 I/O
+//                board poll the TX VFO's mode and frequency. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1051,6 +1058,10 @@ public:
     // `value` is the saved string; an invalid QVariant (the key removed)
     // applies the default, off.
     void applyDisableHfPaSetting(const QVariant& value);
+    // Pushes the saved HL2 options the radio takes on the wire (Band Volts,
+    // Disable PS Sync, TX buffer latency, PTT hang, reset on Ethernet
+    // disconnect) to a P1 connection. Nothing without one.
+    void applyHl2Options();
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
     // is a Core setting: the gate sits where the radio is. The setters save
@@ -7633,6 +7644,10 @@ private:
     QTimer* m_accessoryBandTimer{nullptr};
     QMetaObject::Connection m_accessoryFrequencyConnection;
     QMetaObject::Connection m_accessoryModeConnection;
+    // The HL2 I/O board poll's TX VFO (rebindIoBoardSlice).
+    QMetaObject::Connection m_ioBoardFrequencyConnection;
+    QMetaObject::Connection m_ioBoardModeConnection;
+    void rebindIoBoardSlice();
     QMetaObject::Connection m_accessoryBandConnection;
     void rebindAccessorySlice();
     void publishAccessoryBand();

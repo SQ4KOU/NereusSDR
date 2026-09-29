@@ -801,11 +801,6 @@ QMap<F, QList<Surface>> surfaces()
                    }
                    return false;
                })};
-    map[F::Hl2TxTiming] = {
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("TX buffer latency"),
-               named(QStringLiteral("hl2TxBufferLatency"))),
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("PTT hang"),
-               named(QStringLiteral("hl2PttHang")))};
     map[F::GanymedeTrip] = {status(QStringLiteral("paStatusBadge"))};
     map[F::PbSnr] = {Surface{QStringLiteral("container PB SNR render"), Host::Container,
                             [](Hosts& h) {
