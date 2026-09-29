@@ -584,6 +584,12 @@ private:
     void applyOnAirState(bool onAir);
     QList<QWidget*> paBandControls(int bandIndex) const;
     QList<QWidget*> onAirLockedControls() const;
+    // JJ's ruling (holder only, both ways): whether this window's device
+    // holds transmit; the transmitting band opens on the air only then.
+    bool holdsTransmitHere();
+    // After a gain or adjust edit: on the air the Core's own window moves
+    // the drive as Thetis does (RadioModel::applyPaEditOnAir).
+    void applyEditOnAir(bool adjust, int step);
     bool    m_onAir{false};
     // Thetis _adjustingBand: the transmitting band when the radio went on
     // the air, or no band (-1) when that band has no PA values.

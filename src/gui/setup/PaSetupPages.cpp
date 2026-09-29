@@ -151,6 +151,12 @@
 //                 transmitting band's are disabled, in a local and a remote
 //                 window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-27 (JJ's ruling): the transmitting band's
+//                 row opens on the air only while this window's device holds
+//                 transmit, with plain-words reasons; an adjust taken on the
+//                 air moves the drive to that step, as Thetis's
+//                 nudAdjustGain_ValueChanged does. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -898,6 +904,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // TUNE and two-tone in a local and a remote window alike.
     connect(model, &RadioModel::coreOnAirChanged, this,
             [this](bool onAir) { applyOnAirState(onAir); });
+    // JJ's ruling (holder only, both ways): the transmitting band opens
+    // only while this window's device holds transmit, so the lock follows
+    // the holder too.
+    connect(model, &RadioModel::transmitHolderChanged, this,
+            [this]() { applyPaSettingsGate(); });
     if (model->isCoreOnAir()) {
         applyOnAirState(true);
     }
@@ -962,27 +973,12 @@ QList<QWidget*> PaGainByBandPage::onAirLockedControls() const
 void PaGainByBandPage::applyOnAirState(bool onAir)
 {
     if (onAir && !m_onAir) {
-        // The band the Core transmits on: the transmit slice's, else its
-        // last band (RadioModel::restoreNormalTxDrive reads the same).
-        RadioModel* const radio = model();
-        Band txBand = radio ? radio->lastBand() : Band::GEN;
-        if (radio) {
-            if (const SliceModel* const txSlice = radio->txBoundSlice()) {
-                txBand = bandFromFrequency(txSlice->frequency());
-            }
-        }
-        // From Thetis setup.cs:23839-23852 [v2.10.3.15] setAdjustingBand: a
-        // band outside 160 m..6 m and the transverter bands has no PA values
-        // to adjust:
+        // Thetis _adjustingBand, read where the Core's own refusals read it.
+        // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+        //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
         //   _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
-        //   //[2.3.10.6]MW0LGE added (also in ATTOnTX)  [original inline comment
-        //   from setup.cs:23838, OnTXBandChanged's TX attenuator label line, not ported]
-        //   enabledPAAdjust(false);
-        // NereusSDR's XVTR row stands for Thetis's VHF0..VHF13.
-        const int index = static_cast<int>(txBand);
-        const bool adjustable = (txBand >= Band::Band160m && txBand <= Band::Band6m)
-                                || txBand == Band::XVTR;
-        m_onAirBandIndex = (adjustable && index >= 0 && index < kPaBandCount) ? index : -1;
+        RadioModel* const radio = model();
+        m_onAirBandIndex = radio ? radio->paOnAirBandIndex() : -1;
     }
     if (onAir == m_onAir) {
         return;
@@ -1002,17 +998,37 @@ void PaGainByBandPage::applyPaSettingsGate()
         return;
     }
     const QList<QWidget*> locked = onAirLockedControls();
+    // JJ's ruling: on the air only the device that holds transmit changes
+    // the transmitting band's values; this window too, when another device
+    // holds it (RadioModel::paOnAirEditRefusal gives the Core's refusal).
+    QList<QWidget*> holderOnly;
+    if (m_onAir && m_onAirBandIndex >= 0 && !holdsTransmitHere()) {
+        holderOnly = paBandControls(m_onAirBandIndex);
+    }
     QList<QWidget*> open;
     for (QWidget* control : all) {
-        if (!locked.contains(control)) {
+        if (!locked.contains(control) && !holderOnly.contains(control)) {
             open << control;
         }
     }
     gateTransmitControls(open, true, QString());
-    gateTransmitControls(
-        locked, false,
-        tr("While the radio transmits, only the transmitting band's values can change. "
-           "Profiles change on receive."));
+    gateTransmitControls(locked, false, RadioModel::paOnAirLockedReason());
+    gateTransmitControls(holderOnly, false, RadioModel::paHolderOnlyReason());
+}
+
+bool PaGainByBandPage::holdsTransmitHere()
+{
+    const RadioModel* const radio = model();
+    if (!radio) {
+        return false;
+    }
+    // The Core's own window holds it unless another device does; a remote
+    // window only while the Core names this device the holder.
+    if (radio->ownsLocalDsp()) {
+        return radio->otherDeviceHoldsRefusal().isEmpty();
+    }
+    const IStationLink* const link = radio->stationLink();
+    return link && link->holdsTransmitHere();
 }
 
 QList<QWidget*> PaGainByBandPage::paKeyingControls() const
@@ -1521,6 +1537,7 @@ void PaGainByBandPage::onGainChanged(Band band, double value)
     mutated.setGainForBand(band, static_cast<float>(value));
     m_paProfileManager->saveProfile(active->name(), mutated);
     warnIfProfileDiverged();
+    applyEditOnAir(/*adjust=*/false, -1);
 }
 
 void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
@@ -1533,6 +1550,22 @@ void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
     PaProfile mutated = *active;
     mutated.setAdjust(band, step, static_cast<float>(value));
     m_paProfileManager->saveProfile(active->name(), mutated);
+    // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
+    //   if (console.MOX) ... console.PWR = nNumber + 10; // set drive to the value we are adjusting
+    applyEditOnAir(/*adjust=*/true, step);
+}
+
+void PaGainByBandPage::applyEditOnAir(bool adjust, int step)
+{
+    // The Core's own window drives the radio: an edit taken on the air
+    // reaches the drive as Thetis's does. A remote window's edit reaches
+    // it at the Core (RadioModel::applyPaSettingOnAir).
+    RadioModel* const radio = model();
+    if (radio && radio->ownsLocalDsp() && m_onAir) {
+        radio->applyPaEditOnAir(adjust ? RadioModel::PaProfileAction::SetAdjust
+                                       : RadioModel::PaProfileAction::SetGain,
+                                step);
+    }
 }
 
 void PaGainByBandPage::onMaxPowerChanged(Band band, double watts)

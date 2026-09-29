@@ -189,6 +189,10 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11:
 //                                    adcAttenuatorsAvailable(). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-49 / R-IOS-27: holdsTransmitHere(),
+//                                    for the PA Gain page's on-the-air
+//                                    holder rule. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QString>
@@ -506,6 +510,10 @@ public:
     /// empty while permitted.
     virtual QString transmitPermissionReason() const
     { return QStringLiteral("This device cannot transmit through this Core."); }
+    /// R-R3-49 / R-IOS-27 (JJ's ruling): whether the Core names this
+    /// window's device as the one holding transmit. On the air the PA
+    /// Gain page opens the transmitting band only then. The default: no.
+    virtual bool holdsTransmitHere() const { return false; }
     /// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     /// Tune Power slider. The Core sets the tune power for the band it
     /// transmits on and the tune drive source to the tune slider, as the

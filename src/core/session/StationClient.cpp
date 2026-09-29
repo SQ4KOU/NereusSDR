@@ -332,6 +332,10 @@
 //                Core's radeSynced and radeFreqOffsetHz, so the window's VFO
 //                flag shows RADE sync and offset. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-27: holdsTransmitHere() answers the
+//                IStationLink query, and a holder change reaches the
+//                window's model (reportTransmitHolderChanged). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -693,6 +697,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
         radioModel->setStationDevices(m_remoteDevices);
+        // R-R3-49 / R-IOS-27: pages that follow who holds transmit (the
+        // PA Gain page's on-the-air lock) hear it through the model.
+        connect(this, &StationClient::transmitTakeAvailabilityChanged, radioModel,
+                &RadioModel::reportTransmitHolderChanged);
     }
 
     // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this

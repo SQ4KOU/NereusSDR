@@ -995,7 +995,7 @@ public:
     QString otherHolderReason() const;
     /// Task 77 (ruling 8.4): whether this window holds transmit on the Core
     /// (false while nobody does, or the Core does not say).
-    bool holdsTransmitHere() const;
+    bool holdsTransmitHere() const override;
     /// Task 77: whether the holder's rules reach this window: the Core
     /// names who holds transmit (txStateVersion 2) and takes remote keys
     /// (not receive-only).

@@ -118,6 +118,8 @@ private slots:
     void warning_label_visible_when_profile_diverges();
     void gain_spinbox_bounds_match_thetis_minimum_38_8();  // issue #199
     void on_air_locks_profiles_and_other_bands_like_thetis();
+    void on_air_adjust_moves_the_drive_to_the_step_like_thetis();
+    void on_air_locks_the_transmitting_band_while_another_device_holds();
 };
 
 // ---------------------------------------------------------------------------
@@ -591,8 +593,9 @@ void TstPaGainByBandPageEditor::on_air_locks_profiles_and_other_bands_like_theti
     QCOMPARE(txBand, Band::Band20m);
     for (QWidget* w : profileControls) {
         QVERIFY2(!w->isEnabled(), qPrintable(w->metaObject()->className()));
-        QVERIFY(!w->toolTip().isEmpty());
+        QCOMPARE(w->toolTip(), RadioModel::paOnAirLockedReason());
     }
+    QCOMPARE(page.gainSpinForTest(Band::Band40m)->toolTip(), RadioModel::paOnAirLockedReason());
     for (int n = 0; n < PaGainByBandPage::kPaBandCount; ++n) {
         const Band band = static_cast<Band>(n);
         const bool open = (band == txBand);
@@ -620,6 +623,76 @@ void TstPaGainByBandPageEditor::on_air_locks_profiles_and_other_bands_like_theti
     QVERIFY(page.gainSpinForTest(Band::Band40m)->isEnabled());
     QCOMPARE(page.gainSpinForTest(Band::Band40m)->toolTip(), gainTip);
     QVERIFY(page.adjustSpinForTest(Band::Band40m, 4)->isEnabled());
+}
+
+// R-R3-49 / R-IOS-27: under MOX an adjust moves the drive to the step being
+// adjusted (Thetis setup.cs:24210-24222 [v2.10.3.15]
+// nudAdjustGain_ValueChanged: console.PWR = nNumber + 10).
+void TstPaGainByBandPageEditor::on_air_adjust_moves_the_drive_to_the_step_like_thetis()
+{
+    RadioModel model;
+    primeModelWithProfiles(model);
+    PaGainByBandPage page(&model);
+    page.applyCapabilityVisibility(model.boardCapabilities());
+    model.transmitModel().setPower(100);
+
+    // Off the air an adjust leaves the drive alone.
+    page.adjustSpinForTest(Band::Band20m, 2)->setValue(-0.5);
+    QCOMPARE(model.transmitModel().power(), 100);
+
+    MoxController* mox = model.moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);  // logical test state, no radio transport
+    QTRY_VERIFY(model.isCoreOnAir());
+    page.adjustSpinForTest(Band::Band20m, 5)->setValue(-1.0);
+    QCOMPARE(model.paProfileManager()->activeProfile()->getAdjust(Band::Band20m, 5), -1.0f);
+    QCOMPARE(model.transmitModel().power(), 60);
+    mox->setMox(false);
+    QTRY_VERIFY(!model.isCoreOnAir());
+}
+
+// JJ's ruling (holder only, both ways): while another device holds
+// transmit, this window's transmitting band is refused too, with the
+// holder reason; profiles and other bands keep Thetis's lock.
+void TstPaGainByBandPageEditor::on_air_locks_the_transmitting_band_while_another_device_holds()
+{
+    RadioModel model;
+    primeModelWithProfiles(model);
+    QString holder = QStringLiteral("Pocket has the transmitter.");
+    model.setOtherDeviceHoldsRefusal([&holder]() { return holder; });
+    PaGainByBandPage page(&model);
+    page.applyCapabilityVisibility(model.boardCapabilities());
+
+    MoxController* mox = model.moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);  // logical test state, no radio transport
+    QTRY_VERIFY(model.isCoreOnAir());
+
+    const Band txBand = model.lastBand();
+    QVERIFY(!page.gainSpinForTest(txBand)->isEnabled());
+    QCOMPARE(page.gainSpinForTest(txBand)->toolTip(), RadioModel::paHolderOnlyReason());
+    QVERIFY(!page.adjustSpinForTest(txBand, 3)->isEnabled());
+    QVERIFY(!page.maxPowerSpinForTest(txBand)->isEnabled());
+    QVERIFY(!page.useMaxPowerCheckForTest(txBand)->isEnabled());
+    QCOMPARE(page.profileComboForTest()->toolTip(), RadioModel::paOnAirLockedReason());
+    QCOMPARE(page.gainSpinForTest(Band::Band40m)->toolTip(), RadioModel::paOnAirLockedReason());
+
+    // The holder lets go: this window's transmitting band opens.
+    holder.clear();
+    model.reportTransmitHolderChanged();
+    QVERIFY(page.gainSpinForTest(txBand)->isEnabled());
+    QVERIFY(page.adjustSpinForTest(txBand, 3)->isEnabled());
+    QVERIFY(!page.gainSpinForTest(Band::Band40m)->isEnabled());
+
+    // And takes it again while keyed.
+    holder = QStringLiteral("Pocket has the transmitter.");
+    model.reportTransmitHolderChanged();
+    QVERIFY(!page.gainSpinForTest(txBand)->isEnabled());
+
+    mox->setMox(false);
+    QTRY_VERIFY(!model.isCoreOnAir());
+    QVERIFY(page.gainSpinForTest(txBand)->isEnabled());
+    model.setOtherDeviceHoldsRefusal({});
 }
 
 QTEST_MAIN(TstPaGainByBandPageEditor)

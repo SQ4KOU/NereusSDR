@@ -413,6 +413,7 @@ void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     seedBank(s.settings, 47.5f);
     AppSettings::instance().setRemoteBackend(&s.proxy);
+    s.core->sliceById(0)->setFrequency(14200000.0); // transmits on 20 m
     QVERIFY(s.connect());
     QVERIFY(s.proxy.ready());
     QTRY_COMPARE(s.window.paProfileManager()->activeProfileName(), QStringLiteral("Bench"));
@@ -456,14 +457,22 @@ void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
 
     // On the air the Core keyed itself, so the window holds no transmit:
     // its change is refused and the Core keeps its value (JJ's ruling).
+    // The page shows it: the transmitting band's row with the holder
+    // reason, profiles and the other bands with Thetis's lock.
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
+    QVERIFY(!gain20->isEnabled());
+    QCOMPARE(gain20->toolTip(), RadioModel::paHolderOnlyReason());
+    QVERIFY(!combo->isEnabled());
+    QCOMPARE(combo->toolTip(), RadioModel::paOnAirLockedReason());
+    QVERIFY(!page.gainSpinForTest(Band::Band40m)->isEnabled());
     gain20->setValue(40.0);
     QTRY_VERIFY(!settingsRejectReason(s.windowEnd, paKey(QStringLiteral("Bench"))).isEmpty());
     QCOMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 49.0f);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
+    QVERIFY(gain20->isEnabled() && combo->isEnabled());
 
     // The gate closes the editor with its reason.
     page.setTransmitSettingsPermittedAt(6, false, kOnAir);
