@@ -863,8 +863,18 @@ public:
     /// Otherwise BoardCapsTable::userDdcCountFor(boardCapabilities(), the
     /// protocol in use): the connected radio's protocol once one has been
     /// chosen, the board row's own protocol before that (a test-primed
-    /// board). Protocol 1 gives at most four.
+    /// board). Protocol 1 gives at most four. On Protocol 2 a receiver
+    /// count the radio reported in discovery caps it
+    /// (RadioInfo::reportedReceivers; 0 keeps the board row's count).
     int userStreamCount() const;
+
+    /// The ReceiverManager ceiling connectToRadio sets for `info` and a
+    /// stream pool of `poolStreams`. Protocol 1: the radio's count as
+    /// discovery left it (unchanged). Protocol 2: never below the pool, so
+    /// every stream has a receiver behind it; with a report the pool is
+    /// already within it, and without one (the table fallback, or a saved
+    /// radio's default of 4) the pool's own size is the need.
+    static int receiverPoolCeiling(const RadioInfo& info, int poolStreams);
 
     /// Create a slice under the id the STATION chose rather than minting
     /// one locally. Role::Remote only.

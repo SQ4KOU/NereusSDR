@@ -611,6 +611,16 @@ namespace BoardCapsTable {
     // OrionMKII, Saturn) carry their Protocol 2 count of five.
     int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept;
 
+    // The same count, capped by the receiver count the radio reported in
+    // discovery (RadioInfo::reportedReceivers). On Protocol 2 a non-zero
+    // report caps the row's count: the radio is the authority, since the
+    // gateware's receiver count is a compile-time constant that changes
+    // between firmware releases (ANAN-G2 reports 4 against the row's five
+    // user streams). 0 means no report and keeps the row's count. Protocol 1
+    // is unchanged: its frame slot plan sets the count.
+    int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol,
+                        int reportedReceivers) noexcept;
+
     // The sample rates the board offers over the protocol it is running
     // (plan Task 5, the operator's ruling of 2026-09-24, "follow thetis").
     // Thetis picks the list by protocol, not by board, and adds 384 kHz on

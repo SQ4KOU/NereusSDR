@@ -7656,10 +7656,19 @@ int RadioModel::userStreamCount() const
         return m_stationUserDdcCount;
     }
     const BoardCapabilities& caps = boardCapabilities();
-    const ProtocolVersion protocol = m_lastRadioInfo.macAddress.isEmpty()
-                                         ? caps.protocol
-                                         : m_lastRadioInfo.protocol;
-    return BoardCapsTable::userDdcCountFor(caps, protocol);
+    if (m_lastRadioInfo.macAddress.isEmpty()) {
+        return BoardCapsTable::userDdcCountFor(caps, caps.protocol);
+    }
+    return BoardCapsTable::userDdcCountFor(caps, m_lastRadioInfo.protocol,
+                                           m_lastRadioInfo.reportedReceivers);
+}
+
+int RadioModel::receiverPoolCeiling(const RadioInfo& info, int poolStreams)
+{
+    if (info.protocol == ProtocolVersion::Protocol2) {
+        return std::max(info.maxReceivers, poolStreams);
+    }
+    return info.maxReceivers;
 }
 
 const BoardCapabilities& RadioModel::boardCapabilities() const
@@ -14900,8 +14909,23 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     m_version = QString::number(info.firmwareVersion);
     emit infoChanged();
 
-    // Configure ReceiverManager with hardware capabilities
-    m_receiverManager->setMaxReceivers(info.maxReceivers);
+    // Configure ReceiverManager with hardware capabilities.
+    //
+    // The stream pool below is sized from the same count, so the two agree:
+    // the board row, capped on Protocol 2 by the receiver count the radio
+    // reported in discovery. Bench (ANAN-G2): the radio reports 4 while the
+    // row has five user streams, and sizing the pool from the row alone
+    // left the fifth stream with no receiver ("Cannot create receiver: at
+    // maximum 4") and its pan blank.
+    const int poolStreams = BoardCapsTable::userDdcCountFor(
+        *m_hardwareProfile.caps, info.protocol, info.reportedReceivers);
+    m_receiverManager->setMaxReceivers(receiverPoolCeiling(info, poolStreams));
+    if (info.protocol == ProtocolVersion::Protocol2 && info.reportedReceivers > 0
+        && poolStreams < m_hardwareProfile.caps->userDdcCount) {
+        qCInfo(lcConnection) << "The radio reports" << info.reportedReceivers
+                             << "receivers; using" << poolStreams << "of the board's"
+                             << m_hardwareProfile.caps->userDdcCount << "receive streams";
+    }
 
     // Create receiver 0 with protocol-appropriate DDC mapping.
     // P2 2-ADC boards (Angelia / Orion / OrionMKII / Saturn / ANAN-G2) use
@@ -14996,8 +15020,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // assigned until further down this function.
     const int poolSlices = caps.maxSlices > 0 ? caps.maxSlices : 1;
     // Plan Task 11: the stream count depends on the protocol too (four on
-    // Protocol 1); the same function userStreamCount() reads.
-    const int poolStreams = BoardCapsTable::userDdcCountFor(caps, info.protocol);
+    // Protocol 1), and on Protocol 2 on the radio's reported receiver
+    // count; poolStreams was computed with the ReceiverManager ceiling
+    // above, by the same function userStreamCount() reads.
     configureStreamPool(poolStreams, poolSlices, wdspInputRate);
 
     // One ReceiverManager receiver per stream. Receiver 0 was created above

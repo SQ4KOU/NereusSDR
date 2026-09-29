@@ -321,6 +321,7 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
     // Optional extra fields (len > 20) — From Thetis parseDiscoveryReply P1 branch
     if (bytes.size() > 20) {
         out.maxReceivers = static_cast<quint8>(bytes[20]);
+        out.reportedReceivers = out.maxReceivers;
         if (out.maxReceivers <= 0) {
             out.maxReceivers = RadioInfo::maxReceiversForBoard(out.boardType);
         }
@@ -402,6 +403,11 @@ bool RadioDiscovery::parseP2Reply(const QByteArray& bytes, const QHostAddress& s
     // From Thetis: if (len > 20) — receivers count
     if (bytes.size() > 20) {
         int hwRx = static_cast<quint8>(bytes[20]);
+        // From Thetis clsRadioDiscovery.cs:1194 [v2.10.3.15]:
+        //   r.NumRxs = data[20];
+        // Kept apart from the fallback: RadioModel sizes the Protocol 2
+        // stream pool from the radio's own number when it gives one.
+        out.reportedReceivers = hwRx;
         out.maxReceivers = (hwRx > 0) ? hwRx : RadioInfo::maxReceiversForBoard(out.boardType);
     }
 

@@ -1385,6 +1385,20 @@ int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noe
     return caps.userDdcCount;
 }
 
+int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol,
+                    int reportedReceivers) noexcept {
+    const int fromRow = userDdcCountFor(caps, protocol);
+    // Thetis reads the count (clsRadioDiscovery.cs:1194 [v2.10.3.15],
+    // r.NumRxs = data[20]) but sizes its DDCs from the model alone
+    // (console.cs:8228-8229 [v2.10.3.15], P1_rxcount = 5; nddc = 5; for
+    // the ANAN-G2). NereusSDR follows the radio's number instead
+    // (Radio-Authoritative Settings Policy), on Protocol 2 only.
+    if (protocol == ProtocolVersion::Protocol2 && reportedReceivers > 0) {
+        return std::min(fromRow, reportedReceivers);
+    }
+    return fromRow;
+}
+
 std::vector<int> sampleRatesFor(const BoardCapabilities& caps,
                                 ProtocolVersion protocol,
                                 HPSDRModel model)
