@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/daemon/DaemonConfig.h"
+#include "core/station/StationHost.h"
 #include "gui/DesktopStationController.h"
 #include "gui/StationServiceManager.h"
 #include "gui/setup/RemoteStationPage.h"
@@ -29,9 +30,17 @@ struct RuntimeStationBindings {
 
 // Borrows the desktop's one local model and its singleton settings. The caller
 // keeps both alive until stop() and destroys this runtime before the model.
+class RemoteDevicesState;
+
 class GuiDesktopStationRuntime final : public QObject {
     Q_OBJECT
 public:
+    /// The Remote Access page's reach line for a running Core (iPhone app
+    /// plan Tasks 49 and 78 item 8): where it listens, whether Bonjour
+    /// makes it known on this network, and whether the remote access
+    /// service has it registered. `bind` empty means every interface.
+    static QString reachText(const QString& bind, int port, const StationReach& reach);
+
     GuiDesktopStationRuntime(RadioModel* model, AppSettings* settings,
                              const QString& profile, bool profileOwned,
                              StationServiceOptions serviceOptions = {},
@@ -46,6 +55,11 @@ public:
     bool restore();
     void bindSetupDialog(SetupDialog* dialog);
     const RemoteStationPage::State& state() const { return m_state; }
+    /// iPhone app plan Task 78 item 8 (R-IOS-07): who is connected to the
+    /// Core on this computer now, read from its session registry each
+    /// refresh; empty while no Core runs here. The Remote Access page's
+    /// Connected now list shows it.
+    RemoteDevicesState* connectedDevices();
     const DaemonConfig& config() const { return m_config; }
     void refresh();
     void stop();
@@ -91,6 +105,7 @@ private:
     std::unique_ptr<StationServiceManager> m_service;
     std::unique_ptr<DesktopStationController> m_controller;
     RemoteStationPage::State m_state;
+    RemoteDevicesState* m_hostDevices = nullptr;
     QList<QPointer<RemoteStationPage>> m_pages;
     QTimer m_refreshTimer;
     bool m_actionActive = false;

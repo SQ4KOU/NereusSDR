@@ -768,6 +768,27 @@ void StationHost::cancelStationServerListenRetry()
 }
 
 
+StationReach StationHost::reach() const
+{
+    StationReach reach;
+    reach.listening = listenerReady();
+    reach.listenerRetryPending = listenerRetryPending();
+    if (m_dnsSdAdvertiser) {
+        reach.bonjourAvailable = m_dnsSdAdvertiser->isAvailable();
+        reach.bonjourActive = m_dnsSdAdvertiser->isActive();
+    }
+    const QList<QUrl> servers = RendezvousClient::serverUrls(m_options.rendezvousServers);
+    reach.serviceConfigured = !servers.isEmpty();
+    if (m_rendezvous && m_rendezvous->client()) {
+        reach.serviceRegistered = m_rendezvous->client()->isRegistered();
+        reach.serviceHost = m_rendezvous->client()->currentServer().host();
+    }
+    if (reach.serviceHost.isEmpty() && !servers.isEmpty()) {
+        reach.serviceHost = servers.first().host();
+    }
+    return reach;
+}
+
 bool StationHost::listenerReady() const
 {
     return m_stationServer && m_stationServer->isListening();

@@ -17,6 +17,9 @@ class QWidget;
 
 namespace NereusSDR {
 
+class ConnectedDevicesList;
+class RemoteDevicesState;
+
 class RemoteStationPage : public SetupPage {
     Q_OBJECT
 public:
@@ -47,6 +50,10 @@ public:
     explicit RemoteStationPage(QWidget* parent = nullptr);
     void setState(const State& state);
     const State& state() const { return m_state; }
+    /// iPhone app plan Task 78 item 8 (R-IOS-07): who is connected to the
+    /// Core on this computer now, from its session registry.
+    void setConnectedDevices(RemoteDevicesState* devices);
+    ConnectedDevicesList* connectedList() const { return m_connectedList; }
 
 signals:
     void runCoreRequested(bool enabled);
@@ -80,6 +87,7 @@ private:
     QGroupBox* m_backupGroup = nullptr;
     QPushButton* m_backupAcknowledged = nullptr;
     quint64 m_deviceGeneration = 0;
+    ConnectedDevicesList* m_connectedList = nullptr;
 };
 
 } // namespace NereusSDR
