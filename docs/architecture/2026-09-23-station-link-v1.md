@@ -808,6 +808,18 @@ record (section 7.7); a peer that does not sees exactly the wire it was
 built for, with neither. The station does not declare it, and the
 desktop's remote window does not.
 
+**`coreAddresses` 1** (the phone's direct addresses, 2026-09-29): the
+client dials the Core at the addresses the Core itself reports, so a phone
+away from home can reach a Core's global IPv6 address directly. A peer
+that declares it at minor 11 together with `deviceAuth` 1, and signs in
+with a paired device's own key (section 3.5), is sent
+`coreAddressesVersion` (section 6.3) and the `devices` object's
+`coreAddresses` (section 7.1). Any other peer sees exactly the wire it was
+built for, with neither: one that does not declare it, and a window signed
+in with the token whatever it declares. The station does not declare it,
+and the desktop's remote window does not: it dials the address it was
+given and the ones it last reached.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -969,6 +981,7 @@ change shows as surface drift and as a change to this table.
 | `diversityPatternVersion` | 1 |
 | `logCategoryListVersion` | 1 |
 | `radioModelsVersion` | 0 |
+| `coreAddressesVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1151,6 +1164,17 @@ When a feature is off, its version is 0:
   no name for as "Unknown model" and offers no model choice, with "This
   Core does not say which models this radio can run as. Updating the Core
   may help." on the disabled choice.
+- `coreAddressesVersion` (the phone's direct addresses): optional, sent
+  only at agreed minor 11 to a peer whose hello declared `coreAddresses` 1
+  and `deviceAuth` 1 and that signed in with a paired device's own key,
+  while the Core has a radio model and sends the `devices` object
+  (`deviceAdminVersion` 1), after `radioModelsVersion` (or after the entry
+  before it when that is absent) and before `coreBuildInfo`
+  (`StationServer::peerGetsCoreAddresses`). At 1 `devices` carries
+  `coreAddresses` (section 7.1), where the device can dial this Core. A
+  peer that did not declare the feature, or signed in with the token, is
+  sent neither this entry nor the property. An app on a Core that sends no
+  entry dials the addresses it already keeps (section 21.1).
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1748,7 +1772,8 @@ declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 `diversityPatternVersion` only for a peer that declared
 `diversityPattern`; `logCategoryListVersion` only for a peer that declared
 `logCategoryList`; `radioModelsVersion` only for a peer that declared
-`radioModels`. A client ignores a capability it does not know
+`radioModels`; `coreAddressesVersion` only for a device signed in with its
+own key that declared `coreAddresses`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -1926,7 +1951,8 @@ older window sees only the values it was built for.
 | 88 | `diversityPatternVersion` | `i64` |
 | 89 | `logCategoryListVersion` | `i64` |
 | 90 | `radioModelsVersion` | `i64` |
-| 91 | `coreBuildInfo` | `utf8` |
+| 91 | `coreAddressesVersion` | `i64` |
+| 92 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2424,7 +2450,7 @@ An enum property lists the values its domain allows.
 | 0 | `json` | `utf8` | outbound |  |
 | 1 | `revision` | `i64` | outbound |  |
 
-**StationDevicesFacade** (9 properties)
+**StationDevicesFacade** (10 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2437,6 +2463,7 @@ An enum property lists the values its domain allows.
 | 6 | `keyPath` | `utf8` | outbound |  |
 | 7 | `pairingWindowOpen` | `bool` | outbound |  |
 | 8 | `pairingCode` | `utf8` | outbound |  |
+| 9 | `coreAddresses` | `utf8` | outbound |  |
 
 **StationTciModel** (9 properties)
 
@@ -2843,6 +2870,46 @@ Notes on the keys:
     `""` while the window is closed and while no code is shown. Sent only
     to a connection signed in with a paired device's own key; any other
     connection receives `""` (`StationServer::withPairingCodeFor`).
+  - `coreAddresses` (`utf8`, `coreAddressesVersion` 1): where a device can
+    dial this Core's control listener, as compact JSON
+    `{"addresses":["[2001:db8:1:0:211:22ff:fe33:4455]:47910","44.31.0.7:47910"]}`
+    (`CoreAddresses::toJson`). Each entry is `[<IPv6>]:<port>` or
+    `<IPv4>:<port>`, the port the listener actually holds (`remote_port`,
+    section 2); IPv6 entries first, then IPv4, each family in address
+    order, at most 8 (`CoreAddresses::kMaxAddresses`). It lists only
+    addresses on the Core's own interfaces that are up and running
+    (`StationNetwork::localEntries`) and that the listener serves (a
+    listener bound to one address lists at most that one, and a loopback
+    listener none): each stable global IPv6 address (global unicast,
+    2000::/3, the rule ICE uses for a usable address; never link-local,
+    never a unique local address, never a temporary privacy address, which
+    the system marks as not for DNS, and never a deprecated one, whose
+    preferred lifetime has run out after a renumbering), with its zone
+    dropped; and each IPv4 address on an interface that the public
+    internet routes to (none of RFC 6890's special-purpose blocks: private,
+    shared 100.64/10, loopback, link-local, documentation, benchmarking,
+    multicast, reserved). The Core names no address it has not got on an
+    interface: a public IPv4 address that belongs to a router in front of
+    it (NAT, port forwarding) is not listed, and no address comes from STUN.
+    `{"addresses":[]}` while the Core does not listen or has none. The Core
+    reads its interfaces when its listener opens and again every 5 s
+    (`CoreAddresses::kRefreshIntervalMs`, as often as the LAN announcement,
+    section 14.1), so a DHCP or SLAAC renumbering reaches every device
+    holding it within that time as a `delta` carrying `coreAddresses`
+    alone: it has its own change signal and never moves `revision`.
+    Declared last in `StationDevicesFacade`, so every earlier ordinal
+    stays. A write is refused as any `outbound` property's is. Sent only to
+    a connection signed in with a paired device's own key whose hello
+    declared `coreAddresses` 1 (`StationServer::peerGetsCoreAddresses`); a
+    window signed in with the token never receives it, nor its schema
+    field, whatever it declares. **Privacy.** A Core's global addresses
+    say where its operator is, so they travel only to devices the operator
+    paired, only over a link the device has signed in on, whose TLS (or,
+    through the rendezvous, DTLS, section 20) the relay and the rendezvous
+    cannot read. They are never in the LAN announcement or Bonjour
+    (section 14), never sent to the rendezvous, never logged, and nothing
+    unauthenticated asks for them. A device keeps them with the paired
+    Core and dials them as direct rungs (section 21.1).
 - **`connectedDevices`** (iPhone app plan Task 71;
   `ConnectedDevicesFacade`): who is on the Core, the list a device's
   Devices page reads for "Connected now". Sent only at agreed minor 11 to
@@ -5552,6 +5619,9 @@ listener bound to loopback only is neither announced nor advertised
 `dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
 trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
 
+Neither carries the Core's global addresses: those reach only a device
+signed in with its own key (`coreAddresses`, section 7.1).
+
 Both carry the same six facts about the Core, and both change when one
 does (`DaemonApp::updateStationAnnouncement`):
 
@@ -6033,6 +6103,18 @@ back to receive take that many real milliseconds, so a transfer that
 unkeys a holder is still running when the next message arrives. A verb
 whose arguments are all optional (`tx.take`) may be sent with none.
 
+**The Core's addresses** (the phone's direct addresses).
+`stationSetup.coreListener` `{"address", "port"}` and
+`stationSetup.coreInterfaces` put the Core's control listener and its
+interfaces in place of the runner's computer's, before the client
+connects; the address is read as `remote_bind` is (`"::"` is every
+address, both families). Each interface address is `{"ip"}` with, if
+any, a whole-number `prefix`, `temporary` true for a privacy address and
+`deprecated` true for a renumbered prefix's. A step `{"coreInterfaces":
+[...]}` replaces them (a renumbering), and the station reads them again
+as its 5 s timer would. A fixture with such a step runs on the station
+alone.
+
 **Which fixtures run on the app.** A fixture whose client behaviour no
 app can adopt runs on the station only (`"runs": ["station"]`): an older
 app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
@@ -6176,6 +6258,7 @@ role.
 | `maxSlices` | with `receivers`, the slice cap | 5 |
 | `alexRxAntennas` | iPhone app plan Task 75: the static radio's receive antenna per band, 14 numbers 1 to 3 in `Band` order (160 m to XVTR), and band tracking on (the per-band antenna switch of section 7.6) as though a radio were connected; only with `"radio": "static"` | none (no band tracking) |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
+| `coreListener`, `coreInterfaces` | the phone's direct addresses: the Core's control listener (`{"address", "port"}`, the address read as `remote_bind` is) and its interfaces (above), in place of the runner's computer's; an app's runner ignores them | the Core does not listen: `coreAddresses` is `{"addresses":[]}` |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
 The station runner starts every fixture from an empty settings profile,
@@ -6193,6 +6276,8 @@ same on every machine.
 | `devices` | On a new Core with the runner's device and two others paired, a device that declares `deviceAuth` receives the `devices` object in its snapshot (`listJson` and `keyPath` as `"$string"`, since they carry run-time ids, pairing and sign-in times and a path); a rename with a renamed argument and with a label outside the rule is refused, then a rename is stored (`settings.value` `StationLabel`) and the object's next `delta` carries it; raw `settings.write` and `settings.remove` of `StationLabel` are refused; the key backup is acknowledged; another device is revoked; `station.retireToken` with no token is accepted; then the device revokes itself: `command.result`, `session.end` `deviceRemoved`, the close. Runs on the station alone |
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
+| `core-addresses` | On a new Core listening on every address at port 47910, with a link-local, a unique local, a stable global and a temporary IPv6 address and a private and a public IPv4 address, a device signed in with its own key that declares `deviceAuth` and `coreAddresses` gets `coreAddressesVersion` 1 and a `devices` object whose `coreAddresses` lists the stable IPv6 address and the public IPv4 address alone, each with the port; its interfaces renumber (the old IPv6 prefix deprecated, a new one added) and the next `delta` on `devices` carries `coreAddresses` alone, with the new IPv6 address; a write of it is refused. Runs on the station alone |
+| `core-addresses-token` | On an upgraded Core with the same interfaces, a window signed in with the token that declares `deviceAuth` and `coreAddresses` gets neither `coreAddressesVersion` nor `coreAddresses` (not in the schema, not in the object); the renumbering sends it nothing, so the next messages are a rename's own answer, and the `devices` delta after the rename carries no `coreAddresses`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, transmit ranges (`board.transmit`: the HL2's power and tune in dB) and relays (the G2's Ext 1 and Ext 2 on TX), and the RF power gauge its rating scales; `display` and `noiseReduction` are the same on both, and neither has the RX1 preamp. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
 | `settings-band-plan` | Two devices on a new Core: the fixture's device writes `BandPlanName` "IARU Region 1", and both devices get `settings.value` for it, then one catalogue `delta` each (`revision` 2) whose `json` marks `iaru-region1` alone `active` (`default` stays on ARRL (US)); a write of a plan the Core does not have gets `settings.reject` with the Core's value "IARU Region 1" and "This Core does not have that band plan.", to the writer alone; a `settings.remove` reaches both devices as an absent value, and the next `delta` (`revision` 3) marks ARRL (US) `active` again. The writing device's two deltas carry the catalogue's `json` in full; the other device's carry `active` and `default` for each plan and `"$any"` for the rest |
@@ -7342,8 +7427,10 @@ a **rung** (`PathRacer::Rung`):
 | 4 | the floor: the relay over TCP 443 (reserved, section 21.6) | not yet built |
 
 The addresses are the ones the device keeps for the Core (where it last
-reached it, most recent first, section 14's announcements, and the address
-the operator gave), each host name resolved first, its IPv6 addresses tried
+reached it, most recent first, section 14's announcements, the addresses
+the Core itself sent in `devices`' `coreAddresses` at its last sign-in or
+since, section 7.1, and the address the operator gave), each host name
+resolved first, its IPv6 addresses tried
 at once and its IPv4 addresses 250 ms later. The rendezvous rung needs the
 Core's rendezvous id, which a device derives from the Core's identity key
 (the rendezvous document, section 4.2), so a device learns it from the

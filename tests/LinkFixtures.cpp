@@ -65,6 +65,10 @@
 //               the real remaining time and swallows real expiries. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: stationSetup's coreListener
+//               and coreInterfaces, and the coreInterfaces step. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -106,6 +110,8 @@
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/CoreAddresses.h"
+#include "core/daemon/DaemonConfig.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
@@ -834,6 +840,81 @@ bool LinkFixtures::runsOn(const QJsonObject& fixture, const QString& end)
     return false;
 }
 
+namespace {
+
+// The phone's direct addresses: the Core's interfaces as a fixture gives
+// them (stationSetup.coreInterfaces and the coreInterfaces step), each
+// {"ip"} with an optional whole-number "prefix" and true or false
+// "temporary" (a privacy address) and "deprecated" (a renumbered prefix's).
+QString readCoreInterfaces(const QJsonValue& value, const QString& where,
+                           QList<QNetworkAddressEntry>* entries)
+{
+    if (!value.isArray()) {
+        return where + QStringLiteral(": coreInterfaces must be an array");
+    }
+    for (const QJsonValue& item : value.toArray()) {
+        const QJsonObject object = item.toObject();
+        const QString problem =
+            expectKeys(object, {QStringLiteral("ip")},
+                       {QStringLiteral("prefix"), QStringLiteral("temporary"),
+                        QStringLiteral("deprecated")},
+                       where + QStringLiteral(" coreInterfaces entry"));
+        if (!problem.isEmpty()) {
+            return problem;
+        }
+        const QHostAddress ip(object.value(QStringLiteral("ip")).toString());
+        const QJsonValue prefix = object.value(QStringLiteral("prefix"));
+        if (ip.isNull() || (!prefix.isUndefined() && !prefix.isDouble())
+            || (object.contains(QStringLiteral("temporary"))
+                && !object.value(QStringLiteral("temporary")).isBool())
+            || (object.contains(QStringLiteral("deprecated"))
+                && !object.value(QStringLiteral("deprecated")).isBool())) {
+            return where + QStringLiteral(": each coreInterfaces entry needs an ip address, "
+                                          "and if any a whole-number prefix and true or "
+                                          "false temporary and deprecated");
+        }
+        QNetworkAddressEntry entry;
+        entry.setIp(ip);
+        if (prefix.isDouble()) {
+            entry.setPrefixLength(prefix.toInt());
+        }
+        if (object.value(QStringLiteral("temporary")).toBool(false)) {
+            entry.setDnsEligibility(QNetworkAddressEntry::DnsIneligible);
+        }
+        if (object.value(QStringLiteral("deprecated")).toBool(false)) {
+            entry.setAddressLifetime(QDeadlineTimer(0), QDeadlineTimer::Forever);
+        }
+        if (entries != nullptr) {
+            entries->append(entry);
+        }
+    }
+    return QString();
+}
+
+QString checkCoreAddressSetup(const QJsonObject& setup)
+{
+    const QJsonValue listener = setup.value(QStringLiteral("coreListener"));
+    const QJsonValue interfaces = setup.value(QStringLiteral("coreInterfaces"));
+    if (listener.isUndefined() && interfaces.isUndefined()) {
+        return QString();
+    }
+    const QJsonObject object = listener.toObject();
+    const double port = object.value(QStringLiteral("port")).toDouble(-1.0);
+    if (!listener.isObject()
+        || !expectKeys(object, {QStringLiteral("address"), QStringLiteral("port")}, {},
+                       QStringLiteral("stationSetup.coreListener"))
+                .isEmpty()
+        || QHostAddress(object.value(QStringLiteral("address")).toString()).isNull()
+        || port < 1.0 || port > 65535.0 || port != static_cast<double>(static_cast<int>(port))) {
+        return QStringLiteral("session fixture: stationSetup.coreListener needs an address and "
+                              "a port from 1 to 65535, with coreInterfaces");
+    }
+    return readCoreInterfaces(interfaces, QStringLiteral("session fixture: stationSetup"),
+                              nullptr);
+}
+
+} // namespace
+
 QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
 {
     QString problem = expectKeys(fixture,
@@ -861,6 +942,14 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     if (!fixture.value(QStringLiteral("stationSetup")).isObject()) {
         return QStringLiteral("session fixture: stationSetup must be an object");
     }
+    // The phone's direct addresses: the Core's listener and interfaces.
+    problem = checkCoreAddressSetup(fixture.value(QStringLiteral("stationSetup")).toObject());
+    if (!problem.isEmpty()) {
+        return problem;
+    }
+    const bool coreInterfacesSet =
+        fixture.value(QStringLiteral("stationSetup")).toObject().contains(
+            QStringLiteral("coreListener"));
     // iPhone app Task 71: the other clients a fixture names, by name.
     QSet<QString> others;
     const QJsonValue otherClients =
@@ -968,6 +1057,20 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
             if (problem.isEmpty() && runsOn(fixture, QStringLiteral("app"))) {
                 problem = where + QStringLiteral(": a radioPtt step runs on the station only");
             }
+        } else if (step.contains(QStringLiteral("coreInterfaces"))) {
+            // The phone's direct addresses: the Core's interfaces change
+            // (a renumbering). A station fixture only, after
+            // stationSetup.coreListener.
+            problem = expectKeys(step, {QStringLiteral("coreInterfaces")}, {}, where);
+            if (problem.isEmpty()) {
+                problem = readCoreInterfaces(step.value(QStringLiteral("coreInterfaces")), where,
+                                             nullptr);
+            }
+            if (problem.isEmpty()
+                && (!coreInterfacesSet || runsOn(fixture, QStringLiteral("app")))) {
+                problem = where + QStringLiteral(": a coreInterfaces step runs on the station "
+                                                 "only, after stationSetup.coreListener");
+            }
         } else if (step.contains(QStringLiteral("connect")) || step.contains(QStringLiteral("close"))) {
             // iPhone app Task 71: another client's whole connect sequence,
             // or its close.
@@ -982,7 +1085,8 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
             }
         } else {
             problem = where + QStringLiteral(": not a message, advanceMs, expectClosed, "
-                                             "connect, close or radioPtt step");
+                                             "connect, close, radioPtt or coreInterfaces "
+                                             "step");
         }
         if (!problem.isEmpty()) {
             return problem;
@@ -1425,6 +1529,29 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
         otherDevices.push_back(std::move(other));
     }
 
+    // The phone's direct addresses: the Core's listener and interfaces, in
+    // place of this computer's, before the client connects.
+    auto coreInterfaces = std::make_shared<QList<QNetworkAddressEntry>>();
+    if (setup.contains(QStringLiteral("coreListener"))) {
+        const QJsonObject listener = setup.value(QStringLiteral("coreListener")).toObject();
+        problem = readCoreInterfaces(setup.value(QStringLiteral("coreInterfaces")),
+                                     QStringLiteral("stationSetup"), coreInterfaces.get());
+        if (!problem.isEmpty()) {
+            return problem;
+        }
+        CoreAddressWatcher* watcher = server.coreAddressWatcher();
+        if (watcher == nullptr) {
+            return QStringLiteral("stationSetup.coreListener: the station has no address "
+                                  "watcher");
+        }
+        watcher->setEntrySource([coreInterfaces]() { return *coreInterfaces; });
+        // Read as the Core reads remote_bind: "::" is every address, both
+        // families.
+        watcher->start(DaemonConfig::listenAddressFor(
+                           listener.value(QStringLiteral("address")).toString()),
+                       static_cast<quint16>(listener.value(QStringLiteral("port")).toInt()));
+    }
+
     // iPhone app Task 71: the clients the player plays, its own first.
     std::vector<std::unique_ptr<PlayedClient>> clients;
     {
@@ -1496,6 +1623,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             what = QStringLiteral("advanceMs");
         } else if (step.contains(QStringLiteral("radioPtt"))) {
             what = QStringLiteral("radioPtt");
+        } else if (step.contains(QStringLiteral("coreInterfaces"))) {
+            what = QStringLiteral("coreInterfaces");
         } else if (step.contains(QStringLiteral("connect"))) {
             what = QStringLiteral("connect %1").arg(step.value(QStringLiteral("connect")).toString());
         } else if (step.contains(QStringLiteral("close"))) {
@@ -1639,6 +1768,19 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 return QStringLiteral("%1: the station has no radio to press").arg(describe(index));
             }
             model->moxController()->onMicPttFromRadio(step.value(QStringLiteral("radioPtt")).toBool());
+            settle();
+            clock.scan();
+        } else if (step.contains(QStringLiteral("coreInterfaces"))) {
+            // The phone's direct addresses: the Core's interfaces change,
+            // and it reads them again as its timer would.
+            QList<QNetworkAddressEntry> changed;
+            problem = readCoreInterfaces(step.value(QStringLiteral("coreInterfaces")),
+                                         describe(index), &changed);
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+            *coreInterfaces = changed;
+            server.coreAddressWatcher()->refresh();
             settle();
             clock.scan();
         } else if (step.contains(QStringLiteral("connect"))) {

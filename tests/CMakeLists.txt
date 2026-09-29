@@ -6996,6 +6996,9 @@ nereus_add_test(tst_diversity_pattern)
 # Phone wire batch: radio's logCategoryList (the Support dialog's categories
 # with their labels).
 nereus_add_test(tst_log_category_list)
+# The phone's direct addresses: which of the Core's addresses a signed-in
+# device is told it can dial, and the watcher that follows them.
+nereus_add_test(tst_core_addresses)
 
 # ── Tunable Notch Filter Task 2: RxChannel manual-notch wrappers ──────────
 # The Notch value type plus add / edit / delete / sync / count, the

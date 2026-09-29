@@ -103,6 +103,11 @@
 //                                    logCategoryList are; and radioModels,
 //                                    so radioModelsVersion is. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The phone's direct addresses: the
+//                                    capture declares coreAddresses, so
+//                                    coreAddressesVersion and devices'
+//                                    coreAddresses are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -569,7 +574,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"logCategoryList", 1},
                                   // Phone wire batch: stationRadios' model
                                   // labels and choices.
-                                  {"radioModels", 1}})));
+                                  {"radioModels", 1},
+                                  // The phone's direct addresses: devices'
+                                  // coreAddresses (the capture signs in
+                                  // with its own key).
+                                  {"coreAddresses", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -618,6 +627,9 @@ QJsonArray captureCapabilities()
     caps.logCategoryListVersion = 1;
     // Phone wire batch: sent to a peer that declared radioModels.
     caps.radioModelsEntry = true;
+    // The phone's direct addresses: sent to a device signed in with its own
+    // key that declared coreAddresses.
+    caps.coreAddressesVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

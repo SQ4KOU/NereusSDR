@@ -28,6 +28,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): each entry's name numbered
 //               by pairing order and its shortName. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: setCoreAddresses(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -207,6 +210,15 @@ void StationDevicesFacade::setConnectedDevices(const QSet<QByteArray>& ids)
     }
     m_connected = ids;
     refresh();
+}
+
+void StationDevicesFacade::setCoreAddresses(const QString& json)
+{
+    if (json == m_coreAddresses) {
+        return;
+    }
+    m_coreAddresses = json;
+    emit coreAddressesChanged();
 }
 
 DeviceAdminResult StationDevicesFacade::revoke(const QString& id)

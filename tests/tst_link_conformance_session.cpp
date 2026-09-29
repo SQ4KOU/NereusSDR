@@ -46,6 +46,9 @@
 //                    run time, is paired before the client connects;
 //                    otherClients: iPhone app Task 71, other clients the
 //                    player signs in as paired devices, LinkFixtures.h)
+//   coreListener, coreInterfaces   read by the player too: the phone's
+//                    direct addresses, the Core's listener and interfaces
+//                    in place of this computer's (LinkFixtures.cpp)
 //   remoteTransmit   the Core's remote_transmit: "allow" or "deny"
 //                    ("deny", as every Core was before iPhone app plan
 //                    Task 34)
@@ -252,6 +255,10 @@
 //               one that stalls names the stage it stalled at; the 15 s
 //               bound is unchanged. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: The phone's direct addresses: coreListener and
+//               coreInterfaces are known stationSetup keys. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -326,6 +333,7 @@ const QStringList kSetupKeys{
     QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
     QStringLiteral("unkeyWalkMs"),
     QStringLiteral("stationRadios"),
+    QStringLiteral("coreListener"),    QStringLiteral("coreInterfaces"),
 };
 
 // NEREUS_LINK_CONNECTABLE (see the file comment).

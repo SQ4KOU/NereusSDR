@@ -130,6 +130,10 @@
 //                logCategoryListVersion, only for a peer that declared
 //                radioModels. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - The phone's direct addresses: coreAddressesVersion, after
+//                radioModelsVersion, only for a device signed in with its
+//                own key that declared coreAddresses. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -393,6 +397,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radioModelsEntry) {
             updates.append(intEntry("radioModelsVersion", radioModelsVersion));
         }
+        // The phone's direct addresses: devices' coreAddresses, only for a
+        // device signed in with its own key that declared coreAddresses.
+        if (coreAddressesVersion > 0) {
+            updates.append(intEntry("coreAddressesVersion", coreAddressesVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -627,7 +636,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "band2mVersion"
                    || u.name == "diversityPatternVersion"
                    || u.name == "logCategoryListVersion"
-                   || u.name == "radioModelsVersion") {
+                   || u.name == "radioModelsVersion"
+                   || u.name == "coreAddressesVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -660,6 +670,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "radioModelsVersion") {
                     caps.radioModelsEntry = true;
                     caps.radioModelsVersion = version;
+                } else if (u.name == "coreAddressesVersion") {
+                    caps.coreAddressesVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {
