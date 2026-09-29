@@ -3754,8 +3754,8 @@ int P1RadioConnection::ccMaxBank() const
 // RadioModel::applyAlexAntennaForBand (setIoBoardAerials), composed by
 // AlexController::hl2IoBoardAerials. While the manual I2C tool holds the
 // pause (IoBoardHl2::setPollingPause, mi0bot SetI2CPollingPause) a tick
-// does nothing and the step stays where it is. Not here yet: the auto-tune
-// protocol.
+// does nothing and the step stays where it is. The auto-tune protocol is
+// not ported here.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setIoBoardTxState(int dspMode, qint64 frequencyHz)
 {

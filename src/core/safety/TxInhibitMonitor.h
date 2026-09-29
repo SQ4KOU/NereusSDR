@@ -113,7 +113,7 @@ namespace NereusSDR::safety {
 /// Source priority (highest → lowest):
 ///   IoBoardFault > UserIo01 > OutOfBand > BlockTxAntenna > None
 ///
-/// IoBoardFault — the Hermes Lite 2 I/O board reported a non-zero fault
+/// IoBoardFault: the Hermes Lite 2 I/O board reported a non-zero fault
 ///   code (REG_FAULT). It holds transmit off whether or not External TX
 ///   Inhibit is on, as mi0bot's UpdateIOBoard sets TXInhibit without
 ///   looking at _useTxInhibit.

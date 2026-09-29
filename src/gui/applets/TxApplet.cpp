@@ -1391,7 +1391,10 @@ void TxApplet::wireControls()
         // HL2 port part 2: a TX inhibit locks the same buttons, with its
         // reason (the HL2 I/O board's fault code, say), as Thetis's
         // TXInhibit setter disables them (console.cs:15341-15363
-        // [v2.10.3.15]).
+        // [v2.10.3.15]):
+        //   chkTUN.Enabled = !_tx_inhibit;
+        //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+        //   chkVOX.Enabled = !_tx_inhibit;
         const auto relock = [this]() {
             removeReceiveOnlyLock();
             applyReceiveOnlyLock();

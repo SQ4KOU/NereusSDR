@@ -240,7 +240,9 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         // button blocked for a reason never named (fix wave M6).
         // HL2 port part 2: a TX inhibit the same way, with its reason (the
         // HL2 I/O board's fault code), as Thetis's TXInhibit setter
-        // disables them (console.cs:15341-15363 [v2.10.3.15]).
+        // disables them (console.cs:15341-15363 [v2.10.3.15]):
+        //   chkTUN.Enabled = !_tx_inhibit;
+        //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
         if (m_model->transmitButtonsLocked()
             && (id != Id::Mox || m_model->transmitLockCoversMox())) {
             unavailable(m_model->transmitLockReasonAlongside(
