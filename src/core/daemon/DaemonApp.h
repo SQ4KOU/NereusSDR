@@ -408,7 +408,9 @@ private:
     //   sample_rate_hz -> hardware/<mac>/radioInfo/sampleRate, only when
     //                     that radio has no saved rate (a starting value;
     //                     a saved rate wins, R-R3-49)
-    //   audio_device   -> audio/Speakers/DeviceName, every start
+    //   audio_device   -> audio/Speakers/DeviceName, only when no speaker
+    //                     choice is saved (a starting value; a saved
+    //                     choice wins, G-16)
     //
     // Seeding the settings store rather than passing values down through
     // new parameters is deliberate. Both keys already have a single
@@ -419,9 +421,8 @@ private:
     // AudioEngine::ensureSpeakersOpen() resolves an empty device name to
     // the platform default. A config file that bypassed those would be
     // able to ask for a rate the board cannot do. This way the daemon
-    // and the GUI take the identical path. For the rate the config file
-    // only fills an empty slot; for the audio device it decides the
-    // persisted value on this start.
+    // and the GUI take the identical path. For the rate and the audio
+    // device alike the config file only fills an empty slot.
     //
     // Requires a resolved `mac`, which is why it is called after
     // identity selection and before RadioModel::connectToRadio(): with

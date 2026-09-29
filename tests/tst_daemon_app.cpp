@@ -229,6 +229,82 @@ private slots:
                                    HPSDRModel::HERMESLITE),
                  192000);
     }
+    // G-16: the config file's audio_device is a starting value too, like
+    // sample_rate_hz above. It seeds audio/Speakers/DeviceName only when no
+    // speaker choice is saved; a saved choice (a window's pick, including
+    // an explicit "platform default" saved as an empty name) wins.
+    void configAudioDeviceDoesNotOverrideASavedSpeaker()
+    {
+        const QString key = QStringLiteral("audio/Speakers/DeviceName");
+        AppSettings& settings = AppSettings::instance();
+        const auto forget = qScopeGuard([&settings, key] {
+            settings.remove(key);
+            settings.save();
+        });
+        settings.setValue(key, QStringLiteral("USB Audio CODEC"));
+        DaemonConfig cfg = testCoreConfig();
+        cfg.audioDevice = QStringLiteral("Built-in Output");
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "using the saved speaker device \"USB Audio CODEC\" \\(the config "
+            "file's \"Built-in Output\" is only a starting value\\)")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, QString());
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("USB Audio CODEC"));
+    }
+
+    void configAudioDeviceKeepsASavedPlatformDefault()
+    {
+        const QString key = QStringLiteral("audio/Speakers/DeviceName");
+        AppSettings& settings = AppSettings::instance();
+        const auto forget = qScopeGuard([&settings, key] {
+            settings.remove(key);
+            settings.save();
+        });
+        settings.setValue(key, QString());
+        DaemonConfig cfg = testCoreConfig();
+        cfg.audioDevice = QStringLiteral("Built-in Output");
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "using the saved speaker device \"\" \\(the config file's")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, QString());
+        QVERIFY(settings.contains(key));
+        QCOMPARE(settings.value(key).toString(), QString());
+    }
+
+    void configAudioDeviceSeedsWhenNoSpeakerIsSaved()
+    {
+        const QString key = QStringLiteral("audio/Speakers/DeviceName");
+        AppSettings& settings = AppSettings::instance();
+        settings.remove(key);
+        const auto forget = qScopeGuard([&settings, key] {
+            settings.remove(key);
+            settings.save();
+        });
+        DaemonConfig cfg = testCoreConfig();
+        cfg.audioDevice = QStringLiteral("Built-in Output");
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "seeded the speaker device from the config file: \"Built-in Output\"")));
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, QString());
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("Built-in Output"));
+    }
+
+    void noConfigAudioDeviceLeavesTheSpeakerUnset()
+    {
+        const QString key = QStringLiteral("audio/Speakers/DeviceName");
+        AppSettings& settings = AppSettings::instance();
+        settings.remove(key);
+        const auto forget = qScopeGuard([&settings, key] {
+            settings.remove(key);
+            settings.save();
+        });
+        const DaemonConfig cfg = testCoreConfig();
+        QVERIFY(cfg.audioDevice.isEmpty());
+        DaemonApp app;
+        app.applyConfigToSettings(cfg, QString());
+        QVERIFY(!settings.contains(key));
+    }
+
     // R-R3-44: nereusd publishes no VAX device on the Core host, receive
     // or transmit. Its engine refuses them before anything connects (the
     // engine-level proof that start() then opens none is in
