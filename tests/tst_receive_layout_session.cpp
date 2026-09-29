@@ -351,6 +351,61 @@ private slots:
                                      QByteArrayLiteral("afGain")));
     }
 
+    // Slice control fix wave, round 2: a lone device restores an older
+    // manifest (no owners in it). The restore releases its slice to nobody
+    // with the device still listening; it adopts the slice back and can
+    // change it (unlock, AF gain), not "Nobody controls slice A".
+    void aLoneDeviceChangesItsOwnSliceAfterRestoringAnOlderManifest()
+    {
+        QTemporaryDir securityDirectory;
+        QVERIFY(securityDirectory.isValid());
+
+        RadioModel core;
+        QCOMPARE(core.addSlice(QStringLiteral("pan-0")), 0);
+        SliceModel* const coreA = core.sliceById(0);
+        QVERIFY(coreA != nullptr);
+        coreA->setLocked(true);
+
+        auto& settings = AppSettings::instance();
+        QString error;
+        QVERIFY2(ReceiveLayoutStore::stage(settings, kMac, restoredLayout(), &error),
+                 qPrintable(error));
+        QVERIFY2(settings.save(&error), qPrintable(error));
+
+        StationServer server(&core, settings,
+                             NereusSDR::Test::seedUpgradedCoreToken(securityDirectory.path()));
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("layout-station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("layout-client"), this);
+        stationEnd->linkTo(clientEnd);
+
+        QSignalSpy snapshots(&client, &StationClient::stateSnapshotApplied);
+        client.startSession(clientEnd, server.token());
+        server.acceptTransport(stationEnd);
+        QTRY_COMPARE(snapshots.count(), 1);
+        SliceOwnership* const ownership = core.sliceOwnership();
+        const QByteArray device = ownership->mark(0).owner;
+        QVERIFY(!device.isEmpty());
+        QVERIFY(device != SliceOwnership::stationDevice());
+
+        core.prepareReceiveLayout(kMac);
+        QTRY_COMPARE(snapshots.count(), 2);
+        QTRY_COMPARE(ownership->mark(0).owner, device);
+        QCOMPARE(ownership->listenersOf(0), QList<QByteArray>{device});
+
+        SliceModel* const remoteA = remote.sliceById(0);
+        QVERIFY(remoteA != nullptr);
+        QTRY_VERIFY(remoteA->locked());
+        remoteA->setLocked(false);
+        client.onWriteFlushTick();
+        QTRY_VERIFY(!coreA->locked());
+        remoteA->setAfGain(61);
+        client.onWriteFlushTick();
+        QTRY_COMPARE(coreA->afGain(), 61);
+    }
+
     void reconnectToOlderPeerClearsOptionalRestoreStatus()
     {
         QTemporaryDir securityDirectory;

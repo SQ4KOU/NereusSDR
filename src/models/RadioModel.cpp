@@ -576,6 +576,10 @@
 //                slice (requestTxHandoffToSlice), so the session server
 //                records an explicit choice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave, round 2: a layout entry with no
+//                owner restores with nobody listening, so a lone device
+//                adopts it again. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -20197,6 +20201,16 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
             m_sliceOwnership->hold(state.id, state.owner);
         } else {
             m_sliceOwnership->setOwner(state.id, QByteArray());
+            // Slice control fix wave, round 2: listeners are not part of a
+            // layout (ruling Q11), so an entry with no owner restores with
+            // nobody on it. Its former controller stays joined through the
+            // owner change, which left the slice released to a listener
+            // that ruling Q9 never lets adopt it: the lone device read
+            // "Nobody controls" on its own slice.
+            const QList<QByteArray> listeners = m_sliceOwnership->listenersOf(state.id);
+            for (const QByteArray& device : listeners) {
+                m_sliceOwnership->leave(device, state.id);
+            }
         }
     }
     m_sliceOwnership->setOrder(order);
