@@ -755,8 +755,10 @@ private slots:
         speaker.start();
         h.connectSession();
         QVERIFY(h.client.capabilities().mediaReplaceVersion >= 1);
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
-                                     == RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         // A second of steady audio first.
         const int steadyFrom = h.remoteBus->heard.size() / 2;
         QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2 >= steadyFrom + 48000, 10000);
@@ -843,8 +845,10 @@ private slots:
         source.start();
         speaker.start();
         h.connectSession();
-        QTRY_VERIFY_WITH_TIMEOUT(media.audioStatus().state
-                                     == RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(media.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(media).constData(),
+                                  h.kMediaConnectionWaitMs);
         MediaPeer* const old = media.findChild<MediaPeer*>();
         QVERIFY(old);
         QPointer<MediaPeer> retired(old);
@@ -903,8 +907,10 @@ private slots:
         source.start();
         speaker.start();
         h.connectSession();
-        QTRY_VERIFY_WITH_TIMEOUT(media.audioStatus().state
-                                     == RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(media.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(media).constData(),
+                                  h.kMediaConnectionWaitMs);
         QPointer<MediaPeer> first(media.findChild<MediaPeer*>());
         QVERIFY(first);
         const QString firstId = media.mediaConnectionId();
@@ -993,8 +999,10 @@ private slots:
 
         // Media follows: a new connection takes over once the first was
         // ready, and nothing stays pending.
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
-                                     == RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.mediaConnectionId() != firstId
                                      && !remoteMedia.replacingConnection(), 20000);
         QVERIFY(!remoteMedia.replacePending());

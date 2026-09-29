@@ -310,7 +310,9 @@ private slots:
         QCOMPARE(h.client.capabilities().mediaTunnelVersion, 1);
         QCOMPARE(h.client.capabilities().miniDisplayVersion, 1);
         QCOMPARE(h.client.capabilities().remoteIqVersion, 1);
-        QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty(), 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QVERIFY(onlyExpectedAudioControls(coreControls, modernStartWithoutConnection(false)));
         const QJsonObject initial = latestAudioContext(controls);
         // Minor 8: the eight keys plus the profile Core actually encodes with.
@@ -422,12 +424,14 @@ private slots:
         // its media peer is ready; Core then sends the enabled one
         // (DaemonMediaController's MediaPeer::ready handler reconciles audio).
         // Wait for that enabled context, not just the new connection.
-        QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty()
-                                 && latestAudioContext(controls)
-                                        .value(QStringLiteral("connectionId")).toString()
-                                        != initialConnection
-                                 && latestAudioContext(controls)
-                                        .value(QStringLiteral("enabled")).toBool(), 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty()
+                                      && latestAudioContext(controls)
+                                                 .value(QStringLiteral("connectionId")).toString()
+                                             != initialConnection
+                                      && latestAudioContext(controls)
+                                             .value(QStringLiteral("enabled")).toBool(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const QJsonObject reconnected = latestAudioContext(controls);
         QVERIFY(reconnected.value(QStringLiteral("enabled")).toBool());
         QVERIFY(reconnected.value(QStringLiteral("ssrc")) != initial.value(QStringLiteral("ssrc")));
@@ -504,8 +508,10 @@ private slots:
         QVERIFY(!h.server.remoteAudioStatusAvailable());
         QVERIFY(!h.client.remoteAudioStatusAvailable());
         QVERIFY(!remoteMedia.audioDetailNegotiated());
-        QTRY_VERIFY_WITH_TIMEOUT(latestAudioContext(controls)
-                                     .value(QStringLiteral("enabled")).toBool(), 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(latestAudioContext(controls)
+                                      .value(QStringLiteral("enabled")).toBool(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QCOMPARE(latestAudioContext(controls).size(), 8);
         // Minor 7 negotiated no optional start fields: exactly op and the
         // fresh connectionId reach Core, with the legacy audio controls.
@@ -597,8 +603,10 @@ private slots:
         });
         QVERIFY(h.server.remoteAudioStatusAvailable());
         QVERIFY(remoteMedia.audioDetailNegotiated());
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedAudioContext().has_value()
-                                     && remoteMedia.acceptedAudioContext()->enabled, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.acceptedAudioContext().has_value()
+                                      && remoteMedia.acceptedAudioContext()->enabled,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         {
             const QList<QJsonObject> received = audioContexts(controls);
             QCOMPARE(h.stationLink->forgedContexts, 1);
@@ -785,9 +793,11 @@ private slots:
 
         h.connectSession();
         QVERIFY(remoteMedia.audioProfileNegotiated());
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
-                                     && remoteMedia.audioStatus().losslessEncoder.has_value(),
-                                 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                          == RemoteAudioStatus::State::Playing
+                                      && remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         {
             QList<QJsonObject> starts;
             QStringList profiles;
@@ -857,9 +867,11 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
         QVERIFY(!remoteMedia.audioStatus().losslessEncoder.has_value());
         h.connectSession();
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
-                                     && remoteMedia.audioStatus().losslessEncoder.has_value(),
-                                 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                          == RemoteAudioStatus::State::Playing
+                                      && remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QCOMPARE(remoteErrors.count(), 0);
 
         source.stop();
@@ -901,8 +913,10 @@ private slots:
 
         h.connectSession();
         QVERIFY(remoteMedia.receiverAudioNegotiated());
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const QList<QJsonObject> starts = [&] {
             QList<QJsonObject> found;
             for (const auto& call : coreControls) {
@@ -1119,8 +1133,10 @@ private slots:
         QCOMPARE(h.client.capabilities().mediaTunnelVersion, 1);
         QCOMPARE(h.client.capabilities().miniDisplayVersion, 1);
         QCOMPARE(h.client.capabilities().remoteIqVersion, 1);
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QTRY_VERIFY(!app.stops().isEmpty()
                     && app.stops().constLast().second
                         == QLatin1String(RemoteMediaController::kReceiverAudioUnavailableReason));
@@ -1215,8 +1231,10 @@ private slots:
         h.connectSession();
         QVERIFY(remoteMedia.headphonesMixNegotiated());
         QVERIFY(remoteMedia.headphonesProblem().isEmpty());
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const auto startsOf = [&coreControls] {
             QList<QJsonObject> found;
             for (const auto& call : coreControls) {
@@ -1361,8 +1379,10 @@ private slots:
         devices.start();
 
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QVERIFY(remoteMedia.txMonitorAudioNegotiated());
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedMonitorContext().has_value(), 5000);
 
@@ -1567,11 +1587,12 @@ private slots:
 
         h.connectSession();
         QVERIFY(remoteMedia.audioClockNegotiated());
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
-                                     == RemoteAudioStatus::State::Playing
-                                     && (!lossless
-                                         || remoteMedia.audioStatus().losslessEncoder.has_value()),
-                                 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                          == RemoteAudioStatus::State::Playing
+                                      && (!lossless
+                                          || remoteMedia.audioStatus().losslessEncoder.has_value()),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         // Echoes arrive and a delay is measured while silence plays.
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioDelay().estimate.has_value(), 5000);
         QVERIFY(remoteMedia.audioDelay().measurable);

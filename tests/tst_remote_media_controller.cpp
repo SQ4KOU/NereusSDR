@@ -6547,7 +6547,9 @@ private slots:
         source.start();
         speaker.start();
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const qsizetype heardAtPlaying = h.remoteBus->heard.size() / channels;
         QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / channels >= heardAtPlaying + rate, 10000);
         source.stop();
@@ -6613,7 +6615,9 @@ private slots:
 
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QVERIFY(remoteMedia.audioStatus().detailNegotiated);
         QVERIFY(!remoteMedia.audioStatus().retryAvailable);
         QVERIFY(statusTimer->isActive());
@@ -6717,7 +6721,9 @@ private slots:
         });
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const qsizetype before = requestMs.size();
 
         // The Core has nothing to send from here on.
@@ -6763,7 +6769,9 @@ private slots:
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
 
         // Mute, and while muted the speaker goes away, so the next start
         // cannot open it. Retry does nothing while muted.
@@ -6842,7 +6850,9 @@ private slots:
         QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const RemoteAudioStatus playing = remoteMedia.audioStatus();
 
         // The speaker's timing goes while this session plays. The event loop
@@ -6863,7 +6873,9 @@ private slots:
 
         // The next session plays; the old report arrives and changes nothing.
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QTest::qWait(250);
         QCOMPARE(errors.size(), 0);
         QCOMPARE(remoteMedia.audioStatus().state, State::Playing);
@@ -6880,7 +6892,9 @@ private slots:
         QVERIFY(!remoteMedia.audioStatus().problem.has_value());
         QVERIFY(!remoteMedia.audioStatus().retryAvailable);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QVERIFY(!remoteMedia.audioStatus().problem.has_value());
         QCOMPARE(errors.size(), 1);
 
@@ -6900,7 +6914,9 @@ private slots:
         h.connectSession(quint16{7});
         if (QTest::currentTestFailed()) { return; }
         QVERIFY(!remoteMedia.audioDetailNegotiated());
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const RemoteAudioStatus status = remoteMedia.audioStatus();
         QVERIFY(!status.detailNegotiated);
         QVERIFY(!status.encoder.has_value());
@@ -6927,7 +6943,9 @@ private slots:
         QSignalSpy guiControls(&h.client, &StationClient::mediaControlReceived);
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
 
         // A Core whose encoder cannot start answers a request with audio off
         // for encoder-unavailable. That answer goes on the wire ahead of this
@@ -7035,7 +7053,9 @@ private slots:
                      .value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
 
         // The Core accepts lossless and it starts to play, badly.
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QElapsedTimer lossless;
         lossless.start();
         QCOMPARE(requestedProfiles(coreControls).constFirst(), QStringLiteral("lossless"));
@@ -7089,9 +7109,13 @@ private slots:
         QCOMPARE(remoteMedia.audioStatus().state, State::NotConnected);
         QVERIFY(!remoteMedia.audioStatus().qualityReason.has_value());
         h.connectSession();
-        QTRY_VERIFY_WITH_TIMEOUT(requestedProfiles(coreControls).size() > controlsBefore, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(requestedProfiles(coreControls).size() > controlsBefore,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QCOMPARE(requestedProfiles(coreControls).at(controlsBefore), QStringLiteral("lossless"));
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
@@ -7119,8 +7143,10 @@ private slots:
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
 
         remoteMedia.requestReceiverAudio(sliceB, &app);
         QTRY_VERIFY_WITH_TIMEOUT(app.frames(sliceB) >= 9600, 10000);
@@ -7299,7 +7325,9 @@ private slots:
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         PacedRemoteAudio audio(h);
         h.connectSession();
-        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QVERIFY(remoteMedia.audioStatus().profileChoiceAvailable);
         QCOMPARE(remoteMedia.audioStatus().runningProfile,
                  std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
@@ -7443,8 +7471,10 @@ private slots:
         headphones.start();
         h.station.sliceById(h.sliceB)->setOutputRoute(SliceModel::OutputRoute::Headphones);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.headphonesTelemetry().running
                                      && remoteMedia.headphonesTelemetry().decodedPackets > 10,
                                  15000);
@@ -7500,8 +7530,10 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test reconnect"));
         QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         QTest::qWait(1000);
         QCOMPARE(controlsFor(coreControls, QStringLiteral("headphones-audio")).size(),
                  requestsAfter);
@@ -7561,8 +7593,10 @@ private slots:
         h.connectSession();
         QVERIFY(remoteMedia.audioProfileNegotiated());
         QVERIFY(!remoteMedia.headphonesMixNegotiated());
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
-                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                      == RemoteAudioStatus::State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         const QString reason =
             QString::fromLatin1(RemoteMediaController::kHeadphonesMixUnavailableReason);
         QCOMPARE(remoteMedia.headphonesProblem(), reason);

@@ -9218,6 +9218,18 @@ nereus_add_test(tst_session_transport_switch
 # over the real DTLS/SRTP session. The end-to-end case measures real-time
 # audio, so the test is REALTIME.
 nereus_add_test(tst_media_replace fakes/LoopbackTransport.cpp REALTIME)
+# R-R3-49: a wait on the window's media connection allows the window's own
+# bounds (RemoteMediaController::kMediaDescriptionDeadlineMs +
+# kMediaConnectDeadlineMs, 125.5 s; RemoteAudioSessionHarness::
+# kMediaConnectionWaitMs), so one that stalls reports its stage before
+# ctest ends the binary. The default 120 s would end it first, silently.
+# tst_remote_media_controller already runs under 300 s.
+foreach(_media_wait_test tst_remote_audio_session tst_media_replace
+        tst_remote_telemetry tst_remote_connection_controls)
+    if(TEST ${_media_wait_test})
+        set_tests_properties(${_media_wait_test} PROPERTIES TIMEOUT 300)
+    endif()
+endforeach()
 # iPhone app plan Task 29 (R-IOS-16, R-IOS-08; the link document, section
 # 21.1): the path race. Rungs of its own; then a window and a Core on this
 # computer with the remote access service (the real Python service and the
