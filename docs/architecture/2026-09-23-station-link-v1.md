@@ -2884,8 +2884,11 @@ Notes on the keys:
     2000::/3, the rule ICE uses for a usable address; never link-local,
     never a unique local address, never a temporary privacy address, which
     the system marks as not for DNS, and never a deprecated one, whose
-    preferred lifetime has run out after a renumbering), with its zone
-    dropped; and each IPv4 address on an interface that the public
+    preferred lifetime has run out after a renumbering; on Linux the
+    kernel's own temporary and deprecated flags in `/proc/net/if_inet6`
+    are applied too, `CoreAddresses::withKernelFlags`, so a Core with six
+    privacy addresses beside its stable EUI-64 one lists that one alone),
+    with its zone dropped; and each IPv4 address on an interface that the public
     internet routes to (none of RFC 6890's special-purpose blocks: private,
     shared 100.64/10, loopback, link-local, documentation, benchmarking,
     multicast, reserved). The Core names no address it has not got on an

@@ -11,6 +11,9 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 - The Rock's temporary and deprecated mix, through Qt's
+//                 flags and through the kernel's. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -90,6 +93,72 @@ private slots:
         QCOMPARE(got, (QStringList{QStringLiteral("[2001:db8:1::5]:47910"),
                                    QStringLiteral("[2001:db8:1:0:211:22ff:fe33:4455]:47910"),
                                    QStringLiteral("44.31.0.7:47910")}));
+    }
+
+    // The Rock's end1 as the lead read it (2026-09-29): six global
+    // temporary addresses, one current and five deprecated, beside one
+    // stable EUI-64 (mngtmpaddr) address; wlan0 one stable. Only the two
+    // stable ones are dialable. The stable one's lifetime is finite, as a
+    // SLAAC address's is, so Qt calls it isTemporary(); that is why the
+    // filter never reads isTemporary().
+    void aTemporaryAndDeprecatedMixYieldsOnlyTheStable()
+    {
+        QList<QNetworkAddressEntry> entries;
+        QNetworkAddressEntry current = temporary("2001:db8:1:0:a1b2:c3d4:e5f6:1");
+        current.setAddressLifetime(QDeadlineTimer(3600 * 1000), QDeadlineTimer(7200 * 1000));
+        entries.append(current);
+        for (int i = 2; i <= 6; ++i) {
+            QNetworkAddressEntry old =
+                temporary(qPrintable(QStringLiteral("2001:db8:1:0:a1b2:c3d4:e5f6:%1").arg(i)));
+            old.setAddressLifetime(QDeadlineTimer(0), QDeadlineTimer(3600 * 1000));
+            entries.append(old);
+        }
+        const QNetworkAddressEntry stable = preferred("2001:db8:1:0:211:22ff:fe33:4455");
+        QVERIFY(stable.isTemporary());
+        entries.append(stable);
+        entries.append(preferred("2001:db8:1:0:211:22ff:fe33:9999"));
+        QCOMPARE(CoreAddresses::dialable(entries, QHostAddress(QHostAddress::Any), 50055),
+                 (QStringList{QStringLiteral("[2001:db8:1:0:211:22ff:fe33:4455]:50055"),
+                              QStringLiteral("[2001:db8:1:0:211:22ff:fe33:9999]:50055")}));
+    }
+
+    // The same mix as Linux's /proc/net/if_inet6 shows it, when Qt reports
+    // no flags at all: the kernel's temporary (0x01) and deprecated (0x20)
+    // bits alone drop the six.
+    void theKernelsFlagsAloneDropThem()
+    {
+        const QByteArray procText =
+            "20010db800010000a1b2c3d4e5f60001 02 40 00 01     end1\n"
+            "20010db800010000a1b2c3d4e5f60002 02 40 00 21     end1\n"
+            "20010db800010000a1b2c3d4e5f60003 02 40 00 21     end1\n"
+            "20010db800010000a1b2c3d4e5f60004 02 40 00 21     end1\n"
+            "20010db800010000a1b2c3d4e5f60005 02 40 00 21     end1\n"
+            "20010db800010000a1b2c3d4e5f60006 02 40 00 21     end1\n"
+            "20010db800010000021122fffe334455 02 40 00 00     end1\n"
+            "20010db800010000021122fffe339999 03 40 00 00    wlan0\n"
+            "fe80000000000000021122fffe334455 02 40 20 80     end1\n"
+            "00000000000000000000000000000001 01 80 10 80       lo\n"
+            "not a line\n";
+        const QHash<QString, CoreAddresses::KernelIpv6Flags> flags =
+            CoreAddresses::parseIfInet6(procText);
+        QCOMPARE(flags.size(), 10);
+        QVERIFY(flags.value(QStringLiteral("2001:db8:1:0:a1b2:c3d4:e5f6:1")).temporary);
+        QVERIFY(!flags.value(QStringLiteral("2001:db8:1:0:a1b2:c3d4:e5f6:1")).deprecated);
+        QVERIFY(flags.value(QStringLiteral("2001:db8:1:0:a1b2:c3d4:e5f6:2")).deprecated);
+        QVERIFY(!flags.value(QStringLiteral("2001:db8:1:0:211:22ff:fe33:4455")).temporary);
+
+        QList<QNetworkAddressEntry> plain;
+        for (int i = 1; i <= 6; ++i) {
+            plain.append(entry(qPrintable(QStringLiteral("2001:db8:1:0:a1b2:c3d4:e5f6:%1").arg(i)), 64));
+        }
+        plain.append(entry("2001:db8:1:0:211:22ff:fe33:4455", 64));
+        plain.append(entry("2001:db8:1:0:211:22ff:fe33:9999", 64));
+        // Without the kernel's flags all eight would pass.
+        QCOMPARE(CoreAddresses::dialable(plain, QHostAddress(QHostAddress::Any), 50055).size(), 8);
+        QCOMPARE(CoreAddresses::dialable(CoreAddresses::withKernelFlags(plain, flags),
+                                         QHostAddress(QHostAddress::Any), 50055),
+                 (QStringList{QStringLiteral("[2001:db8:1:0:211:22ff:fe33:4455]:50055"),
+                              QStringLiteral("[2001:db8:1:0:211:22ff:fe33:9999]:50055")}));
     }
 
     void thePortIsTheListenersOwn()

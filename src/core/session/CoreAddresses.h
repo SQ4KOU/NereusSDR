@@ -11,10 +11,14 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created for the phone's direct addresses. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The kernel's own temporary and deprecated flags on Linux
+//                 (/proc/net/if_inet6), beside Qt's. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
+#include <QHash>
 #include <QHostAddress>
 #include <QList>
 #include <QNetworkAddressEntry>
@@ -59,6 +63,31 @@ QStringList dialable(const QList<QNetworkAddressEntry>& entries,
 /// The wire value: compact JSON {"addresses":["[2001:db8::5]:47910",...]}.
 QString toJson(const QStringList& addresses);
 
+/// What the kernel says of one IPv6 address (Linux, /proc/net/if_inet6).
+struct KernelIpv6Flags {
+    bool temporary = false;  ///< a privacy address (IFA_F_TEMPORARY)
+    bool deprecated = false; ///< its preferred lifetime is over (IFA_F_DEPRECATED)
+};
+
+/// Reads /proc/net/if_inet6's text ("<32 hex address> <ifindex> <prefix>
+/// <scope> <flags> <name>" per line, all hex) into the flags of each
+/// address, keyed by QHostAddress::toString(). A line it cannot read is
+/// skipped.
+QHash<QString, KernelIpv6Flags> parseIfInet6(const QByteArray& text);
+
+/// Marks each entry the kernel flags: a temporary one not eligible for DNS
+/// and a deprecated one with its preferred lifetime over, so
+/// isStableGlobalIpv6() drops them whatever Qt itself reported. Qt's own
+/// isTemporary() is not the privacy flag (it means only "not permanent",
+/// true of a stable SLAAC address too), so it is never used here.
+QList<QNetworkAddressEntry> withKernelFlags(QList<QNetworkAddressEntry> entries,
+                                            const QHash<QString, KernelIpv6Flags>& flags);
+
+/// The Core's interfaces as the watcher reads them:
+/// StationNetwork::localEntries(), and on Linux withKernelFlags() from
+/// /proc/net/if_inet6.
+QList<QNetworkAddressEntry> localEntries();
+
 } // namespace CoreAddresses
 
 /// Reads the Core's interfaces while its control listener is up and says
@@ -71,8 +100,9 @@ public:
 
     explicit CoreAddressWatcher(QObject* parent = nullptr);
 
-    /// Where the interfaces are read from; StationNetwork::localEntries()
-    /// (up, running, not loopback) unless a test sets its own.
+    /// Where the interfaces are read from; CoreAddresses::localEntries()
+    /// (up, running, not loopback, with the kernel's flags) unless a test
+    /// sets its own.
     void setEntrySource(EntrySource source);
 
     /// Follows a listener on `listener`:`port`: reads the interfaces now

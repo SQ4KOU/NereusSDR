@@ -8,6 +8,9 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created for the phone's direct addresses. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The kernel's own temporary and deprecated flags on Linux
+//                 (/proc/net/if_inet6), beside Qt's. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/CoreAddresses.h"
@@ -16,6 +19,7 @@
 #include "core/session/IceConfiguration.h"
 #include "core/session/StationLanAnnouncer.h"
 
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -53,6 +57,10 @@ constexpr Ipv4Block kSpecialIpv4[] = {
     {0xE0000000u, 4},  // 224.0.0.0/4, multicast
     {0xF0000000u, 4},  // 240.0.0.0/4, reserved, and the broadcast address
 };
+
+// linux/if_addr.h: the ifa_flags bits /proc/net/if_inet6 prints.
+constexpr quint32 kIfaFlagTemporary = 0x01;  // IFA_F_TEMPORARY
+constexpr quint32 kIfaFlagDeprecated = 0x20; // IFA_F_DEPRECATED
 
 bool inBlock(quint32 address, const Ipv4Block& block)
 {
@@ -144,6 +152,63 @@ QStringList dialable(const QList<QNetworkAddressEntry>& entries,
     return out;
 }
 
+QHash<QString, KernelIpv6Flags> parseIfInet6(const QByteArray& text)
+{
+    QHash<QString, KernelIpv6Flags> flags;
+    for (const QByteArray& line : text.split('\n')) {
+        const QList<QByteArray> fields = line.simplified().split(' ');
+        if (fields.size() < 6 || fields.at(0).size() != 32) {
+            continue;
+        }
+        const QByteArray bytes = QByteArray::fromHex(fields.at(0));
+        bool ok = false;
+        const quint32 bits = fields.at(4).toUInt(&ok, 16);
+        if (bytes.size() != 16 || !ok) {
+            continue;
+        }
+        const QHostAddress address(reinterpret_cast<const quint8*>(bytes.constData()));
+        KernelIpv6Flags entry;
+        entry.temporary = (bits & kIfaFlagTemporary) != 0;
+        entry.deprecated = (bits & kIfaFlagDeprecated) != 0;
+        flags.insert(address.toString(), entry);
+    }
+    return flags;
+}
+
+QList<QNetworkAddressEntry> withKernelFlags(QList<QNetworkAddressEntry> entries,
+                                            const QHash<QString, KernelIpv6Flags>& flags)
+{
+    for (QNetworkAddressEntry& entry : entries) {
+        QHostAddress ip = entry.ip();
+        ip.setScopeId(QString());
+        const auto it = flags.constFind(ip.toString());
+        if (it == flags.cend()) {
+            continue;
+        }
+        if (it->temporary) {
+            entry.setDnsEligibility(QNetworkAddressEntry::DnsIneligible);
+        }
+        if (it->deprecated) {
+            const QDeadlineTimer valid =
+                entry.isLifetimeKnown() ? entry.validityLifetime() : QDeadlineTimer::Forever;
+            entry.setAddressLifetime(QDeadlineTimer(0), valid);
+        }
+    }
+    return entries;
+}
+
+QList<QNetworkAddressEntry> localEntries()
+{
+    QList<QNetworkAddressEntry> entries = StationNetwork::localEntries();
+#ifdef Q_OS_LINUX
+    QFile file(QStringLiteral("/proc/net/if_inet6"));
+    if (file.open(QIODevice::ReadOnly)) {
+        entries = withKernelFlags(std::move(entries), parseIfInet6(file.readAll()));
+    }
+#endif
+    return entries;
+}
+
 QString toJson(const QStringList& addresses)
 {
     const QJsonObject object{{QStringLiteral("addresses"), QJsonArray::fromStringList(addresses)}};
@@ -154,7 +219,7 @@ QString toJson(const QStringList& addresses)
 
 CoreAddressWatcher::CoreAddressWatcher(QObject* parent)
     : QObject(parent)
-    , m_source(&StationNetwork::localEntries)
+    , m_source(&CoreAddresses::localEntries)
 {
     m_timer.setInterval(CoreAddresses::kRefreshIntervalMs);
     connect(&m_timer, &QTimer::timeout, this, &CoreAddressWatcher::refresh);
@@ -162,7 +227,7 @@ CoreAddressWatcher::CoreAddressWatcher(QObject* parent)
 
 void CoreAddressWatcher::setEntrySource(EntrySource source)
 {
-    m_source = source ? std::move(source) : EntrySource(&StationNetwork::localEntries);
+    m_source = source ? std::move(source) : EntrySource(&CoreAddresses::localEntries);
     if (m_active) {
         refresh();
     }
