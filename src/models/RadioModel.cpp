@@ -1696,8 +1696,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_role != Role::Remote) {
         connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
                 [this](bool inhibited, safety::TxInhibitMonitor::Source) {
-            refreshTxInhibitReason();
-            emit txInhibitedChanged(inhibited);
+            // The reason is set before inhibited goes true and cleared after
+            // it goes false, so a remote window (which applies the two in
+            // the order they change) never shows inhibited with no reason,
+            // which would flash the generic refusal words.
+            if (inhibited) {
+                refreshTxInhibitReason();
+                emit txInhibitedChanged(true);
+            } else {
+                emit txInhibitedChanged(false);
+                refreshTxInhibitReason();
+            }
         });
         // HL2 port part 2: a new fault code while the fault already holds
         // transmit off changes only the reason.
@@ -1715,16 +1724,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
         //   }
         // Held while the last read is non-zero and cleared by a read of
         // zero (operator ruling 2026-09-29); mi0bot never clears it here.
-        // Only a radio with the I/O board reads it.
+        // Only a radio with the I/O board reads it. The answer arrives on
+        // the connection's thread, so the fault byte comes from the signal
+        // itself (C2, REG_FAULT) and not from the register table, which that
+        // thread may already have overwritten with a later answer.
         connect(&m_ioBoard, &IoBoardHl2::i2cReadAnswered, this,
-                [this](quint8 address, quint8 reg, quint8, quint8, quint8, quint8) {
+                [this](quint8 address, quint8 reg, quint8, quint8 c2, quint8, quint8) {
             if (address != IoBoardHl2::kI2cAddrGeneral
                 || reg != static_cast<quint8>(IoBoardHl2::Register::REG_INPUT_PINS)
                 || !boardCapabilities().hasIoBoardHl2) {
                 return;
             }
-            m_txInhibit.notifyIoBoardFault(static_cast<quint8>(
-                m_ioBoard.registerValue(IoBoardHl2::Register::REG_FAULT)));
+            m_txInhibit.notifyIoBoardFault(c2);
         });
     }
 
@@ -24449,6 +24460,22 @@ void RadioModel::applyTxKeyBlock()
         return;
     }
     const bool inhibited = m_txInhibit.inhibited();
+    // HL2 port part 2: an I/O board fault is a hardware protection, so while
+    // anything transmits (MOX, TUNE, two-tone, the end-of-over tail or a
+    // release still under way) it is the immediate stop: the RF gate closes
+    // and MOX off goes to the radio now, with no wait for the unkey's delays
+    // or the send ring. The operator unkey below would leave RF on through
+    // that wait. stopAllTx does nothing when nothing transmits; the stop's
+    // own hold (lifted by the next key) keeps a second pass here, from the
+    // fault code's own change signal, from stopping the same release twice.
+    // From mi0bot console.cs:25876-25885 [@c26a8a4] (UpdateIOBoard):
+    //   TXInhibit = true;
+    // and the TXInhibit setter, Thetis console.cs:15341-15363 [v2.10.3.15]:
+    //   if (_tx_inhibit && chkMOX.Checked) chkMOX.Checked = false;
+    if (m_role != Role::Remote && inhibited && !m_transmitStopHold
+        && m_txInhibit.lastSource() == safety::TxInhibitMonitor::Source::IoBoardFault) {
+        stopAllTx(ioBoardFaultReason(m_txInhibit.ioBoardFaultCode()));
+    }
     // HL2 port part 2: an I/O board fault refuses with its own words.
     m_moxController->setTxInhibited(inhibited, m_role == Role::Remote ? QString() : m_txInhibitReason);
     m_moxController->setPaTripped(m_paTripped);
