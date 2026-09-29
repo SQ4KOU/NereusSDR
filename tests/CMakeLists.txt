@@ -7535,6 +7535,11 @@ nereus_add_test(tst_settings_backup_window)
 # way tst_setup_dialog_lazy_pages needs it.
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
+# Load findings 3: about 10 s on a quiet machine, past the 120 s limit in a
+# loaded full run; three entries of the same binary (the limit is not
+# raised; groups in the test's main()).
+nereus_split_test(tst_remote_gui_gating
+    ENV NEREUS_REMOTE_GUI_GATING_GROUP GROUPS setup containers)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 # R-R3-38 (R3 completion Task 5): the stop message of a remote window.
 nereus_add_test(tst_remote_core_stop_notice)
