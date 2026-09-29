@@ -8,6 +8,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 J.J. Boyd / KG4VCF : settings stored once for every pan
+//                 (overlays, normalize, peak value, grid noise-floor
+//                 tracking, band plan size) reach every pan when one
+//                 changes (shareWithOtherPans). AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-28 J.J. Boyd / KG4VCF : setAverageMode routes to the split
 //                 spectrum averaging the renderer reads (Reset to Smooth
 //                 Defaults). AI-assisted via Anthropic Claude Code.
@@ -316,8 +321,9 @@ QRgb interpolateWfGradient(float t, const WfGradientStop* stops, int count)
 
 // ---- SpectrumWidget ----
 
-// Every SpectrumWidget, for the Spectrum Peaks settings every pan shares
-// (reloadSpectrumPeaksSettingsOnAllPans). GUI thread only.
+// Every SpectrumWidget, for the settings every pan shares (Spectrum Peaks:
+// reloadSpectrumPeaksSettingsOnAllPans; the rest: shareWithOtherPans).
+// GUI thread only.
 namespace {
 std::vector<SpectrumWidget*>& spectrumPeaksPans()
 {
@@ -2153,6 +2159,22 @@ void SpectrumWidget::reloadSpectrumPeaksSettingsOnAllPans()
     }
 }
 
+// R-IOS-18: the display settings stored once for every pan (spectrum
+// overlays, normalize, the peak value readout, the grid's noise-floor
+// tracking, the band plan text size). A change on one pan, from Setup or
+// anywhere else, goes to every other pan, so no pan keeps an old value and
+// writes it back on its next save. The setters return early on an equal
+// value, which ends the fan-out.
+void SpectrumWidget::shareWithOtherPans(const std::function<void(SpectrumWidget*)>& apply)
+{
+    const std::vector<SpectrumWidget*> pans = spectrumPeaksPans();
+    for (SpectrumWidget* pan : pans) {
+        if (pan != this) {
+            apply(pan);
+        }
+    }
+}
+
 // ---- Active Peak Hold trace setters (Task 2.5) ----
 // From Thetis display.cs m_bActivePeakHold / groupBoxTS21 [v2.10.3.13].
 
@@ -2372,6 +2394,8 @@ void SpectrumWidget::setShowBinWidth(bool on)
     m_showBinWidth = on;
     markOverlayDirty();
     update();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setShowBinWidth(on); });
 }
 
 double SpectrumWidget::binWidthHz() const
@@ -2411,6 +2435,8 @@ void SpectrumWidget::setShowNoiseFloor(bool on)
     // build block when m_overlayStaticDirty is set, so toggling NF without
     // the dirty mark left the cached overlay stale.
     markOverlayDirty();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setShowNoiseFloor(on); });
 }
 
 void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
@@ -2418,6 +2444,8 @@ void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
     if (m_noiseFloorPosition == pos) { return; }
     m_noiseFloorPosition = pos;
     if (m_showNoiseFloor) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setShowNoiseFloorPosition(pos); });
 }
 
 // From Thetis display.cs:5763-5773 [v2.10.3.13] _fNFshiftDBM setter:
@@ -2430,6 +2458,8 @@ void SpectrumWidget::setNFShiftDbm(float db)
     if (m_nfShiftDbm == clamped) { return; }
     m_nfShiftDbm = clamped;
     if (m_showNoiseFloor) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNFShiftDbm(db); });
 }
 
 void SpectrumWidget::setNoiseFloorColor(const QColor& c)
@@ -2437,6 +2467,8 @@ void SpectrumWidget::setNoiseFloorColor(const QColor& c)
     if (!c.isValid() || m_noiseFloorColor == c) { return; }
     m_noiseFloorColor = c;
     if (m_showNoiseFloor) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNoiseFloorColor(c); });
 }
 
 void SpectrumWidget::setNoiseFloorTextColor(const QColor& c)
@@ -2444,6 +2476,8 @@ void SpectrumWidget::setNoiseFloorTextColor(const QColor& c)
     if (!c.isValid() || m_noiseFloorTextColor == c) { return; }
     m_noiseFloorTextColor = c;
     if (m_showNoiseFloor) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNoiseFloorTextColor(c); });
 }
 
 void SpectrumWidget::setNoiseFloorFastColor(const QColor& c)
@@ -2451,6 +2485,8 @@ void SpectrumWidget::setNoiseFloorFastColor(const QColor& c)
     if (!c.isValid() || m_noiseFloorFastColor == c) { return; }
     m_noiseFloorFastColor = c;
     if (m_showNoiseFloor && m_noiseFloor.fastAttack()) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNoiseFloorFastColor(c); });
 }
 
 void SpectrumWidget::setNoiseFloorLineWidth(float w)
@@ -2459,6 +2495,8 @@ void SpectrumWidget::setNoiseFloorLineWidth(float w)
     if (m_noiseFloorLineWidth == clamped) { return; }
     m_noiseFloorLineWidth = clamped;
     if (m_showNoiseFloor) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNoiseFloorLineWidth(w); });
 }
 
 // From Thetis display.cs:917-927 [v2.10.3.13] FastAttackNoiseFloorRX1 setter,
@@ -2540,6 +2578,8 @@ void SpectrumWidget::setAdjustGridMinToNoiseFloor(bool on)
     if (m_adjustGridMinToNF == on) { return; }
     m_adjustGridMinToNF = on;
     scheduleSettingsSave();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setAdjustGridMinToNoiseFloor(on); });
 }
 
 void SpectrumWidget::setNFOffsetGridFollow(int db)
@@ -2548,6 +2588,8 @@ void SpectrumWidget::setNFOffsetGridFollow(int db)
     if (m_nfOffsetGridFollow == db) { return; }
     m_nfOffsetGridFollow = db;
     scheduleSettingsSave();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setNFOffsetGridFollow(db); });
 }
 
 void SpectrumWidget::setMaintainNFAdjustDelta(bool on)
@@ -2555,6 +2597,8 @@ void SpectrumWidget::setMaintainNFAdjustDelta(bool on)
     if (m_maintainNFAdjustDelta == on) { return; }
     m_maintainNFAdjustDelta = on;
     scheduleSettingsSave();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setMaintainNFAdjustDelta(on); });
 }
 
 // From Thetis console.cs:46074-46086 [v2.10.3.13] tmrAutoAGC_Tick NF grid block:
@@ -2633,6 +2677,8 @@ void SpectrumWidget::setDispNormalize(bool on)
     // without a channel rebuild.
     markOverlayDirty();
     update();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setDispNormalize(on); });
 }
 
 // From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay / timer_peak_text.
@@ -2690,6 +2736,8 @@ void SpectrumWidget::setShowPeakValueOverlay(bool on)
         markOverlayDirty();
         update();
     }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setShowPeakValueOverlay(on); });
 }
 
 void SpectrumWidget::setPeakValuePosition(OverlayPosition pos)
@@ -2697,6 +2745,8 @@ void SpectrumWidget::setPeakValuePosition(OverlayPosition pos)
     if (m_peakValuePosition == pos) { return; }
     m_peakValuePosition = pos;
     if (m_showPeakValueOverlay) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setPeakValuePosition(pos); });
 }
 
 // From Thetis console.cs:20073-20080 [v2.10.3.13] PeakTextDelay default=500.
@@ -2709,6 +2759,8 @@ void SpectrumWidget::setPeakTextDelayMs(int ms)
     if (m_peakTextTimer && m_peakTextTimer->isActive()) {
         m_peakTextTimer->setInterval(ms);
     }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setPeakTextDelayMs(ms); });
 }
 
 // From Thetis console.cs:20278 [v2.10.3.13] peak_text_color = Color.DodgerBlue.
@@ -2717,6 +2769,8 @@ void SpectrumWidget::setPeakValueColor(const QColor& c)
     if (!c.isValid() || m_peakValueColor == c) { return; }
     m_peakValueColor = c;
     if (m_showPeakValueOverlay) { markOverlayDirty(); }
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setPeakValueColor(c); });
 }
 
 // drawTextOverlay — renders text at a corner of specRect with a semi-transparent
@@ -3303,6 +3357,8 @@ void SpectrumWidget::setBandPlanFontSize(int pt)
     m_bandPlanFontSize = pt;
     markOverlayDirty();
     update();
+    // Stored once for every pan: every pan takes it (shareWithOtherPans).
+    shareWithOtherPans([&](SpectrumWidget* pan) { pan->setBandPlanFontSize(pt); });
 }
 
 // Width of the right-edge column reserved for the dBm scale strip in the

@@ -206,6 +206,7 @@ mw0lge@grange-lane.co.uk
 #include <QPainterPath>
 #include <QPixmap>
 #include <QColor>
+#include <functional>
 #include <QPoint>
 #include <QMap>
 #include <QHash>
@@ -1359,6 +1360,8 @@ public:
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
     void loadSpectrumPeaksSettings();
+    // Applies a shared (once for every pan) setting to every other pan.
+    void shareWithOtherPans(const std::function<void(SpectrumWidget*)>& apply);
     void saveSettings();
     // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
     // directly (which has no internal save) and need to ensure the new range

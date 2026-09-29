@@ -12,6 +12,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-28 - R-IOS-18: the per-band grid, dB step and per-band 3D
+//                 floor, one store for every pan, reach every pan's model
+//                 when one changes. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -69,6 +73,9 @@
 
 #include "core/AppSettings.h"
 
+#include <algorithm>
+#include <vector>
+
 #include <QStringLiteral>
 
 namespace NereusSDR {
@@ -91,11 +98,32 @@ QString bandNFKey(Band b)       { return QStringLiteral("DisplayBandNFEstimate_"
 // Task 14). Follows the same no-pan-index convention as the keys above.
 QString dss3DFloorDepthKey(Band b) { return QStringLiteral("Display3DFloorDepth_") + bandKeyName(b); }
 
+// Every PanadapterModel. The per-band grid, the dB step and the per-band 3D
+// floor are one store for every pan (their keys carry no pan index), so a
+// change through one model is given to the others (R-IOS-18); otherwise a
+// pan keeps its old slot and shows it again on its next band change.
+// GUI thread only.
+std::vector<PanadapterModel*>& allPanModels()
+{
+    static std::vector<PanadapterModel*> models;
+    return models;
+}
+
+template <typename Apply>
+void shareWithOtherModels(PanadapterModel* self, Apply apply)
+{
+    const std::vector<PanadapterModel*> models = allPanModels();
+    for (PanadapterModel* model : models) {
+        if (model != self) { apply(model); }
+    }
+}
+
 } // namespace
 
 PanadapterModel::PanadapterModel(QObject* parent)
     : QObject(parent)
 {
+    allPanModels().push_back(this);
     // Seed every band slot with Thetis uniform defaults before loading
     // persisted overrides. This matches Q4 resolution (plan §5.3): existing
     // users will see the grid shift from NereusSDR's -20/-160 to Thetis's
@@ -115,7 +143,11 @@ PanadapterModel::PanadapterModel(QObject* parent)
     applyBandGrid(m_band);
 }
 
-PanadapterModel::~PanadapterModel() = default;
+PanadapterModel::~PanadapterModel()
+{
+    auto& models = allPanModels();
+    models.erase(std::remove(models.begin(), models.end(), this), models.end());
+}
 
 void PanadapterModel::setCenterFrequency(double freq)
 {
@@ -197,6 +229,7 @@ void PanadapterModel::setPerBandDbMax(Band b, int dbMax)
     if (b == m_band) {
         setdBmCeiling(dbMax);
     }
+    shareWithOtherModels(this, [b, dbMax](PanadapterModel* pan) { pan->setPerBandDbMax(b, dbMax); });
 }
 
 void PanadapterModel::setPerBandDbMin(Band b, int dbMin)
@@ -210,6 +243,7 @@ void PanadapterModel::setPerBandDbMin(Band b, int dbMin)
     if (b == m_band) {
         setdBmFloor(dbMin);
     }
+    shareWithOtherModels(this, [b, dbMin](PanadapterModel* pan) { pan->setPerBandDbMin(b, dbMin); });
 }
 
 float PanadapterModel::clarityFloor(Band b) const
@@ -270,6 +304,9 @@ void PanadapterModel::setDss3DFloorDepthForBand(Band b, int depth)
     }
     slot.dss3DFloorDepth = depth;
     AppSettings::instance().setValue(dss3DFloorDepthKey(b), depth);
+    shareWithOtherModels(this, [b, depth](PanadapterModel* pan) {
+        pan->setDss3DFloorDepthForBand(b, depth);
+    });
 }
 
 void PanadapterModel::setGridStep(int step)
@@ -280,6 +317,7 @@ void PanadapterModel::setGridStep(int step)
     m_gridStep = step;
     AppSettings::instance().setValue(QStringLiteral("DisplayGridStep"), step);
     emit gridStepChanged(step);
+    shareWithOtherModels(this, [step](PanadapterModel* pan) { pan->setGridStep(step); });
 }
 
 void PanadapterModel::applyBandGrid(Band b)
