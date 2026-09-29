@@ -151,11 +151,16 @@
 //               without keying for the amplifier's sake tells the device
 //               why (notice tuneEnded). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: a slice's SNR that is not a number and did not change is
+//               not sent back after a write. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include <QtEndian>
+
+#include <cmath>
 
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -1831,6 +1836,32 @@ private slots:
         QCOMPARE(core.model->notchModel()->notchById(rowId)->centerHz, centre + 100.0);
         QCOMPARE(core.model->notchModel()->notchById(rowId)->widthHz, 300.0);
         QCOMPARE(core.model->notchModel()->revision(), revision + 1);
+    }
+
+    // A slice's SNR reads "not a number" until a RADE decoder locks. A
+    // write to the slice must not send that unchanged value back as a
+    // correction every time: not a number counts as equal to itself.
+    void anUnchangedNotANumberSnrIsNotSentBackAfterAWrite()
+    {
+        Core core;
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(std::isnan(core.model->sliceById(0)->snrDb()));
+        const int fromA = appA->received().size();
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {int64("afGain", 7)}, 611)));
+        QTRY_VERIFY(!propertyResult(appA, 611).isEmpty());
+        QCOMPARE(propertyResult(appA, 611).value(QStringLiteral("results")).toArray().first()
+                     .toObject().value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {int64("afGain", 9)}, 612)));
+        QTRY_VERIFY(!propertyResult(appA, 612).isEmpty());
+        QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(deltaValues(appA->received(), fromA, QStringLiteral("slice:0"),
+                            QStringLiteral("snrDb")).isEmpty());
     }
 
     void aNewcomerLeavesAnotherDevicesDeltasInPlace()

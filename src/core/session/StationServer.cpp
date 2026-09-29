@@ -32,6 +32,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  A write's corrections treat a value
+//                                    that is not a number as unchanged
+//                                    when it was not a number before
+//                                    (sameSettledValue). AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  RADE status: radeStatusVersion 1 and
 //                                    each slice's radeSynced and
 //                                    radeFreqOffsetHz only to a peer that
@@ -802,6 +807,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <array>
+#include <cmath>
 #include <QLoggingCategory>
 #include <QNetworkInterface>
 #include <QRegularExpression>
@@ -1556,6 +1562,19 @@ QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
     return text == QLatin1String("True") || text == QLatin1String("False")
         ? QString()
         : QStringLiteral("The Core expected this box to be on or off.");
+}
+
+// A write's corrections compare each settled value with the one before the
+// write. A double that is not a number (a slice's SNR before a RADE decoder
+// locks) never equals itself as a QVariant, so without this it read as
+// changed and went back to the writer after every write.
+bool sameSettledValue(const QVariant& a, const QVariant& b)
+{
+    if (a.typeId() == QMetaType::Double && b.typeId() == QMetaType::Double
+        && std::isnan(a.toDouble()) && std::isnan(b.toDouble())) {
+        return true;
+    }
+    return a == b;
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -6650,7 +6669,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     QList<MirrorUpdate> corrections;
     for (const auto& value : settled) {
         const bool changed = !previous.contains(value.name)
-            || previous.value(value.name).value != value.value;
+            || !sameSettledValue(previous.value(value.name).value, value.value);
         if ((requested.contains(value.name) && (!negotiated || message.writeId == 0))
             || (changed && !requested.contains(value.name))) {
             corrections.append(value);

@@ -31,11 +31,9 @@
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "slice:0", "writeId": 1301, "properties": [{"ordinal": 151, "name": "radeSynced", "kind": "bool", "value": true}]}},
         {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "radeSynced", "reason": "The Core sets this itself; it cannot be changed from here.", "value": {"kind": "bool", "name": "radeSynced", "ordinal": 151, "value": false}}], "type": "property.result", "writeId": 1301}},
-        {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
         {"advanceMs": 100},
         {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "slice:0", "writeId": 1302, "properties": [{"ordinal": 152, "name": "radeFreqOffsetHz", "kind": "f64", "value": 25}]}},
         {"from": "station", "message": {"key": "slice:0", "results": [{"accepted": false, "hasValue": true, "property": "radeFreqOffsetHz", "reason": "The Core sets this itself; it cannot be changed from here.", "value": {"kind": "f64", "name": "radeFreqOffsetHz", "ordinal": 152, "value": 0}}], "type": "property.result", "writeId": 1302}},
-        {"from": "station", "message": {"key": "slice:0", "properties": [{"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
         {"advanceMs": 100}
     ]
 }

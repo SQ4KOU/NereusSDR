@@ -41,7 +41,7 @@
         {"from": "station", "message": {"key": "connectedDevices", "properties": [{"kind": "utf8", "name": "listJson", "ordinal": 0, "value": "$string"}, {"kind": "i64", "name": "revision", "ordinal": 1, "value": 2}, {"kind": "i64", "name": "deviceLimit", "ordinal": 2, "value": 4}], "type": "delta"}},
         {"from": "client", "role": "scripted", "message": {"type": "property.write", "key": "slice:1", "writeId": 1311, "properties": [{"ordinal": 1, "name": "frequency", "kind": "f64", "value": 14300000.0}]}, "client": "b"},
         {"from": "station", "to": "b", "message": {"key": "slice:1", "results": [{"accepted": true, "hasValue": true, "property": "frequency", "reason": "", "value": {"kind": "f64", "name": "frequency", "ordinal": 1, "value": 14300000}}], "type": "property.result", "writeId": 1311}},
-        {"from": "station", "to": "b", "message": {"key": "slice:1", "properties": [{"kind": "f64", "name": "shiftOffsetHz", "ordinal": 26, "value": 75000}, {"kind": "f64", "name": "snrDb", "ordinal": 142, "value": "nan"}], "type": "delta"}},
+        {"from": "station", "to": "b", "message": {"key": "slice:1", "properties": [{"kind": "f64", "name": "shiftOffsetHz", "ordinal": 26, "value": 75000}], "type": "delta"}},
         {"advanceMs": 50},
         {"from": "station", "message": {"key": "marker:1", "properties": [{"kind": "f64", "name": "frequency", "ordinal": 6, "value": 14300000}], "type": "delta"}},
         {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestStreamCentre", "id": 1321, "args": [{"ordinal": 0, "name": "sliceId", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "centreHz", "kind": "f64", "value": 14150000.0}]}},
