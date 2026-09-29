@@ -228,6 +228,16 @@ bool IoBoardHl2::pushPendingRead(const PendingRead& r)
     // mi0bot's poll gives it up after its 20 one-millisecond waits
     // (console.cs:25866-25872 [@c26a8a4]); this newer read takes the answer
     // slot, as mi0bot's I2CReadInitiate does (netInterface.c:1471-1497).
+    //
+    // An answer that is late rather than lost then lands on this newer read.
+    // mi0bot does the same: I2CReadInitiate clears ctrl_read_available with
+    // the rest of i2c_control (netInterface.c:1488 [@c26a8a4]), a late answer
+    // sets it again (networkproto1.c:478-493 [@c26a8a4]), and I2CResponse
+    // hands it to whoever asks next (netInterface.c:1567-1587 [@c26a8a4]).
+    // The answer cannot be matched to its read by address: the low bits of
+    // the returned C0 are not one mi0bot uses, as returned_address is never
+    // set from the wire (network.h:145 [@c26a8a4], only cleared at
+    // netInterface.c:1623 [@c26a8a4], under "// MI0BOT: HL2 I2C variables").
     const qint64 now = nowMs();
     while (m_pendingCount > 0 && now - m_pendingSentMs[m_pendingHead] >= kReadAnswerMs) {
         qDebug("HL2 I2C: read of %02X/%02X unanswered, given up",
