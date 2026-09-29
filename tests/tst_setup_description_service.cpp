@@ -1436,11 +1436,12 @@ private slots:
         checkBank(alex1Rows, "hardware.alex1Filters.bpf1.", "alex/bpf1/",
                   QStringList{"160m BPF", "80/60m BPF", "40/30m BPF", "20/17/15m BPF",
                               "12/10m BPF", "6m BPF/LNA"}, defaults.bpf1);
-        // The plain OrionMKII model is not on Thetis's BPF-panel list, so it
-        // keeps the Alex HPF panel with the same five switches and no BPF1
-        // (setup.cs:6336-6360 [v2.10.3.15]).
-        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::OrionMKII),
-                                HPSDRModel::ORIONMKII, info);
+        // The ANAN-200D (Orion board) is programmed through the Alex HPF
+        // bank (usesBpf1Preselector false, as Thetis console.cs:6827-6837
+        // [v2.10.3.15] routes Orion to setAlexHPF), so it keeps the Alex HPF
+        // rows with the same five switches and no BPF1.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Orion),
+                                HPSDRModel::ANAN200D, info);
         const QJsonArray orionSections = pageById(projectedCategory(service.hardware(), 13),
                                                   "hardware.alex1Filters")
             .value("sections").toArray();
@@ -1500,6 +1501,26 @@ private slots:
             .value("sections").toArray();
         QCOMPARE(hermesSections.size(), 1);
         QCOMPARE(hermesSections.first().toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        // Every Alex model: the one Alex-1 bank the page describes is the
+        // bank the Core programs for that model's board
+        // (codec::alex::usesBpf1Preselector). The plain ORION MKII model is
+        // on the OrionMKII board, so it gets BPF1, as Thetis programs it.
+        for (int m = int(HPSDRModel::FIRST) + 1; m < int(HPSDRModel::LAST); ++m) {
+            const HPSDRModel model = HPSDRModel(m);
+            const HPSDRHW board = boardForModel(model);
+            const BoardCapabilities caps = BoardCapsTable::forBoard(board);
+            if (!caps.hasAlexFilters) {
+                continue;
+            }
+            service.setRadioContext(caps, model, info);
+            const QJsonArray sections = pageById(projectedCategory(service.hardware(), 13),
+                                                 "hardware.alex1Filters")
+                .value("sections").toArray();
+            QVERIFY2(sections.size() == 1, qPrintable(QString::number(m)));
+            QCOMPARE(sections.at(0).toObject().value("title"),
+                     QJsonValue(codec::alex::usesBpf1Preselector(board)
+                                    ? "Saturn BPF1 Bands" : "Alex HPF Bands"));
+        }
         // The ANAN-G2E shows the BPF1 bank but has no Alex-2.
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesC10),
                                 HPSDRModel::ANAN_G2E, info);

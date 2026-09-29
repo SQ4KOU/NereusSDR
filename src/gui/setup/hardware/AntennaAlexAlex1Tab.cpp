@@ -600,8 +600,8 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
 
     // ── Column 3: Saturn BPF1 Bands ───────────────────────────────────────────
     // Source: spec §7; same band-edge shape as Alex HPF.
-    // Shown in place of the Alex HPF group on Thetis's BPF-panel models
-    // (SkuUiProfile::hasBpfPanel); AntennaAlexTab::populate sets it.
+    // Shown in place of the Alex HPF group on the boards the Core programs
+    // through BPF1 (usesBpf1Preselector); AntennaAlexTab::populate sets it.
     m_bpf1Group = new QGroupBox(tr("Saturn BPF1 Bands"), content);
     auto* bpf1VBox = new QVBoxLayout(m_bpf1Group);
     m_bpf1VBox = bpf1VBox;
@@ -864,8 +864,9 @@ QString AntennaAlexAlex1Tab::imdWarningText()
 
 // ── updateBoardCapabilities ───────────────────────────────────────────────────
 
-// Shows the BPF1 group in place of the Alex HPF group on Thetis's BPF-panel
-// models (SkuUiProfile::hasBpfPanel, decided in AntennaAlexTab::populate) and
+// Shows the BPF1 group in place of the Alex HPF group on the boards the Core
+// programs through BPF1 (usesBpf1Preselector, decided in
+// AntennaAlexTab::populate) and
 // moves the five HPF / 6 m LNA switches into whichever group is shown.
 // From Thetis setup.cs:6336-6360 [v2.10.3.15]: other models get
 //   panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true;

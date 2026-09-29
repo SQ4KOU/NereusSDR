@@ -696,18 +696,27 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 continue;
             }
             // Version 13: the Alex-1 Filters tab shows either the Alex HPF
-            // Bands or the Saturn BPF1 Bands, by model, as
-            // AntennaAlexTab::populate does. The five HPF / 6 m LNA switches
-            // go with whichever section is shown, first.
-            // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
+            // Bands or the Saturn BPF1 Bands: the bank the Core programs for
+            // the board (codec::alex::usesBpf1Preselector, the selector
+            // computeRxPreselector uses), as AntennaAlexTab::populate does.
+            // The five HPF / 6 m LNA switches go with whichever section is
+            // shown, first.
+            // From Thetis console.cs:6827-6837 [v2.10.3.15] (setAlex1HPF):
+            //   if ((HardwareSpecific.Hardware == HPSDRHW.OrionMKII) || (HardwareSpecific.Hardware == HPSDRHW.Saturn)
+            //      || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
+            //   { setBPF1ForOrionIISaturn(freq); } else { setAlexHPF(freq); }
+            // From Thetis setup.cs:6336-6360 [v2.10.3.15] (the panel list by model):
             //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
             //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
             //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
             // From Thetis setup.cs:20208-20220 [v2.10.3.15] (7000D; the other
             //   BPF-panel cases match): panelAlex1HPFControl.Visible = false;
             //   panelBPFControl.Visible = true; switches moved to panelBPFControl.
+            // The two agree for every model but the plain ORIONMKII, which is
+            // on the OrionMKII board: Thetis programs BPF1 for it but shows
+            // the HPF panel. The page describes the rows that take effect.
             if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))) {
-                const bool bpfPanel = skuUiProfileFor(model).hasBpfPanel;
+                const bool bpfPanel = codec::alex::usesBpf1Preselector(caps.board);
                 const QString hpfTitle = QStringLiteral("Alex HPF Bands");
                 const QString bpf1Title = QStringLiteral("Saturn BPF1 Bands");
                 QJsonObject page = pages.at(p).toObject();

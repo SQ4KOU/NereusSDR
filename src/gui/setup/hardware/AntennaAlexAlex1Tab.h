@@ -129,8 +129,8 @@ class AntennaAlexAlex1Tab : public QWidget {
 public:
     explicit AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent = nullptr);
 
-    // Call when the model is known. bpfPanel (SkuUiProfile::hasBpfPanel)
-    // shows Saturn BPF1 Bands in place of Alex HPF Bands and moves the five
+    // Call when the board is known. bpfPanel (codec::alex::
+    // usesBpf1Preselector, the bank the Core programs) shows Saturn BPF1 Bands in place of Alex HPF Bands and moves the five
     // switches into it; false does the reverse.
     // From Thetis setup.cs:6336-6360 [v2.10.3.15]:
     //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
