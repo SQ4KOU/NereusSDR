@@ -11,6 +11,9 @@
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-07,
 //               R-IOS-30), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: session.held (iPhone app plan Task 78 item 7, G-53). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteDevicesState.h"
@@ -34,6 +37,7 @@ RemoteDeviceSlice sliceFrom(const QJsonObject& o)
     slice.letter = o.value(QStringLiteral("letter")).toString();
     slice.band = o.value(QStringLiteral("band")).toInt(-1);
     slice.mode = o.value(QStringLiteral("mode")).toInt(-1);
+    slice.frequencyHz = o.value(QStringLiteral("frequencyHz")).toDouble(0.0);
     return slice;
 }
 
@@ -238,6 +242,7 @@ void RemoteDevicesState::clear()
     const bool hadConnected = !m_connected.isEmpty() || m_deviceLimit != 0;
     const bool hadPaired = !m_paired.isEmpty();
     const bool hadQuestion = m_question.has_value();
+    const bool hadHeld = m_held.has_value();
     // Notices stay: what another device did is still worth reading after
     // the link drops, and each card goes when the operator puts it away.
     m_markers.clear();
@@ -245,10 +250,64 @@ void RemoteDevicesState::clear()
     m_paired.clear();
     m_deviceLimit = 0;
     m_question.reset();
+    m_held.reset();
     if (hadMarkers) { emit markersChanged(); }
     if (hadConnected) { emit connectedDevicesChanged(); }
     if (hadPaired) { emit pairedDevicesChanged(); }
     if (hadQuestion) { emit questionChanged(); }
+    if (hadHeld) { emit heldChanged(); }
+}
+
+void RemoteDevicesState::setHeld(const RemoteHeldList& held)
+{
+    m_held = held;
+    emit heldChanged();
+}
+
+void RemoteDevicesState::clearHeld()
+{
+    if (!m_held) {
+        return;
+    }
+    m_held.reset();
+    emit heldChanged();
+}
+
+RemoteHeldList RemoteDevicesState::parseHeld(const QJsonArray& devices, quint32 revision,
+                                             const std::optional<QJsonObject>& placeTaken,
+                                             const std::optional<QJsonObject>& placeFreed,
+                                             const QString& preselectHint)
+{
+    RemoteHeldList held;
+    held.revision = revision;
+    held.receivedAt = QDateTime::currentDateTime();
+    for (const QJsonValue& v : devices) {
+        const QJsonObject o = v.toObject();
+        RemoteHeldEntry entry;
+        entry.device = parseConnectedDevice(o);
+        entry.replaceable = o.value(QStringLiteral("replaceable")).toBool();
+        entry.from = o.value(QStringLiteral("from")).toString();
+        held.entries.append(entry);
+    }
+    if (placeTaken) {
+        held.placeTakenByName = placeTaken->value(QStringLiteral("byName")).toString();
+        held.placeTakenById = placeTaken->value(QStringLiteral("byId")).toString();
+        if (placeTaken->value(QStringLiteral("secondsAgo")).isDouble()) {
+            held.placeTakenSecondsAgo =
+                placeTaken->value(QStringLiteral("secondsAgo")).toInteger();
+        }
+    }
+    if (placeFreed && placeFreed->value(QStringLiteral("secondsAgo")).isDouble()) {
+        held.placeFreedSecondsAgo = placeFreed->value(QStringLiteral("secondsAgo")).toInteger();
+    }
+    const QString wanted = held.placeTakenById.isEmpty() ? preselectHint : held.placeTakenById;
+    for (const RemoteHeldEntry& entry : std::as_const(held.entries)) {
+        if (!wanted.isEmpty() && entry.replaceable && entry.device.deviceId == wanted) {
+            held.preselectId = wanted;
+            break;
+        }
+    }
+    return held;
 }
 
 QList<RemoteConnectedDevice> RemoteDevicesState::parseConnectedList(const QString& listJson)
@@ -256,29 +315,34 @@ QList<RemoteConnectedDevice> RemoteDevicesState::parseConnectedList(const QStrin
     QList<RemoteConnectedDevice> out;
     for (const QJsonValue& v : arrayOf(listJson)) {
         const QJsonObject o = v.toObject();
-        RemoteConnectedDevice d;
-        d.deviceId = o.value(QStringLiteral("deviceId")).toString();
-        d.name = o.value(QStringLiteral("name")).toString();
-        d.shortName = o.value(QStringLiteral("shortName")).toString();
-        d.kind = o.value(QStringLiteral("kind")).toString();
-        d.paired = o.value(QStringLiteral("paired")).toBool();
-        d.hostsCore = o.value(QStringLiteral("hostsCore")).toBool();
-        d.revocable = o.value(QStringLiteral("revocable")).toBool();
-        d.state = o.value(QStringLiteral("state")).toString();
-        d.holdsTransmit = o.value(QStringLiteral("holdsTransmit")).toBool();
-        d.lastActivitySeconds = o.value(QStringLiteral("lastActivitySeconds")).toInteger();
-        d.connectedForSeconds = o.value(QStringLiteral("connectedForSeconds")).toInteger();
-        d.awayForSeconds = o.value(QStringLiteral("awayForSeconds")).toInteger();
-        d.transmittingForSeconds = o.value(QStringLiteral("transmittingForSeconds")).toInteger();
-        for (const QJsonValue& s : o.value(QStringLiteral("listeningOn")).toArray()) {
-            d.listeningOn.append(sliceFrom(s.toObject()));
-        }
-        if (o.value(QStringLiteral("transmittingOn")).isObject()) {
-            d.transmittingOn = sliceFrom(o.value(QStringLiteral("transmittingOn")).toObject());
-        }
-        out.append(d);
+        out.append(parseConnectedDevice(v.toObject()));
     }
     return out;
+}
+
+RemoteConnectedDevice RemoteDevicesState::parseConnectedDevice(const QJsonObject& o)
+{
+    RemoteConnectedDevice d;
+    d.deviceId = o.value(QStringLiteral("deviceId")).toString();
+    d.name = o.value(QStringLiteral("name")).toString();
+    d.shortName = o.value(QStringLiteral("shortName")).toString();
+    d.kind = o.value(QStringLiteral("kind")).toString();
+    d.paired = o.value(QStringLiteral("paired")).toBool();
+    d.hostsCore = o.value(QStringLiteral("hostsCore")).toBool();
+    d.revocable = o.value(QStringLiteral("revocable")).toBool();
+    d.state = o.value(QStringLiteral("state")).toString();
+    d.holdsTransmit = o.value(QStringLiteral("holdsTransmit")).toBool();
+    d.lastActivitySeconds = o.value(QStringLiteral("lastActivitySeconds")).toInteger();
+    d.connectedForSeconds = o.value(QStringLiteral("connectedForSeconds")).toInteger();
+    d.awayForSeconds = o.value(QStringLiteral("awayForSeconds")).toInteger();
+    d.transmittingForSeconds = o.value(QStringLiteral("transmittingForSeconds")).toInteger();
+    for (const QJsonValue& s : o.value(QStringLiteral("listeningOn")).toArray()) {
+        d.listeningOn.append(sliceFrom(s.toObject()));
+    }
+    if (o.value(QStringLiteral("transmittingOn")).isObject()) {
+        d.transmittingOn = sliceFrom(o.value(QStringLiteral("transmittingOn")).toObject());
+    }
+    return d;
 }
 
 QList<RemotePairedDevice> RemoteDevicesState::parsePairedList(const QString& listJson)

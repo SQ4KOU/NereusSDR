@@ -294,6 +294,10 @@
 //               txAmModulationFeedback stream while shown, again after each
 //               snapshot, and sends txModMonitor.reset. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 78 items 3 and 7 (G-53): session.held
+//               read and answered (answerHeld), the takenOver end's name,
+//               id and time kept for the stop panel and Take it back. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -2585,6 +2589,19 @@ void StationClient::onTransportText(const QByteArray& wire)
     case SessionMessageKind::SettingsValue:
         handleSettingsValue(message);
         break;
+    // iPhone app plan Task 78 item 7 (G-53; the link document, section 5.1
+    // step 4): the Core is full and asks which device this window takes
+    // the place of. Sent only to a window that declared sessionHolder 1
+    // and deviceAuth 1. The Core pauses its connect deadline while it
+    // asks, and so does this window.
+    case SessionMessageKind::SessionHeld:
+        if (m_declaredSessionHolder) {
+            m_handshakeDeadlineTimer->stop();
+            m_remoteDevices->setHeld(RemoteDevicesState::parseHeld(
+                message.heldDevices, message.heldRevision, message.placeTaken,
+                message.placeFreed, m_takeBackDeviceId));
+        }
+        break;
     // iPhone app plan Task 78: the Core's question and its notices, sent
     // only to a device with sessionHolderVersion 1.
     case SessionMessageKind::ConfirmRequest:
@@ -2608,6 +2625,16 @@ void StationClient::onTransportText(const QByteArray& wire)
         // and offers buttons for; a retryable one retries as before.
         if (!message.retryable) {
             m_lastEndReport = stationEndReport(message.reason, message.endCode);
+            // Task 78 item 3 (G-53): who took this window's place, and when.
+            if (m_lastEndReport.kind == StationEndReport::Kind::TakenOver) {
+                m_lastEndReport.takenOverByName = message.takenOverBy;
+                m_lastEndReport.takenOverById = message.takenOverById;
+                if (message.secondsAgo) {
+                    m_lastEndReport.endedAt =
+                        QDateTime::currentDateTime().addSecs(-std::max<qint64>(0, *message.secondsAgo));
+                }
+                m_takeBackDeviceId = message.takenOverById;
+            }
         }
         // The operator's ruling of 2026-09-26: the Core changes its radio by
         // restarting its run. This end is a reconnect, not a failure; the
@@ -2947,6 +2974,10 @@ void StationClient::handleAuthResult(const SessionMessage& message)
 
 void StationClient::handleCapabilities(const SessionMessage& message)
 {
+    // Task 78 item 7: capabilities means the Core let this window in; a
+    // fifth-device question, if one was asked, is over.
+    m_remoteDevices->clearHeld();
+    m_takeBackDeviceId.clear();
     const QPointer<StationClient> self(this);
     const quint32 epoch = m_sessionEpoch;
     const auto previousBudget = remoteDisplayBudgetLimits();
@@ -7021,6 +7052,22 @@ quint32 StationClient::takeBackNotice(qint64 id)
     return invokeCommand(
         QByteArrayLiteral("notice.takeBack"),
         {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)}});
+}
+
+bool StationClient::answerHeld(const QString& deviceId)
+{
+    const std::optional<RemoteHeldList> held = m_remoteDevices->held();
+    if (!held || m_transport == nullptr) {
+        return false;
+    }
+    send(SessionMessages::sessionTakeover(deviceId, held->revision));
+    m_remoteDevices->clearHeld();
+    // A choice resumes the connect: the Core lets this window in, or asks
+    // again with a newer list. Declining ends the session from the Core.
+    if (!deviceId.isEmpty() && m_handshakeDeadlineMs > 0) {
+        m_handshakeDeadlineTimer->start(m_handshakeDeadlineMs);
+    }
+    return true;
 }
 
 void StationClient::leaveSession()

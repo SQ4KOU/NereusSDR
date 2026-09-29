@@ -10,6 +10,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: the fifth-device choice (Task 78 item 7, G-53). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -19,6 +22,7 @@
 #include "core/session/TransmitStateFacade.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
 #include "gui/multidevice/NoticeCard.h"
+#include "gui/multidevice/ReplaceDeviceDialog.h"
 #include "gui/multidevice/TakeReceiverDialog.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/widgets/VfoWidget.h"
@@ -52,6 +56,8 @@ MultiDeviceController::MultiDeviceController(StationClient* client, QWidget* dia
     RemoteDevicesState* devices = m_client->remoteDevices();
     connect(devices, &RemoteDevicesState::questionChanged, this,
             &MultiDeviceController::onQuestionChanged);
+    connect(devices, &RemoteDevicesState::heldChanged, this,
+            &MultiDeviceController::onHeldChanged);
     connect(devices, &RemoteDevicesState::noticesChanged, this,
             &MultiDeviceController::onNoticesChanged);
     connect(devices, &RemoteDevicesState::markersChanged, this,
@@ -100,6 +106,7 @@ void MultiDeviceController::closeDialogQuietly()
     QPointer<QDialog> dialog = m_dialog;
     m_dialog.clear();
     m_dialogQuestionId = 0;
+    m_dialogIsHeld = false;
     // Closed without answering: its accepted/rejected handlers check that
     // they are still the open dialog.
     dialog->close();
@@ -191,6 +198,49 @@ void MultiDeviceController::onQuestionChanged()
     });
     showDialog(dialog);
     m_dialogQuestionId = id;
+}
+
+void MultiDeviceController::onHeldChanged()
+{
+    if (!m_client) {
+        return;
+    }
+    const std::optional<RemoteHeldList> held = m_client->remoteDevices()->held();
+    if (!held) {
+        // Answered, or the session moved on or ended.
+        if (m_dialog && m_dialogIsHeld) {
+            closeDialogQuietly();
+        }
+        return;
+    }
+    if (m_dialog && m_dialogIsHeld) {
+        // A newer list while the operator reads: the rows change in place.
+        if (auto* open = qobject_cast<ReplaceDeviceDialog*>(m_dialog.data())) {
+            open->setHeld(*held);
+            return;
+        }
+    }
+    auto* dialog = new ReplaceDeviceDialog(*held, m_dialogParent);
+    const QPointer<ReplaceDeviceDialog> self(dialog);
+    connect(dialog, &QDialog::accepted, this, [this, self]() {
+        if (m_dialog != self) { return; }
+        const QString picked = self->pickedDeviceId();
+        m_dialog.clear();
+        m_dialogIsHeld = false;
+        if (m_client) {
+            m_client->answerHeld(picked);
+        }
+    });
+    connect(dialog, &QDialog::rejected, this, [this, self]() {
+        if (m_dialog != self) { return; }
+        m_dialog.clear();
+        m_dialogIsHeld = false;
+        if (m_client) {
+            m_client->answerHeld(QString());
+        }
+    });
+    showDialog(dialog);
+    m_dialogIsHeld = true;
 }
 
 void MultiDeviceController::onNoticesChanged()

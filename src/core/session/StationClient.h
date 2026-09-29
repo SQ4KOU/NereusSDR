@@ -363,6 +363,11 @@
 //               setModMonitorSource() and requestModMonitorReset(), the AM
 //               Mod Monitor in a remote window. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 78 items 3 and 7 (G-53): session.held
+//               read into RemoteDevicesState and answered by answerHeld();
+//               the takenOver end's name, id and time kept in
+//               StationEndReport. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -499,6 +504,14 @@ struct StationEndReport {
     /// TakenOver only: the network address of the app that took over, as
     /// the Core names it in its reason. Empty when the Core does not say.
     QString takenOverBy;
+    /// TakenOver only (iPhone app plan Task 78 item 3, G-53): the name and
+    /// wire id of the device that took this window's place, as the Core's
+    /// end sends them (`takenOverBy`, `takenOverById`), and when, by this
+    /// computer's clock (the end's `secondsAgo` before it arrived). Empty
+    /// and invalid from an older Core.
+    QString takenOverByName;
+    QString takenOverById;
+    QDateTime endedAt;
     /// VersionRefused only: the major link versions of each side, or -1
     /// when the reason did not carry them.
     int appMajor = -1;
@@ -996,6 +1009,11 @@ public:
     void leaveSession();
     /// The reason a held change carries while its question is asked.
     static bool isAwaitingConfirmation(const QString& reason);
+    /// session.takeover (iPhone app plan Task 78 item 7, G-53): the answer
+    /// to the Core's session.held, with the revision it showed. An empty
+    /// id declines, and the Core then ends this session as full. False
+    /// when no list is being asked.
+    bool answerHeld(const QString& deviceId);
 #ifdef NEREUS_BUILD_TESTS
     /// Test seam: a bench link signs in with the token, which never declares
     /// sessionHolder; a window test says it does, and names the id the Core
@@ -1599,6 +1617,10 @@ private:
     bool m_declaresSessionHolder = true;
     QString m_tokenSessionHolderIdForTest;
     RemoteDevicesState* m_remoteDevices = nullptr;
+    /// Task 78 item 3: the device that took this window's place, from the
+    /// end that stopped it, so the next session.held starts on it (Take it
+    /// back). Cleared once a session is let in.
+    QString m_takeBackDeviceId;
     QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
     bool m_enrolledDeviceKey = false;
