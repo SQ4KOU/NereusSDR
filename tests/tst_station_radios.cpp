@@ -36,6 +36,8 @@
 
 #include <QtTest>
 
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -286,6 +288,58 @@ private slots:
         radios.clearCurrent();
         QCOMPARE(radios.entries().size(), 1);
         QVERIFY(!radios.entries().first().inUse);
+    }
+
+    // Phone wire batch (radioModelsVersion 1): each record names its model
+    // as Setup does and lists the models its board can run as, in the model
+    // combo's order, the same list setModel() accepts.
+    void eachRadioCarriesItsModelChoices()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("NereusSDR.settings")));
+        StationRadios radios(settings);
+        const QString kHermes = QStringLiteral("AA:BB:CC:00:00:04");
+        radios.setVisible({radio(kG2, HPSDRHW::Saturn, QStringLiteral("G2")),
+                           radio(kHermes, HPSDRHW::Hermes, QStringLiteral("Hermes"))});
+
+        QList<StationRadioEntry> entries = radios.entries();
+        QCOMPARE(entries.size(), 2);
+        QCOMPARE(entries.at(0).modelLabel, QStringLiteral("ANAN-G2"));
+        QCOMPARE(entries.at(0).models, (QList<int>{static_cast<int>(HPSDRModel::ANAN_G2),
+                                                   static_cast<int>(HPSDRModel::ANAN_G2_1K)}));
+        // A Hermes board runs as its own models, the ANAN-10E and -100B
+        // (Hermes or Hermes II) and the Red Pitaya (Hermes or Orion MkII):
+        // the board check's cross-board cases.
+        QCOMPARE(entries.at(1).models, (QList<int>{static_cast<int>(HPSDRModel::HERMES),
+                                                   static_cast<int>(HPSDRModel::ANAN10),
+                                                   static_cast<int>(HPSDRModel::ANAN10E),
+                                                   static_cast<int>(HPSDRModel::ANAN100),
+                                                   static_cast<int>(HPSDRModel::ANAN100B),
+                                                   static_cast<int>(HPSDRModel::REDPITAYA)}));
+        for (const StationRadioEntry& entry : entries) {
+            for (int m : entry.models) {
+                QString reason;
+                QVERIFY2(radios.setModel(entry.mac, m, &reason), qPrintable(reason));
+            }
+        }
+
+        // The label follows the model the Core runs it as.
+        QString reason;
+        QVERIFY(radios.setModel(kG2, static_cast<int>(HPSDRModel::ANAN_G2_1K), &reason));
+        entries = radios.entries();
+        QCOMPARE(entries.at(0).modelLabel, QStringLiteral("ANAN-G2 1K"));
+
+        // On the wire: {model, label} per choice.
+        const QJsonObject fields = entries.at(0).toFields();
+        QCOMPARE(fields.value(QStringLiteral("modelLabel")).toString(),
+                 QStringLiteral("ANAN-G2 1K"));
+        const QJsonArray models = fields.value(QStringLiteral("models")).toArray();
+        QCOMPARE(models.size(), 2);
+        QCOMPARE(models.at(1).toObject(),
+                 (QJsonObject{{QStringLiteral("model"), static_cast<int>(HPSDRModel::ANAN_G2_1K)},
+                              {QStringLiteral("label"), QStringLiteral("ANAN-G2 1K")}}));
+        QCOMPARE(StationRadioEntry::fromFields(entries.at(0).id, fields),
+                 std::optional<StationRadioEntry>(entries.at(0)));
     }
 
     void everyRequestWaitsWhileTheRadioIsOnTheAir()

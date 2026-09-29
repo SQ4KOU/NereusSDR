@@ -118,6 +118,18 @@
 //                Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: diversityPatternVersion, after
+//                vaxVersion, only for a peer that declared
+//                diversityPattern. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryListVersion, after
+//                diversityPatternVersion, only for a peer that declared
+//                logCategoryList. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: radioModelsVersion, after
+//                logCategoryListVersion, only for a peer that declared
+//                radioModels. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -366,6 +378,21 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (band2mVersion == 1) {
             updates.append(intEntry("band2mVersion", band2mVersion));
         }
+        // Phone wire batch: the Diversity dialog's pattern on each slice,
+        // only for a peer that declared diversityPattern.
+        if (diversityPatternVersion > 0) {
+            updates.append(intEntry("diversityPatternVersion", diversityPatternVersion));
+        }
+        // Phone wire batch: radio's logCategoryList, only for a peer that
+        // declared logCategoryList.
+        if (logCategoryListVersion > 0) {
+            updates.append(intEntry("logCategoryListVersion", logCategoryListVersion));
+        }
+        // Phone wire batch: stationRadios' model labels and choices, only
+        // for a peer that declared radioModels.
+        if (radioModelsEntry) {
+            updates.append(intEntry("radioModelsVersion", radioModelsVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -597,7 +624,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "radioAntennaRowsVersion"
                    || u.name == "vaxVersion"
                    || u.name == "txEqCurveVersion"
-                   || u.name == "band2mVersion") {
+                   || u.name == "band2mVersion"
+                   || u.name == "diversityPatternVersion"
+                   || u.name == "logCategoryListVersion"
+                   || u.name == "radioModelsVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -623,6 +653,13 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.txEqCurveVersion = version;
                 } else if (u.name == "band2mVersion") {
                     caps.band2mVersion = version >= 1 ? 1 : 0;
+                } else if (u.name == "diversityPatternVersion") {
+                    caps.diversityPatternVersion = version;
+                } else if (u.name == "logCategoryListVersion") {
+                    caps.logCategoryListVersion = version;
+                } else if (u.name == "radioModelsVersion") {
+                    caps.radioModelsEntry = true;
+                    caps.radioModelsVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

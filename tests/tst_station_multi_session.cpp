@@ -1760,33 +1760,18 @@ private slots:
             77)));
 
         // A: the blanker is the shared receiver's, so B's slice there makes
-        // it a change that affects B (ruling 6.1, iPhone app Task 75): held
-        // and asked. Nothing changes until A goes ahead.
+        // it a change that affects B (ruling 6.1, iPhone app Task 75). JJ's
+        // ruling 7.1a (2026-09-28): a blanker is a small adjustment, applied
+        // at once, and B is told. Nobody is asked.
         QVERIFY(QTest::qWaitFor(
-            [appA]() { return !firstOfType(appA->received(), QStringLiteral("confirm.request")).isEmpty(); },
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
             5000));
-        const QJsonObject held = firstOfType(appA->received(), QStringLiteral("property.result"));
-        QCOMPARE(held.value(QStringLiteral("writeId")).toInteger(), 77);
-        QCOMPARE(held.value(QStringLiteral("results")).toArray().first().toObject()
-                     .value(QStringLiteral("reason")).toString(),
-                 QStringLiteral("Waiting for you to confirm."));
-        QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::Off);
-        const QJsonObject question = firstOfType(appA->received(), QStringLiteral("confirm.request"));
-        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
-        const QJsonObject proceeded = core.invoke(
-            appA, "confirm.proceed",
-            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
-        QCOMPARE(proceeded.value(QStringLiteral("accepted")).toBool(false), true);
-        // Its readback, with the value the Core kept (ruling 7.4a).
-        bool readBack = false;
-        for (const QJsonValue& v : proceeded.value(QStringLiteral("values")).toArray()) {
-            if (v.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("nbMode")) {
-                QCOMPARE(v.toObject().value(QStringLiteral("value")).toInt(),
-                         static_cast<int>(NbMode::NB));
-                readBack = true;
-            }
-        }
-        QVERIFY(readBack);
+        const QJsonObject taken = firstOfType(appA->received(), QStringLiteral("property.result"));
+        QCOMPARE(taken.value(QStringLiteral("writeId")).toInteger(), 77);
+        QCOMPARE(taken.value(QStringLiteral("results")).toArray().first().toObject()
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(firstOfType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
         QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::NB);
 
         // B: A's two slices are A's (Task 73), so B never sees them; the
@@ -1815,7 +1800,7 @@ private slots:
         QVERIFY(deltaValues(appA->received(), fromA, sharedKey, QStringLiteral("nbMode")).isEmpty());
     }
 
-    void aTnfRowMoveStillUsesSharedSettingConfirmation()
+    void aTnfRowMoveAppliesAtOnceAndTellsTheOtherDevice()
     {
         Core core;
         Device a;
@@ -1833,21 +1818,16 @@ private slots:
         const int rowId = core.model->notchModel()->addNotch(centre, 200.0);
         QVERIFY(rowId >= 0);
         const quint32 revision = core.model->notchModel()->revision();
-        const QJsonObject asked = core.invoke(appA, "notch.move",
+        const int fromB = appB->received().size();
+        // JJ's ruling 7.1a (2026-09-28): a notch applies at once; the
+        // device whose passband holds it is told, nobody is asked.
+        const QJsonObject taken = core.invoke(appA, "notch.move",
             {int64("id", rowId), f64("centreHz", centre + 100.0),
              f64("widthHz", 300.0)});
-        QCOMPARE(asked.value(QStringLiteral("accepted")).toBool(true), false);
-        QCOMPARE(asked.value(QStringLiteral("reason")).toString(),
-                 QStringLiteral("Waiting for you to confirm."));
-        QCOMPARE(core.model->notchModel()->revision(), revision);
-        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
-        const QJsonObject question = ofType(appA->received(), QStringLiteral("confirm.request")).last();
-        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
-        const QJsonObject proceeded = core.invoke(appA, "confirm.proceed",
-            {int64("id", question.value(QStringLiteral("id")).toInteger()),
-             int64("choice", -1)});
-        QVERIFY2(proceeded.value(QStringLiteral("accepted")).toBool(),
-                 qPrintable(proceeded.value(QStringLiteral("reason")).toString()));
+        QVERIFY2(taken.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(taken.value(QStringLiteral("reason")).toString()));
+        QVERIFY(ofType(appA->received(), QStringLiteral("confirm.request")).isEmpty());
+        QTRY_COMPARE(countOfType(appB->received(), fromB, QStringLiteral("notice")), 1);
         QCOMPARE(core.model->notchModel()->notchById(rowId)->centerHz, centre + 100.0);
         QCOMPARE(core.model->notchModel()->notchById(rowId)->widthHz, 300.0);
         QCOMPARE(core.model->notchModel()->revision(), revision + 1);

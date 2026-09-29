@@ -1,6 +1,9 @@
 #include "LogCategories.h"
 #include "AppSettings.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -118,6 +121,17 @@ QString LogManager::enabledList() const
         }
     }
     return ids.join(QLatin1Char(','));
+}
+
+QString LogManager::categoryListJson() const
+{
+    QJsonArray list;
+    for (const auto& cat : m_categories) {
+        list.append(QJsonObject{{QStringLiteral("id"), cat.id},
+                                {QStringLiteral("label"), cat.label}});
+    }
+    const QJsonObject object{{QStringLiteral("categories"), list}};
+    return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
 void LogManager::setEnabledList(const QStringList& ids)

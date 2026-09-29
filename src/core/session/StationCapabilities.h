@@ -173,6 +173,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: diversityPatternVersion,
+//                logCategoryListVersion and radioModelsVersion. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -266,6 +269,25 @@ struct StationCapabilities {
     /// sends 2 m as GEN and the per-band lists without it, and a window
     /// sends neither band 27 nor a 2 m list entry.
     int band2mVersion = 0;
+    /// Phone wire batch: 1 means every slice carries `diversityPattern`,
+    /// the Diversity dialog's sensitivity pattern. Sent after vaxVersion,
+    /// only to a peer at minor 11 whose hello declared diversityPattern 1,
+    /// on a Core with a radio model; any other peer's capabilities and
+    /// slices are today's.
+    int diversityPatternVersion = 0;
+    /// Phone wire batch: 1 means `radio` carries `logCategoryList`, every
+    /// logging category with its label. Sent after diversityPatternVersion,
+    /// only to a peer at minor 11 whose hello declared logCategoryList 1,
+    /// on a Core with a radio model; any other peer's are today's.
+    int logCategoryListVersion = 0;
+    /// Phone wire batch: 1 means each `stationRadios` record carries
+    /// `modelLabel` and `models` (the models that radio can run as). Sent
+    /// after logCategoryListVersion, only to a peer at minor 11 whose hello
+    /// declared radioModels 1 (radioModelsEntry), 0 on a Core that keeps no
+    /// radio list (stationRadiosVersion 0); any other peer's capabilities
+    /// and records are today's.
+    bool radioModelsEntry = false;
+    int radioModelsVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

@@ -424,6 +424,17 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: peerGetsFeatureProperties() and
+//               fitPeerOnlyProperties(): a declared feature's properties
+//               only to a peer that declared it. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Phone wire batch: fitRecordBatchToPeer(): a declared
+//               feature's record fields only to a peer that declared it.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: Ruling 7.1a: SharedCategory, SharedTier and
+//               sharedTierOf (one table for both tiers), connectedAffected,
+//               applySharedNow and tellAppliedNow. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1633,6 +1644,18 @@ private:
     /// for a peer that does not get it, so an older app sees today's wire.
     /// False when a delta has nothing left worth sending.
     bool fitTxEqCurveToPeer(SessionTransport* transport, SessionMessage& message) const;
+    /// Phone wire batch: `feature` 1 in `transport`'s hello, at minor 11,
+    /// on a Core with a radio model: that feature's properties reach it.
+    bool peerGetsFeatureProperties(SessionTransport* transport,
+                                   const QByteArray& feature) const;
+    /// Takes each declared feature's properties (kPeerOnlyProperties) out
+    /// of a schema, object.create or delta for a peer that did not declare
+    /// the feature, so an older app sees today's wire. False when a delta
+    /// has nothing left worth sending.
+    bool fitPeerOnlyProperties(SessionTransport* transport, SessionMessage& message) const;
+    /// Takes each declared feature's record fields (kPeerOnlyRecordFields)
+    /// out of a record batch for a peer that did not declare the feature.
+    RecordBatch fitRecordBatchToPeer(SessionTransport* transport, RecordBatch batch) const;
     /// A command, property write or settings write from `transport`'s
     /// device (never a heartbeat).
     void noteActivity(SessionTransport* transport);
@@ -1989,9 +2012,38 @@ private:
     //    (StationSharedSettings.cpp) ────────────────────────────────────
     /// A change on the several-devices design's list (7.1): what it
     /// touches, its words, and what it acts on (ruling 7.6).
+    /// JJ's ruling of 2026-09-28 (the several-devices design, ruling
+    /// 7.1a): what a listed change is, as design table 7.1's rows name it.
+    /// kSharedTiers (StationSharedSettings.cpp) is the one table that says
+    /// which rows ask first and which apply at once and tell.
+    enum class SharedCategory : quint8 {
+        SampleRate,
+        Radio,
+        ReceiveAntenna,
+        TransmitAntenna,
+        PureSignal,
+        Diversity,
+        FourO3A,
+        Amplifier,
+        Tuner,
+        Interlock,
+        Transmitter,
+        Attenuator,
+        NoiseBlanker,
+        Notches,
+        ReceiveOptions,
+        FilterPolicy,
+    };
+    /// Ask: the change waits for its requester's confirm while a connected
+    /// device is disturbed. Notify: it applies at once and each disturbed
+    /// device is told.
+    enum class SharedTier : quint8 { Ask, Notify };
     struct SharedChange {
         /// On the list and a real change (not the value already there).
         bool shared = false;
+        /// Ruling 7.1a: every table-7.1 row the message touches, one bit
+        /// per SharedCategory. None marked reads as Ask.
+        quint32 categories = 0;
         DisturbanceCheck::Scope scope;
         /// {label, from, to} in plain words.
         QJsonObject change;
@@ -2006,6 +2058,27 @@ private:
         QList<int> closes;
     };
     SharedChange classifyShared(const SessionMessage& message, const QByteArray& requester) const;
+    /// Ruling 7.1a: Notify when every row the change touches is a Notify
+    /// row in kSharedTiers, Ask otherwise.
+    static SharedTier sharedTierOf(const SharedChange& change);
+    /// Ruling 7.1a: the disturbed devices that are connected now (not
+    /// away); only these are asked about.
+    QList<DisturbanceCheck::Affected> connectedAffected(
+        const QList<DisturbanceCheck::Affected>& affected) const;
+    /// What each disturbed slice is now, for the notices (a closing slice
+    /// is gone once applied).
+    QHash<int, QJsonObject> sharedSliceWords(
+        const QList<DisturbanceCheck::Affected>& affected) const;
+    /// Ruling 7.1a: a change that applies at once (a Notify row, or no
+    /// connected device disturbed) with devices to tell. A command is run
+    /// here and told on its result; a property or settings write is left
+    /// to today's path, and tellAppliedNow() tells once it has applied.
+    bool applySharedNow(SessionTransport* transport, const SessionMessage& message,
+                        const SharedChange& change,
+                        const QList<DisturbanceCheck::Affected>& affected);
+    /// The write held by applySharedNow(): its devices are told when
+    /// `applied`, and it goes either way.
+    void tellAppliedNow(bool applied);
     DisturbanceCheck::Topology sharedTopology() const;
     /// Who holds transmit, for the check. Empty until Task 34's
     /// TransmitHolder joins here.
@@ -2060,8 +2133,17 @@ private:
         QJsonObject change;
         QByteArray requester;
         QList<QByteArray> closedDevices;
+        /// Ruling 7.1a: false for a change applied at once, whose own
+        /// result goes to its requester as today; only the notices wait.
+        bool answersProceed = true;
     };
     QHash<ResultKey, DeferredProceed> m_deferredProceeds;
+    /// Ruling 7.1a: a property or settings write applied at once, whose
+    /// devices are told by tellAppliedNow().
+    std::optional<DeferredProceed> m_appliedNow;
+    /// Ruling 7.1a: a radio change applied at once, told when its held
+    /// answer is (finishRadioChange).
+    std::optional<DeferredProceed> m_appliedNowRadio;
     /// Follow-up N3: a radio change's answer (and, after the confirm step,
     /// its notices), held from holdRadioChangeAnswers to finishRadioChange.
     struct HeldRadioChange {
@@ -2069,6 +2151,9 @@ private:
         SessionMessage result;
         bool proceed = false;  // a confirm.proceed answer, with `later`
         DeferredProceed later;
+        /// Ruling 7.1a: a change applied at once; `later` holds its
+        /// notices.
+        bool tellOnFinish = false;
     };
     bool m_holdingRadioChange = false;
     std::optional<HeldRadioChange> m_heldRadioChange;

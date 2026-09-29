@@ -23,10 +23,15 @@
 //     acts on (the target, ruling 7.6). A write that sets the value already
 //     there is no change and applies as before.
 //   - DisturbanceCheck names each other device it would disturb. None: the
-//     change applies at once, as today. Some: a device with the feature
-//     gets the change's own answer ("Waiting for you to confirm.") and a
-//     confirm.request of kind sharedSetting; an older window gets the
-//     refusal only, naming who it would affect.
+//     change applies at once, as today. Some (ruling 7.1a, the operator's
+//     ruling of 2026-09-28): a change on a row that asks (kSharedTiers in
+//     sharedTierOf) with a connected device disturbed is held: a device
+//     with the feature gets the change's own answer ("Waiting for you to
+//     confirm.") and a confirm.request of kind sharedSetting naming the
+//     connected devices; an older window gets the refusal only, naming
+//     them. Any other change applies at once (applySharedNow), and each
+//     disturbed device is told once it has applied, an away device on its
+//     return.
 //   - On proceed (rulings 7.5 and 7.6): an expired question, a target whose
 //     value moved since the question was asked, or a set that grew, changes
 //     nothing (the last is asked again). Otherwise the change is applied as
@@ -85,6 +90,10 @@
 //               external antenna in use is never the internal one tapped.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: Ruling 7.1a (the operator's ruling): two tiers from one
+//               table (sharedTierOf); a small adjustment applies at once and
+//               tells, and away devices are never asked about. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -437,6 +446,11 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                                {QStringLiteral("from"), from},
                                {QStringLiteral("to"), to}};
     };
+    // Ruling 7.1a: which of table 7.1's rows the message touches
+    // (kSharedTiers says which of them ask).
+    const auto mark = [&c](SharedCategory row) {
+        c.categories |= 1u << static_cast<unsigned>(row);
+    };
 
     // ── Property writes ──────────────────────────────────────────────────
     if (message.kind == SessionMessageKind::PropertyWrite) {
@@ -499,6 +513,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 if (!known) {
                     continue;
                 }
+                mark(SharedCategory::Attenuator);
                 if (adc1) {
                     c.scope.adcs.insert(1);
                 } else {
@@ -543,6 +558,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 if (n == "txAntennas" || n == "blockTxAnt2" || n == "blockTxAnt3"
                     || n == "rxOutOnTx" || n == "ext1OutOnTx" || n == "ext2OutOnTx") {
                     transmitter();
+                    mark(SharedCategory::TransmitAntenna);
                     if (!listed(u)) {
                         continue;
                     }
@@ -576,6 +592,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 // antennas touch.
                 if (n == "rxOutOverride") {
                     c.scope.transmitPath = true;
+                    mark(SharedCategory::ReceiveAntenna);
                     if (oneAdc) {
                         everyReceiver();
                     } else {
@@ -593,6 +610,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 }
                 // The receive side only; a relay in the transmit path.
                 c.scope.transmitPath = true;
+                mark(SharedCategory::ReceiveAntenna);
                 if (oneAdc) {
                     everyReceiver();
                 } else if (n == "rxOnlyAntennas") {
@@ -652,6 +670,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                     // The ADC the relay feeds, and the receiver's other
                     // slices.
                     c.scope.transmitPath = true;
+                    mark(SharedCategory::ReceiveAntenna);
                     if (stream >= 0) {
                         c.scope.receivers.insert(stream);
                     }
@@ -667,6 +686,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                     }
                 } else if (n == "txAntenna") {
                     transmitter();
+                    mark(SharedCategory::TransmitAntenna);
                     if (listed(u)) {
                         words(QStringLiteral("Transmit antenna"), currentWords(u, {}),
                               valueWords(u.value, u.kind));
@@ -675,6 +695,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                            || n == "diversityGainDb" || n == "diversityFineNullEnabled") {
                     // Fix wave (the D53 list): the phase, gain and fine null
                     // steer the same combined receiver as diversity itself.
+                    mark(SharedCategory::Diversity);
                     if (oneAdc) {
                         everyReceiver();
                     } else {
@@ -693,6 +714,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 } else if ((n == "nbMode" || n.startsWith("nb1") || n == "nb2Mode") && stream >= 0) {
                     // Ruling 6.1: a shared receiver's blanker.
                     c.scope.receivers.insert(stream);
+                    mark(SharedCategory::NoiseBlanker);
                     if (!listed(u)) {
                         continue;
                     }
@@ -718,6 +740,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                     continue;
                 }
                 pureSignal();
+                mark(SharedCategory::PureSignal);
                 if (listed(u)) {
                     words(QStringLiteral("PureSignal"), currentWords(u, {}),
                           valueWords(u.value, u.kind));
@@ -732,6 +755,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 if (u.name != "globalEnabled" && u.name != "autoIncrease") {
                     continue;
                 }
+                mark(SharedCategory::Notches);
                 if (notches != nullptr) {
                     for (const Notch& notch : notches->notches()) {
                         c.scope.ranges.append({notch.centerHz - notch.widthHz / 2.0,
@@ -753,6 +777,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                     continue;
                 }
                 transmitter();
+                mark(SharedCategory::Amplifier);
                 if (listed(u)) {
                     const auto state = [](bool on) {
                         return on ? QStringLiteral("Operate") : QStringLiteral("Standby");
@@ -787,6 +812,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         switch (family) {
         case SettingsProxyServer::SharedFamily::ReceiveOptions: {
             everyReceiver();
+            mark(SharedCategory::ReceiveOptions);
             const QString body = key.mid(10, key.size() - 12);
             const QString what = body.startsWith(QLatin1String("BufferSize"))
                 ? QStringLiteral("Receive buffer size")
@@ -801,15 +827,18 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         case SettingsProxyServer::SharedFamily::Amplifier:
             transmitter();
+            mark(SharedCategory::Amplifier);
             label = QStringLiteral("Amplifier setting");
             break;
         case SettingsProxyServer::SharedFamily::Tuner:
             tuner();
+            mark(SharedCategory::Tuner);
             label = key.startsWith(QLatin1String("RfKit_")) ? QStringLiteral("RF-Kit amplifier setting")
                                                             : QStringLiteral("Tuner setting");
             break;
         case SettingsProxyServer::SharedFamily::Transmitter:
             transmitter();
+            mark(SharedCategory::Transmitter);
             if (key == QLatin1String("RxOnly")) {
                 label = QStringLiteral("Receive Only");
             } else if (key == QLatin1String("BandPlanRegion")) {
@@ -817,6 +846,8 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             } else if (SettingsProxyServer::isAlexHpfTransmitSwitchKey(key)) {
                 // Trunk merge of remote transmit: the Alex tab's three
                 // transmit high-pass switches, in the Alex tab's words.
+                // Table 7.1 lists them with the transmit antennas.
+                mark(SharedCategory::TransmitAntenna);
                 const QString field = key.section(QLatin1Char('/'), -1).toLower();
                 label = field == QLatin1String("hpfbypassontx")
                     ? QStringLiteral("HPF Bypass on TX")
@@ -868,6 +899,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             return c;
         }
         c.shared = rateHz != reach.fromRateHz;
+        mark(SharedCategory::SampleRate);
         if (reach.radioWide) {
             c.scope.radio = true;
             c.scope.stopsDataFlow = true;
@@ -918,6 +950,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         const Band b = static_cast<Band>(band);
         const int now = rxOnly ? alex.rxOnlyAnt(b) : alex.rxAnt(b);
         c.target = QStringLiteral("alex:%1:%2").arg(band).arg(rxOnly ? 1 : 0);
+        mark(SharedCategory::ReceiveAntenna);
         c.targetValue = QString::number(now);
         c.shared = now != antenna;
         c.scope.transmitPath = true;
@@ -950,6 +983,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         const int mode = intArgument(args, "mode");
         const int now = static_cast<int>(model.alexController().bpfMode(chain));
         c.target = QStringLiteral("bpf:%1").arg(chain);
+        mark(SharedCategory::FilterPolicy);
         c.targetValue = QString::number(now);
         c.shared = now != mode;
         for (int st = 0; st < model.streamAllocator().streamCount(); ++st) {
@@ -970,6 +1004,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         const int now = model.alexController().txAnt(b);
         transmitter();
         c.target = QStringLiteral("alextx:%1").arg(band);
+        mark(SharedCategory::TransmitAntenna);
         c.targetValue = QString::number(now);
         c.shared = now != antenna;
         const QString where = ReceiverPlanner::bandWords(b);
@@ -993,6 +1028,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             return c;
         }
         pureSignal();
+        mark(SharedCategory::PureSignal);
         c.target = QStringLiteral("ps3");
         c.shared = true;
         words(QStringLiteral("PureSignal"), asItIs, *action);
@@ -1003,6 +1039,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         if (notches == nullptr) {
             return c;
         }
+        mark(SharedCategory::Notches);
         if (verb == "notch.add") {
             const double centre = doubleArgument(args, "centreHz");
             const double width = doubleArgument(args, "widthHz");
@@ -1051,6 +1088,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             now.insert(u.name, u.value);
         }
         tuner();
+        mark(SharedCategory::Tuner);
         if (verb == "setTgxlAntenna" || verb == "tuner.antenna") {
             // R-IOS-30: the port is the button's number, 1 to 3 (activate
             // ant=N); the tuner reports antA 0-based (0 is ANT 1), and the
@@ -1097,6 +1135,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         if (verb == "setRfKitAntenna" || verb == "rfkit.antenna") {
             tuner();
+            mark(SharedCategory::Tuner);
             // R-IOS-30: the port and activeAntennaNumber both count from 1
             // (0 is none reported), but the amp numbers its external
             // antennas from 1 too, and the port is always an internal one
@@ -1118,6 +1157,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             return c;
         }
         transmitter();
+        mark(SharedCategory::Amplifier);
         const bool on = verb == "amp.operate" || verb == "rfkit.operate" ? true
             : verb == "amp.standby" || verb == "rfkit.standby" ? false
             : boolArgument(args, "on");
@@ -1140,6 +1180,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         const bool on = boolArgument(args, "enabled");
         const bool was = model.fourO3AEnabled();
         tuner();
+        mark(SharedCategory::FourO3A);
         c.target = QStringLiteral("fourO3A");
         c.targetValue = onOff(was);
         c.shared = on != was;
@@ -1164,8 +1205,12 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
     if (kTunerVerbs.contains(verb) || kAmplifierVerbs.contains(verb)) {
         if (kTunerVerbs.contains(verb)) {
             tuner();
+            mark(SharedCategory::Tuner);
         } else {
             transmitter();
+            mark(verb == "setTxInterlockPolicy" || verb == "setPgxlPowerCap"
+                     ? SharedCategory::Interlock
+                     : SharedCategory::Amplifier);
         }
         // The operator's ruling (parity mini-round, rulings a to c): the
         // saved addresses go ahead on the air; they touch nothing on the
@@ -1196,6 +1241,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                                                          : m_stationRadios->currentMac();
         everyReceiver();
         transmitter();
+        mark(SharedCategory::Radio);
         c.target = QStringLiteral("radio");
         c.targetValue = current;
         c.shared = !mac.isEmpty() && mac != current;
@@ -1212,6 +1258,149 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         return c;
     }
     return c;
+}
+
+// ── Which changes ask (ruling 7.1a) ─────────────────────────────────────
+
+StationServer::SharedTier StationServer::sharedTierOf(const SharedChange& change)
+{
+    // JJ's ruling of 2026-09-28 (the several-devices design, ruling 7.1a):
+    // a change that can take another device's reception away, or reaches
+    // the transmitter, asks first; a small adjustment applies at once and
+    // the disturbed devices are told. The one table both tiers come from.
+    struct Row {
+        SharedCategory category;
+        SharedTier tier;
+    };
+    static constexpr Row kSharedTiers[] = {
+        {SharedCategory::SampleRate, SharedTier::Ask},
+        {SharedCategory::Radio, SharedTier::Ask},
+        {SharedCategory::ReceiveAntenna, SharedTier::Ask},
+        {SharedCategory::TransmitAntenna, SharedTier::Ask},
+        {SharedCategory::PureSignal, SharedTier::Ask},
+        {SharedCategory::Diversity, SharedTier::Ask},
+        {SharedCategory::FourO3A, SharedTier::Ask},
+        {SharedCategory::Amplifier, SharedTier::Ask},
+        {SharedCategory::Tuner, SharedTier::Ask},
+        {SharedCategory::Interlock, SharedTier::Ask},
+        // Receive Only, the transmit region and External TX Inhibit: not
+        // named by the ruling, so they keep asking as before.
+        {SharedCategory::Transmitter, SharedTier::Ask},
+        {SharedCategory::Attenuator, SharedTier::Notify},
+        {SharedCategory::NoiseBlanker, SharedTier::Notify},
+        {SharedCategory::Notches, SharedTier::Notify},
+        {SharedCategory::ReceiveOptions, SharedTier::Notify},
+        {SharedCategory::FilterPolicy, SharedTier::Notify},
+    };
+    if (change.categories == 0) {
+        return SharedTier::Ask;
+    }
+    for (const Row& row : kSharedTiers) {
+        if ((change.categories & (1u << static_cast<unsigned>(row.category))) != 0
+            && row.tier == SharedTier::Ask) {
+            return SharedTier::Ask;
+        }
+    }
+    return SharedTier::Notify;
+}
+
+QList<DisturbanceCheck::Affected> StationServer::connectedAffected(
+    const QList<DisturbanceCheck::Affected>& affected) const
+{
+    QList<DisturbanceCheck::Affected> connected;
+    for (const DisturbanceCheck::Affected& a : affected) {
+        if (planDevice(a.device).state != QLatin1String("away")) {
+            connected.append(a);
+        }
+    }
+    return connected;
+}
+
+QHash<int, QJsonObject> StationServer::sharedSliceWords(
+    const QList<DisturbanceCheck::Affected>& affected) const
+{
+    QHash<int, QJsonObject> sliceWords;
+    const ReceiverPlanner planner = receiverPlanner();
+    for (const DisturbanceCheck::Affected& a : affected) {
+        for (const DisturbanceCheck::AffectedSlice& s : a.slices) {
+            const QJsonArray one = planner.noticeSlicesJson({s.sliceId});
+            if (!one.isEmpty()) {
+                sliceWords.insert(s.sliceId, one.first().toObject());
+            }
+        }
+    }
+    return sliceWords;
+}
+
+bool StationServer::applySharedNow(SessionTransport* transport, const SessionMessage& message,
+                                   const SharedChange& change,
+                                   const QList<DisturbanceCheck::Affected>& affected)
+{
+    DeferredProceed notices;
+    notices.transport = transport;
+    notices.affected = affected;
+    notices.sliceWords = sharedSliceWords(affected);
+    notices.change = change.change;
+    notices.requester = m_peers.value(transport).sessionDeviceId;
+    notices.answersProceed = false;
+    if (message.kind != SessionMessageKind::CommandInvoke) {
+        // Today's path applies the write; tellAppliedNow() follows it.
+        m_appliedNow = notices;
+        return false;
+    }
+    // A command is run here, as today's path would run it, and its devices
+    // are told when its result says it was taken (finishDeferredProceed).
+    const quint64 session = m_peers.value(transport).sessionId;
+    const ResultKey key{session, message.commandVerb, message.commandId};
+    m_deferredProceeds.insert(key, notices);
+    const bool rateChange = message.commandVerb == "requestSliceSampleRate";
+    if (rateChange && !change.closes.isEmpty()) {
+        // The slices of away devices the rate cannot keep close, as a
+        // confirmed rate change closes them (proceedSharedSetting), saved
+        // for their owners' return.
+        QHash<int, SessionCommandDispatcher::ClosingSlice> closingOwners;
+        for (int id : change.closes) {
+            closingOwners.insert(
+                id, SessionCommandDispatcher::ClosingSlice{
+                        QPointer<SliceModel>(m_radioModel->sliceById(id)),
+                        m_radioModel->sliceOwnership()->mark(id).subject()});
+        }
+        const QPointer<StationServer> self(this);
+        m_dispatcher->setRateClosing(
+            closingOwners, [self, key](int id) {
+                if (self.isNull() || self->m_radioModel.isNull()) {
+                    return;
+                }
+                const QByteArray who = self->m_radioModel->sliceOwnership()->mark(id).subject();
+                if (!self->closeSliceFor(id, self->saveForAbsentSubject(id), nullptr)) {
+                    return;
+                }
+                const auto entry = self->m_deferredProceeds.find(key);
+                if (entry != self->m_deferredProceeds.end()
+                    && !entry->closedDevices.contains(who)) {
+                    entry->closedDevices.append(who);
+                }
+            },
+            QString::fromLatin1(kTargetChangedReason));
+    }
+    m_dispatcher->dispatch(message);
+    if (rateChange) {
+        m_dispatcher->setRateClosing({}, {}, {});
+    }
+    return true;
+}
+
+void StationServer::tellAppliedNow(bool applied)
+{
+    if (!m_appliedNow) {
+        return;
+    }
+    const DeferredProceed notices = *m_appliedNow;
+    m_appliedNow.reset();
+    if (applied) {
+        tellSettingChanged(notices.affected, notices.sliceWords, notices.change,
+                           notices.requester);
+    }
 }
 
 // ── Asking (7.3) ─────────────────────────────────────────────────────────
@@ -1319,6 +1508,13 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
         // Nobody else is disturbed: it applies at once, as today.
         return false;
     }
+    // Ruling 7.1a (JJ, 2026-09-28): only a connected device is asked about,
+    // and only for a change on an Ask row; anything else applies at once
+    // and every disturbed device is told (an away device on its return).
+    const QList<DisturbanceCheck::Affected> connected = connectedAffected(affected);
+    if (!onAirWaits && (sharedTierOf(change) == SharedTier::Notify || connected.isEmpty())) {
+        return applySharedNow(transport, message, change, affected);
+    }
     QString refusal;
     // Task 34: a command refused on the air carries the refusal's code and
     // fix in its values, as every transmit refusal does (the link, 18.3).
@@ -1338,7 +1534,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     } else if (!peerHasSessionHolderVersion(transport)) {
         // An older window gets the refusal only (section 7.3, D59).
         QStringList names;
-        for (const DisturbanceCheck::Affected& a : affected) {
+        for (const DisturbanceCheck::Affected& a : connected) {
             const QString name = planDevice(a.device).name;
             if (!name.isEmpty() && !names.contains(name)) {
                 names.append(name);
@@ -1361,7 +1557,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
         }
         return true;
     }
-    askSharedSetting(transport, message, change, affected, true);
+    askSharedSetting(transport, message, change, connected, true);
     return true;
 }
 
@@ -1451,10 +1647,12 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                                               {}, values);
     }
     // Step 5: a device or an effect the operator was not shown is asked
-    // again, and nothing is applied.
-    for (const QString& entry : sharedShown(affected)) {
+    // again, and nothing is applied. Ruling 7.1a: only connected devices
+    // are asked about; an away one is told on its return.
+    const QList<DisturbanceCheck::Affected> connected = connectedAffected(affected);
+    for (const QString& entry : sharedShown(connected)) {
         if (!question.shown.contains(entry)) {
-            askSharedSetting(transport, question.original, now, affected, false);
+            askSharedSetting(transport, question.original, now, connected, false);
             return askAgain(invoke);
         }
     }
@@ -1489,16 +1687,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
 
     // What each disturbed slice was, for the notices (a closing slice is
     // gone once applied).
-    QHash<int, QJsonObject> sliceWords;
-    const ReceiverPlanner planner = receiverPlanner();
-    for (const DisturbanceCheck::Affected& a : affected) {
-        for (const DisturbanceCheck::AffectedSlice& s : a.slices) {
-            const QJsonArray one = planner.noticeSlicesJson({s.sliceId});
-            if (!one.isEmpty()) {
-                sliceWords.insert(s.sliceId, one.first().toObject());
-            }
-        }
-    }
+    const QHash<int, QJsonObject> sliceWords = sharedSliceWords(affected);
     // Parity ruling C4: the radio-wide rate answers later the same way.
     const bool rateChange = question.held == ConfirmStep::Held::Command
         && (question.original.commandVerb == "requestSliceSampleRate"
@@ -1635,6 +1824,20 @@ bool StationServer::finishDeferredProceed(const ResultKey& key, const SessionMes
     }
     const DeferredProceed later = *it;
     m_deferredProceeds.erase(it);
+    if (!later.answersProceed) {
+        // Ruling 7.1a: a change applied at once. Its own result goes to its
+        // requester as today (false: not consumed here); its devices are
+        // told once it was taken. A radio change answers on the Core's
+        // restart turn, and tells then (finishRadioChange).
+        if (result.accepted && m_holdingRadioChange && !m_heldRadioChange
+            && result.commandVerb == "station.selectRadio") {
+            m_appliedNowRadio = later;
+        } else if (result.accepted) {
+            tellSettingChanged(later.affected, later.sliceWords, later.change, later.requester);
+        }
+        endOlderWindowsWithoutSlices(later.closedDevices, later.requester);
+        return false;
+    }
     // The proceed's own route (recorded because its answer came later) is
     // used here, and goes.
     m_resultRoutes.remove(ResultKey{key.sessionId, later.proceedVerb, later.proceedId});

@@ -1024,6 +1024,10 @@ set(CORE_SOURCES
     src/core/CfcProfile.cpp
     src/core/ParaEqCurve.cpp
     src/core/ParaEqCurve.h
+    # Phone wire batch: the Diversity dialog's sensitivity pattern, drawn by
+    # DiversityRadarWidget and sent on each slice.
+    src/core/DiversityPattern.cpp
+    src/core/DiversityPattern.h
     src/core/TwoToneController.cpp
     src/core/TxSliceArbiter.cpp
     src/core/TxSliceArbiter.h

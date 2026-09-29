@@ -436,6 +436,21 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "diversityPatternVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "logCategoryListVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "radioModelsVersion",
+            "value": 0
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -4759,6 +4774,12 @@
                     "kind": "utf8",
                     "name": "logCategories",
                     "ordinal": 26
+                },
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "utf8",
+                    "name": "logCategoryList",
+                    "ordinal": 27
                 }
             ]
         },
@@ -6191,6 +6212,12 @@
                     "kind": "f64",
                     "name": "minNotchWidthHz",
                     "ordinal": 149
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "diversityPattern",
+                    "ordinal": 150
                 }
             ]
         },

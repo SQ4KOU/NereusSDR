@@ -19,6 +19,9 @@
 //                 before the radio unkeys (startRadeEndOfOverTail,
 //                 onEndOfOverTailChanged); the Core's stops skip it.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: logCategoryList, the Support dialog's
+//                 categories with their labels. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -4236,6 +4239,13 @@ QString RadioModel::logCategories() const
         return m_remoteLogCategories;
     }
     return LogManager::instance().enabledList();
+}
+
+QString RadioModel::logCategoryList() const
+{
+    // Phone wire batch: the categories this process keeps, as the Support
+    // dialog lists them.
+    return LogManager::instance().categoryListJson();
 }
 
 QString RadioModel::stationSupportUnavailableReason() const
