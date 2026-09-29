@@ -405,6 +405,18 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - HL2 port part 2: the HL2 I/O board's fault register holds
+//                 transmit off (mi0bot console.cs UpdateIOBoard 25876-25885
+//                 [@c26a8a4]); txInhibitReason names it on every window, and
+//                 the transmit buttons are disabled with the reason while any
+//                 TX inhibit holds, as Thetis's TXInhibit setter does
+//                 (console.cs:15341-15363 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: expectIoBoardRead and
+//                 updateIoBoardPollingPause, the I/O board poll's pause
+//                 while the I2C tool waits on a read (mi0bot
+//                 SetI2CPollingPause [@c26a8a4]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -742,6 +754,13 @@ class RadioModel : public QObject {
     // the snapshot only, and only to a peer that declared logCategoryList.
     // Declared last so every earlier property keeps its wire ordinal.
     Q_PROPERTY(QString logCategoryList READ logCategoryList CONSTANT)
+    // HL2 port part 2 (txInhibitReasonVersion 1): why the Core's transmit
+    // is held off, in plain words, when the reason is more than the plain
+    // TX inhibit: the HL2 I/O board's "I/O Board: Fault Code N" (mi0bot
+    // console.cs:25876-25885 [@c26a8a4]). Empty otherwise. Core to window
+    // only, and only to a peer that declared txInhibitReason. Declared
+    // after logCategoryList so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString txInhibitReason READ txInhibitReason NOTIFY txInhibitReasonChanged)
 
 
 public:
@@ -1442,6 +1461,21 @@ public:
     // R-R3-49 (parity Task 6): the radio's TX inhibit. Local: this model's
     // TxInhibitMonitor. Remote: the Core's, as the window last heard it.
     bool isTxInhibited() const;
+    // HL2 port part 2: the plain words for a TX inhibit whose reason is more
+    // than the plain inhibit (the HL2 I/O board's fault code); empty
+    // otherwise. Remote: the Core's, as the window last heard it.
+    QString txInhibitReason() const;
+    // HL2 port part 2: the transmit buttons are locked, disabled with a
+    // reason, while receive only or a TX inhibit holds. Thetis's TXInhibit
+    // setter disables MOX, TUN, 2TONE and VOX (console.cs:15341-15363
+    // [v2.10.3.15]) as its RXOnly setter does.
+    bool transmitButtonsLocked() const;
+    // Whether that lock covers MOX: always for a TX inhibit; for receive
+    // only, receiveOnlyDisablesMoxButton.
+    bool transmitLockCoversMox() const;
+    // The words a locked transmit button shows, joined with `otherReason`
+    // as rxOnlyReasonAlongside does; `otherReason` as it is when unlocked.
+    QString transmitLockReasonAlongside(const QString& otherReason) const;
 
     // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
     // Which noise reduction runs is nrCannotRunReason's (DspAssetService,
@@ -5076,6 +5110,8 @@ signals:
     void stationTxReadingsVersionChanged();
     // R-R3-49 (parity Task 6): isTxInhibited() changed.
     void txInhibitedChanged(bool inhibited);
+    // HL2 port part 2: txInhibitReason() changed.
+    void txInhibitReasonChanged(const QString& reason);
     // Fires on each transition to Connected with the RadioInfo of the live
     // connection. HardwarePage (Phase 3I) listens to this to repopulate
     // sub-tabs with per-radio fields.
@@ -7689,6 +7725,11 @@ private:
     // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
     // last heard it.
     bool m_remoteTxInhibited{false};
+    // HL2 port part 2: txInhibitReason(): this model's (refreshed from its
+    // TxInhibitMonitor) or, on a remote window, the Core's.
+    QString m_txInhibitReason;
+    void refreshTxInhibitReason();
+    static QString ioBoardFaultReason(quint8 code);
     // Remote-window parity Task 16: the Core's dspInfoVersion and
     // dspAssetVersion as a remote window last heard them; the last DSP
     // Options apply time; the filter curve.
@@ -7757,6 +7798,12 @@ private:
     void wireIoBoardTool();
     void enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value);
     void finishIoBoardRead(quint64 id, bool ok, qint64 value, const QString& reason);
+    // A read the tool waits on (address, register), answered to `done`;
+    // holds the I/O board poll's pause until it is answered or gives up.
+    void expectIoBoardRead(quint8 address, quint8 reg, IoBoardI2cDone done);
+    // The poll pauses while any read above is outstanding (mi0bot
+    // SetI2CPollingPause).
+    void updateIoBoardPollingPause();
     bool m_paCurrentReported{false};
     bool m_paTemperatureReported{false};
     // R-R3-46 (parity Task 6): the remote window's PA reload.

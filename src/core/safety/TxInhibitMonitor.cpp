@@ -23,6 +23,13 @@
 //   2026-09-25 - Task 16 (receiver and transmit gaps plan): notifyRxOnly
 //                removed; receive only is MoxController::setRxOnly.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: notifyIoBoardFault, the Hermes Lite 2
+//                I/O board's fault register as the highest source, acting
+//                whether or not the monitor is enabled, per mi0bot-Thetis
+//                console.cs UpdateIOBoard 25874-25888 [@c26a8a4]. Held
+//                while the last read is non-zero, cleared by a read of
+//                zero (operator ruling 2026-09-29). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -219,12 +226,19 @@ void TxInhibitMonitor::attachRadioInput(HPSDRModel model, int protocolVersion)
 
 void TxInhibitMonitor::detachRadioInput()
 {
-    if (!m_radioInputAttached) {
+    // HL2 port part 2: the I/O board's fault goes with the radio too; the
+    // next radio's first read sets it again if the board still reports it.
+    const bool hadFault = m_ioBoardFault != 0;
+    m_ioBoardFault = 0;
+    if (!m_radioInputAttached && !hadFault) {
         return;
     }
     m_radioInputAttached = false;
     m_userDigIn          = 0;
     recompute();
+    if (hadFault) {
+        emit ioBoardFaultChanged(0);
+    }
 }
 
 void TxInhibitMonitor::setRadioModel(HPSDRModel model)
@@ -240,6 +254,27 @@ void TxInhibitMonitor::notifyUserDigitalInputs(quint8 userDigIn)
 {
     m_userDigIn = userDigIn;
     recompute();
+}
+
+void TxInhibitMonitor::notifyIoBoardFault(quint8 code)
+{
+    // From mi0bot console.cs:25876-25885 [@c26a8a4] (UpdateIOBoard):
+    //   if (0 != ioBoard.readRegister(IOBoard.Registers.REG_FAULT))
+    //   {
+    //       TXInhibit = true;
+    //       infoBar.Warning("I/O Board: Fault Code " + ioBoard.readRegister(IOBoard.Registers.REG_FAULT).ToString());
+    //       AutoTuningHL2(ProtocolEvent.Idle);
+    //   }
+    // mi0bot never clears TXInhibit here; its PollTXInhibit rewrites it
+    // every 100 ms, so the fault flickers. NereusSDR holds it while the
+    // last read is non-zero and clears it on a read of zero (operator
+    // ruling 2026-09-29). The auto-tune reaction is not ported here.
+    if (m_ioBoardFault == code) {
+        return;
+    }
+    m_ioBoardFault = code;
+    recompute();
+    emit ioBoardFaultChanged(code);
 }
 
 bool TxInhibitMonitor::inhibited() const noexcept
@@ -293,21 +328,19 @@ void TxInhibitMonitor::recompute()
         m_userIoAsserted = false;
     }
 
-    // Step 2 — if disabled, force inhibit clear.
-    if (!m_enabled) {
-        if (m_currentInhibited) {
-            m_currentInhibited = false;
-            m_lastSource       = Source::None;
-            emit txInhibitedChanged(false, Source::None);
-        }
-        return;
-    }
-
-    // Step 3 — compute highest-priority active source.
-    // Priority: UserIo01 > OutOfBand > BlockTxAntenna > None. (Receive
-    // only is MoxController::setRxOnly, Task 16.)
+    // Step 2 — compute highest-priority active source.
+    // Priority: IoBoardFault > UserIo01 > OutOfBand > BlockTxAntenna >
+    // None. (Receive only is MoxController::setRxOnly, Task 16.)
+    // The HL2 I/O board fault acts whether or not the monitor is enabled:
+    // mi0bot's UpdateIOBoard sets TXInhibit without reading _useTxInhibit
+    // (console.cs:25876-25885 [@c26a8a4]). Disabled, every other source
+    // is forced clear (console.cs:25882-25883 [v2.10.3.15]).
     Source newSource = Source::None;
-    if (m_userIoAsserted) {
+    if (m_ioBoardFault != 0) {
+        newSource = Source::IoBoardFault;
+    } else if (!m_enabled) {
+        newSource = Source::None;
+    } else if (m_userIoAsserted) {
         newSource = Source::UserIo01;
     } else if (m_outOfBand) {
         newSource = Source::OutOfBand;
@@ -315,10 +348,10 @@ void TxInhibitMonitor::recompute()
         newSource = Source::BlockTxAntenna;
     }
 
-    // Step 4 — derive new inhibited flag.
+    // Step 3 — derive new inhibited flag.
     const bool newInhibited = (newSource != Source::None);
 
-    // Step 5 — emit only on transitions (state change OR source change).
+    // Step 4 — emit only on transitions (state change OR source change).
     // From Thetis console.cs:25832 [v2.10.3.13]:
     // Upstream tags preserved: //DH1KLM //N1GP (from cited upstream lines) [v2.10.3.15]
     //   if (TXInhibit != inhibit_input) TXInhibitChangedHandlers?.Invoke(...)

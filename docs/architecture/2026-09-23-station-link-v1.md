@@ -855,6 +855,13 @@ the Core takes its `paProfile.*` verbs; a peer that does not sees none of
 them. The desktop's remote window does not declare it: its PA Gain page
 reads and writes the profile settings through the settings proxy.
 
+**`txInhibitReason` 1** (HL2 I/O board fault): the client shows why the
+Core holds transmit off. A peer that declares it at minor 11 is sent
+`txInhibitReasonVersion` (section 6.3) and `radio`'s `txInhibitReason`
+(section 7.1); a peer that does not sees exactly the wire it was built
+for, with neither, and shows its general transmit inhibit wording. The
+station does not declare it; the desktop's remote window does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1022,6 +1029,7 @@ change shows as surface drift and as a change to this table.
 | `adcAttenuatorVersion` | 1 |
 | `paProfileVersion` | 1 |
 | `radeStatusVersion` | 1 |
+| `txInhibitReasonVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1279,6 +1287,14 @@ When a feature is off, its version is 0:
   7.1, "The RADE status"). A peer that did not declare the feature is sent
   neither this entry nor the properties. An app on a Core that sends no
   entry shows the RADE row from `snrDb` alone, as it did before.
+- `txInhibitReasonVersion` (HL2 I/O board fault): optional, sent only at
+  agreed minor 11 to a peer whose hello declared `txInhibitReason` 1, while
+  the Core has a radio model, after `radeStatusVersion` (or after the last
+  entry before it when that is absent) and before `coreBuildInfo`. At 1
+  `radio` carries `txInhibitReason` (section 7.1). A peer that did not
+  declare the feature is sent neither this entry nor the property. An app
+  on a Core that sends no entry names a held transmit inhibit with its own
+  general wording.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1947,7 +1963,8 @@ declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 own key that declared `coreAddresses`; `adcAttenuatorVersion` only for
 a peer that declared `adcAttenuators`; `paProfileVersion` only for a
 peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
-for a peer that declared `radeStatus`. A client ignores a capability it does not know
+for a peer that declared `radeStatus`; `txInhibitReasonVersion` only for a
+peer that declared `txInhibitReason` (section 6.1). A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2131,7 +2148,8 @@ older window sees only the values it was built for.
 | 94 | `adcAttenuatorVersion` | `i64` |
 | 95 | `paProfileVersion` | `i64` |
 | 96 | `radeStatusVersion` | `i64` |
-| 97 | `coreBuildInfo` | `utf8` |
+| 97 | `txInhibitReasonVersion` | `i64` |
+| 98 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2353,7 +2371,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (28 properties)
+**RadioModel** (29 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2385,6 +2403,7 @@ An enum property lists the values its domain allows.
 | 25 | `stationRadioWaiting` | `utf8` | outbound |  |
 | 26 | `logCategories` | `utf8` | outbound |  |
 | 27 | `logCategoryList` | `utf8` | constantSnapshot |  |
+| 28 | `txInhibitReason` | `utf8` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -3264,7 +3283,7 @@ Notes on the keys:
   its copy when the session ends.
 - **`radio`'s `logCategoryList`** (phone wire batch;
   `logCategoryListVersion` 1). Constant snapshot, no WRITE, `utf8`,
-  declared last in `RadioModel`: every logging category the Core keeps, in
+  declared after `logCategories` in `RadioModel`: every logging category the Core keeps, in
   its Support dialog's order, with the label that dialog's checkbox shows,
   as compact JSON `{"categories":[{"id":"nereus.discovery","label":"Discovery"},...]}`
   (`LogManager::categoryListJson`). `id` is the id `logCategories` and
@@ -3277,6 +3296,21 @@ Notes on the keys:
   that declared `logCategoryList` 1. An app's Logs page lists these, each
   on or off as `logCategories` says, and switches them with
   `support.setLogCategories`.
+- **`radio`'s `txInhibitReason`** (HL2 I/O board fault;
+  `txInhibitReasonVersion` 1). Outbound, no WRITE, `utf8`, declared last in
+  `RadioModel`: why the Core holds transmit off, in the words its own
+  window shows, or empty when it gives no particular reason. It is set
+  while a Hermes Lite 2 I/O board reports a fault, as "I/O Board: Fault
+  Code N" with the board's fault code (mi0bot-Thetis `console.cs`
+  UpdateIOBoard), and clears when the board next reads no fault; `radio`'s
+  `txInhibited` is true for as long as it is set. A fault that appears
+  while the radio is on the air drops MOX, TUNE and two-tone, as the Thetis
+  TX inhibit does. A window shows MOX, TUNE and two-tone disabled with this
+  reason and the TX badge with "Transmit blocked." and the reason; when it
+  is empty and `txInhibited` is true it uses its general transmit inhibit
+  wording. A write is refused "The Core sets this itself; it cannot be
+  changed from here." Sent only to a peer that declared `txInhibitReason`
+  1; a window clears its copy when the session ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),

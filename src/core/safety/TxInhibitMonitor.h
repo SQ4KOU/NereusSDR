@@ -35,6 +35,15 @@
 //                _tx_inhibit (console.cs:15312-15334, 25470 [v2.10.3.15]),
 //                so receive only is MoxController::setRxOnly. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the Hermes Lite 2 I/O board's fault
+//                register is a source (IoBoardFault, notifyIoBoardFault),
+//                following mi0bot-Thetis console.cs UpdateIOBoard
+//                25874-25888 [@c26a8a4], which sets TXInhibit on a
+//                non-zero REG_FAULT whatever the External TX Inhibit box
+//                says. Held while the last read is non-zero and cleared
+//                by a read of zero (operator ruling 2026-09-29; mi0bot
+//                never clears it). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -102,7 +111,13 @@ namespace NereusSDR::safety {
 /// emits txInhibitedChanged(bool, Source) on transitions only (not per tick).
 ///
 /// Source priority (highest → lowest):
-///   UserIo01 > OutOfBand > BlockTxAntenna > None
+///   IoBoardFault > UserIo01 > OutOfBand > BlockTxAntenna > None
+///
+/// IoBoardFault: the Hermes Lite 2 I/O board reported a non-zero fault
+///   code (REG_FAULT). It holds transmit off whether or not External TX
+///   Inhibit is on, as mi0bot's UpdateIOBoard sets TXInhibit without
+///   looking at _useTxInhibit.
+///   Cite: mi0bot-Thetis console.cs:25876-25885 [@c26a8a4].
 ///
 /// UserIo01 — per-board GPIO pin polled at 100 ms.
 ///   Cite: console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
@@ -142,6 +157,8 @@ public:
         // (Task 16).
         OutOfBand      = 3,
         BlockTxAntenna = 4,
+        /// HL2 port part 2: the HL2 I/O board's fault register.
+        IoBoardFault   = 5,
     };
     Q_ENUM(Source)
 
@@ -182,7 +199,8 @@ public:
     /// first notifyUserDigitalInputs. Takes precedence over a test reader.
     void attachRadioInput(HPSDRModel model, int protocolVersion);
 
-    /// Task 13: the radio has gone; its input no longer inhibits.
+    /// Task 13: the radio has gone; its input no longer inhibits. HL2 port
+    /// part 2: nor does its I/O board's fault (cleared to 0).
     void detachRadioInput();
 
     /// Task 13: the connected radio's model changed (model override).
@@ -191,6 +209,18 @@ public:
     /// Task 13: the radio reported its user digital inputs. The change
     /// reaches txInhibitedChanged now, not on the next 100 ms poll.
     void notifyUserDigitalInputs(quint8 userDigIn);
+
+    /// HL2 port part 2: the HL2 I/O board's last read of REG_FAULT. A
+    /// non-zero code holds transmit off until a read of zero; the same
+    /// code again changes nothing. Acts whether or not the monitor is
+    /// enabled (the External TX Inhibit box).
+    /// From mi0bot console.cs:25876-25885 [@c26a8a4]:
+    ///   if (0 != ioBoard.readRegister(IOBoard.Registers.REG_FAULT))
+    ///   { TXInhibit = true; infoBar.Warning("I/O Board: Fault Code " + ...
+    void notifyIoBoardFault(quint8 code);
+
+    /// The fault code notifyIoBoardFault last reported; 0 for none.
+    quint8 ioBoardFaultCode() const noexcept { return m_ioBoardFault; }
 
     bool isReverseLogic() const noexcept { return m_reverseLogic; }
     bool hasRadioInput() const noexcept { return m_radioInputAttached; }
@@ -211,6 +241,8 @@ public:
 
 signals:
     void txInhibitedChanged(bool inhibited, NereusSDR::safety::TxInhibitMonitor::Source source);
+    /// HL2 port part 2: the I/O board's fault code changed (0 = cleared).
+    void ioBoardFaultChanged(quint8 code);
 
 private slots:
     void recompute();
@@ -224,6 +256,7 @@ private:
     bool m_userIoAsserted     = false;  // result of last reader() call
     bool m_outOfBand          = false;
     bool m_blockTxAntenna     = false;
+    quint8 m_ioBoardFault     = 0;      // HL2 I/O board REG_FAULT
 
     // Current aggregated state
     bool   m_currentInhibited = false;

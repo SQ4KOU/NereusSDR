@@ -188,6 +188,12 @@
 //               refused CAT or TCI level, report pttSourcesReleased. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: HL2 port part 2: setTxInhibited takes the reason the
+//               inhibit is shown with ("I/O Board: Fault Code N" for the
+//               HL2 I/O board fault, mi0bot console.cs:25876-25885
+//               [@c26a8a4]); the refusal and transmitBlockReason carry it.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1791,7 +1797,11 @@ TxRefusal MoxController::transmitBlockRefusal() const
         return refusal;
     }
     if (m_txInhibited) {
-        return TxRefusals::txInhibited();
+        TxRefusal refusal = TxRefusals::txInhibited();
+        if (!m_txInhibitReason.isEmpty()) {
+            refusal.text = m_txInhibitReason;
+        }
+        return refusal;
     }
     return TxRefusal{};
 }
@@ -1805,6 +1815,9 @@ QString MoxController::transmitBlockReason() const
         return m_rxOnlyReason;
     }
     if (m_txInhibited) {
+        if (!m_txInhibitReason.isEmpty()) {
+            return m_txInhibitReason;
+        }
         return QStringLiteral("Transmit is inhibited.");
     }
     return QString();
@@ -1818,10 +1831,11 @@ void MoxController::emitTransmitBlockIfChanged(const QString& before)
     }
 }
 
-void MoxController::setTxInhibited(bool on)
+void MoxController::setTxInhibited(bool on, const QString& reason)
 {
     const QString before = transmitBlockReason();
     m_txInhibited = on;
+    m_txInhibitReason = on ? reason : QString();
     emitTransmitBlockIfChanged(before);
     if (on) {
         dropAppLevelsUnderBlock();

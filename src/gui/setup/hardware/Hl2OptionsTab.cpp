@@ -45,6 +45,10 @@
 //                 tick does, "Disable power supply sync" (mi0bot's "Disable
 //                 PS Sync"), not "PureSignal sync". J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the input strip shows the input pins
+//                 register (6) as each poll reads it, lit pins red while
+//                 on the air, in a local window and a remote one alike.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -184,14 +188,26 @@ Hl2OptionsTab::Hl2OptionsTab(RadioModel* model, QWidget* parent)
                 [this](IoBoardHl2::Register reg, quint8) {
                     if (reg == IoBoardHl2::Register::REG_OUT_PINS) {
                         onOutputsChanged();
+                    } else if (reg == IoBoardHl2::Register::REG_INPUT_PINS) {
+                        // From mi0bot console.cs:25887 [@c26a8a4]: each read of
+                        // REG_INPUT_PINS calls UpdateIOLedStrip(MOX, registers[6]).
+                        m_inputStrip->setBits(
+                            m_ioBoard->registerValue(IoBoardHl2::Register::REG_INPUT_PINS));
                     }
                 });
         onOutputsChanged();
+        m_inputStrip->setBits(m_ioBoard->registerValue(IoBoardHl2::Register::REG_INPUT_PINS));
     }
     // A write and Pin Control close while the radio is on the air, in a
-    // local window and a remote one alike.
+    // local window and a remote one alike. The input strip lights its pins
+    // in the transmit color on the air: from mi0bot setup.cs:22606-22610
+    // UpdateIOLedStrip [@c26a8a4], ucIOPinsLedStripHF.TX = tx.
     if (m_model) {
-        connect(m_model, &RadioModel::coreOnAirChanged, this, [this](bool) { applyIoGates(); });
+        connect(m_model, &RadioModel::coreOnAirChanged, this, [this](bool onAir) {
+            m_inputStrip->setTx(onAir);
+            applyIoGates();
+        });
+        m_inputStrip->setTx(m_model->isCoreOnAir());
     }
     applyIoGates();
 }
@@ -485,7 +501,7 @@ void Hl2OptionsTab::buildIoPinState(QWidget* parent)
     m_inputStrip->setInteractive(false);   // input port is read-only
     m_inputStrip->setToolTip(tr(
         "HL2 I/O Board input pins (6 bits, polled while board detected).  "
-        "Read-only."));
+        "Read-only. Lit pins show red while transmitting."));
     col->addWidget(m_inputStrip);
 
     // From mi0bot setup.designer.cs:11684-11695 ucOutPinsLedStripHF
@@ -710,6 +726,10 @@ quint8 Hl2OptionsTab::outputBitsForTest() const
 quint8 Hl2OptionsTab::inputBitsForTest() const
 {
     return m_inputStrip ? m_inputStrip->bits() : 0;
+}
+bool Hl2OptionsTab::inputStripTxForTest() const
+{
+    return m_inputStrip && m_inputStrip->tx();
 }
 bool Hl2OptionsTab::isI2cWriteEnabledForTest() const
 {

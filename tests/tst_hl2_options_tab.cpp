@@ -203,6 +203,25 @@ private slots:
         QCOMPARE(tab.outputBitsForTest(), quint8(0x21));
     }
 
+    // I/O Pin State input strip shows the input pins register (6), as
+    // mi0bot's UpdateIOLedStrip(MOX, readRegister(REG_INPUT_PINS)) sets
+    // ucIOPinsLedStripHF after each pin read (console.cs:25887,
+    // setup.cs:22606-22610 [@c26a8a4]). Not the output register.
+    void input_strip_shows_the_input_pins_register()
+    {
+        RadioModel model;
+        Hl2OptionsTab tab(&model);
+        QCOMPARE(tab.inputBitsForTest(), quint8(0));
+        QVERIFY(!tab.inputStripTxForTest());
+
+        model.ioBoardMutable().setRegisterValue(IoBoardHl2::Register::REG_INPUT_PINS, 0x15);
+        QCOMPARE(tab.inputBitsForTest(), quint8(0x15));
+        model.ioBoardMutable().setRegisterValue(IoBoardHl2::Register::REG_OUT_PINS, 0x3F);
+        QCOMPARE(tab.inputBitsForTest(), quint8(0x15));
+        model.ioBoardMutable().setRegisterValue(IoBoardHl2::Register::REG_INPUT_PINS, 0x00);
+        QCOMPARE(tab.inputBitsForTest(), quint8(0));
+    }
+
     // Write button stays disabled until BOTH chkI2CEnable and write-enable
     // gates are checked.  Default state: both unchecked → button disabled.
     void i2c_write_button_default_disabled()

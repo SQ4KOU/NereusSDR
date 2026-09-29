@@ -75,6 +75,14 @@
 //                subframe (console.cs:25781-25945, networkproto1.c:898-906
 //                [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board poll sends RADE_U as DIGU
+//                and RADE_L as DIGL on REG_OP_MODE (operator ruling
+//                2026-09-29). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board poll waits on its step
+//                while the manual I2C tool holds the polling pause (mi0bot
+//                console.cs:25930-25935 [@c26a8a4]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - G-05: txIqRingDrained and txIqRingLengthMs, so an
 //                operator's unkey waits for the transmit I/Q ring to drain,
 //                for at most its 84 ms length. J.J. Boyd (KG4VCF),
@@ -3745,9 +3753,14 @@ int P1RadioConnection::ccMaxBank() const
 // only then (netInterface.c:1470-1497); where mi0bot then waits and gives
 // up the whole loop after 20 tries, this step skips its read. The TX state
 // arrives from RadioModel (setIoBoardTxState) rather than being read from
-// the VFOs each step. RADE modes are not Thetis DSPMode values and are not
-// written. Not here yet: the fault reaction (TX inhibit), the aerial values
-// from the antenna selection, the LED strip and the auto-tune protocol.
+// the VFOs each step. RADE modes are not Thetis DSPMode values; RADE_U is
+// written as DIGU and RADE_L as DIGL. The fault reaction (TX inhibit) lives in RadioModel, which hands
+// each REG_FAULT read to TxInhibitMonitor. The aerial values arrive from
+// RadioModel::applyAlexAntennaForBand (setIoBoardAerials), composed by
+// AlexController::hl2IoBoardAerials. While the manual I2C tool holds the
+// pause (IoBoardHl2::setPollingPause, mi0bot SetI2CPollingPause) a tick
+// does nothing and the step stays where it is. The auto-tune protocol is
+// not ported here.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setIoBoardTxState(int dspMode, qint64 frequencyHz)
 {
@@ -3764,6 +3777,13 @@ void P1RadioConnection::setIoBoardAerials(quint8 aerialMode, quint8 aerialPorts)
 void P1RadioConnection::ioBoardPollTick()
 {
     if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard || !m_ioBoard->isDetected()) {
+        return;
+    }
+    // From mi0bot console.cs:25930-25935 [@c26a8a4]:
+    //   // Delay and continue to delay if we have been paused
+    //   do { await Task.Delay(40); } while (I2CPollingPause);
+    // The manual I2C tool holds the pause; the poll waits on this step.
+    if (m_ioBoard->isPollingPaused()) {
         return;
     }
     using Reg = IoBoardHl2::Register;
@@ -3824,14 +3844,26 @@ void P1RadioConnection::ioBoardPollTick()
             }
             break;
 
-        case 0: // Mode selection
-            if (m_ioTxMode >= static_cast<int>(DSPMode::LSB)
-                && m_ioTxMode <= static_cast<int>(DSPMode::DRM)
-                && m_ioTxMode != m_ioWrittenMode) {
-                write(Reg::REG_OP_MODE, static_cast<quint8>(m_ioTxMode));
-                m_ioWrittenMode = m_ioTxMode;
+        case 0: { // Mode selection
+            // From mi0bot console.cs:25905-25921 [@c26a8a4]: CurrentMode =
+            // (Byte) _rx1_dsp_mode, a Thetis DSPMode value (enums.cs:252-270:
+            // LSB 0 .. DRM 11, DIGU 7, DIGL 9). RADE is NereusSDR's own mode,
+            // so it goes as the digital mode on its sideband (operator ruling
+            // 2026-09-29): RADE_U as DIGU, RADE_L as DIGL.
+            int mode = m_ioTxMode;
+            if (mode == static_cast<int>(DSPMode::RADE_U)) {
+                mode = static_cast<int>(DSPMode::DIGU);
+            } else if (mode == static_cast<int>(DSPMode::RADE_L)) {
+                mode = static_cast<int>(DSPMode::DIGL);
+            }
+            if (mode >= static_cast<int>(DSPMode::LSB)
+                && mode <= static_cast<int>(DSPMode::DRM)
+                && mode != m_ioWrittenMode) {
+                write(Reg::REG_OP_MODE, static_cast<quint8>(mode));
+                m_ioWrittenMode = mode;
             }
             break;
+        }
 
         case 11:
         default:

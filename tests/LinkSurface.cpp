@@ -137,6 +137,10 @@
 //                                    paProfileVersion and the `paProfiles`
 //                                    object are captured. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  HL2 port part 2: and txInhibitReason,
+//                                    so txInhibitReasonVersion and radio's
+//                                    txInhibitReason are. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -605,6 +609,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // Phone wire batch: radio's
                                   // logCategoryList.
                                   {"logCategoryList", 1},
+                                  // HL2 port part 2: radio's
+                                  // txInhibitReason.
+                                  {"txInhibitReason", 1},
                                   // Phone wire batch: stationRadios' model
                                   // labels and choices.
                                   {"radioModels", 1},
@@ -683,6 +690,8 @@ QJsonArray captureCapabilities()
     caps.paProfileVersion = 1;
     // RADE status: sent to a peer that declared radeStatus.
     caps.radeStatusVersion = 1;
+    // HL2 port part 2: sent to a peer that declared txInhibitReason.
+    caps.txInhibitReasonVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

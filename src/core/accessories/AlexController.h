@@ -8,6 +8,12 @@
 //    LimitTXRXAntenna / SetAntennasTo1 external-ATU compat mode,
 //    setRxAnt / setRxOnlyAnt / setTxAnt per-band setters)
 //
+// Ported from mi0bot/OpenHPSDR-Thetis sources [@c26a8a4]:
+//   Project Files/Source/Console/HPSDR/Alex.cs:310-446
+//   (UpdateAlexAntSelection's HERMESLITE branches: the I/O board aerials)
+//   Project Files/Source/Console/console.cs:25616-25637
+//   (SetIOBoardAerialPorts: IOBoardAerialMode / IOBoardAerialPorts)
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-20 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
@@ -34,6 +40,11 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board aerial values
+//                (hl2IoBoardAerials, ioBoardAerialPorts), ported from the
+//                mi0bot fork's Alex.cs HERMESLITE branches and console.cs
+//                SetIOBoardAerialPorts. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -59,6 +70,58 @@
 // this module contains code to support the Alex Filter and Antenna Selection board
 //
 //
+// =================================================================
+//
+// (mi0bot/OpenHPSDR-Thetis fork)
+// --- From Console/console.cs ---
+//=================================================================
+// console.cs
+//=================================================================
+// Thetis is a C# implementation of a Software Defined Radio.
+// Copyright (C) 2004-2009  FlexRadio Systems
+// Copyright (C) 2010-2020  Doug Wigley
+// Credit is given to Sizenko Alexander of Style-7 (http://www.styleseven.com/) for the Digital-7 font.
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+//
+// You may contact us via email at: sales@flex-radio.com.
+// Paper mail may be sent to:
+//    FlexRadio Systems
+//    8900 Marybank Dr.
+//    Austin, TX 78750
+//    USA
+//
+//=================================================================
+// Modifications to support the Behringer Midi controllers
+// by Chris Codella, W2PA, May 2017.  Indicated by //-W2PA comment lines.
+// Modifications for using the new database import function.  W2PA, 29 May 2017
+// Support QSK, possible with Protocol-2 firmware v1.7 (Orion-MkI and Orion-MkII), and later.  W2PA, 5 April 2019
+// Modfied heavily - Copyright (C) 2019-2026 Richard Samphire (MW0LGE)
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
 // =================================================================
 
 #pragma once
@@ -203,6 +266,37 @@ public:
     bool rxOutOverride() const;
     bool useTxAntForRx() const;
     bool xvtrActive() const;
+
+    // ── HL2 I/O board aerial values ──────────────────────────────────────────
+    // The Hermes Lite 2 I/O board's aerial mode (REG_RF_INPUTS) and aerial
+    // ports (REG_ANTENNA) bytes, which the I/O board poll writes
+    // (P1RadioConnection::setIoBoardAerials). mode is IOBoardAerialMode,
+    // ports IOBoardAerialPorts.
+    struct IoBoardAerials {
+        quint8 mode {0};
+        quint8 ports {0};
+        bool operator==(const IoBoardAerials&) const = default;
+    };
+
+    // From mi0bot console.cs:25616-25637 SetIOBoardAerialPorts [@c26a8a4]:
+    // the mode from rx_only_ant, the ports from the RX and TX aerials
+    // (0-based, as Alex.cs passes trx_ant - 1 and tx_ant - 1).
+    // // MI0BOT: Control I/O Board's aerial capabilities
+    // // MI0BOT: Control I/O Board's Alt Rx aerial facility
+    static IoBoardAerials ioBoardAerialPorts(int rxOnlyAnt, int rxAnt, int txAnt);
+
+    // From mi0bot HPSDR/Alex.cs:310-460 UpdateAlexAntSelection [@c26a8a4],
+    // with its HERMESLITE branches: the rx_only_ant, trx_ant and tx_ant it
+    // hands to SetIOBoardAerialPorts. `band` is the current band (the TX
+    // aerial); `rxBand` the band whose receive aerials are in use (the kept
+    // band, as RadioModel::applyAlexAntennaForBand reads them).
+    // Upstream author tags in the range, carried at each step in the .cpp:
+    // // MI0BOT: Alt RX has been requested or TX and Rx are not the same
+    // // MI0BOT: Antenna not the same is valid
+    // //G8NJJ (Aries clamp, deferred)
+    // // MI0BOT: Transmit antenna is being used for reception in split aerial operation
+    // // MI0BOT: Sets the aerial controls on the I/O board
+    IoBoardAerials hl2IoBoardAerials(Band band, Band rxBand, bool isTx) const;
 
 public slots:
     void setRxOutOnTx(bool on);

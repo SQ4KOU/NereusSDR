@@ -146,6 +146,8 @@ public:
     int    txLatencyMsForTest() const;
     quint8 outputBitsForTest() const;
     quint8 inputBitsForTest()  const;
+    // The input strip draws its lit pins as transmitting.
+    bool   inputStripTxForTest() const;
     bool   isI2cWriteEnabledForTest() const;
     bool   isI2cReadEnabledForTest() const;
     bool   isPinControlEnabledForTest() const;

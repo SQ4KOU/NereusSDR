@@ -176,6 +176,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: RadioModel txInhibitReason Outbound and
+//                 in featureGates (txInhibitReasonVersion 1). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -1047,7 +1050,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (28 entries) ----
+    // ---- RadioModel (29 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1099,6 +1102,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // categories with their labels, fixed for the process; only to a peer
     // that declared logCategoryList (StationServer::fitPeerOnlyProperties).
     { "RadioModel", "logCategoryList", MirrorDirection::ConstantSnapshot },
+    // HL2 port part 2 (txInhibitReasonVersion 1): why the Core's transmit is
+    // held off (the HL2 I/O board's fault code); only to a peer that
+    // declared txInhibitReason (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "txInhibitReason", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1173,6 +1180,9 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // categories with their labels, to a peer that declared
         // logCategoryList 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "logCategoryList", "logCategoryList", 1},
+        // HL2 port part 2: why the Core's transmit is held off, to a peer
+        // that declared txInhibitReason 1.
+        {"RadioModel", "txInhibitReason", "txInhibitReason", 1},
         // The phone's direct addresses (coreAddressesVersion 1): where a
         // device can dial this Core, to a device signed in with its own key
         // that declared coreAddresses 1 (StationServer::fitPeerOnlyProperties).

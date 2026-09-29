@@ -150,6 +150,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
 //                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: txInhibitReasonVersion, after
+//                paProfileVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -443,6 +446,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radeStatusVersion > 0) {
             updates.append(intEntry("radeStatusVersion", radeStatusVersion));
         }
+        // HL2 port part 2: radio's txInhibitReason, only for a peer that
+        // declared txInhibitReason.
+        if (txInhibitReasonVersion > 0) {
+            updates.append(intEntry("txInhibitReasonVersion", txInhibitReasonVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -683,7 +691,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationTciSettingsVersion"
                    || u.name == "adcAttenuatorVersion"
                    || u.name == "paProfileVersion"
-                   || u.name == "radeStatusVersion") {
+                   || u.name == "radeStatusVersion"
+                   || u.name == "txInhibitReasonVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -728,6 +737,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.adcAttenuatorVersion = version;
                 } else if (u.name == "paProfileVersion") {
                     caps.paProfileVersion = version;
+                } else if (u.name == "txInhibitReasonVersion") {
+                    caps.txInhibitReasonVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

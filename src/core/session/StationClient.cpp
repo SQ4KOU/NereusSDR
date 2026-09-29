@@ -332,6 +332,9 @@
 //                Core's radeSynced and radeFreqOffsetHz, so the window's VFO
 //                flag shows RADE sync and offset. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29: HL2 port part 2: the hello declares txInhibitReason 1, and
+//               the Core's reason applies as observed state.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -720,6 +723,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // The VFO flag's RADE row shows the Core's decoder sync and frequency
     // offset (radeStatusVersion 1), as a local window's flag does.
     m_declaredFeatures.insert(QByteArrayLiteral("radeStatus"), 1);
+    // HL2 port part 2: this window shows why the Core's transmit is held
+    // off (radio's txInhibitReason; txInhibitReasonVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("txInhibitReason"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -4027,6 +4033,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.stationRadioWaiting"),
         // Parity Task 22: likewise the Core's logging categories.
         QByteArrayLiteral("RadioModel.logCategories"),
+        // HL2 port part 2: likewise the Core's TX inhibit reason.
+        QByteArrayLiteral("RadioModel.txInhibitReason"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),

@@ -663,6 +663,22 @@
 //                a transmitting slice that is not its device's active
 //                slice is compared, with the active slice. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the HL2 I/O board's fault register holds
+//                 transmit off (mi0bot console.cs UpdateIOBoard 25876-25885
+//                 [@c26a8a4]); txInhibitReason names it on every window, and
+//                 the transmit buttons are disabled with the reason while any
+//                 TX inhibit holds, as Thetis's TXInhibit setter does
+//                 (console.cs:15341-15363 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: applyAlexAntennaForBand hands an HL2's
+//                 I/O board its aerial values (AlexController
+//                 hl2IoBoardAerials; mi0bot Alex.cs:445-446 [@c26a8a4]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board poll pauses while an HL2
+//                 Options I2C read or output readback waits on its answer,
+//                 as mi0bot's SetI2CPollingPause callers do (setup.cs
+//                 21457-21529, 30014-30052 [@c26a8a4]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1710,7 +1726,46 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_role != Role::Remote) {
         connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
                 [this](bool inhibited, safety::TxInhibitMonitor::Source) {
-            emit txInhibitedChanged(inhibited);
+            // The reason is set before inhibited goes true and cleared after
+            // it goes false, so a remote window (which applies the two in
+            // the order they change) never shows inhibited with no reason,
+            // which would flash the generic refusal words.
+            if (inhibited) {
+                refreshTxInhibitReason();
+                emit txInhibitedChanged(true);
+            } else {
+                emit txInhibitedChanged(false);
+                refreshTxInhibitReason();
+            }
+        });
+        // HL2 port part 2: a new fault code while the fault already holds
+        // transmit off changes only the reason.
+        connect(&m_txInhibit, &safety::TxInhibitMonitor::ioBoardFaultChanged, this,
+                [this](quint8) { refreshTxInhibitReason(); });
+        // HL2 port part 2: each answered read of the HL2 I/O board's general
+        // registers (REG_INPUT_PINS onward: input pins, tuner, fault,
+        // firmware major) sets or clears the fault.
+        // From mi0bot console.cs:25876-25885 [@c26a8a4] (UpdateIOBoard):
+        //   if (0 != ioBoard.readRegister(IOBoard.Registers.REG_FAULT))
+        //   {
+        //       TXInhibit = true;
+        //       infoBar.Warning("I/O Board: Fault Code " + ioBoard.readRegister(IOBoard.Registers.REG_FAULT).ToString());
+        //       AutoTuningHL2(ProtocolEvent.Idle);
+        //   }
+        // Held while the last read is non-zero and cleared by a read of
+        // zero (operator ruling 2026-09-29); mi0bot never clears it here.
+        // Only a radio with the I/O board reads it. The answer arrives on
+        // the connection's thread, so the fault byte comes from the signal
+        // itself (C2, REG_FAULT) and not from the register table, which that
+        // thread may already have overwritten with a later answer.
+        connect(&m_ioBoard, &IoBoardHl2::i2cReadAnswered, this,
+                [this](quint8 address, quint8 reg, quint8, quint8 c2, quint8, quint8) {
+            if (address != IoBoardHl2::kI2cAddrGeneral
+                || reg != static_cast<quint8>(IoBoardHl2::Register::REG_INPUT_PINS)
+                || !boardCapabilities().hasIoBoardHl2) {
+                return;
+            }
+            m_txInhibit.notifyIoBoardFault(c2);
         });
     }
 
@@ -2131,6 +2186,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](bool /*inhibited*/, safety::TxInhibitMonitor::Source /*source*/) {
                 applyTxKeyBlock();
             });
+    // HL2 port part 2: a new I/O board fault code carries its own reason.
+    connect(&m_txInhibit, &safety::TxInhibitMonitor::ioBoardFaultChanged, this,
+            [this](quint8) { applyTxKeyBlock(); });
     connect(this, &RadioModel::paTrippedChanged, this,
             [this](bool /*tripped*/) { applyTxKeyBlock(); });
     // Task 16: receive only is the third gate. The board decides it too
@@ -3849,6 +3907,15 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_dspOptionsLastApplyMs != ms) {
                 m_dspOptionsLastApplyMs = ms;
                 emit dspOptionsLastApplyMsChanged(ms);
+            }
+            return {};
+        }
+        if (propertyName == "txInhibitReason") {
+            // HL2 port part 2 (txInhibitReasonVersion 1): the Core's reason.
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected the TX inhibit reason as text."); }
+            if (m_txInhibitReason != value.toString()) {
+                m_txInhibitReason = value.toString();
+                emit txInhibitReasonChanged(m_txInhibitReason);
             }
             return {};
         }
@@ -7256,6 +7323,11 @@ void RadioModel::clearRemoteTransmittingState()
         m_remoteTxInhibited = false;
         emit txInhibitedChanged(false);
     }
+    // HL2 port part 2: and its reason.
+    if (!m_txInhibitReason.isEmpty()) {
+        m_txInhibitReason.clear();
+        emit txInhibitReasonChanged(m_txInhibitReason);
+    }
     if (!m_remoteTransmitting) { return; }
     m_remoteTransmitting = false;
     emit transmittingChanged(false);
@@ -7266,6 +7338,35 @@ bool RadioModel::isTxInhibited() const
     // R-R3-49 (parity Task 6): a remote window holds the Core's value.
     if (m_role == Role::Remote) { return m_remoteTxInhibited; }
     return m_txInhibit.inhibited();
+}
+
+QString RadioModel::txInhibitReason() const
+{
+    return m_txInhibitReason;
+}
+
+QString RadioModel::ioBoardFaultReason(quint8 code)
+{
+    // From mi0bot console.cs:25876-25885 [@c26a8a4]:
+    //   infoBar.Warning("I/O Board: Fault Code " + ioBoard.readRegister(IOBoard.Registers.REG_FAULT).ToString());
+    return QStringLiteral("I/O Board: Fault Code %1").arg(code);
+}
+
+void RadioModel::refreshTxInhibitReason()
+{
+    if (m_role == Role::Remote) {
+        return;
+    }
+    const QString reason =
+        m_txInhibit.inhibited()
+                && m_txInhibit.lastSource() == safety::TxInhibitMonitor::Source::IoBoardFault
+            ? ioBoardFaultReason(m_txInhibit.ioBoardFaultCode())
+            : QString();
+    if (reason == m_txInhibitReason) {
+        return;
+    }
+    m_txInhibitReason = reason;
+    emit txInhibitReasonChanged(reason);
 }
 
 RadioModel::PaReadings RadioModel::paReadings() const
@@ -19967,6 +20068,23 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
     AntennaRouting r;
     r.tx = isTx;  // Carried through for P2 MOX-aware wire reapply (3M-1 will consult).
 
+    // HL2 port part 2: the I/O board aerial values. mi0bot's
+    // UpdateAlexAntSelection ends in c.SetIOBoardAerialPorts(...) on a
+    // HERMESLITE (Alex.cs:445-446 [@c26a8a4]); AlexController composes the
+    // two bytes and the I/O board poll writes them (REG_RF_INPUTS,
+    // REG_ANTENNA). NereusSDR divergence: mi0bot runs this under
+    // alex_ant_ctrl_enabled, which it defaults on; an HL2 has no Alex
+    // board here (caps.hasAlex false), so the Alex wire below stays
+    // zeroed while the I/O board still gets its aerials.
+    if (caps.hasIoBoardHl2 && m_role == Role::Local) {
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+            const Band rxBand = isTx ? band : m_keptRxAntennaBand.value_or(band);
+            const AlexController::IoBoardAerials a =
+                m_alexController.hl2IoBoardAerials(band, rxBand, isTx);
+            QMetaObject::invokeMethod(p1, [p1, a]() { p1->setIoBoardAerials(a.mode, a.ports); });
+        }
+    }
+
     // From Thetis Alex.cs:312-317 [@501e3f5].
     // "if (!alex_enabled) { NetworkIO.SetAntBits(0, 0, 0, 0, false); return; }"
     if (!caps.hasAlex) {
@@ -24629,7 +24747,24 @@ void RadioModel::applyTxKeyBlock()
         return;
     }
     const bool inhibited = m_txInhibit.inhibited();
-    m_moxController->setTxInhibited(inhibited);
+    // HL2 port part 2: an I/O board fault is a hardware protection, so while
+    // anything transmits (MOX, TUNE, two-tone, the end-of-over tail or a
+    // release still under way) it is the immediate stop: the RF gate closes
+    // and MOX off goes to the radio now, with no wait for the unkey's delays
+    // or the send ring. The operator unkey below would leave RF on through
+    // that wait. stopAllTx does nothing when nothing transmits; the stop's
+    // own hold (lifted by the next key) keeps a second pass here, from the
+    // fault code's own change signal, from stopping the same release twice.
+    // From mi0bot console.cs:25876-25885 [@c26a8a4] (UpdateIOBoard):
+    //   TXInhibit = true;
+    // and the TXInhibit setter, Thetis console.cs:15341-15363 [v2.10.3.15]:
+    //   if (_tx_inhibit && chkMOX.Checked) chkMOX.Checked = false;
+    if (m_role != Role::Remote && inhibited && !m_transmitStopHold
+        && m_txInhibit.lastSource() == safety::TxInhibitMonitor::Source::IoBoardFault) {
+        stopAllTx(ioBoardFaultReason(m_txInhibit.ioBoardFaultCode()));
+    }
+    // HL2 port part 2: an I/O board fault refuses with its own words.
+    m_moxController->setTxInhibited(inhibited, m_role == Role::Remote ? QString() : m_txInhibitReason);
     m_moxController->setPaTripped(m_paTripped);
     // Task 16: receive only, the third gate (console.RXOnly,
     // console.cs:15312-15334 [v2.10.3.15]: if (_rx_only && chkMOX.Checked)
@@ -24773,6 +24908,43 @@ QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
         return otherReason;
     }
     return joinTransmitReasons(rxOnlyReason(), otherReason, m_rxOnlyForced);
+}
+
+bool RadioModel::transmitButtonsLocked() const
+{
+    return m_rxOnlyEffective || isTxInhibited();
+}
+
+bool RadioModel::transmitLockCoversMox() const
+{
+    if (m_rxOnlyEffective) {
+        return receiveOnlyDisablesMoxButton();
+    }
+    // From Thetis console.cs:15341-15363 [v2.10.3.15] (TXInhibit setter):
+    //   if (_rx1_dsp_mode != DSPMode.SPEC &&
+    //       _rx1_dsp_mode != DSPMode.DRM &&
+    //       chkPower.Checked)
+    //       chkMOX.Enabled = !_tx_inhibit;
+    //   chkTUN.Enabled = !_tx_inhibit;
+    //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+    //   chkVOX.Enabled = !_tx_inhibit;
+    // As for receive only (fix wave I3), MOX is disabled in every mode,
+    // SPEC and DRM included: the gate refuses the key in every mode.
+    return isTxInhibited();
+}
+
+QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) const
+{
+    if (m_rxOnlyEffective) {
+        return rxOnlyReasonAlongside(otherReason);
+    }
+    if (!isTxInhibited()) {
+        return otherReason;
+    }
+    // The fault's own words, else the plain TX inhibit's refusal.
+    const QString reason = m_txInhibitReason.isEmpty() ? TxRefusals::txInhibited().text
+                                                       : m_txInhibitReason;
+    return joinTransmitReasons(reason, otherReason, false);
 }
 
 QString RadioModel::transmitBlockReasonAlongside(const QString& otherReason) const
@@ -26492,6 +26664,16 @@ RadioModel::IoBoardProbeOutcome RadioModel::requestIoBoardProbe()
 // on-air rule for the tool; NereusSDR refuses a write and an output pin on
 // the air, because they reach the I/O board and the N2ADR filter board in
 // the transmit path (the remote-window parity plan's ruling for Task 14).
+//
+// From mi0bot setup.cs:21457/21501, 21516/21529 and 30014/30035,
+// 30048/30052 [@c26a8a4]: each handler brackets its transaction with
+// console.SetI2CPollingPause(true) ... (false), so the I/O board poll
+// (console.cs:25930-25935) waits while the manual transaction has the bus.
+// Here the pause is held while any read the tool is waiting on (a manual
+// read, or the output register's readback) is outstanding, and released
+// when the last is answered or gives up. A write needs no hold of its own:
+// the I2C queue is a FIFO, so nothing the poll queues can go ahead of it.
+// The Core holds it for a remote window's requests, which run here.
 // ---------------------------------------------------------------------------
 QString RadioModel::ioBoardNoAnswerReason()
 {
@@ -26570,12 +26752,30 @@ void RadioModel::finishIoBoardRead(quint64 id, bool ok, qint64 value, const QStr
         if (m_pendingIoBoardReads.at(i).id == id) {
             IoBoardI2cDone done = std::move(m_pendingIoBoardReads[i].done);
             m_pendingIoBoardReads.removeAt(i);
+            updateIoBoardPollingPause();
             if (done) {
                 done(ok, value, reason);
             }
             return;
         }
     }
+}
+
+void RadioModel::updateIoBoardPollingPause()
+{
+    m_ioBoard.setPollingPause(!m_pendingIoBoardReads.isEmpty());
+}
+
+void RadioModel::expectIoBoardRead(quint8 address, quint8 reg, IoBoardI2cDone done)
+{
+    wireIoBoardTool();
+    PendingIoBoardRead read;
+    read.id = m_nextIoBoardReadId++;
+    read.address = address;
+    read.reg = reg;
+    read.done = std::move(done);
+    m_pendingIoBoardReads.append(std::move(read));
+    updateIoBoardPollingPause();
 }
 
 void RadioModel::enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value)
@@ -26652,13 +26852,7 @@ void RadioModel::requestIoBoardI2c(const IoBoardI2cRequest& request, IoBoardI2cD
         finish(true, 0, {});
         return;
     }
-    wireIoBoardTool();
-    PendingIoBoardRead read;
-    read.id = m_nextIoBoardReadId++;
-    read.address = address;
-    read.reg = reg;
-    read.done = std::move(done);
-    m_pendingIoBoardReads.append(std::move(read));
+    expectIoBoardRead(address, reg, std::move(done));
     enqueueIoBoardTxn(address, reg, /*write=*/false, 0);
 }
 
@@ -26733,6 +26927,9 @@ void RadioModel::refreshIoBoardOutputs()
     if (!ioBoardI2cUnreachableReason().isEmpty() || !m_ioBoard.isDetected()) {
         return;
     }
+    // From mi0bot setup.cs:30014-30035 [@c26a8a4]: the poll pauses until
+    // the readback is answered or gives up.
+    expectIoBoardRead(IoBoardHl2::kI2cAddrGeneral, kOutputRegister, {});
     enqueueIoBoardTxn(IoBoardHl2::kI2cAddrGeneral, kOutputRegister, /*write=*/false, 0);
 }
 

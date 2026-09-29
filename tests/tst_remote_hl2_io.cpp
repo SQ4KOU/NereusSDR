@@ -29,6 +29,9 @@
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-49 (parity Task 14).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The input pin strip, local and
+//                                    remote (UpdateIOLedStrip). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Trunk merge of remote transmit: the
 //                                    three switches from a window wait
 //                                    while the Core's own key is on the
@@ -131,6 +134,22 @@ Frame compose(IoBoardHl2& board)
 void answer(IoBoardHl2& board, quint8 c1, quint8 c2, quint8 c3, quint8 c4)
 {
     board.applyI2cReadResponse(quint8(0x80 | (0x3d << 1)), c1, c2, c3, c4);
+}
+
+// The poll's read of the input pins (register 6 at 0x1d), sent and
+// answered: C4 lands in register 6 (the pins), C2 in register 8 (the fault,
+// left 0 here).
+void readInputPins(IoBoardHl2& board, quint8 pins)
+{
+    IoBoardHl2::I2cTxn txn;
+    txn.bus = IoBoardHl2::kI2cBusIndex;
+    txn.address = IoBoardHl2::kI2cAddrGeneral;
+    txn.control = static_cast<quint8>(IoBoardHl2::Register::REG_INPUT_PINS);
+    txn.isRead = true;
+    txn.needsResponse = true;
+    board.enqueueI2c(txn);
+    QVERIFY(compose(board).composed);
+    answer(board, 0x01, 0x00, 0x00, pins);
 }
 
 // A local HL2 (the Core's own radio in the Session below, or a local
@@ -264,6 +283,8 @@ private slots:
     void alexHpfSwitchesFromARemoteWindowOnAndOffTheAir();
     void localAlexHpfSwitchesStayLiveOnTheAir();
     void reasonsArePlain();
+    void inputStripFollowsThePinsAndTransmitLocalAndRemote();
+    void toolReadsPauseThePollUntilAnswered();
 
 private:
     QTemporaryDir m_securityDir;
@@ -722,6 +743,141 @@ void TstRemoteHl2Io::reasonsArePlain()
         QVERIFY2(OperatorWording::coreCalledStationIn(text).isEmpty(), qPrintable(text));
         QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
     }
+}
+
+// mi0bot console.cs:25887 [@c26a8a4]: after each read of the input pins,
+// SetupForm.UpdateIOLedStrip(MOX, readRegister(REG_INPUT_PINS)); the strip
+// draws its lit pins orange-red while MOX (setup.cs:22606-22610,
+// ucOCLedStrip.cs:101-111). A remote window shows the Core's pins and the
+// Core's transmit state, as a local window shows its own.
+void TstRemoteHl2Io::inputStripFollowsThePinsAndTransmitLocalAndRemote()
+{
+    {
+        LocalHl2 local;
+        HardwarePage page(local.model.get());
+        Hl2OptionsTab* tab = optionsTab(page);
+        QVERIFY(tab != nullptr);
+        IoBoardHl2& board = local.model->ioBoardMutable();
+        readInputPins(board, 0x2A);
+        QCOMPARE(tab->inputBitsForTest(), quint8(0x2A));
+        QVERIFY(!tab->inputStripTxForTest());
+        local.key();
+        QTRY_VERIFY(tab->inputStripTxForTest());
+        readInputPins(board, 0x05);
+        QCOMPARE(tab->inputBitsForTest(), quint8(0x05));
+        local.unkey();
+        QTRY_VERIFY(!tab->inputStripTxForTest());
+    }
+
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    HardwarePage page(&s.window);
+    Hl2OptionsTab* tab = optionsTab(page);
+    QVERIFY(tab != nullptr);
+    QCOMPARE(tab->inputBitsForTest(), quint8(0));
+    readInputPins(s.board(), 0x2A);
+    QTRY_COMPARE(tab->inputBitsForTest(), quint8(0x2A));
+    QVERIFY(!tab->inputStripTxForTest());
+    s.core.key();
+    QTRY_VERIFY(tab->inputStripTxForTest());
+    readInputPins(s.board(), 0x11);
+    QTRY_COMPARE(tab->inputBitsForTest(), quint8(0x11));
+    s.core.unkey();
+    QTRY_VERIFY(!tab->inputStripTxForTest());
+}
+
+
+// mi0bot setup.cs:21457/21501 (btnI2CRead), 21516/21529 (btnI2CWrite) and
+// 30014/30035, 30048/30052 (the output strip) [@c26a8a4] bracket each
+// transaction with console.SetI2CPollingPause(true) ... (false), and the
+// poll waits while it is held (console.cs:25930-25935). Here the pause is
+// held while a read the tool waits on is outstanding: answered or given up,
+// it is released. A remote window's read pauses the Core's poll.
+void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
+{
+    {
+        LocalHl2 local;
+        IoBoardHl2& board = local.model->ioBoardMutable();
+        board.setDetected(true);
+        local.p1.setIoBoard(&board);
+        QVERIFY(!board.isPollingPaused());
+
+        Outcome read;
+        RadioModel::IoBoardI2cRequest request;
+        request.address = 0x1D;
+        request.reg = 0x0A;
+        local.model->requestIoBoardI2c(request, read.done());
+        QVERIFY(board.isPollingPaused());
+        // The poll waits on its step.
+        const int step = board.currentStep();
+        local.p1.ioBoardPollTickForTest();
+        QCOMPARE(board.currentStep(), step);
+        QCOMPARE(board.i2cQueueDepth(), 1);
+        QVERIFY(compose(board).composed);
+        QVERIFY(board.isPollingPaused());
+        answer(board, 0x00, 0x00, 0x00, 0x40);
+        QVERIFY(read.called && read.ok);
+        QVERIFY(!board.isPollingPaused());
+        local.p1.ioBoardPollTickForTest();
+        QCOMPARE(board.currentStep(), (step + 1) % IoBoardHl2::kStateMachineSteps);
+        // Send what the poll queued, answering its reads so the next
+        // answer below belongs to the tool.
+        while (!board.i2cQueueIsEmpty()) {
+            if (compose(board).bytes[1] == 0x07) {
+                answer(board, 0x00, 0x00, 0x00, 0x00);
+            }
+        }
+
+        // An output pin pauses it until the register is read back.
+        Outcome pin;
+        local.model->setIoBoardOutput(2, true, pin.done());
+        QVERIFY(pin.called && pin.ok);
+        QVERIFY(board.isPollingPaused());
+        QCOMPARE(compose(board).bytes[1], quint8(0x06));   // the write
+        QVERIFY(board.isPollingPaused());
+        QCOMPARE(compose(board).bytes[1], quint8(0x07));   // the readback
+        answer(board, 0x00, 0x00, 0x00, 0x04);
+        QVERIFY(!board.isPollingPaused());
+        QCOMPARE(local.model->ioBoardFacade()->outputs(), 0x04);
+
+        // A read the radio does not answer releases it when the tool gives
+        // up (last here: the board still expects that answer).
+        Outcome lost;
+        request.reg = 0x0B;
+        local.model->requestIoBoardI2c(request, lost.done());
+        QVERIFY(board.isPollingPaused());
+        QVERIFY(compose(board).composed);
+        QTRY_VERIFY(lost.called);
+        QVERIFY(!lost.ok);
+        QVERIFY(!board.isPollingPaused());
+
+        // A write alone does not hold it: the queue keeps its order.
+        Outcome write;
+        request.write = true;
+        request.reg = 0x20;
+        request.value = 0x01;
+        local.model->requestIoBoardI2c(request, write.done());
+        QVERIFY(write.called && write.ok);
+        QVERIFY(!board.isPollingPaused());
+        local.p1.setIoBoard(nullptr);
+    }
+
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(!s.board().isPollingPaused());
+    Outcome remote;
+    RadioModel::IoBoardI2cRequest request;
+    request.address = 0x1D;
+    request.reg = 0x0A;
+    s.window.requestIoBoardI2c(request, remote.done());
+    QTRY_VERIFY(s.board().isPollingPaused());
+    QVERIFY(compose(s.board()).composed);
+    answer(s.board(), 0x00, 0x00, 0x00, 0x11);
+    QTRY_VERIFY(remote.called);
+    QVERIFY(remote.ok);
+    QVERIFY(!s.board().isPollingPaused());
+    QString keyed;
+    QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
 }
 
 QTEST_MAIN(TstRemoteHl2Io)

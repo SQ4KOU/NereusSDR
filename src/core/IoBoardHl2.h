@@ -28,6 +28,10 @@
 //   2026-09-26 - Remote-window parity Task 14 (R-R3-46): i2cReadAnswered,
 //                the answered read's device address and register. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the polling pause (mi0bot
+//                SetI2CPollingPause), held while the manual I2C tool waits
+//                on an answer. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -108,6 +112,7 @@
 #include <QObject>
 #include <QString>
 #include <array>
+#include <atomic>
 
 namespace NereusSDR {
 
@@ -271,6 +276,15 @@ public:
     void    advanceStep();                    // increments; wraps 11 → 0
     QString stepDescriptor(int step) const;  // human-readable label for logging/UI
 
+    // ── Polling pause ──
+    // From mi0bot console.cs:25640-25646 [@c26a8a4] I2CPollingPause /
+    // SetI2CPollingPause: while held, the poll waits on its current step
+    // (console.cs:25931-25935, the Task.Delay loop) so a manual I2C
+    // transaction has the bus to itself. Set on the main thread, read on
+    // the connection thread, hence atomic.
+    void setPollingPause(bool pause);
+    bool isPollingPaused() const;
+
     // ── Register mirror ──
     // Mirrors IoBoardHl2.cs:91 `byte[] registers = new byte[256]` [@c26a8a4].
     // HardwareVersion (Register value = -1) is stored in m_hardwareVersion,
@@ -353,6 +367,7 @@ private:
     int  m_i2cCount{0};
 
     int  m_currentStep{0};
+    std::atomic<bool> m_pollingPaused{false};
 
     // Register mirror — index is the enum integer value (0–255).
     // Matches upstream `byte[] registers = new byte[256]` [@c26a8a4].
