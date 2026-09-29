@@ -399,6 +399,10 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand, the PA row the
+//                 Core holds on the air (paTransmitBandVersion 1), so a
+//                 remote window opens and locks the Core's row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
 //                 band (driveTxBand), held while keyed as Thetis's
 //                 _adjustingBand is; transmitBandChanged tells the PA page
@@ -741,6 +745,13 @@ class RadioModel : public QObject {
     // the snapshot only, and only to a peer that declared logCategoryList.
     // Declared last so every earlier property keeps its wire ordinal.
     Q_PROPERTY(QString logCategoryList READ logCategoryList CONSTANT)
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air (paOnAirBandIndex, Thetis
+    // _adjustingBand), -1 when its transmit band has no PA values. Core to
+    // window only, and only to a peer that declared paTransmitBand; a
+    // window opens and locks this row, not its own slice's. Declared last
+    // so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(int paTransmitBand READ paTransmitBand NOTIFY paTransmitBandChanged)
 
 
 public:
@@ -2681,8 +2692,11 @@ public:
     static QString paHolderOnlyReason();    // "Only the device that is transmitting ..."
     // The PA band the radio transmits on (Thetis _adjustingBand): the
     // transmit slice's band, else the last band, when it is 160 m..6 m or
-    // XVTR; -1 when that band has no PA values.
+    // XVTR; -1 when that band has no PA values. A remote window whose Core
+    // sends paTransmitBand takes the Core's row.
     int paOnAirBandIndex() const;
+    // The paTransmitBand property: paOnAirBandIndex().
+    int paTransmitBand() const;
     // True while the PA Gain page's on-the-air lock holds: MOX (the
     // controller's or the transmit model's), TUNE or the two-tone test.
     // Unlike stationOnAirRefusal it ends when MOX drops, not after the
@@ -2753,7 +2767,8 @@ public:
     bool isCoreOnAir() const;
     // R-R3-49: the window's copy of the Core's `transmitting` goes back to
     // false when the session ends, so a Core that does not send it never
-    // inherits an old "on the air".
+    // inherits an old "on the air". Its TX inhibit and paTransmitBand go
+    // with it.
     void clearRemoteTransmittingState();
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
@@ -5081,6 +5096,8 @@ signals:
     void transmitBandChanged();
     // R-R3-32 (parity Task 6): paReadings() changed.
     void paReadingsChanged();
+    // paTransmitBand() changed (paTransmitBandVersion 1).
+    void paTransmitBandChanged(int band);
     // Parity Task 33: paRawAdc() changed.
     void paRawAdcChanged();
     // Parity Task 33: stationTxReadingsVersion() changed.
@@ -7723,6 +7740,14 @@ private:
     // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
     // last heard it.
     bool m_remoteTxInhibited{false};
+    // On the Core: emit paTransmitBandChanged when paOnAirBandIndex moved.
+    void announcePaTransmitBand();
+    // PA on-air gate re-review, Important C: the Core's paTransmitBand as a
+    // remote window last heard it, and whether it has (an older Core never
+    // sends it). On the Core, the value last announced.
+    int m_stationPaTransmitBand{-1};
+    bool m_stationPaTransmitBandKnown{false};
+    int m_announcedPaTransmitBand{-2};
     // Remote-window parity Task 16: the Core's dspInfoVersion and
     // dspAssetVersion as a remote window last heard them; the last DSP
     // Options apply time; the filter curve.

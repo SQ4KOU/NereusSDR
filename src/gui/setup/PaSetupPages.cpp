@@ -916,9 +916,13 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // The open row is the Core's transmit band (paOnAirBandIndex), which
     // holds while keyed: Thetis OnTXBandChanged (setup.cs:23835-23839
     // [v2.10.3.15]) moves _adjustingBand only from the TXBand setter, and
-    // that returns while MOX. The row follows the transmit band change; the
-    // slice followers below cover a remote window, whose transmit band is
-    // the transmit slice's.
+    // that returns while MOX.
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    // A local window follows its own transmit band. A remote window takes
+    // the Core's held band from the paTransmitBand property, which also
+    // raises transmitBandChanged. The slice followers below serve only a
+    // remote window on an older Core that does not send paTransmitBand; its
+    // row then follows the window's own transmit slice as before.
     connect(model, &RadioModel::transmitBandChanged, this,
             [this]() { refreshOnAirBand(); });
     const auto followSlice = [this](SliceModel* slice) {

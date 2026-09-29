@@ -1238,6 +1238,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
     // The Support dialog's categories with labels (logCategoryListVersion 1).
     {"RadioModel", "radio", false, "logCategoryList", "logCategoryList"},
+    // The PA row the Core holds on the air (paTransmitBandVersion 1).
+    {"RadioModel", "radio", false, "paTransmitBand", "paTransmitBand"},
     // Where a device can dial this Core (coreAddressesVersion 1).
     {"StationDevicesFacade", "devices", false, "coreAddresses", "coreAddresses", true},
     // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
@@ -10887,6 +10889,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // for a peer that declared radeStatus 1.
             caps.radeStatusVersion =
                 peerGetsFeatureProperties(transport, QByteArrayLiteral("radeStatus")) ? 1 : 0;
+            // PA on-air gate re-review, Important C: radio's paTransmitBand,
+            // for a peer that declared paTransmitBand 1.
+            caps.paTransmitBandVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("paTransmitBand")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();

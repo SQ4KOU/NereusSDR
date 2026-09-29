@@ -821,6 +821,17 @@ the Core's sync, SNR and offset as a local window's do, and it keeps the
 last offset for each fresh SNR, since the Core sends the offset only when
 it moves.
 
+**`paTransmitBand` 1** (R-R3-49, the PA on-the-air lock): the client
+opens and locks the PA gain row the Core holds on the air. A peer that
+declares it at minor 11 is sent `paTransmitBandVersion` (section 6.3) and
+`radio`'s `paTransmitBand` (section 7.1); a peer that does not sees
+exactly the wire it was built for, with neither. The station does not
+declare it. The desktop's remote window declares it too: while the Core
+is on the air its PA Gain page opens the Core's held band and locks the
+rest, as a local window's does, even when the transmit slice is retuned
+to another band while keyed. On a Core that sends neither, the window
+opens the row for its own transmit slice's band, as before.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -1022,6 +1033,7 @@ change shows as surface drift and as a change to this table.
 | `adcAttenuatorVersion` | 1 |
 | `paProfileVersion` | 1 |
 | `radeStatusVersion` | 1 |
+| `paTransmitBandVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1279,6 +1291,14 @@ When a feature is off, its version is 0:
   7.1, "The RADE status"). A peer that did not declare the feature is sent
   neither this entry nor the properties. An app on a Core that sends no
   entry shows the RADE row from `snrDb` alone, as it did before.
+- `paTransmitBandVersion` (R-R3-49, the PA on-the-air lock): optional,
+  sent only at agreed minor 11 to a peer whose hello declared
+  `paTransmitBand` 1, while the Core has a radio model, after
+  `radeStatusVersion` (or after the last entry before it when that is
+  absent) and before `coreBuildInfo`. At 1 `radio` carries
+  `paTransmitBand` (section 7.1). A peer that did not declare the feature
+  is sent neither this entry nor the property. An app on a Core that sends
+  no entry opens the PA row for its own transmit slice's band.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1925,7 +1945,8 @@ declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 own key that declared `coreAddresses`; `adcAttenuatorVersion` only for
 a peer that declared `adcAttenuators`; `paProfileVersion` only for a
 peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
-for a peer that declared `radeStatus`. A client ignores a capability it does not know
+for a peer that declared `radeStatus`; `paTransmitBandVersion` only for a
+peer that declared `paTransmitBand`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2109,7 +2130,8 @@ older window sees only the values it was built for.
 | 94 | `adcAttenuatorVersion` | `i64` |
 | 95 | `paProfileVersion` | `i64` |
 | 96 | `radeStatusVersion` | `i64` |
-| 97 | `coreBuildInfo` | `utf8` |
+| 97 | `paTransmitBandVersion` | `i64` |
+| 98 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2331,7 +2353,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (28 properties)
+**RadioModel** (29 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2363,6 +2385,7 @@ An enum property lists the values its domain allows.
 | 25 | `stationRadioWaiting` | `utf8` | outbound |  |
 | 26 | `logCategories` | `utf8` | outbound |  |
 | 27 | `logCategoryList` | `utf8` | constantSnapshot |  |
+| 28 | `paTransmitBand` | `i64` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -3242,7 +3265,7 @@ Notes on the keys:
   its copy when the session ends.
 - **`radio`'s `logCategoryList`** (phone wire batch;
   `logCategoryListVersion` 1). Constant snapshot, no WRITE, `utf8`,
-  declared last in `RadioModel`: every logging category the Core keeps, in
+  declared after `logCategories` in `RadioModel`: every logging category the Core keeps, in
   its Support dialog's order, with the label that dialog's checkbox shows,
   as compact JSON `{"categories":[{"id":"nereus.discovery","label":"Discovery"},...]}`
   (`LogManager::categoryListJson`). `id` is the id `logCategories` and
@@ -3255,6 +3278,22 @@ Notes on the keys:
   that declared `logCategoryList` 1. An app's Logs page lists these, each
   on or off as `logCategories` says, and switches them with
   `support.setLogCategories`.
+- **`radio`'s `paTransmitBand`** (R-R3-49; `paTransmitBandVersion` 1).
+  Outbound, no WRITE, `i64`, declared last in `RadioModel`: the PA band
+  index (the PA Gain page's row order: 0 for 160 m through 10 for 6 m,
+  13 for the transverter row; -1 when the transmit band has no PA row,
+  such as general coverage) the Core's PA on-the-air lock holds
+  (`RadioModel::paOnAirBandIndex`). It is the Core's transmit band, which
+  holds while the radio is on the air: Thetis moves the band it adjusts
+  only from its TXBand setter, and that setter returns while MOX, so a
+  transmit slice retuned to another band while keyed does not move it.
+  It follows every change of the Core's transmit band. While the Core is
+  on the air, the PA row with this index is the one the Core accepts
+  edits for; the rest are refused with the on-the-air reason. A write is
+  refused "The Core sets this itself; it cannot be changed from here."
+  Sent only to a peer that declared `paTransmitBand` 1. A window clears
+  its copy when the session ends and falls back to its own transmit
+  slice's band.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),

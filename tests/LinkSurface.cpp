@@ -12,6 +12,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate re-review: the capture
+//                                    declares paTransmitBand, so
+//                                    paTransmitBandVersion and radio's
+//                                    paTransmitBand are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  RADE status: the capture declares
 //                                    radeStatus, so radeStatusVersion and
 //                                    the slice's radeSynced and
@@ -619,7 +624,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"paProfiles", 1},
                                   // RADE status: each slice's radeSynced
                                   // and radeFreqOffsetHz.
-                                  {"radeStatus", 1}})));
+                                  {"radeStatus", 1},
+                                  // PA on-air gate re-review: radio's
+                                  // paTransmitBand.
+                                  {"paTransmitBand", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -683,6 +691,8 @@ QJsonArray captureCapabilities()
     caps.paProfileVersion = 1;
     // RADE status: sent to a peer that declared radeStatus.
     caps.radeStatusVersion = 1;
+    // PA on-air gate re-review: sent to a peer that declared paTransmitBand.
+    caps.paTransmitBandVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

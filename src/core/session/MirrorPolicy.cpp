@@ -1056,7 +1056,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (28 entries) ----
+    // ---- RadioModel (29 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1108,6 +1108,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // categories with their labels, fixed for the process; only to a peer
     // that declared logCategoryList (StationServer::fitPeerOnlyProperties).
     { "RadioModel", "logCategoryList", MirrorDirection::ConstantSnapshot },
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air, Core to window only; only to a peer
+    // that declared paTransmitBand (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "paTransmitBand", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1182,6 +1186,10 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // categories with their labels, to a peer that declared
         // logCategoryList 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "logCategoryList", "logCategoryList", 1},
+        // PA on-air gate re-review, Important C (paTransmitBandVersion 1):
+        // the PA row the Core holds on the air, to a peer that declared
+        // paTransmitBand 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "paTransmitBand", "paTransmitBand", 1},
         // The phone's direct addresses (coreAddressesVersion 1): where a
         // device can dial this Core, to a device signed in with its own key
         // that declared coreAddresses 1 (StationServer::fitPeerOnlyProperties).

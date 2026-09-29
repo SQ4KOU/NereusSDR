@@ -663,6 +663,10 @@
 //                 the connect-time tune-power refresh before the per-MAC
 //                 load is gone. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand publishes the PA
+//                 row the Core holds on the air, and a remote window whose
+//                 Core sends it opens and locks that row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3598,6 +3602,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
         }
         drivePowerScroll();
     });
+    // PA on-air gate re-review, Important C: the PA row the Core holds on
+    // the air reaches its windows (paTransmitBandVersion 1).
+    connect(this, &RadioModel::transmitBandChanged,
+            this, &RadioModel::announcePaTransmitBand);
 
     // From mi0bot console.cs:30272 [v2.10.3.13-beta2]: the drive byte is
     // recomputed through the normal path on every MOX-to-TX transition, so a
@@ -3866,6 +3874,23 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_remoteTxInhibited != value.toBool()) {
                 m_remoteTxInhibited = value.toBool();
                 emit txInhibitedChanged(m_remoteTxInhibited);
+            }
+            return {};
+        }
+        if (propertyName == "paTransmitBand") {
+            // PA on-air gate re-review, Important C: the PA row the Core
+            // holds on the air, observed (paTransmitBandVersion 1).
+            bool ok = false;
+            const int band = value.toInt(&ok);
+            if (!ok || band < -1 || band >= PaProfile::kBandCount) {
+                return QStringLiteral("Expected a band number.");
+            }
+            const int before = paOnAirBandIndex();
+            m_stationPaTransmitBand = band;
+            m_stationPaTransmitBandKnown = true;
+            if (paOnAirBandIndex() != before) {
+                emit paTransmitBandChanged(band);
+                emit transmitBandChanged();
             }
             return {};
         }
@@ -5377,13 +5402,20 @@ QString RadioModel::paHolderOnlyReason()
 
 int RadioModel::paOnAirBandIndex() const
 {
+    // PA on-air gate re-review, Important C: a remote window holds no
+    // transmit band of its own (m_txBand moves only on the Core), so it
+    // takes the row its Core reports (paTransmitBandVersion 1). An older
+    // Core never sends it and the window falls back as below.
+    if (m_role == Role::Remote && m_stationPaTransmitBandKnown) {
+        return m_stationPaTransmitBand;
+    }
     // The band the Core transmits on: m_txBand (Thetis _tx_band) once known,
     // the band the drive math reads (driveTxBand). It holds while keyed, as
     // _adjustingBand does: that moves only in OnTXBandChanged, raised by the
     // TXBand setter, which returns while MOX
     // (//[2.10.3.6]MW0LGE no band change on TX fix). Before the first
-    // transmit band is known, and on a remote window, the transmit slice's
-    // band, else the last band.
+    // transmit band is known, and on a remote window whose Core sends no
+    // paTransmitBand, the transmit slice's band, else the last band.
     const Band txBand = driveTxBand();
     // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
     //   setAdjustingBand(newBand);
@@ -5395,6 +5427,23 @@ int RadioModel::paOnAirBandIndex() const
                             || txBand == Band::XVTR;
     const int index = static_cast<int>(txBand);
     return (adjustable && index >= 0 && index < PaProfile::kBandCount) ? index : -1;
+}
+
+int RadioModel::paTransmitBand() const
+{
+    return paOnAirBandIndex();
+}
+
+// The Core's paTransmitBand follows transmitBandChanged: the transmit band
+// moves only through applyTransmitBand (held while keyed) and the
+// disconnect reset, and each emits it.
+void RadioModel::announcePaTransmitBand()
+{
+    if (m_role != Role::Local) { return; }
+    const int band = paOnAirBandIndex();
+    if (band == m_announcedPaTransmitBand) { return; }
+    m_announcedPaTransmitBand = band;
+    emit paTransmitBandChanged(band);
 }
 
 bool RadioModel::paOnAirNow() const
@@ -7702,6 +7751,18 @@ void RadioModel::updateCoreOnAir()
 void RadioModel::clearRemoteTransmittingState()
 {
     if (m_role != Role::Remote) { return; }
+    // PA on-air gate re-review, Important C: the Core's PA row too, so the
+    // next Core (perhaps an older one that never sends it) starts from the
+    // window's own fallback.
+    if (m_stationPaTransmitBandKnown) {
+        const int before = paOnAirBandIndex();
+        m_stationPaTransmitBandKnown = false;
+        m_stationPaTransmitBand = -1;
+        if (paOnAirBandIndex() != before) {
+            emit paTransmitBandChanged(paOnAirBandIndex());
+            emit transmitBandChanged();
+        }
+    }
     // R-R3-49 (parity Task 6): the Core's TX inhibit too.
     if (m_remoteTxInhibited) {
         m_remoteTxInhibited = false;
