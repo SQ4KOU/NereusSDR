@@ -114,43 +114,101 @@ IoBoardHl2::IoBoardHl2(QObject* parent) : QObject(parent)
     // Per mi0bot IoBoardHl2.cs:121-125 [@c26a8a4]:
     //   for (int i = 0; i < 256; i++) { registers[i] = 0; }
     m_registers.fill(0);
+    for (int i = 0; i < kMaxI2cQueue; ++i) {
+        m_i2cSlots[i].sequence.store(static_cast<quint64>(i), std::memory_order_relaxed);
+    }
+    m_clock.start();
+}
+
+qint64 IoBoardHl2::nowMs() const
+{
+    return m_nowForTest ? m_nowForTest() : m_clock.elapsed();
+}
+
+void IoBoardHl2::setClockForTest(std::function<qint64()> nowMs)
+{
+    m_nowForTest = std::move(nowMs);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // I2C queue
 //
-// Circular FIFO buffer. Ports the i2c_queue[] array and MAX_I2C_QUEUE=32
+// Bounded FIFO, safe across threads. Ports the i2c_queue[] array and MAX_I2C_QUEUE=32
 // from mi0bot network.h:41,133-138 [@c26a8a4]. The model holds the queue
 // that Task 2 (P1CodecHl2 wiring) will drain into ep2 TLV frames.
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool IoBoardHl2::enqueueI2c(const I2cTxn& txn)
 {
-    if (m_i2cCount >= kMaxI2cQueue) { return false; }
-    m_i2cQueue[m_i2cTail] = txn;
-    m_i2cTail = (m_i2cTail + 1) % kMaxI2cQueue;
-    ++m_i2cCount;
+    quint64 pos = m_i2cEnqueuePos.load(std::memory_order_relaxed);
+    I2cSlot* slot = nullptr;
+    for (;;) {
+        slot = &m_i2cSlots[pos & (kMaxI2cQueue - 1)];
+        const quint64 seq = slot->sequence.load(std::memory_order_acquire);
+        const qint64 diff = static_cast<qint64>(seq - pos);
+        if (diff == 0) {
+            if (m_i2cEnqueuePos.compare_exchange_weak(pos, pos + 1,
+                                                      std::memory_order_relaxed)) {
+                break;
+            }
+        } else if (diff < 0) {
+            return false;   // full (MAX_I2C_QUEUE)
+        } else {
+            pos = m_i2cEnqueuePos.load(std::memory_order_relaxed);
+        }
+    }
+    slot->txn = txn;
+    slot->sequence.store(pos + 1, std::memory_order_release);
     emit i2cQueueChanged();
     return true;
 }
 
 bool IoBoardHl2::dequeueI2c(I2cTxn& out)
 {
-    if (m_i2cCount <= 0) { return false; }
-    out = m_i2cQueue[m_i2cHead];
-    m_i2cHead = (m_i2cHead + 1) % kMaxI2cQueue;
-    --m_i2cCount;
+    quint64 pos = m_i2cDequeuePos.load(std::memory_order_relaxed);
+    I2cSlot* slot = nullptr;
+    for (;;) {
+        slot = &m_i2cSlots[pos & (kMaxI2cQueue - 1)];
+        const quint64 seq = slot->sequence.load(std::memory_order_acquire);
+        const qint64 diff = static_cast<qint64>(seq - (pos + 1));
+        if (diff == 0) {
+            if (m_i2cDequeuePos.compare_exchange_weak(pos, pos + 1,
+                                                      std::memory_order_relaxed)) {
+                break;
+            }
+        } else if (diff < 0) {
+            return false;   // empty
+        } else {
+            pos = m_i2cDequeuePos.load(std::memory_order_relaxed);
+        }
+    }
+    out = slot->txn;
+    slot->sequence.store(pos + kMaxI2cQueue, std::memory_order_release);
     emit i2cQueueChanged();
     return true;
 }
 
-int  IoBoardHl2::i2cQueueDepth() const   { return m_i2cCount; }
-bool IoBoardHl2::i2cQueueIsEmpty() const { return m_i2cCount == 0; }
-bool IoBoardHl2::i2cQueueIsFull() const  { return m_i2cCount >= kMaxI2cQueue; }
+int IoBoardHl2::i2cQueueDepth() const
+{
+    // Read the consumer position first so a concurrent dequeue can only
+    // make the result smaller than the truth, never negative.
+    const quint64 out = m_i2cDequeuePos.load(std::memory_order_acquire);
+    const quint64 in  = m_i2cEnqueuePos.load(std::memory_order_acquire);
+    const qint64 depth = static_cast<qint64>(in - out);
+    if (depth <= 0) { return 0; }
+    return depth > kMaxI2cQueue ? kMaxI2cQueue : static_cast<int>(depth);
+}
+
+bool IoBoardHl2::i2cQueueIsEmpty() const { return i2cQueueDepth() == 0; }
+bool IoBoardHl2::i2cQueueIsFull() const  { return i2cQueueDepth() >= kMaxI2cQueue; }
 
 void IoBoardHl2::clearI2cQueue()
 {
-    m_i2cHead = m_i2cTail = m_i2cCount = 0;
+    // Taken like the codec takes them, so a clear from the main thread is
+    // safe while the connection thread fills and empties the queue.
+    I2cTxn discarded;
+    while (dequeueI2c(discarded)) {
+    }
     emit i2cQueueChanged();
 }
 
@@ -166,8 +224,31 @@ void IoBoardHl2::clearI2cQueue()
 
 bool IoBoardHl2::pushPendingRead(const PendingRead& r)
 {
+    // A read that went out kReadAnswerMs or more ago has been given up, as
+    // mi0bot's poll gives it up after its 20 one-millisecond waits
+    // (console.cs:25866-25872 [@c26a8a4]); this newer read takes the answer
+    // slot, as mi0bot's I2CReadInitiate does (netInterface.c:1471-1497).
+    //
+    // An answer that is late rather than lost then lands on this newer read.
+    // mi0bot does the same: I2CReadInitiate clears ctrl_read_available with
+    // the rest of i2c_control (netInterface.c:1488 [@c26a8a4]), a late answer
+    // sets it again (networkproto1.c:478-493 [@c26a8a4]), and I2CResponse
+    // hands it to whoever asks next (netInterface.c:1567-1587 [@c26a8a4]).
+    // The answer cannot be matched to its read by address: the low bits of
+    // the returned C0 are not one mi0bot uses, as returned_address is never
+    // set from the wire (network.h:145 [@c26a8a4], only cleared at
+    // netInterface.c:1623 [@c26a8a4], under "// MI0BOT: HL2 I2C variables").
+    const qint64 now = nowMs();
+    while (m_pendingCount > 0 && now - m_pendingSentMs[m_pendingHead] >= kReadAnswerMs) {
+        qDebug("HL2 I2C: read of %02X/%02X unanswered, given up",
+               m_pendingReads[m_pendingHead].deviceAddress,
+               m_pendingReads[m_pendingHead].subAddress);
+        m_pendingHead = (m_pendingHead + 1) % kMaxI2cQueue;
+        --m_pendingCount;
+    }
     if (m_pendingCount >= kMaxI2cQueue) { return false; }
     m_pendingReads[m_pendingTail] = r;
+    m_pendingSentMs[m_pendingTail] = now;
     m_pendingTail = (m_pendingTail + 1) % kMaxI2cQueue;
     ++m_pendingCount;
     return true;

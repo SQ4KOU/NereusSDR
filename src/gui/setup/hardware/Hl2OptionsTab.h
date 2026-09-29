@@ -27,12 +27,13 @@
 //      — output strip (8 LEDs, click-to-toggle when chkI2CEnable) + input
 //        strip (6 LEDs, read-only)
 //
-// Wire-format emission for the 8 NetworkIO.Set*() handlers in groupbox 1
-// is **explicitly deferred** to a Phase 3L follow-up PR per the design
-// doc §4.  This commit ships UI + per-MAC AppSettings persistence only;
-// the C&C bank-2 byte composition is a separate source-first port
-// session.  Toggling a control here updates Hl2OptionsModel and
-// persists, with a `qCWarning` flagging the missing wire emission.
+// Five of the groupbox-1 options reach the radio (Band Volts, Disable
+// power supply sync, TX buffer latency, PTT hang, Reset on Ethernet
+// disconnect; RadioModel::applyHl2Options). The other four are stored
+// per-MAC but not sent: Swap audio channels (NereusSDR sends the radio no
+// audio of its own over P1) and the clock options Enable CL2, CL2
+// frequency and External 10 MHz. Those four show disabled with a plain
+// reason.
 //
 // Bus 0 surface in I2C Control is **also** deferred per design §4 —
 // today only bus 1 is wired in NereusSDR's I2cTxn path.  Rendered as a
@@ -54,6 +55,11 @@
 //                remote window), the output strip shows the I/O board's
 //                output register read back (mi0bot's ucOutPinsLedStripHF),
 //                and the tool follows the Core's offer and the on-air rule.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Swap audio channels, Enable CL2, CL2 frequency and
+//                External 10 MHz are stored but not sent to the radio, so
+//                they show disabled with a plain reason; the "wire emission"
+//                warnings are gone (five options reach the radio).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //

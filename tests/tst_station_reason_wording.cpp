@@ -1117,11 +1117,17 @@ const QList<ReasonSource>& reasonSources()
           // program's key, TxRefusal.cpp's words.
           QStringLiteral("programKeyRefusal")}, {}, 3, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
-         // and TxRefusal.cpp's refusals (scanned there).
-         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
-        {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
-         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
-         {QStringLiteral("m_rxOnlyReason")}},
+         // and TxRefusal.cpp's refusals (scanned there). R-R3-46 (HL2 port
+         // part 2): the reason setTxInhibited was given
+         // (RadioModel::ioBoardFaultReason, scanned).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()"),
+          QStringLiteral("TxRefusals::txInhibited()"), QStringLiteral("m_txInhibitReason")}},
+        {"src/core/MoxController.h",
+         {QStringLiteral("rxOnlyReason"), QStringLiteral("txInhibitReason")}, {}, 0, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
+         // and the one setTxInhibited was given (RadioModel::ioBoardFaultReason,
+         // scanned).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("m_txInhibitReason")}},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
           // iPhone app plan Task 77: a device's Tuner Genius autotune.
@@ -1350,7 +1356,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("ioBoardNoAnswerReason"),
           QStringLiteral("ioBoardI2cUnreachableReason"),
           // R-R3-49 (parity Task 16): dsp.filterResponse's refusals.
-          QStringLiteral("filterResponseForStation")},
+          QStringLiteral("filterResponseForStation"),
+          // R-R3-46 (HL2 port part 2, txInhibitReasonVersion 1): the I/O
+          // board fault's reason, which txInhibitReason sends and the
+          // desktop's transmit block shows.
+          QStringLiteral("ioBoardFaultReason"), QStringLiteral("refreshTxInhibitReason"),
+          QStringLiteral("txInhibitReason")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1363,7 +1374,9 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 / R-IOS-18: a PA profile's own name.
           QStringLiteral("request.name"),
           // onBandButtonClicked: the band's own label ("40m").
-          QStringLiteral("bandLabel(band)")},
+          QStringLiteral("bandLabel(band)"),
+          // ioBoardFaultReason: the board's fault code, a number.
+          QStringLiteral("code")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
@@ -1389,7 +1402,16 @@ const QList<ReasonSource>& reasonSources()
           // the link's own reason for a request it could not send; and
           // stationOnAirRefusal's reason (onAirReason, scanned here).
           QStringLiteral("unreachable"), QStringLiteral("ioBoardNoAnswerReason()"),
-          QStringLiteral("onAir")}},
+          QStringLiteral("onAir"),
+          // R-R3-46 (HL2 port part 2): ioBoardFaultReason, a function of
+          // this file scanned here, held in m_txInhibitReason; and in a
+          // remote window, the Core's txInhibitReason (that same function's
+          // words) mirrored as it is sent.
+          QStringLiteral("m_txInhibit.inhibited() && m_txInhibit.lastSource() == "
+                         "safety::TxInhibitMonitor::Source::IoBoardFault ? "
+                         "ioBoardFaultReason(m_txInhibit.ioBoardFaultCode()) : QString()"),
+          QStringLiteral("reason"), QStringLiteral("m_txInhibitReason"),
+          QStringLiteral("value.toString()")}},
         // iPhone app plan Task 25 (R-IOS-18): a `vax` level outside 0 to 1,
         // in property.result.
         {"src/core/session/StationVaxFacade.cpp", {QStringLiteral("levelRefusal")}, {}, 1},

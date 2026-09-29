@@ -841,7 +841,7 @@ void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
         QCOMPARE(local.model->ioBoardFacade()->outputs(), 0x04);
 
         // A read the radio does not answer releases it when the tool gives
-        // up (last here: the board still expects that answer).
+        // up.
         Outcome lost;
         request.reg = 0x0B;
         local.model->requestIoBoardI2c(request, lost.done());
@@ -858,6 +858,20 @@ void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
         request.value = 0x01;
         local.model->requestIoBoardI2c(request, write.done());
         QVERIFY(write.called && write.ok);
+        QVERIFY(!board.isPollingPaused());
+        QVERIFY(compose(board).composed);
+
+        // The read given up does not take the next read's answer.
+        Outcome next;
+        request.write = false;
+        request.reg = 0x0C;
+        request.value = 0;
+        local.model->requestIoBoardI2c(request, next.done());
+        QVERIFY(compose(board).composed);
+        answer(board, 0x00, 0x00, 0x00, 0x33);
+        QVERIFY(next.called);
+        QVERIFY2(next.ok, qPrintable(next.reason));
+        QCOMPARE(next.value, qint64(0x33));
         QVERIFY(!board.isPollingPaused());
         local.p1.setIoBoard(nullptr);
     }

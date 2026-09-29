@@ -59,8 +59,10 @@ private slots:
         const int index = meta.indexOfProperty("logCategoryList");
         QVERIFY(index >= 0);
         QVERIFY(meta.property(index).isConstant());
-        // Declared last, so every earlier property keeps its wire ordinal.
-        QCOMPARE(index, meta.propertyCount() - 1);
+        // Appended after every earlier property, so each keeps its wire
+        // ordinal; it keeps its own (27) as later properties (txInhibitReason)
+        // append after it.
+        QCOMPARE(index - meta.propertyOffset(), 27);
         RadioModel model;
         QCOMPARE(model.logCategoryList(), LogManager::instance().categoryListJson());
     }

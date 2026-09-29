@@ -145,6 +145,26 @@ constexpr char kHardwareV13Controls[] =
     R"json({"id":"hardware.hl2Io.n2adrFilter","label":"Enable N2ADR Filter board","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2IoBoard/n2adrFilter"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"default":true})json"
     R"json(])json";
 
+// Hardware version 16: HL2 I/O's Hermes Lite Options, the rows the
+// desktop's HL2 Options tab shows, in its order, bound to the same per-radio
+// keys (Hl2OptionsModel, hardware/<mac>/hl2/...). Ranges and defaults are
+// Hl2OptionsModel's (mi0bot setup.designer.cs). The Core sends the radio TX
+// latency, PTT hang, reset on disconnect, power supply sync and Band Volts;
+// the other four are stored only, so they carry availability disabled with
+// the desktop's own reason. Closed as the version 13 rows are.
+constexpr char kHardwareV16Controls[] =
+    R"json([)json"
+    R"json({"id":"hardware.hl2Io.txLatency","label":"TX buffer latency:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/txLatencyMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":70,"step":1,"unit":"ms","default":20},)json"
+    R"json({"id":"hardware.hl2Io.pttHang","label":"PTT hang:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/pttHangMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":30,"step":1,"unit":"ms","default":12},)json"
+    R"json({"id":"hardware.hl2Io.cl2Enable","label":"Enable CL2","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/cl2Enable"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"min":1,"max":200,"step":1,"unit":"MHz","default":116,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.ext10MHz","label":"External 10 MHz reference","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/ext10MHz"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.disconnectReset","label":"Reset on Ethernet disconnect","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/disconnectReset"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.psSync","label":"Disable power supply sync","tooltip":"Stops the radio synchronizing its power supply clock.","kind":"toggle","binding":{"radioSetting":"hl2/psSync"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.bandVolts","label":"Band Volts (PWM out 0\u20133.3 V)","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/bandVolts"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not send the radio audio of its own, so there is nothing to swap."}})json"
+    R"json(])json";
+
 // Transmit version 13 (R-R3-49): Power's PA Control group, "Disable HF PA",
 // which the Core applies on and off the air (transmitSettingsVersion 11).
 constexpr char kTransmitV13Controls[] =
@@ -302,6 +322,12 @@ const QHash<QString, QJsonObject>& hardwareV13Controls()
         controls.insert(controlsById(alex.constData()));
         return controls;
     }();
+    return table;
+}
+
+const QHash<QString, QJsonObject>& hardwareV16Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV16Controls);
     return table;
 }
 
@@ -570,7 +596,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(14))
-         && !((id == QLatin1String("hardware") || id == QLatin1String("transmit"))
+         && !(id == QLatin1String("hardware")
+              && root.value(QStringLiteral("version")) == QJsonValue(16))
+         && !(id == QLatin1String("transmit")
               && root.value(QStringLiteral("version")) == QJsonValue(13))
          && !(SetupDescriptionV15::isCategory(id)
               && root.value(QStringLiteral("version"))
@@ -672,7 +700,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(13))
                                 && !(id == QLatin1String("pa")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(14)))))
+                                         == QJsonValue(14))
+                                && !(id == QLatin1String("hardware")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(16)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -712,7 +743,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control)
                         && !SetupDescription::validateAntennaRowsTable(control)
-                        && !SetupDescription::validateHardwareV13Control(control))
+                        && !SetupDescription::validateHardwareV13Control(control)
+                        && !SetupDescription::validateHardwareV16Control(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
@@ -2003,6 +2035,13 @@ bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
     return row != hardwareV13Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateHardwareV16Control(const QJsonObject& control)
+{
+    const auto row = hardwareV16Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != hardwareV16Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -2542,8 +2581,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     const int ceiling = SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
-        : categoryId == QLatin1String("hardware")
-            || categoryId == QLatin1String("transmit") ? 13
+        : categoryId == QLatin1String("hardware") ? 16
+        : categoryId == QLatin1String("transmit") ? 13
         : categoryId == QLatin1String("pa") ? 14
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
@@ -2555,9 +2594,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4)
-                        // Hardware changed at 6 and 13, PA at 5 and 13.
+                        // Hardware changed at 6, 13 and 16, PA at 5 and 13.
                         : categoryId == QLatin1String("hardware") && version < 13
                             ? qMin(version, 6)
+                        : categoryId == QLatin1String("hardware") && version < 16
+                            ? 13
                         : categoryId == QLatin1String("pa") && version < 13
                             ? qMin(version, 5)
                         // Transmit changed at 13 (Disable HF PA).
@@ -2578,7 +2619,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.insert(QStringLiteral("pages"), fittedPages);
     }
-    // PA changed at 5, 13 and 14; hardware at 6 and 13; transmit at 13;
+    // PA changed at 5, 13 and 14; hardware at 6, 13 and 16; transmit at 13;
     // DSP, Transmit, Audio, Diagnostics and CAT & Network at 15.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()

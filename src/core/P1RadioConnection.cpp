@@ -3787,7 +3787,13 @@ void P1RadioConnection::ioBoardPollTick()
         return;
     }
     using Reg = IoBoardHl2::Register;
-    const auto write = [this](Reg reg, quint8 data) {
+    // mi0bot's writeRequest and setFrequency ignore I2CWrite's result
+    // (IoBoardHl2.cs:176-202 [@c26a8a4]), and I2CWrite returns -1 when the
+    // queue is full (netInterface.c:1536-1564 [@c26a8a4]), so a write that
+    // meets a full queue is lost while currentFreq says it was sent. Here a
+    // value is recorded as written only when it was queued; otherwise the
+    // next poll on that step sends it again.
+    const auto write = [this](Reg reg, quint8 data) -> bool {
         IoBoardHl2::I2cTxn txn;
         txn.bus = IoBoardHl2::kI2cBusIndex;
         txn.address = IoBoardHl2::kI2cAddrGeneral;
@@ -3795,15 +3801,16 @@ void P1RadioConnection::ioBoardPollTick()
         txn.writeData = data;
         txn.isRead = false;
         txn.needsResponse = false;
-        m_ioBoard->enqueueI2c(txn);
+        return m_ioBoard->enqueueI2c(txn);
     };
 
     switch (m_ioBoard->currentStep()) {
         case 3:
         case 6: // Secondary receive selection
             if (m_ioAerialMode != m_ioWrittenAerialMode) {
-                write(Reg::REG_RF_INPUTS, m_ioAerialMode);
-                m_ioWrittenAerialMode = m_ioAerialMode;
+                if (write(Reg::REG_RF_INPUTS, m_ioAerialMode)) {
+                    m_ioWrittenAerialMode = m_ioAerialMode;
+                }
             }
             break;
 
@@ -3825,22 +3832,29 @@ void P1RadioConnection::ioBoardPollTick()
 
         case 8:
         case 2: // Write current transmission frequency
-            if (m_ioTxFrequencyHz != m_ioWrittenFrequencyHz) {
+            // The five bytes go only when all five fit, so the board is not
+            // left holding part of a new frequency. If another thread takes
+            // a slot in between, the whole frequency goes again next time.
+            if (m_ioTxFrequencyHz != m_ioWrittenFrequencyHz
+                && IoBoardHl2::kMaxI2cQueue - m_ioBoard->i2cQueueDepth() >= 5) {
                 const qint64 f = m_ioTxFrequencyHz;
-                write(Reg::REG_TX_FREQ_BYTE4, static_cast<quint8>(f >> 32));
-                write(Reg::REG_TX_FREQ_BYTE3, static_cast<quint8>(f >> 24));
-                write(Reg::REG_TX_FREQ_BYTE2, static_cast<quint8>(f >> 16));
-                write(Reg::REG_TX_FREQ_BYTE1, static_cast<quint8>(f >> 8));
-                write(Reg::REG_TX_FREQ_BYTE0, static_cast<quint8>(f >> 0));
-                m_ioWrittenFrequencyHz = f;
+                bool queued = write(Reg::REG_TX_FREQ_BYTE4, static_cast<quint8>(f >> 32));
+                queued = write(Reg::REG_TX_FREQ_BYTE3, static_cast<quint8>(f >> 24)) && queued;
+                queued = write(Reg::REG_TX_FREQ_BYTE2, static_cast<quint8>(f >> 16)) && queued;
+                queued = write(Reg::REG_TX_FREQ_BYTE1, static_cast<quint8>(f >> 8)) && queued;
+                queued = write(Reg::REG_TX_FREQ_BYTE0, static_cast<quint8>(f >> 0)) && queued;
+                if (queued) {
+                    m_ioWrittenFrequencyHz = f;
+                }
             }
             break;
 
         case 9:
         case 5: // Aerial selection
             if (m_ioAerialPorts != m_ioWrittenAerialPorts) {
-                write(Reg::REG_ANTENNA, m_ioAerialPorts);
-                m_ioWrittenAerialPorts = m_ioAerialPorts;
+                if (write(Reg::REG_ANTENNA, m_ioAerialPorts)) {
+                    m_ioWrittenAerialPorts = m_ioAerialPorts;
+                }
             }
             break;
 
@@ -3859,8 +3873,9 @@ void P1RadioConnection::ioBoardPollTick()
             if (mode >= static_cast<int>(DSPMode::LSB)
                 && mode <= static_cast<int>(DSPMode::DRM)
                 && mode != m_ioWrittenMode) {
-                write(Reg::REG_OP_MODE, static_cast<quint8>(mode));
-                m_ioWrittenMode = mode;
+                if (write(Reg::REG_OP_MODE, static_cast<quint8>(mode))) {
+                    m_ioWrittenMode = mode;
+                }
             }
             break;
         }

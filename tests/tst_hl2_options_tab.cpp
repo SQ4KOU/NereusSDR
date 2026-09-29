@@ -162,6 +162,41 @@ private slots:
         QCOMPARE(tab.txLatencyMsForTest(), 33);
     }
 
+    // Four options are stored but never reach the radio: Swap audio
+    // channels (NereusSDR sends the radio no audio of its own over P1, so
+    // there is nothing to swap), Enable CL2, CL2 frequency and External
+    // 10 MHz (the HL2 clock settings are not sent). Each shows disabled
+    // with a plain reason, never enabled as if it worked. The five that do
+    // reach the radio stay enabled. The same tab is the remote window's.
+    void stored_only_options_show_disabled_with_a_reason()
+    {
+        RadioModel model;
+        Hl2OptionsTab tab(&model);
+        const QStringList storedOnly{
+            QStringLiteral("hl2SwapAudioChannels"), QStringLiteral("hl2Cl2Enable"),
+            QStringLiteral("hl2Cl2Freq"), QStringLiteral("hl2Ext10MHz")};
+        for (const QString& name : storedOnly) {
+            auto* w = tab.findChild<QWidget*>(name);
+            QVERIFY2(w != nullptr, qPrintable(name));
+            QVERIFY2(!w->isEnabled(), qPrintable(name));
+            QVERIFY2(!w->toolTip().isEmpty(), qPrintable(name));
+        }
+        QCOMPARE(tab.findChild<QWidget*>(QStringLiteral("hl2SwapAudioChannels"))->toolTip(),
+                 QStringLiteral("NereusSDR does not send the radio audio of its own, "
+                                "so there is nothing to swap."));
+        QCOMPARE(tab.findChild<QWidget*>(QStringLiteral("hl2Ext10MHz"))->toolTip(),
+                 QStringLiteral("NereusSDR does not change the radio's clock settings."));
+        const QStringList live{
+            QStringLiteral("hl2TxBufferLatency"), QStringLiteral("hl2PttHang"),
+            QStringLiteral("hl2DisconnectReset"), QStringLiteral("hl2DisablePsSync"),
+            QStringLiteral("hl2BandVolts")};
+        for (const QString& name : live) {
+            auto* w = tab.findChild<QWidget*>(name);
+            QVERIFY2(w != nullptr, qPrintable(name));
+            QVERIFY2(w->isEnabled(), qPrintable(name));
+        }
+    }
+
     // The power-supply sync option reads as what a tick does: it turns the
     // radio's power supply clock sync off. mi0bot's check box is
     // "Disable PS Sync" (setup.designer.cs:11298 [@c26a8a4]), tooltip
