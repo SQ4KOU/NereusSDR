@@ -1421,6 +1421,12 @@ private:
     /// remove of a key on isTransmitSettingKeyAcceptedOffAir's list on a
     /// receive-only Core; empty when the key may be applied now.
     QString transmitSettingOnAirRefusal(const QString& key) const;
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): a raw PA profile
+    // key on the air (RadioModel::paSettingOnAirRefusal), for this peer:
+    // taken only for the active profile's transmitting band, from the
+    // device that holds transmit. `value` is null for a remove.
+    QString paSettingOnAirRefusalFor(SessionTransport* transport, const QString& key,
+                                     const QString* value) const;
     /// Addendum G-42 (JJ's ruling 2026-09-28): a key the transmit gate
     /// reads (RadioModel::kExtendedTransmitKey). Its write or removal needs
     /// this session's transmit permission (txDecisionFor), waits while the

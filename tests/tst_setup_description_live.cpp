@@ -432,6 +432,121 @@ private slots:
         QCOMPARE(core.model->transmitModel().power(), 40);
     }
 
+    // R-R3-49 / R-IOS-27 (JJ's ruling): a window's raw PA profile keys
+    // (hardware/<mac>/pa/profile/...) follow the same on-air rule as the
+    // verbs. The holder's change to the active profile's transmitting band
+    // is taken and applied at once (an adjust moves the drive); any other
+    // band, the active profile, the list and every other profile are
+    // refused with the Core's value handed back, never held until receive.
+    void onAirRawPaProfileKeysFollowThetisForTheHolderOnly()
+    {
+        Core core(true);
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        const QString active = bank->activeProfileName();
+        QVERIFY(bank->saveProfile(QStringLiteral("Raw spare"), *bank->activeProfile()));
+        Device holderDevice(QStringLiteral("Raw holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("Raw other iPad"), QStringLiteral("tablet"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        auto* holder = core.signIn(holderDevice, kTransmitter);
+        auto* other = core.signIn(otherDevice, kTransmitter);
+        QVERIFY(admitted(holder) && admitted(other));
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        const auto paKey = [&mac](const QString& rest) {
+            return QStringLiteral("hardware/%1/pa/profile/%2").arg(mac, rest);
+        };
+        const auto rejects = [](LoopbackTransport* app, const QString& k) {
+            int count = 0;
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == k) {
+                    ++count;
+                    reason = message.reason;
+                }
+            }
+            return qMakePair(count, reason);
+        };
+        const auto write = [](LoopbackTransport* app, const QString& k, const QString& v) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::settingsWrite(k, v, QStringLiteral("window"))));
+        };
+        const auto remove = [](LoopbackTransport* app, const QString& k) {
+            app->sendText(SessionMessages::encode(SessionMessages::settingsRemove(k)));
+        };
+        const QString locked = QStringLiteral("Can't change while transmitting.");
+
+        // Taken, and applied at once: the transmitting band's gain.
+        PaProfile edited = *bank->activeProfile();
+        edited.setGainForBand(Band::Band20m, 46.0f);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), edited.dataToString());
+        // An adjust moves the drive to the step being adjusted (50%). The
+        // bank is the process's: values no other test writes.
+        core.model->transmitModel().setPower(100);
+        edited.setAdjust(Band::Band20m, 4, -2.5f);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 4), -2.5f);
+        QCOMPARE(core.model->transmitModel().power(), 50);
+        edited.setMaxPower(Band::Band20m, 65.0f);
+        edited.setMaxPowerUse(Band::Band20m, !edited.getMaxPowerUse(Band::Band20m));
+        const bool useMax = edited.getMaxPowerUse(Band::Band20m);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getMaxPower(Band::Band20m), 65.0f);
+        QCOMPARE(bank->activeProfile()->getMaxPowerUse(Band::Band20m), useMax);
+        QCOMPARE(rejects(holder, paKey(active)).first, 0);
+
+        // Refused, with the Core's value handed back: another band, the
+        // active profile, the list, another profile, a remove.
+        const QString kept = core.settings->value(paKey(active)).toString();
+        PaProfile otherBand = *bank->activeProfile();
+        otherBand.setGainForBand(Band::Band40m, 51.0f);
+        write(holder, paKey(active), otherBand.dataToString());
+        QTRY_COMPARE(rejects(holder, paKey(active)).second, locked);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+        const QString activeKept = core.settings->value(paKey(QStringLiteral("active"))).toString();
+        write(holder, paKey(QStringLiteral("active")), QStringLiteral("Raw spare"));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("active"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("active"))).toString(), activeKept);
+        const QString names = core.settings->value(paKey(QStringLiteral("_names"))).toString();
+        write(holder, paKey(QStringLiteral("_names")), names + QStringLiteral(",Raw new"));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("_names"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("_names"))).toString(), names);
+        const QString spare = core.settings->value(paKey(QStringLiteral("Raw spare"))).toString();
+        write(holder, paKey(QStringLiteral("Raw spare")), otherBand.dataToString());
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("Raw spare"))).toString(), spare);
+        remove(holder, paKey(QStringLiteral("Raw spare")));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).first, 2);
+        QCOMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).second, locked);
+        QVERIFY(bank->profileNames().contains(QStringLiteral("Raw spare")));
+        QCOMPARE(bank->activeProfileName(), active);
+
+        // Refused: the transmitting band from a device that does not hold
+        // transmit (the Core's transmit gate names the holder first).
+        PaProfile notHolder = *bank->activeProfile();
+        notHolder.setGainForBand(Band::Band20m, 44.0f);
+        write(other, paKey(active), notHolder.dataToString());
+        QTRY_COMPARE(rejects(other, paKey(active)).second,
+                     QStringLiteral("Raw holder iPhone has the transmitter."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+    }
+
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()
     {
         Core core;

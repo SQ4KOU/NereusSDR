@@ -6966,6 +6966,20 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), onAir));
         return;
     }
+    // R-R3-49 / R-IOS-27 (JJ's ruling): a PA profile key on the air is
+    // taken only for the active profile's transmitting band, from the
+    // device that holds transmit; the rest is refused, not held.
+    {
+        const QString value = message.updates.first().value.toString();
+        if (const QString pa = paSettingOnAirRefusalFor(transport, key, &value);
+            !pa.isEmpty()) {
+            const QVariant restored = m_settings.value(key);
+            qCWarning(lcStation) << "Refused remote settings write" << key << ":" << pa;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(), pa));
+            return;
+        }
+    }
     // R-R3-49 (parity Task 5): a Power page key the page's own control
     // could not have written is refused, and the Core's value handed back.
     if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
@@ -7119,6 +7133,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
+        // R-R3-49 / R-IOS-27: a PA change taken on the air reaches the
+        // Core's bank and drive now (the PA reload waits for receive).
+        m_radioModel->applyPaSettingOnAir(key, m_settings.value(key).toString());
         // R-R3-47 / R-R3-22: an accessory setting (interlock, output limit,
         // tune memory, antenna names, a fault history) reaches the Core's
         // live objects now, not at the next restart.
@@ -7219,6 +7236,14 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
         qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << onAir;
         send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                       restored.toString(), onAir));
+        return;
+    }
+    // R-R3-49 / R-IOS-27: a PA profile key is never removed on the air.
+    if (const QString pa = paSettingOnAirRefusalFor(transport, key, nullptr); !pa.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << pa;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), pa));
         return;
     }
     // SettingsProxyServer has no remove path of its own: AppSettings::
@@ -9548,6 +9573,19 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     }
     m_radioModel->stationOnAirRefusal(&reason);
     return reason;
+}
+
+QString StationServer::paSettingOnAirRefusalFor(SessionTransport* transport,
+                                                const QString& key,
+                                                const QString* value) const
+{
+    if (m_radioModel.isNull()) {
+        return {};
+    }
+    const QByteArray requester = peerInfoFor(transport).deviceId;
+    const bool holds = !requester.isEmpty() && m_transmitHolder
+        && m_transmitHolder->isHeldBy(requester);
+    return m_radioModel->paSettingOnAirRefusal(key, value, holds);
 }
 
 bool StationServer::isTransmitGateSettingKey(const QString& key)

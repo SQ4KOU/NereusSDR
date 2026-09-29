@@ -5376,6 +5376,113 @@ QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
     return {};
 }
 
+namespace {
+
+// hardware/<mac>/pa/<rest>: true, with <rest>, for a PA key of `mac`.
+bool paKeyRest(const QString& key, const QString& mac, QString* rest)
+{
+    const QString prefix = QStringLiteral("hardware/%1/pa/").arg(mac);
+    if (mac.isEmpty() || !key.startsWith(prefix, Qt::CaseInsensitive)) {
+        return false;
+    }
+    *rest = key.mid(prefix.size());
+    return true;
+}
+
+// True when `a` and `b` differ anywhere but PA row `band`.
+bool paProfilesDifferOutsideBand(const PaProfile& a, const PaProfile& b, int band)
+{
+    if (a.name() != b.name() || a.model() != b.model()
+        || a.isFactoryDefault() != b.isFactoryDefault()) {
+        return true;
+    }
+    for (int i = 0; i < PaProfile::kBandCount; ++i) {
+        if (i == band) {
+            continue;
+        }
+        const Band b0 = static_cast<Band>(i);
+        if (a.getGainForBand(b0) != b.getGainForBand(b0)
+            || a.getMaxPower(b0) != b.getMaxPower(b0)
+            || a.getMaxPowerUse(b0) != b.getMaxPowerUse(b0)) {
+            return true;
+        }
+        for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+            if (a.getAdjust(b0, step) != b.getAdjust(b0, step)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+QString RadioModel::paSettingOnAirRefusal(const QString& key, const QString* value,
+                                          bool requesterHoldsTransmit) const
+{
+    QString rest;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !stationOnAirRefusal(nullptr)) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // The list, the active name, another profile and a remove are the
+    // profile controls Thetis greys; only the active profile's values stay.
+    const PaProfileManager* const bank = m_paProfileManager;
+    const QString profilePrefix = QStringLiteral("profile/");
+    const QString name = rest.startsWith(profilePrefix) ? rest.mid(profilePrefix.size())
+                                                        : QString();
+    const int txBand = paOnAirBandIndex();
+    if (value == nullptr || bank == nullptr || bank->activeProfile() == nullptr
+        || name.isEmpty() || name != bank->activeProfileName() || txBand < 0) {
+        return paOnAirLockedReason();
+    }
+    PaProfile incoming;
+    if (!incoming.dataFromString(*value)) {
+        return paOnAirLockedReason();
+    }
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    if (paProfilesDifferOutsideBand(incoming, *bank->activeProfile(), txBand)) {
+        return paOnAirLockedReason();
+    }
+    return paOnAirEditRefusal(false, txBand, requesterHoldsTransmit);
+}
+
+void RadioModel::applyPaSettingOnAir(const QString& key, const QString& value)
+{
+    QString rest;
+    PaProfileManager* const bank = m_paProfileManager;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !stationOnAirRefusal(nullptr)
+        || bank == nullptr || bank->activeProfile() == nullptr
+        || rest != QStringLiteral("profile/") + bank->activeProfileName()) {
+        return;
+    }
+    const int txBand = paOnAirBandIndex();
+    PaProfile incoming;
+    if (txBand < 0 || !incoming.dataFromString(value)) {
+        return;
+    }
+    const PaProfile before = *bank->activeProfile();
+    if (!bank->saveProfile(bank->activeProfileName(), incoming)) {
+        return;
+    }
+    // What Thetis does after each value box's change on the transmitting
+    // band (applyPaEditOnAir): a gain re-applies the drive, an adjust moves
+    // the drive to its step. A window changes one box at a time.
+    const Band band = static_cast<Band>(txBand);
+    if (incoming.getGainForBand(band) != before.getGainForBand(band)) {
+        applyPaEditOnAir(PaProfileAction::SetGain, -1);
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(band, step) != before.getAdjust(band, step)) {
+            applyPaEditOnAir(PaProfileAction::SetAdjust, step);
+        }
+    }
+}
+
 bool RadioModel::stationOnAirRefusal(QString* reason) const
 {
     // On the air: MOX (the controller's or the transmit model's), TUNE, or

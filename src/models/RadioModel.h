@@ -2683,6 +2683,18 @@ public:
     // reset. `band`: the PA row the edit changes. `requesterHoldsTransmit`:
     // the device asking holds transmit.
     QString paOnAirEditRefusal(bool profileAction, int band, bool requesterHoldsTransmit) const;
+    // The same rule for a window's raw PA profile keys
+    // (hardware/<mac>/pa/profile/...): on the air only a change to the
+    // active profile's transmitting band, from the device that holds
+    // transmit, is taken; the list, the active name, another profile, a
+    // remove (`value` null) and any other band are refused. Empty off the
+    // air and for every other key.
+    QString paSettingOnAirRefusal(const QString& key, const QString* value,
+                                  bool requesterHoldsTransmit) const;
+    // After such a change was stored: the Core's bank takes it at once and
+    // the drive follows it, as applyPaEditOnAir does for the verbs. Off the
+    // air (and for any other key) it does nothing: the PA reload does it.
+    void applyPaSettingOnAir(const QString& key, const QString& value);
     // iPhone app plan Task 77 fix round 3: the Power Genius's OPERATE and
     // STANDBY also wait while a Tuner Genius cycle runs (the Core's own
     // cycle, from its standby wait to its restore, or the tuner reporting

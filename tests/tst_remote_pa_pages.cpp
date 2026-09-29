@@ -242,7 +242,7 @@ private slots:
     void paKeysAreOnTheOffAirListAtVersion6();
     void paProfileWriteReachesTheCoresBankAtOnce();
     void paCalibrationWriteReachesTheCoresTableAtOnce();
-    void paKeysTakenOnTheAirAndAppliedAtTheUnkey();
+    void paKeysRefusedOnTheAirForAWindowThatDoesNotTransmit();
     void remotePaGainPageShowsAndChangesTheCoresBank();
     void remoteWattMeterPageChangesTheCoresTable();
     void remotePaReadingsShowOnRadioStatusPaValuesAndMeters();
@@ -363,7 +363,7 @@ void TstRemotePaPages::paCalibrationWriteReachesTheCoresTableAtOnce()
     QTRY_COMPARE(cal.paCalProfile().watts[3], 33.5f);
 }
 
-void TstRemotePaPages::paKeysTakenOnTheAirAndAppliedAtTheUnkey()
+void TstRemotePaPages::paKeysRefusedOnTheAirForAWindowThatDoesNotTransmit()
 {
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/true);
     PaProfileManager* const bank = s.core->paProfileManager();
@@ -371,27 +371,37 @@ void TstRemotePaPages::paKeysTakenOnTheAirAndAppliedAtTheUnkey()
     bank->load(HPSDRModel::ANAN_G2);
     const QString active = bank->activeProfileName();
     const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
+    s.core->sliceById(0)->setFrequency(14200000.0); // transmits on 20 m
     QVERIFY(s.connect());
 
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
-    // Remote parity on the air (transmitSettingsVersion 13): the local
-    // pages change them while transmitting, so the Core takes them keyed;
-    // the PA profiles reload once the radio is back on receive.
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
+    // device that holds transmit changes the transmitting band's PA
+    // values. The Core keyed itself, so the window's change is refused with
+    // the Core's value handed back, not held until receive; another band
+    // is refused as Thetis greys it. The Watt Meter's points stay taken.
+    const QString kept = s.settings.value(paKey(active)).toString();
     PaProfile edited = *bank->activeProfile();
     edited.setGainForBand(Band::Band20m, before + 3.0f);
     s.proxy.setValue(paKey(active), edited.dataToString());
-    QTRY_COMPARE(s.settings.value(paKey(active)).toString(), edited.dataToString());
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(active)),
+                 RadioModel::paHolderOnlyReason());
+    PaProfile otherBand = *bank->activeProfile();
+    otherBand.setGainForBand(Band::Band40m, 51.0f);
+    s.proxy.setValue(paKey(active), otherBand.dataToString());
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(active)),
+                 RadioModel::paOnAirLockedReason());
     s.proxy.setValue(calKey(QStringLiteral("calPoint2")), QStringLiteral("19"));
     QTRY_COMPARE(s.settings.value(calKey(QStringLiteral("calPoint2"))).toString(),
                  QStringLiteral("19"));
-    QCOMPARE(settingsRejectReason(s.windowEnd, paKey(active)), QString());
-    QTest::qWait(150);
-    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+    QCOMPARE(s.settings.value(paKey(active)).toString(), kept);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
-    QTRY_COMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before + 3.0f);
+    QTest::qWait(150);
+    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+    QCOMPARE(s.settings.value(paKey(active)).toString(), kept);
 }
 
 // B5.15: PA Gain in a remote window shows the Core's bank and changes it;
@@ -444,11 +454,13 @@ void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
     s.settings.setValue(paKey(QStringLiteral("Bench")), coreEdit.dataToString());
     QTRY_COMPARE(gain20->value(), 49.0);
 
-    // On the air the change is taken too (version 13), as on a local page.
+    // On the air the Core keyed itself, so the window holds no transmit:
+    // its change is refused and the Core keeps its value (JJ's ruling).
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
     gain20->setValue(40.0);
-    QTRY_COMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 40.0f);
+    QTRY_VERIFY(!settingsRejectReason(s.windowEnd, paKey(QStringLiteral("Bench"))).isEmpty());
+    QCOMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 49.0f);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
