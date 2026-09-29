@@ -20690,9 +20690,13 @@ void RadioModel::teardownConnection()
     // on a disconnect. The unkey walks as it did before the tail existed,
     // so the amplifier's UNKEY (txAboutToEnd) and the TX channel's drain
     // run inside this setMox(false), while the TX channel is still wired.
+    // A tail already running (the operator released, then disconnected
+    // within it) is not touched by setMox(false), since MOX is already off;
+    // end it here too, for the same reason.
     if (m_moxController) {
         m_refuseEndOfOverTail = true;
         m_moxController->setMox(false);
+        m_moxController->abortEndOfOverTail();
         m_refuseEndOfOverTail = false;
     }
     if (m_isTuning) {

@@ -490,6 +490,43 @@ private slots:
         QVERIFY(!rig.model.endOfOverTailActive());
     }
 
+    // Review Important 2, round 2: the operator releases, then disconnects
+    // while the end-of-over tail is still running. MOX is already off, so
+    // the teardown's setMox(false) changes nothing; the tail must still end
+    // inside the teardown before the TX channel is unwired, so the amp's
+    // UNKEY (txAboutToEnd) and the TX channel's drain see a wired channel.
+    void disconnectDuringTailEndsItWhileWired()
+    {
+        RealRig rig;
+        rig.key();
+        QCOMPARE(rig.worker->currentTxPathForTest(), TxWorkerThread::TxPath::Rade);
+        MoxController* mox = rig.model.moxController();
+        mox->setMox(false);
+        QVERIFY(rig.model.endOfOverTailActive());
+        QVERIFY(rig.tx.isRfGateOpen());
+
+        int aboutToEnd = 0;
+        int drains = 0;
+        bool wiredAtAboutToEnd = false;
+        bool wiredAtDrain = false;
+        connect(mox, &MoxController::txAboutToEnd, this, [&]() {
+            ++aboutToEnd;
+            wiredAtAboutToEnd = rig.model.txChannel() != nullptr;
+        });
+        connect(mox, &MoxController::txDrainRequested, this, [&]() {
+            ++drains;
+            wiredAtDrain = rig.model.txChannel() != nullptr;
+        });
+        rig.model.disconnectFromRadio();
+
+        QCOMPARE(aboutToEnd, 1);
+        QCOMPARE(drains, 1);
+        QVERIFY(wiredAtAboutToEnd);
+        QVERIFY(wiredAtDrain);
+        QVERIFY(!rig.tx.isRfGateOpen());
+        QVERIFY(!rig.model.endOfOverTailActive());
+    }
+
     void tailRunsBeforeTeardown()
     {
         Ctrl c;
