@@ -17376,7 +17376,7 @@ void RadioModel::installBandPlanMoxCheck()
         // From Thetis console.cs:29451-29465 [v2.10.3.15]
         //MW0LGE [2.9.0.7]
         //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || (RX2Enabled && VFOBTX && RX2Band != TXBand)))
-        //   // note RX2 enabled with a TXvfoB will always TX
+        //   // note RX2 enabled with a TXvfoB will always TX  [original inline comment from console.cs:29458]
         // Thetis refuses only when it transmits on VFO B (split, VFOBTX)
         // and VFO B's band differs from the RX band it listens on. JJ's
         // ruling (2026-09-29) matches that: NereusSDR has no split, and the
@@ -17405,6 +17405,14 @@ void RadioModel::installBandPlanMoxCheck()
             // are chosen by the station, which runs them. The first
             // candidate that is the device's own is it, else its first
             // slice in creation order (activeFor's own fallback).
+            // Recency: SliceOwnership keeps only one most recent choice
+            // across all owners (stationActiveSlice, first here while
+            // nobody else holds transmit); it keeps no per-owner recency.
+            // So when that slot names another device's slice, or the
+            // station holds transmit (stationActiveSlice is then
+            // activeFor(station)), station-owned and ownerless choices
+            // cannot be ranked by recency and the fixed order below
+            // applies: the station's own choice before the ownerless one.
             QList<int> candidates;
             if (device == SliceOwnership::stationDevice()) {
                 candidates = {m_sliceOwnership->stationActiveSlice(),

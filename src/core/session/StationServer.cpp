@@ -10066,9 +10066,11 @@ int StationServer::transmitSettingsVersion() const
     // them under MOX) and General > Region.
     // 14: General Options' Prevent transmitting on a different band, the
     // Core's PreventTxOnDifferentBandToRx setting ("True"/"False", default
-    // off), read by the Core's transmit gate, which compares the
-    // transmitting slice's band with the device's other slices; changed
-    // only with transmit permission and off the air, as Extended.
+    // off), read by the Core's transmit gate, which refuses a key only
+    // when the transmitting slice is not its device's active slice and is
+    // on a different band from it (Thetis console.cs:29451-29465
+    // [v2.10.3.15] refuses only split TX on another band); changed only
+    // with transmit permission and off the air, as Extended.
     return m_radioModel.isNull() ? 0 : kTransmitSettingsDifferentBandVersion;
 }
 
