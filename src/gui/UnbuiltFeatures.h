@@ -69,6 +69,13 @@ namespace UnbuiltFeatures {
 // feature is built, so a surface keeps whatever other gate it has.
 void hideUnlessBuilt(QWidget* widget, UnbuiltFeature feature);
 
+/// JJ's rule "disabled, never hidden": the control stays in view, disabled,
+/// with `reason` as its tooltip, until `feature` is built.
+void disableUnlessBuilt(QWidget* widget, UnbuiltFeature feature, const QString& reason);
+
+/// The words an unbuilt control shows: what it does today, no promise.
+QString notBuiltReason();
+
 // Hide the labelled row `control` sits in: its QFormLayout row, its
 // QGridLayout row, or the horizontal row layout holding it and its label.
 // A control directly in a vertical layout hides alone. The row is found

@@ -399,7 +399,7 @@ void NetworkDiagnosticsDialog::refresh()
 
     // R-R3-32 / R-R3-49 (parity Task 6): jitter, packet loss, packet gap
     // and UDP packets seen come from the connection's own counters
-    // (RadioLinkStats); a value not measured yet says so.
+    // (RadioLinkStats); a value not measured says so.
     const RadioConnection* linkConn =
         (m_model && m_model->isConnected()) ? m_model->connection() : nullptr;
     const std::optional<RadioLinkStats::Snapshot> link =

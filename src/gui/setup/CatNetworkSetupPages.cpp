@@ -430,8 +430,8 @@ void CatTciServerPage::buildCoreGroup()
     }
     // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
     // this page's settings, for the Core's server. The captions, ranges and
-    // tooltips are this page's own (the groups below); the ones this page
-    // hides as not built yet are hidden here too.
+    // tooltips are this page's own (the groups below); the ones the TCI
+    // server does not use yet show disabled with the reason, as there.
     const auto addCheck = [this, form](const char* name, const QString& text,
                                        const QString& tip, bool unbuilt) {
         auto* box = new QCheckBox(text, m_coreGroup);
@@ -445,7 +445,10 @@ void CatTciServerPage::buildCoreGroup()
                 [this, key](bool on) { sendCoreSetting(key, on); });
         form->addRow(QString(), box);
         m_coreSettings.insert(key, box);
-        if (unbuilt) { UnbuiltFeatures::hideUnlessBuilt(box, UnbuiltFeature::TciExtras); }
+        if (unbuilt && !UnbuiltFeatures::isBuilt(UnbuiltFeature::TciExtras)) {
+            m_coreUnbuilt.insert(key);
+            box->setEnabled(false);
+        }
     };
     const auto addSpin = [this, form](const char* name, const QString& label, int min, int max,
                                       const QString& suffix, const QString& tip, bool unbuilt) {
@@ -463,7 +466,10 @@ void CatTciServerPage::buildCoreGroup()
                 [this, key](int value) { sendCoreSetting(key, value); });
         form->addRow(label, spin);
         m_coreSettings.insert(key, spin);
-        if (unbuilt) { UnbuiltFeatures::hideUnlessBuilt(spin, UnbuiltFeature::TciExtras); }
+        if (unbuilt && !UnbuiltFeatures::isBuilt(UnbuiltFeature::TciExtras)) {
+            m_coreUnbuilt.insert(key);
+            spin->setEnabled(false);
+        }
         return spin;
     };
     addSpin("rateLimitMs", tr("Rate limit:"), NereusSDR::TciUpdateGap::kMinGapMs,
@@ -474,7 +480,7 @@ void CatTciServerPage::buildCoreGroup()
     addCheck("cwBecomesCwuAbove10mhz", tr("CW becomes CWU above 10 MHz"),
              tr("On bands above 10 MHz, report mode as \"CWU\" instead of \"CW\" or \"CWL\". "
                 "Required by certain logging apps that follow the ARRL sideband convention."),
-             true);
+             false);
     addCheck("iqSwap", tr("Swap I/Q channels"),
              tr("Swap the I and Q samples in the TCI IQ data stream. "
                 "Enabled by default for compatibility with most TCI IQ consumers."), false);
@@ -499,14 +505,13 @@ void CatTciServerPage::buildCoreGroup()
                 [this](int index) { sendCoreSetting(QByteArrayLiteral("txChannel"), index); });
         form->addRow(tr("TX channel:"), combo);
         m_coreSettings.insert(QByteArrayLiteral("txChannel"), combo);
-        UnbuiltFeatures::hideUnlessBuilt(combo, UnbuiltFeature::TciExtras);
     }
     addSpin("rxSensorIntervalMs", tr("RX interval:"), 30, 1000, tr(" ms"),
             tr("How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients "
-               "that subscribe to sensors (30 to 1000 ms)."), true);
+               "that subscribe to sensors (30 to 1000 ms)."), false);
     addSpin("txSensorIntervalMs", tr("TX interval:"), 30, 1000, tr(" ms"),
             tr("How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI "
-               "clients that subscribe to sensors (30 to 1000 ms)."), true);
+               "clients that subscribe to sensors (30 to 1000 ms)."), false);
     addCheck("forgetRx2VfoBOnDisconnect", tr("Forget RX2 VFOB on disconnect"),
              tr("When a TCI client disconnects, reset RX2 VFOB to its default frequency instead "
                 "of keeping the last value set by the client."), true);
@@ -585,9 +590,12 @@ void CatTciServerPage::refreshCoreGroup()
                 combo->setCurrentIndex(value.toInt());
             }
         }
-        control->setEnabled(settingsAvailable && !onAir);
-        control->setToolTip(settingsReason.isEmpty() ? m_coreSettingTips.value(it.key())
-                                                     : settingsReason);
+        // Unbuilt: in view, disabled, with the reason.
+        const bool unbuilt = m_coreUnbuilt.contains(it.key());
+        control->setEnabled(settingsAvailable && !onAir && !unbuilt);
+        control->setToolTip(unbuilt ? UnbuiltFeatures::notBuiltReason()
+                            : settingsReason.isEmpty() ? m_coreSettingTips.value(it.key())
+                                                       : settingsReason);
     }
 }
 
@@ -735,7 +743,6 @@ void CatTciServerPage::buildCompatibilityGroup()
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
     });
     form->addRow(QString(), m_cwBecomesCwuCheck);
-    UnbuiltFeatures::hideUnlessBuilt(m_cwBecomesCwuCheck, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -838,11 +845,17 @@ void CatTciServerPage::buildAudioStreamGroup()
     const int txChIdx = m_txChannelCombo->findText(savedTxCh);
     m_txChannelCombo->setCurrentIndex(txChIdx >= 0 ? txChIdx
                                                     : m_txChannelCombo->findText(QStringLiteral("Both")));
-    connect(m_txChannelCombo, &QComboBox::currentTextChanged, this, [](const QString& text) {
+    connect(m_txChannelCombo, &QComboBox::currentTextChanged, this, [this](const QString& text) {
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
+        // Thetis setup.cs:37386-37394 [v2.10.3.15]: the running server
+        // takes the new TX channel at once.
+#ifdef HAVE_WEBSOCKETS
+        if (m_tciServerRef) {
+            m_tciServerRef->setTxStereoInputMode(TciServer::txStereoInputModeFromText(text));
+        }
+#endif
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
-    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     contentLayout()->addWidget(group);
 }
@@ -904,7 +917,6 @@ void CatTciServerPage::buildSensorsGroup()
 
     contentLayout()->addWidget(group);
     // R-R3-49: the sensor intervals are not applied yet; hidden until they are.
-    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
 }
 
 // ---------------------------------------------------------------------------
@@ -927,6 +939,7 @@ void CatTciServerPage::buildVfoQuirksGroup()
     // From Thetis TCIServer.cs [v2.10.3.13] — RX2 VFOB forget-on-disconnect
     m_forgetRx2VfoBCheck = new QCheckBox(tr("Forget RX2 VFOB on disconnect"), group);
     m_forgetRx2VfoBCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+    m_forgetRx2VfoBCheck->setObjectName(QStringLiteral("tciForgetRx2VfoBCheck"));
     m_forgetRx2VfoBCheck->setToolTip(
         tr("When a TCI client disconnects, reset RX2 VFOB to its default frequency "
            "instead of keeping the last value set by the client."));
@@ -943,6 +956,7 @@ void CatTciServerPage::buildVfoQuirksGroup()
     // From Thetis TCIServer.cs [v2.10.3.13] — shared-VFOA quirk
     m_useRx1VfoaForRx2Check = new QCheckBox(tr("Use RX1 VFOA for RX2 VFOA"), group);
     m_useRx1VfoaForRx2Check->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+    m_useRx1VfoaForRx2Check->setObjectName(QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck"));
     m_useRx1VfoaForRx2Check->setToolTip(
         tr("Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. "
            "Required by clients that do not maintain independent per-receiver VFO state."));
@@ -959,6 +973,7 @@ void CatTciServerPage::buildVfoQuirksGroup()
     // From Thetis TCIServer.cs [v2.10.3.13] — VFOB→VFOA copy quirk
     m_copyRx2VfobToVfoaCheck = new QCheckBox(tr("Copy RX2 VFOB to VFOA"), group);
     m_copyRx2VfobToVfoaCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+    m_copyRx2VfobToVfoaCheck->setObjectName(QStringLiteral("tciCopyRx2VfobToVfoaCheck"));
     m_copyRx2VfobToVfoaCheck->setToolTip(
         tr("Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. "
            "Required by apps that drive split mode via VFOB but read back VFOA."));
@@ -974,7 +989,13 @@ void CatTciServerPage::buildVfoQuirksGroup()
     contentLayout()->addWidget(group);
     // R-R3-49: the three RX2 VFO options are not applied yet; hidden until
     // they are.
-    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::TciExtras);
+    // Unbuilt: in view, disabled, with the reason (JJ's rule
+    // "disabled, never hidden").
+    for (QCheckBox* quirk : {m_forgetRx2VfoBCheck, m_useRx1VfoaForRx2Check,
+                             m_copyRx2VfobToVfoaCheck}) {
+        UnbuiltFeatures::disableUnlessBuilt(quirk, UnbuiltFeature::TciExtras,
+                                            UnbuiltFeatures::notBuiltReason());
+    }
 }
 
 // ---------------------------------------------------------------------------

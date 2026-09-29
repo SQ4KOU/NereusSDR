@@ -436,6 +436,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             },
             {
@@ -461,6 +465,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             },
             {
@@ -486,6 +494,10 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
+              },
+              "availability": {
+                "enabled": false,
+                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             }
           ]

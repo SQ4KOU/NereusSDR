@@ -355,9 +355,24 @@ constexpr Entry kEntries[] = {
 // shown in the same words as before. None is written in the sources any
 // more (tst_operator_wording_sweep checks both ways).
 constexpr Entry kOlderCoreEntries[] = {
-    // A Core from before 2026-09-29 said "yet" here.
+    // An older Core words these with "yet"; this app shows them without it.
     {"The receiver's spectrum is not ready yet.", "Refused: not ready",
      "The Core does not have this receiver's spectrum ready.", "Refused"},
+    {"CW transmit is not available yet", nullptr,
+     "CW transmit is not available on this Core"},
+    {"FM transmit is not available yet", nullptr,
+     "FM transmit is not available on this Core"},
+    {"DRM transmit is not available yet", nullptr,
+     "DRM transmit is not available on this Core"},
+    {"This device's microphone is not connected to the Core yet. Wait a moment and try again.",
+     nullptr,
+     "This device's microphone is not connected to the Core. Wait a moment and try again."},
+    {"No sound has reached the Core from this device's microphone yet. "
+     "Wait a moment and try again.", nullptr,
+     "No sound has reached the Core from this device's microphone. "
+     "Wait a moment and try again."},
+    {"PureSignal cannot be run from a remote window yet.", nullptr,
+     "PureSignal cannot be run from a remote window."},
     {"session display budget exceeded", "Refused: Core busy",
      "The Core's display limit has no room left for this pan.", "Refused"},
     {"endpoint limit reached", "Refused: pan limit",

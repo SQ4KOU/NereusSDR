@@ -4630,6 +4630,11 @@ public slots:
     /// the slice frequency regardless of `chan` (see setVfoHz note).
     /// From Thetis TCIServer.cs:3793-3833 [v2.10.3.13] — handleVfo, query path.
     Q_INVOKABLE qint64 vfoHz(int rx, int chan) const;
+    /// The frequency of the VFO that transmits, for TCI's "CW becomes CWU
+    /// above 10 MHz" (Thetis TCIServer.cs:4003-4025 [v2.10.3.15] tests the
+    /// TX VFO): the transmitting slice's frequency, or the first slice's
+    /// when none is bound to transmit.
+    Q_INVOKABLE qint64 transmitVfoHz() const;
 
     /// The centre of the stream receiver `rx` sits on: its frequency minus
     /// its offset from that centre (SliceModel::shiftOffsetHz). What TCI's

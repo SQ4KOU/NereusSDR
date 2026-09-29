@@ -170,6 +170,15 @@ bool namedShown(const QWidget* root, const QString& name)
     return shownWithin(w, root);
 }
 
+// JJ's rule "disabled, never hidden": a control named `name`, shown and
+// usable. An unbuilt one may be in view, disabled with its reason.
+bool usableShown(const QWidget* root, const QString& name)
+{
+    if (root == nullptr) { return false; }
+    const QWidget* w = root->findChild<QWidget*>(name);
+    return w != nullptr && shownWithin(w, root) && w->isEnabled();
+}
+
 // A label or button with exactly this text, shown.
 bool textShown(const QWidget* root, const QString& text)
 {
@@ -734,16 +743,19 @@ QMap<F, QList<Surface>> surfaces()
                             Surface{QStringLiteral("Spot Hub RBN Rate Limit label"), Host::SpotHub,
                                     [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
     map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
+    // CW to CWU, the TX channel, the sensor intervals and the stream
+    // channels are built (codex/tci-settings-real); the three RX2 VFO
+    // options stay in view, disabled with the reason, until they are.
+    const auto usable = [](const QString& name) {
+        return [name](QWidget* root) { return usableShown(root, name); };
+    };
     map[F::TciExtras] = {
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("CW to CWU"),
-               text(QStringLiteral("CW becomes CWU above 10 MHz"))),
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:"))),
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("sensor intervals"),
-               [](QWidget* p) { return groupShown(p, QStringLiteral("Sensors")); }),
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("RX2 VFO options"),
-               [](QWidget* p) { return groupShown(p, QStringLiteral("VFO Quirks")); }),
-        onPage(QStringLiteral("TCI"), QStringLiteral("stream channels"), text(QStringLiteral("Channels:"))),
-        onPage(QStringLiteral("TCI"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:")))};
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("Forget RX2 VFOB"),
+               usable(QStringLiteral("tciForgetRx2VfoBCheck"))),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("Use RX1 VFOA for RX2 VFOA"),
+               usable(QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck"))),
+        onPage(QStringLiteral("TCI Server"), QStringLiteral("Copy RX2 VFOB to VFOA"),
+               usable(QStringLiteral("tciCopyRx2VfobToVfoaCheck")))};
     map[F::SmallFilter] = {onPage(QStringLiteral("Meter Styles"), QStringLiteral("small filter display"),
                                   named(QStringLiteral("appearanceVfoFlagGroup")))};
     map[F::ApfParams] = {onPage(QStringLiteral("CW"), QStringLiteral("APF bandwidth"), text(QStringLiteral("Bandwidth"))),
@@ -932,6 +944,22 @@ private slots:
             QVERIFY(renders);
             QVERIFY(actionShown(hosts.containerDialog(), QStringLiteral("Filter Display")));
         }
+    }
+
+    // The stream channels setting is built (codex/tci-settings-real): the
+    // Channels control on Setup > Audio > TCI is shown and usable, in a local
+    // window and a remote one.
+    void builtTciStreamChannelsControlIsUsable()
+    {
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            Hosts hosts(sessions, remote);
+            QWidget* page = hosts.page(QStringLiteral("TCI"));
+            QVERIFY2(page != nullptr, remote ? "remote" : "local");
+            QVERIFY2(usableShown(page, QStringLiteral("tciStreamChannelsCombo")),
+                     remote ? "remote" : "local");
+        }
+        QVERIFY(sessions.replace({}, false));
     }
 
     // Nothing on the list shows, in a local window or a remote one.

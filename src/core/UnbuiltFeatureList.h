@@ -87,7 +87,7 @@ enum class UnbuiltFeature {
     WsjtxFilters,     // Spot Hub WSJT-X filters (three) (built after R4)
     RbnRateLimit,     // Spot Hub RBN rate limit (built after R4)
     FreeDvToPsk,      // Spot Hub report FreeDV decodes to PSK Reporter (built after R4)
-    TciExtras,        // TCI CW to CWU, TX channel, sensor intervals, RX2 VFO options,
+    TciExtras,        // TCI RX2 VFO options (three),
                       // stream channels (built after R4)
     SmallFilter,      // Setup > Appearance small filter display on the VFO flag
     ApfParams,        // Setup > DSP > CW peak filter bandwidth and gain (built after R4)

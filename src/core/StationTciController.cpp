@@ -298,6 +298,12 @@ bool StationTciController::setSettings(const QVariantMap& changes, QString* reas
         if (changes.contains(QStringLiteral("alwaysStreamIq"))) {
             m_server->refreshRemoteIqDemand();
         }
+        // Thetis setup.cs:37386-37394 [v2.10.3.15]: the TX channel reaches
+        // the running server at once too.
+        if (changes.contains(QStringLiteral("txChannel"))) {
+            m_server->setTxStereoInputMode(static_cast<TciServer::TxStereoInputMode>(
+                changes.value(QStringLiteral("txChannel")).toInt()));
+        }
     }
 #endif
     if (reason) {

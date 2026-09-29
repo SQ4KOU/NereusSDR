@@ -20,7 +20,6 @@
 #include "AudioTciPage.h"
 #include "core/AppSettings.h"
 #include "gui/StyleConstants.h"
-#include "gui/UnbuiltFeatures.h"
 
 #include <QFormLayout>
 #include <QGroupBox>
@@ -141,11 +140,16 @@ void AudioTciPage::buildFormatGroup()
     // Channel count
     m_channelsCombo = new QComboBox(group);
     m_channelsCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
+    m_channelsCombo->setObjectName(QStringLiteral("tciStreamChannelsCombo"));
     m_channelsCombo->addItem(tr("Mono"),   1);
     m_channelsCombo->addItem(tr("Stereo"), 2);
+    // Each app starts with this count; Thetis starts it at 2 and a mono
+    // stream carries the left channel (TCIServer.cs:781, 5897-5900
+    // [v2.10.3.15]). The server reads it when an app connects.
     m_channelsCombo->setToolTip(
-        tr("Number of audio channels in the TCI audio stream. "
-           "Stereo carries I/Q or L/R pairs; Mono carries a single downmixed channel."));
+        tr("Number of audio channels a TCI app starts with. "
+           "Stereo carries left and right; Mono carries the left channel only. "
+           "An app can choose its own."));
     {
         const int saved = s.value(QStringLiteral("TciAudioStreamChannels"), 2).toInt();
         const int idx   = m_channelsCombo->findData(saved);
@@ -158,8 +162,6 @@ void AudioTciPage::buildFormatGroup()
             m_channelsCombo->currentData().toInt());
     });
     form->addRow(tr("Channels:"), m_channelsCombo);
-    // R-R3-49: the stream channel count is not applied yet; hidden until it is.
-    UnbuiltFeatures::hideUnlessBuilt(m_channelsCombo, UnbuiltFeature::TciExtras);
 
     // Block size (shared key with CatTciServerPage Group 4)
     m_blockSizeSpin = new QSpinBox(group);
@@ -217,7 +219,6 @@ void AudioTciPage::buildTxDirectionGroup()
         AppSettings::instance().setValue(QStringLiteral("TciTxChannel"), text);
     });
     form->addRow(tr("TX channel:"), m_txChannelCombo);
-    UnbuiltFeatures::hideUnlessBuilt(m_txChannelCombo, UnbuiltFeature::TciExtras);
 
     // TX stream buffering
     m_txBufferingSpin = new QSpinBox(group);

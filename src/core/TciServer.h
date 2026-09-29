@@ -339,6 +339,19 @@ public:
     void setUpdateGapMs(int ms);
     int updateGapMs() const { return m_updateGapMs; }
 
+    /// Which channel of an app's stereo transmit audio the radio sends
+    /// (Setup > TCI Server > TX channel; Thetis TCITxStereoInputMode,
+    /// TCIServer.cs:6518 [v2.10.3.15]). Read from TciTxChannel when the
+    /// server starts, as Thetis does (StartServer, TCIServer.cs:6688).
+    enum class TxStereoInputMode { Left = 0, Right = 1, Both = 2 };
+    void setTxStereoInputMode(TxStereoInputMode mode) { m_txStereoInputMode = mode; }
+    TxStereoInputMode txStereoInputMode() const { return m_txStereoInputMode; }
+    /// TciTxChannel's text ("Left", "Right", "Both"); anything else is Both.
+    static TxStereoInputMode txStereoInputModeFromText(const QString& text);
+    /// Thetis cmaster.cs:1401-1427 [v2.10.3.15]: `frames` interleaved stereo
+    /// frames folded into `frames` mono samples at the front of `samples`.
+    static void foldTxStereoToMono(float* samples, int frames, TxStereoInputMode mode);
+
     // Test-only: bypass the RxChannel signal chain and inject audio directly
     // into the per-slice ring buffer.  Used by tst_tci_audio_roundtrip;
     // production code paths go through the Qt::DirectConnection signal at
@@ -611,6 +624,8 @@ private:
     // Task 10 (R-R3-49): the update gap every app gets, and the clock its
     // gates read (milliseconds since this server was built).
     int m_updateGapMs{TciUpdateGap::kDefaultGapMs};
+    // From Thetis TCIServer.cs:6518 [v2.10.3.15]: default Both.
+    TxStereoInputMode m_txStereoInputMode{TxStereoInputMode::Both};
     QElapsedTimer m_gapClock;
 
     // From design doc §1 — TciServer owns one TciProtocol; it is the shared

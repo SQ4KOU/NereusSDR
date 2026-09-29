@@ -23592,6 +23592,15 @@ qint64 RadioModel::vfoHz(int rx, int chan) const
     return static_cast<qint64>(slice->frequency());
 }
 
+qint64 RadioModel::transmitVfoHz() const
+{
+    const SliceModel* slice = txBoundSlice();
+    if (!slice && !m_slices.isEmpty()) {
+        slice = m_slices.first();
+    }
+    return slice ? static_cast<qint64>(slice->frequency()) : 0;
+}
+
 qint64 RadioModel::ddsHz(int rx) const
 {
     const SliceModel* slice = sliceById(rx);

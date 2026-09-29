@@ -2127,7 +2127,7 @@ private slots:
                     // it has its own reason, independent of Core availability.
                     QVERIFY(!importAll->isEnabled());
                     QVERIFY(importAll->accessibleDescription().contains(
-                        QStringLiteral("is not available.")));
+                        QStringLiteral("combined window and Core backup is not available")));
                 } else {
                     QVERIFY2(gated.isEmpty(), qPrintable(label));
                 }

@@ -94,6 +94,18 @@ int indexIn(QLayout* layout, const QWidget* widget, const QLayout* inner)
 
 } // namespace
 
+void disableUnlessBuilt(QWidget* widget, UnbuiltFeature feature, const QString& reason)
+{
+    if (widget == nullptr || isBuilt(feature)) { return; }
+    widget->setEnabled(false);
+    widget->setToolTip(reason);
+}
+
+QString notBuiltReason()
+{
+    return QStringLiteral("This option does not change anything in NereusSDR at the moment.");
+}
+
 void hideUnlessBuilt(QWidget* widget, UnbuiltFeature feature)
 {
     if (widget == nullptr || isBuilt(feature)) { return; }

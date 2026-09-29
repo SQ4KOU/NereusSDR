@@ -46,6 +46,7 @@
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/containers/MmioEndpointsDialog.h"
 #include "gui/containers/MmioVariablePickerPopup.h"
@@ -371,6 +372,54 @@ void collectDescriptionText(const QJsonValue& value, const QString& key, const Q
             collectDescriptionText(item, key, where, out);
         }
     }
+}
+
+// Every string every Setup description shows: each description as written,
+// and each one the Core sends per radio and per version.
+QList<QPair<QString, QString>> allSetupDescriptionText()
+{
+    QList<QPair<QString, QString>> shown;
+    const QStringList ids{QStringLiteral("general"), QStringLiteral("hardware"),
+                          QStringLiteral("audio"), QStringLiteral("dsp"),
+                          QStringLiteral("display"), QStringLiteral("transmit"),
+                          QStringLiteral("appearance"), QStringLiteral("catNetwork"),
+                          QStringLiteral("test"), QStringLiteral("diagnostics"),
+                          QStringLiteral("pa")};
+    // Every description as written, published or not.
+    for (const QString& id : ids) {
+        QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
+        if (!resource.open(QIODevice::ReadOnly)) {
+            continue;
+        }
+        collectDescriptionText(QJsonDocument::fromJson(resource.readAll()).object(), {},
+                               id + QStringLiteral(".json"), shown);
+    }
+    // And every description the Core sends, per radio and per version, so
+    // text the service writes itself is checked as well.
+    const QList<QPair<HPSDRHW, HPSDRModel>> radios{
+        {HPSDRHW::Hermes, HPSDRModel::HERMES},
+        {HPSDRHW::OrionMKII, HPSDRModel::ANAN7000D},
+        {HPSDRHW::Saturn, HPSDRModel::ANAN_G2},
+        {HPSDRHW::HermesC10, HPSDRModel::ANAN_G2E},
+        {HPSDRHW::HermesLite, HPSDRModel::HERMESLITE}};
+    for (const auto& [board, model] : radios) {
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(board), model);
+        for (const QString& id : ids) {
+            const QString description =
+                service.property(id.toLatin1().constData()).toString();
+            for (int version = 1; version <= 14; ++version) {
+                const QString fitted =
+                    SetupDescriptionService::fitCategoryForVersion(description, version);
+                collectDescriptionText(
+                    QJsonDocument::fromJson(fitted.toUtf8()).object(), {},
+                    QStringLiteral("%1 v%2 (model %3)").arg(id).arg(version)
+                        .arg(int(model)),
+                    shown);
+            }
+        }
+    }
+    return shown;
 }
 
 // Desktop text (2026-09-28): the same rule for every tooltip the desktop
@@ -1615,45 +1664,7 @@ private slots:
             QVERIFY2(setupInternalNameIn(QLatin1String(plain)).isEmpty(), plain);
         }
 
-        QList<QPair<QString, QString>> shown;
-        const QStringList ids{QStringLiteral("general"), QStringLiteral("hardware"),
-                              QStringLiteral("audio"), QStringLiteral("dsp"),
-                              QStringLiteral("display"), QStringLiteral("transmit"),
-                              QStringLiteral("appearance"), QStringLiteral("catNetwork"),
-                              QStringLiteral("test"), QStringLiteral("diagnostics"),
-                              QStringLiteral("pa")};
-        // Every description as written, published or not.
-        for (const QString& id : ids) {
-            QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
-            QVERIFY2(resource.open(QIODevice::ReadOnly), qPrintable(id));
-            collectDescriptionText(QJsonDocument::fromJson(resource.readAll()).object(), {},
-                                   id + QStringLiteral(".json"), shown);
-        }
-        // And every description the Core sends, per radio and per version, so
-        // text the service writes itself is checked as well.
-        const QList<QPair<HPSDRHW, HPSDRModel>> radios{
-            {HPSDRHW::Hermes, HPSDRModel::HERMES},
-            {HPSDRHW::OrionMKII, HPSDRModel::ANAN7000D},
-            {HPSDRHW::Saturn, HPSDRModel::ANAN_G2},
-            {HPSDRHW::HermesC10, HPSDRModel::ANAN_G2E},
-            {HPSDRHW::HermesLite, HPSDRModel::HERMESLITE}};
-        for (const auto& [board, model] : radios) {
-            SetupDescriptionService service;
-            service.setRadioContext(BoardCapsTable::forBoard(board), model);
-            for (const QString& id : ids) {
-                const QString description =
-                    service.property(id.toLatin1().constData()).toString();
-                for (int version = 1; version <= 13; ++version) {
-                    const QString fitted =
-                        SetupDescriptionService::fitCategoryForVersion(description, version);
-                    collectDescriptionText(
-                        QJsonDocument::fromJson(fitted.toUtf8()).object(), {},
-                        QStringLiteral("%1 v%2 (model %3)").arg(id).arg(version)
-                            .arg(int(model)),
-                        shown);
-                }
-            }
-        }
+        const QList<QPair<QString, QString>> shown = allSetupDescriptionText();
         QVERIFY2(shown.size() > 2000, qPrintable(QString::number(shown.size())));
         QStringList failures;
         QSet<QString> reported;
@@ -1665,6 +1676,121 @@ private slots:
             }
         }
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+    }
+
+    // Floor rule (operator, 2026-09-29): the words a disabled control shows
+    // make no promise, so no "yet". The reason every unbuilt control shows,
+    // every literal in the unbuilt-feature list, and every reason a Setup
+    // description gives say what the control does today, in plain words.
+    void disabledReasonsMakeNoPromise()
+    {
+        static const QRegularExpression promise(QStringLiteral("\\byet\\b"),
+                                                QRegularExpression::CaseInsensitiveOption);
+        // The rule is not vacuous.
+        QVERIFY(promise.match(QStringLiteral("Not built yet. It does nothing.")).hasMatch());
+        QVERIFY(!promise.match(QStringLiteral("Yeti antenna")).hasMatch());
+
+        const QString reason = UnbuiltFeatures::notBuiltReason();
+        QVERIFY2(!promise.match(reason).hasMatch(), qPrintable(reason));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QVERIFY2(developerWordingIn(reason).isEmpty(), qPrintable(reason));
+
+        QStringList failures;
+        for (const char* file : {"src/gui/UnbuiltFeatures.cpp", "src/core/UnbuiltFeatureList.cpp"}) {
+            const QStringList literals = codeLiterals(sourcePath(file));
+            QVERIFY2(!literals.isEmpty(), file);
+            for (const QString& text : literals) {
+                if (promise.match(text).hasMatch()) {
+                    failures << QStringLiteral("%1: %2").arg(QLatin1String(file), text);
+                }
+            }
+        }
+        const QList<QPair<QString, QString>> shown = allSetupDescriptionText();
+        QVERIFY2(shown.size() > 2000, qPrintable(QString::number(shown.size())));
+        int reasons = 0;
+        for (const auto& [where, text] : shown) {
+            if (!where.endsWith(QLatin1String(".reason"))) {
+                continue;
+            }
+            ++reasons;
+            if (promise.match(text).hasMatch()) {
+                failures << QStringLiteral("%1: %2").arg(where, text);
+            }
+        }
+        QVERIFY2(reasons > 0, "no description reasons read");
+        failures.removeDuplicates();
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+    }
+
+    // Floor rule (operator, 2026-09-29): no user-visible string says "yet",
+    // anywhere. Every literal a user can read in the sources (log lines
+    // left out), every sentence and short line the reason table shows, and
+    // every Setup description field. The reason table's left column is wire
+    // text an older Core sends; it is checked by what it is shown as.
+    void noUserVisibleStringSaysYet()
+    {
+        static const QRegularExpression promise(QStringLiteral("\\byet\\b"),
+                                                QRegularExpression::CaseInsensitiveOption);
+        QStringList failures;
+
+        // The reason table, as shown.
+        QStringList reasons = OperatorReasonText::knownReasons();
+        reasons += OperatorReasonText::tableKeys();
+        int shownReasons = 0;
+        for (const QString& reason : std::as_const(reasons)) {
+            QStringList shown{OperatorReasonText::forDisplay(reason)};
+            shown += OperatorReasonText::shortFormsForDisplay(reason);
+            shown += OperatorReasonText::panNextStep(reason);
+            for (const QString& text : std::as_const(shown)) {
+                ++shownReasons;
+                if (promise.match(text).hasMatch()) {
+                    failures << QStringLiteral("reason table: %1 -> %2").arg(reason, text);
+                }
+            }
+        }
+        QVERIFY2(shownReasons > 300, qPrintable(QString::number(shownReasons)));
+
+        // Every literal a user can read in the sources.
+        int literals = 0;
+        QDirIterator it(sourcePath("src"), {QStringLiteral("*.cpp"), QStringLiteral("*.h"),
+                                            QStringLiteral("*.mm")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            if (path.endsWith(QLatin1String("/OperatorReasonText.cpp"))) {
+                continue;  // Its left column is wire text; its words are checked above.
+            }
+            if (path.endsWith(QLatin1String("/NyiOverlay.cpp"))) {
+                // The placeholder marker tst_no_placeholder_marks must find; its one
+                // user, the Diversity applet, is never built into a window.
+                continue;
+            }
+            const QString file = QDir(QStringLiteral(NEREUS_SOURCE_DIR)).relativeFilePath(path);
+            for (const QString& text : userVisibleLiterals(path)) {
+                ++literals;
+                if (promise.match(text).hasMatch()) {
+                    failures << QStringLiteral("%1: %2").arg(file, text);
+                }
+            }
+        }
+        QVERIFY2(literals > 20000, qPrintable(QString::number(literals)));
+
+        // Every Setup description field, from the resources and the service.
+        const QList<QPair<QString, QString>> described = allSetupDescriptionText();
+        QVERIFY2(described.size() > 2000, qPrintable(QString::number(described.size())));
+        for (const auto& [where, text] : described) {
+            if (promise.match(text).hasMatch()) {
+                failures << QStringLiteral("%1: %2").arg(where, text);
+            }
+        }
+
+        failures.removeDuplicates();
+        // QtTest cuts a long message short; each failure gets its own line.
+        for (const QString& failure : std::as_const(failures)) {
+            qWarning().noquote() << failure;
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(QString::number(failures.size())
+                                                + QStringLiteral(" strings say \"yet\"")));
     }
 
     void desktopTooltipsAndTextNameNoInternals()

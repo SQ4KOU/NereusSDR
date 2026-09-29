@@ -1784,6 +1784,13 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
         setUpdateGapMs(ok ? gapMs : TciUpdateGap::kDefaultGapMs);
     }
 
+    // The TX channel for an app's stereo transmit audio, read when the
+    // server starts. From Thetis StartServer, TCIServer.cs:6688
+    // [v2.10.3.15]: m_txStereoInputMode = c.SetupForm.TCITXInputChannel;
+    setTxStereoInputMode(txStereoInputModeFromText(
+        AppSettings::instance().value(QStringLiteral("TciTxChannel"),
+                                      QStringLiteral("Both")).toString()));
+
     // Phase 14: start the outbound drain timer (stops again in stop()).
     m_drainTimer->start();
 
@@ -2027,6 +2034,23 @@ void TciServer::onNewConnection()
         // TCPIPtciSocketListener(..., rateLimit) at TCIServer.cs:792-795
         // [v2.10.3.15].
         session->updateGap.setGapMs(m_updateGapMs);
+        // The sensor interval an app gets when its rx_sensors_enable or
+        // tx_sensors_enable names none. Thetis keeps 200 ms
+        // (clsTCISensorManager _rxIntervalMs / _txIntervalMs,
+        // TCIServer.cs:486-487 [v2.10.3.15]) and handleRxSensorsEnable /
+        // handleTxSensorsEnable fall back to it (TCIServer.cs:4636, 4647);
+        // NereusSDR's Setup > TCI Server > Sensors sets it, 200 by default,
+        // held to Thetis clampIntervalMs's 30 to 1000 (TCIServer.cs:500-505).
+        {
+            auto& settings = AppSettings::instance();
+            const auto interval = [&settings](const char* key) {
+                bool ok = false;
+                const int ms = settings.value(QString::fromLatin1(key), 200).toInt(&ok);
+                return std::clamp(ok ? ms : 200, 30, 1000);
+            };
+            session->rxSensorIntervalMs = interval("TciRxSensorIntervalMs");
+            session->txSensorIntervalMs = interval("TciTxSensorIntervalMs");
+        }
 
         // Phase 26 review finding #3: apply AudioTciPage AppSettings defaults
         // at connect time so that a client that never sends explicit audio
@@ -2084,6 +2108,21 @@ void TciServer::onNewConnection()
                 session->audioStreamSamples = samplesSaved;
             }
 
+            // Audio stream channel count. Thetis starts each app at 2
+            // (m_audioStreamChannels = 2, TCIServer.cs:781 [v2.10.3.15]) and
+            // takes only 1 or 2 from it afterwards:
+            //     if (channels == 1 || channels == 2)
+            //         m_audioStreamChannels = channels;
+            // (handleAudioStreamChannels, TCIServer.cs:6340-6354
+            // [v2.10.3.15]). Setup > Audio > TCI's Channels is that starting
+            // count; anything else keeps Thetis's 2. The app's own
+            // audio_stream_channels still wins.
+            const int channelsSaved = s.value(
+                QStringLiteral("TciAudioStreamChannels"), 2).toInt();
+            if (channelsSaved == 1 || channelsSaved == 2) {
+                session->audioStreamChannels = channelsSaved;
+            }
+
             // TciTxStreamBufferingMs — no TciClientSession field yet; log only.
             // TODO Phase 3J-2: add txStreamBufferingMs to TciClientSession and
             // wire into the TX audio drain path so the operator-configured
@@ -2116,6 +2155,12 @@ void TciServer::onNewConnection()
             for (QString line : burst) {
                 if (line.startsWith(QLatin1String("iq_samplerate:"))) {
                     line = QStringLiteral("iq_samplerate:%1;").arg(publishedIqRate());
+                } else if (line.startsWith(QLatin1String("audio_stream_channels:"))) {
+                    // Thetis announces the app's own count
+                    // (sendAudioStreamChannels(m_audioStreamChannels),
+                    // TCIServer.cs:2645 [v2.10.3.15]).
+                    line = QStringLiteral("audio_stream_channels:%1;")
+                               .arg(session->audioStreamChannels);
                 }
                 session->sendQueue.push(TciSendQueue::Priority::Control, line);
             }
@@ -4488,6 +4533,20 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
         }
     }
 
+    // ── Stereo to mono by the TX channel ──────────────────────────────────────
+    //
+    // From Thetis cmaster.cs:1401-1427 [v2.10.3.15] (queueTCITxAudio, fed
+    // tciServer.TXStereoInputMode at cmaster.cs:1315): a mono block passes
+    // as it is; a stereo one becomes mono by the TX channel setting (Left,
+    // Right, or Both averaged) before it reaches the transmitter.
+    if (channels > 1) {
+        const int stereoFrames = decodedValueCount / channels;
+        foldTxStereoToMono(decoded.data(), stereoFrames, m_txStereoInputMode);
+        decoded.resize(static_cast<size_t>(stereoFrames));
+        decodedValueCount = stereoFrames;
+        channels = 1;
+    }
+
     // ── Push to TX audio ring ─────────────────────────────────────────────────
     //
     // Thetis enqueues a TCIQueuedTxAudio (with bounded drop-oldest) at
@@ -4559,6 +4618,51 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     }
     // Note: m_txAudioRing holds the data for test-only peekTxRingSize() calls
     // when m_model is null (unit test scenario without a real TxChannel).
+}
+
+// ── TX channel (Thetis TCITxStereoInputMode) ──────────────────────────────────
+
+TciServer::TxStereoInputMode TciServer::txStereoInputModeFromText(const QString& text)
+{
+    // Thetis setup.cs:35513-35527 [v2.10.3.15] (TCITXInputChannel): the
+    // combo's Left, Right or Both.
+    if (text == QLatin1String("Left")) { return TxStereoInputMode::Left; }
+    if (text == QLatin1String("Right")) { return TxStereoInputMode::Right; }
+    return TxStereoInputMode::Both;
+}
+
+void TciServer::foldTxStereoToMono(float* samples, int frames, TxStereoInputMode mode)
+{
+    // From Thetis cmaster.cs:1408-1426 [v2.10.3.15]:
+    //   for (int i = 0; i < complexSamples; i++)
+    //   {
+    //       double left = queuedAudio.Samples[2 * i];
+    //       double right = queuedAudio.Samples[2 * i + 1];
+    //       switch (stereoInputMode)
+    //       {
+    //           case TCITxStereoInputMode.Left:  mono[i] = (float)left; break;
+    //           case TCITxStereoInputMode.Right: mono[i] = (float)right; break;
+    //           case TCITxStereoInputMode.Both:
+    //           default: mono[i] = (float)((left + right) * 0.5); break;
+    //       }
+    //   }
+    // In place: sample i is written after frames 2i and 2i+1 are read.
+    for (int i = 0; i < frames; ++i) {
+        const double left = samples[2 * i];
+        const double right = samples[2 * i + 1];
+        switch (mode) {
+        case TxStereoInputMode::Left:
+            samples[i] = static_cast<float>(left);
+            break;
+        case TxStereoInputMode::Right:
+            samples[i] = static_cast<float>(right);
+            break;
+        case TxStereoInputMode::Both:
+        default:
+            samples[i] = static_cast<float>((left + right) * 0.5);
+            break;
+        }
+    }
 }
 
 // ── setPingIntervalMs() ──────────────────────────────────────────────────────

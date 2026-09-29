@@ -99,8 +99,9 @@ public:
     /// JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
     /// the TCI Server page's settings for this server, by property name
     /// (StationTciModel::settingsTable()), saved and published; the rate
-    /// limit and "always stream IQ" reach the running server at once, the
-    /// others as the server next reads them. Every name must be known and
+    /// limit, "always stream IQ" and the TX channel reach the running server
+    /// at once, the others as the server next reads them (the sensor
+    /// intervals when an app connects). Every name must be known and
     /// every value in its range, or nothing changes and `reason` says why.
     bool setSettings(const QVariantMap& changes, QString* reason);
     /// Parity Task 23: closes the app the `tciClients` record `id` names.

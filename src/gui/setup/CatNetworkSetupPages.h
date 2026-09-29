@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QHash>
+#include <QSet>
 #include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
@@ -154,6 +155,8 @@ private:
     // the page's settings for the Core's own server, by property name.
     QHash<QByteArray, QWidget*> m_coreSettings;
     QHash<QByteArray, QString> m_coreSettingTips;
+    // The Core's settings the TCI server does not use yet (tci-extras).
+    QSet<QByteArray> m_coreUnbuilt;
     void sendCoreSetting(const QByteArray& name, const QVariant& value);
 
     // Group 2: Compatibility
