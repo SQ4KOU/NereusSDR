@@ -46,6 +46,9 @@
 //                 history enable are hidden (UnbuiltFeatures) until the
 //                 meters use them. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-IOS-18 (Display V12): decimal, units and history
+//                 duration carry Setup description ids. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -174,6 +177,7 @@ void MultimeterPage::buildUI()
     // QGroupBox* is captured in addSection but we add the checkbox manually
     // so it spans the full row without a label prefix.
     m_showDecimal = new QCheckBox(tr("Show decimal point in readouts"), this);
+    m_showDecimal->setProperty("nereusSetupId", "display.multimeter.showDecimal");
     m_showDecimal->setToolTip(tr("Display a decimal digit in S-meter and dBm text readouts "
                                   "(e.g. S5.3 or -85.6 dBm)."));
     contentLayout()->addWidget(m_showDecimal);
@@ -191,6 +195,7 @@ void MultimeterPage::buildUI()
             QStringLiteral("dBm"),  // decibels relative to 1 mW
             QStringLiteral("uV")    // microvolts
         });
+    m_unitMode->setProperty("nereusSetupId", "display.multimeter.unitMode");
     m_unitMode->setToolTip(tr("Sets the unit used for signal level readouts across all meter items. "
                                "S = IARU S-scale (S1–S9+dB), dBm = -130 to 0, uV = microvolts at 50Ω."));
 
@@ -207,6 +212,7 @@ void MultimeterPage::buildUI()
         // From Thetis udSignalHistoryDuration default 60 s [v2.10.3.13]
         60000);
     m_signalHistoryDurationMs->setSuffix(QStringLiteral(" ms"));
+    m_signalHistoryDurationMs->setProperty("nereusSetupId", "display.multimeter.historyDuration");
     m_signalHistoryDurationMs->setToolTip(tr("Total time span shown in the signal history graph (1–600 000 ms)."));
 
     // ── Cross-link ───────────────────────────────────────────────────────────

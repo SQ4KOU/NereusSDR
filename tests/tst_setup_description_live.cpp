@@ -22,6 +22,72 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    void pairedV12PublishesTheRestOfDisplayAndKeepsV11Projection()
+    {
+        Core core;
+        Device current(QStringLiteral("Display V12 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Display V11 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v12Features = kHolder;
+        v12Features.insert("setupDescription", 12);
+        auto* v12 = core.signIn(current, v12Features);
+        QVERIFY(admitted(v12));
+        QCOMPARE(capability(v12->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(12));
+        const QJsonObject display = QJsonDocument::fromJson(latest(v12->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(display.value("version"), QJsonValue(12));
+        QStringList pageIds;
+        int described = 0;
+        int v12Rows = 0;
+        for (const QJsonValue& page : display.value("pages").toArray()) {
+            pageIds << page.toObject().value("id").toString();
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    ++described;
+                    if (control.value("requiresDescriptionVersion") == QJsonValue(12)) {
+                        QVERIFY2(SetupDescriptionService::validateDisplayPhoneBinding(control),
+                                 qPrintable(control.value("id").toString()));
+                        ++v12Rows;
+                    }
+                }
+            }
+        }
+        QCOMPARE(pageIds, (QStringList{"display.spectrumDefaults", "display.spectrumPeaks",
+                                       "display.waterfallDefaults", "display.gridScales",
+                                       "display.multimeter", "display.txDisplay",
+                                       "display.threeD"}));
+        QCOMPARE(described, 99);
+        QCOMPARE(v12Rows, 51);
+        const QJsonObject appearance = QJsonDocument::fromJson(latest(v12->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(appearance.value("version"), QJsonValue(12));
+        const QJsonArray colourSections = appearance.value("pages").toArray().first().toObject()
+            .value("sections").toArray();
+        QCOMPARE(colourSections.size(), 2);
+        QVERIFY(SetupDescriptionService::validateAppearanceResetColours(
+            colourSections.at(1).toObject().value("controls").toArray().first().toObject()));
+
+        QHash<QByteArray, int> v11Features = kHolder;
+        v11Features.insert("setupDescription", 11);
+        auto* v11 = core.signIn(older, v11Features);
+        QVERIFY(admitted(v11));
+        QCOMPARE(capability(v11->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(11));
+        const QJsonObject old = QJsonDocument::fromJson(latest(v11->received(),
+            QStringLiteral("setup"), QStringLiteral("display")).toString().toUtf8()).object();
+        QCOMPARE(old.value("version"), QJsonValue(11));
+        QCOMPARE(old.value("pages").toArray().size(), 5);
+        QVERIFY(!QJsonDocument(old).toJson(QJsonDocument::Compact).contains("requiresDescriptionVersion\":12"));
+        const QJsonObject oldAppearance = QJsonDocument::fromJson(latest(v11->received(),
+            QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
+        QCOMPARE(oldAppearance.value("version"), QJsonValue(7));
+        QCOMPARE(oldAppearance.value("pages").toArray().first().toObject()
+                     .value("sections").toArray().size(), 1);
+    }
+
     void pairedV11PublishesSpectrumPeaksAndKeepsV10Projection()
     {
         Core core;

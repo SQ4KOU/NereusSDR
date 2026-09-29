@@ -1,5 +1,9 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-28: R-IOS-18: the dBm window follows the pan's normalise only
+//               when it applies (SpectrumWidget::normalizeActive: Average,
+//               Sample or RMS). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone uplink
 //               (see RemoteMediaController.h). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -466,14 +470,14 @@ DbmWindow waterfallLevelsWindow(const SpectrumWidget* widget,
 // The pan's own floor, in the frame's un-normalised values.
 double panLowDbm(const SpectrumWidget* widget, double binWidthHz)
 {
-    return double(widget->refLevel()) - normalizeShiftDb(widget->dispNormalize(), binWidthHz)
+    return double(widget->refLevel()) - normalizeShiftDb(widget->normalizeActive(), binWidthHz)
         - double(widget->dynamicRange());
 }
 
 DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz,
                         const DbmWindow& levels)
 {
-    const double shift = normalizeShiftDb(widget->dispNormalize(), binWidthHz);
+    const double shift = normalizeShiftDb(widget->normalizeActive(), binWidthHz);
     const double panHigh = double(widget->refLevel()) - shift;
     const double panLow = panLowDbm(widget, binWidthHz);
     // Parity Task 17 follow-up: the waterfall's levels colour the frame's

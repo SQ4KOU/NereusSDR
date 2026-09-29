@@ -8,6 +8,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 J.J. Boyd / KG4VCF : setAverageMode routes to the split
+//                 spectrum averaging the renderer reads (Reset to Smooth
+//                 Defaults). AI-assisted via Anthropic Claude Code.
+//   2026-09-28 J.J. Boyd / KG4VCF : the 1 Hz normalise applies only
+//                 with the Average, Sample and RMS spectrum detectors
+//                 (normalizeActive). AI-assisted via Anthropic Claude Code.
 //   2026-09-28 J.J. Boyd / KG4VCF : persist the local trace/fill colour
 //                 per pan and let per-pan appearance colours inherit pan 0
 //                 until overridden. AI-assisted via OpenAI Codex.
@@ -1800,6 +1806,18 @@ void SpectrumWidget::setWfBlackLevel(int level)
 
 void SpectrumWidget::setAverageMode(AverageMode m)
 {
+    // R-IOS-18: route to the split spectrum averaging, as the header
+    // promises, whether or not the legacy mode changes (it is Logarithmic
+    // from the first load). The renderer reads only m_spectrumAveraging, so
+    // without this Reset to Smooth Defaults' "log-recursive averaging" set
+    // nothing.
+    switch (m) {
+    case AverageMode::None:        setSpectrumAveraging(SpectrumAveraging::None); break;
+    case AverageMode::Weighted:    setSpectrumAveraging(SpectrumAveraging::Recursive); break;
+    case AverageMode::Logarithmic: setSpectrumAveraging(SpectrumAveraging::LogRecursive); break;
+    case AverageMode::TimeWindow:  setSpectrumAveraging(SpectrumAveraging::TimeWindow); break;
+    case AverageMode::Count:       break;
+    }
     if (m_averageMode == m) {
         return;
     }
@@ -1822,8 +1840,14 @@ void SpectrumWidget::setAverageMode(AverageMode m)
 void SpectrumWidget::setSpectrumDetector(SpectrumDetector d)
 {
     if (m_spectrumDetector == d) { return; }
+    const bool normalizeWas = normalizeActive();
     m_spectrumDetector = d;
     scheduleSettingsSave();
+    // The detector decides whether the 1 Hz normalise applies, and the
+    // shift moves the dBm labels the overlay caches.
+    if (normalizeActive() != normalizeWas) {
+        markOverlayDirty();
+    }
     update();
 }
 
@@ -5377,7 +5401,16 @@ int SpectrumWidget::bandPlanStripHeight() const
 // channel rebuild.
 float SpectrumWidget::normalizeShiftDb() const
 {
-    return NereusSDR::normalizeShiftDb(m_dispNormalize, binWidthHz());
+    return NereusSDR::normalizeShiftDb(normalizeActive(), binWidthHz());
+}
+
+// The normalise is on and the spectrum detector is one it applies to
+// (Average, Sample or RMS; normalizeAppliesToDetector). With Peak or
+// Rosenfell the stored choice is kept but nothing moves, as Thetis does.
+bool SpectrumWidget::normalizeActive() const
+{
+    return m_dispNormalize
+        && NereusSDR::normalizeAppliesToDetector(static_cast<int>(m_spectrumDetector));
 }
 
 // Parity Task 31 (A11, R-R3-49): the calibration the trace is drawn with.

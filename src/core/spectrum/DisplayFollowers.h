@@ -29,6 +29,10 @@
 //                 the Core's display extras (iPhone app Task 20). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-28 - normalizeAppliesToDetector (specHPSDR.cs updateNormalizePan):
+//                 the 1 Hz normalise follows the pan detector. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From display.cs ---
@@ -241,6 +245,12 @@ private:
 /// or 0 for a bin width that is not positive. Mirrors Thetis
 /// SetDisplayNormOneHz (specHPSDR.cs:325 NormOneHzPan) at render time.
 float normalizeShiftDb(bool enabled, double binWidthHz);
+
+/// Whether the 1 Hz normalise applies with this spectrum detector (0 Peak,
+/// 1 Rosenfell, 2 Average, 3 Sample, 4 RMS): only 2, 3 and 4. Thetis
+/// specHPSDR.cs updateNormalizePan passes the flag to WDSP for those three
+/// and turns it off for the others.
+bool normalizeAppliesToDetector(int detector);
 
 /// The per-frame averaging constant for a time constant: α =
 /// exp(-1 / (fps × τ)), τ in seconds, clamped to [0, 1]. Thetis AvTau /

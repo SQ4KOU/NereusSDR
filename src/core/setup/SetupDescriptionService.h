@@ -44,6 +44,7 @@ public:
     static bool validateDisplayPhoneBinding(const QJsonObject& control);
     static bool validateAppearanceColourBinding(const QJsonObject& control);
     static bool validateAppearanceMeterStyleBinding(const QJsonObject& control);
+    static bool validateAppearanceResetColours(const QJsonObject& control);
     static bool validateSettingToggleEncoding(const QJsonObject& control);
     static bool validateCommandBinding(const QJsonObject& control, QString* error = nullptr);
     static bool validateTnfTable(const QJsonObject& control, QString* error = nullptr);

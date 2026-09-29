@@ -28,6 +28,11 @@
 //                 the Core's display extras (iPhone app Task 20). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-28 - normalizeAppliesToDetector: the 1 Hz normalise applies
+//                 only to the Average, Sample and RMS detectors, as
+//                 specHPSDR.cs updateNormalizePan does (R-IOS-18). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From display.cs ---
@@ -285,6 +290,17 @@ void WaterfallLevelFollower::compose(const QVector<float>& wfPixelsDbm,
 // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan, applied at the
 // rendering stage so the toggle is instantly reversible without a WDSP
 // channel rebuild.
+// From Thetis specHPSDR.cs:288-294 [v2.10.3.15] updateNormalizePan:
+//     if (norm_oneHz_pan && (det_type_pan == 2 || det_type_pan == 3 || det_type_pan == 4))
+//         SpecHPSDRDLL.SetDisplayNormOneHz(disp, 0, true);
+//     else
+//         SpecHPSDRDLL.SetDisplayNormOneHz(disp, 0, false);
+// Detector 2, 3 and 4 are Average, Sample and RMS in the pan detector list.
+bool normalizeAppliesToDetector(int detector)
+{
+    return detector == 2 || detector == 3 || detector == 4;
+}
+
 float normalizeShiftDb(bool enabled, double binWidthHz)
 {
     if (!enabled) { return 0.0f; }

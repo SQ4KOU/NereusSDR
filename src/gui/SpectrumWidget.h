@@ -1137,6 +1137,10 @@ public:
     // the WDSP spectrum engine is integrated (Task 5.x).
     void setDispNormalize(bool on);
     bool dispNormalize() const { return m_dispNormalize; }
+    // Normalise is on and the spectrum detector is Average, Sample or RMS
+    // (Thetis applies it only then; DisplayFollowers
+    // normalizeAppliesToDetector). The stored choice is dispNormalize().
+    bool normalizeActive() const;
 
     // ShowPeakValueOverlay — scan visible bins, render "Peak: X.X dBm @ Y.YYYY MHz"
     // as corner text. Refreshed on a timer throttled by m_peakTextDelayMs.

@@ -201,6 +201,7 @@ void ColorsThemePage::buildUI()
     auto* resetRow = new QHBoxLayout;
     resetRow->addStretch(1);
     auto* resetBtn = new QPushButton(QStringLiteral("Reset all colors to defaults"), this);
+    resetBtn->setProperty("nereusSetupId", "appearance.colorsTheme.resetColors");
     resetBtn->setToolTip(QStringLiteral(
         "Reset all spectrum and waterfall colors to factory defaults. "
         "Other display settings (FPS, averaging, thresholds, etc.) are not affected."));

@@ -28,8 +28,13 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/NotchModel.h"
+#include "models/Band.h"
+#include "models/PanadapterModel.h"
+#include "gui/SpectrumWidget.h"
+#include "core/spectrum/DisplayFollowers.h"
 
 #include <QAbstractButton>
+#include <QBoxLayout>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -66,6 +71,35 @@ QObject* bySetupId(QWidget& page, const QString& id)
         if (object->property("nereusSetupId").toString() == id) { return object; }
     }
     return nullptr;
+}
+
+QJsonObject projectedCategory(const QString& description, int version)
+{
+    return QJsonDocument::fromJson(
+        SetupDescriptionService::fitCategoryForVersion(description, version).toUtf8()).object();
+}
+
+// The text a described row is labelled with on the desktop: its form label,
+// else the QLabel just before it in a box row, else its accessible name.
+QString nativeRowLabel(QWidget& page, QWidget* widget)
+{
+    QWidget* field = widget;
+    for (QWidget* parent = widget->parentWidget(); parent; parent = parent->parentWidget()) {
+        if (auto* form = qobject_cast<QFormLayout*>(parent->layout())) {
+            auto* label = qobject_cast<QLabel*>(form->labelForField(field));
+            if (label && !label->text().isEmpty()) { return label->text(); }
+        }
+        field = parent;
+    }
+    for (QBoxLayout* box : page.findChildren<QBoxLayout*>()) {
+        for (int i = 1; i < box->count(); ++i) {
+            if (box->itemAt(i)->widget() != widget) { continue; }
+            if (auto* label = qobject_cast<QLabel*>(box->itemAt(i - 1)->widget())) {
+                return label->text();
+            }
+        }
+    }
+    return widget->accessibleName();
 }
 
 void compareControl(QWidget& page, const QJsonObject& control)
@@ -199,7 +233,7 @@ private slots:
         MultimeterPage multimeter(&model);
         TxDisplayPage tx(&model);
         SetupDescriptionService service;
-        const QJsonObject display = service.category(QStringLiteral("display"));
+        const QJsonObject display = projectedCategory(service.display(), 11);
         const QJsonArray pages = display.value("pages").toArray();
         QCOMPARE(pages.size(), 5);
         const QStringList expectedIds{
@@ -318,14 +352,147 @@ private slots:
         QCOMPARE(actualIds, expectedIds);
         model.setBoardForTest(HPSDRHW::HermesLite);
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
-        QCOMPARE(service.category(QStringLiteral("display")), display);
+        QCOMPARE(projectedCategory(service.display(), 11), display);
     }
+    void describedV12DisplayRowsMatchNativePages()
+    {
+        RadioModel model;
+        SpectrumDefaultsPage spectrum(&model);
+        WaterfallDefaultsPage waterfall(&model);
+        GridScalesPage grid(&model);
+        MultimeterPage multimeter(&model);
+        TxDisplayPage tx(&model);
+        Display3DSetupPage threeD(nullptr);
+        ColorsThemePage colours(&model);
+        SetupDescriptionService service;
+        const QHash<QString, QWidget*> nativeByPage{
+            {"display.spectrumDefaults", &spectrum}, {"display.waterfallDefaults", &waterfall},
+            {"display.gridScales", &grid}, {"display.multimeter", &multimeter},
+            {"display.txDisplay", &tx}, {"display.threeD", &threeD},
+            {"appearance.colorsTheme", &colours}};
+        int described = 0;
+        QHash<QWidget*, int> taggedV12;
+        for (const QJsonObject& category : {service.category(QStringLiteral("display")),
+                                            service.category(QStringLiteral("appearance"))}) {
+            for (const QJsonValue& rawPage : category.value("pages").toArray()) {
+                const QJsonObject page = rawPage.toObject();
+                for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+                    const QJsonObject section = rawSection.toObject();
+                    for (const QJsonValue& raw : section.value("controls").toArray()) {
+                        const QJsonObject control = raw.toObject();
+                        if (control.value("requiresDescriptionVersion") != QJsonValue(12)) {
+                            continue;
+                        }
+                        const QString id = control.value("id").toString();
+                        QWidget* native = nativeByPage.value(page.value("id").toString());
+                        QVERIFY2(native != nullptr, qPrintable(id));
+                        ++described;
+                        ++taggedV12[native];
+                        compareControl(*native, control);
+                        auto* widget = qobject_cast<QWidget*>(bySetupId(*native, id));
+                        QVERIFY2(widget != nullptr, qPrintable(id));
+                        // A row inside a native group sits in the section of
+                        // that title.
+                        for (QWidget* parent = widget->parentWidget(); parent;
+                             parent = parent->parentWidget()) {
+                            if (auto* group = qobject_cast<QGroupBox*>(parent)) {
+                                QCOMPARE(group->title(), section.value("title").toString());
+                                break;
+                            }
+                        }
+                        const QString kind = control.value("kind").toString();
+                        if (kind == QLatin1String("toggle") || kind == QLatin1String("button")) {
+                            continue;
+                        }
+                        const QString label = nativeRowLabel(*native, widget);
+                        if (control.contains("perBand")) {
+                            // The desktop names the band being edited.
+                            PanadapterModel* pan = model.panadapters().isEmpty()
+                                ? nullptr : model.panadapters().first();
+                            const QString perBand = control.value("perBand").toObject()
+                                .value("label").toString();
+                            QVERIFY2(label == control.value("label").toString()
+                                         || (pan && label == perBand.arg(bandLabel(pan->band()))),
+                                     qPrintable(id + QStringLiteral(": ") + label));
+                        } else {
+                            QCOMPARE(label, control.value("label").toString());
+                        }
+                    }
+                }
+            }
+        }
+        QCOMPARE(described, 52);
+        // The Spectrum Defaults section of the two top actions and the
+        // Appearance reset carry no native group; the rest match groups.
+        QCOMPARE(taggedV12.value(&grid), 12);
+        QCOMPARE(taggedV12.value(&threeD), 7);
+        // Every tagged widget on the two new pages is described.
+        for (QWidget* page : {static_cast<QWidget*>(&grid), static_cast<QWidget*>(&threeD)}) {
+            int tagged = 0;
+            for (QObject* object : page->findChildren<QObject*>()) {
+                tagged += object->property("nereusSetupId").isValid() ? 1 : 0;
+            }
+            QCOMPARE(tagged, taggedV12.value(page));
+        }
+        // Rows built but not described carry no id.
+        for (QObject* object : spectrum.findChildren<QObject*>()) {
+            const QString id = object->property("nereusSetupId").toString();
+            QVERIFY(!id.contains(QLatin1String("lineWidth"), Qt::CaseSensitive)
+                    || id == QLatin1String("display.spectrumDefaults.noiseFloorLineWidth"));
+            QVERIFY(!id.contains(QLatin1String("calOffset")));
+            QVERIFY(!id.contains(QLatin1String("threadPriority")));
+        }
+    }
+
+    // Normalize applies to the Average, Sample and RMS detectors only
+    // (Thetis specHPSDR.cs updateNormalizePan); the page follows the detector.
+    void normalizeFollowsTheSpectrumDetector()
+    {
+        SpectrumWidget widget;
+        widget.setDispNormalize(true);
+        widget.setSpectrumDetector(SpectrumDetector::Peak);
+        QVERIFY(widget.dispNormalize());
+        QVERIFY(!widget.normalizeActive());
+        widget.setSpectrumDetector(SpectrumDetector::Rosenfell);
+        QVERIFY(!widget.normalizeActive());
+        for (const SpectrumDetector detector :
+             {SpectrumDetector::Average, SpectrumDetector::Sample, SpectrumDetector::RMS}) {
+            widget.setSpectrumDetector(detector);
+            QVERIFY(widget.normalizeActive());
+        }
+        widget.setDispNormalize(false);
+        QVERIFY(!widget.normalizeActive());
+        QVERIFY(!normalizeAppliesToDetector(0));
+        QVERIFY(!normalizeAppliesToDetector(1));
+        QVERIFY(normalizeAppliesToDetector(2));
+        QVERIFY(normalizeAppliesToDetector(3));
+        QVERIFY(normalizeAppliesToDetector(4));
+        QVERIFY(!normalizeAppliesToDetector(5));
+    }
+
+    // Reset to Smooth Defaults sets the log-recursive averaging the
+    // renderer reads (the legacy mode it set used to reach nothing).
+    void smoothDefaultsSetLogRecursiveAveraging()
+    {
+        RadioModel model;
+        SpectrumWidget widget;
+        model.setSpectrumSink(&widget);
+        widget.setSpectrumAveraging(SpectrumAveraging::None);
+        widget.setPanFillEnabled(true);
+        model.applyClaritySmoothDefaults();
+        QCOMPARE(widget.spectrumAveraging(), SpectrumAveraging::LogRecursive);
+        QCOMPARE(widget.wfColorScheme(), WfColorScheme::ClarityBlue);
+        QVERIFY(!widget.panFillEnabled());
+        QVERIFY(widget.wfAgcEnabled());
+        QCOMPARE(widget.wfUpdatePeriodMs(), 30);
+    }
+
     void describedAppearanceColoursMatchNativePage()
     {
         RadioModel model;
         ColorsThemePage page(&model);
         SetupDescriptionService service;
-        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        const QJsonObject appearance = projectedCategory(service.appearance(), 11);
         QCOMPARE(appearance.value("category").toObject().value("where"), QJsonValue("phone"));
         QCOMPARE(appearance.value("category").toObject().value("coverage"), QJsonValue("partial"));
         const QJsonArray pages = appearance.value("pages").toArray();
@@ -362,14 +529,14 @@ private slots:
         QVERIFY(bySetupId(page, QStringLiteral("appearance.colorsTheme.waterfallLowColor")) == nullptr);
         model.setBoardForTest(HPSDRHW::HermesLite);
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
-        QCOMPARE(service.category(QStringLiteral("appearance")), appearance);
+        QCOMPARE(projectedCategory(service.appearance(), 11), appearance);
     }
     void describedMeterStylesMatchNativePage()
     {
         RadioModel model;
         MeterStylesPage page(&model);
         SetupDescriptionService service;
-        const QJsonObject appearance = service.category(QStringLiteral("appearance"));
+        const QJsonObject appearance = projectedCategory(service.appearance(), 11);
         const QJsonArray pages = appearance.value("pages").toArray();
         QCOMPARE(pages.size(), 2);
         const QJsonObject meterPage = pages.at(1).toObject();
@@ -440,7 +607,7 @@ private slots:
                  QStringLiteral("AgedCream"));
         model.setBoardForTest(HPSDRHW::HermesLite);
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
-        QCOMPARE(service.category(QStringLiteral("appearance")), appearance);
+        QCOMPARE(projectedCategory(service.appearance(), 11), appearance);
         QVERIFY(bySetupId(page, QStringLiteral("appearance.meterStyles.smallFilter")) == nullptr);
     }
     void settingsValidationPanelMatchesDesktopActions()
