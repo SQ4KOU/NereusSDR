@@ -37,7 +37,8 @@
 //                 The slice stays for its other listeners, with no
 //                 controller (ruling Q9: nobody adopts it; Take control
 //                 does), or closes when nobody else is on it (the last
-//                 slice on the Core stays). The Core's other close paths
+//                 slice on the Core stays). Refused while the slice
+//                 transmits whenever it stays. The Core's other close paths
 //                 act as this from a controller others listen with
 //                 (ruling Q6).
 //   selectRx      the device's active receive slice, any joined slice
@@ -56,7 +57,9 @@
 //               with AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-28: fix wave for the Tasks 1-4 review by J.J. Boyd (KG4VCF):
 //               a take clears the transmit selection of the slice for any
-//               holder. AI-assisted via Anthropic Claude Code.
+//               holder, and a release that keeps the Core's last slice is
+//               refused while it transmits. AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"

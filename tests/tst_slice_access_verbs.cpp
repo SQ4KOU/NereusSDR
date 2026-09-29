@@ -903,6 +903,41 @@ private slots:
         QVERIFY(!holds(appA, QStringLiteral("slice:0")));
     }
 
+    // Slice control fix wave (Important 1): the Core's last slice stays when
+    // released, so a release of it is a hand-off to nobody and is refused
+    // while it transmits, as a release kept for listeners is.
+    void releasingTheLastSliceIsRefusedWhileItTransmits()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->slices().size(), 1);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QTRY_VERIFY(holds(appA, accessKey(0)));
+
+        const Seen seen = seenBy(appA, 0);
+        QJsonObject r = core.invoke(appA, "slice.release", revisionArgs(seen));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), QStringLiteral("Slice A is transmitting. Release it once it stops."));
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QVERIFY(mox->isMox());
+
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        r = core.invoke(appA, "slice.release", revisionArgs(seen));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QVERIFY(core.model->sliceById(0) != nullptr);
+        QVERIFY(ownership->mark(0).owner.isEmpty());
+    }
+
     void aControllersCloseOfASharedSliceReleasesIt()
     {
         Core core;

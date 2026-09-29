@@ -12,6 +12,11 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 4,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: fix wave for the Tasks 1-4 review by J.J. Boyd (KG4VCF):
+//               a take clears the transmit selection for a slice with no
+//               controller too, and a release of the Core's last slice is
+//               refused while it transmits. AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -284,7 +289,12 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
         if (m_hooks.close && m_hooks.close(sliceId)) {
             return result;
         }
-        // The Core's last slice stays, with nobody on it.
+        // The Core's last slice stays, with nobody on it: a hand-off to
+        // nobody as below, so not while it transmits (slice control fix
+        // wave, Important 1). The close above changed nothing.
+        if (m_hooks.transmitting && m_hooks.transmitting(sliceId)) {
+            return refused(releaseWhileTransmittingReason(letter));
+        }
         if (m_hooks.clearTransmitSelection) {
             m_hooks.clearTransmitSelection(device, sliceId);
         }
