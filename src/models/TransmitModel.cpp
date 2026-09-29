@@ -275,6 +275,10 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: the per-band FM TX offset store
+//                 (setter and load) keeps only finite values in 0..50 MHz,
+//                 else the band's default. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -370,6 +374,16 @@ static double defaultFmTxOffsetMhz(Band band)
         case Band::Band10m: return 0.1;  // 100kHz
         default:            return 0.1;  // 100kHz
     }
+}
+
+// The per-band store keeps only what udFMOffset can hold (0..50 MHz, the
+// FMTXOffsetMHz setter's check, console.cs:20891-20902 [v2.10.3.15]:
+//   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
+// ); anything else, NaN and infinities included, is the band's default.
+static double validFmTxOffsetMhz(Band band, double mhz)
+{
+    return (std::isfinite(mhz) && mhz >= 0.0 && mhz <= 50.0)
+        ? mhz : defaultFmTxOffsetMhz(band);
 }
 
 TransmitModel::TransmitModel(QObject* parent)
@@ -1370,6 +1384,7 @@ void TransmitModel::setFmTxOffsetForBandMhz(Band band, double mhz)
     if (idx < 0 || idx >= kBandCount) {
         return;
     }
+    mhz = validFmTxOffsetMhz(band, mhz);
     m_fmTxOffsetByBandMhz[static_cast<std::size_t>(idx)] = mhz;
     if (!m_persistMac.isEmpty()) {
         AppSettings::instance().setValue(
@@ -2471,7 +2486,8 @@ void TransmitModel::loadFromSettings(const QString& mac)
             bool ok = false;
             const double fm =
                 s.value(fmPfx + bandKeyName(band)).toString().toDouble(&ok);
-            m_fmTxOffsetByBandMhz[slot] = ok ? fm : defaultFmTxOffsetMhz(band);
+            m_fmTxOffsetByBandMhz[slot] =
+                ok ? validFmTxOffsetMhz(band, fm) : defaultFmTxOffsetMhz(band);
         }
     }
 

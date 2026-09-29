@@ -44,6 +44,7 @@
 #include <QThread>
 
 #include <cmath>
+#include <limits>
 
 #include "core/AppSettings.h"
 #include "core/HpsdrModel.h"
@@ -1135,6 +1136,45 @@ private slots:
         slice->setFrequency(50200000.0);
         pump();
         QCOMPARE(tx.fmTxOffsetMhz(), 0.6);
+    }
+
+    // The per-band FM TX offset store takes only what udFMOffset can hold
+    // (0..50 MHz, the FMTXOffsetMHz setter's check at console.cs:20891-20902
+    // [v2.10.3.15], //MW0LGE_21k9); anything else, from a caller or a hand-edited settings
+    // file, falls back to the band's default (console.cs:1833-1841).
+    void fmTxOffsetStore_keepsOnlyValidOffsets()
+    {
+        const double inf = std::numeric_limits<double>::infinity();
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        TransmitModel tx;
+        tx.setFmTxOffsetForBandMhz(Band::Band20m, 25.0);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band20m), 25.0);
+        tx.setFmTxOffsetForBandMhz(Band::Band20m, nan);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band20m), 0.1);
+        tx.setFmTxOffsetForBandMhz(Band::Band6m, inf);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band6m), 1.0);
+        tx.setFmTxOffsetForBandMhz(Band::Band40m, -1e300);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 0.1);
+        tx.setFmTxOffsetForBandMhz(Band::Band40m, 50.5);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 0.1);
+        tx.setFmTxOffsetForBandMhz(Band::Band40m, 50.0);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 50.0);
+
+        const QString mac = QStringLiteral("AABBCCDDEEFF");
+        const QString pfx = QStringLiteral("hardware/%1/fmTxOffsetByBandMhz/").arg(mac);
+        AppSettings& settings = AppSettings::instance();
+        settings.setValue(pfx + bandKeyName(Band::Band6m), QStringLiteral("nan"));
+        settings.setValue(pfx + bandKeyName(Band::Band10m), QStringLiteral("inf"));
+        settings.setValue(pfx + bandKeyName(Band::Band20m), QStringLiteral("-1e300"));
+        settings.setValue(pfx + bandKeyName(Band::Band40m), QStringLiteral("51"));
+        settings.setValue(pfx + bandKeyName(Band::Band80m), QStringLiteral("7.5"));
+        TransmitModel loaded;
+        loaded.loadFromSettings(mac);
+        QCOMPARE(loaded.fmTxOffsetForBandMhz(Band::Band6m), 1.0);
+        QCOMPARE(loaded.fmTxOffsetForBandMhz(Band::Band10m), 0.1);
+        QCOMPARE(loaded.fmTxOffsetForBandMhz(Band::Band20m), 0.1);
+        QCOMPARE(loaded.fmTxOffsetForBandMhz(Band::Band40m), 0.1);
+        QCOMPARE(loaded.fmTxOffsetForBandMhz(Band::Band80m), 7.5);
     }
 };
 
