@@ -8159,10 +8159,12 @@ void StationServer::leaveListenedSlices(const QByteArray& deviceId)
     }
     SliceOwnership* ownership = m_radioModel->sliceOwnership();
     const QList<int> joined = ownership->joinedBy(deviceId);
+    // Its own slices (controlled, or held for it) are the caller's: the
+    // same lists revoke and release walk.
+    const QList<int> controlled = ownership->ownedBy(deviceId);
+    const QList<int> held = ownership->heldFor(deviceId);
     for (int sliceId : joined) {
-        const SliceOwnership::Mark mark = ownership->mark(sliceId);
-        // Its own slices (controlled, or held for it) are the caller's.
-        if (mark.owner == deviceId || mark.heldFor == deviceId) {
+        if (controlled.contains(sliceId) || held.contains(sliceId)) {
             continue;
         }
         ownership->leave(deviceId, sliceId);
