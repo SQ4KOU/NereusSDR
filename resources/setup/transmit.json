@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 14,
   "category": {
     "id": "transmit",
     "title": "Transmit",
@@ -37,6 +37,130 @@
               "min": 0,
               "max": 100,
               "step": 1
+            },
+            {
+              "id": "transmit.power.attOnTx",
+              "label": "ATT on TX",
+              "tooltip": "Enables Attenuator on Mercury during Transmit.",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "attOnTxEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "transmit.power.attOnTxValue",
+              "label": "ATT on TX (dB):",
+              "tooltip": "ATT on TX value in dB (%1..%2).  Active when the ATT on TX checkbox is enabled.  AutoAtt (PS-A) will adjust this automatically during PureSignal cycles; setting a sane starting value (e.g. 10 dB) before arming PS-A avoids the 31.1 dB initial-overload slam on radios where the coupler+PA delivers calcc FB level > 256 at ATT=0.",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "attOnTxValue"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "unit": "dB",
+              "rangeSource": "attOnTx"
+            },
+            {
+              "id": "transmit.power.forceAttWhenPsOff",
+              "label": "Force ATT on Tx to 31 when PS-A is off",
+              "tooltip": "Forces ATT on Tx to 31 when PS-A is off. CW will do this anyway",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "stepAtt",
+                  "name": "forceAttWhenPsOff"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              }
+            }
+          ]
+        },
+        {
+          "title": "Tune",
+          "controls": [
+            {
+              "id": "transmit.power.tuneDriveSource",
+              "label": "Drive Source:",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "tuneDrivePowerSource"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "choices": [
+                "Use Drive Slider",
+                "Use Tune Slider",
+                "Use Fixed Drive"
+              ]
+            },
+            {
+              "id": "transmit.power.fixedTunePower",
+              "label": "Fixed Tune Power:",
+              "tooltip": "",
+              "kind": "integer",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "tunePower"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 5,
+                "transmit": true,
+                "offAir": true
+              },
+              "rangeFrom": {
+                "catalogueTransmit": "tunePower"
+              },
+              "enabledWhen": {
+                "property": {
+                  "object": "transmit",
+                  "name": "tuneDrivePowerSource"
+                },
+                "oneOf": [
+                  2
+                ]
+              }
             }
           ]
         },
@@ -187,6 +311,252 @@
               }
             }
           ]
+        },
+        {
+          "title": "PA Control",
+          "controls": [
+            {
+              "id": "transmit.power.DisableHfPa",
+              "label": "Disable HF PA",
+              "tooltip": "Disables HF PA.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DisableHfPa"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 11,
+                "transmit": true
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "availableOn": "hfPaSwitch"
+            }
+          ]
+        }
+      ],
+      "coverageV14": "partial: the TX TUN Meter choice is not wired to anything on the desktop"
+    },
+    {
+      "id": "transmit.speechProcessor",
+      "title": "Speech Processor",
+      "where": "station",
+      "sections": [
+        {
+          "title": "Active Profile",
+          "controls": [
+            {
+              "id": "transmit.speechProcessor.activeProfile",
+              "label": "Profile:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "activeTxProfile"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3
+              }
+            },
+            {
+              "id": "transmit.speechProcessor.manage",
+              "label": "Manage...",
+              "tooltip": "Open the TX equalizer. To save or delete a TX profile, use Setup > Audio > TX Profile.",
+              "kind": "button",
+              "binding": {
+                "phone": "openTxEq"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14
+            }
+          ]
+        },
+        {
+          "title": "Stage Status",
+          "controls": [
+            {
+              "id": "transmit.speechProcessor.txEq",
+              "label": "TX EQ",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txEqEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "enabledOff"
+            },
+            {
+              "id": "transmit.speechProcessor.openTxEq",
+              "label": "Open TX EQ Editor...",
+              "tooltip": "Open the TX Equalizer (10-band sliders)",
+              "kind": "button",
+              "binding": {
+                "phone": "openTxEq"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14
+            },
+            {
+              "id": "transmit.speechProcessor.leveler",
+              "label": "Leveler",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "txLevelerOn"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "enabledOff"
+            },
+            {
+              "id": "transmit.speechProcessor.openLeveler",
+              "label": "Open AGC/ALC Setup",
+              "tooltip": "Open Setup \u2192 DSP \u2192 AGC/ALC (Leveler controls live there)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "dsp.agcAlc"
+            },
+            {
+              "id": "transmit.speechProcessor.openAlc",
+              "label": "Open AGC/ALC Setup",
+              "tooltip": "Open Setup \u2192 DSP \u2192 AGC/ALC (ALC max-gain + decay live there)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "dsp.agcAlc"
+            },
+            {
+              "id": "transmit.speechProcessor.phaseRotator",
+              "label": "Phase Rot.",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "phaseRotatorEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "phaseRotator"
+            },
+            {
+              "id": "transmit.speechProcessor.openPhaseRotator",
+              "label": "Open Phase Rotator...",
+              "tooltip": "Open Setup \u2192 DSP \u2192 CFC (Phase Rotator group is at the top)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "dsp.cfc"
+            },
+            {
+              "id": "transmit.speechProcessor.cfc",
+              "label": "CFC",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cfcEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "cfcBands"
+            },
+            {
+              "id": "transmit.speechProcessor.openCfc",
+              "label": "Open CFC...",
+              "tooltip": "Open Setup \u2192 DSP \u2192 CFC (Continuous Frequency Compressor)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "dsp.cfc"
+            },
+            {
+              "id": "transmit.speechProcessor.cessb",
+              "label": "CESSB",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "cessbOn"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "cessb"
+            },
+            {
+              "id": "transmit.speechProcessor.openCessb",
+              "label": "Open CESSB...",
+              "tooltip": "Open Setup \u2192 DSP \u2192 CFC (CESSB group is at the bottom)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "dsp.cfc"
+            },
+            {
+              "id": "transmit.speechProcessor.dexp",
+              "label": "AM-SQ / DEXP",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "dexpEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "format": "enabledOff"
+            },
+            {
+              "id": "transmit.speechProcessor.openDexp",
+              "label": "Open DEXP/VOX Setup",
+              "tooltip": "Open Setup \u2192 Transmit \u2192 DEXP/VOX (AM-Squelch + Downward Expander)",
+              "kind": "button",
+              "binding": {
+                "phone": "openSetupPage"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "target": "transmit.dexpVox"
+            }
+          ]
         }
       ]
     },
@@ -199,6 +569,26 @@
         {
           "title": "VOX / DEXP",
           "controls": [
+            {
+              "id": "transmit.dexpVox.voxEnabled",
+              "label": "Enable VOX",
+              "tooltip": "Enable voice activated transmit",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "voxEnabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 14,
+              "gate": {
+                "capability": "remoteTxVersion",
+                "min": 1,
+                "transmit": true,
+                "micLine": true
+              }
+            },
             {
               "id": "transmit.dexpVox.dexpEnabled",
               "label": "Enable DEXP",
@@ -556,7 +946,9 @@
             }
           ]
         }
-      ]
+      ],
+      "coverageV14": ""
     }
-  ]
+  ],
+  "coverageV14": "partial: the TX TUN Meter choice is not wired to anything on the desktop"
 }
