@@ -76,6 +76,10 @@
 //                 nudAutoAttHoldRX2), locally and on the Core; disabled
 //                 with the reason on a one-ADC radio or an older Core.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The Region combo's IARU entries read "IARU Region 1".."IARU
+//                 Region 3" (display text only; the saved value is
+//                 unchanged). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -561,9 +565,12 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
         QStringLiteral("Netherlands"),
         QStringLiteral("France"),
         QStringLiteral("Russia"),
-        QStringLiteral("Region1"),
-        QStringLiteral("Region2"),
-        QStringLiteral("Region3"),
+        // Thetis shows "Region1".."Region3"; NereusSDR names them "IARU
+        // Region 1".."IARU Region 3" (display text only: the saved
+        // BandPlanRegion value is still the entry's number, 20..22).
+        QStringLiteral("IARU Region 1"),
+        QStringLiteral("IARU Region 2"),
+        QStringLiteral("IARU Region 3"),
         QStringLiteral("Germany"),
     });
     // From Thetis setup.designer.cs:8113 [v2.10.3.13]

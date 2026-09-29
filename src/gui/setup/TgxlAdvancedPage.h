@@ -133,6 +133,8 @@ private slots:
     void onApplyIfconf();
 
 private:
+    // Setup description version 15: the described widgets' ids.
+    void applySetupIds();
     // Build each section
     void buildIdentitySection(QVBoxLayout* topLay);
     void buildAntennaLabelsSection(QVBoxLayout* topLay);

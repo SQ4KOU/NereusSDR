@@ -1430,6 +1430,7 @@ list(APPEND CORE_SOURCES
     # tools read (the desktop's hide helpers stay in src/gui).
     src/core/UnbuiltFeatureList.cpp
     src/core/setup/SetupDescriptionService.cpp
+    src/core/setup/SetupDescriptionV15.cpp
     # Parity Task 19 (R-IOS-25): the link's record streams.
     src/core/session/RecordStream.cpp
     # R-IOS-13 / R-R3-49 (txModMonitorVersion 1): the AM Mod Monitor's

@@ -12,6 +12,8 @@
 //                                    the Core (setTxInterlockPolicy); every
 //                                    window follows policy changes.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/setup/PgxlInterlockPage.h"
@@ -40,6 +42,17 @@ PgxlInterlockPage::PgxlInterlockPage(RadioModel* model, QWidget* parent)
 {
     buildUi();
     loadFromPolicy();
+    // Setup description version 15: this page's ids.
+    const std::pair<QWidget*, const char*> setupIds[] = {
+        {m_modeCombo, "interlockMode"},
+        {m_graceSpinbox, "interlockGrace"},
+        {m_swrGateCheckbox, "swrGate"},
+        {m_swrGateMaxSpinbox, "swrGateMax"}};
+    for (const auto& [widget, id] : setupIds) {
+        if (widget) {
+            widget->setProperty("nereusSetupId", QStringLiteral("catNetwork.fourO3A.") + QLatin1String(id));
+        }
+    }
     // R-R3-47: the page follows the policy wherever it changes (another
     // window, the Core, a remote window's own change coming back).
     if (m_policy) {
@@ -137,7 +150,7 @@ void PgxlInterlockPage::buildUi()
         "  is present but not in OPERATE (or SWR gate trips).\n"
         "Block: TX is prevented when the amplifier is present but not in\n"
         "  OPERATE (or SWR gate trips).\n"
-        "Default: Disabled (matches AetherSDR behavior).");
+        "Default: Disabled.");
     modeForm->addRow("Interlock Mode:", m_modeCombo);
 
     topLay->addWidget(modeBox);

@@ -32,13 +32,13 @@
 // Phase 3M-1b Task I.3 (2026-04-28): Radio Mic settings group with
 // per-family layout, capability-gated. Visible only when
 // MicSource::Radio AND caps.hasMicJack == true. Three sub-layouts:
-//   Hermes/Atlas/HermesII/Angelia family — QGroupBox "Radio Mic — Hermes / Atlas":
+//   Hermes/Atlas/HermesII/Angelia family: QGroupBox "Radio Mic (Hermes / Atlas)":
 //     Row 1: Mic In / Line In radio buttons (TransmitModel::lineIn)
 //     Row 2: +20 dB Mic Boost checkbox (TransmitModel::micBoost)
 //     Row 3: Line In Gain slider -34..+12 dB (TransmitModel::lineInBoost)
-//   Orion-MkII family (Orion/OrionMKII) — QGroupBox "Radio Mic — Orion-MkII":
+//   Orion-MkII family (Orion/OrionMKII): QGroupBox "Radio Mic (Orion-MkII)":
 //     4 checkboxes: Mic Tip-Ring, Mic Bias, Mic PTT Disabled, +20 dB Mic Boost
-//   Saturn G2 — QGroupBox "Radio Mic — Saturn G2":
+//   Saturn G2: QGroupBox "Radio Mic (Saturn G2)":
 //     Row 1: 3.5 mm / XLR radio buttons (TransmitModel::micXlr)
 //     Rows 2-4: Mic PTT Disabled, Mic Bias, +20 dB Mic Boost checkboxes
 // HL2 hides all three groups (hasMicJack=false). HW-family discriminated

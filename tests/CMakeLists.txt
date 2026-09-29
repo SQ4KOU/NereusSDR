@@ -8279,6 +8279,14 @@ nereus_add_test(tst_station_tx_watch_direct EXTRA_LABELS session)
 nereus_add_test(tst_station_tx_watch_relay EXTRA_LABELS session)
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
+# Load finding: about 19 s on a quiet machine, past ctest's 120 s under a
+# loaded full run; two entries of the same binary (the limit is not raised;
+# the group is in the test's main()).
+nereus_split_test(tst_station_session
+    ENV NEREUS_STATION_SESSION_GROUP GROUPS controls)
+# The session tests' waits (SessionWait.h): NEREUS_TRY_COMPARE waits for the
+# compare QCOMPARE makes (fuzzy for floating point).
+nereus_add_test(tst_session_wait EXTRA_LABELS session)
 nereus_add_test(tst_core_build_identity
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

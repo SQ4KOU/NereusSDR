@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 15,
   "category": {
     "id": "dsp",
     "title": "DSP",
@@ -632,6 +632,68 @@
           ]
         },
         {
+          "title": "RNNoise Model (Global)",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nr3Model",
+              "label": "Model",
+              "tooltip": "The NR3 model the Core uses for every receiver.",
+              "kind": "choice",
+              "binding": {
+                "command": {
+                  "verb": "dspAssets.selectNr3Model",
+                  "valueProperty": {
+                    "object": "dspAssets",
+                    "name": "nr3ModelAsset"
+                  },
+                  "arguments": {
+                    "id": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "dspAssetVersion",
+                "min": 2
+              },
+              "options": [
+                {
+                  "value": "bundled:nr3-large",
+                  "label": "Bundled large model"
+                },
+                {
+                  "value": "bundled:nr3-small",
+                  "label": "Bundled small model"
+                }
+              ],
+              "choicesFrom": {
+                "dspAssets": "nr3"
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nr3ModelStatus",
+              "label": "Status",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "dspAssets",
+                  "name": "nr3ModelStatus"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "dspAssetVersion",
+                "min": 2
+              }
+            }
+          ]
+        },
+        {
           "title": "NR4 (SpecBleach)",
           "controls": [
             {
@@ -905,6 +967,57 @@
               ]
             },
             {
+              "id": "dsp.nrAnf.nnrLimit",
+              "label": "Limit",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrLimit"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "format": "nnrLimit"
+            },
+            {
+              "id": "dsp.nrAnf.nnrTryAgain",
+              "label": "Try again",
+              "tooltip": "Run the saved noise reduction choice again.",
+              "kind": "button",
+              "binding": {
+                "command": {
+                  "verb": "nnr.tryAgain",
+                  "arguments": {
+                    "sliceId": {
+                      "$selectedOwnedSliceId": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "enabledWhen": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrLimit"
+                },
+                "oneOf": [
+                  1,
+                  2
+                ]
+              }
+            },
+            {
               "id": "dsp.nrAnf.nnrMaskFloorDb",
               "label": "Suppression",
               "tooltip": "More-negative values permit stronger suppression. Higher values retain more of the original signal and noise.",
@@ -1074,6 +1187,370 @@
           ]
         },
         {
+          "title": "Diagnostics",
+          "controls": [
+            {
+              "id": "dsp.nrAnf.nnrAvailable",
+              "label": "Available",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrAvailable"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrReady",
+              "label": "Ready",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrReady"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrRunning",
+              "label": "Running",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrRunning"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrStandardAvailable",
+              "label": "Standard model",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrStandardAvailable"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrPremiumAvailable",
+              "label": "Premium model",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrPremiumAvailable"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrActualModelSlot",
+              "label": "Model in use",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrActualModelSlot"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "format": "nnrModelSlot"
+            },
+            {
+              "id": "dsp.nrAnf.nnrDspRateHz",
+              "label": "NNR processing",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrDspRateHz"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "unit": "Hz",
+              "decimals": 0
+            },
+            {
+              "id": "dsp.nrAnf.nnrNetworkRateHz",
+              "label": "Model rate",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrNetworkRateHz"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "unit": "Hz",
+              "decimals": 0
+            },
+            {
+              "id": "dsp.nrAnf.nnrRateSupported",
+              "label": "Rate supported",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrRateSupported"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrDelaySamples",
+              "label": "Delay",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrDelaySamples"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "unit": "samples",
+              "decimals": 0
+            },
+            {
+              "id": "dsp.nrAnf.nnrLatencyMs",
+              "label": "Latency",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrLatencyMs"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "unit": "ms",
+              "decimals": 2
+            },
+            {
+              "id": "dsp.nrAnf.nnrModelSource",
+              "label": "Source",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrModelSource"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrProfilingAvailable",
+              "label": "Profiling",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrProfilingAvailable"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "dsp.nrAnf.nnrStatus",
+              "label": "Status",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrStatus"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "format": "nnrStatus"
+            },
+            {
+              "id": "dsp.nrAnf.nnrTestMode",
+              "label": "Test mode",
+              "tooltip": "Temporary NNR processing mode until this app reconnects to the Core.",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrTestMode"
+                }
+              },
+              "applies": "staged",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "label": "Network"
+                },
+                {
+                  "value": 1,
+                  "label": "Identity"
+                },
+                {
+                  "value": 2,
+                  "label": "Low-pass"
+                }
+              ]
+            },
+            {
+              "id": "dsp.nrAnf.nnrOutputMode",
+              "label": "Output mode",
+              "tooltip": "Temporary output mapping until this app reconnects to the Core.",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrOutputMode"
+                }
+              },
+              "applies": "staged",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "options": [
+                {
+                  "value": 0,
+                  "label": "Duplicate I/Q"
+                },
+                {
+                  "value": 1,
+                  "label": "Q zero"
+                }
+              ]
+            },
+            {
+              "id": "dsp.nrAnf.nnrApplyDiagnostics",
+              "label": "Apply until reconnect",
+              "tooltip": "",
+              "kind": "button",
+              "binding": {
+                "command": {
+                  "verb": "nnr.setDiagnostics",
+                  "arguments": {
+                    "sliceId": {
+                      "$selectedOwnedSliceId": true
+                    },
+                    "testMode": {
+                      "$control": "dsp.nrAnf.nnrTestMode"
+                    },
+                    "outputMode": {
+                      "$control": "dsp.nrAnf.nnrOutputMode"
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "nnrVersion",
+                "min": 1
+              },
+              "enabledWhen": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "nnrReady"
+                },
+                "oneOf": [
+                  true
+                ]
+              }
+            }
+          ]
+        },
+        {
           "title": "NNR actions",
           "controls": [
             {
@@ -1120,7 +1597,8 @@
             }
           ]
         }
-      ]
+      ],
+      "coverageV15": "partial: adding and saving NR3 and NNR model files is done in the model manager"
     },
     {
       "id": "dsp.nbSnb",
@@ -1296,10 +1774,30 @@
                 }
               },
               "applies": "live"
+            },
+            {
+              "id": "dsp.cw.apfCenter",
+              "label": "Center Freq",
+              "tooltip": "",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "slice:active",
+                  "name": "apfTuneHz"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "min": 100,
+              "max": 1100,
+              "step": 1,
+              "unit": "Hz",
+              "valueOffset": 600
             }
           ]
         }
-      ]
+      ],
+      "coverageV15": "partial: the CW keyer and timing and the APF bandwidth and gain are not built"
     },
     {
       "id": "dsp.amSam",
@@ -1557,7 +2055,8 @@
             }
           ]
         }
-      ]
+      ],
+      "coverageV15": "partial: the per-band CFC editor is not described"
     },
     {
       "id": "dsp.tnf",
@@ -1730,6 +2229,203 @@
                 "capability": "notchControlVersion",
                 "min": 2
               }
+            },
+            {
+              "id": "dsp.tnf.visualNotch",
+              "label": "Visual approximation of notch (NOTE: this is not 100% representation of the active notch)",
+              "tooltip": "This is a simple approximation and does not accurately represent the notch",
+              "kind": "toggle",
+              "binding": {
+                "phone": "NotchVisualEnabled"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "default": false
+            }
+          ]
+        }
+      ],
+      "coverageV15": ""
+    },
+    {
+      "id": "dsp.filterPresets",
+      "title": "Filter Presets",
+      "where": "station",
+      "sections": [
+        {
+          "title": "Mode",
+          "controls": [
+            {
+              "id": "dsp.filterPresets.mode",
+              "label": "Mode:",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "phone": "filterPresetsMode"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "options": [
+                {
+                  "value": 0,
+                  "label": "LSB"
+                },
+                {
+                  "value": 1,
+                  "label": "USB"
+                },
+                {
+                  "value": 2,
+                  "label": "DSB"
+                },
+                {
+                  "value": 3,
+                  "label": "CWL"
+                },
+                {
+                  "value": 4,
+                  "label": "CWU"
+                },
+                {
+                  "value": 5,
+                  "label": "FM"
+                },
+                {
+                  "value": 6,
+                  "label": "AM"
+                },
+                {
+                  "value": 7,
+                  "label": "DIGU"
+                },
+                {
+                  "value": 8,
+                  "label": "SPEC"
+                },
+                {
+                  "value": 9,
+                  "label": "DIGL"
+                },
+                {
+                  "value": 10,
+                  "label": "SAM"
+                },
+                {
+                  "value": 11,
+                  "label": "DRM"
+                }
+              ],
+              "default": 1
+            }
+          ]
+        },
+        {
+          "title": "Presets",
+          "controls": [
+            {
+              "id": "dsp.filterPresets.presets",
+              "label": "Presets",
+              "tooltip": "",
+              "kind": "table",
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "binding": {
+                "filterPresets": {
+                  "modeFrom": "dsp.filterPresets.mode"
+                }
+              },
+              "columns": [
+                {
+                  "id": "slot",
+                  "label": "#",
+                  "kind": "readout"
+                },
+                {
+                  "id": "name",
+                  "label": "Name",
+                  "kind": "text",
+                  "maxLength": 32
+                },
+                {
+                  "id": "lowHz",
+                  "label": "Low (Hz)",
+                  "kind": "integer",
+                  "min": -10000,
+                  "max": 10000,
+                  "step": 1,
+                  "unit": "Hz"
+                },
+                {
+                  "id": "highHz",
+                  "label": "High (Hz)",
+                  "kind": "integer",
+                  "min": -10000,
+                  "max": 10000,
+                  "step": 1,
+                  "unit": "Hz"
+                },
+                {
+                  "id": "width",
+                  "label": "Width (Hz)",
+                  "kind": "readout"
+                },
+                {
+                  "id": "reorder",
+                  "label": "Reorder",
+                  "kind": "reorder"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Actions",
+          "controls": [
+            {
+              "id": "dsp.filterPresets.resetRow",
+              "label": "Reset Selected Row",
+              "tooltip": "",
+              "kind": "button",
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "binding": {
+                "filterPresets": {
+                  "action": "resetRow"
+                }
+              }
+            },
+            {
+              "id": "dsp.filterPresets.resetMode",
+              "label": "Reset All Rows for This Mode",
+              "tooltip": "",
+              "kind": "button",
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "binding": {
+                "filterPresets": {
+                  "action": "resetMode"
+                }
+              },
+              "confirm": "Reset all presets for %1 to the defaults?"
+            }
+          ]
+        },
+        {
+          "title": "Global",
+          "controls": [
+            {
+              "id": "dsp.filterPresets.resetAll",
+              "label": "Reset Every Mode to Defaults",
+              "tooltip": "",
+              "kind": "button",
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "binding": {
+                "filterPresets": {
+                  "action": "resetAll"
+                }
+              },
+              "confirm": "Reset ALL filter presets for ALL modes to the defaults?\n\nThis cannot be undone."
             }
           ]
         }
@@ -2169,8 +2865,51 @@
               }
             }
           ]
+        },
+        {
+          "title": "Filter Graph",
+          "controls": [
+            {
+              "id": "dsp.options.highResFilter",
+              "label": "High-resolution filter characteristics in filter graph",
+              "tooltip": "When enabled, the filter graph displays the actual computed FIR magnitude response. When disabled, a simplified box-shape passband is shown instead.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DspOptionsHighResFilterCharacteristics"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "dspInfoVersion",
+                "min": 1
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              }
+            },
+            {
+              "id": "dsp.options.timeToLastChange",
+              "label": "Time to last change",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "property": {
+                  "object": "radio",
+                  "name": "dspOptionsLastApplyMs"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "unit": "ms",
+              "decimals": 0,
+              "format": "positiveOrNone"
+            }
+          ]
         }
-      ]
+      ],
+      "coverageV15": ""
     }
-  ]
+  ],
+  "coverageV15": "partial: the NR3 and NNR model files and the per-band CFC editor are not described"
 }

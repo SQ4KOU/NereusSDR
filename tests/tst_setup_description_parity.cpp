@@ -13,8 +13,11 @@
 #include "gui/ColorSwatchButton.h"
 #include "gui/setup/GeneralSetupPages.h"
 #include "gui/setup/CatNetworkSetupPages.h"
+#include "gui/setup/FourO3APage.h"
+#include "gui/setup/RfKitPage.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/DspOptionsPage.h"
+#include "gui/setup/FilterPresetsSetupPage.h"
 #include "gui/setup/DisplaySetupPages.h"
 #include "gui/setup/MultimeterPage.h"
 #include "gui/setup/SpectrumPeaksPage.h"
@@ -22,6 +25,7 @@
 #include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
 #include "gui/setup/hardware/AntennaAlexAlex2Tab.h"
+#include "gui/setup/AudioTxInputPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/CalibrationTab.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
@@ -33,6 +37,7 @@
 #include "gui/widgets/MetricLabel.h"
 #include "gui/setup/TestTwoTonePage.h"
 #include "gui/diagnostics/DiagnosticsPhaseHPages.h"
+#include "gui/diagnostics/RadioStatusPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/NotchModel.h"
@@ -82,6 +87,10 @@ QObject* bySetupId(QWidget& page, const QString& id)
     for (QObject* object : page.findChildren<QObject*>()) {
         if (object->property("nereusSetupId").toString() == id) { return object; }
     }
+    // Version 15: one desktop widget that serves several described rows.
+    for (QObject* object : page.findChildren<QObject*>()) {
+        if (object->property("nereusSetupIds").toStringList().contains(id)) { return object; }
+    }
     return nullptr;
 }
 
@@ -124,6 +133,11 @@ void compareControl(QWidget& page, const QJsonObject& control)
         auto* button = qobject_cast<QAbstractButton*>(object);
         QVERIFY2(button != nullptr, qPrintable(id));
         QCOMPARE(button->text(), control.value("label").toString());
+    } else if (control.contains("rangeFrom")) {
+        // Version 15: the range and shown values are the catalogue's
+        // (tst_catalogue_ranges holds them against the widget).
+        QVERIFY2(qobject_cast<QAbstractSpinBox*>(object) != nullptr
+                     || qobject_cast<QSlider*>(object) != nullptr, qPrintable(id));
     } else if (kind == "integer") {
         auto* spin = qobject_cast<QSpinBox*>(object);
         QVERIFY2(spin != nullptr, qPrintable(id));
@@ -174,12 +188,34 @@ void compareControl(QWidget& page, const QJsonObject& control)
             auto* group = qobject_cast<QButtonGroup*>(object);
             QVERIFY2(group != nullptr, qPrintable(id));
             const QJsonArray choices = control.value("choices").toArray();
-            QCOMPARE(group->buttons().size(), choices.size());
-            for (int i = 0; i < choices.size(); ++i) {
+            const QJsonArray options = control.value("options").toArray();
+            QCOMPARE(group->buttons().size(), options.isEmpty() ? choices.size() : options.size());
+            for (int i = 0; i < group->buttons().size(); ++i) {
                 auto* button = group->button(i);
                 QVERIFY(button != nullptr);
-                QCOMPARE(button->text(), choices.at(i).toString());
+                QCOMPARE(button->text(), options.isEmpty() ? choices.at(i).toString()
+                                                           : options.at(i).toObject().value("label").toString());
             }
+        }
+    } else if (kind == "table" && id == "dsp.filterPresets.presets") {
+        // Version 15: the Filter Presets table's columns, in the desktop's order.
+        auto* table = qobject_cast<QTableWidget*>(object);
+        QVERIFY2(table != nullptr, qPrintable(id));
+        const QJsonArray columns = control.value("columns").toArray();
+        QCOMPARE(table->columnCount(), columns.size());
+        for (int col = 0; col < columns.size(); ++col) {
+            QCOMPARE(table->horizontalHeaderItem(col)->text(),
+                     columns.at(col).toObject().value("label").toString());
+        }
+        QVERIFY(table->rowCount() > 0);
+        auto* name = qobject_cast<QLineEdit*>(table->cellWidget(0, 1));
+        QVERIFY(name != nullptr);
+        QCOMPARE(name->maxLength(), columns.at(1).toObject().value("maxLength").toInt());
+        for (int col : {2, 3}) {
+            auto* spin = qobject_cast<QSpinBox*>(table->cellWidget(0, col));
+            QVERIFY(spin != nullptr);
+            QCOMPARE(spin->minimum(), columns.at(col).toObject().value("min").toInt());
+            QCOMPARE(spin->maximum(), columns.at(col).toObject().value("max").toInt());
         }
     } else if (kind == "table") {
         auto* table = qobject_cast<QTableWidget*>(object);
@@ -622,13 +658,74 @@ private slots:
         QCOMPARE(projectedCategory(service.appearance(), 11), appearance);
         QVERIFY(bySetupId(page, QStringLiteral("appearance.meterStyles.smallFilter")) == nullptr);
     }
+    void describedCatNetworkRowsMatchRemoteDesktop()
+    {
+        // The phone is a remote client: its rows are the remote window's
+        // (its captions, the Core's verbs). Tooltips there are the Core's
+        // availability reasons, so they are not compared here.
+        RadioModel model(RadioModel::Role::Remote);
+        FourO3APage fourO3A(&model);
+        RfKitPage rfKit(&model);
+        SetupDescriptionService service;
+        int described = 0;
+        for (const QJsonValue& raw : controls(service.category(QStringLiteral("catNetwork")))) {
+            const QJsonObject control = raw.toObject();
+            const QString id = control.value("id").toString();
+            if (control.value("requiresDescriptionVersion") != QJsonValue(15)) { continue; }
+            ++described;
+            QWidget& page = id.startsWith("catNetwork.rfKit.") ? static_cast<QWidget&>(rfKit)
+                                                               : static_cast<QWidget&>(fourO3A);
+            QObject* object = bySetupId(page, id);
+            QVERIFY2(object != nullptr, qPrintable(id + " has no desktop widget"));
+            const QString kind = control.value("kind").toString();
+            if ((kind == "toggle" || kind == "button")
+                && object->property("nereusSetupId").toString() == id) {
+                auto* button = qobject_cast<QAbstractButton*>(object);
+                QVERIFY2(button != nullptr, qPrintable(id));
+                QCOMPARE(button->text(), control.value("label").toString());
+            }
+            if (kind == "integer") {
+                auto* spin = qobject_cast<QSpinBox*>(object);
+                QVERIFY2(spin != nullptr, qPrintable(id));
+                QCOMPARE(spin->minimum(), control.value("min").toInt());
+                QCOMPARE(spin->maximum(), control.value("max").toInt());
+            }
+            if (kind == "choice" && control.contains("options")) {
+                auto* combo = qobject_cast<QComboBox*>(object);
+                QVERIFY2(combo != nullptr, qPrintable(id));
+                QCOMPARE(combo->count(), control.value("options").toArray().size());
+            }
+        }
+        QCOMPARE(described, 80);
+    }
+
+    void describedDiagnosticsReadoutsMatchDesktop()
+    {
+        RadioModel model;
+        RadioStatusPage status(&model);
+        ConnectionQualityPage quality(&model);
+        SetupDescriptionService service;
+        const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
+        int described = 0;
+        for (const QJsonValue& raw : controls(diagnostics)) {
+            const QJsonObject control = raw.toObject();
+            const QString id = control.value("id").toString();
+            if (id.startsWith("diagnostics.settingsValidation.")) { continue; }
+            ++described;
+            compareControl(id.startsWith("diagnostics.radioStatus.")
+                               ? static_cast<QWidget&>(status) : static_cast<QWidget&>(quality),
+                           control);
+        }
+        QCOMPARE(described, 18);
+    }
+
     void settingsValidationPanelMatchesDesktopActions()
     {
         RadioModel model;
         SettingsValidationPage page(&model);
         SetupDescriptionService service;
         const QJsonObject diagnostics = service.category(QStringLiteral("diagnostics"));
-        const QJsonObject panel = diagnostics.value("pages").toArray().first().toObject()
+        const QJsonObject panel = diagnostics.value("pages").toArray().last().toObject()
             .value("sections").toArray().first().toObject()
             .value("controls").toArray().first().toObject();
         QVERIFY(SetupDescriptionService::validateSettingsHygienePanel(panel));
@@ -1380,21 +1477,41 @@ private slots:
         QTest::newRow("HL2") << int(HPSDRHW::HermesLite);
     }
 
+    void describedAudioTxProfileControlsMatchDesktop_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("radioMicRows");
+        QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn) << 4;
+        QTest::newRow("HL2") << int(HPSDRHW::HermesLite) << 0;
+        QTest::newRow("Hermes") << int(HPSDRHW::Hermes) << 3;
+        QTest::newRow("Orion-MkII") << int(HPSDRHW::OrionMKII) << 4;
+    }
+
     void describedAudioTxProfileControlsMatchDesktop()
     {
+        QFETCH(int, board);
+        QFETCH(int, radioMicRows);
         RadioModel model;
+        model.setBoardForTest(static_cast<HPSDRHW>(board));
         TxProfileSetupPage page(&model, nullptr, &model.transmitModel());
+        AudioTxInputPage input(&model);
         SetupDescriptionService service;
+        service.setBoardCapabilities(model.boardCapabilities());
         const QJsonObject audio = service.category(QStringLiteral("audio"));
         QVERIFY(!audio.isEmpty());
         const QJsonArray pages = audio.value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 1);
+        QCOMPARE(pages.size(), 2);
         QCOMPARE(pages.first().toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("audio.txInput")));
+        QCOMPARE(pages.last().toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("audio.txProfile")));
         const QJsonArray described = controls(audio);
-        QCOMPARE(described.size(), 3);
+        QCOMPARE(described.size(), 7 + radioMicRows);
         for (const QJsonValue& raw : described) {
-            compareControl(page, raw.toObject());
+            const QJsonObject control = raw.toObject();
+            compareControl(control.value("id").toString().startsWith("audio.txInput.")
+                               ? static_cast<QWidget&>(input) : static_cast<QWidget&>(page),
+                           control);
         }
     }
 
@@ -1405,22 +1522,26 @@ private slots:
         model.setBoardForTest(static_cast<HPSDRHW>(board));
         DexpVoxPage dexp(&model);
         PowerPage power(&model);
+        SpeechProcessorPage speech(&model);
         SetupDescriptionService service;
         const QJsonObject transmit = service.category(QStringLiteral("transmit"));
         QVERIFY(!transmit.isEmpty());
         const QJsonArray pages = transmit.value(QStringLiteral("pages")).toArray();
-        QCOMPARE(pages.size(), 2);
-        QCOMPARE(pages.first().toObject().value(QStringLiteral("id")),
+        QCOMPARE(pages.size(), 3);
+        QCOMPARE(pages.at(0).toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("transmit.power")));
-        QCOMPARE(pages.last().toObject().value(QStringLiteral("id")),
+        QCOMPARE(pages.at(1).toObject().value(QStringLiteral("id")),
+                 QJsonValue(QStringLiteral("transmit.speechProcessor")));
+        QCOMPARE(pages.at(2).toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("transmit.dexpVox")));
         const QJsonArray described = controls(transmit);
-        // Version 13 adds Disable HF PA (PA Control).
-        QCOMPARE(described.size(), 25);
+        QCOMPARE(described.size(), 46);
         for (const QJsonValue& raw : described) {
             const QJsonObject control = raw.toObject();
-            compareControl(control.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("transmit.power."))
-                               ? static_cast<QWidget&>(power) : static_cast<QWidget&>(dexp), control);
+            const QString id = control.value(QStringLiteral("id")).toString();
+            compareControl(id.startsWith(QStringLiteral("transmit.power.")) ? static_cast<QWidget&>(power)
+                           : id.startsWith(QStringLiteral("transmit.speechProcessor."))
+                             ? static_cast<QWidget&>(speech) : static_cast<QWidget&>(dexp), control);
         }
     }
 
@@ -1461,6 +1582,7 @@ private slots:
         AgcAlcSetupPage agc(&model);
         MnfSetupPage tnf(&model);
         DspOptionsPage dspOptions(&model);
+        FilterPresetsSetupPage filterPresets(model.filterPresetStore(), &model);
         for (const QJsonValue& raw : controls(service.category(QStringLiteral("general")))) {
             const QJsonObject c = raw.toObject();
             QWidget& page = c.value("id").toString().startsWith("general.startup.")
@@ -1471,17 +1593,20 @@ private slots:
             compareControl(test, raw.toObject());
         }
         for (const QJsonValue& raw : controls(service.category(QStringLiteral("catNetwork")))) {
-            compareControl(cat, raw.toObject());
+            // The version 15 rows: describedCatNetworkRowsMatchRemoteDesktop.
+            if (raw.toObject().value("id").toString().startsWith("catNetwork.tciServer.")) {
+                compareControl(cat, raw.toObject());
+            }
         }
         const QJsonObject dsp = service.category(QStringLiteral("dsp"));
-        QCOMPARE(dsp.value("pages").toArray().size(), 9);
+        QCOMPARE(dsp.value("pages").toArray().size(), 10);
         QStringList pageIds;
         for (const QJsonValue& page : dsp.value("pages").toArray()) {
             pageIds.append(page.toObject().value("id").toString());
         }
         QCOMPARE(pageIds, (QStringList{"dsp.agcAlc", "dsp.nrAnf", "dsp.nbSnb",
                                        "dsp.cw", "dsp.amSam", "dsp.fm", "dsp.cfc",
-                                       "dsp.tnf", "dsp.options"}));
+                                       "dsp.tnf", "dsp.filterPresets", "dsp.options"}));
         for (const QJsonValue& raw : controls(dsp)) {
             const QJsonObject c = raw.toObject();
             const QString id = c.value("id").toString();
@@ -1493,6 +1618,7 @@ private slots:
                 : id.startsWith("dsp.fm.") ? static_cast<QWidget&>(fm)
                 : id.startsWith("dsp.options.") ? static_cast<QWidget&>(dspOptions)
                 : id.startsWith("dsp.tnf.") ? static_cast<QWidget&>(tnf)
+                : id.startsWith("dsp.filterPresets.") ? static_cast<QWidget&>(filterPresets)
                 : static_cast<QWidget&>(cfc);
             compareControl(page, c);
         }

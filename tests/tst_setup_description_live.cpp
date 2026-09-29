@@ -13,6 +13,7 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "core/setup/SetupDescriptionService.h"
+#include "core/setup/SetupDescriptionV15.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorController.h"
@@ -382,6 +383,90 @@ private slots:
             QVERIFY2(core.settings->value(key(c.rest)).toString() != c.bad, qPrintable(c.rest));
             write(key(c.rest), c.good);
             QTRY_COMPARE_WITH_TIMEOUT(core.settings->value(key(c.rest)).toString(), c.good, 5000);
+        }
+    }
+
+    void pairedV15PublishesTheRestAndKeepsV14Projection()
+    {
+        Core core;
+        Device current(QStringLiteral("Setup V15 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Setup V14 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v15Features = kHolder;
+        v15Features.insert("setupDescription", 15);
+        auto* v15 = core.signIn(current, v15Features);
+        QVERIFY(admitted(v15));
+        QCOMPARE(capability(v15->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(15));
+        const auto category = [](LoopbackTransport* app, const QString& name) {
+            return QJsonDocument::fromJson(latest(app->received(), QStringLiteral("setup"), name)
+                                               .toString().toUtf8()).object();
+        };
+        const auto pageIds = [](const QJsonObject& root) {
+            QStringList ids;
+            for (const QJsonValue& page : root.value("pages").toArray()) {
+                ids << page.toObject().value("id").toString();
+            }
+            return ids;
+        };
+        // Every version 15 row the Core sends passes the Core's own check.
+        for (const QString& name : {QStringLiteral("dsp"), QStringLiteral("transmit"),
+                                    QStringLiteral("audio"), QStringLiteral("diagnostics"),
+                                    QStringLiteral("catNetwork")}) {
+            const QJsonObject root = category(v15, name);
+            QCOMPARE(root.value("version"), QJsonValue(15));
+            for (const QJsonValue& page : root.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    QString why;
+                    QVERIFY2(SetupDescriptionV15::validateSection(
+                                 name, section.toObject().value("controls").toArray(), &why),
+                             qPrintable(name + ": " + why));
+                }
+            }
+        }
+        QCOMPARE(pageIds(category(v15, "dsp")).size(), 10);
+        QCOMPARE(pageIds(category(v15, "transmit")),
+                 (QStringList{"transmit.power", "transmit.speechProcessor", "transmit.dexpVox"}));
+        // The HL2 has no radio microphone jack group; Mic Gain is its TX Input.
+        QCOMPARE(pageIds(category(v15, "audio")), (QStringList{"audio.txInput", "audio.txProfile"}));
+        QCOMPARE(pageIds(category(v15, "diagnostics")),
+                 (QStringList{"diagnostics.radioStatus", "diagnostics.connectionQuality",
+                              "diagnostics.settingsValidation"}));
+
+        // Rows reach the Core through its existing bindings: the APF centre
+        // is the selected slice's tune offset, a Filter Presets row is the
+        // Core's three filters/ settings.
+        SliceModel* slice = core.model->sliceById(0);
+        QVERIFY(slice != nullptr);
+        v15->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {MirrorUpdate{0, "apfTuneHz", MirrorWireKind::Int64, qint64(50)}}, 1401)));
+        QTRY_COMPARE(slice->apfTuneHz(), 50);
+        for (const auto& [key, value] : {std::pair{QStringLiteral("filters/USB/0/name"), QStringLiteral("Wide")},
+                                         std::pair{QStringLiteral("filters/USB/0/low"), QStringLiteral("100")},
+                                         std::pair{QStringLiteral("filters/USB/0/high"), QStringLiteral("3100")}}) {
+            v15->sendText(SessionMessages::encode(SessionMessages::settingsWrite(key, value, QStringLiteral("presets"))));
+            QTRY_COMPARE(core.settings->value(key).toString(), value);
+        }
+
+        QHash<QByteArray, int> v14Features = kHolder;
+        v14Features.insert("setupDescription", 14);
+        auto* v14 = core.signIn(older, v14Features);
+        QVERIFY(admitted(v14));
+        QCOMPARE(capability(v14->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(14));
+        const QJsonObject oldDsp = category(v14, "dsp");
+        QCOMPARE(oldDsp.value("version"), QJsonValue(3));
+        QCOMPARE(pageIds(oldDsp).size(), 9);
+        QCOMPARE(pageIds(category(v14, "transmit")), (QStringList{"transmit.power", "transmit.dexpVox"}));
+        QCOMPARE(pageIds(category(v14, "audio")), (QStringList{"audio.txProfile"}));
+        QCOMPARE(pageIds(category(v14, "diagnostics")), (QStringList{"diagnostics.settingsValidation"}));
+        for (const QString& name : {QStringLiteral("dsp"), QStringLiteral("transmit"),
+                                    QStringLiteral("audio"), QStringLiteral("diagnostics"),
+                                    QStringLiteral("catNetwork")}) {
+            const QString text = latest(v14->received(), QStringLiteral("setup"), name).toString();
+            QVERIFY2(!text.contains(QStringLiteral("\"requiresDescriptionVersion\":15")), qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("coverageV15")), qPrintable(name));
         }
     }
 

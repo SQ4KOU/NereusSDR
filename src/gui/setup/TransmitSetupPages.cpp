@@ -203,6 +203,11 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: Disable HF PA carries its Setup
 //                description id (version 13). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on
+//                Power, Speech Processor and Enable VOX; the Speech
+//                Processor's AM-SQ / DEXP row shows DEXP's state (it read
+//                "off" whatever DEXP was). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -366,6 +371,7 @@ void PowerPage::buildPowerGroup()
     //   toolTip1.SetToolTip(chkATTOnTX, "Enables Attenuator on Mercury during Transmit.")
     m_chkAttOnTx = new QCheckBox(QStringLiteral("ATT on TX"), pwrGroup);
     m_chkAttOnTx->setObjectName(QStringLiteral("chkATTOnTX"));
+    m_chkAttOnTx->setProperty("nereusSetupId", "transmit.power.attOnTx");
     m_chkAttOnTx->setToolTip(QStringLiteral("Enables Attenuator on Mercury during Transmit."));
 
     // R-R3-49 (parity Task 5): a remote window changes the Core's value
@@ -404,6 +410,7 @@ void PowerPage::buildPowerGroup()
     // logarithmic formula instead of the constant fallback.
     m_spinAttOnTxValue = new QSpinBox(pwrGroup);
     m_spinAttOnTxValue->setObjectName(QStringLiteral("udATTOnTX"));
+    m_spinAttOnTxValue->setProperty("nereusSetupId", "transmit.power.attOnTxValue");
     m_spinAttOnTxValue->setSingleStep(1);
     m_spinAttOnTxValue->setSuffix(QStringLiteral(" dB"));
 
@@ -482,6 +489,7 @@ void PowerPage::buildPowerGroup()
     m_chkForceAttWhenPsOff = new QCheckBox(
         QStringLiteral("Force ATT on Tx to 31 when PS-A is off"), pwrGroup);
     m_chkForceAttWhenPsOff->setObjectName(QStringLiteral("chkForceATTwhenPSAoff"));
+    m_chkForceAttWhenPsOff->setProperty("nereusSetupId", "transmit.power.forceAttWhenPsOff");
     m_chkForceAttWhenPsOff->setToolTip(
         QStringLiteral("Forces ATT on Tx to 31 when PS-A is off. CW will do this anyway"));
 
@@ -554,6 +562,7 @@ void PowerPage::buildTuneGroup()
     m_radTuneSlider->setObjectName(QStringLiteral("radUseTuneSliderTune"));
 
     m_tuneDriveButtons = new QButtonGroup(m_grpPATune);
+    m_tuneDriveButtons->setProperty("nereusSetupId", "transmit.power.tuneDriveSource");
     m_tuneDriveButtons->addButton(m_radFixedDrive,  static_cast<int>(DrivePowerSource::Fixed));
     m_tuneDriveButtons->addButton(m_radDriveSlider, static_cast<int>(DrivePowerSource::DriveSlider));
     m_tuneDriveButtons->addButton(m_radTuneSlider,  static_cast<int>(DrivePowerSource::TuneSlider));
@@ -596,6 +605,7 @@ void PowerPage::buildTuneGroup()
     // (FIRST = ANAN100) keeps a sane Watts range until the first connect.
     m_fixedTunePwrSpin = new QDoubleSpinBox(m_grpPATune);
     m_fixedTunePwrSpin->setObjectName(QStringLiteral("udTXTunePower"));
+    m_fixedTunePwrSpin->setProperty("nereusSetupId", "transmit.power.fixedTunePower");
     form->addRow(QStringLiteral("Fixed Tune Power:"), m_fixedTunePwrSpin);
 
     // Apply default-SKU bounds so a no-model test still gets a sensible
@@ -1180,11 +1190,13 @@ void SpeechProcessorPage::buildActiveProfileSection()
 
     m_activeProfileLabel = new QLabel(QStringLiteral("Default"));
     m_activeProfileLabel->setObjectName(QStringLiteral("lblActiveProfile"));
+    m_activeProfileLabel->setProperty("nereusSetupId", "transmit.speechProcessor.activeProfile");
     m_activeProfileLabel->setStyleSheet(QStringLiteral(
         "QLabel { color: #00c8ff; font-size: 12px; font-weight: bold; }"));
 
     m_manageProfileBtn = new QPushButton(QStringLiteral("Manage..."));
     m_manageProfileBtn->setObjectName(QStringLiteral("btnManageProfile"));
+    m_manageProfileBtn->setProperty("nereusSetupId", "transmit.speechProcessor.manage");
     m_manageProfileBtn->setAutoDefault(false);
     // R-R3-49 (group A fix wave, M8): profiles are saved and deleted in
     // Setup > Audio > TX Profile, not in the TX EQ editor.
@@ -1388,7 +1400,7 @@ void SpeechProcessorPage::buildStageStatusSection()
         txEqOn ? QStringLiteral("enabled") : QStringLiteral("off"),
         txEqOn,
         QStringLiteral("Open TX EQ Editor..."),
-        QStringLiteral("Open the modeless TX Equalizer dialog (10-band sliders)"),
+        QStringLiteral("Open the TX Equalizer (10-band sliders)"),
         QString(),                                         // not a setup-page jump
         QString());
 
@@ -1473,10 +1485,13 @@ void SpeechProcessorPage::buildStageStatusSection()
     // R-R3-21: the page is registered as Transmit > "DEXP/VOX"
     // (SetupDialog.cpp); asking for "VOX/DEXP" found nothing, so the click
     // did nothing.
+    // R-R3-49 / R-IOS-18: it shows the downward expander's state (the TX
+    // AM squelch is not built); it read "off" whatever DEXP was.
+    const bool dexpOn = (model() != nullptr) && model()->transmitModel().dexpEnabled();
     m_amSqDexpStatusLabel = addStageRow(grid, row++,
         QStringLiteral("AM-SQ / DEXP"),
-        QStringLiteral("off"),
-        false,
+        dexpOn ? QStringLiteral("enabled") : QStringLiteral("off"),
+        dexpOn,
         QStringLiteral("Open DEXP/VOX Setup"),
         QStringLiteral("Open Setup → Transmit → DEXP/VOX (AM-Squelch + Downward Expander)"),
         QStringLiteral("DEXP/VOX"),
@@ -1560,6 +1575,34 @@ void SpeechProcessorPage::buildStageStatusSection()
         };
         connect(&tx, &TransmitModel::cessbOnChanged, this, refreshCessb);
         connect(&tx, &TransmitModel::cpdrOnChanged,  this, refreshCessb);
+
+        connect(&tx, &TransmitModel::dexpEnabledChanged,
+                this, [this](bool on) {
+            if (!m_amSqDexpStatusLabel) { return; }
+            m_amSqDexpStatusLabel->setText(on ? QStringLiteral("enabled")
+                                              : QStringLiteral("off"));
+            if (auto* dot = qobject_cast<QLabel*>(
+                    m_amSqDexpStatusLabel->property("dotSibling").value<QObject*>())) {
+                dot->setText(on ? QString(kFilledCircle) : QString(kHollowCircle));
+                dot->setStyleSheet(dotStyleFor(on));
+            }
+        });
+    }
+
+    // Setup description version 15: the stage rows' ids.
+    const std::pair<const char*, const char*> stageIds[] = {
+        {"state_TX EQ", "txEq"}, {"btn_TX EQ", "openTxEq"},
+        {"state_Leveler", "leveler"}, {"btn_Leveler", "openLeveler"},
+        {"btn_ALC", "openAlc"},
+        {"state_Phase Rot.", "phaseRotator"}, {"btn_Phase Rot.", "openPhaseRotator"},
+        {"state_CFC", "cfc"}, {"btn_CFC", "openCfc"},
+        {"state_CESSB", "cessb"}, {"btn_CESSB", "openCessb"},
+        {"state_AM-SQ / DEXP", "dexp"}, {"btn_AM-SQ / DEXP", "openDexp"}};
+    for (const auto& [objectName, id] : stageIds) {
+        if (auto* widget = group->findChild<QWidget*>(QLatin1String(objectName))) {
+            widget->setProperty("nereusSetupId",
+                                QStringLiteral("transmit.speechProcessor.") + QLatin1String(id));
+        }
     }
 }
 
@@ -1698,6 +1741,7 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
     // chkVOXEnable — "Enable VOX" — line 45065
     m_chkVOXEnable = new QCheckBox(QStringLiteral("Enable VOX"));
     m_chkVOXEnable->setObjectName(QStringLiteral("chkVOXEnable"));
+    m_chkVOXEnable->setProperty("nereusSetupId", "transmit.dexpVox.voxEnabled");
     m_chkVOXEnable->setChecked(tx.voxEnabled());
     // From Thetis setup.designer.cs:45066 [v2.10.3.13] — chkVOXEnable tooltip.
     m_chkVOXEnable->setToolTip(QStringLiteral("Enable voice activated transmit"));

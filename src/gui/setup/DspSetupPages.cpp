@@ -59,6 +59,10 @@
 //                 with no slice it starts at MacNRFilter's DEF_* values
 //                 (Aggressiveness 4, Bias 1.2), where it showed 6 and 1.5.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on
+//                 the NR3 model, NNR limit and Diagnostics, APF Center Freq
+//                 and Visual Notch. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1247,6 +1251,12 @@ void NrAnfSetupPage::rebuildForActiveSlice()
         }
         if (auto* statusLbl = nr3Picker->findChild<QLabel*>(QStringLiteral("nr3ModelStatusLabel"))) {
             statusLbl->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; }");
+            statusLbl->setProperty("nereusSetupId", "dsp.nrAnf.nr3ModelStatus");
+        }
+        // Setup description version 15: the Core's NR3 model choice.
+        if (auto* modelCombo = nr3Picker->findChild<QComboBox*>(QStringLiteral("nr3ModelCombo"))) {
+            modelCombo->setProperty("nereusSetupId", "dsp.nrAnf.nr3Model");
+            modelCombo->setAccessibleName(QStringLiteral("Model"));
         }
         mdlGrp->addWidget(nr3Picker);
 
@@ -1664,12 +1674,37 @@ void NrAnfSetupPage::rebuildForActiveSlice()
             {"nnrPositionCombo", "nnrPosition"}, {"nnrAlphaSpin", "nnrAlpha"},
             {"nnrAlphaKneeSpin", "nnrAlphaKneeDb"}, {"nnrTauSpin", "nnrTauSeconds"},
             {"nnrMaxGainSpin", "nnrMaxGainDb"}, {"nnrAttackSpin", "nnrAttackMs"},
-            {"nnrReleaseSpin", "nnrReleaseMs"}, {"nnrResetButton", "nnrResetTuning"}
+            {"nnrReleaseSpin", "nnrReleaseMs"}, {"nnrResetButton", "nnrResetTuning"},
+            // Setup description version 15: the limit row and Diagnostics.
+            {"nnrLimitNotice", "nnrLimit"}, {"nnrTryAgainButton", "nnrTryAgain"},
+            {"nnrTestModeCombo", "nnrTestMode"}, {"nnrOutputModeCombo", "nnrOutputMode"},
+            {"nnrApplyDiagnosticButton", "nnrApplyDiagnostics"}
         };
         for (const auto& [objectName, property] : nnrIds) {
             if (auto* control = m_nnrControls->findChild<QWidget*>(QLatin1String(objectName))) {
                 control->setProperty("nereusSetupId", QStringLiteral("dsp.nrAnf.")
                     + QLatin1String(property));
+            }
+        }
+        // Each Diagnostics line shows several of the described readouts.
+        const std::pair<const char*, QStringList> nnrReadouts[] = {
+            {"nnrRuntimeReadback", {QStringLiteral("dsp.nrAnf.nnrAvailable"),
+                                    QStringLiteral("dsp.nrAnf.nnrReady"),
+                                    QStringLiteral("dsp.nrAnf.nnrRunning")}},
+            {"nnrModelsReadback", {QStringLiteral("dsp.nrAnf.nnrStandardAvailable"),
+                                   QStringLiteral("dsp.nrAnf.nnrPremiumAvailable"),
+                                   QStringLiteral("dsp.nrAnf.nnrActualModelSlot")}},
+            {"nnrRateLatencyReadback", {QStringLiteral("dsp.nrAnf.nnrDspRateHz"),
+                                        QStringLiteral("dsp.nrAnf.nnrNetworkRateHz"),
+                                        QStringLiteral("dsp.nrAnf.nnrRateSupported"),
+                                        QStringLiteral("dsp.nrAnf.nnrDelaySamples"),
+                                        QStringLiteral("dsp.nrAnf.nnrLatencyMs")}},
+            {"nnrSourceReadback", {QStringLiteral("dsp.nrAnf.nnrModelSource")}},
+            {"nnrStatusReadback", {QStringLiteral("dsp.nrAnf.nnrProfilingAvailable"),
+                                   QStringLiteral("dsp.nrAnf.nnrStatus")}}};
+        for (const auto& [objectName, ids] : nnrReadouts) {
+            if (auto* label = m_nnrControls->findChild<QLabel*>(QLatin1String(objectName))) {
+                label->setProperty("nereusSetupIds", ids);
             }
         }
         tabLay->addWidget(m_nnrControls);
@@ -2124,6 +2159,7 @@ CwSetupPage::CwSetupPage(RadioModel* model, QWidget* parent,
     static constexpr int kApfPitchHz = RadioModel::kApfCwPitchHz;
     auto* apfCenter = new QSlider(Qt::Horizontal);
     apfCenter->setObjectName(QStringLiteral("apfCenterSlider"));
+    apfCenter->setProperty("nereusSetupId", "dsp.cw.apfCenter");
     apfCenter->setRange(kApfPitchHz - 500, kApfPitchHz + 500);
     auto* apfCenterValue = new QLabel;
     addLabeledSlider(apfLay, "Center Freq", apfCenter, apfCenterValue);
@@ -2826,6 +2862,7 @@ MnfSetupPage::MnfSetupPage(RadioModel* model, QWidget* parent,
                        "representation of the active notch)"),
         mnfGrp);
     m_visualNotchChk->setObjectName(QStringLiteral("chkVisualNotch"));
+    m_visualNotchChk->setProperty("nereusSetupId", "dsp.tnf.visualNotch");
     m_visualNotchChk->setChecked(nm->visualEnabled());
     m_visualNotchChk->setToolTip(QStringLiteral(
         "This is a simple approximation and does not accurately represent the notch"));

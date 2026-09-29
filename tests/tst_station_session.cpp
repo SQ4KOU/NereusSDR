@@ -4,6 +4,10 @@
 // 2026-09-29: Pin that a remote window logs no schema skew from the
 // current Core and that every feature-gate row names a real property.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
+// 2026-09-29: load finding: positive waits follow the store's lockout and the
+// heartbeat's own pings, nothing-happens checks the link's flush bound
+// (SessionWait.h), and the suite runs as more than one ctest entry.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // tests/tst_station_session.cpp  (NereusSDR)
 // =================================================================
@@ -51,6 +55,7 @@
 
 #include <algorithm>
 
+#include <QApplication>
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QFile>
@@ -125,6 +130,8 @@
 
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
+#include "SessionWait.h"
+#include "TestFunctionGroups.h"
 #include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
@@ -600,7 +607,7 @@ void TstStationSession::mediaRejectsPreAuthenticationAndOldProtocol()
     unauthStation->linkTo(unauthPeer);
     server.acceptTransport(unauthStation);
     unauthPeer->sendText(SessionMessages::encode(media));
-    QTRY_VERIFY(!unauthPeer->isOpen());
+    NEREUS_TRY_VERIFY(!unauthPeer->isOpen());
     QCOMPARE(inbound.count(), 0);
 
     auto* oldStation = new LoopbackTransport(QStringLiteral("old-station"), this);
@@ -610,7 +617,7 @@ void TstStationSession::mediaRejectsPreAuthenticationAndOldProtocol()
     oldPeer->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, 0, 6, QStringLiteral("old-client"))));
     oldPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     QVERIFY(!server.mediaAvailable());
     QVERIFY(!server.sendMediaControl(media.mediaPayload, server.mediaSessionEpoch()));
     oldPeer->sendText(SessionMessages::encode(media));
@@ -644,29 +651,29 @@ void TstStationSession::mediaRequiresReadySessionAndRejectsPriorEpoch()
         server.acceptTransport(station);
     };
     connectPair();
-    QTRY_VERIFY(client.mediaAvailable());
+    NEREUS_TRY_VERIFY(client.mediaAvailable());
     QVERIFY(server.mediaAvailable());
     const quint32 firstClientEpoch = client.sessionEpoch();
     const quint64 firstServerEpoch = server.mediaSessionEpoch();
     QVERIFY(client.sendMediaControl(payload, firstClientEpoch));
     QVERIFY(server.sendMediaControl(payload, firstServerEpoch));
-    QTRY_COMPARE(serverInbound.count(), 1);
-    QTRY_COMPARE(clientInbound.count(), 1);
+    NEREUS_TRY_COMPARE(serverInbound.count(), 1);
+    NEREUS_TRY_COMPARE(clientInbound.count(), 1);
     QCOMPARE(serverInbound.first().at(1).toULongLong(), firstServerEpoch);
     QCOMPARE(clientInbound.first().at(1).toUInt(), firstClientEpoch);
 
     connectPair();
-    QTRY_VERIFY(client.mediaAvailable());
+    NEREUS_TRY_VERIFY(client.mediaAvailable());
     QVERIFY(client.sessionEpoch() != firstClientEpoch);
     QVERIFY(server.mediaSessionEpoch() != firstServerEpoch);
     QVERIFY(!ended.isEmpty());
     QVERIFY(!client.sendMediaControl(payload, firstClientEpoch));
     QVERIFY(!server.sendMediaControl(payload, firstServerEpoch));
     QVERIFY(client.sendMediaControl(payload, client.sessionEpoch()));
-    QTRY_COMPARE(serverInbound.count(), 2);
+    NEREUS_TRY_COMPARE(serverInbound.count(), 2);
     QCOMPARE(clientInbound.count(), 1);
     client.disconnectFromStation(QStringLiteral("media test complete"));
-    QTRY_VERIFY(!server.mediaAvailable());
+    NEREUS_TRY_VERIFY(!server.mediaAvailable());
     QVERIFY(!client.sendMediaControl(payload, client.sessionEpoch()));
 }
 
@@ -694,23 +701,23 @@ void TstStationSession::telemetryRequiresReadySessionAndRejectsPriorEpoch()
         server.acceptTransport(station);
     };
     connectPair();
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     const quint64 oldServerEpoch = server.sessionEpoch();
     const quint32 oldClientEpoch = client.sessionEpoch();
     QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     QCOMPARE(samples.first().at(1).toUInt(), oldClientEpoch);
     QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch)); // duplicate ignored
     snapshot.sequence = 2;
     snapshot.sampledElapsedMs = 1000;
     QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
-    QTRY_COMPARE(samples.count(), 2);
+    NEREUS_TRY_COMPARE(samples.count(), 2);
     QCOMPARE(qvariant_cast<StationTelemetrySnapshot>(samples.last().at(0)).sequence, 2u);
     snapshot.sequence = 3;
     snapshot.sampledElapsedMs = 500; // a regressing producer sample is ignored
     QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
     connectPair();
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     QVERIFY(server.sessionEpoch() != oldServerEpoch);
     QVERIFY(client.sessionEpoch() != oldClientEpoch);
     QVERIFY(!ended.isEmpty());
@@ -718,10 +725,10 @@ void TstStationSession::telemetryRequiresReadySessionAndRejectsPriorEpoch()
     snapshot.sequence = 1; // new epoch establishes a new sequence baseline
     snapshot.sampledElapsedMs = 0;
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
-    QTRY_COMPARE(samples.count(), 3);
+    NEREUS_TRY_COMPARE(samples.count(), 3);
     QCOMPARE(samples.last().at(1).toUInt(), client.sessionEpoch());
     client.disconnectFromStation(QStringLiteral("telemetry complete"));
-    QTRY_VERIFY(!server.telemetryAvailable());
+    NEREUS_TRY_VERIFY(!server.telemetryAvailable());
     QVERIFY(!client.telemetryAvailable());
     QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
 }
@@ -745,7 +752,7 @@ void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
         kSessionProtocolMajor, kStationTelemetrySessionProtocolMinor - 1, 6,
         QStringLiteral("older-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     QVERIFY(!server.telemetryAvailable());
     QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
     QVERIFY(peer->isOpen());
@@ -753,7 +760,7 @@ void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
     // has its own (Task 76), the first admitted while none holds it; the
     // older client leaves first so the newer one is that session.
     peer->closeLink(QStringLiteral("older client done"));
-    QTRY_VERIFY(!server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(!server.hasAuthenticatedSession());
 
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -763,7 +770,7 @@ void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
     newerStation->linkTo(newerPeer);
     client.startSession(newerPeer, server.token());
     server.acceptTransport(newerStation);
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     QVERIFY(server.telemetryAvailable());
     QVERIFY(!server.mediaAvailable());
     QVERIFY(!client.mediaAvailable());
@@ -793,14 +800,14 @@ void TstStationSession::telemetryClientWaitsForCapabilityAndSnapshot()
     caps.stationTelemetryVersion = 1;
     send(SessionMessages::capabilities(caps.toUpdates()));
     send(sample); // capability present, but snapshot not ready
-    QTRY_VERIFY(!peer->receivedKinds().isEmpty());
+    NEREUS_TRY_VERIFY(!peer->receivedKinds().isEmpty());
     QCoreApplication::processEvents();
     QCOMPARE(samples.count(), 0);
     QVERIFY(!client.telemetryAvailable());
     send(SessionMessages::snapshotComplete());
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     send(sample);
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
 }
 
 namespace {
@@ -851,14 +858,14 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     station->linkTo(peer);
     client.startSession(peer, server.token());
     server.acceptTransport(station);
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     QCOMPARE(client.agreedMinor(), kSessionProtocolMinor);
 
     StationTelemetrySnapshot snapshot;
     snapshot.sequence = 1;
     snapshot.host = hostSample();
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QCOMPARE(received.host.systemCpuPercent, std::optional<double>(23.5));
     QCOMPARE(received.host.processCpuPercent, std::optional<double>(4.25));
@@ -887,7 +894,7 @@ void TstStationSession::hostTelemetryIsOmittedForMinorNinePeer()
         kSessionProtocolMajor, kCoreHostTelemetrySessionProtocolMinor - 1, 6,
         QStringLiteral("minor-9-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.telemetryAvailable());
+    NEREUS_TRY_VERIFY(server.telemetryAvailable());
     peer->clearReceived();
 
     StationTelemetrySnapshot snapshot;
@@ -897,7 +904,7 @@ void TstStationSession::hostTelemetryIsOmittedForMinorNinePeer()
     snapshot.receivers = receiverSample();
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
     QByteArray wire;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& message : peer->received()) {
             if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
                     == QStringLiteral("station.metrics.v1")) {
@@ -958,13 +965,13 @@ void TstStationSession::clientKeepsHostTelemetryOnlyWhenNegotiated()
     caps.stationTelemetryVersion = version;
     send(SessionMessages::capabilities(caps.toUpdates()));
     send(SessionMessages::snapshotComplete());
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     SessionMessage sample;
     sample.kind = SessionMessageKind::StationTelemetry;
     sample.telemetry.sequence = 1;
     sample.telemetry.host = hostSample();
     send(sample);
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QCOMPARE(!received.host.isEmpty(), kept);
     QCOMPARE(received.host.hottestZoneName.isEmpty(), !kept);
@@ -989,7 +996,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     station->linkTo(peer);
     client.startSession(peer, server.token());
     server.acceptTransport(station);
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     QCOMPARE(kSessionProtocolMinor, kReceiverLoadSessionProtocolMinor);
     QCOMPARE(client.agreedMinor(), kReceiverLoadSessionProtocolMinor);
 
@@ -998,7 +1005,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     snapshot.host = hostSample();
     snapshot.receivers = receiverSample();
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QVERIFY(received.receivers);
     QCOMPARE(received.receivers->size(), 2);
@@ -1014,7 +1021,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     snapshot.sequence = 2;
     snapshot.receivers = QVector<StationReceiverTelemetry>{};
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
-    QTRY_COMPARE(samples.count(), 2);
+    NEREUS_TRY_COMPARE(samples.count(), 2);
     const auto empty = qvariant_cast<StationTelemetrySnapshot>(samples.last().at(0));
     QVERIFY(empty.receivers);
     QVERIFY(empty.receivers->isEmpty());
@@ -1038,7 +1045,7 @@ void TstStationSession::receiverLoadIsOmittedForMinorTenPeer()
         kSessionProtocolMajor, kReceiverLoadSessionProtocolMinor - 1, 6,
         QStringLiteral("minor-10-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.telemetryAvailable());
+    NEREUS_TRY_VERIFY(server.telemetryAvailable());
     peer->clearReceived();
 
     StationTelemetrySnapshot snapshot;
@@ -1049,7 +1056,7 @@ void TstStationSession::receiverLoadIsOmittedForMinorTenPeer()
     snapshot.receivers = receiverSample();
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
     QByteArray wire;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& message : peer->received()) {
             if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
                     == QStringLiteral("station.metrics.v1")) {
@@ -1111,14 +1118,14 @@ void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated()
     caps.stationTelemetryVersion = version;
     send(SessionMessages::capabilities(caps.toUpdates()));
     send(SessionMessages::snapshotComplete());
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     SessionMessage sample;
     sample.kind = SessionMessageKind::StationTelemetry;
     sample.telemetry.sequence = 1;
     sample.telemetry.host = hostSample();
     sample.telemetry.receivers = receiverSample();
     send(sample);
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QCOMPARE(received.receivers.has_value(), kept);
     // The host section follows its own negotiation, untouched by this one.
@@ -1143,7 +1150,7 @@ void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
         kSessionProtocolMajor, kReceiverLoadSessionProtocolMinor - 1, 6,
         QStringLiteral("minor-10-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.telemetryAvailable());
+    NEREUS_TRY_VERIFY(server.telemetryAvailable());
     peer->clearReceived();
 
     StationTelemetrySnapshot snapshot;
@@ -1161,7 +1168,7 @@ void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
         {0, 1, 100, true, 100}};
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
     QByteArray wire;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& message : peer->received()) {
             if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
                     == QStringLiteral("station.metrics.v1")) {
@@ -1216,7 +1223,7 @@ void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated()
     caps.stationTelemetryVersion = version;
     send(SessionMessages::capabilities(caps.toUpdates()));
     send(SessionMessages::snapshotComplete());
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     SessionMessage sample;
     sample.kind = SessionMessageKind::StationTelemetry;
     sample.telemetry.sequence = 1;
@@ -1225,7 +1232,7 @@ void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated()
     sample.telemetry.radio.paVolts = 13.8;
     sample.telemetry.radio.jitterMs = 0.5;
     send(sample);
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QCOMPARE(received.radio.paVolts.has_value(), kept);
     QCOMPARE(received.radio.jitterMs.has_value(), kept);
@@ -1268,7 +1275,7 @@ void TstStationSession::clientKeepsRadioDiagnosticsOnlyWhenNegotiated()
     caps.stationTelemetryVersion = version;
     send(SessionMessages::capabilities(caps.toUpdates()));
     send(SessionMessages::snapshotComplete());
-    QTRY_VERIFY(client.telemetryAvailable());
+    NEREUS_TRY_VERIFY(client.telemetryAvailable());
     SessionMessage sample;
     sample.kind = SessionMessageKind::StationTelemetry;
     sample.telemetry.sequence = 1;
@@ -1278,7 +1285,7 @@ void TstStationSession::clientKeepsRadioDiagnosticsOnlyWhenNegotiated()
     sample.telemetry.radio.adcOverloads = QVector<StationAdcOverloadTelemetry>{
         {0, 1, 100, true, 100}};
     send(sample);
-    QTRY_COMPARE(samples.count(), 1);
+    NEREUS_TRY_COMPARE(samples.count(), 1);
     const StationRadioTelemetry& radio =
         qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0)).radio;
     QCOMPARE(radio.connectionAgeMs.has_value(), kept);
@@ -1313,31 +1320,31 @@ void TstStationSession::nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt()
     station->linkTo(peer);
     client.startSession(peer, server.token());
     server.acceptTransport(station);
-    QTRY_VERIFY(client.nnrRetryAvailable());
+    NEREUS_TRY_VERIFY(client.nnrRetryAvailable());
     QCOMPARE(client.agreedMinor(), kNnrLimitSessionProtocolMinor);
-    QTRY_VERIFY(remote.sliceById(sliceId) != nullptr);
+    NEREUS_TRY_VERIFY(remote.sliceById(sliceId) != nullptr);
     SliceModel* guiSlice = remote.sliceById(sliceId);
     QCOMPARE(guiSlice->nnrLimit(), 0);
 
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));   // the Core stepped back
-    QTRY_COMPARE(guiSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+    NEREUS_TRY_COMPARE(guiSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
     // A remote window names the Core computer, never "this computer".
     const QString coreText = QStringLiteral(
         "Noise reduction is using the Standard model. The Core computer could not keep up with Premium.");
     QCOMPARE(guiSlice->nnrLimitText(), coreText);
-    QTRY_COMPARE(guiSlice->nnrStatus(), coreText);
+    NEREUS_TRY_COMPARE(guiSlice->nnrStatus(), coreText);
 
     // The station changing the model is an echo, not the operator asking.
     NnrSettings standard = coreSlice->nnrSettings();
     standard.modelSlot = coreSlice->nnrModelSlot() == 1 ? 0 : 1;
     QVERIFY(coreSlice->applyNnrSettings(standard));
-    QTRY_COMPARE(guiSlice->nnrModelSlot(), standard.modelSlot);
-    QTest::qWait(200);
+    NEREUS_TRY_COMPARE(guiSlice->nnrModelSlot(), standard.modelSlot);
+    NereusSDR::Test::settleSession();
     QCOMPARE(coreSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
 
     guiSlice->requestNnrRetry();   // "Try again" on the remote GUI
-    QTRY_COMPARE(coreSlice->nnrLimit(), 0);
-    QTRY_COMPARE(guiSlice->nnrLimit(), 0);
+    NEREUS_TRY_COMPARE(coreSlice->nnrLimit(), 0);
+    NEREUS_TRY_COMPARE(guiSlice->nnrLimit(), 0);
     QVERIFY(guiSlice->nnrLastError().isEmpty());
     QCOMPARE(coreSlice->nnrModelSlot(), standard.modelSlot);   // saved choice unchanged
     for (const QString& line : std::as_const(lines)) {
@@ -1464,7 +1471,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
         kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
         QStringLiteral("minor-10-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
 
     // Changes after the snapshot: the limit itself never reaches this peer
     // (a change sends only nnrStatus, its plain reason); a limit change
@@ -1473,7 +1480,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::None));
     coreSlice->setNnrAlpha(2.5);
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& wire : peer->received()) {
             if (wire.contains("\"nnrAlpha\"") && wire.contains("\"delta\"")) {
                 return true;
@@ -1481,7 +1488,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
         }
         return false;
     }());
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     bool sawSliceSchema = false;
     for (const QByteArray& wire : peer->received()) {
         QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
@@ -1500,7 +1507,7 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
         "nnr.tryAgain", 31,
         { MirrorUpdate{ 0, "sliceId", MirrorWireKind::Int64, qint64(coreSlice->sliceIndex()) } })));
     SessionMessage result;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& wire : peer->received()) {
             const SessionMessage candidate = decodeOrFail(wire);
             if (candidate.kind == SessionMessageKind::CommandResult
@@ -1537,7 +1544,7 @@ void TstStationSession::minorTenWriteThatClearsTheLimitCarriesNoNnrLimit()
         kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
         QStringLiteral("minor-10-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
 
     const QByteArray key = ObjectRegistry::keyForSlice(coreSlice->sliceIndex());
     MirrorUpdate activeNr;
@@ -1554,13 +1561,13 @@ void TstStationSession::minorTenWriteThatClearsTheLimitCarriesNoNnrLimit()
     QCOMPARE(activeNr.name, QByteArray("activeNr"));
 
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     peer->clearReceived();
     activeNr.value = qint64(static_cast<int>(NrSlot::NR2));
     peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(key, {activeNr})));
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
     QCOMPARE(coreSlice->nnrLimit(), 0);   // cleared as a side effect
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const QByteArray& wire : peer->received()) {
             if (wire.contains("\"activeNr\"") && wire.contains("\"delta\"")) {
                 return true;
@@ -1568,7 +1575,7 @@ void TstStationSession::minorTenWriteThatClearsTheLimitCarriesNoNnrLimit()
         }
         return false;
     }());
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     for (const QByteArray& wire : peer->received()) {
         QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
         const SessionMessage message = decodeOrFail(wire);
@@ -1596,7 +1603,7 @@ void TstStationSession::minorTenPeerReadsWhyInNnrStatus()
         kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
         QStringLiteral("minor-10-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
     const QString normal = coreSlice->nnrStatus();
 
     const auto lastStatus = [&]() -> std::optional<QString> {
@@ -1616,13 +1623,13 @@ void TstStationSession::minorTenPeerReadsWhyInNnrStatus()
     };
     peer->clearReceived();
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
-    QTRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
+    NEREUS_TRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
         "Noise reduction is using the Standard model. The Core computer could not keep up with Premium.")));
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::Off));
-    QTRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
+    NEREUS_TRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
         "Noise reduction was turned off. The Core computer could not keep up.")));
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::None));
-    QTRY_COMPARE(lastStatus(), std::optional<QString>(normal));
+    NEREUS_TRY_COMPARE(lastStatus(), std::optional<QString>(normal));
     for (const QByteArray& wire : peer->received()) {
         QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
     }
@@ -1650,7 +1657,7 @@ void TstStationSession::clientSendsTryAgainOnlyAtMinorEleven()
         caps.nnrVersion = 1;
         send(SessionMessages::capabilities(caps.toUpdates()));
         send(SessionMessages::snapshotComplete());
-        QTRY_VERIFY(client.nnrControlAvailable());
+        NEREUS_TRY_VERIFY(client.nnrControlAvailable());
         station->clearReceived();
         const auto outcome = client.requestNnrRetry(0);
         QCOMPARE(outcome.sent, minor >= kNnrLimitSessionProtocolMinor);
@@ -1664,9 +1671,9 @@ void TstStationSession::clientSendsTryAgainOnlyAtMinorEleven()
             return false;
         };
         if (outcome.sent) {
-            QTRY_VERIFY(sawCommand());
+            NEREUS_TRY_VERIFY(sawCommand());
         } else {
-            QTest::qWait(100);
+            NereusSDR::Test::settleSession();
             QVERIFY(!sawCommand());
         }
         if (!outcome.sent) {
@@ -1701,8 +1708,8 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
     caps.remoteTgxlConfigVersion = 1;
     station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(client.remoteTgxlConfigAvailable());
-    QTRY_VERIFY(availabilityChanged.count() >= 1);
+    NEREUS_TRY_VERIFY(client.remoteTgxlConfigAvailable());
+    NEREUS_TRY_VERIFY(availabilityChanged.count() >= 1);
 
     const IStationLink::CommandOutcome configured =
         client.requestConfigureTgxl(QStringLiteral("192.0.2.10"), 9010);
@@ -1710,7 +1717,7 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
     // The client sends on peer; LoopbackTransport delivers that wire to the
     // linked station endpoint.  Assert the actual receiving route rather
     // than the sender's inbound capture.
-    QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
     const QList<QByteArray> sent = station->received();
     const SessionMessage command = decodeOrFail(sent.last());
     QCOMPARE(command.kind, SessionMessageKind::CommandInvoke);
@@ -1725,7 +1732,7 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
 
     const IStationLink::CommandOutcome disconnected = client.requestDisconnectTgxl();
     QVERIFY2(disconnected.sent, qPrintable(disconnected.reason));
-    QTRY_VERIFY(station->receivedKinds().count(QByteArrayLiteral("command.invoke")) == 2);
+    NEREUS_TRY_VERIFY(station->receivedKinds().count(QByteArrayLiteral("command.invoke")) == 2);
     const QList<QByteArray> afterDisconnect = station->received();
     const SessionMessage disconnect = decodeOrFail(afterDisconnect.last());
     QCOMPARE(disconnect.kind, SessionMessageKind::CommandInvoke);
@@ -1734,8 +1741,8 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
 
     const int availableSignalCount = availabilityChanged.count();
     station->closeLink(QStringLiteral("test teardown"));
-    QTRY_VERIFY(!client.remoteTgxlConfigAvailable());
-    QTRY_VERIFY(availabilityChanged.count() > availableSignalCount);
+    NEREUS_TRY_VERIFY(!client.remoteTgxlConfigAvailable());
+    NEREUS_TRY_VERIFY(availabilityChanged.count() > availableSignalCount);
 
     RadioModel olderRemote(RadioModel::Role::Remote);
     SettingsProxy olderProxy;
@@ -1751,7 +1758,7 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
     olderStation->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
     olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(olderClient.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(olderClient.isHandshakeComplete());
     QVERIFY(!olderClient.remoteTgxlConfigAvailable());
 }
 
@@ -1775,11 +1782,11 @@ void TstStationSession::remoteFourO3AClientRequiresHandshakeMinorAndCapability()
     caps.remoteFourO3AControlVersion = 1;
     station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    NEREUS_TRY_VERIFY(client.remoteFourO3AControlAvailable());
 
     const IStationLink::CommandOutcome requested = client.requestFourO3AEnabled(true);
     QVERIFY2(requested.sent, qPrintable(requested.reason));
-    QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
     const SessionMessage command = decodeOrFail(station->received().last());
     QCOMPARE(command.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
     QCOMPARE(command.arguments.size(), 1);
@@ -1803,7 +1810,7 @@ void TstStationSession::remoteFourO3AClientRequiresHandshakeMinorAndCapability()
     olderStation->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
     olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(olderClient.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(olderClient.isHandshakeComplete());
     QVERIFY(!olderClient.remoteFourO3AControlAvailable());
 }
 
@@ -1824,7 +1831,7 @@ void TstStationSession::remoteFourO3AServerRejectsPreAuthAndOldMinor()
     unauthStation->linkTo(unauthPeer);
     server.acceptTransport(unauthStation);
     unauthPeer->sendText(SessionMessages::encode(request));
-    QTRY_VERIFY(!unauthPeer->isOpen());
+    NEREUS_TRY_VERIFY(!unauthPeer->isOpen());
 
     auto* oldStation = new LoopbackTransport(QStringLiteral("four-o3a-old-station"), this);
     auto* oldPeer = new LoopbackTransport(QStringLiteral("four-o3a-old-peer"), this);
@@ -1835,10 +1842,10 @@ void TstStationSession::remoteFourO3AServerRejectsPreAuthAndOldMinor()
         static_cast<quint16>(kRemoteFourO3AControlSessionProtocolMinor - 1), 6,
         QStringLiteral("older-client"))));
     oldPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     oldPeer->clearReceived();
     oldPeer->sendText(SessionMessages::encode(request));
-    QTRY_VERIFY(oldPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    NEREUS_TRY_VERIFY(oldPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
     SessionMessage result;
     for (const QByteArray& wire : oldPeer->received()) {
         const SessionMessage candidate = decodeOrFail(wire);
@@ -1874,7 +1881,7 @@ void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListener
     client.startSession(peer, server.token());
     server.acceptTransport(station);
 
-    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    NEREUS_TRY_VERIFY(client.remoteFourO3AControlAvailable());
     QVERIFY(!remote.currentRadioMac().isEmpty());
     QVERIFY(!remote.fourO3AEnabled());
     QVERIFY(!remote.fourO3AListening());
@@ -1885,12 +1892,12 @@ void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListener
     // The remote model owns no listener. It remains false until the Core
     // snapshot/delta arrives after the accepted CommandResult.
     QVERIFY(!remote.smartSdrListener()->isListening());
-    QTRY_VERIFY(!finished.isEmpty());
+    NEREUS_TRY_VERIFY(!finished.isEmpty());
     QCOMPARE(finished.last().at(0).toBool(), true);
-    QTRY_VERIFY(stationModel->fourO3AEnabled());
-    QTRY_VERIFY(stationModel->fourO3AListening());
-    QTRY_VERIFY(remote.fourO3AEnabled());
-    QTRY_VERIFY(remote.fourO3AListening());
+    NEREUS_TRY_VERIFY(stationModel->fourO3AEnabled());
+    NEREUS_TRY_VERIFY(stationModel->fourO3AListening());
+    NEREUS_TRY_VERIFY(remote.fourO3AEnabled());
+    NEREUS_TRY_VERIFY(remote.fourO3AListening());
     QVERIFY(remote.fourO3AListenerError().isEmpty());
     QVERIFY(!remote.smartSdrListener()->isListening());
     QCOMPARE(stationModel->peripheralValue(QStringLiteral("FourO3A_Enabled")),
@@ -1900,26 +1907,26 @@ void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListener
     // listener failure it is; no invented listening success is possible.
     const IStationLink::CommandOutcome disabled = client.requestFourO3AEnabled(false);
     QVERIFY2(disabled.sent, qPrintable(disabled.reason));
-    QTRY_VERIFY(!remote.fourO3AEnabled());
-    QTRY_VERIFY(!stationModel->fourO3AListening());
+    NEREUS_TRY_VERIFY(!remote.fourO3AEnabled());
+    NEREUS_TRY_VERIFY(!stationModel->fourO3AListening());
     QTcpServer blocker;
     QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
     stationModel->smartSdrListener()->setListenEndpointForTesting(
         QHostAddress::LocalHost, blocker.serverPort());
     const IStationLink::CommandOutcome bindFailure = client.requestFourO3AEnabled(true);
     QVERIFY2(bindFailure.sent, qPrintable(bindFailure.reason));
-    QTRY_VERIFY(remote.fourO3AEnabled());
-    QTRY_VERIFY(!remote.fourO3AListening());
-    QTRY_VERIFY(!remote.fourO3AListenerError().isEmpty());
+    NEREUS_TRY_VERIFY(remote.fourO3AEnabled());
+    NEREUS_TRY_VERIFY(!remote.fourO3AListening());
+    NEREUS_TRY_VERIFY(!remote.fourO3AListenerError().isEmpty());
     QVERIFY(!remote.smartSdrListener()->isListening());
 
     // Link loss clears the remote-only snapshot cache, including a real
     // listener error, without starting a local listener or writing a local
     // setting on the GUI model.
     station->closeLink(QStringLiteral("four-o3a roundtrip teardown"));
-    QTRY_VERIFY(!remote.fourO3AEnabled());
-    QTRY_VERIFY(!remote.fourO3AListening());
-    QTRY_VERIFY(remote.fourO3AListenerError().isEmpty());
+    NEREUS_TRY_VERIFY(!remote.fourO3AEnabled());
+    NEREUS_TRY_VERIFY(!remote.fourO3AListening());
+    NEREUS_TRY_VERIFY(remote.fourO3AListenerError().isEmpty());
     QVERIFY(!remote.smartSdrListener()->isListening());
 }
 
@@ -1953,9 +1960,9 @@ void TstStationSession::remoteFourO3AUnansweredCommandDoesNotSurviveSession()
     };
 
     auto* firstStation = attach();
-    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    NEREUS_TRY_VERIFY(client.remoteFourO3AControlAvailable());
     QVERIFY(client.requestFourO3AEnabled(true).sent);
-    QTRY_VERIFY(firstStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    NEREUS_TRY_VERIFY(firstStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
     const SessionMessage abandoned = decodeOrFail(firstStation->received().last());
     QCOMPARE(abandoned.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
     QVERIFY(finished.isEmpty());
@@ -1963,19 +1970,19 @@ void TstStationSession::remoteFourO3AUnansweredCommandDoesNotSurviveSession()
     // directly adopted replacement must retire its pending completion.
     if (closeBeforeReplacement) {
         firstStation->closeLink(QStringLiteral("lost before command result"));
-        QTRY_VERIFY(!client.remoteFourO3AControlAvailable());
+        NEREUS_TRY_VERIFY(!client.remoteFourO3AControlAvailable());
     }
 
     auto* currentStation = attach();
-    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    NEREUS_TRY_VERIFY(client.remoteFourO3AControlAvailable());
     QVERIFY(client.requestFourO3AEnabled(false).sent);
-    QTRY_VERIFY(currentStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    NEREUS_TRY_VERIFY(currentStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
     const SessionMessage current = decodeOrFail(currentStation->received().last());
     QCOMPARE(current.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
     QVERIFY(current.commandId != abandoned.commandId);
     currentStation->sendText(SessionMessages::encode(SessionMessages::commandResult(
         current.commandVerb, current.commandId, true, {}, {})));
-    QTRY_COMPARE(finished.count(), 1);
+    NEREUS_TRY_COMPARE(finished.count(), 1);
     QVERIFY(finished.first().at(0).toBool());
     QVERIFY(!remote.smartSdrListener()->isListening());
 }
@@ -1996,14 +2003,14 @@ void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
         kSessionProtocolMajor, static_cast<quint16>(kRemoteTgxlConfigSessionProtocolMinor - 1),
         6, QStringLiteral("older-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     peer->clearReceived();
 
     peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
         "configureTgxl", 17,
         { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("192.0.2.10") },
           MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(9010) } })));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
     SessionMessage result;
     for (const QByteArray& wire : peer->received()) {
         const SessionMessage candidate = decodeOrFail(wire);
@@ -2028,14 +2035,14 @@ void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
     currentPeer->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("current-client"))));
     currentPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("auth.result")));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     currentPeer->clearReceived();
     currentPeer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
         "configureTgxl", 18,
         { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("192.0.2.10") },
           MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(9010) } })));
-    QTRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    NEREUS_TRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
     SessionMessage currentResult;
     for (const QByteArray& wire : currentPeer->received()) {
         const SessionMessage candidate = decodeOrFail(wire);
@@ -2078,14 +2085,14 @@ void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
     peer->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("current-client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     peer->clearReceived();
 
     peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
         "configureTgxl", 19,
         { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("127.0.0.1") },
           MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(tgxl.serverPort()) } })));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
     SessionMessage result;
     for (const QByteArray& wire : peer->received()) {
         const SessionMessage candidate = decodeOrFail(wire);
@@ -2107,7 +2114,7 @@ void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
                   QStringLiteral("peripherals/TGXL_ManualIp")).toString(), QStringLiteral("127.0.0.1"));
     QCOMPARE(persisted.hardwareValue(stationModel->currentRadioMac(),
                   QStringLiteral("peripherals/TGXL_ManualPort")).toString(), QString::number(tgxl.serverPort()));
-    QTRY_VERIFY(tgxl.hasPendingConnections());
+    NEREUS_TRY_VERIFY(tgxl.hasPendingConnections());
     QVERIFY(stationModel->tgxlConnection()->identityInfo().serial.isEmpty());
     QVERIFY(!tuner->hasDirectConnection());
     QVERIFY(!tuner->isPresent());
@@ -2184,7 +2191,8 @@ void TstStationSession::tokenVerifyIsRateLimitedAfterRepeatedFailures()
     QCOMPARE(store.verify(QStringLiteral("nope")), TokenStore::VerifyResult::RateLimited);
     QCOMPARE(store.verify(store.token()), TokenStore::VerifyResult::RateLimited);
 
-    QTest::qWait(250);
+    // The lockout ends on the store's own clock.
+    NEREUS_TRY_VERIFY(!store.isRateLimited());
     QCOMPARE(store.verify(store.token()), TokenStore::VerifyResult::Accepted);
     QCOMPARE(store.consecutiveFailures(), 0);
 }
@@ -2212,7 +2220,7 @@ void TstStationSession::handshakeCompletesInSectionSevenZeroOrder()
     // it.
     server.acceptTransport(stationEnd);
 
-    QTRY_VERIFY(!clientEnd->received().isEmpty());
+    NEREUS_TRY_VERIFY(!clientEnd->received().isEmpty());
     const SessionMessage stationHello = decodeOrFail(clientEnd->received().first());
     QCOMPARE(stationHello.kind, SessionMessageKind::Hello);
     QCOMPARE(stationHello.protocolMajor, kSessionProtocolMajor);
@@ -2223,7 +2231,7 @@ void TstStationSession::handshakeCompletesInSectionSevenZeroOrder()
     clientEnd->sendText(
         SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
-    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    NEREUS_TRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
 
     const QList<QByteArray> kinds = clientEnd->receivedKinds();
 
@@ -2347,7 +2355,7 @@ void TstStationSession::clientAppliesCapabilitiesAndDrivesConnected()
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
 
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     // Step 6, the step that makes three earlier tasks mean anything.
     QVERIFY(clientModel.isConnected());
@@ -2403,7 +2411,7 @@ void TstStationSession::lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayi
     QSignalSpy mediaStarted(&server, &StationServer::mediaSessionStarted);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     QVERIFY(!clientModel.isConnected());
     QVERIFY(clientModel.currentRadioMac().isEmpty());
@@ -2422,11 +2430,11 @@ void TstStationSession::lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayi
     stationModel->setConnectionStateForTest(ConnectionState::Connected);
     stationModel->emitCurrentRadioChangedForTest();
 
-    QTRY_VERIFY(clientModel.isConnected());
+    NEREUS_TRY_VERIFY(clientModel.isConnected());
     QCOMPARE(clientModel.currentRadioMac(), mac);
     QCOMPARE(clientModel.boardCapabilities().board, HPSDRHW::HermesLite);
     QCOMPARE(clientModel.maxSlices(), 2);
-    QTRY_COMPARE(proxy.value(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac), QVariant{})
+    NEREUS_TRY_COMPARE(proxy.value(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac), QVariant{})
                      .toString(),
                  QStringLiteral("192000"));
 
@@ -2469,7 +2477,7 @@ void TstStationSession::queuedLateRadioRefreshReachesOnlyTheSessionsAdmittedBefo
     QSignalSpy oldCompleted(&oldClient, &StationClient::handshakeComplete);
     oldClient.startSession(oldClientEnd, server.token());
     server.acceptTransport(oldStationEnd);
-    QTRY_COMPARE(oldCompleted.count(), 1);
+    NEREUS_TRY_COMPARE(oldCompleted.count(), 1);
     oldClientEnd->clearReceived();
 
     // The deferred callback captures the sessions admitted now (the old
@@ -2494,10 +2502,10 @@ void TstStationSession::queuedLateRadioRefreshReachesOnlyTheSessionsAdmittedBefo
     replacementClient->sendText(
         SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
-    QTRY_VERIFY(replacementClient->receivedKinds().contains(
+    NEREUS_TRY_VERIFY(replacementClient->receivedKinds().contains(
         QByteArrayLiteral("snapshot.complete")));
     // The old session gets the refresh it was owed, and stays up.
-    QTRY_VERIFY(oldClientEnd->receivedKinds().contains(QByteArrayLiteral("settings.snapshot")));
+    NEREUS_TRY_VERIFY(oldClientEnd->receivedKinds().contains(QByteArrayLiteral("settings.snapshot")));
 
     const QList<QByteArray> replacementKinds = replacementClient->receivedKinds();
     QCOMPARE(replacementKinds.count(QByteArrayLiteral("capabilities")), 1);
@@ -2525,13 +2533,13 @@ void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
     stationEnd->linkTo(clientEnd);
 
     server.acceptTransport(stationEnd);
-    QTRY_VERIFY(!clientEnd->received().isEmpty());
+    NEREUS_TRY_VERIFY(!clientEnd->received().isEmpty());
 
     const quint16 wrongMajor = kSessionProtocolMajor + 1;
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         wrongMajor, 4, 6, QStringLiteral("from-the-future"))));
 
-    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("session.end")));
+    NEREUS_TRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("session.end")));
 
     QString reason;
     for (const QByteArray& wire : clientEnd->received()) {
@@ -2566,7 +2574,7 @@ void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
     fakeStationEnd->sendText(SessionMessages::encode(
         SessionMessages::hello(wrongMajor, 9, 6, QStringLiteral("future-station"))));
 
-    QTRY_COMPARE(ended.count(), 1);
+    NEREUS_TRY_COMPARE(ended.count(), 1);
     const QString clientReason = ended.first().first().toString();
     QCOMPARE(clientReason,
              SessionEndReasons::versionRefused({wrongMajor}, {kSessionProtocolMajor}));
@@ -2599,7 +2607,7 @@ void TstStationSession::minorVersionMismatchNegotiatesDown()
 
     // The client answers rather than refusing, and settles on the LOWER of
     // the two minors.
-    QTRY_VERIFY(fakeStationEnd->receivedKinds().contains(QByteArrayLiteral("hello")));
+    NEREUS_TRY_VERIFY(fakeStationEnd->receivedKinds().contains(QByteArrayLiteral("hello")));
     QCOMPARE(client.agreedMinor(), kSessionProtocolMinor);
     QCOMPARE(ended.count(), 0);
 
@@ -2616,14 +2624,14 @@ void TstStationSession::minorVersionMismatchNegotiatesDown()
     auto* rawClient = new LoopbackTransport(QStringLiteral("raw-client"), this);
     stationEnd->linkTo(rawClient);
     server.acceptTransport(stationEnd);
-    QTRY_VERIFY(!rawClient->received().isEmpty());
+    NEREUS_TRY_VERIFY(!rawClient->received().isEmpty());
 
     rawClient->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, higherMinor, 6, QStringLiteral("newer-client"))));
     rawClient->sendText(
         SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
-    QTRY_VERIFY(server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
     QVERIFY(!rawClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
 }
 
@@ -2646,7 +2654,7 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
         auto* rawClient = new LoopbackTransport(QStringLiteral("raw-client"), this);
         stationEnd->linkTo(rawClient);
         server.acceptTransport(stationEnd);
-        QTRY_VERIFY(!rawClient->received().isEmpty());
+        NEREUS_TRY_VERIFY(!rawClient->received().isEmpty());
 
         rawClient->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 6,
@@ -2654,7 +2662,7 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
         rawClient->sendText(SessionMessages::encode(
             SessionMessages::authRequest(QStringLiteral("definitely-not-the-token"))));
 
-        QTRY_VERIFY(rawClient->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+        NEREUS_TRY_VERIFY(rawClient->receivedKinds().contains(QByteArrayLiteral("auth.result")));
         for (const QByteArray& wire : rawClient->received()) {
             const SessionMessage message = decodeOrFail(wire);
             if (message.kind == SessionMessageKind::AuthResult) {
@@ -2681,13 +2689,13 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
     auto* rawClient = new LoopbackTransport(QStringLiteral("raw-client"), this);
     stationEnd->linkTo(rawClient);
     server.acceptTransport(stationEnd);
-    QTRY_VERIFY(!rawClient->received().isEmpty());
+    NEREUS_TRY_VERIFY(!rawClient->received().isEmpty());
     rawClient->sendText(SessionMessages::encode(
         SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
                                QStringLiteral("right-token-client"))));
     rawClient->sendText(
         SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(rawClient->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    NEREUS_TRY_VERIFY(rawClient->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     QVERIFY(!server.hasAuthenticatedSession());
 }
 
@@ -2712,12 +2720,12 @@ void TstStationSession::secondAuthenticatedConnectionIsAdmittedBesideTheFirst()
         auto* clientEnd = new LoopbackTransport(name + QStringLiteral("-client"), this);
         stationEnd->linkTo(clientEnd);
         server.acceptTransport(stationEnd);
-        QTRY_VERIFY(!clientEnd->received().isEmpty());
+        NEREUS_TRY_VERIFY(!clientEnd->received().isEmpty());
         clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 6, name)));
         clientEnd->sendText(
             SessionMessages::encode(SessionMessages::authRequest(server.token())));
-        QTRY_VERIFY(
+        NEREUS_TRY_VERIFY(
             clientEnd->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
         *clientEndOut = clientEnd;
     };
@@ -2769,7 +2777,7 @@ void TstStationSession::heartbeatDetectsAPeerThatWentSilentWithoutClosing()
 
     QSignalSpy timedOut(&server, &StationServer::peerHeartbeatTimeout);
     server.acceptTransport(stationEnd);
-    QTRY_VERIFY(!clientEnd->received().isEmpty());
+    NEREUS_TRY_VERIFY(!clientEnd->received().isEmpty());
 
     // THE CASE THIS WHOLE STEP EXISTS FOR. The link stays nominally OPEN;
     // the peer simply stops answering. No close, no write error, nothing
@@ -2780,11 +2788,11 @@ void TstStationSession::heartbeatDetectsAPeerThatWentSilentWithoutClosing()
     QVERIFY(clientEnd->isOpen());
     clientEnd->setAnswersPings(false);
 
-    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
     QCOMPARE(timedOut.first().first().toString(), QStringLiteral("silent-peer"));
 
     // The peer really was dropped, not merely reported.
-    QTRY_COMPARE(server.peerCount(), 0);
+    NEREUS_TRY_COMPARE(server.peerCount(), 0);
     QVERIFY(!server.hasAuthenticatedSession());
 
     // The pings really did go out: without them the miss counter could
@@ -2815,8 +2823,11 @@ void TstStationSession::heartbeatLeavesAnAnsweringPeerAlone()
     QSignalSpy timedOut(&server, &StationServer::peerHeartbeatTimeout);
     server.acceptTransport(stationEnd);
 
-    // Long enough for many more than maxMissedPongs intervals to elapse.
-    QTest::qWait(20 * 2 * 15);
+    // Many more than maxMissedPongs intervals, counted by the pings the
+    // heartbeat itself sends rather than by a wait picked by hand. A
+    // timeout ends the wait too, so the claim below names it.
+    NEREUS_TRY_VERIFY(timedOut.count() > 0
+                || clientEnd->pingsSeen() > 4 * server.maxMissedPongs());
 
     // The claim FIRST, the non-vacuity guard second. Ordered this way
     // deliberately: an implementation that stopped tracking pongs kills
@@ -2852,7 +2863,7 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     SliceModel* stationSlice = stationModel->slices().first();
     SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
@@ -2861,7 +2872,7 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     // Station to client: an ordinary property delta.
     stationEnd->clearReceived();
     stationSlice->setFrequency(7123456.0);
-    QTRY_COMPARE(clientSlice->frequency(), 7123456.0);
+    NEREUS_TRY_COMPARE(clientSlice->frequency(), 7123456.0);
 
     // THE ECHO GUARD, asserted directly rather than inferred from message
     // volume. Applying an inbound value calls a real setter, which emits a
@@ -2873,19 +2884,19 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     // without generating a reply -- one wasted round trip, invisible in a
     // volume count, and a genuine correctness hole for any property whose
     // setter is not emit-on-change.
-    QTest::qWait(StationClient::kDefaultWriteFlushMs * 4);
+    NereusSDR::Test::settleSession();
     QVERIFY2(!stationEnd->receivedKinds().contains(QByteArrayLiteral("property.write")),
              "the client echoed the station's own delta straight back to it");
 
     // Client to station: the inbound half of the mirror.
     const int before = clientEnd->received().size();
     clientSlice->setFrequency(14074000.0);
-    QTRY_COMPARE(stationSlice->frequency(), 14074000.0);
+    NEREUS_TRY_COMPARE(stationSlice->frequency(), 14074000.0);
 
     // And no echo storm: applying the station's answer must not produce
     // another outbound write, which would ping-pong forever. Give the
     // event loop several flush intervals to misbehave in.
-    QTest::qWait(StationClient::kDefaultWriteFlushMs * 6);
+    NereusSDR::Test::settleSession();
     const int after = clientEnd->received().size();
     QVERIFY2(after - before < 5,
              qPrintable(QStringLiteral("station sent %1 messages after one client write")
@@ -2901,11 +2912,11 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     // the mirror carries it. Stop it: these setters stand in for the pump.
     stopSliceMeterPump(stationModel.get());
     stationSlice->setSignalStrengthDbm(-73.0);
-    QTRY_COMPARE(clientSlice->signalStrengthDbm(), -73.0);
+    NEREUS_TRY_COMPARE(clientSlice->signalStrengthDbm(), -73.0);
     stationSlice->setSignalPeakDbm(-61.0);
     stationSlice->setSignalAverageDbm(-79.0);
-    QTRY_COMPARE(clientSlice->signalPeakDbm(), -61.0);
-    QTRY_COMPARE(clientSlice->signalAverageDbm(), -79.0);
+    NEREUS_TRY_COMPARE(clientSlice->signalPeakDbm(), -61.0);
+    NEREUS_TRY_COMPARE(clientSlice->signalAverageDbm(), -79.0);
 
     // Read-only telemetry must never turn into a client command, even if
     // code changes the client's local copy. Only Core is authoritative.
@@ -2914,7 +2925,7 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     clientSlice->setSignalAverageDbm(-30.0);
     // A real writable property is a flush barrier, avoiding a timed sleep.
     clientSlice->setFrequency(14075100.0);
-    QTRY_COMPARE(stationSlice->frequency(), 14075100.0);
+    NEREUS_TRY_COMPARE(stationSlice->frequency(), 14075100.0);
     for (const QByteArray& wire : stationEnd->received()) {
         const SessionMessage message = decodeOrFail(wire);
         if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
@@ -2948,7 +2959,7 @@ void TstStationSession::autoAgcTelemetryFollowsCoreAcrossReconnect()
         stationEnd->linkTo(clientEnd);
         client.startSession(clientEnd, server.token());
         server.acceptTransport(stationEnd);
-        QTRY_COMPARE(completed.count(), session);
+        NEREUS_TRY_COMPARE(completed.count(), session);
         auto* remoteFirst = remote.sliceById(first->sliceIndex());
         auto* remoteSecond = remote.sliceById(second->sliceIndex());
         QVERIFY(remoteFirst && remoteSecond);
@@ -2959,11 +2970,11 @@ void TstStationSession::autoAgcTelemetryFollowsCoreAcrossReconnect()
         QVERIFY(!remoteSecond->stationAutoAgcNoiseFloorValid());
 
         first->setStationAutoAgcNoiseFloor(-108.5, false, session * 10 + 2);
-        QTRY_COMPARE(remoteFirst->stationAutoAgcNoiseFloorGeneration(), quint64(session * 10 + 2));
+        NEREUS_TRY_COMPARE(remoteFirst->stationAutoAgcNoiseFloorGeneration(), quint64(session * 10 + 2));
         QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorDbm(), -108.5);
         QVERIFY(!remoteFirst->stationAutoAgcNoiseFloorValid());
         first->setStationAutoAgcNoiseFloor(-107.0, true, session * 10 + 2);
-        QTRY_VERIFY(remoteFirst->stationAutoAgcNoiseFloorValid());
+        NEREUS_TRY_VERIFY(remoteFirst->stationAutoAgcNoiseFloorValid());
         QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorDbm(), -107.0);
         QCOMPARE(remoteSecond->stationAutoAgcNoiseFloorDbm(), -91.0);
 
@@ -2972,7 +2983,7 @@ void TstStationSession::autoAgcTelemetryFollowsCoreAcrossReconnect()
         // An actual operator write is the barrier for the client's write
         // flush. None of the telemetry notifies may join that outbound batch.
         remoteFirst->setFrequency(14080000.0 + session * 100.0);
-        QTRY_COMPARE(first->frequency(), remoteFirst->frequency());
+        NEREUS_TRY_COMPARE(first->frequency(), remoteFirst->frequency());
         for (const QByteArray& wire : stationEnd->received()) {
             const auto message = decodeOrFail(wire);
             if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
@@ -3032,7 +3043,7 @@ void TstStationSession::filterTelemetryFollowsCoreAcrossReconnect()
         client.startSession(clientEnd, server.token());
         QVERIFY(!remote.filterChainStateAvailable(1));
         server.acceptTransport(stationEnd);
-        QTRY_COMPARE(completed.count(), session);
+        NEREUS_TRY_COMPARE(completed.count(), session);
         QVERIFY(*snapshotSeen);
         QVERIFY(!*presentedEarly);
         QVERIFY(remote.filterChainStateAvailable(0));
@@ -3048,10 +3059,10 @@ void TstStationSession::filterTelemetryFollowsCoreAcrossReconnect()
         remote.alexControllerMutable().setWidebandActive(0, true);
         QVERIFY(!remote.panBypassState({slice0->sliceIndex()}).bypassed);
         station->alexControllerMutable().setWidebandActive(1, true);
-        QTRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::WidebandLocked));
+        NEREUS_TRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::WidebandLocked));
         QVERIFY(remote.panBypassState({slice1->sliceIndex()}).reason.contains("more spectrum"));
         station->alexControllerMutable().setWidebandActive(1, false);
-        QTRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::Bypass));
+        NEREUS_TRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::Bypass));
 
         stationEnd->clearReceived();
         QVERIFY(remote.applyStationFilterValue("rxFilter1Reason", QStringLiteral("client-only")));
@@ -3059,7 +3070,7 @@ void TstStationSession::filterTelemetryFollowsCoreAcrossReconnect()
         auto* clientSlice = remote.sliceById(slice0->sliceIndex());
         QVERIFY(clientSlice);
         clientSlice->setFrequency(14075000.0 + session * 100.0);
-        QTRY_COMPARE(slice0->frequency(), clientSlice->frequency());
+        NEREUS_TRY_COMPARE(slice0->frequency(), clientSlice->frequency());
         for (const QByteArray& wire : stationEnd->received()) {
             const auto message = decodeOrFail(wire);
             if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
@@ -3105,7 +3116,7 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     QVERIFY(proxy.ready());
     QVERIFY(proxy.hasReceivedSnapshot());
@@ -3130,13 +3141,13 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QSignalSpy outbound(&proxy, &SettingsProxy::outboundWriteRequested);
     proxy.setValue(QStringLiteral("StationCallsign"), QStringLiteral("50999"));
     QCOMPARE(outbound.count(), 1);
-    QTRY_COMPARE(stationSettings.value(QStringLiteral("StationCallsign")).toString(),
+    NEREUS_TRY_COMPARE(stationSettings.value(QStringLiteral("StationCallsign")).toString(),
                  QStringLiteral("50999"));
 
     // The removal half of the same seam.
     QVERIFY(stationSettings.contains(QStringLiteral("StationCallsign")));
     proxy.remove(QStringLiteral("StationCallsign"));
-    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("StationCallsign")));
+    NEREUS_TRY_VERIFY(!stationSettings.contains(QStringLiteral("StationCallsign")));
 }
 
 // Whole-branch review, Important 4. A settings remove on the station used
@@ -3181,7 +3192,7 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("50123"));
@@ -3191,7 +3202,7 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     // A removal on the daemon, for any reason of its own.
     stationSettings.remove(QStringLiteral("StationCallsign"));
 
-    QTRY_VERIFY2(!proxy.contains(QStringLiteral("StationCallsign")),
+    NEREUS_TRY_VERIFY2(!proxy.contains(QStringLiteral("StationCallsign")),
                  "the client still holds a key the station removed");
     QCOMPARE(proxy.value(QStringLiteral("StationCallsign"), QStringLiteral("fallback")).toString(),
              QStringLiteral("fallback"));
@@ -3205,15 +3216,15 @@ void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmpt
     // That echo is what used to resurrect the key as an empty string,
     // undoing a removal the client had already performed correctly.
     stationSettings.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
-    QTRY_COMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QString()).toString(),
+    NEREUS_TRY_COMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QString()).toString(),
                  QStringLiteral("True"));
 
     proxy.remove(QStringLiteral("Slice0/Locked"));
     QVERIFY(!proxy.contains(QStringLiteral("Slice0/Locked")));
-    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("Slice0/Locked")));
+    NEREUS_TRY_VERIFY(!stationSettings.contains(QStringLiteral("Slice0/Locked")));
 
     // Several flush intervals for the echo to land and misbehave in.
-    QTest::qWait(StationClient::kDefaultWriteFlushMs * 6);
+    NereusSDR::Test::settleSession();
     QVERIFY2(!proxy.contains(QStringLiteral("Slice0/Locked")),
              "the station's echo resurrected the key the client just removed");
     QCOMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QStringLiteral("fallback")).toString(),
@@ -3252,7 +3263,7 @@ void TstStationSession::schemaSkewIsCaughtByNameComparison()
     fakeStationEnd->sendText(
         SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
 
-    QTRY_VERIFY(client.mirroredObject(QByteArrayLiteral("radio")) != nullptr);
+    NEREUS_TRY_VERIFY(client.mirroredObject(QByteArrayLiteral("radio")) != nullptr);
 
     // A schema for RadioModel carrying a property this build has never
     // heard of, and omitting one it does have.
@@ -3272,7 +3283,7 @@ void TstStationSession::schemaSkewIsCaughtByNameComparison()
     fakeStationEnd->sendText(SessionMessages::encode(
         SessionMessages::schema(QByteArrayLiteral("RadioModel"), fields)));
 
-    QTRY_VERIFY(!client.schemaNamesOnlyOnStation().isEmpty());
+    NEREUS_TRY_VERIFY(!client.schemaNamesOnlyOnStation().isEmpty());
     QVERIFY(client.schemaNamesOnlyOnStation().contains(
         QByteArrayLiteral("RadioModel.aPropertyFromTheFuture")));
     QVERIFY(client.schemaNamesOnlyLocal().contains(
@@ -3322,7 +3333,7 @@ void TstStationSession::reconnectSurvivesTheOldTransportClosing()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(firstClient, server.token());
     server.acceptTransport(firstStation);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(clientModel.isConnected());
 
     // Reconnect on a fresh pair WITHOUT closing the old one first, which
@@ -3332,7 +3343,7 @@ void TstStationSession::reconnectSurvivesTheOldTransportClosing()
     secondStation->linkTo(secondClient);
     client.startSession(secondClient, server.token());
     server.acceptTransport(secondStation);
-    QTRY_COMPARE(completed.count(), 2);
+    NEREUS_TRY_COMPARE(completed.count(), 2);
     QVERIFY(clientModel.isConnected());
     QVERIFY(proxy.ready());
 
@@ -3341,7 +3352,7 @@ void TstStationSession::reconnectSurvivesTheOldTransportClosing()
     // deleteLater()s it; the old code overwrote m_transport and did none
     // of the three, which leaked a transport (and, over a real socket, a
     // QWebSocket still connected to onTransportText) on every reconnect.
-    QTRY_VERIFY2(staleClient.isNull(),
+    NEREUS_TRY_VERIFY2(staleClient.isNull(),
                  "the stale transport was orphaned rather than released");
 
     // And if anything of the old link is still around to make noise, it
@@ -3351,7 +3362,7 @@ void TstStationSession::reconnectSurvivesTheOldTransportClosing()
     if (!staleStation.isNull()) {
         staleStation->closeLink(QStringLiteral("stale link finally closing"));
     }
-    QTest::qWait(StationClient::kDefaultWriteFlushMs * 4);
+    NereusSDR::Test::settleSession();
 
     QVERIFY2(client.isHandshakeComplete(),
              "a stale transport's close tore down the fresh session");
@@ -3395,19 +3406,19 @@ void TstStationSession::heartbeatTimeoutReportsTheSessionAsEnded()
 
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     // The station goes silent without closing.
     stationEnd->setAnswersPings(false);
 
-    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
-    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 2000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 2000);
     QCOMPARE(ended.first().first().toString(), QStringLiteral("heartbeat timeout"));
     QVERIFY(!clientModel.isConnected());
     QVERIFY(!proxy.ready());
 
     // Exactly once, no matter how many close paths unwind afterwards.
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     QCOMPARE(ended.count(), 1);
 }
 
@@ -3457,7 +3468,7 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     TunerModel* const clientTuner = clientModel.tunerModel();
     QVERIFY(clientTuner != nullptr);
@@ -3503,16 +3514,16 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
         {QStringLiteral("fwd"), QStringLiteral("0")},
         {QStringLiteral("swr"), QStringLiteral("0")},
     });
-    QTRY_COMPARE(clientTuner->relayC1(), 0);
-    QTRY_COMPARE(clientTuner->relayL(), 0);
-    QTRY_COMPARE(clientTuner->relayC2(), 0);
-    QTRY_VERIFY(!clientTuner->isOperate());
-    QTRY_VERIFY(!clientTuner->isBypass());
-    QTRY_VERIFY(!clientTuner->isTuning());
-    QTRY_COMPARE(clientTuner->antennaA(), 0);
-    QTRY_VERIFY(!clientTuner->hasAntennaSwitch());
-    QTRY_COMPARE(clientTuner->fwdPower(), 0.0f);
-    QTRY_COMPARE(clientTuner->swr(), 0.0f);
+    NEREUS_TRY_COMPARE(clientTuner->relayC1(), 0);
+    NEREUS_TRY_COMPARE(clientTuner->relayL(), 0);
+    NEREUS_TRY_COMPARE(clientTuner->relayC2(), 0);
+    NEREUS_TRY_VERIFY(!clientTuner->isOperate());
+    NEREUS_TRY_VERIFY(!clientTuner->isBypass());
+    NEREUS_TRY_VERIFY(!clientTuner->isTuning());
+    NEREUS_TRY_COMPARE(clientTuner->antennaA(), 0);
+    NEREUS_TRY_VERIFY(!clientTuner->hasAntennaSwitch());
+    NEREUS_TRY_COMPARE(clientTuner->fwdPower(), 0.0f);
+    NEREUS_TRY_COMPARE(clientTuner->swr(), 0.0f);
     QCOMPARE(clientTgxlFrames.count(), 0);
 
     // And the property that genuinely DOES land is not swept into the set
@@ -3525,7 +3536,7 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
     // no-reading value over the reading this setter stands in for (R-R3-13).
     stopSliceMeterPump(stationModel.get());
     stationSlice->setSignalStrengthDbm(-91.0);
-    QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
+    NEREUS_TRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
     QVERIFY(!client.unappliedProperties().contains(
         QByteArrayLiteral("SliceModel.signalStrengthDbm")));
 }
@@ -3575,11 +3586,11 @@ void TstStationSession::remoteTgxlStateClearsOnSessionLossRetainingConfiguredEnd
     stationEnd->linkTo(clientEnd);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_VERIFY(client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(client.isHandshakeComplete());
 
     TunerModel* const clientTuner = clientModel.tunerModel();
     QVERIFY(clientTuner != nullptr);
-    QTRY_VERIFY(clientTuner->hasDirectConnection());
+    NEREUS_TRY_VERIFY(clientTuner->hasDirectConnection());
     QVERIFY(clientTuner->isPresent());
     QCOMPARE(clientTuner->configuredHost(), state.configuredHost);
     QCOMPARE(clientTuner->configuredPort(), int(state.configuredPort));
@@ -3588,7 +3599,7 @@ void TstStationSession::remoteTgxlStateClearsOnSessionLossRetainingConfiguredEnd
     QCOMPARE(clientTuner->swr(), 1.4f);
 
     clientEnd->closeLink(QStringLiteral("station link lost"));
-    QTRY_VERIFY(!client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(!client.isHandshakeComplete());
     QVERIFY(!clientTuner->hasDirectConnection());
     QVERIFY(!clientTuner->isPresent());
     QCOMPARE(clientTuner->connectionPhase(), TunerModel::ConnectionPhase::Disconnected);
@@ -3673,18 +3684,18 @@ void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     SliceModel* const clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
     QVERIFY(clientSlice != nullptr);
     clientSlice->setFrequency(7100000.0);
 
-    QTRY_COMPARE(stationSlice->frequency(), 7100000.0);
+    NEREUS_TRY_COMPARE(stationSlice->frequency(), 7100000.0);
     QCOMPARE(tgxlFrames.count(), 0);
 
     // Session teardown must never lift the daemon's persistent policy.
     clientEnd->closeLink(QStringLiteral("test session complete"));
-    QTRY_VERIFY(!clientModel.isConnected());
+    NEREUS_TRY_VERIFY(!clientModel.isConnected());
     QVERIFY(stationModel->receiveOnlyStationPolicy());
     stationMox->setMox(true);
     QCOMPARE(moxRefused.count(), 2);
@@ -3727,7 +3738,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitKeyingWrites()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     TransmitModel& stationTx = stationModel->transmitModel();
     TransmitModel& clientTx = clientModel.transmitModel();
@@ -3743,17 +3754,17 @@ void TstStationSession::receiveOnlyStationRefusesTransmitKeyingWrites()
     clientTx.setTune(true);
     clientTx.setPower(requestedPower);
 
-    QTRY_VERIFY(stationEnd->receivedKinds().contains(
+    NEREUS_TRY_VERIFY(stationEnd->receivedKinds().contains(
         QByteArrayLiteral("property.write")));
 
     // These are model-state assertions. This fixture does not claim that a
     // radio socket emitted RF in the uncorrected implementation.
     QVERIFY(!stationTx.isMox());
     QVERIFY(!stationTx.isTune());
-    QTRY_COMPARE(stationTx.power(), requestedPower);
+    NEREUS_TRY_COMPARE(stationTx.power(), requestedPower);
 
-    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
-    QTRY_COMPARE(clientTx.power(), requestedPower);
+    NEREUS_TRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
+    NEREUS_TRY_COMPARE(clientTx.power(), requestedPower);
     // iPhone app plan Task 35: mox and tune travel from the Core only
     // (MirrorPolicy Outbound), so the window never sends them: a device
     // keys with the transmit verbs. Only the power reached the Core.
@@ -3806,38 +3817,38 @@ void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     DspAssetService* window = clientModel.dspAssets();
-    QTRY_VERIFY(!window->nr3Runnable());
-    QTRY_COMPARE(window->nr3ModelStatus(), none);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_VERIFY(!window->nr3Runnable());
+    NEREUS_TRY_COMPARE(window->nr3ModelStatus(), none);
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
     windowSlice->setActiveNr(NrSlot::NR3);
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
     QCOMPARE(windowRefused.count(), 1);
     QCOMPARE(windowRefused.constFirst().at(0).toString(), none);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
 
     // Another reducer still turns on from the window.
     windowSlice->setActiveNr(NrSlot::NR2);
     QCOMPARE(windowSlice->activeNr(), NrSlot::NR2);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
 
     // The model comes back: the Core says so and the window turns NR3 on.
     DspAssetService::setBundledNr3ModelPathsForTest({});
     QVERIFY(core->applyNr3Model());
     QVERIFY(core->nr3Runnable());
-    QTRY_VERIFY(window->nr3Runnable());
+    NEREUS_TRY_VERIFY(window->nr3Runnable());
     windowSlice->setActiveNr(NrSlot::NR3);
     QCOMPARE(windowSlice->activeNr(), NrSlot::NR3);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR3);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::NR3);
     QCOMPARE(windowRefused.count(), 1);
 
     windowSlice->setActiveNr(NrSlot::Off);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
     AppSettings::instance().remove(QStringLiteral("DspAssets/Nr3Model"));
 }
 
@@ -3877,24 +3888,24 @@ void TstStationSession::dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     DspAssetService* window = clientModel.dspAssets();
-    QTRY_VERIFY(!window->dfnrRunnable());
-    QTRY_COMPARE(window->dfnrModelStatus(), reason);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_VERIFY(!window->dfnrRunnable());
+    NEREUS_TRY_COMPARE(window->dfnrModelStatus(), reason);
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
     windowSlice->setActiveNr(NrSlot::DFNR);
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
     QCOMPARE(windowRefused.count(), 1);
     QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     windowSlice->setActiveNr(NrSlot::NR2);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
     windowSlice->setActiveNr(NrSlot::Off);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
     client.disconnectFromStation(QStringLiteral("test complete"));
 }
 
@@ -3936,25 +3947,25 @@ void TstStationSession::mnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     DspAssetService* window = clientModel.dspAssets();
-    QTRY_VERIFY(!window->mnrRunnable());
-    QTRY_COMPARE(window->mnrStatus(), reason);
+    NEREUS_TRY_VERIFY(!window->mnrRunnable());
+    NEREUS_TRY_COMPARE(window->mnrStatus(), reason);
     QCOMPARE(clientModel.nrCannotRunReason(NrSlot::MNR), reason);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
     windowSlice->setActiveNr(NrSlot::MNR);
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
     QCOMPARE(windowRefused.count(), 1);
     QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     windowSlice->setActiveNr(NrSlot::NR2);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
     windowSlice->setActiveNr(NrSlot::Off);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
     client.disconnectFromStation(QStringLiteral("test complete"));
 }
 
@@ -3985,15 +3996,15 @@ void TstStationSession::bnrIsRefusedOnTheCoreAndInTheWindow()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
     windowSlice->setActiveNr(NrSlot::BNR);
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
     QCOMPARE(windowRefused.count(), 1);
     QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     client.disconnectFromStation(QStringLiteral("test complete"));
 }
@@ -4027,21 +4038,21 @@ void TstStationSession::dfnrFailingAtFirstSelectionTurnsTheWindowOff()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     DspAssetService* window = clientModel.dspAssets();
     QVERIFY(window->dfnrRunnable());
     windowSlice->setActiveNr(NrSlot::DFNR);
-    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::DFNR);
+    NEREUS_TRY_COMPARE(coreSlice->activeNr(), NrSlot::DFNR);
 
     stationModel->reportDfnrUnavailableForTest(/*modelMissing=*/false);
     const QString reason = QStringLiteral(
         "The DFNR model file on this Core could not be loaded, so DFNR cannot run.");
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
-    QTRY_VERIFY(!window->dfnrRunnable());
-    QTRY_COMPARE(window->dfnrModelStatus(), reason);
-    QTRY_COMPARE(windowSlice->activeNr(), NrSlot::Off);
+    NEREUS_TRY_VERIFY(!window->dfnrRunnable());
+    NEREUS_TRY_COMPARE(window->dfnrModelStatus(), reason);
+    NEREUS_TRY_COMPARE(windowSlice->activeNr(), NrSlot::Off);
     windowSlice->setActiveNr(NrSlot::DFNR);
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
     client.disconnectFromStation(QStringLiteral("test complete"));
@@ -4084,11 +4095,11 @@ void TstStationSession::savedNr3OnACoreWithNoModelShowsOffInTheWindow()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
-    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    NEREUS_TRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_VERIFY(!clientModel.slices().isEmpty());
     SliceModel* windowSlice = clientModel.slices().constFirst();
     QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
-    QTRY_VERIFY(!clientModel.dspAssets()->nr3Runnable());
+    NEREUS_TRY_VERIFY(!clientModel.dspAssets()->nr3Runnable());
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     client.disconnectFromStation(QStringLiteral("test complete"));
 }
@@ -4117,12 +4128,12 @@ void TstStationSession::nr3CannotRunEndsWithTheSession()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     DspAssetService* window = clientModel.dspAssets();
-    QTRY_VERIFY(!window->nr3Runnable());
+    NEREUS_TRY_VERIFY(!window->nr3Runnable());
     QVERIFY(!window->nr3ModelStatus().isEmpty());
     client.disconnectFromStation(QStringLiteral("first Core done"));
-    QTRY_VERIFY(!client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(!client.isHandshakeComplete());
 
     // A second connection, to an older Core that never sends nr3Runnable.
     auto* olderStation = new LoopbackTransport(QStringLiteral("older-station"), this);
@@ -4137,7 +4148,7 @@ void TstStationSession::nr3CannotRunEndsWithTheSession()
     caps.dspAssetVersion = 2;
     olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(client.isHandshakeComplete());
     QVERIFY(window->nr3Runnable());
     QVERIFY(window->nr3ModelStatus().isEmpty());
     client.disconnectFromStation(QStringLiteral("test complete"));
@@ -4167,25 +4178,25 @@ void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
 
     DspAssetService* remote = clientModel.dspAssets();
-    QTRY_VERIFY(remote->nr3ModelsSupported());
-    QTRY_COMPARE(remote->nr3ModelStatus(), stationModel->dspAssets()->nr3ModelStatus());
+    NEREUS_TRY_VERIFY(remote->nr3ModelsSupported());
+    NEREUS_TRY_COMPARE(remote->nr3ModelStatus(), stationModel->dspAssets()->nr3ModelStatus());
 
     const QString small = QString::fromLatin1(DspAssetService::kNr3BundledSmallId);
     QSignalSpy answered(remote, &DspAssetService::requestCompleted);
     const quint32 request = remote->request("dspAssets.selectNr3Model",
                                             {{QStringLiteral("id"), small}});
     QVERIFY(request != 0);
-    QTRY_COMPARE(answered.count(), 1);
+    NEREUS_TRY_COMPARE(answered.count(), 1);
     QCOMPARE(answered.first().at(0).toUInt(), request);
     QVERIFY2(answered.first().at(1).toBool(), qPrintable(answered.first().at(2).toString()));
 
     QCOMPARE(loaded, QStringList{DspAssetService::bundledNr3ModelPath(small)});
     QCOMPARE(stationModel->dspAssets()->nr3ModelAsset(), small);
-    QTRY_COMPARE(remote->nr3ModelAsset(), small);
-    QTRY_COMPARE(remote->nr3ModelStatus(), QStringLiteral("Using the bundled small model."));
+    NEREUS_TRY_COMPARE(remote->nr3ModelAsset(), small);
+    NEREUS_TRY_COMPARE(remote->nr3ModelStatus(), QStringLiteral("Using the bundled small model."));
     // The window never loads a model itself.
     QVERIFY(!remote->applyNr3Model());
     QCOMPARE(loaded.size(), 1);
@@ -4214,7 +4225,7 @@ void TstStationSession::olderCoreLeavesTheNr3ModelUnchangeable()
         caps.dspAssetVersion = version;
         station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-        QTRY_VERIFY(client.isHandshakeComplete());
+        NEREUS_TRY_VERIFY(client.isHandshakeComplete());
 
         DspAssetService* assets = remote.dspAssets();
         QCOMPARE(assets->nr3ModelsSupported(), version >= 2);
@@ -4254,13 +4265,13 @@ void TstStationSession::olderAppNr3ModelPathWriteIsRefused()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(proxy.ready());
 
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.setValue(key, QStringLiteral("C:/Users/op/model.bin"));
-    QTRY_COMPARE(rejected.count(), 1);
+    NEREUS_TRY_COMPARE(rejected.count(), 1);
     QCOMPARE(rejected.first().at(0).toString(), key);
     QVERIFY(!stationSettings.contains(key));
     QCOMPARE(toast.count(), 1);
@@ -4268,7 +4279,7 @@ void TstStationSession::olderAppNr3ModelPathWriteIsRefused()
              QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one."));
 
     proxy.remove(key);
-    QTRY_COMPARE(rejected.count(), 2);
+    NEREUS_TRY_COMPARE(rejected.count(), 2);
     QCOMPARE(toast.count(), 2);
     QCOMPARE(toast.last().at(0).toString(),
              QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one."));
@@ -4338,7 +4349,7 @@ void joinNotchWindow(NotchSession& s, QObject* owner, const QString& securityDir
     QSignalSpy completed(s.client.get(), &StationClient::handshakeComplete);
     s.client->startSession(s.clientEnd, s.server->token());
     s.server->acceptTransport(s.stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(s.client->remoteNotchControlAvailable());
     QVERIFY(s.window->notchModel()->mirrorMode());
 }
@@ -4413,7 +4424,7 @@ void TstStationSession::remoteNotchEditKeepsTheCoresWholeList()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(proxy.ready());
 
     SliceModel* remoteSlice = clientModel.sliceById(0);
@@ -4426,12 +4437,12 @@ void TstStationSession::remoteNotchEditKeepsTheCoresWholeList()
     // The Core's live list gains the notch; nothing replaced it. The
     // window's settings, when it wrote any, have landed by the time the
     // window has heard back from the Core.
-    QTRY_VERIFY(stationEnd->receivedKinds().contains(QByteArrayLiteral("command.invoke"))
+    NEREUS_TRY_VERIFY(stationEnd->receivedKinds().contains(QByteArrayLiteral("command.invoke"))
                 || stationSettings.value(QStringLiteral("NotchCount")).toString()
                        != QStringLiteral("2"));
     QCOMPARE(stationSettings.value(QStringLiteral("NotchCount")).toString(),
              QStringLiteral("2"));
-    QTRY_COMPARE(core->notches().size(), 3);
+    NEREUS_TRY_COMPARE(core->notches().size(), 3);
     QCOMPARE(core->notches().at(0).centerHz, 7040000.0);
     QCOMPARE(core->notches().at(1).centerHz, 7050000.0);
     QCOMPARE(core->notches().at(2).centerHz, 7060000.0);
@@ -4441,7 +4452,7 @@ void TstStationSession::remoteNotchEditKeepsTheCoresWholeList()
     QCOMPARE(stationSettings.value(QStringLiteral("Notch1Center")).toDouble(), 7050000.0);
     // The window shows the Core's whole list, under the Core's ids.
     NotchModel* remote = clientModel.notchModel();
-    QTRY_COMPARE(remote->notches().size(), 3);
+    NEREUS_TRY_COMPARE(remote->notches().size(), 3);
     for (int i = 0; i < 3; ++i) {
         QCOMPARE(remote->notches().at(i).id, core->notches().at(i).id);
         QCOMPARE(remote->notches().at(i).centerHz, core->notches().at(i).centerHz);
@@ -4465,28 +4476,28 @@ void TstStationSession::remoteNotchMoveToggleAndDeleteReachTheCore()
     joinNotchWindow(s, this, m_securityDir.path());
     if (QTest::currentTestFailed()) { return; }
     NotchModel* remote = s.window->notchModel();
-    QTRY_COMPARE(remote->notches().size(), 1);
+    NEREUS_TRY_COMPARE(remote->notches().size(), 1);
     QCOMPARE(remote->notches().first().id, first);
 
     QVERIFY(remote->setCenter(first, 7041000.0));
-    QTRY_COMPARE(core->notchById(first)->centerHz, 7041000.0);
+    NEREUS_TRY_COMPARE(core->notchById(first)->centerHz, 7041000.0);
     QVERIFY(remote->setWidth(first, 400.0));
-    QTRY_COMPARE(core->notchById(first)->widthHz, 400.0);
+    NEREUS_TRY_COMPARE(core->notchById(first)->widthHz, 400.0);
     QVERIFY(remote->setActive(first, false));
-    QTRY_VERIFY(!core->notchById(first)->active);
-    QTRY_VERIFY(sameNotchList(core, remote));
+    NEREUS_TRY_VERIFY(!core->notchById(first)->active);
+    NEREUS_TRY_VERIFY(sameNotchList(core, remote));
 
     s.window->addNotchForSlice(s.window->sliceById(0), 7060000.0, 250.0);
-    QTRY_COMPARE(core->notches().size(), 2);
+    NEREUS_TRY_COMPARE(core->notches().size(), 2);
     const int second = core->notches().at(1).id;
-    QTRY_COMPARE(remote->notches().size(), 2);
+    NEREUS_TRY_COMPARE(remote->notches().size(), 2);
     QCOMPARE(remote->notches().at(1).id, second);
 
     QVERIFY(remote->removeNotch(first));
-    QTRY_COMPARE(core->notches().size(), 1);
+    NEREUS_TRY_COMPARE(core->notches().size(), 1);
     QCOMPARE(core->notches().first().id, second);
-    QTRY_VERIFY(sameNotchList(core, remote));
-    QTRY_COMPARE(remote->revision(), core->revision());
+    NEREUS_TRY_VERIFY(sameNotchList(core, remote));
+    NEREUS_TRY_COMPARE(remote->revision(), core->revision());
 
     // Only the Core wrote notch settings, and not through the window.
     QVERIFY(!hasNotchSettings(*s.stationSettings));
@@ -4517,12 +4528,12 @@ void TstStationSession::remoteNotchRefusalsAreInPlainWords()
     if (QTest::currentTestFailed()) { return; }
     NotchModel* remote = s.window->notchModel();
     // The whole list travels, ids and all.
-    QTRY_COMPARE(remote->notches().size(), NotchModel::kMaxNotches);
+    NEREUS_TRY_COMPARE(remote->notches().size(), NotchModel::kMaxNotches);
     QVERIFY(sameNotchList(core, remote));
 
     QSignalSpy addRefused(remote, &NotchModel::notchAddRejected);
     s.window->addNotchForSlice(s.window->sliceById(0), 14200000.0, 200.0);
-    QTRY_COMPARE(addRefused.count(), 1);
+    NEREUS_TRY_COMPARE(addRefused.count(), 1);
     QCOMPARE(addRefused.first().at(0).toString(),
              QStringLiteral("Maximum of 1024 notches reached"));
     QCOMPARE(core->notches().size(), NotchModel::kMaxNotches);
@@ -4533,11 +4544,11 @@ void TstStationSession::remoteNotchRefusalsAreInPlainWords()
     QVERIFY(core->removeNotch(gone));
     QSignalSpy refused(remote, &NotchModel::notchRequestRefused);
     QVERIFY(remote->setActive(gone, false));
-    QTRY_COMPARE(refused.count(), 1);
+    NEREUS_TRY_COMPARE(refused.count(), 1);
     QCOMPARE(refused.first().at(0).toString(),
              QStringLiteral("That notch is no longer on this Core."));
-    QTRY_VERIFY(remote->notchById(gone) == nullptr);
-    QTRY_VERIFY(sameNotchList(core, remote));
+    NEREUS_TRY_VERIFY(remote->notchById(gone) == nullptr);
+    NEREUS_TRY_VERIFY(sameNotchList(core, remote));
 
     // A malformed or stale request sent straight to the Core.
     QSignalSpy results(s.client.get(), &StationClient::commandResult);
@@ -4547,7 +4558,7 @@ void TstStationSession::remoteNotchRefusalsAreInPlainWords()
     const quint32 malformed = s.client->invokeCommand("notch.delete",
         {{0, "id", MirrorWireKind::Float64, double(gone)}});
     QVERIFY(malformed != 0);
-    QTRY_COMPARE(results.count(), 2);
+    NEREUS_TRY_COMPARE(results.count(), 2);
     for (const QList<QVariant>& args : std::as_const(results)) {
         QVERIFY(!args.at(1).toBool());
         QCOMPARE(args.at(2).toString(), args.at(0).toUInt() == stale
@@ -4573,19 +4584,19 @@ void TstStationSession::coreNotchChangesReachTheWindow()
     QVERIFY(!core->globalEnabled());
 
     s.core->setRxNf(0, true);   // the TCI rx_nf_enable path
-    QTRY_VERIFY(remote->globalEnabled());
+    NEREUS_TRY_VERIFY(remote->globalEnabled());
 
     const int placed = core->addNotch(14074000.0, 300.0);
     QVERIFY(placed > 0);
-    QTRY_COMPARE(remote->notches().size(), 1);
+    NEREUS_TRY_COMPARE(remote->notches().size(), 1);
     QCOMPARE(remote->notches().first().id, placed);
     QCOMPARE(remote->notches().first().widthHz, 300.0);
 
     remote->setGlobalEnabled(false);
-    QTRY_VERIFY(!core->globalEnabled());
+    NEREUS_TRY_VERIFY(!core->globalEnabled());
     QVERIFY(core->autoIncrease());
     remote->setAutoIncrease(false);
-    QTRY_VERIFY(!core->autoIncrease());
+    NEREUS_TRY_VERIFY(!core->autoIncrease());
     QVERIFY(!hasNotchSettings(*s.stationSettings));
     removeLocalNotchKeys();
 }
@@ -4610,21 +4621,21 @@ void TstStationSession::appNotchSettingsWritesAreRefused()
     QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     s.proxy->setValue(QStringLiteral("NotchCount"), QStringLiteral("0"));
-    QTRY_COMPARE(rejected.count(), 1);
+    NEREUS_TRY_COMPARE(rejected.count(), 1);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(QStringLiteral("NotchCount")).toString(),
              QStringLiteral("2"));
     s.proxy->setValue(QStringLiteral("NotchGlobalEnabled"), QStringLiteral("True"));
-    QTRY_COMPARE(rejected.count(), 2);
+    NEREUS_TRY_COMPARE(rejected.count(), 2);
     QVERIFY(!s.stationSettings->contains(QStringLiteral("NotchGlobalEnabled")));
     s.proxy->remove(QStringLiteral("NotchCount"));
-    QTRY_COMPARE(rejected.count(), 3);
+    NEREUS_TRY_COMPARE(rejected.count(), 3);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(QStringLiteral("NotchCount")).toString(),
              QStringLiteral("2"));
 
     s.proxy->setValue(QStringLiteral("NotchVisualEnabled"), QStringLiteral("True"));
-    QTRY_COMPARE(s.stationSettings->value(QStringLiteral("NotchVisualEnabled")).toString(),
+    NEREUS_TRY_COMPARE(s.stationSettings->value(QStringLiteral("NotchVisualEnabled")).toString(),
                  QStringLiteral("True"));
     QCOMPARE(rejected.count(), 3);
     removeLocalNotchKeys();
@@ -4652,7 +4663,7 @@ void TstStationSession::olderCoreKeepsTodaysNotchBehaviour()
         caps.notchControlVersion = version;
         station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-        QTRY_VERIFY(client.isHandshakeComplete());
+        NEREUS_TRY_VERIFY(client.isHandshakeComplete());
 
         NotchModel* notches = remote.notchModel();
         QCOMPARE(notches->mirrorMode(), version >= 1);
@@ -4664,12 +4675,12 @@ void TstStationSession::olderCoreKeepsTodaysNotchBehaviour()
             QCOMPARE(notches->notches().size(), 1);
             QCOMPARE(AppSettings::instance().value(QStringLiteral("NotchCount")).toString(),
                      QStringLiteral("1"));
-            QTest::qWait(50);
+            NereusSDR::Test::settleSession();
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
         } else {
             QCOMPARE(added, -1);
             QCOMPARE(notches->notches().size(), 0);
-            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
             QVERIFY(!AppSettings::instance().contains(QStringLiteral("NotchCount")));
         }
     }
@@ -4699,7 +4710,7 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
     peer->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("older-app"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
     QVERIFY(core->notchModel()->addNotch(7050000.0, 200.0) > 0);
     const auto hasNotchDelta = [peer]() {
         for (const QByteArray& wire : peer->received()) {
@@ -4710,7 +4721,7 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
         }
         return false;
     };
-    QTRY_VERIFY(hasNotchDelta());
+    NEREUS_TRY_VERIFY(hasNotchDelta());
     const QList<QByteArray> burst = peer->received();
 
     int notchMessages = 0;
@@ -4780,9 +4791,9 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
     run(withNotches, replay(true));
     run(without, replay(false));
     QVERIFY(notchMessages >= 3);   // schema, object.create, delta
-    QTRY_VERIFY(withNotches.client->isHandshakeComplete());
-    QTRY_VERIFY(without.client->isHandshakeComplete());
-    QTest::qWait(50);
+    NEREUS_TRY_VERIFY(withNotches.client->isHandshakeComplete());
+    NEREUS_TRY_VERIFY(without.client->isHandshakeComplete());
+    NereusSDR::Test::settleSession();
 
     NotchModel* a = withNotches.model.notchModel();
     NotchModel* b = without.model.notchModel();
@@ -4832,20 +4843,20 @@ void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsWrites(
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(proxy.ready());
     QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
 
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.setValue(txKey, QStringLiteral("2048"));
-    QTRY_COMPARE(stationSettings.value(txKey).toString(), QStringLiteral("2048"));
+    NEREUS_TRY_COMPARE(stationSettings.value(txKey).toString(), QStringLiteral("2048"));
     QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("2048"));
     QCOMPARE(rejected.count(), 0);
     QCOMPARE(toast.count(), 0);
 
     proxy.setValue(rxKey, QStringLiteral("2048"));
-    QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
+    NEREUS_TRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
     QCOMPARE(rejected.count(), 0);
 }
 
@@ -4880,7 +4891,7 @@ void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(proxy.ready());
     QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
 
@@ -4888,14 +4899,14 @@ void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.remove(txKey);
     QVERIFY(!proxy.contains(txKey));
-    QTRY_VERIFY(!stationSettings.contains(txKey));
-    QTest::qWait(50);
+    NEREUS_TRY_VERIFY(!stationSettings.contains(txKey));
+    NereusSDR::Test::settleSession();
     QCOMPARE(rejected.count(), 0);
     QCOMPARE(toast.count(), 0);
     QVERIFY(!proxy.contains(txKey));
 
     proxy.remove(rxKey);
-    QTRY_VERIFY(!stationSettings.contains(rxKey));
+    NEREUS_TRY_VERIFY(!stationSettings.contains(rxKey));
     QCOMPARE(rejected.count(), 0);
 }
 
@@ -4944,34 +4955,34 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_COMPARE(completed.count(), 1);
     QVERIFY(proxy.ready());
 
     // Accepted RX write: one apply, to the Phone slice only.
     proxy.setValue(phoneRx, QStringLiteral("2048"));
-    QTRY_COMPARE(stationSettings.value(phoneRx).toString(), QStringLiteral("2048"));
-    QTRY_COMPARE(applied.size(), 1);
+    NEREUS_TRY_COMPARE(stationSettings.value(phoneRx).toString(), QStringLiteral("2048"));
+    NEREUS_TRY_COMPARE(applied.size(), 1);
     QCOMPARE(applied.first(), qMakePair(phoneSlice->sliceIndex(), DSPMode::USB));
 
     // A TX write and an unrelated accepted key: no receive slice applies.
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     proxy.setValue(phoneTx, QStringLiteral("2048"));
-    QTRY_COMPARE(stationSettings.value(phoneTx).toString(), QStringLiteral("2048"));
+    NEREUS_TRY_COMPARE(stationSettings.value(phoneTx).toString(), QStringLiteral("2048"));
     QCOMPARE(rejected.count(), 0);
     proxy.setValue(unrelated, QStringLiteral("True"));
-    QTRY_COMPARE(stationSettings.value(unrelated).toString(), QStringLiteral("True"));
-    QTest::qWait(200);
+    NEREUS_TRY_COMPARE(stationSettings.value(unrelated).toString(), QStringLiteral("True"));
+    NereusSDR::Test::settleSession();
     QCOMPARE(applied.size(), 1);
 
     // Accepted RX remove: the CW slice applies its default.
     proxy.remove(cwRx);
-    QTRY_VERIFY(!stationSettings.contains(cwRx));
-    QTRY_COMPARE(applied.size(), 2);
+    NEREUS_TRY_VERIFY(!stationSettings.contains(cwRx));
+    NEREUS_TRY_COMPARE(applied.size(), 2);
     QCOMPARE(applied.at(1), qMakePair(cwSlice->sliceIndex(), DSPMode::CWU));
 
     // Local half: the Core's own store changing is not a remote write.
     stationSettings.setValue(phoneRx, QStringLiteral("512"));
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     QCOMPARE(applied.size(), 2);
 }
 
@@ -5013,10 +5024,10 @@ void TstStationSession::handshakeDeadlineDropsASilentPeer()
 
     QSignalSpy dropped(&server, &StationServer::peerDisconnected);
     server.acceptTransport(stationEnd);
-    QTRY_COMPARE(server.peerCount(), 1);
+    NEREUS_TRY_COMPARE(server.peerCount(), 1);
 
     // It answers pings (the default) but never says hello or authenticates.
-    QTRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 3000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 3000);
     QCOMPARE(dropped.count(), 1);
     QVERIFY(!server.hasAuthenticatedSession());
 
@@ -5025,14 +5036,16 @@ void TstStationSession::handshakeDeadlineDropsASilentPeer()
     auto* goodClient = new LoopbackTransport(QStringLiteral("good-client"), this);
     goodStation->linkTo(goodClient);
     server.acceptTransport(goodStation);
-    QTRY_VERIFY(!goodClient->received().isEmpty());
+    NEREUS_TRY_VERIFY(!goodClient->received().isEmpty());
     goodClient->sendText(SessionMessages::encode(
         SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
                                QStringLiteral("good"))));
     goodClient->sendText(
         SessionMessages::encode(SessionMessages::authRequest(server.token())));
-    QTRY_VERIFY(server.hasAuthenticatedSession());
-    QTest::qWait(200);  // well past the 60 ms deadline
+    NEREUS_TRY_VERIFY(server.hasAuthenticatedSession());
+    // Nothing to wait for but the deadline itself: twice the server's own.
+    QTest::qWait(2 * server.authDeadlineMs());
+    NereusSDR::Test::drainQueuedDeliveries();
     QVERIFY2(server.hasAuthenticatedSession(),
              "the handshake deadline fired on a peer that had authenticated");
 }
@@ -5068,7 +5081,7 @@ void TstStationSession::peerLimitRefusesFurtherConnections()
 
     QCOMPARE(server.peerCount(), StationServer::kMaxConcurrentPeers);
     // Refused with a reason on the wire, not an unexplained close.
-    QTRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
+    NEREUS_TRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
 }
 
 // Part C fix wave (R1-M4): one host cannot hold every one of the
@@ -5101,7 +5114,7 @@ void TstStationSession::oneAddressHoldsAtMostTwoConnectingSlots()
     for (const QString& same : {attacker, QStringLiteral("::ffff:203.0.113.9")}) {
         auto third = dial(same);
         QCOMPARE(server.peerCount(), 2);
-        QTRY_VERIFY(third.second->receivedKinds().contains(QByteArrayLiteral("session.end")));
+        NEREUS_TRY_VERIFY(third.second->receivedKinds().contains(QByteArrayLiteral("session.end")));
         SessionMessage end;
         for (const QByteArray& wire : third.second->received()) {
             const SessionMessage m = decodeOrFail(wire);
@@ -5122,7 +5135,7 @@ void TstStationSession::oneAddressHoldsAtMostTwoConnectingSlots()
     QCOMPARE(server.peerCount(), 6);
     // Once one of the two ends, the address may connect again.
     first.second->closeLink(QStringLiteral("gone"));
-    QTRY_COMPARE(server.peerCount(), 5);
+    NEREUS_TRY_COMPARE(server.peerCount(), 5);
     dial(attacker);
     QCOMPARE(server.peerCount(), 6);
     Q_UNUSED(second);
@@ -5191,7 +5204,7 @@ void TstStationSession::ipv6PeersAreCountedPerSlash64()
         QCOMPARE(server->peerCount(), 2);
         QCOMPARE(refused.size(), 6);
         for (LoopbackTransport* client : std::as_const(refused)) {
-            QTRY_VERIFY(refusedWithCap(client));
+            NEREUS_TRY_VERIFY(refusedWithCap(client));
         }
     }
 
@@ -5209,7 +5222,7 @@ void TstStationSession::ipv6PeersAreCountedPerSlash64()
         QCOMPARE(server->peerCount(), 4);
         LoopbackTransport* third = dial(*server, QStringLiteral("2001:db8:1:3::3"));
         QCOMPARE(server->peerCount(), 4);
-        QTRY_VERIFY(refusedWithCap(third));
+        NEREUS_TRY_VERIFY(refusedWithCap(third));
     }
 
     // An IPv4-mapped peer is counted as its IPv4 address: it shares a count
@@ -5225,7 +5238,7 @@ void TstStationSession::ipv6PeersAreCountedPerSlash64()
         dial(*server, QStringLiteral("::ffff:192.0.2.7"));
         LoopbackTransport* plain = dial(*server, QStringLiteral("192.0.2.7"));
         QCOMPARE(server->peerCount(), 2);
-        QTRY_VERIFY(refusedWithCap(plain));
+        NEREUS_TRY_VERIFY(refusedWithCap(plain));
         dial(*server, QStringLiteral("::ffff:192.0.2.8"));
         dial(*server, QStringLiteral("192.0.2.8"));
         dial(*server, QStringLiteral("::ffff:192.0.2.9"));
@@ -5240,18 +5253,18 @@ void TstStationSession::ipv6PeersAreCountedPerSlash64()
         auto model = makeStationRadioModel(0);
         auto server = makeServer(model.get(), settings);
         LoopbackTransport* signedIn = dial(*server, QStringLiteral("2001:db8:5:6::10"));
-        QTRY_VERIFY(!signedIn->received().isEmpty());
+        NEREUS_TRY_VERIFY(!signedIn->received().isEmpty());
         signedIn->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("phone"))));
         signedIn->sendText(SessionMessages::encode(SessionMessages::authRequest(server->token())));
-        QTRY_VERIFY(signedIn->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+        NEREUS_TRY_VERIFY(signedIn->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
         QVERIFY(server->hasAuthenticatedSession());
         dial(*server, QStringLiteral("2001:db8:5:6::11"));
         dial(*server, QStringLiteral("2001:db8:5:6::12"));
         QCOMPARE(server->peerCount(), 3);
         LoopbackTransport* third = dial(*server, QStringLiteral("2001:db8:5:6::13"));
         QCOMPARE(server->peerCount(), 3);
-        QTRY_VERIFY(refusedWithCap(third));
+        NEREUS_TRY_VERIFY(refusedWithCap(third));
     }
 
     // The key itself.
@@ -5404,8 +5417,8 @@ void TstStationSession::oversizedMessageIsRefusedBeforeAnyAuthentication()
             [&raw](const QList<QSslError>& errors) { raw.ignoreSslErrors(errors); });
     QSignalSpy rawConnected(&raw, &QWebSocket::connected);
     raw.open(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())));
-    QTRY_COMPARE_WITH_TIMEOUT(rawConnected.count(), 1, 15000);
-    QTRY_COMPARE(server.peerCount(), 1);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(rawConnected.count(), 1, 15000);
+    NEREUS_TRY_COMPARE(server.peerCount(), 1);
 
     // Comfortably past the cap and nowhere near Qt's default, so an
     // uncapped station accepts every byte of it.
@@ -5413,10 +5426,10 @@ void TstStationSession::oversizedMessageIsRefusedBeforeAnyAuthentication()
         static_cast<qsizetype>(StationServer::kMaxIncomingMessageBytes) + 4096;
     raw.sendTextMessage(QString(oversize, QLatin1Char('x')));
 
-    QTRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 15000);
     QVERIFY2(!server.hasAuthenticatedSession(),
              "an oversized message reached a peer that had authenticated");
-    QTRY_COMPARE_WITH_TIMEOUT(raw.closeCode(),
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(raw.closeCode(),
                               QWebSocketProtocol::CloseCodeTooMuchData, 5000);
 
     server.close();
@@ -5452,7 +5465,7 @@ void TstStationSession::clientCapsWhatAStationCanMakeItAllocate()
     client.connectToStation(
         QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())),
         server.token(), server.certificateFingerprint());
-    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
 
     auto* transport = qobject_cast<WebSocketTransport*>(client.transport());
     QVERIFY2(transport != nullptr, "the dial did not produce a WebSocketTransport");
@@ -5566,14 +5579,14 @@ void TstStationSession::tokenIsNeverSentOnALinkWhosePinWasNeverChecked()
                        "00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF");
     client.startSession(clientEnd, server.token(), pin);
 
-    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
     QVERIFY(!client.isPinSatisfied());
     QVERIFY2(client.lastError().contains(QStringLiteral("no certificate")),
              qPrintable(client.lastError()));
 
     // The leak, asserted from both ends. On the wire: no auth.request ever
     // left the client. On the station: nobody proved they held the secret.
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     QVERIFY2(!stationEnd->receivedKinds().contains(QByteArrayLiteral("auth.request")),
              "the client sent its pre-shared token over a link whose certificate "
              "fingerprint had never been compared");
@@ -5630,7 +5643,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     overflowStation->linkTo(overflowClient);
     server.acceptTransport(overflowStation);
 
-    QTRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
+    NEREUS_TRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
     SessionMessage limitEnd;
     for (const QByteArray& wire : overflowClient->received()) {
         const SessionMessage m = decodeOrFail(wire);
@@ -5678,7 +5691,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     };
 
     LoopbackTransport* firstEnd = refuse(QStringLiteral("not-the-token"));
-    QTRY_VERIFY(firstEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    NEREUS_TRY_VERIFY(firstEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage firstBad = refusalOn(firstEnd);
     QCOMPARE(firstBad.kind, SessionMessageKind::AuthResult);
     QCOMPARE(firstBad.reason, QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."));
@@ -5687,7 +5700,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
              "forever and feed the station's own rate limiter");
 
     LoopbackTransport* secondEnd = refuse(QStringLiteral("still-not-the-token"));
-    QTRY_VERIFY(secondEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    NEREUS_TRY_VERIFY(secondEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage secondBad = refusalOn(secondEnd);
     QCOMPARE(secondBad.reason, QStringLiteral("The Core did not accept this app's pairing token. Check the token saved for this Core."));
     QVERIFY(!secondBad.retryable);
@@ -5696,7 +5709,7 @@ void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
     // and it would be even with the CORRECT token, which is exactly the
     // lockout this flag has to let the operator recover from.
     LoopbackTransport* lockedEnd = refuse(authServer.token());
-    QTRY_VERIFY(lockedEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    NEREUS_TRY_VERIFY(lockedEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
     const SessionMessage locked = refusalOn(lockedEnd);
     QCOMPARE(locked.kind, SessionMessageKind::AuthResult);
     QVERIFY(locked.reason.contains(QStringLiteral("too many wrong ones")));
@@ -5746,7 +5759,7 @@ void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
     QSignalSpy strangerEnded(&stranger, &StationClient::sessionEnded);
     stranger.connectToStation(url, QStringLiteral("not-the-token"),
                               server.certificateFingerprint());
-    QTRY_COMPARE_WITH_TIMEOUT(strangerEnded.count(), 1, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(strangerEnded.count(), 1, 15000);
     QVERIFY(stranger.lastError().contains(QStringLiteral("did not accept this app's pairing token")));
     QVERIFY2(!stranger.isReconnectPending(),
              "a wrong token re-armed automatic reconnect, which would hammer the "
@@ -5758,7 +5771,7 @@ void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
     StationClient op(&operatorModel, &operatorProxy);
     QSignalSpy opEnded(&op, &StationClient::sessionEnded);
     op.connectToStation(url, server.token(), server.certificateFingerprint());
-    QTRY_COMPARE_WITH_TIMEOUT(opEnded.count(), 1, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(opEnded.count(), 1, 15000);
     QVERIFY2(op.lastError().contains(QStringLiteral("too many wrong ones")),
              qPrintable(op.lastError()));
     QVERIFY2(op.isReconnectPending(),
@@ -5803,7 +5816,7 @@ void TstStationSession::wssListenerComesUpAndCompletesAHandshake()
     const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()));
     client.connectToStation(url, server.token(), server.certificateFingerprint());
 
-    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
     QCOMPARE(ended.count(), 0);
     QVERIFY(clientModel.isConnected());
     QCOMPARE(clientModel.slices().size(), stationModel->slices().size());
@@ -5842,7 +5855,7 @@ void TstStationSession::wssRefusesAMismatchedCertificateFingerprint()
     const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()));
     client.connectToStation(url, server.token(), wrongFingerprint);
 
-    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 15000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 15000);
     QCOMPARE(completed.count(), 0);
     QVERIFY(!clientModel.isConnected());
     QVERIFY2(client.lastError().contains(QStringLiteral("fingerprint")),
@@ -5897,13 +5910,13 @@ void TstStationSession::failedInitialConnectReportsPromptly()
     // WELL inside one heartbeat interval, which is the entire point: the
     // old behaviour would have taken 40 to 60 seconds, and only then via
     // a mechanism that had nothing to do with the connect failing.
-    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
     QCOMPARE(completed.count(), 0);
     QVERIFY(!clientModel.isConnected());
     QVERIFY(!ended.first().first().toString().isEmpty());
 
     // And exactly once, however many socket errors and closes unwind.
-    QTest::qWait(300);
+    NereusSDR::Test::settleSession();
     QCOMPARE(ended.count(), 1);
 }
 
@@ -6113,7 +6126,7 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
         peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
         QList<MirrorUpdate> updates;
         [&] {
-            QTRY_VERIFY([&] {
+            NEREUS_TRY_VERIFY([&] {
                 for (const QByteArray& wire : peer->received()) {
                     const SessionMessage m = decodeOrFail(wire);
                     if (m.kind == SessionMessageKind::Capabilities) {
@@ -6356,19 +6369,19 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
         peer->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, minor, 6, QStringLiteral("step-att-app"))));
         peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-        [&] { QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
+        [&] { NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
         controller.setAttenuation(7);
         peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
             "stepAtt",
             {MirrorUpdate{0, "attenuationDb", MirrorWireKind::Int64, QVariant(qlonglong(9))}},
             41)));
         [&] {
-            QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("property.result")));
+            NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("property.result")));
         }();
         // The Core's deltas are flushed on their own timer and can land
         // after the write's result; wait for them before reading the wire.
         if (minor >= kRadioIdentitySessionProtocolMinor) {
-            [&] { QTRY_VERIFY(aboutStepAtt(peer->received()) >= 3); }();
+            [&] { NEREUS_TRY_VERIFY(aboutStepAtt(peer->received()) >= 3); }();
         }
         // Only the Core's own change happened; a refused write changed nothing.
         [&] { QCOMPARE(controller.attenuatorDb(), minor >= 11 ? 9 : 7); }();
@@ -6449,7 +6462,7 @@ void TstStationSession::appStepAttenuatorSettingsWritesAreRefused()
     for (const QString& key : {value, band, mode, preamp}) {
         s.proxy->setValue(key, QStringLiteral("20"));
         ++expected;
-        QTRY_COMPARE(rejected.count(), expected);
+        NEREUS_TRY_COMPARE(rejected.count(), expected);
         QCOMPARE(toast.last().at(0).toString(), reason);
     }
     QCOMPARE(s.stationSettings->value(value).toString(), QStringLiteral("10"));
@@ -6459,13 +6472,13 @@ void TstStationSession::appStepAttenuatorSettingsWritesAreRefused()
 
     s.proxy->remove(value);
     ++expected;
-    QTRY_COMPARE(rejected.count(), expected);
+    NEREUS_TRY_COMPARE(rejected.count(), expected);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(value).toString(), QStringLiteral("10"));
 
     const QString rate = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac);
     s.proxy->setValue(rate, QStringLiteral("192000"));
-    QTRY_COMPARE(s.stationSettings->value(rate).toString(), QStringLiteral("192000"));
+    NEREUS_TRY_COMPARE(s.stationSettings->value(rate).toString(), QStringLiteral("192000"));
     QCOMPARE(rejected.count(), expected);
 }
 
@@ -6491,7 +6504,7 @@ void TstStationSession::windowAttenuatorEditsWaitForACoreThatOffersThem()
         caps.radioHardwareVersion = version;
         station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-        QTRY_VERIFY(client.isHandshakeComplete());
+        NEREUS_TRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(client.remoteRadioHardwareAvailable(), version >= 1);
 
         StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
@@ -6504,12 +6517,12 @@ void TstStationSession::windowAttenuatorEditsWaitForACoreThatOffersThem()
             const QString reason = refused.last().at(0).toString();
             QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
             QCOMPARE(stepAtt->attenuationDb(), 0);
-            QTest::qWait(50);
+            NereusSDR::Test::settleSession();
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
         } else {
             QCOMPARE(refused.count(), 0);
             QCOMPARE(stepAtt->attenuationDb(), 15);
-            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+            NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
         }
     }
 }
@@ -6552,8 +6565,8 @@ void joinHardwareWindow(HardwareSession& s, AppSettings& serverSettings, QObject
     QSignalSpy completed(s.client.get(), &StationClient::handshakeComplete);
     s.client->startSession(clientEnd, s.server->token());
     s.server->acceptTransport(stationEnd);
-    QTRY_COMPARE(completed.count(), 1);
-    QTRY_VERIFY(s.proxy->ready());
+    NEREUS_TRY_COMPARE(completed.count(), 1);
+    NEREUS_TRY_VERIFY(s.proxy->ready());
     QVERIFY(s.client->remoteHardwareConfigAvailable());
 }
 
@@ -6592,55 +6605,55 @@ void TstStationSession::windowAntennaEditsReachTheCoresController()
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
 
     window->setRxAnt(Band::Band40m, 2);
-    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    NEREUS_TRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
     // Saved on the Core by its own controller (the save its teardown
     // repeats), so its later saves keep the change.
-    QTRY_COMPARE(coreStore.value(QStringLiteral("hardware/%1/alex/antenna/40m/rx")
+    NEREUS_TRY_COMPARE(coreStore.value(QStringLiteral("hardware/%1/alex/antenna/40m/rx")
                                      .arg(kHardwareMac)).toString(),
                  QStringLiteral("2"));
     window->setRxOnlyAnt(Band::Band20m, 3);
-    QTRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band20m), 3);
+    NEREUS_TRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band20m), 3);
     window->setUseTxAntennaForRx(true);
-    QTRY_VERIFY(s.core->alexController().useTxAntForRx());
+    NEREUS_TRY_VERIFY(s.core->alexController().useTxAntForRx());
     // Group B fix wave (radioHardwareVersion 5): RX bypass on TX, the VFO
     // flag's BYPS, reaches the Core's controller too, which clears Ext1
     // and Ext2 out on TX as Thetis's chkRxOutOnTx does.
     QVERIFY(s.client->remoteRxBypassOnTxAvailable());
     QVERIFY(s.client->rxBypassOnTxUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setExt1OutOnTx(true);
-    QTRY_VERIFY(window->ext1OutOnTx());
+    NEREUS_TRY_VERIFY(window->ext1OutOnTx());
     window->setRxOutOnTx(true);
-    QTRY_VERIFY(s.core->alexController().rxOutOnTx());
+    NEREUS_TRY_VERIFY(s.core->alexController().rxOutOnTx());
     QVERIFY(!s.core->alexController().ext1OutOnTx());
-    QTRY_VERIFY(!window->ext1OutOnTx());
+    NEREUS_TRY_VERIFY(!window->ext1OutOnTx());
     QVERIFY(window->rxOutOnTx());
     window->setRxOutOnTx(false);
-    QTRY_VERIFY(!s.core->alexController().rxOutOnTx());
+    NEREUS_TRY_VERIFY(!s.core->alexController().rxOutOnTx());
     // The Core's own change reaches the window.
     s.core->alexControllerMutable().setRxOutOnTx(true);
-    QTRY_VERIFY(window->rxOutOnTx());
+    NEREUS_TRY_VERIFY(window->rxOutOnTx());
     QCOMPARE(refused.count(), 0);
 
     // The Core's transmit settings, changed on the Core, reach the window.
     s.core->alexControllerMutable().setTxAnt(Band::Band20m, 3);
     s.core->alexControllerMutable().setBlockTxAnt2(true);
-    QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
-    QTRY_VERIFY(window->blockTxAnt2());
+    NEREUS_TRY_COMPARE(window->txAnt(Band::Band20m), 3);
+    NEREUS_TRY_VERIFY(window->blockTxAnt2());
     // Parity Task 12 (radioHardwareVersion 6): and the window's reach the
     // Core's controller.
     QVERIFY(s.client->remoteTransmitAntennasAvailable());
     window->setTxAnt(Band::Band40m, 3);
-    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 3);
+    NEREUS_TRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 3);
     window->setBlockTxAnt2(false);
-    QTRY_VERIFY(!s.core->alexController().blockTxAnt2());
+    NEREUS_TRY_VERIFY(!s.core->alexController().blockTxAnt2());
     window->setExt2OutOnTx(true);
-    QTRY_VERIFY(s.core->alexController().ext2OutOnTx());
-    QTRY_VERIFY(!window->rxOutOnTx());  // cleared by the Core, as Thetis does
+    NEREUS_TRY_VERIFY(s.core->alexController().ext2OutOnTx());
+    NEREUS_TRY_VERIFY(!window->rxOutOnTx());  // cleared by the Core, as Thetis does
     window->setRxOutOverride(true);
-    QTRY_VERIFY(s.core->alexController().rxOutOverride());
+    NEREUS_TRY_VERIFY(s.core->alexController().rxOutOverride());
     // And a receive change made on the Core.
     s.core->alexControllerMutable().setRxAnt(Band::Band80m, 3);
-    QTRY_COMPARE(window->rxAnt(Band::Band80m), 3);
+    NEREUS_TRY_COMPARE(window->rxAnt(Band::Band80m), 3);
 }
 
 void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
@@ -6668,7 +6681,7 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
         caps.radioHardwareVersion = version;
         station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-        QTRY_VERIFY(client.isHandshakeComplete());
+        NEREUS_TRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(client.remoteHardwareConfigAvailable(), version >= 2);
         // Group B fix wave: RX bypass on TX from radioHardwareVersion 5.
         QCOMPARE(client.remoteRxBypassOnTxAvailable(), version >= 5);
@@ -6701,16 +6714,16 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
             QCOMPARE(refused.count(), 1);
             QCOMPARE(refused.last().at(0).toString(), reason);
             QCOMPARE(alex->rxAnt(Band::Band40m), 1);
-            QTest::qWait(50);
+            NereusSDR::Test::settleSession();
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
         } else if (version == 2) {
             QCOMPARE(refused.count(), 0);
             QCOMPARE(alex->rxAnt(Band::Band40m), 2);
-            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
+            NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("property.write")));
         } else {
             QCOMPARE(refused.count(), 0);
-            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
-            QTest::qWait(50);
+            NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            NereusSDR::Test::settleSession();
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
             QCOMPARE(alex->rxAnt(Band::Band40m), 1);  // until the Core's delta
         }
@@ -6738,12 +6751,12 @@ void TstStationSession::appRawAntennaSettingsWritesAreRefused()
     QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     s.proxy->setValue(rx, QStringLiteral("3"));
-    QTRY_COMPARE(rejected.count(), 1);
+    NEREUS_TRY_COMPARE(rejected.count(), 1);
     QCOMPARE(toast.last().at(0).toString(), reason);
     s.proxy->setValue(block, QStringLiteral("True"));
-    QTRY_COMPARE(rejected.count(), 2);
+    NEREUS_TRY_COMPARE(rejected.count(), 2);
     s.proxy->remove(rx);
-    QTRY_COMPARE(rejected.count(), 3);
+    NEREUS_TRY_COMPARE(rejected.count(), 3);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(rx).toString(), QStringLiteral("1"));
     QVERIFY(!s.stationSettings->contains(block));
@@ -6769,11 +6782,11 @@ void TstStationSession::hardwareWritesForAnotherRadioAreRefused()
     QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     s.proxy->setValue(other, QStringLiteral("192000"));
-    QTRY_COMPARE(rejected.count(), 1);
+    NEREUS_TRY_COMPARE(rejected.count(), 1);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(other).toString(), QStringLiteral("48000"));
     s.proxy->remove(other);
-    QTRY_COMPARE(rejected.count(), 2);
+    NEREUS_TRY_COMPARE(rejected.count(), 2);
     QCOMPARE(toast.last().at(0).toString(), reason);
     QCOMPARE(s.stationSettings->value(other).toString(), QStringLiteral("48000"));
 
@@ -6781,17 +6794,17 @@ void TstStationSession::hardwareWritesForAnotherRadioAreRefused()
     const QString own = QStringLiteral("hardware/%1/xvtr/autoSelectBand")
                             .arg(kHardwareMac.toLower());
     s.proxy->setValue(own, QStringLiteral("True"));
-    QTRY_COMPARE(s.stationSettings->value(own).toString(), QStringLiteral("True"));
+    NEREUS_TRY_COMPARE(s.stationSettings->value(own).toString(), QStringLiteral("True"));
     const QString oc = QStringLiteral("hardware/oc/usbBcd/enabled");
     s.proxy->setValue(oc, QStringLiteral("True"));
-    QTRY_COMPARE(s.stationSettings->value(oc).toString(), QStringLiteral("True"));
+    NEREUS_TRY_COMPARE(s.stationSettings->value(oc).toString(), QStringLiteral("True"));
     QCOMPARE(rejected.count(), 2);
 
     // With no radio connected the Core takes no radio's hardware settings.
     s.core->setConnectionStateForTest(ConnectionState::Disconnected);
     const QString rate = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(kHardwareMac);
     s.proxy->setValue(rate, QStringLiteral("96000"));
-    QTRY_COMPARE(rejected.count(), 3);
+    NEREUS_TRY_COMPARE(rejected.count(), 3);
     QVERIFY(!s.stationSettings->contains(rate));
 }
 
@@ -6823,7 +6836,7 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
     s.proxy->setValue(pin, QStringLiteral("True"));
     s.proxy->setValue(QStringLiteral("hardware/%1/oc/rx/20m/pin4").arg(kHardwareMac),
                       QStringLiteral("True"));
-    QTRY_VERIFY(s.core->ocMatrix().pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    NEREUS_TRY_VERIFY(s.core->ocMatrix().pinEnabled(Band::Band40m, 2, /*tx=*/false));
     QVERIFY(s.core->ocMatrix().pinEnabled(Band::Band20m, 3, /*tx=*/false));
     QCOMPARE(reloads, QStringList{QStringLiteral("oc")});
 
@@ -6833,7 +6846,7 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
                       QStringLiteral("1.000001"));
     s.proxy->setValue(QStringLiteral("hardware/%1/cal/using10M").arg(kHardwareMac),
                       QStringLiteral("True"));
-    QTRY_VERIFY(s.core->calibrationController().using10MHzRef());
+    NEREUS_TRY_VERIFY(s.core->calibrationController().using10MHzRef());
     QCOMPARE(s.core->calibrationController().freqCorrectionFactor(), 1.000001);
     QCOMPARE(reloads, QStringList{QStringLiteral("cal")});
     // The reload leaves the Core a PA forward-power table, as a connect does.
@@ -6845,11 +6858,11 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
     reloads.clear();
     const QString n2adr = QStringLiteral("hardware/%1/hl2IoBoard/n2adrFilter").arg(kHardwareMac);
     s.proxy->setValue(n2adr, QStringLiteral("False"));
-    QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
+    NEREUS_TRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
     QVERIFY(!s.core->ocMatrix().pinEnabled(Band::Band40m, 2, /*tx=*/false));
     reloads.clear();
     s.proxy->setValue(n2adr, QStringLiteral("True"));
-    QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
+    NEREUS_TRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
     QVERIFY(s.core->ocMatrix().pinEnabled(Band::Band80m, 6, /*tx=*/false));
     QCOMPARE(settings.value(QStringLiteral("hardware/%1/oc/rx/80m/pin7").arg(kHardwareMac))
                  .toString(),
@@ -6859,7 +6872,7 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
     reloads.clear();
     s.proxy->setValue(QStringLiteral("hardware/%1/xvtr/autoSelectBand").arg(kHardwareMac),
                       QStringLiteral("True"));
-    QTest::qWait(150);
+    NereusSDR::Test::settleSession();
     QVERIFY(reloads.isEmpty());
 }
 
@@ -6942,7 +6955,7 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     for (const auto& [key, value] : writes) {
         s.proxy->setValue(key, value);
         ++expected;
-        QTRY_COMPARE_WITH_TIMEOUT(rejected.count(), expected, 2000);
+        NEREUS_TRY_COMPARE_WITH_TIMEOUT(rejected.count(), expected, 2000);
         QCOMPARE(rejected.last().at(0).toString(), key);
         QVERIFY2(!settings.contains(key), qPrintable(key));
         QCOMPARE(toast.last().at(0).toString(), reason);
@@ -6953,13 +6966,13 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     settings.setValue(held, QStringLiteral("25"));
     s.proxy->remove(held);
     ++expected;
-    QTRY_COMPARE(rejected.count(), expected);
+    NEREUS_TRY_COMPARE(rejected.count(), expected);
     QCOMPARE(rejected.last().at(0).toString(), held);
     QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("25"));
     QCOMPARE(settings.value(held).toString(), QStringLiteral("25"));
 
     // Nothing reached the Core's controllers.
-    QTest::qWait(150);
+    NereusSDR::Test::settleSession();
     QVERIFY2(reloads.isEmpty(), qPrintable(reloads.join(QLatin1Char(','))));
     QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
     QCOMPARE(oc.pinAction(0), action1);
@@ -6980,21 +6993,21 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, true);
     const QString n2adr = hw(QStringLiteral("hl2IoBoard/n2adrFilter"));
     s.proxy->setValue(n2adr, QStringLiteral("True"));
-    QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
+    NEREUS_TRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
     QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));   // receive half applied
     QVERIFY(!oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));   // cleared by the preset
     QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));    // set by the preset
     QCOMPARE(settings.value(hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("False"))
                  .toString(), QStringLiteral("True"));
     s.proxy->setValue(n2adr, QStringLiteral("False"));
-    QTRY_VERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    NEREUS_TRY_VERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
     QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
 
     // The receive side is still the window's to change.
     s.proxy->setValue(hw(QStringLiteral("oc/rx/40m/pin3")), QStringLiteral("True"));
-    QTRY_VERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    NEREUS_TRY_VERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
     s.proxy->setValue(hw(QStringLiteral("cal/freqFactor")), QStringLiteral("1.000002"));
-    QTRY_COMPARE(cal.freqCorrectionFactor(), 1.000002);
+    NEREUS_TRY_COMPARE(cal.freqCorrectionFactor(), 1.000002);
     QCOMPARE(rejected.count(), expected);
 }
 
@@ -7013,7 +7026,7 @@ void TstStationSession::ioBoardProbeIsAskedOfTheCore()
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     const RadioModel::IoBoardProbeOutcome outcome = s.window->requestIoBoardProbe();
     QVERIFY(outcome.sent);
-    QTRY_COMPARE(toast.count(), 1);
+    NEREUS_TRY_COMPARE(toast.count(), 1);
     const QString reason = toast.last().at(0).toString();
     QCOMPARE(reason,
              QStringLiteral("The radio is not connected, so there is no I/O board to probe."));
@@ -7044,17 +7057,17 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     s.core->alexControllerMutable().setRxAnt(Band::Band20m, 3);
     QCOMPARE(window->rxAnt(Band::Band20m), 1);
     window->setRxAnt(Band::Band40m, 2);
-    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
-    QTest::qWait(150);
+    NEREUS_TRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    NereusSDR::Test::settleSession();
     QCOMPARE(s.core->alexController().rxAnt(Band::Band20m), 3);
-    QTRY_COMPARE(window->rxAnt(Band::Band20m), 3);
-    QTRY_COMPARE(window->rxAnt(Band::Band40m), 2);
+    NEREUS_TRY_COMPARE(window->rxAnt(Band::Band20m), 3);
+    NEREUS_TRY_COMPARE(window->rxAnt(Band::Band40m), 2);
 
     // The receive-only input the same way.
     s.core->alexControllerMutable().setRxOnlyAnt(Band::Band15m, 2);
     window->setRxOnlyAnt(Band::Band10m, 3);
-    QTRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band10m), 3);
-    QTest::qWait(150);
+    NEREUS_TRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band10m), 3);
+    NereusSDR::Test::settleSession();
     QCOMPARE(s.core->alexController().rxOnlyAnt(Band::Band15m), 2);
 
     // A value the Core cannot take is refused in plain words and the
@@ -7062,8 +7075,8 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     window->setRxAnt(Band::Band17m, 7);
-    QTRY_COMPARE(resync.count(), 1);
-    QTRY_COMPARE(toast.count(), 1);
+    NEREUS_TRY_COMPARE(resync.count(), 1);
+    NEREUS_TRY_COMPARE(toast.count(), 1);
     QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().rxAnt(Band::Band17m), 1);
     QCOMPARE(window->rxAnt(Band::Band17m), 1);
@@ -7095,30 +7108,30 @@ void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
     s.core->alexControllerMutable().setTxAnt(Band::Band20m, 3);
     QCOMPARE(window->txAnt(Band::Band20m), 1);
     window->setTxAnt(Band::Band40m, 2);
-    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 2);
-    QTest::qWait(150);
+    NEREUS_TRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 2);
+    NereusSDR::Test::settleSession();
     QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
-    QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
-    QTRY_COMPARE(window->txAnt(Band::Band40m), 2);
+    NEREUS_TRY_COMPARE(window->txAnt(Band::Band20m), 3);
+    NEREUS_TRY_COMPARE(window->txAnt(Band::Band40m), 2);
 
     // A port blocked for transmit, and a value outside 1 to 3, are refused
     // in plain words; the window's view re-reads the Core's value.
     // (Block TX on Ant 2 moves 40 m back to Ant 1, as the local tab does.)
     s.core->alexControllerMutable().setBlockTxAnt2(true);
-    QTRY_VERIFY(window->blockTxAnt2());
-    QTRY_COMPARE(window->txAnt(Band::Band40m), 1);
+    NEREUS_TRY_VERIFY(window->blockTxAnt2());
+    NEREUS_TRY_COMPARE(window->txAnt(Band::Band40m), 1);
     QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     window->setTxAnt(Band::Band17m, 2);
-    QTRY_COMPARE(resync.count(), 1);
-    QTRY_COMPARE(toast.count(), 1);
+    NEREUS_TRY_COMPARE(resync.count(), 1);
+    NEREUS_TRY_COMPARE(toast.count(), 1);
     QCOMPARE(toast.last().at(0).toString(),
              QStringLiteral("An antenna blocked for transmit cannot be a band's TX antenna."));
     QCOMPARE(s.core->alexController().txAnt(Band::Band17m), 1);
     QCOMPARE(window->txAnt(Band::Band17m), 1);
     window->setTxAnt(Band::Band15m, 7);
-    QTRY_COMPARE(resync.count(), 2);
-    QTRY_COMPARE(toast.count(), 2);
+    NEREUS_TRY_COMPARE(resync.count(), 2);
+    NEREUS_TRY_COMPARE(toast.count(), 2);
     QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().txAnt(Band::Band15m), 1);
     QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
@@ -7140,11 +7153,15 @@ void TstStationSession::windowUsesBoundAntennaVerbAndCurrentMacWhenOffered()
 
     s.stationEnd->clearReceived();
     s.window->alexAntennaFacade()->setRxAnt(Band::Band40m, 2);
-    QTRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    NEREUS_TRY_COMPARE(s.core->alexController().rxAnt(Band::Band40m), 2);
+    // The antenna edit's invoke, either verb: the window's own connect
+    // sequence (records.subscribe) can still be on the wire after the clear.
     QJsonObject invoke;
     for (const QByteArray& wire : s.stationEnd->received()) {
         const QJsonObject message = QJsonDocument::fromJson(wire).object();
-        if (message.value(QStringLiteral("type")) == QStringLiteral("command.invoke")) {
+        if (message.value(QStringLiteral("type")) == QStringLiteral("command.invoke")
+            && message.value(QStringLiteral("verb")).toString().startsWith(
+                QStringLiteral("setAlexRxAntenna"))) {
             invoke = message;
             break;
         }
@@ -7162,7 +7179,7 @@ void TstStationSession::windowUsesBoundAntennaVerbAndCurrentMacWhenOffered()
     }
     QVERIFY(foundMac);
     s.stationEnd->closeLink(QStringLiteral("test session ended"));
-    QTRY_COMPARE(s.client->capabilities().radioAntennaRowsVersion, 0);
+    NEREUS_TRY_COMPARE(s.client->capabilities().radioAntennaRowsVersion, 0);
 }
 
 void TstStationSession::windowFilterPolicyReachesTheCore()
@@ -7189,8 +7206,8 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     s.core->alexControllerMutable().notifySlicesOnAdc(
         0, {Band::Band40m, Band::Count, Band::Count, Band::Count, Band::Count});
     QCOMPARE(s.core->alexController().adcState(0).currentBpfBand, Band::Band40m);
-    QTRY_VERIFY(s.window->filterChainStateAvailable(0));
-    QTRY_COMPARE(s.window->filterChainState(0).currentBpfBand, Band::Band40m);
+    NEREUS_TRY_VERIFY(s.window->filterChainStateAvailable(0));
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).currentBpfBand, Band::Band40m);
     QCOMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
 
     const QString savedKey =
@@ -7212,7 +7229,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
         QCOMPARE(dialog.result(), int(QDialog::Accepted));
     }
     // Applied by the Core's controller: the 40 m filter, forced.
-    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBand);
+    NEREUS_TRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBand);
     QCOMPARE(s.core->alexController().adcState(0).effective,
              AlexController::BpfEffective::Filtered);
     QCOMPARE(s.core->alexController().adcState(0).currentBpfBand, Band::Band40m);
@@ -7220,11 +7237,11 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     QCOMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::Auto);
     // Saved on the Core for its radio, under the key the Core's controller
     // loads.
-    QTRY_COMPARE(coreStore.value(savedKey).toString(), QStringLiteral("1"));
+    NEREUS_TRY_COMPARE(coreStore.value(savedKey).toString(), QStringLiteral("1"));
     // Every window shows it.
-    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBand);
-    QTRY_COMPARE(s.window->filterChainState(0).effective, AlexController::BpfEffective::Filtered);
-    QTRY_COMPARE(s.window->filterChainState(0).reasonText, QStringLiteral("40m (forced)"));
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBand);
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).effective, AlexController::BpfEffective::Filtered);
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).reasonText, QStringLiteral("40m (forced)"));
     {
         FilterPolicyDialog again(0, s.window.get());
         auto* force = again.findChild<QRadioButton*>(QStringLiteral("filterPolicyForceFilter"));
@@ -7237,24 +7254,24 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     // that can bring the new policy (the chain's effective filter and
     // reason do not move, so AlexController's bpfStateChanged is quiet).
     s.core->alexControllerMutable().setWidebandActive(1, true);
-    QTRY_VERIFY(s.window->filterChainStateAvailable(1));
-    QTRY_COMPARE(s.window->filterChainState(1).effective,
+    NEREUS_TRY_VERIFY(s.window->filterChainStateAvailable(1));
+    NEREUS_TRY_COMPARE(s.window->filterChainState(1).effective,
                  AlexController::BpfEffective::WidebandLocked);
     QCOMPARE(s.window->filterChainState(1).mode, AlexController::BpfMode::Auto);
     const IStationLink::CommandOutcome sent =
         s.client->requestFilterPolicy(1, int(AlexController::BpfMode::ForceBand));
     QVERIFY(sent.sent);
-    QTRY_COMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::ForceBand);
-    QTRY_COMPARE(coreStore.value(QStringLiteral("hardware/%1/alex/antenna/Alex1_BpfMode")
+    NEREUS_TRY_COMPARE(s.core->alexController().bpfMode(1), AlexController::BpfMode::ForceBand);
+    NEREUS_TRY_COMPARE(coreStore.value(QStringLiteral("hardware/%1/alex/antenna/Alex1_BpfMode")
                                      .arg(kHardwareMac)).toString(),
                  QStringLiteral("1"));
-    QTRY_COMPARE(s.window->filterChainState(1).mode, AlexController::BpfMode::ForceBand);
+    NEREUS_TRY_COMPARE(s.window->filterChainState(1).mode, AlexController::BpfMode::ForceBand);
 
     // A policy the Core does not have is refused in plain words and changes
     // nothing.
     QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
     QVERIFY(s.client->requestFilterPolicy(0, 7).sent);
-    QTRY_COMPARE(toast.count(), 1);
+    NEREUS_TRY_COMPARE(toast.count(), 1);
     QVERIFY2(OperatorWording::isPlain(toast.last().at(0).toString()),
              qPrintable(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::ForceBand);
@@ -7275,7 +7292,7 @@ void TstStationSession::windowFilterPolicyApplySendsWhatIsShown()
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
-    QTRY_VERIFY(s.window->filterChainStateAvailable(0));
+    NEREUS_TRY_VERIFY(s.window->filterChainStateAvailable(0));
     QCOMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
 
     FilterPolicyDialog dialog(0, s.window.get());
@@ -7285,12 +7302,12 @@ void TstStationSession::windowFilterPolicyApplySendsWhatIsShown()
     QVERIFY(autoBtn->isChecked());
 
     s.core->alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBypass);
-    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBypass);
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::ForceBypass);
 
     apply->click();
     QCOMPARE(dialog.result(), int(QDialog::Accepted));
-    QTRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::Auto);
-    QTRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
+    NEREUS_TRY_COMPARE(s.core->alexController().bpfMode(0), AlexController::BpfMode::Auto);
+    NEREUS_TRY_COMPARE(s.window->filterChainState(0).mode, AlexController::BpfMode::Auto);
 }
 
 void TstStationSession::coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour()
@@ -7324,7 +7341,7 @@ void TstStationSession::coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour
         peer->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, minor, 6, QStringLiteral("bpf-app"))));
         peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
-        [&] { QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
+        [&] { NEREUS_TRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))); }();
         peer->clearReceived();
         peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
             "setAlexBpfMode", 57,
@@ -7332,7 +7349,7 @@ void TstStationSession::coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour
               MirrorUpdate{ 0, "mode", MirrorWireKind::Int64, QVariant(qlonglong(2)) } })));
         SessionMessage result;
         [&] {
-            QTRY_VERIFY([&] {
+            NEREUS_TRY_VERIFY([&] {
                 for (const QByteArray& wire : peer->received()) {
                     const SessionMessage candidate = decodeOrFail(wire);
                     if (candidate.kind == SessionMessageKind::CommandResult
@@ -7390,7 +7407,7 @@ void TstStationSession::windowFilterPolicyWaitsForACoreThatOffersIt()
         caps.radioHardwareVersion = version;
         station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-        QTRY_VERIFY(client.isHandshakeComplete());
+        NEREUS_TRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(remote.stationLink(), static_cast<IStationLink*>(&client));
         QCOMPARE(client.filterPolicyEditAvailable(), version >= 4);
         const QString reason = client.filterPolicyUnavailableReason();
@@ -7418,13 +7435,13 @@ void TstStationSession::windowFilterPolicyWaitsForACoreThatOffersIt()
             QVERIFY(!refused.sent);
             QCOMPARE(refused.reason, reason);
             apply->click();
-            QTest::qWait(50);
+            NereusSDR::Test::settleSession();
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
         } else {
             QVERIFY(group->isEnabled());
             bypass->setChecked(true);
             apply->click();
-            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            NEREUS_TRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
             QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("property.write")));
         }
         // Nothing changes in the window on the way out: the Core's answer
@@ -7459,7 +7476,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     coreBoard.setHardwareVersion(IoBoardHl2::kHardwareVersion1);
     coreBoard.setDetected(true);
 
-    QTRY_VERIFY(windowBoard.isDetected());
+    NEREUS_TRY_VERIFY(windowBoard.isDetected());
     QCOMPARE(windowBoard.hardwareVersion(), IoBoardHl2::kHardwareVersion1);
     QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MAJOR), quint8(0x02));
     QCOMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FIRMWARE_MINOR), quint8(0x07));
@@ -7467,7 +7484,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
 
     // A later register reading follows.
     coreBoard.setRegisterValue(IoBoardHl2::Register::REG_FAULT, 0x01);
-    QTRY_COMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FAULT), quint8(0x01));
+    NEREUS_TRY_COMPARE(windowBoard.registerValue(IoBoardHl2::Register::REG_FAULT), quint8(0x01));
 
     // The window never writes the Core's board: every property is the
     // Core's to report, and a write is refused in plain words.
@@ -7508,7 +7525,7 @@ void TstStationSession::windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt()
     caps.radioHardwareVersion = 2;
     station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
     station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
-    QTRY_VERIFY(client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(client.isHandshakeComplete());
 
     QVERIFY(!remote.ioBoard().isDetected());
     QCOMPARE(remote.ioBoard().hardwareVersion(), quint8(0));
@@ -7536,7 +7553,7 @@ void TstStationSession::windowOcMatrixFollowsTheCore()
     // The Core sets 40 m pin 3 (as another window's click would).
     const QString pin = QStringLiteral("hardware/%1/oc/rx/40m/pin3").arg(kHardwareMac);
     coreStore.setValue(pin, QStringLiteral("True"));
-    QTRY_VERIFY(windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    NEREUS_TRY_VERIFY(windowOc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
     QCOMPARE(s.proxy->value(pin, QString()).toString(), QStringLiteral("True"));
 }
 
@@ -7557,8 +7574,8 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
                        /*extraSlices=*/2);
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QTRY_COMPARE(s.window->slices().size(), 3);
-    QTRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
+    NEREUS_TRY_COMPARE(s.window->slices().size(), 3);
+    NEREUS_TRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
     QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
     QVERIFY(s.window->radioSampleRateReachesEveryReceiver());
     s.window->alexAntennaFacade()->setWindowAvailability(true, {});
@@ -7580,7 +7597,7 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
     rate->setCurrentIndex(target);
 
     const QString key = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(kHardwareMac);
-    QTRY_COMPARE(settings.value(key).toInt(), hz);
+    NEREUS_TRY_COMPARE(settings.value(key).toInt(), hz);
     QList<int> radioWide;
     int perReceiver = 0;
     const auto collect = [&] {
@@ -7601,8 +7618,8 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
         }
         return !radioWide.isEmpty();
     };
-    QTRY_VERIFY(collect());
-    QTest::qWait(50);
+    NEREUS_TRY_VERIFY(collect());
+    NereusSDR::Test::settleSession();
     collect();
     QCOMPARE(radioWide, QList<int>{hz});
     QCOMPARE(perReceiver, 0);
@@ -7693,7 +7710,7 @@ struct KeyedWindow {
 
 void verifyIdentityRefusal(KeyedWindow& window, LoopbackTransport* station)
 {
-    QTRY_VERIFY(!window.client.isConnectionActive());
+    NEREUS_TRY_VERIFY(!window.client.isConnectionActive());
     // Nothing went to that Core: not this window's hello, not a sign-in.
     QVERIFY(sentOfType(station, QStringLiteral("hello")).isEmpty());
     QVERIFY(sentOfType(station, QStringLiteral("auth.request")).isEmpty());
@@ -7772,7 +7789,7 @@ void TstStationSession::changedCertificateWhoseBindingVerifiesIsAccepted()
                                              pinOf(randomSha()), pairedKey.fingerprint());
     const SessionMessage hello = scriptedCoreHello(pairedKey, pairedKey, newCertificate);
     station->sendText(SessionMessages::encode(hello));
-    QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+    NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
     QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::None);
 
     const QJsonObject windowHello = sentOfType(station, QStringLiteral("hello")).first();
@@ -7813,7 +7830,7 @@ void TstStationSession::helloDeclaresDeviceAuthOnlyWithAKey()
         station->linkTo(peer);
         client.startSession(peer, QStringLiteral("token"));
         station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, randomSha())));
-        QTRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
+        NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
         QVERIFY(!sentOfType(station, QStringLiteral("hello")).first()
                      .value(QStringLiteral("features")).toObject()
                      .contains(QStringLiteral("deviceAuth")));
@@ -7823,7 +7840,7 @@ void TstStationSession::helloDeclaresDeviceAuthOnlyWithAKey()
     LoopbackTransport* station =
         window.link(this, QByteArray(), QStringLiteral("token"), QString(), QByteArray());
     station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, randomSha())));
-    QTRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
+    NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("hello")).size(), 1);
     QCOMPARE(sentOfType(station, QStringLiteral("hello")).first()
                  .value(QStringLiteral("features")).toObject()
                  .value(QStringLiteral("deviceAuth")).toInt(), 1);
@@ -7843,7 +7860,7 @@ void TstStationSession::coreWithNoIdentityGetsTheTokenAlone()
             window.link(this, certificate, QStringLiteral("token"), pinOf(certificate), {});
         station->sendText(SessionMessages::encode(
             scriptedCoreHello(coreKey, coreKey, certificate, /*withIdentity=*/false)));
-        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
         const QJsonObject auth = sentOfType(station, QStringLiteral("auth.request")).first();
         QCOMPARE(auth.value(QStringLiteral("token")).toString(), QStringLiteral("token"));
         QVERIFY(!auth.contains(QStringLiteral("device")));
@@ -7855,7 +7872,7 @@ void TstStationSession::coreWithNoIdentityGetsTheTokenAlone()
         LoopbackTransport* station =
             window.link(this, certificate, QStringLiteral("token"), QString(), {});
         station->sendText(SessionMessages::encode(scriptedCoreHello(coreKey, coreKey, certificate)));
-        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
         QVERIFY(!sentOfType(station, QStringLiteral("auth.request")).first()
                      .contains(QStringLiteral("device")));
         window.client.disconnectFromStation(QStringLiteral("test done"));
@@ -7884,7 +7901,7 @@ void TstStationSession::tokenSignInEnrolsTheKeyThenSignsInByKey()
     station->linkTo(peer);
     window.client.startSession(peer, server.token(), server.certificateFingerprint());
     server.acceptTransport(station);
-    QTRY_VERIFY(window.client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(window.client.isHandshakeComplete());
     QCOMPARE(learned.size(), 1);
     QCOMPARE(learned.first().first().toByteArray(), server.stationIdentity().fingerprint());
     QCOMPARE(window.client.stationIdentityFingerprint(), server.stationIdentity().fingerprint());
@@ -7897,7 +7914,7 @@ void TstStationSession::tokenSignInEnrolsTheKeyThenSignsInByKey()
     QCOMPARE(firstAuth.value(QStringLiteral("token")).toString(), server.token());
     QVERIFY(firstAuth.contains(QStringLiteral("device")));
     window.client.disconnectFromStation(QStringLiteral("test done"));
-    QTRY_VERIFY(!server.hasAuthenticatedSession());
+    NEREUS_TRY_VERIFY(!server.hasAuthenticatedSession());
 
     // The next connection, by key alone: no token leaves this window.
     auto* station2 = new LoopbackTransport(QStringLiteral("core"), this);
@@ -7908,7 +7925,7 @@ void TstStationSession::tokenSignInEnrolsTheKeyThenSignsInByKey()
     window.client.startSession(peer2, server.token(), QString(),
                                window.client.stationIdentityFingerprint());
     server.acceptTransport(station2);
-    QTRY_VERIFY(window.client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(window.client.isHandshakeComplete());
     const QJsonObject secondAuth = sentOfType(station2, QStringLiteral("auth.request")).first();
     QCOMPARE(secondAuth.value(QStringLiteral("token")).toString(), QString());
     QVERIFY(secondAuth.contains(QStringLiteral("device")));
@@ -7954,10 +7971,10 @@ void TstStationSession::endCodesChooseTheReport()
         client.startSession(peer, QStringLiteral("token"));
         station->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("scripted core"))));
-        QTRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
+        NEREUS_TRY_COMPARE(sentOfType(station, QStringLiteral("auth.request")).size(), 1);
         station->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
             QString::fromLatin1(entry.reason), false, QString::fromLatin1(entry.code))));
-        QTRY_VERIFY(!client.isConnectionActive());
+        NEREUS_TRY_VERIFY(!client.isConnectionActive());
         const StationEndReport report = client.lastEndReport();
         QVERIFY2(report.kind == entry.kind, entry.reason);
         QCOMPARE(report.code, QString::fromLatin1(entry.code));
@@ -7996,10 +8013,10 @@ void TstStationSession::revokedDeviceIsEndedWithDeviceRemoved()
     station->linkTo(peer);
     window.client.startSession(peer, QString(), QString(), server.stationIdentity().fingerprint());
     server.acceptTransport(station);
-    QTRY_VERIFY(window.client.isHandshakeComplete());
+    NEREUS_TRY_VERIFY(window.client.isHandshakeComplete());
 
     QVERIFY(server.deviceStore()->remove(device.id));
-    QTRY_VERIFY(!window.client.isConnectionActive());
+    NEREUS_TRY_VERIFY(!window.client.isConnectionActive());
     QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::DeviceRemoved);
     QCOMPARE(window.client.lastEndReport().code,
              QString::fromLatin1(SessionEndCode::kDeviceRemoved));
@@ -8013,7 +8030,7 @@ void TstStationSession::revokedDeviceIsEndedWithDeviceRemoved()
     station2->linkTo(peer2);
     window.client.startSession(peer2, QString(), QString(), server.stationIdentity().fingerprint());
     server.acceptTransport(station2);
-    QTRY_VERIFY(!window.client.isConnectionActive());
+    NEREUS_TRY_VERIFY(!window.client.isConnectionActive());
     QCOMPARE(window.client.lastEndReport().kind, StationEndReport::Kind::DeviceRemoved);
     QCOMPARE(window.client.lastEndReport().code,
              QString::fromLatin1(SessionEndCode::kDeviceNotPaired));
@@ -8038,11 +8055,67 @@ void TstStationSession::retiredTokenIsRefusedWithPairingRequired()
     station->linkTo(peer);
     client.startSession(peer, QStringLiteral("the saved token"));
     server.acceptTransport(station);
-    QTRY_VERIFY(!client.isConnectionActive());
+    NEREUS_TRY_VERIFY(!client.isConnectionActive());
     QCOMPARE(client.lastEndReport().kind, StationEndReport::Kind::PairingRequired);
     QCOMPARE(client.lastEndReport().code, QString::fromLatin1(SessionEndCode::kPairingRequired));
     QVERIFY(!client.isReconnectPending());
 }
 
-QTEST_MAIN(TstStationSession)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TstStationSession test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // Load finding: about 19 s on a quiet machine, past ctest's 120 s under
+    // a loaded full run (the limit is not raised). The cases for the Core's
+    // noise reduction, notches, attenuator, antennas and hardware settings
+    // run as their own ctest entry, tst_station_session_controls
+    // (tests/CMakeLists.txt); the rest as tst_station_session.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_STATION_SESSION_GROUP",
+        {{QStringLiteral("controls"),
+          {QStringLiteral("nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors"),
+           QStringLiteral("nr3CannotRunIsRefusedOnTheCoreAndInTheWindow"),
+           QStringLiteral("dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow"),
+           QStringLiteral("mnrCannotRunIsRefusedOnTheCoreAndInTheWindow"),
+           QStringLiteral("bnrIsRefusedOnTheCoreAndInTheWindow"),
+           QStringLiteral("savedNr3OnACoreWithNoModelShowsOffInTheWindow"),
+           QStringLiteral("nr3CannotRunEndsWithTheSession"),
+           QStringLiteral("olderCoreLeavesTheNr3ModelUnchangeable"),
+           QStringLiteral("olderAppNr3ModelPathWriteIsRefused"),
+           QStringLiteral("remoteNotchEditKeepsTheCoresWholeList"),
+           QStringLiteral("remoteNotchMoveToggleAndDeleteReachTheCore"),
+           QStringLiteral("remoteNotchRefusalsAreInPlainWords"),
+           QStringLiteral("coreNotchChangesReachTheWindow"),
+           QStringLiteral("appNotchSettingsWritesAreRefused"),
+           QStringLiteral("olderCoreKeepsTodaysNotchBehaviour"),
+           QStringLiteral("olderAppIgnoresTheNotchesObjectGolden"),
+           QStringLiteral("radioIdentityEntriesRoundTrip"),
+           QStringLiteral("coreSendsRadioIdentityOnlyFromMinorEleven"),
+           QStringLiteral("remoteModelResolvesTheCoresRadio"),
+           QStringLiteral("remoteModelSignalsOncePerIdentityChange"),
+           QStringLiteral("coreOffersTheAttenuatorOnlyFromMinorEleven"),
+           QStringLiteral("appStepAttenuatorSettingsWritesAreRefused"),
+           QStringLiteral("windowAttenuatorEditsWaitForACoreThatOffersThem"),
+           QStringLiteral("windowAntennaEditsReachTheCoresController"),
+           QStringLiteral("windowAntennaEditsWaitForACoreThatOffersThem"),
+           QStringLiteral("appRawAntennaSettingsWritesAreRefused"),
+           QStringLiteral("hardwareWritesForAnotherRadioAreRefused"),
+           QStringLiteral("coreAppliesHardwareConfigWritesLive"),
+           QStringLiteral("receiveOnlyCoreRefusesTransmitHardwareKeys"),
+           QStringLiteral("ioBoardProbeIsAskedOfTheCore"),
+           QStringLiteral("windowBandAntennaEditKeepsTheCoresNewerBands"),
+           QStringLiteral("windowTxBandAntennaEditKeepsTheCoresNewerBands"),
+           QStringLiteral("windowUsesBoundAntennaVerbAndCurrentMacWhenOffered"),
+           QStringLiteral("windowShowsTheCoresIoBoard"),
+           QStringLiteral("windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt"),
+           QStringLiteral("windowOcMatrixFollowsTheCore"),
+           QStringLiteral("hardwareConfigRateGoesToEveryReceiver"),
+           QStringLiteral("windowFilterPolicyReachesTheCore"),
+           QStringLiteral("windowFilterPolicyWaitsForACoreThatOffersIt"),
+           QStringLiteral("windowFilterPolicyApplySendsWhatIsShown"),
+           QStringLiteral("coreTakesTheFilterPolicyOnlyFromMinorElevenAtVersionFour")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
 #include "tst_station_session.moc"

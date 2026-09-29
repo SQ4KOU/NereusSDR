@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 15,
   "category": {
     "id": "audio",
     "title": "Audio",
@@ -8,11 +8,447 @@
   "coverage": "partial: TX Profile picker and actions need a live profile collection contract; TX Input needs microphone source and source-dependent visibility; Devices, VAX, TCI, and most Advanced controls are desktop-local",
   "pages": [
     {
+      "id": "audio.txInput",
+      "title": "TX Input",
+      "where": "mixed",
+      "coverage": "partial: the microphone source, device, buffer and test are each computer's own",
+      "sections": [
+        {
+          "title": "PC Mic",
+          "controls": [
+            {
+              "id": "audio.txInput.micGain",
+              "label": "Mic Gain:",
+              "tooltip": "",
+              "kind": "slider",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micGainDb"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "unit": "dB",
+              "rangeFrom": {
+                "catalogueTransmit": "micGainDb"
+              }
+            }
+          ]
+        },
+        {
+          "title": "Radio Mic (Hermes / Atlas)",
+          "boardFamily": "hermes",
+          "controls": [
+            {
+              "id": "audio.txInput.hermesLineIn",
+              "label": "Input",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "lineIn"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "options": [
+                {
+                  "value": false,
+                  "label": "Mic In"
+                },
+                {
+                  "value": true,
+                  "label": "Line In"
+                }
+              ]
+            },
+            {
+              "id": "audio.txInput.hermesMicBoost",
+              "label": "+20 dB Mic Boost",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micBoost"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.hermesLineInGain",
+              "label": "Line In Gain:",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "lineInBoost"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "min": -34,
+              "max": 12,
+              "step": 1,
+              "unit": "dB"
+            }
+          ]
+        },
+        {
+          "title": "Radio Mic (Orion-MkII)",
+          "boardFamily": "orion",
+          "controls": [
+            {
+              "id": "audio.txInput.orionMicTipRing",
+              "label": "Mic Tip-Ring (Tip is Mic)",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micTipRing"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.orionMicBias",
+              "label": "Mic Bias",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micBias"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.orionMicPttDisabled",
+              "label": "Mic PTT Disabled",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micPttDisabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.orionMicBoost",
+              "label": "+20 dB Mic Boost",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micBoost"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            }
+          ]
+        },
+        {
+          "title": "Radio Mic (Saturn G2)",
+          "boardFamily": "saturn",
+          "controls": [
+            {
+              "id": "audio.txInput.saturnMicXlr",
+              "label": "Input",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micXlr"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "options": [
+                {
+                  "value": false,
+                  "label": "3.5 mm Jack"
+                },
+                {
+                  "value": true,
+                  "label": "XLR"
+                }
+              ]
+            },
+            {
+              "id": "audio.txInput.saturnMicPttDisabled",
+              "label": "Mic PTT Disabled",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micPttDisabled"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.saturnMicBias",
+              "label": "Mic Bias",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micBias"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            },
+            {
+              "id": "audio.txInput.saturnMicBoost",
+              "label": "+20 dB Mic Boost",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micBoost"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "id": "audio.txProfile",
       "title": "TX Profile",
       "where": "station",
       "coverage": "partial: active profile choice, Save, and Delete need a live collection and action contract",
       "sections": [
+        {
+          "title": "TX Profile",
+          "controls": [
+            {
+              "id": "audio.txProfile.activeProfile",
+              "label": "Active profile:",
+              "tooltip": "Active TX Profile.  Switching prompts to save unsaved changes.",
+              "kind": "choice",
+              "binding": {
+                "command": {
+                  "verb": "txProfile.select",
+                  "valueProperty": {
+                    "object": "transmit",
+                    "name": "activeTxProfile"
+                  },
+                  "arguments": {
+                    "name": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "choicesFrom": {
+                "jsonNames": {
+                  "object": "transmit",
+                  "name": "txProfilesJson"
+                }
+              },
+              "unsavedChanges": {
+                "title": "Unsaved Profile Changes",
+                "question": "The current profile (\"%1\") has been modified.\nSave before switching?",
+                "saveVerb": "txProfile.save",
+                "watch": [
+                  "micGainDb",
+                  "micBoost",
+                  "micXlr",
+                  "lineIn",
+                  "lineInBoost",
+                  "micTipRing",
+                  "micBias",
+                  "micPttDisabled",
+                  "voxThresholdDb",
+                  "voxHangTimeMs",
+                  "antiVoxGainDb",
+                  "monitorVolume",
+                  "amCarrierLevel",
+                  "twoToneFreq1",
+                  "twoToneFreq2",
+                  "twoToneLevel",
+                  "twoTonePower",
+                  "twoToneFreq2Delay",
+                  "twoToneInvert",
+                  "twoTonePulsed",
+                  "twoToneDrivePowerSource"
+                ]
+              }
+            },
+            {
+              "id": "audio.txProfile.save",
+              "label": "Save...",
+              "tooltip": "Save the current transmit settings under a profile name.",
+              "kind": "button",
+              "binding": {
+                "command": {
+                  "verb": "txProfile.save",
+                  "arguments": {
+                    "name": {
+                      "$prompt": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "prompt": {
+                "title": "Save TX Profile",
+                "label": "New profile name:",
+                "initial": {
+                  "$property": {
+                    "object": "transmit",
+                    "name": "activeTxProfile"
+                  }
+                },
+                "overwrite": {
+                  "title": "Overwrite TX Profile",
+                  "question": "A profile named \"%1\" already exists.  Overwrite?",
+                  "namesFrom": {
+                    "object": "transmit",
+                    "name": "txProfilesJson"
+                  }
+                }
+              }
+            },
+            {
+              "id": "audio.txProfile.delete",
+              "label": "Delete",
+              "tooltip": "Delete the currently-selected profile.",
+              "kind": "button",
+              "binding": {
+                "command": {
+                  "verb": "txProfile.delete",
+                  "arguments": {
+                    "name": {
+                      "$property": {
+                        "object": "transmit",
+                        "name": "activeTxProfile"
+                      }
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 15,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true,
+                "offAir": true
+              },
+              "confirm": "Delete profile \"%1\"?"
+            }
+          ]
+        },
         {
           "title": "TX Filter",
           "controls": [
@@ -84,7 +520,9 @@
             }
           ]
         }
-      ]
+      ],
+      "coverageV15": ""
     }
-  ]
+  ],
+  "coverageV15": "partial: Devices, VAX, TCI and Advanced are each computer's own, and TX Input's microphone source, device, buffer and test are the computer's too"
 }

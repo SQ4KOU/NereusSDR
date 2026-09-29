@@ -59,6 +59,9 @@
 //                 (dsp.filterResponse); "Time to last change" shows the
 //                 Core's apply time. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on
+//                the high-resolution box and the time readout. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -640,6 +643,7 @@ void DspOptionsPage::buildUI()
         tr("When enabled, the filter graph displays the actual computed FIR "
            "magnitude response. When disabled, a simplified box-shape passband "
            "is shown instead."));
+    m_highResFilterChars->setProperty("nereusSetupId", "dsp.options.highResFilter");
 
     // R-R3-49 (parity Task 16): a remote window draws its Core's curve
     // (dsp.filterResponse, dspInfoVersion 1). On a Core that does not send
@@ -687,6 +691,7 @@ void DspOptionsPage::buildUI()
     // Placeholder text shown until the first rebuild occurs.
     // =========================================================================
     m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none"), this);
+    m_timeToLastChangeLabel->setProperty("nereusSetupId", "dsp.options.timeToLastChange");
     m_timeToLastChangeLabel->setStyleSheet(QStringLiteral("color: #888;"));
 
     // Follows RadioModel::dspOptionsLastApplyMs: the elapsed milliseconds

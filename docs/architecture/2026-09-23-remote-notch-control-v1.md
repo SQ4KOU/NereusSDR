@@ -15,8 +15,9 @@ whenever it runs; it does not depend on a radio or on WDSP.
 
 - A window that negotiated version 1 puts its `NotchModel` in mirror mode:
   the list comes only from the Core's `notches` object, and every edit is a
-  `notch.*` command. The window writes no notch settings except its own
-  display preference, `NotchVisualEnabled`.
+  `notch.*` command. The window writes no notch settings except
+  `NotchVisualEnabled`, which is one Core-wide setting: a Station key the
+  settings proxy carries, so every window and the phone share one value.
 - A window without version 1 (an older Core, or an older agreed minor) keeps
   today's behaviour: its notches live in its own settings. Leaving mirror mode
   clears the Core's list from the window and restores the window's own saved
@@ -27,7 +28,8 @@ whenever it runs; it does not depend on a radio or on WDSP.
   `Notch<N>Center`, `Notch<N>Width`, `Notch<N>Active` (N a whole number
   written without leading zeros), `NotchGlobalEnabled` and
   `NotchAutoIncrease`, compared without regard to case. `NotchVisualEnabled`
-  stays the window's own.
+  is not Core-owned in this sense: any window may write it through the
+  settings proxy, and the Core keeps the one value.
 - A `notch.*` command on an agreed minor below 5 is refused with "Update this
   app to change notches on this Core."
 - Version 2 (R-IOS-27, R-IOS-06) adds `notch.addAtSlice`, below. The Core

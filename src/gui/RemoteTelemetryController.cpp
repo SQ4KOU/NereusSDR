@@ -114,6 +114,14 @@ void RemoteTelemetryController::pushPaReadings()
         hl2.sequenceGaps = m_view.radio.hl2SequenceGaps;
     }
     m_paTarget->applyCoreHl2LinkFigures(hl2);
+    // The Core's radio connection age (station telemetry version 6) for
+    // the Radio Status page's Uptime, as of now: the sample's age plus how
+    // long ago it arrived.
+    std::optional<qint64> connectionAge;
+    if (m_view.state == RemoteTelemetryView::State::Current && m_view.radio.connectionAgeMs) {
+        connectionAge = *m_view.radio.connectionAgeMs + m_view.stationAgeMs.value_or(0);
+    }
+    m_paTarget->applyCoreConnectionAge(connectionAge);
 }
 
 qint64 RemoteTelemetryController::nowMs() const

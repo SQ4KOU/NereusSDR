@@ -18,6 +18,8 @@
 //   groups follow the transmit settings gate (transmitSettingsVersion 3)
 //   and change the Core's values off the air; the mic source keeps the
 //   transmit permission.
+// R-R3-49 / R-IOS-18 (2026-09-29): Setup description version 15 ids on Mic
+//   Gain and the radio microphone groups, whose titles use parentheses.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -590,6 +592,7 @@ void AudioTxInputPage::buildPcMicGroup(QVBoxLayout* parentLayout)
         : TransmitModel::kMicGainDbMax;
 
     m_micGainSlider = new QSlider(Qt::Horizontal, this);
+    m_micGainSlider->setProperty("nereusSetupId", "audio.txInput.micGain");
     m_micGainSlider->setMinimum(micGainMin);
     m_micGainSlider->setMaximum(micGainMax);
     m_micGainSlider->setSingleStep(1);
@@ -926,7 +929,7 @@ void AudioTxInputPage::onModelMicGainDbChanged(int dB)
 
 void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
 {
-    m_hermesGroup = new QGroupBox(QStringLiteral("Radio Mic — Hermes / Atlas"), this);
+    m_hermesGroup = new QGroupBox(QStringLiteral("Radio Mic (Hermes / Atlas)"), this);
     auto* grpLayout = new QVBoxLayout(m_hermesGroup);
 
     // ── Row 1: Mic In / Line In radio buttons ─────────────────────────────────
@@ -935,6 +938,7 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
     micInBtn->setChecked(true);  // Hermes default: mic input active
 
     m_hermesMicInputGroup = new QButtonGroup(this);
+    m_hermesMicInputGroup->setProperty("nereusSetupId", "audio.txInput.hermesLineIn");
     m_hermesMicInputGroup->addButton(micInBtn,  0);  // id=0 → lineIn=false
     m_hermesMicInputGroup->addButton(lineInBtn, 1);  // id=1 → lineIn=true
 
@@ -949,6 +953,7 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
 
     // ── Row 2: +20 dB Mic Boost checkbox ────────────────────────────────────
     m_hermesMicBoostChk = new QCheckBox(QStringLiteral("+20 dB Mic Boost"), m_hermesGroup);
+    m_hermesMicBoostChk->setProperty("nereusSetupId", "audio.txInput.hermesMicBoost");
     m_hermesMicBoostChk->setChecked(true);  // TransmitModel default: true
     grpLayout->addWidget(m_hermesMicBoostChk);
 
@@ -960,6 +965,7 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
     // kLineInBoostMin is a double (-34.5) cast to int at slider construction
     // time via static_cast<int>; the slider integer minimum is therefore -34.
     m_hermesLineInGainSlider = new QSlider(Qt::Horizontal, m_hermesGroup);
+    m_hermesLineInGainSlider->setProperty("nereusSetupId", "audio.txInput.hermesLineInGain");
     m_hermesLineInGainSlider->setMinimum(static_cast<int>(TransmitModel::kLineInBoostMin));
     m_hermesLineInGainSlider->setMaximum(static_cast<int>(TransmitModel::kLineInBoostMax));
     m_hermesLineInGainSlider->setSingleStep(1);
@@ -986,25 +992,29 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
 
 void AudioTxInputPage::buildOrionRadioMicGroup(QVBoxLayout* parentLayout)
 {
-    m_orionGroup = new QGroupBox(QStringLiteral("Radio Mic — Orion-MkII"), this);
+    m_orionGroup = new QGroupBox(QStringLiteral("Radio Mic (Orion-MkII)"), this);
     auto* grpLayout = new QVBoxLayout(m_orionGroup);
 
     m_orionMicTipRingChk = new QCheckBox(
         QStringLiteral("Mic Tip-Ring (Tip is Mic)"), m_orionGroup);
+    m_orionMicTipRingChk->setProperty("nereusSetupId", "audio.txInput.orionMicTipRing");
     m_orionMicTipRingChk->setChecked(true);  // TransmitModel default: true
     grpLayout->addWidget(m_orionMicTipRingChk);
 
     m_orionMicBiasChk = new QCheckBox(QStringLiteral("Mic Bias"), m_orionGroup);
+    m_orionMicBiasChk->setProperty("nereusSetupId", "audio.txInput.orionMicBias");
     m_orionMicBiasChk->setChecked(false);  // TransmitModel default: false
     grpLayout->addWidget(m_orionMicBiasChk);
 
     m_orionMicPttDisabledChk = new QCheckBox(
         QStringLiteral("Mic PTT Disabled"), m_orionGroup);
+    m_orionMicPttDisabledChk->setProperty("nereusSetupId", "audio.txInput.orionMicPttDisabled");
     m_orionMicPttDisabledChk->setChecked(false);  // TransmitModel default: false
     grpLayout->addWidget(m_orionMicPttDisabledChk);
 
     m_orionMicBoostChk = new QCheckBox(
         QStringLiteral("+20 dB Mic Boost"), m_orionGroup);
+    m_orionMicBoostChk->setProperty("nereusSetupId", "audio.txInput.orionMicBoost");
     m_orionMicBoostChk->setChecked(true);  // TransmitModel default: true
     grpLayout->addWidget(m_orionMicBoostChk);
 
@@ -1026,7 +1036,7 @@ void AudioTxInputPage::buildOrionRadioMicGroup(QVBoxLayout* parentLayout)
 
 void AudioTxInputPage::buildSaturnRadioMicGroup(QVBoxLayout* parentLayout)
 {
-    m_saturnGroup = new QGroupBox(QStringLiteral("Radio Mic — Saturn G2"), this);
+    m_saturnGroup = new QGroupBox(QStringLiteral("Radio Mic (Saturn G2)"), this);
     auto* grpLayout = new QVBoxLayout(m_saturnGroup);
 
     // ── Row 1: 3.5 mm Jack / XLR radio buttons ───────────────────────────────
@@ -1036,6 +1046,7 @@ void AudioTxInputPage::buildSaturnRadioMicGroup(QVBoxLayout* parentLayout)
     xlrBtn->setChecked(true);
 
     m_saturnMicInputGroup = new QButtonGroup(this);
+    m_saturnMicInputGroup->setProperty("nereusSetupId", "audio.txInput.saturnMicXlr");
     m_saturnMicInputGroup->addButton(jackBtn, 0);  // id=0 → micXlr=false (3.5mm)
     m_saturnMicInputGroup->addButton(xlrBtn,  1);  // id=1 → micXlr=true  (XLR)
 
@@ -1051,15 +1062,18 @@ void AudioTxInputPage::buildSaturnRadioMicGroup(QVBoxLayout* parentLayout)
     // ── Rows 2-4: three checkboxes ───────────────────────────────────────────
     m_saturnMicPttDisabledChk = new QCheckBox(
         QStringLiteral("Mic PTT Disabled"), m_saturnGroup);
+    m_saturnMicPttDisabledChk->setProperty("nereusSetupId", "audio.txInput.saturnMicPttDisabled");
     m_saturnMicPttDisabledChk->setChecked(false);  // TransmitModel default
     grpLayout->addWidget(m_saturnMicPttDisabledChk);
 
     m_saturnMicBiasChk = new QCheckBox(QStringLiteral("Mic Bias"), m_saturnGroup);
+    m_saturnMicBiasChk->setProperty("nereusSetupId", "audio.txInput.saturnMicBias");
     m_saturnMicBiasChk->setChecked(false);  // TransmitModel default
     grpLayout->addWidget(m_saturnMicBiasChk);
 
     m_saturnMicBoostChk = new QCheckBox(
         QStringLiteral("+20 dB Mic Boost"), m_saturnGroup);
+    m_saturnMicBoostChk->setProperty("nereusSetupId", "audio.txInput.saturnMicBoost");
     m_saturnMicBoostChk->setChecked(true);  // TransmitModel default: true
     grpLayout->addWidget(m_saturnMicBoostChk);
 

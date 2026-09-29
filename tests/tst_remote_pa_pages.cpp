@@ -27,6 +27,12 @@
 //                                    keys are taken on the air and reload
 //                                    at receive. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Radio Status names a TCI key, a key
+//                                    from a device that does not hold
+//                                    transmit and a RADE end-of-over tail
+//                                    alike in both windows, and its history
+//                                    records a release with its source.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -36,6 +42,7 @@
 #include <QDoubleSpinBox>
 #include <QFile>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -50,11 +57,14 @@
 #include "core/PaCalProfile.h"
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
+#include "core/PttMode.h"
 #include "core/TxChannel.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/session/IStationLink.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
@@ -247,6 +257,8 @@ private slots:
     void remoteWattMeterPageChangesTheCoresTable();
     void remotePaReadingsShowOnRadioStatusPaValuesAndMeters();
     void localRadioStatusSetsPaVoltage();
+    void remoteRadioStatusShowsTheCoresTransmitAndUptime();
+    void radioStatusNamesEveryKeyAlikeInBothWindows();
     void remoteSettingsResetAndTokenMutationGivePlainDisabledReasons();
     void coreTxInhibitReachesTheWindow();
     void systemTileSaysTheReadingsAreTheCores();
@@ -586,6 +598,194 @@ void TstRemotePaPages::localRadioStatusSetsPaVoltage()
     QVERIFY(hasText(QStringLiteral("PA Status")));
     QVERIFY(hasText(QStringLiteral("Unavailable")));
     QVERIFY(!local.paReadingsFromCore());
+}
+
+// Radio Status in a remote window: the PTT card, Forward / Reflected / SWR
+// and Uptime follow the Core, from what the link already carries (the
+// mirrored txState and station telemetry's connectionAgeMs), and read as the
+// Core's own window reads them.
+void TstRemotePaPages::remoteRadioStatusShowsTheCoresTransmitAndUptime()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    s.server->setTelemetryEnabled(true);
+    qint64 now = 10000;
+    RemoteTelemetryController telemetry(s.client.get(), nullptr, nullptr, [&] { return now; });
+    telemetry.setPaReadingsTarget(&s.window);
+    QVERIFY(s.connect());
+    QTRY_VERIFY(s.client->telemetryAvailable());
+    QVERIFY(s.window.stationTransmitState() != nullptr);
+
+    // The remote window's meter poller copies the Core's power readings
+    // into its RadioStatus, as MainWindow wires it.
+    MeterPoller poller;
+    poller.setRemoteRadioModel(&s.window, [] { return true; }, {});
+    poller.setRemoteTransmitState(s.window.stationTransmitState(), {});
+
+    RadioStatusPage remote(&s.window);
+    RadioStatusPage local(s.core.get());
+    const auto readout = [](const RadioStatusPage& page, const char* id) {
+        const QString wanted = QStringLiteral("diagnostics.radioStatus.") + QLatin1String(id);
+        for (QLabel* label : page.findChildren<QLabel*>()) {
+            if (label->property("nereusSetupId").toString() == wanted) {
+                return label->text();
+            }
+        }
+        return QStringLiteral("<missing>");
+    };
+    const auto pttText = [](const RadioStatusPage& page) {
+        for (QLabel* label : page.findChildren<QLabel*>()) {
+            if (label->text().startsWith(QStringLiteral("Active: "))) {
+                return label->text();
+            }
+        }
+        return QStringLiteral("<missing>");
+    };
+
+    QCOMPARE(pttText(remote), QStringLiteral("Active: none"));
+    QCOMPARE(readout(remote, "forward"), QStringLiteral("– W"));
+
+    // Keyed from the Core's MOX: both windows say MOX and TX.
+    s.keyCore();
+    QTRY_COMPARE(pttText(local), QStringLiteral("Active: MOX"));
+    QTRY_COMPARE(pttText(remote), QStringLiteral("Active: MOX"));
+    QCOMPARE(readout(local, "mode"), QStringLiteral("TX"));
+    QCOMPARE(readout(remote, "mode"), QStringLiteral("TX"));
+
+    // The Core's power readings while keyed.
+    s.core->radioStatus().setPowerReadings(50.0, 2.0, 1.5);
+    QTRY_COMPARE(readout(local, "forward"), QStringLiteral("50.0 W"));
+    QTRY_COMPARE(readout(remote, "forward"), QStringLiteral("50.0 W"));
+    QCOMPARE(readout(remote, "reflected"), readout(local, "reflected"));
+    QCOMPARE(readout(remote, "swr"), readout(local, "swr"));
+    QCOMPARE(readout(remote, "reflected"), QStringLiteral("2.0 W"));
+
+    // Released: none again, and the power readouts rest.
+    s.unkeyCore();
+    QTRY_COMPARE(pttText(local), QStringLiteral("Active: none"));
+    QTRY_COMPARE(pttText(remote), QStringLiteral("Active: none"));
+    QTRY_COMPARE(readout(remote, "forward"), QStringLiteral("– W"));
+    QCOMPARE(readout(remote, "mode"), QStringLiteral("RX (idle)"));
+
+    // Uptime: the Core's connection age, which keeps counting between
+    // samples, and is unavailable once the samples go stale.
+    QCOMPARE(readout(remote, "uptime"), QStringLiteral("–"));
+    StationTelemetrySnapshot sample = paSample(1);
+    sample.radio.connectionAgeMs = 95000;
+    QVERIFY(s.server->sendTelemetry(sample, s.server->sessionEpoch()));
+    QTRY_VERIFY(s.window.connectionAgeMs().has_value());
+    QVERIFY(*s.window.connectionAgeMs() >= 95000);
+    QTRY_VERIFY(readout(remote, "uptime").startsWith(QStringLiteral("1m 3")));
+    now += 4000;
+    telemetry.sampleNow();
+    QTRY_VERIFY(!s.window.connectionAgeMs().has_value());
+    QTRY_COMPARE(readout(remote, "uptime"), QStringLiteral("–"));
+}
+
+// The same key reads the same in the Core's window and a remote one: a TCI
+// key as TCI; a key from a device that does not hold transmit as the Core's
+// own window names it (Remote); the RADE end-of-over tail as the key it
+// ends; and the history records each release with the source it ended.
+void TstRemotePaPages::radioStatusNamesEveryKeyAlikeInBothWindows()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    s.server->setTelemetryEnabled(true);
+    QVERIFY(s.connect());
+    QTRY_VERIFY(s.client->telemetryAvailable());
+    const TransmitState* const txState = s.window.stationTransmitState();
+    QVERIFY(txState != nullptr);
+
+    RadioStatusPage remote(&s.window);
+    RadioStatusPage local(s.core.get());
+    const auto pttText = [](const RadioStatusPage& page) {
+        for (QLabel* label : page.findChildren<QLabel*>()) {
+            if (label->text().startsWith(QStringLiteral("Active: "))) {
+                return label->text();
+            }
+        }
+        return QStringLiteral("<missing>");
+    };
+    const auto lastEvent = [](const RadioStatusPage& page) {
+        const QListWidget* const list = page.findChild<QListWidget*>();
+        if (list == nullptr || list->count() == 0) {
+            return QStringLiteral("<empty>");
+        }
+        return list->item(0)->text();
+    };
+    const auto bothRead = [&](const QString& text) {
+        return pttText(local) == text && pttText(remote) == text;
+    };
+
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    // The keys below come straight from the Core's own keyers, so no
+    // device's hold on transmit is asked for.
+    mox->setKeyingGate({});
+
+    // A TCI key.
+    mox->setMox(true, KeyerIdentity::station(PttMode::Tci));
+    QVERIFY(mox->isMox());
+    QCOMPARE(s.core->keyedBy().trigger, QByteArrayLiteral("tci"));
+    QTRY_VERIFY2(bothRead(QStringLiteral("Active: TCI")),
+                 qPrintable(pttText(local) + QStringLiteral(" / ") + pttText(remote)));
+    mox->setMox(false);
+    QTRY_VERIFY(bothRead(QStringLiteral("Active: none")));
+    QTRY_VERIFY2(lastEvent(local).endsWith(QStringLiteral("TX end (TCI)")),
+                 qPrintable(lastEvent(local)));
+    QTRY_VERIFY2(lastEvent(remote).endsWith(QStringLiteral("TX end (TCI)")),
+                 qPrintable(lastEvent(remote)));
+
+    // A device's key with nobody holding transmit: the Core names the device
+    // but has no kind for it.
+    KeyerIdentity device;
+    device.deviceId = QByteArrayLiteral("phone-without-transmit");
+    mox->setMox(true, device);
+    QVERIFY(mox->isMox());
+    QCOMPARE(s.core->keyedBy().deviceId, device.deviceId);
+    QVERIFY(s.core->keyedBy().deviceKind.isEmpty());
+    // No link carries this device's keepalives here, so the transmit
+    // watchdog stops watching it rather than ending the key.
+    s.server->txWatchdog()->released(device.deviceId);
+    QTRY_VERIFY2(bothRead(QStringLiteral("Active: Remote")),
+                 qPrintable(pttText(local) + QStringLiteral(" / ") + pttText(remote)));
+    QVERIFY(mox->isMox());
+    mox->setMox(false, device);
+    QTRY_VERIFY(bothRead(QStringLiteral("Active: none")));
+
+    // A RADE end-of-over tail: the radio stays on the air after the
+    // release, and both windows keep the key's source until it ends.
+    mox->setEndOfOverTail([]() { return true; });
+    s.keyCore();
+    QTRY_VERIFY(bothRead(QStringLiteral("Active: MOX")));
+    s.unkeyCore();
+    QVERIFY(s.core->endOfOverTailActive());
+    QCOMPARE(pttText(local), QStringLiteral("Active: MOX"));
+    QTRY_VERIFY(txState->txEnding());
+    QCOMPARE(pttText(remote), QStringLiteral("Active: MOX"));
+    mox->onEndOfOverTailDone();
+    QTRY_VERIFY(bothRead(QStringLiteral("Active: none")));
+    QVERIFY2(lastEvent(local).endsWith(QStringLiteral("TX end (MOX)")),
+             qPrintable(lastEvent(local)));
+    QTRY_VERIFY2(lastEvent(remote).endsWith(QStringLiteral("TX end (MOX)")),
+                 qPrintable(lastEvent(remote)));
+
+    // A radio with no station running names nobody as keyed, so its own
+    // page reads the key's source from the key itself, through a tail too.
+    RadioModel alone;
+    MoxController* const aloneMox = alone.moxController();
+    aloneMox->setMoxCheck({});
+    aloneMox->setEndOfOverTail([]() { return true; });
+    aloneMox->setMox(true, KeyerIdentity::station(PttMode::Tci));
+    QVERIFY(aloneMox->isMox());
+    QVERIFY(alone.keyedBy().isEmpty());
+    // The page follows the key once the TX walk has ended.
+    QTRY_COMPARE(alone.radioStatus().activePttSource(), PttSource::Tci);
+    aloneMox->setMox(false);
+    QVERIFY(alone.endOfOverTailActive());
+    QCOMPARE(alone.radioStatus().activePttSource(), PttSource::Tci);
+    aloneMox->onEndOfOverTailDone();
+    QTRY_COMPARE(alone.radioStatus().activePttSource(), PttSource::None);
+    QCOMPARE(alone.radioStatus().recentPttEvents().first().source, PttSource::Tci);
+    QVERIFY(!alone.radioStatus().recentPttEvents().first().isStart);
 }
 
 void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReasons()

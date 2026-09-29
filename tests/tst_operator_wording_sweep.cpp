@@ -325,6 +325,7 @@ QString setupInternalNameIn(const QString& text)
         // Hardware Config > Radio Info's row for the radio's protocol
         // (Protocol 1 or 2), as the desktop tab labels it (R-R3-49).
         QStringLiteral("Protocol:"),
+        QStringLiteral("Setup \u2192 DSP"),          // the Setup category, as a path
     };
     QString rest = text;
     for (const QString& phrase : operatorPhrases) {
@@ -355,7 +356,7 @@ void collectDescriptionText(const QJsonValue& value, const QString& key, const Q
     static const QStringList shownKeys{
         QStringLiteral("title"), QStringLiteral("label"), QStringLiteral("tooltip"),
         QStringLiteral("unit"), QStringLiteral("reason"), QStringLiteral("message"),
-        QStringLiteral("confirm")};
+        QStringLiteral("confirm"), QStringLiteral("question")};
     if (value.isObject()) {
         const QJsonObject object = value.toObject();
         for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
@@ -410,7 +411,7 @@ QList<QPair<QString, QString>> allSetupDescriptionText()
         for (const QString& id : ids) {
             const QString description =
                 service.property(id.toLatin1().constData()).toString();
-            for (int version = 1; version <= 14; ++version) {
+            for (int version = 1; version <= 15; ++version) {
                 const QString fitted =
                     SetupDescriptionService::fitCategoryForVersion(description, version);
                 collectDescriptionText(

@@ -31,6 +31,12 @@
 //                 the next decoder's first lock reaches the flag and the
 //                 FreeDV reporter. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Radio Status PTT source: a remote window reads a key from
+//                 a device that does not hold transmit as Remote, as the
+//                 Core's window does; both keep the key's source through a
+//                 RADE end-of-over tail; a radio with no station running
+//                 reads the key's own source (TCI, CAT, PTT, VOX).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
 //                 sends FreeDV's end-of-over frame with the station callsign
 //                 before the radio unkeys (startRadeEndOfOverTail,
@@ -1854,12 +1860,27 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 [publishTransmitting](MoxState) { publishTransmitting(false); });
         connect(m_moxController, &MoxController::moxStateChanged, this,
                 [publishTransmitting](bool) { publishTransmitting(false); });
+        // The Radio Status page's PTT source follows the key itself.
+        connect(m_moxController, &MoxController::moxStateChanged, this,
+                [this](bool) { refreshRadioStatusPtt(); });
     }
 
     // R-R3-49 (parity Task 1): isCoreOnAir() follows the radio's
     // `transmitting`, the transmit model's TUNE and PureSignal's two-tone.
     connect(this, &RadioModel::transmittingChanged, this,
             [this](bool) { updateCoreOnAir(); });
+    // The Radio Status page's PTT source follows the key, TUNE and the
+    // two-tone test (a remote window's also follows the Core's txState,
+    // setStationTransmitState).
+    connect(this, &RadioModel::transmittingChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
+    connect(&m_transmitModel, &TransmitModel::tuneChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
+    connect(&m_transmitModel, &TransmitModel::twoToneActiveChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
+    // A RADE end-of-over tail keeps the key's source until it ends.
+    connect(this, &RadioModel::endOfOverTailChanged, this,
+            [this](bool) { refreshRadioStatusPtt(); });
     connect(&m_transmitModel, &TransmitModel::tuneChanged, this,
             [this](bool) { updateCoreOnAir(); });
     if (m_pureSignalFacade) {
@@ -8607,8 +8628,101 @@ TransmitState* RadioModel::stationTransmitState() const
 void RadioModel::setStationTransmitState(TransmitState* state)
 {
     if (m_role == Role::Remote) {
+        disconnect(m_stationTransmitStateConnection);
         m_stationTransmitState = state;
+        if (state != nullptr) {
+            // A delta from the Core sets txState's properties one at a
+            // time, each with its own stateChanged, so between them the
+            // key reads half old and half new (the kind cleared while the
+            // trigger still names the key). The page reads it once the
+            // whole delta is in.
+            m_stationTransmitStateConnection = connect(
+                state, &TransmitState::stateChanged, this,
+                [this]() {
+                    if (m_radioStatusPttRefreshQueued) {
+                        return;
+                    }
+                    m_radioStatusPttRefreshQueued = true;
+                    QMetaObject::invokeMethod(this, [this]() {
+                        m_radioStatusPttRefreshQueued = false;
+                        refreshRadioStatusPtt();
+                    }, Qt::QueuedConnection);
+                });
+        }
+        refreshRadioStatusPtt();
     }
+}
+
+// The trigger a station's own key names for its PTT source, as
+// RemoteKeying::stationTrigger names it (TUNE and two-tone read from the
+// transmit model in pttSourceForKey).
+static QString radioStatusTriggerFor(PttMode source)
+{
+    switch (source) {
+    case PttMode::Mic:
+        return QStringLiteral("radioPtt");
+    case PttMode::Vox:
+        return QStringLiteral("vox");
+    case PttMode::Tci:
+        return QStringLiteral("tci");
+    case PttMode::Cat:
+        return QStringLiteral("cat");
+    default:
+        break;
+    }
+    return QStringLiteral("station");
+}
+
+void RadioModel::refreshRadioStatusPtt()
+{
+    PttSource source = PttSource::None;
+    if (m_role == Role::Remote) {
+        // The Core's key as its `txState` carries it: keyedByKind is
+        // "station" for the station's own keys, a device's kind otherwise.
+        // A device that keys without holding transmit has no kind; the
+        // Core still names its trigger, and its own window reads that key
+        // as Remote, so this one does too. Through an end-of-over tail the
+        // Core keeps who keyed (txEnding), so the page keeps the key's
+        // source until the radio is off the air, as the Core's page does.
+        // The radio's TX to RX handover names nobody, so it reads released.
+        if (const TransmitState* state = m_stationTransmitState.data()) {
+            const QString kind = state->keyedByKind();
+            const QString trigger = state->keyedTrigger();
+            const bool named = !kind.isEmpty() || !trigger.isEmpty();
+            const bool deviceKey = named && kind != QLatin1String("station");
+            const bool held = state->keyed() && named;
+            source = pttSourceForKey(held, deviceKey, state->tuning(),
+                                     state->twoTone(), trigger);
+        }
+    } else {
+        // The key itself (MOX, not the radio's TX to RX handover after it).
+        // A paired device's key shows from the moment it holds the key.
+        const bool mox = m_moxController != nullptr && m_moxController->isMox();
+        bool deviceKey = !m_keyedBy.isEmpty()
+            && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+        QString trigger = QString::fromLatin1(m_keyedBy.trigger);
+        if (m_keyedBy.isEmpty() && mox) {
+            // No station running names who keyed, so the key's own source
+            // says it (the trigger the station would name).
+            trigger = radioStatusTriggerFor(m_moxController->currentKeyer().source);
+        }
+        bool keyed = mox || deviceKey;
+        if (keyed) {
+            m_radioStatusKeyTrigger = trigger;
+            m_radioStatusKeyFromDevice = deviceKey;
+        } else if (endOfOverTailActive()) {
+            // A RADE end-of-over tail: released, but still on the air until
+            // the tail ends, so the page keeps the source of the key.
+            keyed = true;
+            trigger = m_radioStatusKeyTrigger;
+            deviceKey = m_radioStatusKeyFromDevice;
+        }
+        source = pttSourceForKey(keyed, deviceKey,
+                                 m_transmitModel.isTune(),
+                                 m_transmitModel.isTwoToneActive(),
+                                 trigger);
+    }
+    m_radioStatus.setActivePttSource(source);
 }
 
 void RadioModel::setStationTxDisplayVersion(int version)
@@ -14231,26 +14345,10 @@ void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
     if (role() != Role::Local || m_keyedBy == keyedBy) {
         return;
     }
-    const bool wasRemoteVox = m_keyedBy.trigger == QByteArrayLiteral("vox")
-        && !m_keyedBy.isEmpty()
-        && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
     m_keyedBy = keyedBy;
-    // The Radio Status page's PTT source: a paired device's key is Remote.
-    // Only Remote is set and cleared here; the other sources are not this
-    // record's.
-    const bool remote = !keyedBy.isEmpty()
-        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
-    // iPhone app plan Task 36: a device's VOX key (VOX listening to its
-    // microphone) shows as VOX, attributed to it by keyedBy.
-    const bool remoteVox = remote && keyedBy.trigger == QByteArrayLiteral("vox");
-    if (remoteVox) {
-        m_radioStatus.setActivePttSource(PttSource::Vox);
-    } else if (remote) {
-        m_radioStatus.setActivePttSource(PttSource::Remote);
-    } else if (m_radioStatus.activePttSource() == PttSource::Remote
-               || (m_radioStatus.activePttSource() == PttSource::Vox && wasRemoteVox)) {
-        m_radioStatus.setActivePttSource(PttSource::None);
-    }
+    // The Radio Status page's PTT source follows the key (a paired device's
+    // key is Remote, its VOX key VOX; iPhone app plan Task 36).
+    refreshRadioStatusPtt();
     // Fix wave C2: the writer follows who is keyed.
     updateRemoteMicSource();
     emit keyedByChanged();
@@ -24712,15 +24810,36 @@ QString RadioModel::connectionUptimeText() const
                              static_cast<long long>(s));
 }
 
+void RadioModel::applyCoreConnectionAge(std::optional<qint64> ageMs)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    m_coreConnectionAgeMs = ageMs;
+    if (ageMs) {
+        m_coreConnectionAgeClock.start();
+    } else {
+        m_coreConnectionAgeClock.invalidate();
+    }
+}
+
 std::optional<qint64> RadioModel::connectionAgeMs() const
 {
+    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
+    if (m_role == Role::Remote) {
+        // The Core's radio connection, counting on between its samples.
+        if (!m_coreConnectionAgeMs || !m_coreConnectionAgeClock.isValid()) {
+            return std::nullopt;
+        }
+        return std::clamp<qint64>(*m_coreConnectionAgeMs + m_coreConnectionAgeClock.elapsed(),
+                                  0, kMaxExactJsonInteger);
+    }
     if (m_connectionState != ConnectionState::Connected
         || !m_connectionStartedAt.isValid()
         || m_connectionAgeOwner != m_connection
         || (m_connectionAgeHadOwner && !m_connectionAgeOwner)) {
         return std::nullopt;
     }
-    constexpr qint64 kMaxExactJsonInteger = 9007199254740991LL;
     return std::clamp<qint64>(m_connectionStartedAt.elapsed(), 0,
                               kMaxExactJsonInteger);
 }

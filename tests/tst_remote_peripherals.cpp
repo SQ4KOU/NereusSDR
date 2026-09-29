@@ -81,6 +81,9 @@
 // 2026-09-26: iPhone app plan Task 77 fix round 4: an amp whose operate=1
 // is unconfirmed is sent standby from both local buttons. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: load finding: the nothing-happens checks wait for the link's
+// own flush bound (SessionWait.h), not a number picked by hand. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
@@ -163,6 +166,7 @@
 
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "SessionWait.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -704,7 +708,7 @@ void RemotePeripheralsTest::remoteMasterShowsPendingAndRefusalWithoutLocalActiva
     link.fourO3AAvailable = true;
     model.reportStationLinkStateChanged();
     QVERIFY(master->isEnabled());
-    QTRY_VERIFY(!status->text().contains(QStringLiteral("refused test request")));
+    NEREUS_TRY_VERIFY(!status->text().contains(QStringLiteral("refused test request")));
 }
 
 void RemotePeripheralsTest::remoteTgxlDraftUsesStationLinkAndSurvivesUnrelatedSnapshots()
@@ -917,13 +921,13 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
     QVERIFY(client.remoteRfKitStatusAvailable());
 
     // Filled on attach.
-    QTRY_COMPARE(amp.tempGaugeValueForTesting(), 42.5);
+    NEREUS_TRY_COMPARE(amp.tempGaugeValueForTesting(), 42.5);
     QVERIFY(amp.operateButtonShownForTesting());
     QCOMPARE(amp.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
     QCOMPARE(amp.fwdGaugeValueForTesting(), 0.0);
     QVERIFY(!amp.staleIndicatorVisibleForTesting());
-    QTRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 850);
+    NEREUS_TRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 850);
     QVERIFY(rfKit.connectedStateForTesting());
     QCOMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     QCOMPARE(rfKit.nicknameLabelTextForTesting(), QStringLiteral("KG4VCF  G200C267"));
@@ -933,7 +937,7 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
 
     // Updated as the Core's amps report.
     station.amplifierModel()->applyStatusFrame(pgxlFrame(kTransmit));
-    QTRY_VERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
+    NEREUS_TRY_VERIFY(std::abs(amp.fwdGaugeValueForTesting() - 1000.0) < 1e-3);
     QVERIFY(std::abs(amp.swrGaugeValueForTesting() - 1.12668) < 1e-4);
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 22.5A"));
 
@@ -941,19 +945,19 @@ void RemotePeripheralsTest::remoteAmpAndRfKitAppletsFollowTheCore()
     station.amplifierModel()->applyStatusFrame(pgxlFrame(kStandby));
     station.rfKitModel()->applyOperateMode(QStringLiteral("STANDBY"));
     station.rfKitModel()->applyPower(rfKitPower(0, 1.0f, 0.0f, 0.0f, 0.0f));
-    QTRY_COMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
-    QTRY_COMPARE(amp.fwdGaugeValueForTesting(), 0.0);
+    NEREUS_TRY_COMPARE(amp.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_COMPARE(amp.fwdGaugeValueForTesting(), 0.0);
     QCOMPARE(amp.swrGaugeValueForTesting(), 1.0);
     QCOMPARE(amp.powerLabelTextForTesting(), QStringLiteral("Volts: 240V\u00A0\u00A0Amps: 0.0A"));
-    QTRY_COMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
-    QTRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 0);
+    NEREUS_TRY_COMPARE(rfKit.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_COMPARE(rfKit.fwdGaugeValueForTesting(), 0);
     QCOMPARE(rfKit.telemetryStripTextForTesting(),
              QStringLiteral("Fwd 0 W  SWR 1.00  0 V  0.0 A"));
 
     // The Core is lost: the last readings stay, marked stale.
     stationEnd->closeLink(QStringLiteral("test: Core lost"));
-    QTRY_VERIFY(amp.staleIndicatorVisibleForTesting());
-    QTRY_VERIFY(rfKit.staleIndicatorVisibleForTesting());
+    NEREUS_TRY_VERIFY(amp.staleIndicatorVisibleForTesting());
+    NEREUS_TRY_VERIFY(rfKit.staleIndicatorVisibleForTesting());
     QCOMPARE(amp.staleIndicatorTextForTesting(),
              QStringLiteral("Core disconnected. Power Genius readings are stale."));
     QCOMPARE(rfKit.staleIndicatorTextForTesting(),
@@ -1433,23 +1437,23 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
-    QTRY_VERIFY(client.remotePgxlControlAvailable());
+    NEREUS_TRY_VERIFY(client.remotePgxlControlAvailable());
     window.reportStationLinkStateChanged();
-    QTRY_VERIFY(connectButton->isEnabled());
+    NEREUS_TRY_VERIFY(connectButton->isEnabled());
 
     // Connect: the Core dials, and the window follows its phase.
     host->setText(QStringLiteral("127.0.0.1"));
     port->setValue(amp.serverPort());
     QVERIFY(QMetaObject::invokeMethod(&page, "onConnect", Qt::DirectConnection, Q_ARG(int, 1)));
-    QTRY_VERIFY(amp.hasPendingConnections());
+    NEREUS_TRY_VERIFY(amp.hasPendingConnections());
     QTcpSocket* peer = amp.nextPendingConnection();
     peer->write("V3.8.9\n");
     peer->flush();
-    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Identifying);
     QCOMPARE(status->text(), QStringLiteral("Identifying device"));
     quint32 infoSeq = 0;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const auto& row : stationFrames) {
             const QString frame = row.first().toString();
             if (frame.endsWith(QStringLiteral("|info"))) {
@@ -1463,13 +1467,13 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
     peer->flush();
     auto* controller = station.findChild<StationPgxlController*>();
     QVERIFY(controller);
-    QTRY_VERIFY(controller->findChild<LanDiscovery*>());
+    NEREUS_TRY_VERIFY(controller->findChild<LanDiscovery*>());
     controller->findChild<LanDiscovery*>()->injectDatagramForTesting(
         QStringLiteral("PowerGeniusXL ip=127.0.0.1 v=3.8.9 serial=10-200/24-0046 nickname=PowerGeniusXL"),
         amp.serverPort());
-    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Connected);
-    QTRY_COMPARE(status->text(), QStringLiteral("Connected: PowerGeniusXL 10-200/24-0046"));
+    NEREUS_TRY_COMPARE(status->text(), QStringLiteral("Connected: PowerGeniusXL 10-200/24-0046"));
     QCOMPARE(window.amplifierModel()->configuredPort(), int(amp.serverPort()));
     QCOMPARE(connectButton->text(), QStringLiteral("Disconnect"));
 
@@ -1482,9 +1486,9 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
         QCOMPARE(toggle->text(), QStringLiteral("Disconnect"));
         toggle->trigger();
     }
-    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Disconnected);
-    QTRY_VERIFY(!station.pgxlConnection()->isConnected());
+    NEREUS_TRY_VERIFY(!station.pgxlConnection()->isConnected());
     QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
     {
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
@@ -1493,24 +1497,24 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
         QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
-    QTRY_VERIFY(amp.hasPendingConnections());   // the Core dials its saved address
+    NEREUS_TRY_VERIFY(amp.hasPendingConnections());   // the Core dials its saved address
     QTcpSocket* again = amp.nextPendingConnection();
     again->write("V3.8.9\n");
     again->flush();
-    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Identifying);
     QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Identifying device"));
 
     // Configure: the settings command reaches the Core and applies there.
     const auto settingsOutcome = client.requestPgxlConnectionSettings(true, 40, 0);
     QVERIFY(settingsOutcome.sent);
-    QTRY_COMPARE(AppSettings::instance().value(QStringLiteral("PGXL_KeepaliveSec")).toString(),
+    NEREUS_TRY_COMPARE(AppSettings::instance().value(QStringLiteral("PGXL_KeepaliveSec")).toString(),
                  QStringLiteral("40"));
 
     // Disconnect (here, cancelling the second attempt): the Core closes
     // it; the window shows it.
     QVERIFY(QMetaObject::invokeMethod(&page, "onConnect", Qt::DirectConnection, Q_ARG(int, 1)));
-    QTRY_COMPARE(window.amplifierModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.amplifierModel()->connectionPhase(),
                  AmplifierModel::ConnectionPhase::Disconnected);
     QVERIFY(!station.pgxlConnection()->isConnected());
     QCOMPARE(status->text(), QStringLiteral("Disconnected"));
@@ -1561,7 +1565,7 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
         }
         return list;
     };
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const SessionMessage& m : messages()) {
             if (m.kind == SessionMessageKind::SnapshotComplete) { return true; }
         }
@@ -1577,7 +1581,7 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
     peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
         "amplifier", {MirrorUpdate{0, "operate", MirrorWireKind::Bool, QVariant(true)}}, 14)));
     QList<SessionPropertyResult> results;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         results.clear();
         for (const SessionMessage& m : messages()) {
             if (m.kind == SessionMessageKind::PropertyResult) {
@@ -1588,7 +1592,7 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
     }());
     // The amp object is offered only on a Core that owns its accessories;
     // this Core does not, so only the three tuner results are certain.
-    QTest::qWait(50);
+    NereusSDR::Test::settleSession();
     int tunerRefusals = 0;
     for (const SessionPropertyResult& result : results) {
         QVERIFY(!result.accepted);
@@ -1612,7 +1616,7 @@ void RemotePeripheralsTest::receiveOnlyCoreRefusesTunerAndAmpOperation()
         }
         return count;
     };
-    QTRY_VERIFY_WITH_TIMEOUT(framesButThePoll(tunerFrames) < tunerFrames.count(), 5000);
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(framesButThePoll(tunerFrames) < tunerFrames.count(), 5000);
     QCOMPARE(framesButThePoll(tunerFrames), 0);
     QCOMPARE(framesButThePoll(ampFrames), 0);
     QCOMPARE(station.tunerModel()->isOperate(), operateBefore);
@@ -1659,31 +1663,31 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
-    QTRY_VERIFY(client.remoteRfKitControlAvailable());
+    NEREUS_TRY_VERIFY(client.remoteRfKitControlAvailable());
     window.reportStationLinkStateChanged();
-    QTRY_VERIFY(master->isEnabled());
+    NEREUS_TRY_VERIFY(master->isEnabled());
     QVERIFY(!window.rfKitEnabled());
     QVERIFY(!page.detailTabIsEnabledForTesting());
 
     // Switch it on at the Core.
     master->setChecked(true);
-    QTRY_VERIFY(station.rfKitEnabled());
-    QTRY_VERIFY(window.rfKitEnabled());
+    NEREUS_TRY_VERIFY(station.rfKitEnabled());
+    NEREUS_TRY_VERIFY(window.rfKitEnabled());
     QVERIFY(master->isChecked());
-    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+    NEREUS_TRY_VERIFY(page.detailTabIsEnabledForTesting());
 
     // Connect: the Core identifies the amp and admits it.
     page.setHostForTesting(QStringLiteral("127.0.0.1"));
     page.setPortForTesting(amp.serverPort());
     page.testConnectionButtonForTesting()->click();
-    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
                               RfKitModel::ConnectionPhase::Connected, 5000);
     QCOMPARE(window.rfKitModel()->deviceModel(), QStringLiteral("RF2K-S"));
     QCOMPARE(window.rfKitModel()->configuredPort(), int(amp.serverPort()));
     QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")), QStringLiteral("127.0.0.1"));
-    QTRY_VERIFY(page.liveStatusTextForTesting().contains(QStringLiteral("Connected")));
+    NEREUS_TRY_VERIFY(page.liveStatusTextForTesting().contains(QStringLiteral("Connected")));
     QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
-    QTRY_VERIFY(applet.connectedStateForTesting());
+    NEREUS_TRY_VERIFY(applet.connectedStateForTesting());
 
     // The rows the Core's amp reports reach the window's applet.
     station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/power"), kRfKitPower);
@@ -1693,8 +1697,8 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         R"({"antennas":[{"type":"INTERNAL","number":1,"state":"AVAILABLE"},{"type":"INTERNAL","number":2,"state":"ACTIVE"},{"type":"INTERNAL","number":3,"state":"AVAILABLE"},{"type":"INTERNAL","number":4,"state":"AVAILABLE"}]})");
     station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas/active"),
                                                    R"({"type":"INTERNAL","number":2})");
-    QTRY_COMPARE(applet.tunerStatusTextForTesting(), QStringLiteral("TUNED 3.891 MHz (LC)"));
-    QTRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
+    NEREUS_TRY_COMPARE(applet.tunerStatusTextForTesting(), QStringLiteral("TUNED 3.891 MHz (LC)"));
+    NEREUS_TRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
     QVERIFY(!applet.antennaButtonIsActiveForTesting(1));
     // R-R3-49 (parity Task 10): off the air the Core switches its amp's
     // antenna for this window (they waited for remote transmit before).
@@ -1714,9 +1718,9 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         QCOMPARE(toggle->text(), QStringLiteral("Disconnect"));
         toggle->trigger();
     }
-    QTRY_COMPARE(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.rfKitModel()->connectionPhase(),
                  RfKitModel::ConnectionPhase::Disconnected);
-    QTRY_VERIFY(!station.rfKitConnection()->isConnected());
+    NEREUS_TRY_VERIFY(!station.rfKitConnection()->isConnected());
     QCOMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Disconnected"));
     {
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
@@ -1725,21 +1729,21 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
-    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
                               RfKitModel::ConnectionPhase::Connected, 5000);
-    QTRY_COMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Connected"));
+    NEREUS_TRY_COMPARE(applet.connectionLineTextForTesting(), QStringLiteral("Connected"));
 
     // Disconnect from the page.
     page.disconnectButtonForTesting()->click();
-    QTRY_COMPARE(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE(window.rfKitModel()->connectionPhase(),
                  RfKitModel::ConnectionPhase::Disconnected);
     QVERIFY(!station.rfKitConnection()->isConnected());
 
     // Switch it off.
     master->setChecked(false);
-    QTRY_VERIFY(!station.rfKitEnabled());
-    QTRY_VERIFY(!window.rfKitEnabled());
-    QTRY_COMPARE(window.rfKitModel()->connectionPhase(), RfKitModel::ConnectionPhase::Disabled);
+    NEREUS_TRY_VERIFY(!station.rfKitEnabled());
+    NEREUS_TRY_VERIFY(!window.rfKitEnabled());
+    NEREUS_TRY_COMPARE(window.rfKitModel()->connectionPhase(), RfKitModel::ConnectionPhase::Disabled);
 
     // R-R3-22: the Core refuses the applet's Reconnect while its switch is
     // off; the applet shows the reason in plain words.
@@ -1750,7 +1754,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
-    QTRY_COMPARE(applet.connectionLineTextForTesting(),
+    NEREUS_TRY_COMPARE(applet.connectionLineTextForTesting(),
                  OperatorReasonText::forDisplay(QStringLiteral(
                      "Turn on the RF-Kit amplifier on the Core before connecting it.")));
     QVERIFY2(OperatorWording::isPlain(applet.connectionLineTextForTesting()),
@@ -1798,7 +1802,7 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
         }
         return list;
     };
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const SessionMessage& m : messages()) {
             if (m.kind == SessionMessageKind::SnapshotComplete) { return true; }
         }
@@ -1807,7 +1811,7 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
     peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
         "radio", {MirrorUpdate{0, "rfKitEnabled", MirrorWireKind::Bool, QVariant(true)}}, 21)));
     SessionPropertyResult result;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const SessionMessage& m : messages()) {
             if (m.kind == SessionMessageKind::PropertyResult && !m.propertyResults.isEmpty()) {
                 result = m.propertyResults.first();
@@ -1827,7 +1831,7 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
     peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
         "radio", {MirrorUpdate{0, "transmitting", MirrorWireKind::Bool, QVariant(true)}}, 22)));
     SessionPropertyResult transmitResult;
-    QTRY_VERIFY([&] {
+    NEREUS_TRY_VERIFY([&] {
         for (const SessionMessage& m : messages()) {
             if (m.kind == SessionMessageKind::PropertyResult && m.writeId == 22
                 && !m.propertyResults.isEmpty()) {
@@ -1846,7 +1850,7 @@ void RemotePeripheralsTest::rawRfKitSwitchWriteIsRefused()
     // The command is what changes it.
     peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
         "setRfKitEnabled", 31, {MirrorUpdate{0, "enabled", MirrorWireKind::Bool, QVariant(true)}})));
-    QTRY_VERIFY(station.rfKitEnabled());
+    NEREUS_TRY_VERIFY(station.rfKitEnabled());
     core->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
 }
@@ -1913,12 +1917,12 @@ void RemotePeripheralsTest::pgxlBandFollowLineLocalAndRemote()
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
     station.amplifierModel()->setBandFollow(TunerModel::BandFollow::Following);
-    QTRY_COMPARE(window.amplifierModel()->bandFollow(), TunerModel::BandFollow::Following);
+    NEREUS_TRY_COMPARE(window.amplifierModel()->bandFollow(), TunerModel::BandFollow::Following);
     QCOMPARE(remoteApplet.bandFollowTextForTesting(),
              QStringLiteral("Band follow: following the radio"));
     QCOMPARE(remoteLine->text(), QStringLiteral("Band follow: following the radio"));
     station.amplifierModel()->setBandFollow(TunerModel::BandFollow::Waiting);
-    QTRY_COMPARE(remoteApplet.bandFollowTextForTesting(),
+    NEREUS_TRY_COMPARE(remoteApplet.bandFollowTextForTesting(),
                  QStringLiteral("Band follow: waiting for the Power Genius to pair with the radio."));
     stationEnd->closeLink(QStringLiteral("test done"));
 }
@@ -1959,17 +1963,17 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     client->startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
-    QTRY_VERIFY(client->stationTciAvailable());
+    NEREUS_TRY_VERIFY(client->stationTciAvailable());
     QCOMPARE(client->capabilities().stationTciVersion, 2);
     QVERIFY(client->stationTciServerAvailable());
     window->reportStationLinkStateChanged();
 
     // On: the Core listens on this port; this window runs none of its own.
     tci->setSwitch(true, port, QHostAddress(QHostAddress::LocalHost));
-    QTRY_VERIFY(station.stationTciModel()->listening());
+    NEREUS_TRY_VERIFY(station.stationTciModel()->listening());
     QCOMPARE(station.stationTciModel()->port(), int(port));
     QVERIFY(!local->isRunning());
-    QTRY_VERIFY(window->stationTciModel()->listening());
+    NEREUS_TRY_VERIFY(window->stationTciModel()->listening());
     QCOMPARE(page.stationLineForTesting(),
              QStringLiteral("The Core on this computer serves TCI apps here, port %1.").arg(port));
     QVERIFY(OperatorWording::isPlain(page.stationLineForTesting()));
@@ -1979,7 +1983,7 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
         connect(&app, &QWebSocket::textMessageReceived, &app,
                 [&frames](const QString& text) { frames.append(text); });
         app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
-        QTRY_VERIFY(frames.join(QString()).contains(QStringLiteral("receive_only:true;")));
+        NEREUS_TRY_VERIFY(frames.join(QString()).contains(QStringLiteral("receive_only:true;")));
         app.close();
     }
 
@@ -1989,7 +1993,7 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     local.reset();
     client.reset();
     window.reset();
-    QTest::qWait(50);
+    NereusSDR::Test::settleSession();
     QVERIFY(station.stationTciModel()->enabled());
     QVERIFY(station.stationTciModel()->listening());
 
@@ -2008,18 +2012,18 @@ void RemotePeripheralsTest::oneTciSwitchDrivesTheCoresStationServer()
     secondClient.startSession(clientEnd2, server.token());
     server.acceptTransport(stationEnd2);
     QVERIFY(completed2.wait(5000) || !completed2.isEmpty());
-    QTRY_VERIFY(second.stationTciModel()->listening());
+    NEREUS_TRY_VERIFY(second.stationTciModel()->listening());
     QVERIFY(station.stationTciModel()->listening());
-    QTRY_VERIFY(secondClient.stationTciAvailable());
+    NEREUS_TRY_VERIFY(secondClient.stationTciAvailable());
 
     // Rework part 1: the second window's switch shows the Core's.
-    QTRY_VERIFY(secondSwitch.switchOn());
+    NEREUS_TRY_VERIFY(secondSwitch.switchOn());
     QCOMPARE(secondSwitch.port(), port);
     secondSwitch.setSwitch(false, port, QHostAddress(QHostAddress::LocalHost));
-    QTRY_VERIFY(!station.stationTciModel()->enabled());
+    NEREUS_TRY_VERIFY(!station.stationTciModel()->enabled());
     QVERIFY(!station.stationTciModel()->listening());
     QVERIFY(!secondLocal.isRunning());
-    QTRY_VERIFY(!second.stationTciModel()->listening());
+    NEREUS_TRY_VERIFY(!second.stationTciModel()->listening());
     stationEnd2->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
 }
@@ -2075,21 +2079,21 @@ void RemotePeripheralsTest::coreHereServesThisComputersApps()
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
     QVERIFY(completed.wait(5000) || !completed.isEmpty());
-    QTRY_VERIFY(client.stationTciAvailable());
+    NEREUS_TRY_VERIFY(client.stationTciAvailable());
     window.reportStationLinkStateChanged();
-    QTRY_VERIFY(!local.isRunning());   // connected on the Core's computer: none here
+    NEREUS_TRY_VERIFY(!local.isRunning());   // connected on the Core's computer: none here
 
     // The phone turns the Core's switch on: the Core serves.
     QString reason;
     QVERIFY(station.setStationTciForStation(true, port, &reason));
-    QTRY_VERIFY_WITH_TIMEOUT(station.stationTciModel()->listening(), 5000);
-    QTRY_VERIFY(window.stationTciModel()->listening());
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(station.stationTciModel()->listening(), 5000);
+    NEREUS_TRY_VERIFY(window.stationTciModel()->listening());
     QVERIFY(station.stationTciModel()->error().isEmpty());
     QVERIFY(!local.isRunning());
-    QTRY_VERIFY(tci.switchOn());
+    NEREUS_TRY_VERIFY(tci.switchOn());
     QCOMPARE(tci.port(), port);
     // The TCI page shows the Core's switch and port.
-    QTRY_VERIFY(page.switchOnForTesting());
+    NEREUS_TRY_VERIFY(page.switchOnForTesting());
     QCOMPARE(page.portForTesting(), int(port));
     const auto servedAt = [](const QString& address, quint16 appPort) {
         QWebSocket app;
@@ -2179,11 +2183,11 @@ void RemotePeripheralsTest::upgradeKeepsTciOnTheCoresComputer()
     QVERIFY(cw.local.isRunning());   // before the link: as before
     QVERIFY(!AppSettings::instance().contains(QStringLiteral("StationTci_Enabled")));
     QVERIFY(cw.connect(this));
-    QTRY_VERIFY(cw.client.stationTciAvailable());
+    NEREUS_TRY_VERIFY(cw.client.stationTciAvailable());
     cw.window.reportStationLinkStateChanged();
-    QTRY_VERIFY_WITH_TIMEOUT(cw.station.stationTciModel()->listening(), 5000);
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(cw.station.stationTciModel()->listening(), 5000);
     QCOMPARE(cw.station.stationTciModel()->port(), int(port));
-    QTRY_VERIFY(!cw.local.isRunning());
+    NEREUS_TRY_VERIFY(!cw.local.isRunning());
     QVERIFY(cw.tci.switchOn());
     QVERIFY(tciAppServed(port));
     QString reason;
@@ -2204,12 +2208,12 @@ void RemotePeripheralsTest::coresStoredSwitchWinsOverTheLink()
     const quint16 port = freeLoopbackPort();
     cw.tci.setSwitch(true, port, QHostAddress(QHostAddress::LocalHost), /*tellCore=*/false);
     QVERIFY(cw.connect(this));
-    QTRY_VERIFY(cw.client.stationTciAvailable());
+    NEREUS_TRY_VERIFY(cw.client.stationTciAvailable());
     cw.window.reportStationLinkStateChanged();
-    QTRY_VERIFY(!cw.tci.switchOn());
+    NEREUS_TRY_VERIFY(!cw.tci.switchOn());
     QCOMPARE(cw.tci.port(), quint16(50001));
     QVERIFY(!cw.local.isRunning());
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QVERIFY(!cw.station.stationTciModel()->enabled());
     QVERIFY(!cw.station.stationTciModel()->listening());
     AppSettings::instance().clear();
@@ -2245,11 +2249,11 @@ void RemotePeripheralsTest::connectRuleReadsTheCurrentCore()
         return stationEnd;
     };
     LoopbackTransport* endA = linkTo(serverA, QStringLiteral("a"));
-    QTRY_COMPARE(client.coreStationTciStored(), 1);
+    NEREUS_TRY_COMPARE(client.coreStationTciStored(), 1);
     endA->closeLink(QStringLiteral("moving to another Core"));
-    QTRY_COMPARE(client.coreStationTciStored(), -1);
+    NEREUS_TRY_COMPARE(client.coreStationTciStored(), -1);
     LoopbackTransport* endB = linkTo(serverB, QStringLiteral("b"));
-    QTRY_COMPARE(client.coreStationTciStored(), 0);
+    NEREUS_TRY_COMPARE(client.coreStationTciStored(), 0);
     endB->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
 }
@@ -2336,11 +2340,11 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
     QVERIFY(!pgxlPage.powerCapCheckForTesting()->isEnabled());   // no Core yet
 
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.accessoryDataAvailable());
+    NEREUS_TRY_VERIFY(cw.client.accessoryDataAvailable());
     // 2 from parity Task 10 (the RF-Kit's connection counts).
     QCOMPARE(cw.server.accessoryDataVersion(), 3);
     window.reportStationLinkStateChanged();
-    QTRY_VERIFY(pgxlPage.powerCapCheckForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(pgxlPage.powerCapCheckForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(pgxlPage.remoteNoteForTesting()));
 
     // A Power Genius fault on the Core appears without a reconnect, with
@@ -2351,7 +2355,7 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
                                                QStringLiteral("FAULT"), 1820.0f, 2.85f, 78.0f,
                                                FaultLog::likelyCauseFor(1820.0f, 2.85f, 78.0f)});
     QCOMPARE(station.pgxlFaultLog()->events().size(), 1);
-    QTRY_COMPARE(window.pgxlFaultLog()->events().size(), 1);
+    NEREUS_TRY_COMPARE(window.pgxlFaultLog()->events().size(), 1);
     const FaultEvent pgxlFault = window.pgxlFaultLog()->events().first();
     QCOMPARE(pgxlFault.device, QStringLiteral("pgxl"));
     QCOMPARE(pgxlFault.whenMs, station.pgxlFaultLog()->events().first().whenMs);
@@ -2364,23 +2368,23 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
     station.rfKitConnection()->injectJsonForTesting(
         QStringLiteral("/operational-interface"),
         R"({"operational_interface":"UDP","error":"CAT timeout"})");
-    QTRY_COMPARE(window.rfkitFaultLog()->events().size(), 1);
+    NEREUS_TRY_COMPARE(window.rfkitFaultLog()->events().size(), 1);
     QCOMPARE(window.rfkitFaultLog()->events().first().detail, QStringLiteral("CAT timeout"));
     QVERIFY(OperatorWording::isPlain(window.rfkitFaultLog()->events().first().text));
     station.tgxlFaultLog()->captureNotice(QStringLiteral("link"),
                                           QStringLiteral("The Tuner Genius stopped answering."),
                                           QString());
-    QTRY_COMPARE(tgxlPage.faultRowCountForTesting(), 1);
+    NEREUS_TRY_COMPARE(tgxlPage.faultRowCountForTesting(), 1);
     QCOMPARE(tgxlPage.faultTextForTesting(0), QStringLiteral("The Tuner Genius stopped answering."));
     QVERIFY(window.accessoryDataModel()->faultRevision() >= 3);
 
     // Cleared from the remote page: the Core's history goes, and the window's.
     pgxlPage.clearFaultsButtonForTesting()->click();
-    QTRY_VERIFY(station.pgxlFaultLog()->events().isEmpty());
-    QTRY_COMPARE(pgxlPage.faultRowCountForTesting(), 0);
+    NEREUS_TRY_VERIFY(station.pgxlFaultLog()->events().isEmpty());
+    NEREUS_TRY_COMPARE(pgxlPage.faultRowCountForTesting(), 0);
     tgxlPage.clearFaultsButtonForTesting()->click();
-    QTRY_VERIFY(station.tgxlFaultLog()->events().isEmpty());
-    QTRY_COMPARE(tgxlPage.faultRowCountForTesting(), 0);
+    NEREUS_TRY_VERIFY(station.tgxlFaultLog()->events().isEmpty());
+    NEREUS_TRY_COMPARE(tgxlPage.faultRowCountForTesting(), 0);
     QCOMPARE(station.rfkitFaultLog()->events().size(), 1);   // only the one asked for
 
     // The counters are the Core's: a retry the Core's amp connection counts
@@ -2391,22 +2395,22 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
     emit station.pgxlConnection()->reconnectAttempt(1, 1000);
     emit station.pgxlConnection()->reconnectAttempt(2, 2000);
     station.pgxlDiagnostics()->testFlushCoalesceTimer();
-    QTRY_COMPARE(pgxlPage.reconnectCountTextForTesting(), QStringLiteral("2"));
+    NEREUS_TRY_COMPARE(pgxlPage.reconnectCountTextForTesting(), QStringLiteral("2"));
     QCOMPARE(window.accessoryDataModel()->pgxlReconnectCount(), 2);
     emit station.tgxlConnection()->reconnectAttempt(1, 1000);
     station.tgxlDiagnostics()->testFlushCoalesceTimer();
-    QTRY_COMPARE(tgxlPage.reconnectCountTextForTesting(), QStringLiteral("1"));
+    NEREUS_TRY_COMPARE(tgxlPage.reconnectCountTextForTesting(), QStringLiteral("1"));
 
     // The output limit is set through the Core; the Core raises the alert
     // and the window sees it.
     pgxlPage.powerCapSpinForTesting()->setValue(800);   // limit off: not sent yet
     pgxlPage.powerCapCheckForTesting()->setChecked(true);
-    QTRY_VERIFY(station.accessoryDataModel()->powerCapEnabled());
+    NEREUS_TRY_VERIFY(station.accessoryDataModel()->powerCapEnabled());
     QCOMPARE(station.accessoryDataModel()->powerCapW(), 800);
-    QTRY_VERIFY(window.accessoryDataModel()->powerCapEnabled());
+    NEREUS_TRY_VERIFY(window.accessoryDataModel()->powerCapEnabled());
     // The amp's peak forward power as the Core reads it (onPgxlStatus).
     emit station.ampMetersChanged(1000.0f, 1.13f);
-    QTRY_COMPARE(window.accessoryDataModel()->powerCapAlertCount(), 1);
+    NEREUS_TRY_COMPARE(window.accessoryDataModel()->powerCapAlertCount(), 1);
     QVERIFY(window.accessoryDataModel()->powerCapExceeded());
     QCOMPARE(window.accessoryDataModel()->powerCapAlertText(),
              QStringLiteral("Power Genius output 1000 W is above the 800 W limit."));
@@ -2415,10 +2419,10 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
     // reaches the Core as a station setting; the Core then publishes it.)
     AppSettings::instance().setValue(QStringLiteral("TGXL_Ant1_Label"), QStringLiteral("Dipole"));
     station.applyRemoteAccessorySetting(QStringLiteral("TGXL_Ant1_Label"));
-    QTRY_COMPARE(window.accessoryDataModel()->tgxlAntenna1Label(), QStringLiteral("Dipole"));
-    QTRY_COMPARE(tgxlPage.antennaLabelForTesting(1), QStringLiteral("Dipole"));
+    NEREUS_TRY_COMPARE(window.accessoryDataModel()->tgxlAntenna1Label(), QStringLiteral("Dipole"));
+    NEREUS_TRY_COMPARE(tgxlPage.antennaLabelForTesting(1), QStringLiteral("Dipole"));
     station.tuneMemoryStore()->store(TuneMemory{2, Band::Band40m, 10, 20, 30, 1790000000000});
-    QTRY_COMPARE(window.tuneMemoryStore()->listAll().size(), 1);
+    NEREUS_TRY_COMPARE(window.tuneMemoryStore()->listAll().size(), 1);
     QCOMPARE(window.tuneMemoryStore()->listAll().first().band, Band::Band40m);
     QCOMPARE(tgxlPage.tuneMemoryRowCountForTesting(), 1);
 
@@ -2442,19 +2446,19 @@ void RemotePeripheralsTest::remoteWindowChangesTheInterlockOnTheCore()
     PgxlInterlockPage page(&cw.window);
     QVERIFY(!page.modeComboForTesting()->isEnabled());
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.accessoryDataAvailable());
+    NEREUS_TRY_VERIFY(cw.client.accessoryDataAvailable());
     cw.window.reportStationLinkStateChanged();
-    QTRY_VERIFY(page.modeComboForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(page.modeComboForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(page.remoteNoteForTesting()));
     QVERIFY(station.txInterlockPolicy()->evaluateTxRequest(true, false, 1.0f));
 
     page.modeComboForTesting()->setCurrentIndex(2);   // Block
-    QTRY_COMPARE(station.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    NEREUS_TRY_COMPARE(station.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
     QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_TxInterlockMode")).toString(),
              QStringLiteral("Block"));
     // The Core refuses to transmit now; the window's copy is the Core's.
     QVERIFY(!station.txInterlockPolicy()->evaluateTxRequest(true, false, 1.0f));
-    QTRY_COMPARE(cw.window.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    NEREUS_TRY_COMPARE(cw.window.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
     QCOMPARE(cw.window.accessoryDataModel()->interlockMode(),
              AccessoryDataModel::InterlockMode::Block);
     QCOMPARE(page.modeComboForTesting()->currentIndex(), 2);
@@ -2462,17 +2466,17 @@ void RemotePeripheralsTest::remoteWindowChangesTheInterlockOnTheCore()
     page.swrGateCheckboxForTesting()->setChecked(true);
     page.graceSpinboxForTesting()->setValue(1250);
     page.swrGateMaxSpinboxForTesting()->setValue(2.4);
-    QTRY_COMPARE(station.txInterlockPolicy()->graceMs(), 1250);
-    QTRY_VERIFY(qFuzzyCompare(station.txInterlockPolicy()->swrGateMax(), 2.4f));
+    NEREUS_TRY_COMPARE(station.txInterlockPolicy()->graceMs(), 1250);
+    NEREUS_TRY_VERIFY(qFuzzyCompare(station.txInterlockPolicy()->swrGateMax(), 2.4f));
     QVERIFY(station.txInterlockPolicy()->swrGateEnabled());
-    QTRY_COMPARE(cw.window.txInterlockPolicy()->graceMs(), 1250);
+    NEREUS_TRY_COMPARE(cw.window.txInterlockPolicy()->graceMs(), 1250);
 
     // A request the Core cannot take: nothing changes; the window says why,
     // as an accessory refusal (L1), never as a slice one.
     QSignalSpy sliceToast(&cw.window, &RadioModel::sliceAddRejected);
     QSignalSpy refused(&cw.window, &RadioModel::accessoryRequestRefused);
     QVERIFY(cw.client.requestTxInterlockPolicy(1, 99999, false, 2.0).sent);
-    QTRY_COMPARE(refused.count(), 1);
+    NEREUS_TRY_COMPARE(refused.count(), 1);
     QCOMPARE(refused.first().at(0).toString(), QStringLiteral("interlock"));
     QVERIFY(OperatorWording::isPlain(refused.first().at(1).toString()));
     QCOMPARE(sliceToast.count(), 0);
@@ -2491,9 +2495,9 @@ void RemotePeripheralsTest::remoteWindowChangesTheInterlockOnTheCore()
     stationEnd2->linkTo(clientEnd2);
     secondClient.startSession(clientEnd2, cw.server.token());
     cw.server.acceptTransport(stationEnd2);
-    QTRY_COMPARE(second.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
+    NEREUS_TRY_COMPARE(second.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
     QCOMPARE(second.txInterlockPolicy()->graceMs(), 1250);
-    QTRY_COMPARE(secondPage.modeComboForTesting()->currentIndex(), 2);
+    NEREUS_TRY_COMPARE(secondPage.modeComboForTesting()->currentIndex(), 2);
     QCOMPARE(secondPage.graceSpinboxForTesting()->value(), 1250);
     stationEnd2->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
@@ -2631,7 +2635,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     });
 
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
+    NEREUS_TRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(page.nicknameEditForTesting()->isEnabled());
     QVERIFY(page.pairAttemptCheckForTesting()->isEnabled());
@@ -2642,7 +2646,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QSignalSpy offlineRefused(&window, &RadioModel::accessoryRequestRefused);
     page.show();   // rework part 5: a refusal counts as shown only on a visible page
     editName(page.nicknameEditForTesting(), QStringLiteral("Offline"));
-    QTRY_COMPARE(page.deviceAnswerForTesting(),
+    NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Core is not connected to the Power Genius."));
     // Follow-up 3: shown on the page that sent it, so not toasted too.
     QCOMPARE(offlineRefused.count(), 1);
@@ -2651,8 +2655,8 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
 
     QVERIFY(admitCoreAmp(station, amp));
-    QTRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
-    QTRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("3.8.9"));
+    NEREUS_TRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
+    NEREUS_TRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("3.8.9"));
     local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), localAmp.port());
     QVERIFY(localAmp.accept());
     localAmp.send(QStringLiteral("V3.8.9"));
@@ -2684,7 +2688,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
             p->netmaskEditForTesting()->clear();
         }
         QCOMPARE(asked.size(), askedBefore);
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         for (int i = remoteBefore; i < amp.commands.size(); ++i) {
             QVERIFY2(!amp.commands.at(i).startsWith(QStringLiteral("ifconf address")),
                      qPrintable(amp.commands.at(i)));
@@ -2758,7 +2762,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(amp.waitFor(QStringLiteral("setup led=60"), declineMark) >= 0);
     page.saveAndRebootButtonForTesting()->click();
     QCOMPARE(asked.size(), 4);
-    QTest::qWait(150);
+    NereusSDR::Test::settleSession();
     QCOMPARE(amp.settingsCommands(declineMark), QStringList{QStringLiteral("setup led=60")});
     yes = true;
 
@@ -2768,10 +2772,10 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     editName(page.nicknameEditForTesting(), QStringLiteral("Remote Amp"));
     at = amp.waitFor(QStringLiteral("setup nickname=Remote Amp"), answerMark);
     QVERIFY(at >= 0);
-    QTRY_COMPARE(page.deviceAnswerForTesting(),
+    NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
     amp.reply(at, QStringLiteral("0|"));
-    QTRY_COMPARE(page.deviceAnswerForTesting(),
+    NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Power Genius took the new name."));
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
     QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote Amp"));
@@ -2785,7 +2789,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // the FlexRadio wiki) says only that non-zero is a failure. The amp's
     // refusal of a `setup` command itself has not been observed.
     amp.reply(at, QStringLiteral("50000015|"));
-    QTRY_COMPARE(page.deviceAnswerForTesting(),
+    NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Power Genius did not take the new name."));
     page.revertButtonForTesting()->click();
     const int setupAt = amp.waitFor(QStringLiteral("setup read"), answerMark);
@@ -2797,7 +2801,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // design doc documents `address=` and `dhcp=false`). Pending hardware.
     amp.reply(setupAt, QStringLiteral("0|nickname=Amp2 bias=classab fan=continuous led=90"));
     amp.reply(ifconfAt, QStringLiteral("0|dhcp=0 ip=10.0.0.5 netmask=255.0.0.0 gateway=10.0.0.1"));
-    QTRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("10.0.0.5"));
+    NEREUS_TRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("10.0.0.5"));
     QCOMPARE(page.nicknameEditForTesting()->text(), QStringLiteral("Amp2"));
     QVERIFY(!page.biasClassAForTesting()->isChecked());
     QCOMPARE(page.fanModeComboForTesting()->currentText(), QStringLiteral("Continuous"));
@@ -2815,7 +2819,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     const int refuseMark = amp.commands.size();
     QVERIFY(cw.client.requestPgxlNetwork(false, QStringLiteral("999.1.1.1"), QString(),
                                          QString()).sent);
-    QTRY_COMPARE(refused.count(), 1);
+    NEREUS_TRY_COMPARE(refused.count(), 1);
     QCOMPARE(refused.first().first().toString(), QStringLiteral("pgxl"));
     QCOMPARE(sliceToast.count(), 0);
     QCOMPARE(page.deviceAnswerForTesting(),
@@ -2870,14 +2874,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     });
 
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.tgxlDeviceSettingsAvailable());
+    NEREUS_TRY_VERIFY(cw.client.tgxlDeviceSettingsAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(page.nicknameEditForTesting()->isEnabled());
     QVERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
 
     QVERIFY(admitCoreTuner(station, tuner));
-    QTRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
-    QTRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("1.2.17"));
+    NEREUS_TRY_VERIFY(page.applyNetworkButtonForTesting()->isEnabled());
+    NEREUS_TRY_COMPARE(page.firmwareTextForTesting(), QStringLiteral("1.2.17"));
     QCOMPARE(page.variantTextForTesting(), QStringLiteral("3x1"));
     local.tgxlConnection()->connectToTgxl(QStringLiteral("127.0.0.1"), localTuner.port());
     QVERIFY(localTuner.accept());
@@ -2909,7 +2913,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
             p->netmaskEditForTesting()->clear();
         }
         QCOMPARE(asked.size(), askedBefore);
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         for (int i = remoteBefore; i < tuner.commands.size(); ++i) {
             QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("ifconf address")),
                      qPrintable(tuner.commands.at(i)));
@@ -2952,7 +2956,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     yes = false;
     const int declineMark = tuner.commands.size();
     page.applyNetworkButtonForTesting()->click();
-    QTest::qWait(150);
+    NereusSDR::Test::settleSession();
     QCOMPARE(tuner.settingsCommands(declineMark), QStringList{});
     yes = true;
 
@@ -2968,20 +2972,20 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     tuner.reply(readAt, QStringLiteral("0|nickname=Tuner_Genius_XL"));
     tuner.reply(ifconfAt, QStringLiteral("0|dhcp=1 ip=192.168.1.60 netmask=255.255.255.0 "
                                          "gateway=192.168.1.1"));
-    QTRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("192.168.1.60"));
+    NEREUS_TRY_COMPARE(page.ipEditForTesting()->text(), QStringLiteral("192.168.1.60"));
     QCOMPARE(page.nicknameEditForTesting()->text(), QStringLiteral("Tuner_Genius_XL"));
     QVERIFY(page.dhcpCheckForTesting()->isChecked());
     QVERIFY(!page.ipEditForTesting()->isEnabled());   // DHCP gates the fields
     const int saveAt = tuner.waitFor(QStringLiteral("save"), remoteMark);
     tuner.reply(saveAt, QStringLiteral("0|saving"));
-    QTRY_COMPARE(page.deviceAnswerForTesting(),
+    NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Tuner Genius is saving its settings and restarting."));
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
 
     // A Core refusal on its own route.
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
     QVERIFY(cw.client.requestTgxlName(QStringLiteral("Bad\tname")).sent);
-    QTRY_COMPARE(refused.count(), 1);
+    NEREUS_TRY_COMPARE(refused.count(), 1);
     QCOMPARE(refused.first().first().toString(), QStringLiteral("tgxl"));
     QCOMPARE(page.deviceAnswerForTesting(),
              QStringLiteral("Enter a name without line breaks or tabs."));
@@ -2989,7 +2993,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     // The Core loses the tuner: Apply and Revert wait for it again.
     QString reason;
     QVERIFY(station.disconnectTgxlForStation(&reason));
-    QTRY_VERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(!page.applyNetworkButtonForTesting()->isEnabled());
     QVERIFY(!page.revertButtonForTesting()->isEnabled());
 
     for (const QString& command : tuner.commands) {
@@ -3045,8 +3049,8 @@ void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
     AppSettings::instance().clear();
     CoreAndWindow cw;
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.accessoryDataAvailable());
-    QTRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
+    NEREUS_TRY_VERIFY(cw.client.accessoryDataAvailable());
+    NEREUS_TRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
     QSignalSpy sliceToast(&cw.window, &RadioModel::sliceAddRejected);
     QSignalSpy refused(&cw.window, &RadioModel::accessoryRequestRefused);
 
@@ -3062,7 +3066,7 @@ void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
     for (const Case& one : cases) {
         refused.clear();
         QVERIFY(one.send().sent);
-        QTRY_COMPARE(refused.count(), 1);
+        NEREUS_TRY_COMPARE(refused.count(), 1);
         QCOMPARE(refused.first().at(0).toString(), QString::fromLatin1(one.device));
         // Follow-up 3: sent by no page, so MainWindow toasts it.
         QCOMPARE(refused.first().size(), 3);
@@ -3070,7 +3074,7 @@ void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
         QVERIFY(OperatorWording::isPlain(
             OperatorReasonText::forDisplay(refused.first().at(1).toString())));
     }
-    QTest::qWait(50);
+    NereusSDR::Test::settleSession();
     QCOMPARE(sliceToast.count(), 0);
     stationEnd->closeLink(QStringLiteral("test done"));
     AppSettings::instance().clear();
@@ -3092,11 +3096,11 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     FakeRfKit amp;
     RfKitPage page(&window);
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.rfKitSettingsAvailable());
+    NEREUS_TRY_VERIFY(cw.client.rfKitSettingsAvailable());
     window.reportStationLinkStateChanged();
     QString reason;
     QVERIFY(station.setRfKitEnabledForStation(true, &reason));
-    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+    NEREUS_TRY_VERIFY(page.detailTabIsEnabledForTesting());
     for (QWidget* w : std::initializer_list<QWidget*>{
              page.autoReconnectForTesting(), page.pollIntervalForTesting(),
              page.saveButtonForTesting(), page.resetErrorButtonForTesting(),
@@ -3112,7 +3116,7 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     // the refusal is toasted, not lost.
     page.hide();
     page.resetErrorButtonForTesting()->click();
-    QTRY_COMPARE(accessoryRefused.count(), 1);
+    NEREUS_TRY_COMPARE(accessoryRefused.count(), 1);
     QCOMPARE(accessoryRefused.first().size(), 3);
     QVERIFY(!accessoryRefused.first().at(2).toBool());
     // A page gone before the answer: toasted too.
@@ -3121,15 +3125,15 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
         gone->show();
         gone->resetErrorButtonForTesting()->click();
     }
-    QTRY_COMPARE(accessoryRefused.count(), 2);
+    NEREUS_TRY_COMPARE(accessoryRefused.count(), 2);
     QVERIFY(!accessoryRefused.at(1).at(2).toBool());
     // Follow-up 3: the visible page that sent it shows it, so it is not
     // toasted too.
     page.show();
     page.resetErrorButtonForTesting()->click();
-    QTRY_COMPARE(accessoryRefused.count(), 3);
+    NEREUS_TRY_COMPARE(accessoryRefused.count(), 3);
     QVERIFY(accessoryRefused.at(2).at(2).toBool());
-    QTRY_VERIFY(page.liveStatusTextForTesting().contains(
+    NEREUS_TRY_VERIFY(page.liveStatusTextForTesting().contains(
         QStringLiteral("The Core is not connected to the RF-Kit amplifier.")));
     QVERIFY(OperatorWording::isPlain(page.liveStatusTextForTesting()));
     QCOMPARE(sliceToast.count(), 0);
@@ -3137,11 +3141,11 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     // The Core admits its amp; the window's Reset reaches it.
     QVERIFY(station.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
                                              &reason));
-    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
                               RfKitModel::ConnectionPhase::Connected, 5000);
     const int remoteMark = amp.lines.size();
     page.resetErrorButtonForTesting()->click();
-    QTRY_VERIFY(amp.lines.mid(remoteMark).contains(QStringLiteral("POST /error/reset")));
+    NEREUS_TRY_VERIFY(amp.lines.mid(remoteMark).contains(QStringLiteral("POST /error/reset")));
 
     // A local window's page on its own amp: the same request.
     FakeRfKit localAmp;
@@ -3154,16 +3158,16 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     RfKitPage localPage(&local);
     QVERIFY(localPage.detailTabIsEnabledForTesting());
     local.rfKitConnection()->connectToAmp(QStringLiteral("127.0.0.1"), localAmp.serverPort());
-    QTRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
     const int localMark = localAmp.lines.size();
     localPage.resetErrorButtonForTesting()->click();
-    QTRY_VERIFY(localAmp.lines.mid(localMark).contains(QStringLiteral("POST /error/reset")));
+    NEREUS_TRY_VERIFY(localAmp.lines.mid(localMark).contains(QStringLiteral("POST /error/reset")));
     local.rfKitConnection()->disconnect();
 
     // Save: the station's settings, sent over the link through the
     // window's settings proxy (follow-up 5: nothing here writes the Core's
     // store or calls its apply by hand), then applied by the Core at once.
-    QTRY_VERIFY(cw.proxy.ready());
+    NEREUS_TRY_VERIFY(cw.proxy.ready());
     AppSettings::instance().setRemoteBackend(&cw.proxy);
     const auto restoreBackend = qScopeGuard([] {
         AppSettings::instance().setRemoteBackend(nullptr);
@@ -3173,15 +3177,15 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     page.antennaLabelEditForTesting(1)->setText(QStringLiteral("Beam"));
     page.antennaLabelEditForTesting(4)->setText(QStringLiteral("Loop"));
     page.saveButtonForTesting()->click();
-    QTRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
+    NEREUS_TRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
                  QStringLiteral("2500"));
     QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_AutoReconnect")).toString(),
              QStringLiteral("False"));
     QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_Ant1_Label")).toString(),
              QStringLiteral("Beam"));
-    QTRY_COMPARE(station.rfKitConnection()->pollIntervalMs(), 2500);
+    NEREUS_TRY_COMPARE(station.rfKitConnection()->pollIntervalMs(), 2500);
     QVERIFY(!station.rfKitConnection()->autoReconnect());
-    QTRY_COMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(0),
+    NEREUS_TRY_COMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(0),
                  QStringLiteral("Beam"));
     QCOMPARE(window.accessoryDataModel()->rfkitAntennaLabels().value(3), QStringLiteral("Loop"));
 
@@ -3189,8 +3193,8 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     // follows.
     cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("3000"));
     cw.stationSettings.setValue(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("True"));
-    QTRY_COMPARE(page.pollIntervalForTesting()->value(), 3000);
-    QTRY_VERIFY(page.autoReconnectForTesting()->isChecked());
+    NEREUS_TRY_COMPARE(page.pollIntervalForTesting()->value(), 3000);
+    NEREUS_TRY_VERIFY(page.autoReconnectForTesting()->isChecked());
 
     // Rework part 6: an unsaved edit is not overwritten by the Core's
     // settings; untouched fields still follow.
@@ -3200,8 +3204,8 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     cw.stationSettings.setValue(QStringLiteral("RfKit_AutoReconnect"), QStringLiteral("False"));
     cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4000"));
     cw.stationSettings.setValue(QStringLiteral("RfKit_Ant2_Label"), QStringLiteral("Core"));
-    QTRY_VERIFY(!page.autoReconnectForTesting()->isChecked());
-    QTest::qWait(100);
+    NEREUS_TRY_VERIFY(!page.autoReconnectForTesting()->isChecked());
+    NereusSDR::Test::settleSession();
     QCOMPARE(page.pollIntervalForTesting()->value(), 1234);
     QCOMPARE(page.antennaLabelEditForTesting(2)->text(), QStringLiteral("Wire"));
 
@@ -3211,18 +3215,18 @@ void RemotePeripheralsTest::remoteRfKitPageWorksEveryControl()
     // values; a Save the Core takes (its settings echo) clears them.
     cw.proxy.setReady(false);
     page.saveButtonForTesting()->click();   // poll 1234, ANT 2 "Wire": dropped
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
              QStringLiteral("4000"));
     cw.proxy.setReady(true);
     cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4500"));
-    QTest::qWait(200);
+    NereusSDR::Test::settleSession();
     QCOMPARE(page.pollIntervalForTesting()->value(), 1234);
     page.saveButtonForTesting()->click();   // taken this time
-    QTRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
+    NEREUS_TRY_COMPARE(cw.stationSettings.value(QStringLiteral("RfKit_PollIntervalMs")).toString(),
                  QStringLiteral("1234"));
     cw.stationSettings.setValue(QStringLiteral("RfKit_PollIntervalMs"), QStringLiteral("4600"));
-    QTRY_COMPARE(page.pollIntervalForTesting()->value(), 4600);
+    NEREUS_TRY_COMPARE(page.pollIntervalForTesting()->value(), 4600);
 
     // Nothing but reads and the reset reached the Core's amp; the window
     // opened no connection of its own.
@@ -3376,7 +3380,7 @@ void RemotePeripheralsTest::tciPortIsSentWhenEditingFinishes()
     QTest::keyClicks(spin, QStringLiteral("50002"));
     QCOMPARE(sent.count(), 0);
     QTest::keyClick(spin, Qt::Key_Return);
-    QTRY_COMPARE(sent.count(), 1);
+    NEREUS_TRY_COMPARE(sent.count(), 1);
     QCOMPARE(sent.first().at(1).toUInt(), 50002u);
     AppSettings::instance().clear();
 }
@@ -3414,7 +3418,7 @@ void RemotePeripheralsTest::localPagesAskBeforeNetworkSettings()
         fill(page);
         const int mark = amp.commands.size();
         page.applyNetworkButtonForTesting()->click();
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         QCOMPARE(amp.settingsCommands(mark), QStringList{});
         QCOMPARE(asked, QStringList{QStringLiteral("Apply Network Settings|")
                                     + PgxlAdvancedPage::networkQuestionText()});
@@ -3440,7 +3444,7 @@ void RemotePeripheralsTest::localPagesAskBeforeNetworkSettings()
         fill(page);
         const int mark = tuner.commands.size();
         page.applyNetworkButtonForTesting()->click();
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         QCOMPARE(tuner.settingsCommands(mark), QStringList{});
         QCOMPARE(asked, QStringList{QStringLiteral("Apply Network Settings|")
                                     + TgxlAdvancedPage::networkQuestionText()});
@@ -3476,14 +3480,14 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
 
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.tgxlControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.tgxlControlAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(admitCoreTuner(station, tuner));
-    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    NEREUS_TRY_VERIFY(cw.client.capabilities().txPermitted);
     QVERIFY(!station.receiveOnlyStationPolicy());
     tuner.send(QStringLiteral("S0|state one_by_three=1 antA=1 operate=0 bypass=0"));
-    QTRY_VERIFY(window.tunerModel()->hasAntennaSwitch());
-    QTRY_COMPARE(window.tunerModel()->antennaA(), 1);
+    NEREUS_TRY_VERIFY(window.tunerModel()->hasAntennaSwitch());
+    NEREUS_TRY_COMPARE(window.tunerModel()->antennaA(), 1);
 
     for (int port = 1; port <= 3; ++port) {
         QVERIFY(applet.antennaButtonForTesting(port)->isEnabled());
@@ -3500,7 +3504,7 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     QVERIFY(tuner.waitFor(QStringLiteral("activate ant=3"), mark) >= 0);
     QCOMPARE(window.tunerModel()->antennaA(), 1);
     tuner.send(QStringLiteral("S0|state antA=3"));
-    QTRY_COMPARE(window.tunerModel()->antennaA(), 3);
+    NEREUS_TRY_COMPARE(window.tunerModel()->antennaA(), 3);
 
     // OPERATE from STANDBY: bypass off, then operate on, as a local click.
     // This Core (remoteTgxlControlVersion 3) takes it as one setTgxlOperate
@@ -3512,11 +3516,11 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     const int bypassOff = tuner.waitFor(QStringLiteral("bypass=0"), operateMark);
     const int operateOn = tuner.waitFor(QStringLiteral("operate=1"), operateMark);
     QVERIFY(bypassOff >= 0 && operateOn > bypassOff);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(tuner.commands.mid(operateMark).count(QStringLiteral("bypass=0")), 1);
     QCOMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("STANDBY"));
     tuner.send(QStringLiteral("S0|state operate=1 bypass=0"));
-    QTRY_COMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("OPERATE"));
+    NEREUS_TRY_COMPARE(applet.operateButtonForTesting()->text(), QStringLiteral("OPERATE"));
     // OPERATE to BYPASS.
     const int bypassMark = tuner.commands.size();
     applet.operateButtonForTesting()->click();
@@ -3534,14 +3538,14 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     mox->setMoxCheck({});
     const auto expectOnAir = [&] {
         for (int port = 1; port <= 3; ++port) {
-            QTRY_VERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+            NEREUS_TRY_VERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
             QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(), TunerApplet::onAirReason());
         }
         QVERIFY(!applet.operateButtonForTesting()->isEnabled());
         QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::onAirReason());
     };
     const auto expectOffAir = [&] {
-        QTRY_VERIFY(applet.antennaButtonForTesting(2)->isEnabled());
+        NEREUS_TRY_VERIFY(applet.antennaButtonForTesting(2)->isEnabled());
         QVERIFY(applet.antennaButtonForTesting(2)->toolTip().isEmpty());
         QVERIFY(applet.operateButtonForTesting()->isEnabled());
         QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
@@ -3552,24 +3556,24 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
         // The Core never writes its transmit model's MOX latch from here.
         QVERIFY(!station.transmitModel().isMox());
         QVERIFY(station.isTransmitting());
-        QTRY_VERIFY(window.isTransmitting());
+        NEREUS_TRY_VERIFY(window.isTransmitting());
         expectOnAir();
         if (QTest::currentTestFailed()) { return; }
         QVERIFY(OperatorWording::isPlain(TunerApplet::onAirReason()));
         const int airMark = tuner.commands.size();
         const int refusedBefore = refused.count();
         QVERIFY(cw.client.requestTgxlAntenna(2).sent);
-        QTRY_COMPARE(refused.count(), refusedBefore + 1);
+        NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 1);
         QCOMPARE(refused.last().at(0).toString(), QStringLiteral("tgxl"));
         QCOMPARE(refused.last().at(1).toString(), TunerApplet::onAirReason());
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         for (int i = airMark; i < tuner.commands.size(); ++i) {
             QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("activate")),
                      qPrintable(tuner.commands.at(i)));
         }
         if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
-        QTRY_VERIFY(!station.isTransmitting());
-        QTRY_VERIFY(!window.isTransmitting());
+        NEREUS_TRY_VERIFY(!station.isTransmitting());
+        NEREUS_TRY_VERIFY(!window.isTransmitting());
         expectOffAir();
         if (QTest::currentTestFailed()) { return; }
     }
@@ -3577,11 +3581,11 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     // R-R3-49 (parity Task 1): the Core's TUNE and its two-tone test put
     // the radio on the air too; the window hears both (isCoreOnAir).
     station.transmitModel().setTune(true);
-    QTRY_VERIFY(window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(window.isCoreOnAir());
     expectOnAir();
     if (QTest::currentTestFailed()) { return; }
     station.transmitModel().setTune(false);
-    QTRY_VERIFY(!window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!window.isCoreOnAir());
     expectOffAir();
     if (QTest::currentTestFailed()) { return; }
     {
@@ -3591,24 +3595,24 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
         twoTone->setTxChannel(&tx);
         twoTone->setSettleDelaysMs(0, 0);
         twoTone->setActive(true);
-        QTRY_VERIFY(twoTone->isActive());
-        QTRY_VERIFY(window.pureSignalFacade()->twoToneOn());
+        NEREUS_TRY_VERIFY(twoTone->isActive());
+        NEREUS_TRY_VERIFY(window.pureSignalFacade()->twoToneOn());
         expectOnAir();
         if (QTest::currentTestFailed()) { return; }
         twoTone->setActive(false);
-        QTRY_VERIFY(!twoTone->isActive());
-        QTRY_VERIFY(mox->state() == MoxState::Rx);
+        NEREUS_TRY_VERIFY(!twoTone->isActive());
+        NEREUS_TRY_VERIFY(mox->state() == MoxState::Rx);
         twoTone->setTxChannel(nullptr);
     }
-    QTRY_VERIFY(!window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!window.isCoreOnAir());
     expectOffAir();
     if (QTest::currentTestFailed()) { return; }
 
     // The link gone: back to the transmit gate, with its reason.
     stationEnd->closeLink(QStringLiteral("test: Core lost"));
-    QTRY_VERIFY(!cw.client.tgxlControlAvailable());
+    NEREUS_TRY_VERIFY(!cw.client.tgxlControlAvailable());
     window.reportStationLinkStateChanged();
-    QTRY_VERIFY(!applet.antennaButtonForTesting(1)->isEnabled());
+    NEREUS_TRY_VERIFY(!applet.antennaButtonForTesting(1)->isEnabled());
     QCOMPARE(applet.antennaButtonForTesting(1)->toolTip(), transmitReason);
 }
 
@@ -3707,14 +3711,14 @@ void RemotePeripheralsTest::remoteWindowMovesTheTunerRelaysThroughTheCore()
 
     // Before the Core admits a tuner the bars do not scroll.
     cw.connect(this);
-    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.tgxlFullControlAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(!applet.relayBarForTesting(0)->isScrollEnabled());
     QVERIFY(admitCoreTuner(station, tuner));
     QVERIFY(station.receiveOnlyStationPolicy());
-    QTRY_VERIFY(window.tunerModel()->hasDirectConnection());
+    NEREUS_TRY_VERIFY(window.tunerModel()->hasDirectConnection());
     for (int relay = 0; relay < 3; ++relay) {
-        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+        NEREUS_TRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
         QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
     }
     QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
@@ -3726,8 +3730,8 @@ void RemotePeripheralsTest::remoteWindowMovesTheTunerRelaysThroughTheCore()
     QVERIFY(tuner.waitFor(QStringLiteral("tune relay=0 move=1"), mark) >= 0);
     QCOMPARE(applet.relayBarForTesting(0)->value(), 0);
     tuner.send(QStringLiteral("S0|state relayC1=42 relayL=17 relayC2=3"));
-    QTRY_COMPARE(window.tunerModel()->relayC1(), 42);
-    QTRY_COMPARE(applet.relayBarForTesting(0)->value(), 42);
+    NEREUS_TRY_COMPARE(window.tunerModel()->relayC1(), 42);
+    NEREUS_TRY_COMPARE(applet.relayBarForTesting(0)->value(), 42);
     QCOMPARE(applet.relayBarForTesting(1)->value(), 17);
     mark = tuner.commands.size();
     wheel(applet.relayBarForTesting(1), -120);
@@ -3748,29 +3752,29 @@ void RemotePeripheralsTest::remoteWindowMovesTheTunerRelaysThroughTheCore()
     mox->setMoxCheck({});
     for (int keying = 0; keying < 2; ++keying) {
         if (keying == 0) { mox->setMox(true); } else { mox->onMicPttFromRadio(true); }
-        QTRY_VERIFY(window.isCoreOnAir());
+        NEREUS_TRY_VERIFY(window.isCoreOnAir());
         for (int relay = 0; relay < 3; ++relay) {
-            QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+            NEREUS_TRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
             QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::onAirReason());
         }
         const int before = relayCommandCount(tuner);
         wheel(applet.relayBarForTesting(0), 120);
         const int refusedBefore = refused.count();
         QVERIFY(cw.client.requestTgxlRelayMove(0, 1).sent);
-        QTRY_COMPARE(refused.count(), refusedBefore + 1);
+        NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 1);
         QCOMPARE(refused.last().at(0).toString(), QStringLiteral("tgxl"));
         QCOMPARE(refused.last().at(1).toString(), TunerApplet::onAirReason());
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         QCOMPARE(relayCommandCount(tuner), before);
         if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
-        QTRY_VERIFY(!window.isCoreOnAir());
-        QTRY_VERIFY(applet.relayBarForTesting(0)->isScrollEnabled());
+        NEREUS_TRY_VERIFY(!window.isCoreOnAir());
+        NEREUS_TRY_VERIFY(applet.relayBarForTesting(0)->isScrollEnabled());
         QVERIFY(applet.relayBarForTesting(0)->toolTip().isEmpty());
     }
     // A bad request is not understood, in the Core's words.
     const int refusedBefore = refused.count();
     QVERIFY(cw.client.requestTgxlRelayMove(3, 1).sent);
-    QTRY_COMPARE(refused.count(), refusedBefore + 1);
+    NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 1);
     QCOMPARE(refused.last().at(1).toString(),
              QStringLiteral("The request to move a Tuner Genius relay was not understood."));
     QVERIFY(!station.transmitModel().isTune());
@@ -3819,7 +3823,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
             && !station.tgxlConnection()->isConnected();
     };
     cw.connect(this);
-    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.tgxlFullControlAvailable());
     window.reportStationLinkStateChanged();
 
     SetupDialog dialog(&window);
@@ -3831,7 +3835,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     auto* port = page->findChild<QSpinBox*>(QStringLiteral("tgxlPortSpin"));
     auto* scan = page->findChild<QPushButton*>(QStringLiteral("tgxlScanButton"));
     QVERIFY(host && port && scan);
-    QTRY_VERIFY(scan->isEnabled());
+    NEREUS_TRY_VERIFY(scan->isEnabled());
     QVERIFY(OperatorWording::isPlain(scan->toolTip()));
     QVERIFY(host->isEnabled());
 
@@ -3840,12 +3844,12 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     auto* scanDialog = page->findChild<LanScanDialog*>(QStringLiteral("tgxlCoreScanDialog"));
     QVERIFY(scanDialog);
     LanDiscovery* coreScan = nullptr;
-    QTRY_VERIFY((coreScan = station.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")))
+    NEREUS_TRY_VERIFY((coreScan = station.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")))
                 != nullptr);
     coreScan->injectDatagramForTesting(
         QStringLiteral("TunerGeniusXL ip=192.0.2.44 v=1.2.17 serial=9911-2 nickname=Shack_TGXL"),
         9010);
-    QTRY_VERIFY(scanDialog->rowCountForTesting() >= 1);
+    NEREUS_TRY_VERIFY(scanDialog->rowCountForTesting() >= 1);
     QVERIFY(OperatorWording::isPlain(scanDialog->statusTextForTesting()));
     auto* table = scanDialog->findChild<QTableWidget*>();
     QVERIFY(table);
@@ -3860,24 +3864,24 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     scanDialog->pickRowForTesting(row);
     QCOMPARE(host->text(), QStringLiteral("192.0.2.44"));
     QCOMPARE(port->value(), 9010);
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
                  QStringLiteral("192.0.2.44"));
-    QTRY_COMPARE(window.tunerModel()->configuredHost(), QStringLiteral("192.0.2.44"));
+    NEREUS_TRY_COMPARE(window.tunerModel()->configuredHost(), QStringLiteral("192.0.2.44"));
     QVERIFY(notDialled());
 
     // A Host typed without Connect reaches the Core when editing finishes.
     host->clear();
     QTest::keyClicks(host, QStringLiteral("192.0.2.77"));
     emit host->editingFinished();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
                  QStringLiteral("192.0.2.77"));
     // A Port changed and left unsent reaches the Core when Setup closes.
     port->setValue(9055);
     QCOMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualPort")), QStringLiteral("9010"));
     dialog.close();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualPort")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualPort")),
                  QStringLiteral("9055"));
-    QTRY_COMPARE(window.tunerModel()->configuredPort(), 9055);
+    NEREUS_TRY_COMPARE(window.tunerModel()->configuredPort(), 9055);
     QVERIFY(refused.isEmpty());
     QVERIFY(notDialled());
 
@@ -3897,13 +3901,13 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     window.reportStationLinkStateChanged();
     auto* onAirScan = onAirPage.findChild<QPushButton*>(QStringLiteral("tgxlScanButton"));
     auto* onAirHost = onAirPage.findChild<QLineEdit*>(QStringLiteral("tgxlHostEdit"));
-    QTRY_VERIFY(onAirScan->isEnabled());
+    NEREUS_TRY_VERIFY(onAirScan->isEnabled());
     const QString offAirScanTip = onAirScan->toolTip();
     MoxController* const mox = station.moxController();
     QVERIFY(mox);
     mox->setMoxCheck({});
     mox->setMox(true);
-    QTRY_VERIFY(window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(window.isCoreOnAir());
     QVERIFY(onAirScan->isEnabled());
     QCOMPARE(onAirScan->toolTip(), offAirScanTip);
     QVERIFY(onAirHost->isEnabled());
@@ -3912,14 +3916,14 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     QSignalSpy scanned(&window, &RadioModel::stationTgxlLanScanFinished);
     QVERIFY(cw.client.requestTgxlLanScan().sent);
     QVERIFY(cw.client.requestTgxlAddress(QStringLiteral("192.0.2.88"), 9010).sent);
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("TGXL_ManualIp")),
                  QStringLiteral("192.0.2.88"));
-    QTRY_COMPARE(scanned.count(), 1);
+    NEREUS_TRY_COMPARE(scanned.count(), 1);
     QVERIFY(scanned.last().at(1).toBool());
     QCOMPARE(refused.count(), refusedBefore);
     QVERIFY(window.isCoreOnAir());
     mox->setMox(false);
-    QTRY_VERIFY(!window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!window.isCoreOnAir());
     QVERIFY(onAirScan->isEnabled());
     QVERIFY(onAirHost->isEnabled());
 
@@ -3931,11 +3935,11 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     QTest::keyClick(onAirHost, Qt::Key_Backspace);
     QVERIFY(onAirHost->text().isEmpty());
     emit onAirHost->editingFinished();
-    QTRY_VERIFY(station.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
-    QTRY_VERIFY(window.tunerModel()->configuredHost().isEmpty());
+    NEREUS_TRY_VERIFY(station.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
+    NEREUS_TRY_VERIFY(window.tunerModel()->configuredHost().isEmpty());
     QCOMPARE(refused.count(), refusedBeforeBlank);
     station.applyPeripheralsForTest();
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QVERIFY(notDialled());
 }
 
@@ -3958,10 +3962,10 @@ void RemotePeripheralsTest::remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore(
     applet.setTransmitPermitted(
         false, QStringLiteral("Remote transmit controls are not available from this Core."));
     cw.connect(this);
-    QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.tgxlFullControlAvailable());
     window.reportStationLinkStateChanged();
     QVERIFY(admitCoreTuner(station, tuner));
-    QTRY_VERIFY(window.tunerModel()->hasDirectConnection());
+    NEREUS_TRY_VERIFY(window.tunerModel()->hasDirectConnection());
 
     const auto action = [](QMenu* menu, const QString& text) -> QAction* {
         for (QAction* a : menu->actions()) {
@@ -3995,7 +3999,7 @@ void RemotePeripheralsTest::remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore(
     QCOMPARE(applet.relayBarForTesting(0)->value(), 11);
     QCOMPARE(applet.relayBarForTesting(1)->value(), 22);
     QCOMPARE(applet.relayBarForTesting(2)->value(), 33);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     for (int i = mark; i < tuner.commands.size(); ++i) {
         QVERIFY2(tuner.commands.at(i) == QStringLiteral("status")
                      || tuner.commands.at(i).startsWith(QStringLiteral("keepalive"))
@@ -4005,7 +4009,7 @@ void RemotePeripheralsTest::remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore(
 
     // Copy diagnostics: the Core's connection, not this computer's.
     QVERIFY(!window.tgxlConnection()->isConnected());
-    QTRY_VERIFY(window.accessoryDataModel()->tgxlFramesIn() > 0);
+    NEREUS_TRY_VERIFY(window.accessoryDataModel()->tgxlFramesIn() > 0);
     const QString text = TunerApplet::coreDiagnosticsText(&window);
     QVERIFY2(text.contains(QStringLiteral("Connected: Yes")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("Serial: 241288-1")), qPrintable(text));
@@ -4094,7 +4098,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     };
 
     cw.connect(this);
-    QTRY_VERIFY(cw.client.pgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.pgxlFullControlAvailable());
     window.reportStationLinkStateChanged();
     // Before the Core admits an amp: both wait, saying why.
     const QString notConnected = QStringLiteral("The Core is not connected to the Power Genius.");
@@ -4105,14 +4109,14 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     QVERIFY(OperatorWording::isPlain(notConnected));
 
     QVERIFY(admitCoreAmp(station, amp));
-    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    NEREUS_TRY_VERIFY(cw.client.capabilities().txPermitted);
     QVERIFY(!station.receiveOnlyStationPolicy());
     amp.send(QStringLiteral("S0|status state=STANDBY"));
-    QTRY_COMPARE(window.amplifierModel()->deviceState(), QStringLiteral("STANDBY"));
-    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_COMPARE(window.amplifierModel()->deviceState(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
     QCOMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
     QVERIFY(applet.operateButtonToolTipForTesting().isEmpty());
-    QTRY_VERIFY(tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(tabOperate->isEnabled());
     QCOMPARE(tabOperate->text(), QStringLiteral("Operate"));
     QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
 
@@ -4122,14 +4126,14 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
     QCOMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
     amp.send(QStringLiteral("S0|status state=OPERATE"));
-    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
-    QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+    NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
     // The tab's Operate: standby.
     tabOperate->click();
     QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
     amp.send(QStringLiteral("S0|status state=STANDBY"));
-    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
-    QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+    NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
     QCOMPARE(operateLines(), (QStringList{QStringLiteral("operate=1"),
                                           QStringLiteral("operate=0")}));
     QVERIFY(refused.isEmpty());
@@ -4145,31 +4149,31 @@ void RemotePeripheralsTest::remoteWindowOperatesTheAmpThroughTheCore()
     mox->setMoxCheck({});
     for (int keying = 0; keying < 2; ++keying) {
         if (keying == 0) { mox->setMox(true); } else { mox->onMicPttFromRadio(true); }
-        QTRY_VERIFY(window.isCoreOnAir());
-        QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+        NEREUS_TRY_VERIFY(window.isCoreOnAir());
+        NEREUS_TRY_VERIFY(!applet.operateButtonEnabledForTesting());
         QCOMPARE(applet.operateButtonToolTipForTesting(), RadioModel::onAirReason());
-        QTRY_VERIFY(!tabOperate->isEnabled());
+        NEREUS_TRY_VERIFY(!tabOperate->isEnabled());
         QCOMPARE(tabOperate->toolTip(), RadioModel::onAirReason());
         applet.clickOperateForTesting();
         QVERIFY(QMetaObject::invokeMethod(&page, "onRemotePgxlOperateClicked",
                                           Qt::DirectConnection));
         const int refusedBefore = refused.count();
         QVERIFY(cw.client.requestPgxlOperate(true).sent);
-        QTRY_COMPARE(refused.count(), refusedBefore + 1);
+        NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 1);
         QCOMPARE(refused.last().at(0).toString(), QStringLiteral("pgxl"));
         QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
-        QTest::qWait(100);
+        NereusSDR::Test::settleSession();
         QCOMPARE(refused.count(), refusedBefore + 1);
         QVERIFY(sliceRefused.isEmpty());
         QCOMPARE(operateLines().size(), 2);
         if (keying == 0) { mox->setMox(false); } else { mox->onMicPttFromRadio(false); }
-        QTRY_VERIFY(!window.isCoreOnAir());
-        QTRY_VERIFY(applet.operateButtonEnabledForTesting());
-        QTRY_VERIFY(tabOperate->isEnabled());
+        NEREUS_TRY_VERIFY(!window.isCoreOnAir());
+        NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
+        NEREUS_TRY_VERIFY(tabOperate->isEnabled());
     }
 
     // Copy diagnostics: the Core's connection, not this computer's.
-    QTRY_VERIFY(window.accessoryDataModel()->pgxlFramesIn() > 0);
+    NEREUS_TRY_VERIFY(window.accessoryDataModel()->pgxlFramesIn() > 0);
     const QString text = AmpApplet::coreDiagnosticsText(&window);
     QVERIFY2(text.contains(QStringLiteral("Connected: Yes")), qPrintable(text));
     QVERIFY2(text.contains(QStringLiteral("Serial: 10-200/24-0046")), qPrintable(text));
@@ -4217,7 +4221,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
             && station.pgxlConnection()->socketAttemptToken() == token;
     };
     cw.connect(this);
-    QTRY_VERIFY(cw.client.pgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.pgxlFullControlAvailable());
     window.reportStationLinkStateChanged();
 
     SetupDialog dialog(&window);
@@ -4229,7 +4233,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     auto* port = page->findChild<QSpinBox*>(QStringLiteral("pgxlPortSpin"));
     auto* scan = page->findChild<QPushButton*>(QStringLiteral("pgxlScanButton"));
     QVERIFY(host && port && scan);
-    QTRY_VERIFY(scan->isEnabled());
+    NEREUS_TRY_VERIFY(scan->isEnabled());
     QVERIFY(OperatorWording::isPlain(scan->toolTip()));
     QVERIFY(host->isEnabled());
 
@@ -4239,7 +4243,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     QVERIFY(scanDialog);
     QVERIFY(OperatorWording::isPlain(scanDialog->statusTextForTesting()));
     LanDiscovery* coreScan = nullptr;
-    QTRY_VERIFY((coreScan = station.findChild<LanDiscovery*>(QStringLiteral("pgxlLanScan")))
+    NEREUS_TRY_VERIFY((coreScan = station.findChild<LanDiscovery*>(QStringLiteral("pgxlLanScan")))
                 != nullptr);
     coreScan->injectDatagramForTesting(
         QStringLiteral("PowerGeniusXL ip=192.0.2.45 v=3.8.9 serial=5501-7 nickname=Shack_Amp"),
@@ -4247,7 +4251,7 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     coreScan->injectDatagramForTesting(
         QStringLiteral("TunerGeniusXL ip=192.0.2.44 v=1.2.17 serial=9911-2 nickname=Tuner"),
         9010);
-    QTRY_VERIFY(scanDialog->rowCountForTesting() >= 1);
+    NEREUS_TRY_VERIFY(scanDialog->rowCountForTesting() >= 1);
     auto* table = scanDialog->findChild<QTableWidget*>();
     QVERIFY(table);
     int row = -1;
@@ -4261,24 +4265,24 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     scanDialog->pickRowForTesting(row);
     QCOMPARE(host->text(), QStringLiteral("192.0.2.45"));
     QCOMPARE(port->value(), 9008);
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
                  QStringLiteral("192.0.2.45"));
-    QTRY_COMPARE(window.amplifierModel()->configuredHost(), QStringLiteral("192.0.2.45"));
+    NEREUS_TRY_COMPARE(window.amplifierModel()->configuredHost(), QStringLiteral("192.0.2.45"));
     QVERIFY(notDialled());
 
     // A Host typed without Connect reaches the Core when editing finishes.
     host->clear();
     QTest::keyClicks(host, QStringLiteral("192.0.2.77"));
     emit host->editingFinished();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
                  QStringLiteral("192.0.2.77"));
     // A Port changed and left unsent reaches the Core when Setup closes.
     port->setValue(9055);
     QCOMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualPort")), QStringLiteral("9008"));
     dialog.close();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualPort")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualPort")),
                  QStringLiteral("9055"));
-    QTRY_COMPARE(window.amplifierModel()->configuredPort(), 9055);
+    NEREUS_TRY_COMPARE(window.amplifierModel()->configuredPort(), 9055);
     QVERIFY(refused.isEmpty());
     QVERIFY(notDialled());
 
@@ -4297,13 +4301,13 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     window.reportStationLinkStateChanged();
     auto* onAirScan = onAirPage.findChild<QPushButton*>(QStringLiteral("pgxlScanButton"));
     auto* onAirHost = onAirPage.findChild<QLineEdit*>(QStringLiteral("pgxlHostEdit"));
-    QTRY_VERIFY(onAirScan->isEnabled());
+    NEREUS_TRY_VERIFY(onAirScan->isEnabled());
     const QString offAirScanTip = onAirScan->toolTip();
     MoxController* const mox = station.moxController();
     QVERIFY(mox);
     mox->setMoxCheck({});
     mox->setMox(true);
-    QTRY_VERIFY(window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(window.isCoreOnAir());
     QVERIFY(onAirScan->isEnabled());
     QCOMPARE(onAirScan->toolTip(), offAirScanTip);
     QVERIFY(onAirHost->isEnabled());
@@ -4312,14 +4316,14 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     QSignalSpy scanned(&window, &RadioModel::stationPgxlLanScanFinished);
     QVERIFY(cw.client.requestPgxlLanScan().sent);
     QVERIFY(cw.client.requestPgxlAddress(QStringLiteral("192.0.2.88"), 9008).sent);
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("PGXL_ManualIp")),
                  QStringLiteral("192.0.2.88"));
-    QTRY_COMPARE(scanned.count(), 1);
+    NEREUS_TRY_COMPARE(scanned.count(), 1);
     QVERIFY(scanned.last().at(1).toBool());
     QCOMPARE(refused.count(), refusedBefore);
     QVERIFY(window.isCoreOnAir());
     mox->setMox(false);
-    QTRY_VERIFY(!window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!window.isCoreOnAir());
     QVERIFY(onAirScan->isEnabled());
     QVERIFY(onAirHost->isEnabled());
     QVERIFY(notDialled());
@@ -4332,11 +4336,11 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     QTest::keyClick(onAirHost, Qt::Key_Backspace);
     QVERIFY(onAirHost->text().isEmpty());
     emit onAirHost->editingFinished();
-    QTRY_VERIFY(station.peripheralValue(QStringLiteral("PGXL_ManualIp")).isEmpty());
-    QTRY_VERIFY(window.amplifierModel()->configuredHost().isEmpty());
+    NEREUS_TRY_VERIFY(station.peripheralValue(QStringLiteral("PGXL_ManualIp")).isEmpty());
+    NEREUS_TRY_VERIFY(window.amplifierModel()->configuredHost().isEmpty());
     QCOMPARE(refused.count(), refusedBeforeBlank);
     station.applyPeripheralsForTest();
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QVERIFY(notDialled());
 }
 
@@ -4368,9 +4372,9 @@ void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
     local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
     QVERIFY(amp.accept());
     amp.send(QStringLiteral("V3.8.9"));
-    QTRY_VERIFY(local.pgxlConnection()->isConnected());
+    NEREUS_TRY_VERIFY(local.pgxlConnection()->isConnected());
     amp.send(QStringLiteral("S0|status state=STANDBY"));
-    QTRY_VERIFY(operate->isEnabled());
+    NEREUS_TRY_VERIFY(operate->isEnabled());
     QCOMPARE(operate->text(), QStringLiteral("Operate"));
     QVERIFY(OperatorWording::isPlain(operate->toolTip()));
 
@@ -4379,23 +4383,23 @@ void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
     QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
     // Task 77 fix round 4 (Minor 3): until the amp reports operate, the tab
     // offers Standby (the way out of an amp that never gets there).
-    QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
+    NEREUS_TRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     amp.send(QStringLiteral("S0|status state=OPERATE"));
-    QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
+    NEREUS_TRY_COMPARE(operate->text(), QStringLiteral("Standby"));
     QVERIFY(OperatorWording::isPlain(operate->toolTip()));
     // Standby.
     operate->click();
     QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
     amp.send(QStringLiteral("S0|status state=STANDBY"));
-    QTRY_COMPARE(operate->text(), QStringLiteral("Operate"));
+    NEREUS_TRY_COMPARE(operate->text(), QStringLiteral("Operate"));
     QCOMPARE(operateLines(), (QStringList{QStringLiteral("operate=1"),
                                           QStringLiteral("operate=0")}));
     QVERIFY(!local.isTransmitting());
 
     // The amp goes away: disabled with the reason again.
     amp.peer->disconnectFromHost();
-    QTRY_VERIFY(!local.pgxlConnection()->isConnected());
-    QTRY_VERIFY(!operate->isEnabled());
+    NEREUS_TRY_VERIFY(!local.pgxlConnection()->isConnected());
+    NEREUS_TRY_VERIFY(!operate->isEnabled());
     QCOMPARE(operate->toolTip(), notConnected);
     local.pgxlConnection()->disconnect();
 }
@@ -4425,12 +4429,12 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
 
     LoopbackTransport* stationEnd = cw.connect(this);
-    QTRY_VERIFY(cw.client.rfKitFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.rfKitFullControlAvailable());
     QVERIFY(cw.client.rfKitCountersAvailable());
     window.reportStationLinkStateChanged();
     QString reason;
     QVERIFY(station.setRfKitEnabledForStation(true, &reason));
-    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+    NEREUS_TRY_VERIFY(page.detailTabIsEnabledForTesting());
     // Before the Core admits an amp: they wait, saying why.
     const QString notConnected =
         QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
@@ -4444,19 +4448,19 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
 
     QVERIFY(station.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
                                              &reason));
-    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+    NEREUS_TRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
                               RfKitModel::ConnectionPhase::Connected, 5000);
-    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    NEREUS_TRY_VERIFY(cw.client.capabilities().txPermitted);
     QVERIFY(!station.receiveOnlyStationPolicy());
     // The amp lists its antennas: 1 and 2 usable, 3 disabled, 4 not fitted.
     station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas"), QByteArray(
         R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},)"
         R"({"type":"INTERNAL","number":2,"state":"AVAILABLE"},)"
         R"({"type":"INTERNAL","number":3,"state":"DISABLED"}]})"));
-    QTRY_COMPARE(window.rfKitModel()->antennaPresentMask(), 0x7);
-    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_COMPARE(window.rfKitModel()->antennaPresentMask(), 0x7);
+    NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
     QVERIFY(applet.operateButtonToolTipForTesting().isEmpty());
-    QTRY_VERIFY(applet.antennaButtonIsEnabledForTesting(2));
+    NEREUS_TRY_VERIFY(applet.antennaButtonIsEnabledForTesting(2));
     QVERIFY(applet.antennaButtonIsEnabledForTesting(1));
     const QString unavailable =
         QStringLiteral("This antenna is not available on the RF-Kit amplifier.");
@@ -4464,38 +4468,38 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     QCOMPARE(applet.antennaButtonToolTipForTesting(3), unavailable);
     QVERIFY(!applet.antennaButtonIsEnabledForTesting(4));
     QVERIFY(OperatorWording::isPlain(unavailable));
-    QTRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(page.setTciButtonForTesting()->toolTip()));
 
     // B1.7: OPERATE switches the Core's amp; the button follows the amp's
     // report, not the click.
-    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
     applet.clickOperateButtonForTesting();
-    QTRY_COMPARE(amp.writes, QStringList{
+    NEREUS_TRY_COMPARE(amp.writes, QStringList{
         QStringLiteral(R"(PUT /operate-mode {"operate_mode":"OPERATE"})")});
-    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
     QVERIFY(window.rfKitModel()->operate());
     applet.clickOperateButtonForTesting();
-    QTRY_COMPARE(amp.writes.size(), 2);
+    NEREUS_TRY_COMPARE(amp.writes.size(), 2);
     QCOMPARE(amp.writes.at(1), QStringLiteral(R"(PUT /operate-mode {"operate_mode":"STANDBY"})"));
-    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
 
     // B1.8: ANT 2 switches the Core's amp and lights when the amp says so.
     applet.clickAntennaButtonForTesting(2);
-    QTRY_COMPARE(amp.writes.size(), 3);
+    NEREUS_TRY_COMPARE(amp.writes.size(), 3);
     QCOMPARE(amp.writes.at(2),
              QStringLiteral(R"(PUT /antennas/active {"number":2,"type":"INTERNAL"})"));
-    QTRY_COMPARE(window.rfKitModel()->activeAntennaNumber(), 2);
-    QTRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
+    NEREUS_TRY_COMPARE(window.rfKitModel()->activeAntennaNumber(), 2);
+    NEREUS_TRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
     QVERIFY(!applet.antennaButtonIsActiveForTesting(1));
 
     // B1.9: Set amp to TCI mode from the page; the amp reports TCI after.
-    QTRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("UDP"));
+    NEREUS_TRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("UDP"));
     page.setTciButtonForTesting()->click();
-    QTRY_COMPARE(amp.writes.size(), 4);
+    NEREUS_TRY_COMPARE(amp.writes.size(), 4);
     QCOMPARE(amp.writes.at(3), QStringLiteral(
         R"(PUT /operational-interface {"operational_interface":"TCI"})"));
-    QTRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("TCI"));
+    NEREUS_TRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("TCI"));
     QVERIFY(refused.isEmpty());
     QCOMPARE(localOperate.count(), 0);   // never this computer's connection
     QCOMPARE(localAntenna.count(), 0);
@@ -4504,7 +4508,7 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     page.hostEditForTesting()->setText(QStringLiteral("192.0.2.77"));
     page.portSpinForTesting()->setValue(8099);
     page.saveButtonForTesting()->click();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
                  QStringLiteral("192.0.2.77"));
     QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualPort")), QStringLiteral("8099"));
     QVERIFY(station.rfKitConnection()->isConnected());
@@ -4513,9 +4517,9 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
 
     // B1.12: the Core's connection counts in Live diagnostics and Copy
     // diagnostics.
-    QTRY_VERIFY_WITH_TIMEOUT(window.accessoryDataModel()->rfkitPollsOk() > 0, 3000);
-    QTRY_VERIFY(window.accessoryDataModel()->rfkitConnectedSinceMs() > 0);
-    QTRY_VERIFY(page.diagnosticsTextForTesting().contains(
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(window.accessoryDataModel()->rfkitPollsOk() > 0, 3000);
+    NEREUS_TRY_VERIFY(window.accessoryDataModel()->rfkitConnectedSinceMs() > 0);
+    NEREUS_TRY_VERIFY(page.diagnosticsTextForTesting().contains(
         QStringLiteral("Polls: %1 OK").arg(window.accessoryDataModel()->rfkitPollsOk())));
     QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since")));
     QVERIFY(!page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since --")));
@@ -4532,8 +4536,8 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     // shows it (the Core's average over its last ten polls).
     QVERIFY(cw.client.rfKitResponseTimeAvailable());
     for (int i = 0; i < 10; ++i) { station.rfKitConnection()->testMarkPollSuccess(250); }
-    QTRY_VERIFY(window.accessoryDataModel()->rfkitRttAvgMs() > 0);
-    QTRY_VERIFY2(page.diagnosticsTextForTesting().contains(
+    NEREUS_TRY_VERIFY(window.accessoryDataModel()->rfkitRttAvgMs() > 0);
+    NEREUS_TRY_VERIFY2(page.diagnosticsTextForTesting().contains(
                      QStringLiteral("RTT %1 ms avg")
                          .arg(window.accessoryDataModel()->rfkitRttAvgMs())),
                  qPrintable(page.diagnosticsTextForTesting()));
@@ -4552,12 +4556,12 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     QVERIFY(mox);
     mox->setMoxCheck({});
     mox->setMox(true);
-    QTRY_VERIFY(window.isCoreOnAir());
-    QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!applet.operateButtonEnabledForTesting());
     QCOMPARE(applet.operateButtonToolTipForTesting(), RadioModel::onAirReason());
     QVERIFY(!applet.antennaButtonIsEnabledForTesting(1));
     QCOMPARE(applet.antennaButtonToolTipForTesting(1), RadioModel::onAirReason());
-    QTRY_VERIFY(!page.setTciButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(!page.setTciButtonForTesting()->isEnabled());
     QCOMPARE(page.setTciButtonForTesting()->toolTip(), RadioModel::onAirReason());
     QVERIFY(page.hostEditForTesting()->isEnabled());
     QVERIFY(page.hostEditForTesting()->toolTip() != RadioModel::onAirReason());
@@ -4566,24 +4570,24 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     applet.clickAntennaButtonForTesting(1);
     const int refusedBefore = refused.count();
     QVERIFY(cw.client.requestRfKitOperate(true).sent);
-    QTRY_COMPARE(refused.count(), refusedBefore + 1);
+    NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 1);
     QCOMPARE(refused.last().at(0).toString(), QStringLiteral("rfkit"));
     QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
     QVERIFY(cw.client.requestRfKitTciMode().sent);
-    QTRY_COMPARE(refused.count(), refusedBefore + 2);
+    NEREUS_TRY_COMPARE(refused.count(), refusedBefore + 2);
     QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
     page.hostEditForTesting()->setText(QStringLiteral("192.0.2.78"));
     page.saveButtonForTesting()->click();
-    QTRY_COMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
+    NEREUS_TRY_COMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
                  QStringLiteral("192.0.2.78"));
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(refused.count(), refusedBefore + 2);
     QCOMPARE(amp.writes.size(), 4);
     QVERIFY(window.isCoreOnAir());
     mox->setMox(false);
-    QTRY_VERIFY(!window.isCoreOnAir());
-    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
-    QTRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(!window.isCoreOnAir());
+    NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
     QVERIFY(page.hostEditForTesting()->isEnabled());
 
     // Group B fix wave (I1): a blank Host with Save is kept on the Core, as
@@ -4592,9 +4596,9 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     const int refusedBeforeBlank = refused.count();
     page.hostEditForTesting()->clear();
     page.saveButtonForTesting()->click();
-    QTRY_VERIFY(station.peripheralValue(QStringLiteral("RfKit_ManualIp")).isEmpty());
+    NEREUS_TRY_VERIFY(station.peripheralValue(QStringLiteral("RfKit_ManualIp")).isEmpty());
     QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualPort")), QStringLiteral("8099"));
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(refused.count(), refusedBeforeBlank);
     QVERIFY(station.rfKitConnection()->isConnected());
 
@@ -4667,14 +4671,14 @@ void RemotePeripheralsTest::localRfKitPageShowsTheRemoteReadings()
     RfKitPage page(&local);
     QVERIFY(page.setTciButtonForTesting()->isEnabled());
     local.rfKitConnection()->connectToAmp(QStringLiteral("127.0.0.1"), amp.serverPort());
-    QTRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since")),
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
+    NEREUS_TRY_VERIFY_WITH_TIMEOUT(page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since")),
                              3000);
     QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("Last poll")));
     QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("RTT")));
     QVERIFY(!page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since --")));
     page.setTciButtonForTesting()->click();
-    QTRY_VERIFY(amp.writes.contains(QStringLiteral(
+    NEREUS_TRY_VERIFY(amp.writes.contains(QStringLiteral(
         R"(PUT /operational-interface {"operational_interface":"TCI"})")));
     local.rfKitConnection()->disconnect();
     AppSettings::instance().clear();
@@ -4735,10 +4739,10 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
     QVERIFY(amp.accept());
     amp.send(QStringLiteral("V3.8.9"));
-    QTRY_VERIFY(local.pgxlConnection()->isConnected());
+    NEREUS_TRY_VERIFY(local.pgxlConnection()->isConnected());
     amp.send(QStringLiteral("S0|status state=STANDBY"));
     QPushButton* tabOperate = tab.operateButtonForTesting();
-    QTRY_VERIFY(tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(tabOperate->isEnabled());
     QVERIFY(ampApplet.operateButtonEnabledForTesting());
     QVERIFY(rfKit.operateButtonEnabledForTesting());
     QVERIFY(rfKit.antennaButtonIsEnabledForTesting(1));
@@ -4761,10 +4765,10 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     QVERIFY(mox);
     mox->setMoxCheck({});
     mox->setMox(true);
-    QTRY_VERIFY(local.isCoreOnAir());
-    QTRY_VERIFY(!ampApplet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(local.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!ampApplet.operateButtonEnabledForTesting());
     QCOMPARE(ampApplet.operateButtonToolTipForTesting(), onAir);
-    QTRY_VERIFY(!tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(!tabOperate->isEnabled());
     QCOMPARE(tabOperate->toolTip(), onAir);
     QVERIFY(!rfKit.operateButtonEnabledForTesting());
     QCOMPARE(rfKit.operateButtonToolTipForTesting(), onAir);
@@ -4777,7 +4781,7 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     pressDisabled(tabOperate);
     pressDisabled(rfKitButton);
     pressDisabled(rfKitAnt1);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(ampOperate.count(), 0);
     QCOMPARE(rfKitOperate.count(), 0);
     QCOMPARE(rfKitAntenna.count(), 0);
@@ -4789,14 +4793,14 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     QVERIFY(!rfKit.antennaButtonIsEnabledForTesting(1));
 
     mox->setMox(false);
-    QTRY_VERIFY(!local.isCoreOnAir());
-    QTRY_VERIFY(ampApplet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(!local.isCoreOnAir());
+    NEREUS_TRY_VERIFY(ampApplet.operateButtonEnabledForTesting());
     QVERIFY(ampApplet.operateButtonToolTipForTesting().isEmpty());
-    QTRY_VERIFY(tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(tabOperate->isEnabled());
     QVERIFY(rfKit.operateButtonEnabledForTesting());
     QVERIFY(rfKit.operateButtonToolTipForTesting().isEmpty());
     QVERIFY(rfKit.antennaButtonIsEnabledForTesting(1));
-    QTRY_VERIFY(!local.stationOnAirRefusal(nullptr));
+    NEREUS_TRY_VERIFY(!local.stationOnAirRefusal(nullptr));
     ampApplet.clickOperateForTesting();
     QCOMPARE(ampOperate.count(), 1);
     tabOperate->click();
@@ -4821,7 +4825,7 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     applet.setTransmitPermitted(true, QString());
     QVERIFY(admitCoreTuner(station, tuner));
     for (int relay = 0; relay < 3; ++relay) {
-        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+        NEREUS_TRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
     // Task 77 fix round 2: TUNE (it switches the Power Genius to standby
@@ -4830,11 +4834,11 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     MoxController* const coreMox = station.moxController();
     coreMox->setMoxCheck({});
     coreMox->setMox(true);
-    QTRY_VERIFY(station.isCoreOnAir());
-    QTRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(station.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
     QCOMPARE(applet.tuneButtonForTesting()->toolTip(), onAir);
     for (int relay = 0; relay < 3; ++relay) {
-        QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        NEREUS_TRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
         QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), onAir);
     }
     QVERIFY(!applet.operateButtonForTesting()->isEnabled());
@@ -4857,18 +4861,18 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
     wheel(applet.relayBarForTesting(0), 120);
     pressDisabled(applet.operateButtonForTesting());
     pressDisabled(applet.antennaButtonForTesting(2));
-    QTest::qWait(150);
+    NereusSDR::Test::settleSession();
     QVERIFY2(switchCommands(mark).isEmpty(), qPrintable(switchCommands(mark).join(u',')));
 
     coreMox->setMox(false);
-    QTRY_VERIFY(!station.isCoreOnAir());
-    QTRY_VERIFY(!station.stationOnAirRefusal(nullptr));
+    NEREUS_TRY_VERIFY(!station.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!station.stationOnAirRefusal(nullptr));
     for (int relay = 0; relay < 3; ++relay) {
-        QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
+        NEREUS_TRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
         QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
-    QTRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
+    NEREUS_TRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
     QVERIFY(applet.tuneButtonForTesting()->toolTip().isEmpty());
     mark = tuner.commands.size();
     wheel(applet.relayBarForTesting(0), 120);
@@ -4905,10 +4909,10 @@ void RemotePeripheralsTest::localClickRefusedAsTheRadioUnkeysSaysWhy()
     local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
     QVERIFY(amp.accept());
     amp.send(QStringLiteral("V3.8.9"));
-    QTRY_VERIFY(local.pgxlConnection()->isConnected());
+    NEREUS_TRY_VERIFY(local.pgxlConnection()->isConnected());
     amp.send(QStringLiteral("S0|status state=STANDBY"));
     QPushButton* tabOperate = tab.operateButtonForTesting();
-    QTRY_VERIFY(tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(tabOperate->isEnabled());
 
     // Ruling a: the local TCI mode button waits on the air with the reason.
     QPushButton* tci = rfKitPage.setTciButtonForTesting();
@@ -4917,14 +4921,14 @@ void RemotePeripheralsTest::localClickRefusedAsTheRadioUnkeysSaysWhy()
     QVERIFY(mox);
     mox->setMoxCheck({});
     mox->setMox(true);
-    QTRY_VERIFY(local.isCoreOnAir());
-    QTRY_VERIFY(!tci->isEnabledTo(tci->parentWidget()));
+    NEREUS_TRY_VERIFY(local.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!tci->isEnabledTo(tci->parentWidget()));
     QCOMPARE(tci->toolTip(), onAir);
     mox->setMox(false);
-    QTRY_VERIFY(!local.isCoreOnAir());
-    QTRY_VERIFY(tci->isEnabledTo(tci->parentWidget()));
+    NEREUS_TRY_VERIFY(!local.isCoreOnAir());
+    NEREUS_TRY_VERIFY(tci->isEnabledTo(tci->parentWidget()));
     QVERIFY(tci->toolTip().isEmpty());
-    QTRY_VERIFY(!local.stationOnAirRefusal(nullptr));
+    NEREUS_TRY_VERIFY(!local.stationOnAirRefusal(nullptr));
     QCOMPARE(refused.count(), 0);
 
     // Ruling c: the window shows the radio off the air, the Core's rule
@@ -4963,7 +4967,7 @@ void RemotePeripheralsTest::localClickRefusedAsTheRadioUnkeysSaysWhy()
     tuner.relayBarForTesting(0)->setScrollEnabled(true);
     wheel(tuner.relayBarForTesting(0), 120);
     expectReason(8, QStringLiteral("tgxl"));
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(ampOperate.count(), 0);
     QCOMPARE(rfKitOperate.count(), 0);
     QCOMPARE(rfKitAntenna.count(), 0);
@@ -5005,12 +5009,12 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
         local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
         QVERIFY(amp.accept());
         amp.send(QStringLiteral("V3.8.9"));
-        QTRY_VERIFY(local.pgxlConnection()->isConnected());
+        NEREUS_TRY_VERIFY(local.pgxlConnection()->isConnected());
         amp.send(QStringLiteral("S0|status state=STANDBY"));
         QPushButton* tabOperate = tab.operateButtonForTesting();
-        QTRY_VERIFY(tabOperate->isEnabled());
+        NEREUS_TRY_VERIFY(tabOperate->isEnabled());
         QVERIFY(applet.operateButtonEnabledForTesting());
-        QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+        NEREUS_TRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
         QPushButton* ampButton = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
             if (b->text() == QStringLiteral("STANDBY")) { ampButton = b; }
@@ -5020,8 +5024,8 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
         // The tuner reports its sweep: both wait, saying why.
         local.tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
         local.tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=1"));
-        QTRY_VERIFY(local.pgxlSwitchWaitsForTuner());
-        QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+        NEREUS_TRY_VERIFY(local.pgxlSwitchWaitsForTuner());
+        NEREUS_TRY_VERIFY(!applet.operateButtonEnabledForTesting());
         QCOMPARE(applet.operateButtonToolTipForTesting(), tuning);
         QVERIFY(!tabOperate->isEnabled());
         QCOMPARE(tabOperate->toolTip(), tuning);
@@ -5034,50 +5038,50 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
             refused.clear();
         }
         QCOMPARE(toggles.count(), 0);
-        QTest::qWait(50);
+        NereusSDR::Test::settleSession();
         QVERIFY(operateLines().isEmpty());
         local.tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=0"));
-        QTRY_VERIFY(applet.operateButtonEnabledForTesting());
-        QTRY_VERIFY(tabOperate->isEnabled());
+        NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
+        NEREUS_TRY_VERIFY(tabOperate->isEnabled());
 
         // A fault: the applet's button reads STANDBY and sends standby;
         // the tab offers Standby and sends operate=0.
         amp.send(QStringLiteral("S0|status state=FAULT"));
-        QTRY_COMPARE(local.amplifierModel()->state(), AmplifierModel::State::Fault);
+        NEREUS_TRY_COMPARE(local.amplifierModel()->state(), AmplifierModel::State::Fault);
         QCOMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
         QVERIFY(OperatorWording::isPlain(applet.operateButtonToolTipForTesting()));
         QVERIFY(!applet.operateButtonToolTipForTesting().isEmpty());
         applet.clickOperateForTesting();
         QCOMPARE(toggles.count(), 1);
         QCOMPARE(toggles.last().at(0).toBool(), false);
-        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+        NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
         QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
         tabOperate->click();
         QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
         QCOMPARE(operateLines(), QStringList{QStringLiteral("operate=0")});
         amp.send(QStringLiteral("S0|status state=STANDBY"));
-        QTRY_VERIFY(!local.ampChangingOver());
+        NEREUS_TRY_VERIFY(!local.ampChangingOver());
 
         // Round 4 (Minor 3): an amp that took operate=1 and keeps reporting
         // standby: both buttons now send standby, which the next STANDBY
         // report confirms, ending the wait.
-        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+        NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
         tabOperate->click();
         QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
         QVERIFY(local.ampOperateUnconfirmed());
         amp.send(QStringLiteral("S0|status state=STANDBY"));
-        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+        NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
         QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
         const int togglesBefore = toggles.count();
         applet.clickOperateForTesting();
         QCOMPARE(toggles.count(), togglesBefore + 1);
         QCOMPARE(toggles.last().at(0).toBool(), false);
         tabOperate->click();
-        QTRY_COMPARE(operateLines().size(), 3);
+        NEREUS_TRY_COMPARE(operateLines().size(), 3);
         QCOMPARE(operateLines().last(), QStringLiteral("operate=0"));
         amp.send(QStringLiteral("S0|status state=STANDBY"));
-        QTRY_VERIFY(!local.ampChangingOver());
-        QTRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
+        NEREUS_TRY_VERIFY(!local.ampChangingOver());
+        NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Operate"));
     }
 
     // A remote window: the Core's tuner sweeping greys OPERATE with the
@@ -5098,32 +5102,32 @@ void RemotePeripheralsTest::ampOperateWaitsForTheTunerAndAFaultedAmpGoesToStandb
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
     QSignalSpy sliceRefused(&window, &RadioModel::sliceAddRejected);
     cw.connect(this);
-    QTRY_VERIFY(cw.client.pgxlFullControlAvailable());
-    QTRY_VERIFY(cw.client.capabilities().txPermitted);
+    NEREUS_TRY_VERIFY(cw.client.pgxlFullControlAvailable());
+    NEREUS_TRY_VERIFY(cw.client.capabilities().txPermitted);
     window.reportStationLinkStateChanged();
     QVERIFY(admitCoreAmp(station, amp));
     amp.send(QStringLiteral("S0|status state=STANDBY"));
-    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
     station.tunerModel()->applyStationValue(QByteArrayLiteral("isTuning"), true);
-    QTRY_VERIFY(window.tunerModel()->isTuning());
-    QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(window.tunerModel()->isTuning());
+    NEREUS_TRY_VERIFY(!applet.operateButtonEnabledForTesting());
     QCOMPARE(applet.operateButtonToolTipForTesting(), tuning);
-    QTRY_VERIFY(!tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(!tabOperate->isEnabled());
     QCOMPARE(tabOperate->toolTip(), tuning);
     QVERIFY(cw.client.requestPgxlOperate(true).sent);
-    QTRY_COMPARE(refused.count(), 1);
+    NEREUS_TRY_COMPARE(refused.count(), 1);
     QCOMPARE(refused.last().at(0).toString(), QStringLiteral("pgxl"));
     QCOMPARE(refused.last().at(1).toString(), tuning);
-    QTest::qWait(100);
+    NereusSDR::Test::settleSession();
     QCOMPARE(refused.count(), 1);
     QVERIFY(sliceRefused.isEmpty());
     QVERIFY(amp.commands.filter(QRegularExpression(QStringLiteral("^operate"))).isEmpty());
     station.tunerModel()->applyStationValue(QByteArrayLiteral("isTuning"), false);
-    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
-    QTRY_VERIFY(tabOperate->isEnabled());
+    NEREUS_TRY_VERIFY(applet.operateButtonEnabledForTesting());
+    NEREUS_TRY_VERIFY(tabOperate->isEnabled());
     // A fault: the remote tab offers Standby.
     amp.send(QStringLiteral("S0|status state=FAULT"));
-    QTRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
+    NEREUS_TRY_COMPARE(tabOperate->text(), QStringLiteral("Standby"));
     QVERIFY(OperatorWording::isPlain(tabOperate->toolTip()));
 }
 

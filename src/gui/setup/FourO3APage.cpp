@@ -48,6 +48,8 @@
 //                 R-IOS-13): that Operate also waits while the Core's
 //                 Tuner Genius tunes, and a faulted amp is offered Standby.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -211,6 +213,7 @@ QWidget* FourO3APage::buildGeneralTab()
     auto* masterLayout = new QVBoxLayout(masterBox);
     m_masterToggle = new QCheckBox(tr("Enable 4O3A integration"), masterBox);
     m_masterToggle->setObjectName(QStringLiteral("fourO3AMasterToggle"));
+    m_masterToggle->setProperty("nereusSetupId", "catNetwork.fourO3A.enabled");
     m_masterToggle->setToolTip(
         tr("Gates the FlexAPI listener on TCP 4992 and the PGXL / TGXL "
            "auto-connect paths.  Off by default; turn on only when you "
@@ -238,6 +241,7 @@ QWidget* FourO3APage::buildGeneralTab()
     auto* statusLayout = new QHBoxLayout(statusBox);
     m_flexApiStatusLabel = new QLabel(tr("Status: \xE2\x97\x8B Idle"), statusBox);
     m_flexApiStatusLabel->setObjectName(QStringLiteral("fourO3AListenerStatus"));
+    m_flexApiStatusLabel->setProperty("nereusSetupId", "catNetwork.fourO3A.listener");
     m_flexApiStatusLabel->setToolTip(
         tr("Live state of the TCP 4992 SmartSDR API listener.  Reflects "
            "the master toggle above plus any external bind errors."));
@@ -257,6 +261,7 @@ QWidget* FourO3APage::buildGeneralTab()
     // Core's `amplifier` object in a remote window).
     m_pgxlBandFollow = new QLabel(tab);
     m_pgxlBandFollow->setObjectName(QStringLiteral("pgxlBandFollowLabel"));
+    m_pgxlBandFollow->setProperty("nereusSetupId", "catNetwork.fourO3A.pgxlBandFollow");
     m_pgxlBandFollow->setTextFormat(Qt::PlainText);
     m_pgxlBandFollow->setWordWrap(true);
     m_pgxlBandFollow->setStyleSheet(QStringLiteral("color: #9aa5b1; font-size: 11px;"));
