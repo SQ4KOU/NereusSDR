@@ -58,6 +58,10 @@
 //   2026-09-28: slice control and shared listening plan Task 1: each named,
 //               offered and shown slice's incarnation. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: askedListeners, each slice's
+//               listeners when a device that shares slices was asked. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -145,6 +149,12 @@ public:
         /// slice whose control changed hands meanwhile (even back again)
         /// has listeners the operator was not shown.
         QHash<int, quint64> askedRevisions;
+        /// Slice control plan Task 9: for a device that shares slices, the
+        /// listeners of the same slices when asked, by slice id, controller
+        /// first. A slice that gained a listener meanwhile is asked again;
+        /// one that lost a listener is not.
+        QHash<int, QList<QByteArray>> askedListeners;
+        bool listenersShown = false;
         /// takeTransmit (Task 77, ruling 8.7): the holder epoch and whether
         /// the holder was on the air when asked.
         quint64 holderEpoch = 0;

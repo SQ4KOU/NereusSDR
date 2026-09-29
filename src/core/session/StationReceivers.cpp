@@ -72,14 +72,21 @@
 //               receiver's device that is not connected as such. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 9: a refused Add lists the slices
+//               to listen to (usableSlices), a question names each slice's
+//               listeners and asks again when one joined, and every
+//               listener of a closed slice is told. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 #include <limits>
@@ -235,6 +242,34 @@ QString sliceTakenReason(const QString& name, const QStringList& letters)
                                : QStringLiteral("%1 took your slices %2.").arg(name, letterWords);
 }
 
+// Slice control plan Task 9: to a device listening to a slice another
+// device closed.
+QString listenedClosedReason(const QString& why, const QString& name, const QStringList& letters)
+{
+    const QString letterWords = ReceiverPlanner::joinWords(letters);
+    const bool one = letters.size() == 1;
+    if (why == QLatin1String("receiverTaken")) {
+        return one ? QStringLiteral("%1 took the receiver slice %2 was on. You were listening "
+                                    "to it.")
+                         .arg(name, letterWords)
+                   : QStringLiteral("%1 took the receiver slices %2 were on. You were listening "
+                                    "to them.")
+                         .arg(name, letterWords);
+    }
+    if (why == QLatin1String("sliceTaken")) {
+        return one ? QStringLiteral("%1 took slice %2, which you were listening to.")
+                         .arg(name, letterWords)
+                   : QStringLiteral("%1 took slices %2, which you were listening to.")
+                         .arg(name, letterWords);
+    }
+    return one ? QStringLiteral("%1 moved their panadapter. Slice %2, which you were listening "
+                                "to, closed: no receiver was free.")
+                     .arg(name, letterWords)
+               : QStringLiteral("%1 moved their panadapter. Slices %2, which you were listening "
+                                "to, closed: no receiver was free.")
+                     .arg(name, letterWords);
+}
+
 // "Receiver 1" for stream 0 (the several-devices design, 5.4 and 7.3).
 // Slice control plan Task 1: whether `refs` recorded `sliceId` with an
 // incarnation it no longer has (closed, or its id reused by a new slice).
@@ -273,6 +308,43 @@ void recordRevisions(ConfirmStep::Question* question, const SliceOwnership* owne
             }
         }
     }
+}
+
+// Slice control plan Task 9: the listeners of every slice recordRevisions
+// records, for a device that shares slices.
+void recordListeners(ConfirmStep::Question* question, const SliceOwnership* ownership)
+{
+    question->askedListeners.clear();
+    question->listenersShown = true;
+    for (const QList<SliceOwnership::SliceRef>* refs :
+         {&question->namedRefs, &question->choiceRefs, &question->shownRefs}) {
+        for (const SliceOwnership::SliceRef& ref : *refs) {
+            if (ref.sliceId >= 0 && ownership->isLive(ref.sliceId)) {
+                question->askedListeners.insert(ref.sliceId, ownership->listenersOf(ref.sliceId));
+            }
+        }
+    }
+}
+
+// Slice control plan Task 9: whether `sliceId` has a listener now that the
+// question did not show. A listener who left is no reason to ask again; a
+// slice the question did not record is left to the other checks.
+bool listenersGrew(const SliceOwnership* ownership, const ConfirmStep::Question& question,
+                   int sliceId)
+{
+    if (!question.listenersShown) {
+        return false;
+    }
+    const auto it = question.askedListeners.constFind(sliceId);
+    if (it == question.askedListeners.constEnd()) {
+        return false;
+    }
+    for (const QByteArray& device : ownership->listenersOf(sliceId)) {
+        if (!it.value().contains(device)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void appendRefOnce(QList<SliceOwnership::SliceRef>* refs, const SliceOwnership* ownership,
@@ -411,6 +483,13 @@ ReceiverPlanner StationServer::receiverPlanner() const
     return planner;
 }
 
+ReceiverPlanner StationServer::questionPlanner(SessionTransport* transport) const
+{
+    ReceiverPlanner planner = receiverPlanner();
+    planner.setShowListeners(peerHasSliceAccess(transport));
+    return planner;
+}
+
 SessionTransport* StationServer::liveTransportFor(const QByteArray& deviceId) const
 {
     for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
@@ -419,6 +498,23 @@ SessionTransport* StationServer::liveTransportFor(const QByteArray& deviceId) co
         }
     }
     return nullptr;
+}
+
+QString StationServer::usableSlicesJson() const
+{
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    QList<int> ids = ownership->liveSlices();
+    std::sort(ids.begin(), ids.end());
+    QJsonArray usable;
+    for (const int id : std::as_const(ids)) {
+        usable.append(QJsonObject{
+            {QStringLiteral("sliceId"), id},
+            {QStringLiteral("incarnation"), static_cast<qint64>(ownership->incarnation(id))},
+            {QStringLiteral("letter"), ReceiverPlanner::letterOf(id)},
+            {QStringLiteral("controllerDeviceId"), planDevice(ownership->mark(id).owner).wireId},
+        });
+    }
+    return QString::fromUtf8(QJsonDocument(usable).toJson(QJsonDocument::Compact));
 }
 
 QString StationServer::withHolderNames(const QString& reason, const QByteArray& requester) const
@@ -712,6 +808,13 @@ bool StationServer::handleAddWithTake(SessionTransport* transport, const Session
                 // Section 6.4: the refusal names the devices holding them.
                 result.reason = withHolderNames(result.reason, requester);
             }
+            if (!result.accepted && (capFull || receiversFull) && peerHasSliceAccess(transport)) {
+                // Slice control plan Task 9: the live slices it could
+                // listen to instead (slice.listen), each with its
+                // incarnation and controller.
+                result.updates.append(MirrorUpdate{0, QByteArrayLiteral("usableSlices"),
+                                                   MirrorWireKind::Utf8, usableSlicesJson()});
+            }
             answer = result;
             answered = true;
         }
@@ -938,6 +1041,9 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
         }
     }
     recordRevisions(&question, ownership);
+    if (peerHasSliceAccess(transport)) {
+        recordListeners(&question, ownership);
+    }
     m_confirm->ask(question);
     const SessionMessage request =
         SessionMessages::confirmRequest(prompt, QString::fromLatin1(kWaitingReason));
@@ -981,7 +1087,7 @@ void StationServer::askPanMove(SessionTransport* transport, const SessionMessage
         appendRefOnce(&question.shownRefs, m_radioModel->sliceOwnership(), d.sliceId);
     }
     SessionPrompt prompt;
-    prompt.affected = receiverPlanner().affectedJson(check.named);
+    prompt.affected = questionPlanner(transport).affectedJson(check.named);
     prompt.change = change;
     sendQuestion(transport, question, prompt);
 }
@@ -989,7 +1095,7 @@ void StationServer::askPanMove(SessionTransport* transport, const SessionMessage
 bool StationServer::askTake(SessionTransport* transport, const SessionMessage& original,
                             const ReceiverPlanner::TakeRequest& request)
 {
-    const ReceiverPlanner planner = receiverPlanner();
+    const ReceiverPlanner planner = questionPlanner(transport);
     QList<ReceiverPlanner::Choice> choices = planner.receiverChoices(request);
     if (choices.isEmpty()) {
         return false;
@@ -1050,7 +1156,7 @@ bool StationServer::askTakeSlice(SessionTransport* transport, const SessionMessa
         return false;
     }
     QList<ReceiverPlanner::Choice> offered = choices;
-    const ReceiverPlanner planner = receiverPlanner();
+    const ReceiverPlanner planner = questionPlanner(transport);
     const QByteArray requester = m_peers.value(transport).sessionDeviceId;
     bool anyTakeable = false;
     for (ReceiverPlanner::Choice& candidate : offered) {
@@ -1090,22 +1196,30 @@ void StationServer::applyPanMove(const PanMoveCheck& check, const QByteArray& re
     // are placed again (moveStreamWindowFor), as planned.
     QHash<QByteArray, QList<SavedSlice>> closedBy;
     QHash<QByteArray, QList<int>> movedBy;
+    // Slice control plan Task 9: every other listener of a closed slice is
+    // told too.
+    QHash<QByteArray, QList<SavedSlice>> listenedBy;
+    const auto close = [&](int id, const QByteArray& device) {
+        const QList<QByteArray> listeners = m_radioModel->sliceOwnership()->listenersOf(id);
+        SavedSlice closed;
+        if (closeSliceFor(id, saveForAbsentSubject(id), &closed)) {
+            closedBy[device].append(closed);
+            for (const QByteArray& listener : listeners) {
+                if (listener != device) {
+                    listenedBy[listener].append(closed);
+                }
+            }
+        }
+    };
     for (const ReceiverPlanner::Disturbed& d : check.plan.disturbed) {
         if (d.effect == ReceiverPlanner::Effect::Closes) {
-            SavedSlice closed;
-            if (closeSliceFor(d.sliceId, saveForAbsentSubject(d.sliceId), &closed)) {
-                closedBy[d.device].append(closed);
-            }
+            close(d.sliceId, d.device);
         }
     }
     const QList<int> unplaced =
         m_radioModel->moveStreamWindowFor(check.stream, check.centreHz, check.exemptSliceId);
     for (const int id : unplaced) {
-        const QByteArray device = m_radioModel->sliceOwnership()->mark(id).subject();
-        SavedSlice closed;
-        if (closeSliceFor(id, saveForAbsentSubject(id), &closed)) {
-            closedBy[device].append(closed);
-        }
+        close(id, m_radioModel->sliceOwnership()->mark(id).subject());
     }
     for (const ReceiverPlanner::Disturbed& d : check.plan.disturbed) {
         if (d.effect == ReceiverPlanner::Effect::Moves && !unplaced.contains(d.sliceId)
@@ -1134,6 +1248,7 @@ void StationServer::applyPanMove(const PanMoveCheck& check, const QByteArray& re
         notice.reason = sliceClosedReason(planDevice(requester).name, lettersOf(it.value()));
         tellDevice(notice, requester);
     }
+    tellListeners(listenedBy, requester, QStringLiteral("panMove"));
     endOlderWindowsWithoutSlices(closedBy.keys(), requester);
 }
 
@@ -1251,20 +1366,46 @@ bool StationServer::heldFitsNow(const ConfirmStep::Question& question) const
     return false;
 }
 
-QHash<QByteArray, QList<SavedSlice>> StationServer::closeForTake(const QList<int>& sliceIds)
+QHash<QByteArray, QList<SavedSlice>> StationServer::closeForTake(
+    const QList<int>& sliceIds, QHash<QByteArray, QList<SavedSlice>>* listenedBy)
 {
     QHash<QByteArray, QList<SavedSlice>> closedBy;
     for (const int id : sliceIds) {
         const QByteArray device = m_radioModel->sliceOwnership()->mark(id).subject();
+        const QList<QByteArray> listeners = m_radioModel->sliceOwnership()->listenersOf(id);
         SavedSlice closed;
         // Ruling 5.2's last paragraph: a slice held for a device that has
         // left is saved in its layout store; its notice has nobody to
         // reach, so the store is where its owner finds it again.
         if (closeSliceFor(id, saveForAbsentSubject(id), &closed)) {
             closedBy[device].append(closed);
+            if (listenedBy != nullptr) {
+                for (const QByteArray& listener : listeners) {
+                    if (listener != device) {
+                        (*listenedBy)[listener].append(closed);
+                    }
+                }
+            }
         }
     }
     return closedBy;
+}
+
+void StationServer::tellListeners(const QHash<QByteArray, QList<SavedSlice>>& listenedBy,
+                                  const QByteArray& by, const QString& why)
+{
+    const QString name = planDevice(by).name;
+    for (auto it = listenedBy.cbegin(); it != listenedBy.cend(); ++it) {
+        if (it.key() == by) {
+            continue;
+        }
+        ConfirmStep::Notice notice;
+        notice.device = it.key();
+        notice.prompt.kind = QStringLiteral("sliceClosed");
+        notice.prompt.slices = savedSlicesJson(it.value());
+        notice.reason = listenedClosedReason(why, name, lettersOf(it.value()));
+        tellDevice(notice, by);
+    }
 }
 
 void StationServer::tellTaken(const QHash<QByteArray, QList<SavedSlice>>& closedBy,
@@ -1638,13 +1779,14 @@ SessionMessage StationServer::proceedPanMove(SessionTransport* transport,
             // Slice control fix wave: control that changed hands and came
             // back counts as grown; its listeners were never shown.
             grew = grew || !question.shown.contains(key)
-                || revisionChanged(m_radioModel->sliceOwnership(), question, d.sliceId);
+                || revisionChanged(m_radioModel->sliceOwnership(), question, d.sliceId)
+                || listenersGrew(m_radioModel->sliceOwnership(), question, d.sliceId);
         }
         if (grew) {
             // A device or an effect the operator was not shown: ask again,
             // apply nothing.
             SessionPrompt prompt;
-            prompt.affected = receiverPlanner().affectedJson(check.named);
+            prompt.affected = questionPlanner(transport).affectedJson(check.named);
             if (question.original.kind == SessionMessageKind::PropertyWrite) {
                 const SliceModel* slice = m_radioModel->sliceById(check.exemptSliceId);
                 if (slice != nullptr) {
@@ -1725,7 +1867,8 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
             grew = grew || !shown.contains(id)
                 || !question.shown.contains(shownVictimKey(
                     choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))
-                || revisionChanged(m_radioModel->sliceOwnership(), question, id);
+                || revisionChanged(m_radioModel->sliceOwnership(), question, id)
+                || listenersGrew(m_radioModel->sliceOwnership(), question, id);
         }
     }
     if (grew) {
@@ -1760,7 +1903,8 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
     }
     // Ruling 6.7: every other device's slice on it closes, then the held
     // request is applied on the freed receiver, before anyone can claim it.
-    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake(now->closes);
+    QHash<QByteArray, QList<SavedSlice>> listenedBy;
+    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake(now->closes, &listenedBy);
     if (!m_radioModel->slicesOnStream(target).isEmpty()
         && (request.need == ReceiverPlanner::Need::Retune
             || request.need == ReceiverPlanner::Need::PanMove)) {
@@ -1772,6 +1916,7 @@ SessionMessage StationServer::proceedTakeReceiver(SessionTransport* transport,
     }
     const SessionMessage result = applyHeld(transport, question, target, invoke);
     tellTaken(closedBy, question.device, QStringLiteral("receiverTaken"), target, -1);
+    tellListeners(listenedBy, question.device, QStringLiteral("receiverTaken"));
     return result;
 }
 
@@ -1799,7 +1944,8 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
     // asks again like an owner change; its listeners were never shown.
     if (!ownership->isLive(target)
         || ownership->mark(target).subject() != question.shownOwners.value(choice)
-        || revisionChanged(ownership, question, target)) {
+        || revisionChanged(ownership, question, target)
+        || listenersGrew(ownership, question, target)) {
         const QList<ReceiverPlanner::Choice> choices =
             receiverPlanner().sliceChoices(question.device);
         if (!choices.isEmpty() && askTakeSlice(transport, question.original, choices)) {
@@ -1829,7 +1975,8 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
             invoke.commandVerb, invoke.commandId, false,
             panId ? placement.reason : QStringLiteral("The Core could not read this request."), {});
     }
-    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake({target});
+    QHash<QByteArray, QList<SavedSlice>> listenedBy;
+    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake({target}, &listenedBy);
     const SessionMessage result = applyHeld(transport, question, -1, invoke);
     int takerSlice = -1;
     for (const QByteArray& key : result.affectedKeys) {
@@ -1838,6 +1985,7 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
         }
     }
     tellTaken(closedBy, question.device, QStringLiteral("sliceTaken"), -1, takerSlice);
+    tellListeners(listenedBy, question.device, QStringLiteral("sliceTaken"));
     return result;
 }
 
@@ -1857,7 +2005,7 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
     if (record->prompt.kind == QLatin1String("transmitTaken")) {
         return takeBackTransmit(transport, invoke, noticeId);
     }
-    const ReceiverPlanner planner = receiverPlanner();
+    const ReceiverPlanner planner = questionPlanner(transport);
     const SliceStreamAllocator& live = m_radioModel->streamAllocator();
     QList<double> savedFrequencies;
     for (const SavedSlice& saved : record->closed) {
@@ -2012,7 +2160,8 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
         if (!shown.contains(id)
             || !question.shown.contains(shownVictimKey(
                 choice, id, m_radioModel->sliceOwnership()->mark(id).subject()))
-            || revisionChanged(m_radioModel->sliceOwnership(), question, id)) {
+            || revisionChanged(m_radioModel->sliceOwnership(), question, id)
+            || listenersGrew(m_radioModel->sliceOwnership(), question, id)) {
             // Something the operator was not shown (slice control fix wave:
             // including control that changed hands and came back): ask the
             // other way again.
@@ -2031,7 +2180,8 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               placement.reason, {});
     }
-    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake(closes);
+    QHash<QByteArray, QList<SavedSlice>> listenedBy;
+    const QHash<QByteArray, QList<SavedSlice>> closedBy = closeForTake(closes, &listenedBy);
     // On proceed the Core recreates the device's closed slices at their
     // frequencies, modes and pans, with their settings (5.3).
     QList<QByteArray> affected;
@@ -2069,6 +2219,8 @@ SessionMessage StationServer::proceedTakeBack(SessionTransport* transport,
     tellTaken(closedBy, device,
               receiver ? QStringLiteral("receiverTaken") : QStringLiteral("sliceTaken"),
               receiver ? target : -1, receiver ? -1 : firstRestored);
+    tellListeners(listenedBy, device,
+                  receiver ? QStringLiteral("receiverTaken") : QStringLiteral("sliceTaken"));
     m_connectedDevices->refresh();
     return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, !affected.isEmpty(),
                                           affected.isEmpty()

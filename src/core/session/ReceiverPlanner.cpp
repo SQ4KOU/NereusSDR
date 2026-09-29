@@ -18,6 +18,10 @@
 //               device that is not here is neither named as disturbed nor
 //               offered to close. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: each disturbed slice's
+//               listeners, named to a device that shares slices. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/ReceiverPlanner.h"
@@ -93,6 +97,7 @@ ReceiverPlanner::WindowMove ReceiverPlanner::planWindowMove(int stream, double c
         Disturbed d;
         d.sliceId = id;
         d.device = subject;
+        d.listeners = m_model.sliceOwnership()->listenersOf(id);
         const SliceStreamAllocator::Placement placement = copy.placeSlice(slice->frequency());
         if (placement.outcome == SliceStreamAllocator::Outcome::NewStream) {
             copy.activateStream(placement.streamIndex, placement.newStreamCentreHz,
@@ -403,6 +408,20 @@ QStringList ReceiverPlanner::namesHoldingReceivers(const QByteArray& requester) 
 
 // ── JSON ─────────────────────────────────────────────────────────────────
 
+// Slice control plan Task 9: `listeners` as wire ids, in order, skipping a
+// device the Core cannot name.
+QJsonArray ReceiverPlanner::listenerIdsJson(const QList<QByteArray>& listeners) const
+{
+    QJsonArray ids;
+    for (const QByteArray& device : listeners) {
+        const DeviceInfo info = m_describe(device);
+        if (info.known && !info.wireId.isEmpty()) {
+            ids.append(info.wireId);
+        }
+    }
+    return ids;
+}
+
 QJsonArray ReceiverPlanner::affectedJson(const QList<Disturbed>& disturbed) const
 {
     QList<QByteArray> order;
@@ -415,7 +434,7 @@ QJsonArray ReceiverPlanner::affectedJson(const QList<Disturbed>& disturbed) cons
         if (!order.contains(d.device)) {
             order.append(d.device);
         }
-        slicesOf[d.device].append(QJsonObject{
+        QJsonObject entry{
             {QStringLiteral("sliceId"), d.sliceId},
             {QStringLiteral("letter"), letterOf(d.sliceId)},
             {QStringLiteral("frequencyHz"), slice->frequency()},
@@ -424,7 +443,11 @@ QJsonArray ReceiverPlanner::affectedJson(const QList<Disturbed>& disturbed) cons
             {QStringLiteral("adc"), m_model.adcForStream(slice->streamIndex())},
             {QStringLiteral("streamIndex"), slice->streamIndex()},
             {QStringLiteral("effect"), effectName(d.effect)},
-        });
+        };
+        if (m_showListeners) {
+            entry.insert(QStringLiteral("listenerDeviceIds"), listenerIdsJson(d.listeners));
+        }
+        slicesOf[d.device].append(entry);
     }
     QJsonArray affected;
     for (const QByteArray& device : order) {
@@ -460,7 +483,7 @@ QJsonArray ReceiverPlanner::receiverChoicesJson(const QList<Choice>& choices) co
             }
             const QByteArray subject = subjectOf(id);
             const DeviceInfo info = m_describe(subject);
-            slices.append(QJsonObject{
+            QJsonObject entry{
                 {QStringLiteral("sliceId"), id},
                 {QStringLiteral("letter"), letterOf(id)},
                 {QStringLiteral("deviceId"), info.wireId},
@@ -469,7 +492,12 @@ QJsonArray ReceiverPlanner::receiverChoicesJson(const QList<Choice>& choices) co
                 {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
                 {QStringLiteral("band"), static_cast<int>(slice->band())},
                 {QStringLiteral("txSlice"), slice->txSliceMarked()},
-            });
+            };
+            if (m_showListeners) {
+                entry.insert(QStringLiteral("listenerDeviceIds"),
+                             listenerIdsJson(m_model.sliceOwnership()->listenersOf(id)));
+            }
+            slices.append(entry);
             if (info.known && !seen.contains(subject)) {
                 seen.append(subject);
                 devices.append(QJsonObject{
@@ -510,7 +538,7 @@ QJsonArray ReceiverPlanner::sliceChoicesJson(const QList<Choice>& choices) const
             continue;
         }
         const DeviceInfo info = m_describe(subjectOf(c.sliceId));
-        out.append(QJsonObject{
+        QJsonObject entry{
             {QStringLiteral("choice"), c.choice},
             {QStringLiteral("sliceId"), c.sliceId},
             {QStringLiteral("letter"), letterOf(c.sliceId)},
@@ -526,7 +554,12 @@ QJsonArray ReceiverPlanner::sliceChoicesJson(const QList<Choice>& choices) const
             {QStringLiteral("adc"), m_model.adcForStream(slice->streamIndex())},
             {QStringLiteral("takeable"), c.takeable},
             {QStringLiteral("why"), c.why},
-        });
+        };
+        if (m_showListeners) {
+            entry.insert(QStringLiteral("listenerDeviceIds"),
+                         listenerIdsJson(m_model.sliceOwnership()->listenersOf(c.sliceId)));
+        }
+        out.append(entry);
     }
     return out;
 }

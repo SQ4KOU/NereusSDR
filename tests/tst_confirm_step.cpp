@@ -83,6 +83,11 @@
 //   2026-09-29: slice control plan Task 8: the held slice is made
 //               directly, as a restored layout makes it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: a refused Add lists the slices
+//               to listen to; take questions name listeners, ask again when
+//               one joins, and every listener is told of the close. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -196,6 +201,51 @@ struct Shared {
     }
 };
 
+// Slice control plan Task 9: the feature set of a device that shares
+// slices (slice.listen and the rest).
+const QHash<QByteArray, int> kShares{{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}};
+
+// A device's id as the link names it.
+QString wireOf(const Device& device)
+{
+    return StationIdentity::toBase64Url(device.key.fingerprint());
+}
+
+// The ids in a slice entry's listenerDeviceIds, or {"absent"} without one.
+QStringList listenersIn(const QJsonObject& slice)
+{
+    if (!slice.contains(QStringLiteral("listenerDeviceIds"))) {
+        return {QStringLiteral("absent")};
+    }
+    QStringList ids;
+    for (const QJsonValue& v : slice.value(QStringLiteral("listenerDeviceIds")).toArray()) {
+        ids.append(v.toString());
+    }
+    return ids;
+}
+
+// The takeReceiver choice for `stream` in `ask`, or an empty object.
+QJsonObject choiceForStream(const QJsonObject& ask, int stream)
+{
+    for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+        if (v.toObject().value(QStringLiteral("streamIndex")).toInt(-1) == stream) {
+            return v.toObject();
+        }
+    }
+    return {};
+}
+
+// The entry for `sliceId` in a choice's slices, or an empty object.
+QJsonObject sliceIn(const QJsonObject& choice, int sliceId)
+{
+    for (const QJsonValue& v : choice.value(QStringLiteral("slices")).toArray()) {
+        if (v.toObject().value(QStringLiteral("sliceId")).toInt(-1) == sliceId) {
+            return v.toObject();
+        }
+    }
+    return {};
+}
+
 const QString kRadioOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
 
 // The radio's own PTT keys at once and with no PC microphone (fix wave 2):
@@ -305,6 +355,76 @@ struct SharedAdc {
     }
 
     int attenuation() const { return core.model->stepAttFacade()->attenuationDb(); }
+};
+
+// Slice control plan Task 9: the HL2's two receivers held. A (the iPhone)
+// has slice 0 on 7.074 MHz; C (the Mac) has its slice on 14.074 MHz on the
+// other receiver, and listens to slice 0; B (the iPad) and D (the second
+// iPad) each have a slice beside C's. Every device shares slices.
+struct Listened {
+    Core core;
+    Device a;
+    Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+    Device c{QStringLiteral("Mac"), QStringLiteral("computer")};
+    Device d{QStringLiteral("Second iPad"), QStringLiteral("tablet"), QStringLiteral("iPad 2")};
+    LoopbackTransport* appA = nullptr;
+    LoopbackTransport* appB = nullptr;
+    LoopbackTransport* appC = nullptr;
+    LoopbackTransport* appD = nullptr;
+
+    Listened()
+    {
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        core.pair(d);
+        appA = core.signIn(a, kShares);
+        appC = core.signIn(c, kShares);
+        besideC(c, 14074000.0);
+        appB = core.signIn(b, kShares);
+        besideC(b, 14080000.0);
+        appD = core.signIn(d, kShares);
+        besideC(d, 14090000.0);
+    }
+
+    void besideC(const Device& device, double hz)
+    {
+        for (int id : core.model->sliceOwnership()->ownedBy(device.key.fingerprint())) {
+            core.model->sliceById(id)->setFrequency(hz);
+        }
+    }
+
+    QList<MirrorUpdate> refOf(int sliceId) const
+    {
+        return {int64("sliceId", sliceId),
+                int64("incarnation",
+                      static_cast<qint64>(core.model->sliceOwnership()->incarnation(sliceId)))};
+    }
+
+    int aStream() const { return streamOf(core, 0); }
+
+    // B asks for a slice on a new pan and is asked takeReceiver.
+    QJsonObject bAsks()
+    {
+        const int before = countOf(appB, QStringLiteral("confirm.request"));
+        const QJsonObject refused =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("b-new-pan"))});
+        if (refused.value(QStringLiteral("accepted")).toBool(true)) {
+            return {};
+        }
+        return waitForLast(appB, QStringLiteral("confirm.request"), before);
+    }
+
+    QJsonObject proceed(const QJsonObject& ask)
+    {
+        return core.invoke(appB, "confirm.proceed",
+                           {int64("id", ask.value(QStringLiteral("id")).toInteger()),
+                            int64("choice", choiceForStream(ask, aStream())
+                                                .value(QStringLiteral("choice"))
+                                                .toInt(-1))});
+    }
 };
 
 } // namespace
@@ -1608,6 +1728,157 @@ private slots:
         QCOMPARE(afterC, cIds);
         QCOMPARE(countOf(appA, QStringLiteral("notice")), noticesBefore);
         QCOMPARE(countOf(appA, QStringLiteral("object.destroy")), destroysBefore);
+    }
+
+    // Slice control plan Task 9: with every receiver held, a sharing
+    // device's Add is refused naming the receivers and lists every live
+    // slice it could listen to instead; listening to one closes nothing.
+    // A device without the feature is sent no list.
+    void aRefusedAddListsTheSlicesToListenTo()
+    {
+        Listened s;
+        QVERIFY(s.aStream() >= 0);
+        QVERIFY(streamOf(s.core, s.core.model->sliceOwnership()
+                                    ->ownedBy(s.c.key.fingerprint()).first())
+                != s.aStream());
+        const int slicesBefore = static_cast<int>(s.core.model->slices().size());
+        QVERIFY(slicesBefore < 5);
+        const QJsonObject refused = s.core.invoke(
+            s.appB, "addSliceOnPan", {utf8("panId", QStringLiteral("b-new-pan"))});
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QVERIFY2(refused.value(QStringLiteral("reason")).toString().contains(
+                     QStringLiteral("receivers are in use by")),
+                 qPrintable(refused.value(QStringLiteral("reason")).toString()));
+        const QJsonValue listed = valueOf(refused, QStringLiteral("usableSlices"));
+        QVERIFY2(listed.isString(), QJsonDocument(refused).toJson().constData());
+        const QJsonArray usable = QJsonDocument::fromJson(listed.toString().toUtf8()).array();
+        QCOMPARE(usable.size(), slicesBefore);
+        const SliceOwnership* ownership = s.core.model->sliceOwnership();
+        QSet<int> ids;
+        for (const QJsonValue& v : usable) {
+            const QJsonObject entry = v.toObject();
+            const int id = entry.value(QStringLiteral("sliceId")).toInt(-1);
+            ids.insert(id);
+            QVERIFY(ownership->isLive(id));
+            QCOMPARE(static_cast<quint64>(entry.value(QStringLiteral("incarnation")).toInteger()),
+                     ownership->incarnation(id));
+            QCOMPARE(entry.value(QStringLiteral("letter")).toString(),
+                     ReceiverPlanner::letterOf(id));
+        }
+        QCOMPARE(ids.size(), slicesBefore);
+        QJsonObject zero;
+        for (const QJsonValue& v : usable) {
+            if (v.toObject().value(QStringLiteral("sliceId")).toInt(-1) == 0) {
+                zero = v.toObject();
+            }
+        }
+        QCOMPARE(zero.value(QStringLiteral("controllerDeviceId")).toString(), wireOf(s.a));
+
+        const QJsonObject listened = s.core.invoke(
+            s.appB, "slice.listen",
+            {int64("sliceId", 0),
+             int64("incarnation", zero.value(QStringLiteral("incarnation")).toInteger())});
+        QVERIFY2(listened.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(listened).toJson().constData());
+        QCOMPARE(static_cast<int>(s.core.model->slices().size()), slicesBefore);
+        QVERIFY(ownership->isListening(s.b.key.fingerprint(), 0));
+        // An older device is refused with no list:
+        // aTakeQuestionToAnOlderDeviceNamesNoListeners.
+    }
+
+    // Slice control plan Task 9: a take question to a sharing device names
+    // each slice's listeners, the controller first. A listener who leaves
+    // before the answer changes nothing the operator must see: the take
+    // proceeds.
+    void aTakeQuestionNamesListenersAndALeaverDoesNotAskAgain()
+    {
+        Listened s;
+        QVERIFY(s.core.invoke(s.appC, "slice.listen", s.refOf(0))
+                    .value(QStringLiteral("accepted")).toBool(false));
+        const quint64 incarnation = s.core.model->sliceOwnership()->incarnation(0);
+        const QJsonObject ask = s.bAsks();
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        const QJsonObject choice = choiceForStream(ask, s.aStream());
+        QVERIFY2(choice.value(QStringLiteral("takeable")).toBool(false),
+                 QJsonDocument(choice).toJson().constData());
+        QCOMPARE(listenersIn(sliceIn(choice, 0)), (QStringList{wireOf(s.a), wireOf(s.c)}));
+
+        QVERIFY(s.core.invoke(s.appC, "slice.stopListening", s.refOf(0))
+                    .value(QStringLiteral("accepted")).toBool(false));
+        const QJsonObject done = s.proceed(ask);
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QVERIFY(!s.core.model->sliceOwnership()->matches(SliceOwnership::SliceRef{0, incarnation}));
+    }
+
+    // Slice control plan Task 9: a listener who joins a slice the question
+    // closes before the answer: asked again, nothing closed. On the new
+    // question's answer the slice closes and each listener is told, naming
+    // it, besides its controller's own notice.
+    void aListenerWhoJoinsAsksAgainAndEveryListenerIsTold()
+    {
+        Listened s;
+        QVERIFY(s.core.invoke(s.appC, "slice.listen", s.refOf(0))
+                    .value(QStringLiteral("accepted")).toBool(false));
+        const quint64 incarnation = s.core.model->sliceOwnership()->incarnation(0);
+        const QJsonObject ask = s.bAsks();
+        QCOMPARE(listenersIn(sliceIn(choiceForStream(ask, s.aStream()), 0)),
+                 (QStringList{wireOf(s.a), wireOf(s.c)}));
+        QVERIFY(s.core.invoke(s.appD, "slice.listen", s.refOf(0))
+                    .value(QStringLiteral("accepted")).toBool(false));
+        const int questions = countOf(s.appB, QStringLiteral("confirm.request"));
+        const QJsonObject again = s.proceed(ask);
+        QCOMPARE(again.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(again.value(QStringLiteral("reason")).toString(), kWaiting);
+        QVERIFY(s.core.model->sliceOwnership()->matches(SliceOwnership::SliceRef{0, incarnation}));
+        const QJsonObject asked = waitForLast(s.appB, QStringLiteral("confirm.request"), questions);
+        QCOMPARE(listenersIn(sliceIn(choiceForStream(asked, s.aStream()), 0)),
+                 (QStringList{wireOf(s.a), wireOf(s.c), wireOf(s.d)}));
+
+        const int cNotices = countOf(s.appC, QStringLiteral("notice"));
+        const int dNotices = countOf(s.appD, QStringLiteral("notice"));
+        const QJsonObject done = s.proceed(asked);
+        QVERIFY2(done.value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(done).toJson().constData());
+        QVERIFY(!s.core.model->sliceOwnership()->matches(SliceOwnership::SliceRef{0, incarnation}));
+        const QJsonObject owner = waitForLast(s.appA, QStringLiteral("notice"), 0);
+        QCOMPARE(owner.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
+        for (const auto& [app, before] :
+             {qMakePair(s.appC, cNotices), qMakePair(s.appD, dNotices)}) {
+            const QJsonObject told = waitForLast(app, QStringLiteral("notice"), before);
+            QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("sliceClosed"));
+            QCOMPARE(told.value(QStringLiteral("takeBack")).toBool(true), false);
+            QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("iPad took the receiver slice A was on. You were listening "
+                                    "to it."));
+            const QJsonArray slices = told.value(QStringLiteral("slices")).toArray();
+            QCOMPARE(slices.size(), 1);
+            QCOMPARE(slices.first().toObject().value(QStringLiteral("letter")).toString(),
+                     QStringLiteral("A"));
+        }
+        // B, who took it, is told nothing; A's own notice is not doubled.
+        QCOMPARE(countOf(s.appA, QStringLiteral("notice")), 1);
+    }
+
+    // Slice control plan Task 9: a device without the feature is asked as
+    // before, with no listener lists.
+    void aTakeQuestionToAnOlderDeviceNamesNoListeners()
+    {
+        Shared s(2, 5);
+        s.cOnTheOtherReceiver();
+        const QJsonObject refused =
+            s.core.invoke(s.appB, "addSliceOnPan", {utf8("panId", QStringLiteral("b-new-pan"))});
+        QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true),
+                 QJsonDocument(refused).toJson().constData());
+        QVERIFY2(!valueOf(refused, QStringLiteral("usableSlices")).isString(),
+                 QJsonDocument(refused).toJson().constData());
+        const QJsonObject ask = waitForLast(s.appB, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        for (const QJsonValue& c : ask.value(QStringLiteral("choices")).toArray()) {
+            for (const QJsonValue& slice : c.toObject().value(QStringLiteral("slices")).toArray()) {
+                QVERIFY(!slice.toObject().contains(QStringLiteral("listenerDeviceIds")));
+            }
+        }
     }
 
     void fullSliceAndReceiverPoolOffersTheNamedReceiverGroup()

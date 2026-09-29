@@ -430,6 +430,10 @@
 //               SliceAccessController behind the listen, stop listening,
 //               take control and release verbs. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: usableSlicesJson(),
+//               questionPlanner(), closeForTake's listenedBy and
+//               tellListeners(). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1938,8 +1942,16 @@ private:
     PanMoveCheck checkPanMove(const QByteArray& requester, const SessionMessage& original) const;
     ReceiverPlanner::DeviceInfo planDevice(const QByteArray& deviceId) const;
     ReceiverPlanner receiverPlanner() const;
+    /// Slice control plan Task 9: receiverPlanner() naming each slice's
+    /// listeners when `transport` shares slices.
+    ReceiverPlanner questionPlanner(SessionTransport* transport) const;
     SessionTransport* liveTransportFor(const QByteArray& deviceId) const;
     QString withHolderNames(const QString& reason, const QByteArray& requester) const;
+    /// Slice control plan Task 9: the usableSlices result value, a JSON
+    /// array of {sliceId, incarnation, letter, controllerDeviceId} for every
+    /// live slice in id order ("" for a slice with no controller the link
+    /// can name).
+    QString usableSlicesJson() const;
     QString namesOf(const QList<ReceiverPlanner::Disturbed>& disturbed) const;
     void answerHere(SessionTransport* transport, const SessionMessage& result);
     void answerWrite(SessionTransport* transport, const SessionMessage& write,
@@ -1962,7 +1974,15 @@ private:
     SessionMessage applyHeld(SessionTransport* transport, const ConfirmStep::Question& question,
                              int stream, const SessionMessage& invoke);
     bool heldFitsNow(const ConfirmStep::Question& question) const;
-    QHash<QByteArray, QList<SavedSlice>> closeForTake(const QList<int>& sliceIds);
+    /// Slice control plan Task 9: `listenedBy`, when given, gets each
+    /// closed slice under every other device that was listening to it.
+    QHash<QByteArray, QList<SavedSlice>> closeForTake(
+        const QList<int>& sliceIds, QHash<QByteArray, QList<SavedSlice>>* listenedBy = nullptr);
+    /// Slice control plan Task 9: a sliceClosed notice to each listener of
+    /// a slice `by` closed, never to `by`. `why` is receiverTaken,
+    /// sliceTaken or panMove.
+    void tellListeners(const QHash<QByteArray, QList<SavedSlice>>& listenedBy,
+                       const QByteArray& by, const QString& why);
     void tellTaken(const QHash<QByteArray, QList<SavedSlice>>& closedBy, const QByteArray& taker,
                    const QString& kind, int stream, int takerSlice);
     void endOlderWindowsWithoutSlices(const QList<QByteArray>& devices, const QByteArray& taker);

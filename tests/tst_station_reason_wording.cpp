@@ -186,6 +186,10 @@
 //                                    sliceAccessUnavailableReason and
 //                                    SliceModel's getter are app side.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 9: the
+//                                    notice to a closed slice's listeners
+//                                    (listenedClosedReason), forwarded.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -885,6 +889,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("takenOverReason(planDevice(taker).name)"),
           QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),
           QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
+          // Slice control plan Task 9: a closed slice's listeners are told;
+          // listenedClosedReason's literals, scanned here.
+          QStringLiteral("listenedClosedReason(why, name, lettersOf(it.value()))"),
           QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
                          "sliceTakenReason(takerName, letters)"),
           // Fix wave 2: the on-air and freeze refusals (TxRefusal.cpp's
