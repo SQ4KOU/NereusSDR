@@ -8,6 +8,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28 J.J. Boyd / KG4VCF : the grid's noise-floor tracking follows
+//                 the pan's own display noise floor every 500 ms, as Thetis
+//                 tmrAutoAGC does, so it works with Clarity off and in a
+//                 remote window; a pan Clarity feeds keeps Clarity's grid.
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 J.J. Boyd / KG4VCF : settings stored once for every pan
 //                 (overlays, normalize, peak value, grid noise-floor
 //                 tracking, band plan size) reach every pan when one
@@ -1022,6 +1027,7 @@ void SpectrumWidget::loadSettings()
     m_nfOffsetGridFollow = qBound(-60, m_nfOffsetGridFollow, 60);
     m_maintainNFAdjustDelta = s.value(QStringLiteral("DisplayMaintainNFAdjustDelta"),
                                       QStringLiteral("False")).toString() == QStringLiteral("True");
+    updateGridFollowTimer();
 
     // 3D Stacked-Trace Spectrum Plan Task 14: five of the six 3D controls
     // are per panadapter, read through the readInt/readBool lambdas above
@@ -2504,6 +2510,9 @@ void SpectrumWidget::setNoiseFloorLineWidth(float w)
 // which stamps the trigger time on every call.
 void SpectrumWidget::setNoiseFloorFastAttack(bool on)
 {
+    // Thetis's FastAttackNoiseFloorRX1 setter clears the good flag on any
+    // set (display.cs:925-934 [v2.10.3.15]): m_bNoiseFloorGoodRX1 = false;
+    m_gridFollowNfGood = false;
     if (!m_noiseFloor.setFastAttack(on, QDateTime::currentMSecsSinceEpoch())) { return; }
     if (m_showNoiseFloor) { markOverlayDirty(); }
 }
@@ -2522,6 +2531,19 @@ void SpectrumWidget::processNoiseFloor()
     const int fps = overlayFrameRate();
     if (m_noiseFloor.process(src, fps, QDateTime::currentMSecsSinceEpoch())) {
         if (m_showNoiseFloor) { markOverlayDirty(); }
+    }
+    // The noise floor Thetis exposes outside Display, set each receive
+    // frame that is not in fast attack (gridFollowTick reads it).
+    // From Thetis display.cs:5398-5404 [v2.10.3.15]:
+    //     if (!m_bFastAttackNoiseFloorRX1 && !bPreviousRX1)
+    //     {
+    //         m_fNoiseFloorRX1 = m_fLerpAverageRX1 + _fNFshiftDBM;
+    //         m_bNoiseFloorGoodRX1 = true;
+    //     }
+    // Thetis computes it only while not local_mox.
+    if (!m_moxOverlay && !m_noiseFloor.fastAttack()) {
+        m_gridFollowNfDbm = m_noiseFloor.lerpAverage() + m_nfShiftDbm;
+        m_gridFollowNfGood = true;
     }
 }
 
@@ -2577,6 +2599,7 @@ void SpectrumWidget::setAdjustGridMinToNoiseFloor(bool on)
 {
     if (m_adjustGridMinToNF == on) { return; }
     m_adjustGridMinToNF = on;
+    updateGridFollowTimer();
     scheduleSettingsSave();
     // Stored once for every pan: every pan takes it (shareWithOtherPans).
     shareWithOtherPans([&](SpectrumWidget* pan) { pan->setAdjustGridMinToNoiseFloor(on); });
@@ -2622,6 +2645,18 @@ void SpectrumWidget::onNoiseFloorChanged(float nfDbm)
     // floated above the visible noise on bands with non-trivial signal
     // density.
     if (!m_adjustGridMinToNF) { return; }
+    // While Clarity feeds this pan its estimate, Clarity drives the grid
+    // (the add-on is kept); otherwise the pan's own display noise floor does
+    // (gridFollowTick, the Thetis tmrAutoAGC port).
+    m_lastClarityGridNfMs = QDateTime::currentMSecsSinceEpoch();
+    applyGridFollow(nfDbm);
+}
+
+// The grid rule both feeds share: Thetis tmrAutoAGC_Tick's grid block
+// (quoted above onNoiseFloorChanged).
+void SpectrumWidget::applyGridFollow(float nfDbm)
+{
+    if (!m_adjustGridMinToNF) { return; }
 
     // Not while transmitting. This tracks a RECEIVE noise floor, and on an
     // ORION-class radio the receiver keeps running through transmit, so the
@@ -2658,6 +2693,53 @@ void SpectrumWidget::onNoiseFloorChanged(float nfDbm)
     // disk writes. The range reverts to persisted values on next app launch;
     // live NF-tracking then re-adjusts it within the first cadence cycle.
     setDbmRange(newMin, newMax);
+}
+
+// The grid's noise-floor tracking on the pan's own display noise floor,
+// every 500 ms while it is on. Port of Thetis tmrAutoAGC_Tick's grid block.
+// From Thetis console.cs:46136-46167 [v2.10.3.15]:
+//     private void tmrAutoAGC_Tick(object sender, EventArgs e)
+//     {
+//         if (!chkPower.Checked || _mox) return;
+//         // every 500ms
+//         _lastRX1NoiseFloorGood = Display.IsNoiseFloorGoodRX1;
+//         if (!_lastRX1NoiseFloorGood && !_lastRX2NoiseFloorGood) return;
+//         if (_lastRX1NoiseFloorGood) _lastRX1NoiseFloor = Display.NoiseFloorRX1; // these update noisefloorgoodrx, and 'use up' the readings
+//         //change the display grids if needed to follow NF
+//         ... float setPoint = _lastRX1NoiseFloor - _RX1NFoffsetGridFollow;
+//         ... float fDelta = (float)Math.Abs(SetupForm.DisplayGridMax - SetupForm.DisplayGridMin); // abs incase MW0LGE [2.9.0.7]
+//         ... if (Math.Abs(SetupForm.DisplayGridMin - setPoint) >= 2) { ... }
+// Display.NoiseFloorRX1's getter clears the good flag (display.cs:4670-4677
+// [v2.10.3.15]), so each reading is used once. The radio-running check is
+// the frames themselves: without frames the floor is never good.
+void SpectrumWidget::gridFollowTick()
+{
+    if (m_moxOverlay) { return; }
+    if (!m_gridFollowNfGood) { return; }
+    const float nfDbm = m_gridFollowNfDbm;
+    m_gridFollowNfGood = false;   // 'use up' the reading
+    // Clarity keeps the pan it feeds (onNoiseFloorChanged).
+    if (m_lastClarityGridNfMs > 0
+        && QDateTime::currentMSecsSinceEpoch() - m_lastClarityGridNfMs < kClarityGridHoldMs) {
+        return;
+    }
+    applyGridFollow(nfDbm);
+}
+
+void SpectrumWidget::updateGridFollowTimer()
+{
+    if (!m_adjustGridMinToNF) {
+        if (m_gridFollowTimer) { m_gridFollowTimer->stop(); }
+        return;
+    }
+    if (!m_gridFollowTimer) {
+        m_gridFollowTimer = new QTimer(this);
+        // Thetis tmrAutoAGC ticks every 500 ms ("// every 500ms",
+        // console.cs:46140 [v2.10.3.15]).
+        m_gridFollowTimer->setInterval(500);
+        connect(m_gridFollowTimer, &QTimer::timeout, this, &SpectrumWidget::gridFollowTick);
+    }
+    m_gridFollowTimer->start();
 }
 
 // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan.
