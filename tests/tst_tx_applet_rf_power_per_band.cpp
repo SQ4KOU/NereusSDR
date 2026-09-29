@@ -427,6 +427,46 @@ private slots:
         QCOMPARE(tx.powerForBand(Band::Band20m), band20Before);
         QCOMPARE(tx.tuneDrivePowerSource(), DrivePowerSource::DriveSlider);
     }
+
+    // ── PA on-air gate review: the Tune Power slider is the transmit band's ─
+    //
+    // Thetis ptbTune_Scroll writes tunePower_by_band[(int)_tx_band] and the
+    // slider shows TunePWR, which the TXBand setter loads from that band
+    // (console.cs:46618 [v2.10.3.15]). A pan or receive slice on another
+    // band neither shows nor takes the tune power; TUNE uses the transmit
+    // band's.
+    void tuneSlider_usesTransmitBand_notAppletBand()
+    {
+        RadioModel rm;
+        rm.addSlice();
+        SliceModel* slice = rm.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setFrequency(14'200'000.0);
+        TransmitModel& tx = rm.transmitModel();
+        tx.setTunePowerForBand(Band::Band20m, 100);
+        tx.setTunePowerForBand(Band::Band40m, 5);
+        QCOMPARE(tx.tunePowerForTxBand(), 100);
+
+        TxApplet applet(&rm);
+        applet.setCurrentBand(Band::Band40m);
+        QSlider* slider = applet.tunePowerSlider();
+        QVERIFY(slider != nullptr);
+        // Shown: the transmit band's tune power, not the applet band's.
+        QCOMPARE(slider->value(), 100);
+
+        slider->setValue(30);
+        QCOMPARE(tx.tunePowerForBand(Band::Band20m), 30);
+        QCOMPARE(tx.tunePowerForBand(Band::Band40m), 5);
+        QCOMPARE(tx.tunePowerForTxBand(), 30);
+        QCOMPARE(slider->value(), tx.tunePowerForTxBand());
+        QCOMPARE(tx.tuneDrivePowerSource(), DrivePowerSource::TuneSlider);
+
+        // Repaints on the transmit band's change only.
+        tx.setTunePowerForBand(Band::Band20m, 42);
+        QCOMPARE(slider->value(), 42);
+        tx.setTunePowerForBand(Band::Band40m, 7);
+        QCOMPARE(slider->value(), 42);
+    }
 };
 
 QTEST_MAIN(TestTxAppletRfPowerPerBand)

@@ -284,6 +284,9 @@
 //                 [v2.10.3.15]; setPowerUsingTargetDbm constrains the drive
 //                 to the slider limit (ConstrainAValue). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: tuneTxBandKnown() for the TX
+//                 applet's Tune Power slider. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -696,6 +699,8 @@ public:
     // band's tunePowerForBand(); in a remote window it is the Core's value,
     // applied by applyStationValue(). NereusSDR-original.
     int  tunePowerForTxBand() const noexcept { return m_tunePowerForTxBand; }
+    /// True once RadioModel has set the transmit band (setTuneTxBand).
+    bool tuneTxBandKnown() const noexcept { return m_tuneTxBandKnown; }
     void setTuneTxBand(Band band);
     /// What the TX applet's Tune Power slider does locally: the transmit
     /// band's tune power, and the tune drive source to TuneSlider. False,

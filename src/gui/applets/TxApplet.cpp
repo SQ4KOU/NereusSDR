@@ -156,6 +156,11 @@
 //                and a local window's RF Power slider no longer saves the
 //                band slot: RadioModel does both (applyTransmitBand,
 //                drivePowerScroll). AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate review: the local Tune
+//                Power slider writes and shows the transmit band's tune
+//                power (Thetis ptbTune_Scroll, console.cs:46618
+//                [v2.10.3.15]), not the pan band's. AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1191,10 +1196,15 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── Tune Power slider → TransmitModel::setTunePowerForBand ──────────────
+    // ── Tune Power slider → TransmitModel::setTunePowerForTxBand ────────────
     // Per-band tune power, ported from Thetis console.cs:12094 [v2.10.3.13]:
     //   private int[] tunePower_by_band;
-    // The current band is tracked by m_currentBand (updated by setCurrentBand).
+    // The slider writes and shows the transmit band's slot, as Thetis
+    // ptbTune_Scroll does (PA on-air gate review):
+    // From Thetis console.cs:46618 [v2.10.3.15]
+    //   tunePower_by_band[(int)_tx_band] = ptbTune.Value;
+    // m_currentBand (the pan or slice band) is used only before RadioModel
+    // knows the transmit band.
     //
     // Issue #175 Task 7: label text routed through updatePowerSliderLabels()
     // for the HL2 (slider/3.0 - 33.0)/2.0 dB conversion.
@@ -1210,6 +1220,7 @@ void TxApplet::wireControls()
             }
             return;
         }
+        if (tx.setTunePowerForTxBand(val)) { return; }
         tx.setTunePowerForBand(m_currentBand, val);
         // When the user touches the tune slider, switch the tune drive
         // source so TUNE actually reads from tunePowerForBand instead of
@@ -1230,10 +1241,11 @@ void TxApplet::wireControls()
     });
 
     // R-R3-49 (parity Task 2): in a remote window the slider shows the
-    // Core's tune power for its transmit band.
+    // Core's tune power for its transmit band; a local window shows its own
+    // transmit band's (PA on-air gate review).
     connect(&tx, &TransmitModel::tunePowerForTxBandChanged,
-            this, [this](int watts) {
-        if (!remoteTunePower()) { return; }
+            this, [this, &tx](int watts) {
+        if (!remoteTunePower() && !tx.tuneTxBandKnown()) { return; }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -1241,10 +1253,12 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for current band)
+    // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for
+    // current band, and only before the transmit band is known; after that
+    // tunePowerForTxBandChanged above repaints it).
     connect(&tx, &TransmitModel::tunePowerByBandChanged,
-            this, [this](Band band, int watts) {
-        if (band != m_currentBand || remoteTunePower()) { return; }
+            this, [this, &tx](Band band, int watts) {
+        if (band != m_currentBand || remoteTunePower() || tx.tuneTxBandKnown()) { return; }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -2756,7 +2770,10 @@ int TxApplet::shownTunePower(Band band) const
 {
     if (!m_model) { return 0; }
     const TransmitModel& tx = m_model->transmitModel();
-    return remoteTunePower() ? tx.tunePowerForTxBand() : tx.tunePowerForBand(band);
+    // The transmit band's tune power once it is known (PA on-air gate
+    // review; Thetis shows TunePWR, the transmit band's).
+    return (remoteTunePower() || tx.tuneTxBandKnown()) ? tx.tunePowerForTxBand()
+                                                       : tx.tunePowerForBand(band);
 }
 
 void TxApplet::requestRemoteTunePower(int watts)
