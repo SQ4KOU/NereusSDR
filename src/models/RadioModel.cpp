@@ -1977,8 +1977,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // connection's transmit I/Q send ring to drain before the hardware is
     // released, for at most the ring's own length. The Core's stops
     // (stopTransmitNow's hold: Stop All TX, the time-out, the holder
-    // revoked, the amplifier and SWR stops) and a disconnect release at
-    // once, as does a remote model, which has no ring of its own.
+    // revoked or its link lost, the amplifier stops) and a disconnect
+    // release at once, as does a remote model, which has no ring of its
+    // own. High SWR has no stop of its own: SwrProtectionController folds
+    // the power back and the interlock's SWR gate warns or refuses a key.
     {
         MoxController::SendRingDrain ring;
         ring.permitted = [this]() {
