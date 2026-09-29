@@ -585,6 +585,11 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -14511,7 +14516,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         m_pennyLaneController.load();
 
         // Load per-MAC HL2 Options (9 mi0bot tpHL2Options knobs).
-        // Phase 3L commit #9.  Wire-format emission deferred to follow-up PR.
+        // Phase 3L commit #9. Band Volts and Disable PS Sync reach the wire
+        // (P1RadioConnection, wired below); the others are not sent yet.
         m_hl2Options.setMacAddress(info.macAddress);
         m_hl2Options.load();
 
@@ -16118,6 +16124,22 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
         m_bwMonitor.reset();
         p1->setBandwidthMonitor(&m_bwMonitor);
+    }
+
+    // HL2 Band Volts and Disable PS Sync (bank 0 C3 bits 3 and 4 on a Hermes
+    // Lite 2), from the saved HL2 options loaded above, before the
+    // connection thread starts; later changes follow on that thread.
+    // From mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4]:
+    //   chkHL2BandVolts_CheckedChanged(this, e);        // MI0BOT: HL2 option page now doesn't share ditter and random
+    //   // MI0BOT: Control band volts for the HL2
+    //   // MI0BOT: Control power supply sync for the HL2
+    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
+        p1->setHl2BandVolts(m_hl2Options.bandVolts());
+        p1->setHl2PsSync(m_hl2Options.psSync());
+        connect(&m_hl2Options, &Hl2OptionsModel::bandVoltsChanged,
+                p1, &P1RadioConnection::setHl2BandVolts);
+        connect(&m_hl2Options, &Hl2OptionsModel::psSyncChanged,
+                p1, &P1RadioConnection::setHl2PsSync);
     }
 
     // Per-MAC P1 ADC routing override (Thetis `P1_adc_cntrl`).
