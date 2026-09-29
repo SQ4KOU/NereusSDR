@@ -3333,7 +3333,12 @@ Notes on the keys:
   A window built before this change still sends `powerByBandJson` when
   its RF slider moves; each such write is refused, and its `power` write
   for the same move is still taken, so the Core's power follows the
-  slider and the Core's own map reaches the window. The Core keeps each
+  slider and the Core's own map reaches the window. With more than one
+  slice, such a window's recall for its own active slice can still send a
+  `power` read from another band's slot; the Core takes it as the power
+  of its transmit band, so the most it can change is that one band's
+  value. A current window and the phone send `power` only for an RF
+  slider move. The Core keeps each
   value a whole number from 0 to 100 W (tune power 0 to 99 on a Hermes
   Lite 2).
   `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
