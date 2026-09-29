@@ -449,9 +449,10 @@ void SpectrumDefaultsPage::buildUI()
     resetBtn->setToolTip(QStringLiteral(
         "Overwrite this panadapter's spectrum and waterfall look with the "
         "NereusSDR smooth-default profile: Clarity Blue palette, "
-        "log-recursive averaging, a white trace without fill, waterfall AGC "
-        "on and a 30 ms waterfall update period. FFT size, frequency, band "
-        "stack, and per-band grid ranges are not affected."));
+        "log-recursive averaging with a 650 ms averaging time, a white "
+        "trace without fill, waterfall AGC on and a 30 ms waterfall update "
+        "period. FFT size, frequency, band stack, and per-band grid ranges "
+        "are not affected."));
     connect(resetBtn, &QPushButton::clicked, this, [this]() {
         const auto rc = QMessageBox::question(
             this,

@@ -5212,6 +5212,11 @@ nereus_add_test(tst_spectrum_reducer)
 # fails here instead of shipping two different spectra.
 nereus_add_test(tst_spectrum_reducer_widget_parity)
 
+# Reset to Smooth Defaults sets and saves the spectrum averaging time
+# (650 ms, the March 0.05 new-frame weight at 30 FPS) instead of a
+# transient averaging constant.
+nereus_add_test(tst_clarity_smooth_defaults)
+
 # R1 Task 4 -- guard test for the ISpectrumSink extraction.  Walks src/core
 # and src/models and fails on any include that reaches into src/gui or into
 # the Qt widget / GUI rendering stack.  This is the property the whole R1

@@ -21036,9 +21036,13 @@ void RadioModel::applyClaritySmoothDefaults()
     // 2. Spectrum averaging mode — log-recursive for heavy smoothing.
     sw->setAverageMode(AverageMode::Logarithmic);
 
-    // 3. Averaging alpha — very slow exponential (~500 ms perceived smoothing
-    //    at 30 FPS). See waterfall-tuning.md §3.
-    sw->setAverageAlpha(0.05f);
+    // 3. Averaging time: 650 ms, saved like any Setup averaging-time edit.
+    //    The March recipe gave each new frame a 5 % weight; the averager
+    //    keeps the back-multiplier exp(-1 / (fps * tau)) (DisplayFollowers
+    //    averageAlphaForTimeMs), and at 30 FPS 650 ms gives 0.950, a 5 %
+    //    new-frame weight. A bare alpha was lost on the next frame-rate or
+    //    time change. See waterfall-tuning.md section 3.
+    sw->setSpectrumAverageTimeMs(650);
 
     // 4. Trace colour — pure white, thin, sits cleanly in front of the
     //    waterfall without competing. Visual target: 2026-04-14 reference.
