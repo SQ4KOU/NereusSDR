@@ -43,6 +43,17 @@
 //                 (ruling Q6).
 //   selectRx      the device's active receive slice, any joined slice
 //                 (RadioModel::setActiveRxFor).
+//   setListenLevel
+//                 the level (0..1) and mute a listener hears the slice at
+//                 in its own mix (slice control plan Task 6). Each listener
+//                 has its own; it starts at the slice's AF level when the
+//                 device joins, and for a former controller when control
+//                 passes from it (ruling Q4). Refused for a stale
+//                 incarnation and for a slice the device does not hear.
+//                 The station device's level plays on the Core's own output
+//                 for a slice it listens to and another device controls
+//                 (AudioEngine::setLocalListen); a session's goes to its
+//                 owner mix (DaemonMediaController).
 //
 // What only the Core's session server knows (who is transmitting, which
 // device can stay on as a listener, the transmit selection, closing a
@@ -60,11 +71,16 @@
 //               holder, and a release that keeps the Core's last slice is
 //               refused while it transmits. AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 6 by J.J. Boyd (KG4VCF): each
+//               listener's own level and mute (setListenLevel, seeded from
+//               the slice's AF, ruling Q4), and the station device's local
+//               listening. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QPointer>
@@ -123,6 +139,21 @@ public:
                    quint64 expectedRevision);
     Result selectRx(const QByteArray& device, int sliceId);
 
+    /// A listener's own level for a slice: 0..1 and its mute.
+    struct ListenLevel {
+        double level = 1.0;
+        bool muted = false;
+    };
+    /// Slice control plan Task 6: the level and mute `device` hears the
+    /// slice at as a listener. Refused for a stale incarnation and for a
+    /// slice the device does not hear; `level` is clamped to 0..1.
+    Result setListenLevel(const QByteArray& device, SliceOwnership::SliceRef ref, double level,
+                          bool muted);
+    /// The level `device` hears `sliceId` at as a listener: the one it set,
+    /// else the slice's AF level when it joined or control passed from it
+    /// (ruling Q4). The slice's AF level, unmuted, for one not recorded.
+    ListenLevel listenLevel(const QByteArray& device, int sliceId) const;
+
     /// Whether a close of `sliceId` from `device` is a release (ruling Q6):
     /// it controls the slice and another device is joined to it.
     bool closeIsRelease(const QByteArray& device, int sliceId) const;
@@ -134,6 +165,9 @@ signals:
     /// `byDevice` took control of the slice from `fromDevice`, which is
     /// still listening.
     void controlTaken(int sliceId, const QByteArray& fromDevice, const QByteArray& byDevice);
+    /// `device`'s listen level or mute for the slice changed (set, seeded
+    /// or dropped).
+    void listenLevelChanged(int sliceId, const QByteArray& device);
 
 private:
     SliceOwnership* ownership() const;
@@ -141,9 +175,24 @@ private:
     static QList<QByteArray> keysOf(int sliceId);
     /// Closes the slice when nobody is on it any more.
     void closeIfNobodyIsOn(int sliceId);
+    /// The slice's AF level, 0..1.
+    double afLevelOf(int sliceId) const;
+    /// Seeds joined listeners, drops ones that left or a closed slice's.
+    void reconcileListenLevels(int sliceId);
+    /// Ruling Q4: control passed from `former`, which still listens.
+    void reseedFormerController(int sliceId, const QByteArray& former);
+    /// The station device's local listening of the slice.
+    void publishLocalListen(int sliceId);
+
+    struct StoredLevel {
+        quint64 incarnation = 0;
+        ListenLevel value;
+    };
 
     QPointer<RadioModel> m_radio;
     Hooks m_hooks;
+    /// Per slice, per listening device.
+    QHash<int, QHash<QByteArray, StoredLevel>> m_listenLevels;
 };
 
 } // namespace NereusSDR

@@ -10,6 +10,8 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/SliceOwnership.h"
+#include "core/session/SliceAccessController.h"
 #include "core/FFTEngine.h"
 #include "core/P2RadioConnection.h"
 #include "core/DdcAssignment.h"
@@ -686,6 +688,7 @@ private slots:
     void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
     void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
     void aBoundControllerServesItsOwnSessionAndHearsItsOwnMix();
+    void aListenedSliceJoinsTheMixAtTheListenersOwnLevel();
     void rawIqRunsForSixtySecondsInSequenceAndRetires();
     void stalledRawIqFailsWithoutBlockingControl();
     void rawIqBusyRetryDebitsOnlyOnce();
@@ -727,6 +730,61 @@ void TstDaemonMediaController::aBoundControllerServesItsOwnSessionAndHearsItsOwn
     QTRY_COMPARE(h.controller.sessionEpoch(), quint64{0});
     QCOMPARE(h.controller.ownerMixSlot(), -1);
     QCOMPARE(engine->ownerMixCount(), 0);
+}
+
+// Slice control plan Task 6 (rulings Q3, Q4): a slice the session's device
+// only listens to joins its owner mix as a listen lane, at the slice's AF
+// level to start and then at the level the device sets; the controller's
+// AF and mute do not move it, and it leaves when the device stops
+// listening. Nothing is acquired.
+void TstDaemonMediaController::aListenedSliceJoinsTheMixAtTheListenersOwnLevel()
+{
+    Harness h;
+    h.establishSession();
+    const quint64 epoch = h.server.mediaSessionEpoch();
+    QVERIFY(epoch != 0);
+    AudioEngine* const engine = h.radio.audioEngine();
+    const int slot = h.controller.ownerMixSlot();
+    QVERIFY(slot >= 0);
+    const QByteArray device = h.server.mediaSessionDevice(epoch);
+    QVERIFY(!device.isEmpty());
+    SliceAccessController* const access = h.server.sliceAccessController();
+    QVERIFY(access != nullptr);
+    SliceOwnership* const ownership = h.radio.sliceOwnership();
+    SliceModel* const spare = h.radio.sliceById(h.spareSliceId);
+    QVERIFY(spare != nullptr);
+    spare->setAfGain(40);
+
+    // The Core's own desktop controls the spare slice; the device listens.
+    ownership->setOwner(h.spareSliceId, SliceOwnership::stationDevice());
+    QVERIFY(ownership->join(device, h.spareSliceId));
+    const quint32 spareBit = 1u << h.spareSliceId;
+    QTRY_COMPARE(engine->ownerMixSliceMask(slot) & spareBit, 0u);
+    QTRY_COMPARE(engine->ownerMixListenMask(slot), spareBit);
+    QCOMPARE(engine->ownerMixListenLevel(slot, h.spareSliceId), 0.4f);
+
+    // Its own level and mute.
+    SliceOwnership::SliceRef ref;
+    ref.sliceId = h.spareSliceId;
+    ref.incarnation = ownership->incarnation(h.spareSliceId);
+    QVERIFY(access->setListenLevel(device, ref, 0.25, false).accepted);
+    QCOMPARE(engine->ownerMixListenLevel(slot, h.spareSliceId), 0.25f);
+    QVERIFY(access->setListenLevel(device, ref, 0.25, true).accepted);
+    QCOMPARE(engine->ownerMixListenLevel(slot, h.spareSliceId), 0.0f);
+    QVERIFY(access->setListenLevel(device, ref, 0.25, false).accepted);
+
+    // The controller's AF and mute leave it alone.
+    spare->setAfGain(0);
+    spare->setMuted(true);
+    QCOMPARE(engine->ownerMixListenLevel(slot, h.spareSliceId), 0.25f);
+    QCOMPARE(engine->ownerMixListenMask(slot), spareBit);
+    QCOMPARE(engine->ownerMixCount(), 1);
+
+    // It leaves when the device stops listening.
+    QVERIFY(ownership->leave(device, h.spareSliceId));
+    QTRY_COMPARE(engine->ownerMixListenMask(slot), 0u);
+    QCOMPARE(engine->ownerMixSliceMask(slot) & spareBit, 0u);
+    h.finish();
 }
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()

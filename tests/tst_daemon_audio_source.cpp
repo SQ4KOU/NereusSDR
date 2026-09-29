@@ -53,6 +53,9 @@ struct Harness {
         sliceA = radio.addSlice();
         sliceB = radio.addSlice();
         Q_ASSERT(sliceA >= 0 && sliceB >= 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio.sliceById(sliceA)->setAfGain(100);
+        radio.sliceById(sliceB)->setAfGain(100);
         // Both slices share a DDC in this fixture, so state their mixer
         // membership directly rather than relying on receiver activation.
         engine->setSliceStreaming(sliceA, true);

@@ -92,6 +92,11 @@ struct Harness {
         engine->setSliceStreaming(sliceA, true);
         engine->setSliceStreaming(sliceB, true);
         engine->setSliceStreaming(sliceC, true);
+        // The mixer applies each slice's AF level (slice control plan
+        // Task 6); full AF keeps the tones exact.
+        radio->sliceById(sliceA)->setAfGain(100);
+        radio->sliceById(sliceB)->setAfGain(100);
+        radio->sliceById(sliceC)->setAfGain(100);
     }
 
     // Slice A plays 0.5, B 0.25, C 0.125 on both channels.

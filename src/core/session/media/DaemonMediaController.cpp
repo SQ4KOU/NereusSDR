@@ -70,6 +70,10 @@
 //               mix and displays follow a leave (listenersChanged) as they
 //               follow a change of controller. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 6: the owner mix sums the slices
+//               this device listens to at its own level and mute
+//               (SliceAccessController::listenLevel), centered.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -89,6 +93,7 @@
 #include "core/safety/TransmitHolder.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RemoteKeying.h"
+#include "core/session/SliceAccessController.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
@@ -1370,6 +1375,13 @@ void DaemonMediaController::acquireOwnerMix()
         qCWarning(lcDaemonMedia) << "no owner mix free for media session" << m_epoch;
         return;
     }
+    // Slice control plan Task 6: a level or mute this device sets for a
+    // slice it listens to reaches its mix.
+    if (m_server && m_server->sliceAccessController()) {
+        m_listenLevelConnection = connect(
+            m_server->sliceAccessController(), &SliceAccessController::listenLevelChanged, this,
+            [this](int, const QByteArray&) { refreshOwnerMixMask(); });
+    }
     refreshOwnerMixMask();
     // Parity Task 32: and the transmit monitor, if this device has one.
     refreshTxMonitor();
@@ -1377,6 +1389,8 @@ void DaemonMediaController::acquireOwnerMix()
 
 void DaemonMediaController::releaseOwnerMix()
 {
+    QObject::disconnect(m_listenLevelConnection);
+    m_listenLevelConnection = {};
     if (m_ownerMix < 0) {
         return;
     }
@@ -1431,14 +1445,39 @@ void DaemonMediaController::refreshOwnerMixMask()
     if (m_ownerMix < 0 || !m_radioModel || !m_radioModel->audioEngine()) {
         return;
     }
+    AudioEngine* const engine = m_radioModel->audioEngine();
+    SliceAccessController* const access = m_server ? m_server->sliceAccessController() : nullptr;
+    const QByteArray device =
+        m_server && m_epoch != 0 ? m_server->mediaSessionDevice(m_epoch) : QByteArray();
     quint32 mask = 0;
+    quint32 listened = 0;
     for (SliceModel* slice : m_radioModel->slices()) {
         const int id = slice ? slice->sliceIndex() : -1;
-        if (id >= 0 && id < 32 && controlsSlice(id)) {
+        if (id < 0 || id >= 32) {
+            continue;
+        }
+        if (controlsSlice(id)) {
             mask |= 1u << id;
+        } else if (hearsSlice(id) && access != nullptr && !device.isEmpty()) {
+            // Slice control plan Task 6 (rulings Q3, Q4): a slice this
+            // device only listens to plays centered at its own level and
+            // mute; the controller's AF, mute and pan do not reach it.
+            const SliceAccessController::ListenLevel level = access->listenLevel(device, id);
+            engine->setOwnerMixListen(m_ownerMix, id, static_cast<float>(level.level),
+                                      level.muted);
+            listened |= 1u << id;
         }
     }
-    m_radioModel->audioEngine()->setOwnerMixSliceMask(m_ownerMix, mask);
+    // The controlled mask moves before a listen lane is dropped, and a
+    // listen lane is set before the mask drops the slice: a controlled
+    // slice has no listen lane in the mixer, so a hand-off never leaves a
+    // drain period with neither.
+    engine->setOwnerMixSliceMask(m_ownerMix, mask);
+    for (int id = 0; id < 32; ++id) {
+        if ((listened & (1u << id)) == 0) {
+            engine->clearOwnerMixListen(m_ownerMix, id);
+        }
+    }
     // A slice onto or off this device changes whether its headphones mix
     // has a receiver to carry.
     onOutputRoutesChanged();

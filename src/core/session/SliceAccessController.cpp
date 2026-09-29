@@ -20,6 +20,10 @@
 //   2026-09-29: slice control plan Task 7 by J.J. Boyd (KG4VCF): the
 //               release of the Core's last slice with nobody else on it
 //               closes it. AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 6 by J.J. Boyd (KG4VCF): each
+//               listener's own level and mute, seeded from the slice's AF
+//               (ruling Q4), and the station device's local listening.
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -27,7 +31,12 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SliceAccessPolicy.h"
 #include "core/session/SliceAccessSet.h"
+#include "core/AudioEngine.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -89,6 +98,27 @@ SliceAccessController::SliceAccessController(RadioModel* radio, Hooks hooks, QOb
     , m_radio(radio)
     , m_hooks(std::move(hooks))
 {
+    // Slice control plan Task 6: listeners' levels follow who is on each
+    // slice and who controls it.
+    SliceOwnership* own = ownership();
+    if (own != nullptr) {
+        connect(own, &SliceOwnership::listenersChanged, this, [this](int sliceId) {
+            reconcileListenLevels(sliceId);
+            publishLocalListen(sliceId);
+        });
+        connect(own, &SliceOwnership::markChanged, this,
+                [this](int sliceId, const QByteArray& oldOwner, const QByteArray&) {
+                    reconcileListenLevels(sliceId);
+                    reseedFormerController(sliceId, oldOwner);
+                    publishLocalListen(sliceId);
+                });
+    }
+    if (m_radio) {
+        connect(m_radio.data(), &RadioModel::sliceRemoved, this, [this](int sliceId) {
+            reconcileListenLevels(sliceId);
+            publishLocalListen(sliceId);
+        });
+    }
 }
 
 QString SliceAccessController::letterOf(int sliceId)
@@ -320,6 +350,137 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
     own->setOwner(sliceId, QByteArray());
     own->leave(device, sliceId);
     result.controlRevision = own->controlRevision(sliceId);
+    return result;
+}
+
+double SliceAccessController::afLevelOf(int sliceId) const
+{
+    const SliceModel* slice = m_radio ? m_radio->sliceById(sliceId) : nullptr;
+    if (slice == nullptr) {
+        return 1.0;
+    }
+    return std::clamp(slice->afGain(), 0, 100) / 100.0;
+}
+
+void SliceAccessController::reconcileListenLevels(int sliceId)
+{
+    const SliceOwnership* own = ownership();
+    const bool live = own != nullptr && own->isLive(sliceId);
+    const quint64 incarnation = live ? own->incarnation(sliceId) : 0;
+    QHash<QByteArray, StoredLevel>& levels = m_listenLevels[sliceId];
+    QList<QByteArray> changed;
+    // A slice made again under the same id starts over; a device that left
+    // is dropped.
+    for (auto it = levels.begin(); it != levels.end();) {
+        if (!live || it.value().incarnation != incarnation
+            || !own->isListening(it.key(), sliceId)) {
+            changed.append(it.key());
+            it = levels.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (live) {
+        // Ruling Q4: a new listener starts at the slice's AF level.
+        const QByteArray controller = own->mark(sliceId).owner;
+        for (const QByteArray& device : own->listenersOf(sliceId)) {
+            if (device == controller || levels.contains(device)) {
+                continue;
+            }
+            StoredLevel stored;
+            stored.incarnation = incarnation;
+            stored.value.level = afLevelOf(sliceId);
+            levels.insert(device, stored);
+            changed.append(device);
+        }
+    }
+    if (levels.isEmpty()) {
+        m_listenLevels.remove(sliceId);
+    }
+    for (const QByteArray& device : changed) {
+        emit listenLevelChanged(sliceId, device);
+    }
+}
+
+void SliceAccessController::reseedFormerController(int sliceId, const QByteArray& former)
+{
+    const SliceOwnership* own = ownership();
+    if (own == nullptr || former.isEmpty() || !own->isLive(sliceId)
+        || own->mark(sliceId).owner == former || !own->isListening(former, sliceId)) {
+        return;
+    }
+    // Ruling Q4: the former controller keeps hearing the slice at the AF
+    // level it had, so the hand-off neither jumps nor goes quiet.
+    StoredLevel stored;
+    stored.incarnation = own->incarnation(sliceId);
+    stored.value.level = afLevelOf(sliceId);
+    m_listenLevels[sliceId].insert(former, stored);
+    emit listenLevelChanged(sliceId, former);
+}
+
+void SliceAccessController::publishLocalListen(int sliceId)
+{
+    AudioEngine* engine = m_radio ? m_radio->audioEngine() : nullptr;
+    if (engine == nullptr || sliceId < 0 || sliceId >= AudioEngine::kMaxSliceAudioViews) {
+        return;
+    }
+    // The Core's own output plays the station device's slices already
+    // (RadioModel's local output mask); a slice another device controls
+    // that the station device listens to plays at the station's level.
+    const SliceOwnership* own = ownership();
+    const QByteArray& station = SliceOwnership::stationDevice();
+    const QByteArray controller =
+        own != nullptr && own->isLive(sliceId) ? own->mark(sliceId).owner : QByteArray();
+    if (own != nullptr && own->isLive(sliceId) && !controller.isEmpty() && controller != station
+        && own->isListening(station, sliceId)) {
+        const ListenLevel level = listenLevel(station, sliceId);
+        engine->setLocalListen(sliceId, static_cast<float>(level.level), level.muted);
+    } else {
+        engine->clearLocalListen(sliceId);
+    }
+}
+
+SliceAccessController::ListenLevel SliceAccessController::listenLevel(const QByteArray& device,
+                                                                      int sliceId) const
+{
+    const auto slice = m_listenLevels.constFind(sliceId);
+    if (slice != m_listenLevels.constEnd()) {
+        const auto found = slice->constFind(device);
+        if (found != slice->constEnd()) {
+            return found->value;
+        }
+    }
+    ListenLevel fallback;
+    fallback.level = afLevelOf(sliceId);
+    return fallback;
+}
+
+SliceAccessController::Result SliceAccessController::setListenLevel(
+    const QByteArray& device, SliceOwnership::SliceRef ref, double level, bool muted)
+{
+    SliceOwnership* own = ownership();
+    if (own == nullptr) {
+        return refused(notReadyReason());
+    }
+    if (device.isEmpty() || !own->matches(ref)) {
+        return refused(closedReason());
+    }
+    const int sliceId = ref.sliceId;
+    if (!own->isListening(device, sliceId)) {
+        return refused(notListeningReason(letterOf(sliceId)));
+    }
+    StoredLevel stored;
+    stored.incarnation = ref.incarnation;
+    stored.value.level = std::isfinite(level) ? std::clamp(level, 0.0, 1.0) : 0.0;
+    stored.value.muted = muted;
+    m_listenLevels[sliceId].insert(device, stored);
+    emit listenLevelChanged(sliceId, device);
+    if (device == SliceOwnership::stationDevice()) {
+        publishLocalListen(sliceId);
+    }
+    // Nothing mirrored changes: the level lives in the device's own mix.
+    Result result;
+    result.accepted = true;
     return result;
 }
 

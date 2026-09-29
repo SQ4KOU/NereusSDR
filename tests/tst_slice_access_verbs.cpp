@@ -16,6 +16,9 @@
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 4,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice.setListenLevel and the Q4 seeding, slice control
+//               plan Task 6. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -24,6 +27,8 @@
 #include "core/session/SliceAccessPolicy.h"
 
 #include <QSignalSpy>
+
+#include <limits>
 
 namespace {
 
@@ -120,6 +125,13 @@ Seen seenBy(const LoopbackTransport* app, int sliceId)
 QList<MirrorUpdate> refArgs(const Seen& seen)
 {
     return {int64("sliceId", seen.sliceId), int64("incarnation", seen.incarnation)};
+}
+
+QList<MirrorUpdate> levelArgs(const Seen& seen, double level, bool muted)
+{
+    return {int64("sliceId", seen.sliceId), int64("incarnation", seen.incarnation),
+            f64("level", level),
+            MirrorUpdate{0, QByteArrayLiteral("muted"), MirrorWireKind::Bool, QVariant(muted)}};
 }
 
 QList<MirrorUpdate> revisionArgs(const Seen& seen)
@@ -1269,6 +1281,112 @@ private slots:
         const QJsonObject refused = core.invoke(appB, "removeSlice", {int64("sliceId", 0)});
         QVERIFY(!accepted(refused));
         QCOMPARE(core.model->slices().size(), slices);
+    }
+
+    // Slice control plan Task 6 (rulings Q3, Q4, and JJ's AF ruling): a
+    // listener's level starts at the slice's AF and is its own after that;
+    // the controller's AF and mute stay as they were. A device that does
+    // not listen, an old incarnation and an unreadable level are refused
+    // and change nothing.
+    void aListenerSetsItsOwnLevelAndTheControllersAfStays()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("Laptop"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        LoopbackTransport* appC = core.signIn(c, kShares);
+        QVERIFY(admitted(appA) && admitted(appB) && admitted(appC));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QTRY_VERIFY(holds(appC, accessKey(0)));
+        SliceModel* const slice = core.model->sliceById(0);
+        slice->setAfGain(40);
+        SliceAccessController* const access = core.server->sliceAccessController();
+        QVERIFY(access != nullptr);
+
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).level, 0.4);
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).muted, false);
+
+        const Seen seen = seenBy(appB, 0);
+        QJsonObject r = core.invoke(appB, "slice.setListenLevel", levelArgs(seen, 0.25, true));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).level, 0.25);
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).muted, true);
+        QCOMPARE(slice->afGain(), 40);
+        QCOMPARE(slice->muted(), false);
+        // The controller's AF moves; the listener's level does not.
+        slice->setAfGain(70);
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).level, 0.25);
+
+        // Not listening.
+        r = core.invoke(appC, "slice.setListenLevel", levelArgs(seenBy(appC, 0), 0.5, false));
+        QVERIFY(!accepted(r));
+        const QString notListening =
+            QStringLiteral("You are not listening to slice A. Listen in first.");
+        QVERIFY(OperatorWording::isPlain(notListening));
+        QCOMPARE(reasonOf(r), notListening);
+        // An old incarnation.
+        Seen stale = seen;
+        stale.incarnation += 1;
+        r = core.invoke(appB, "slice.setListenLevel", levelArgs(stale, 0.5, false));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r),
+                 QStringLiteral("That slice has closed. Choose it again from the list."));
+        // A level outside 0..1.
+        const QString unread = QStringLiteral("The Core could not read this request.");
+        for (double bad : {1.5, -0.1, std::numeric_limits<double>::quiet_NaN()}) {
+            r = core.invoke(appB, "slice.setListenLevel", levelArgs(seen, bad, false));
+            QVERIFY(!accepted(r));
+            QCOMPARE(reasonOf(r), unread);
+        }
+        // A level sent as an integer.
+        r = core.invoke(appB, "slice.setListenLevel",
+                        {int64("sliceId", 0), int64("incarnation", seen.incarnation),
+                         int64("level", 1),
+                         MirrorUpdate{0, QByteArrayLiteral("muted"), MirrorWireKind::Bool,
+                                      QVariant(false)}});
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), unread);
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).level, 0.25);
+        QCOMPARE(access->listenLevel(b.key.fingerprint(), 0).muted, true);
+        QCOMPARE(slice->afGain(), 70);
+    }
+
+    // Ruling Q4: a controller that hands the slice over keeps hearing it at
+    // the AF level it had.
+    void theFormerControllerListensAtTheAfItHad()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        SliceModel* const slice = core.model->sliceById(0);
+        slice->setAfGain(60);
+        SliceAccessController* const access = core.server->sliceAccessController();
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QVERIFY(accepted(core.invoke(appB, "slice.setListenLevel",
+                                     levelArgs(seenBy(appB, 0), 0.1, false))));
+        const QJsonObject r =
+            core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QCOMPARE(access->listenLevel(a.key.fingerprint(), 0).level, 0.6);
+        QCOMPARE(access->listenLevel(a.key.fingerprint(), 0).muted, false);
+        // The former controller sets its own level now.
+        QTRY_VERIFY(seenBy(appA, 0).revision == seenBy(appB, 0).revision);
+        QVERIFY(accepted(core.invoke(appA, "slice.setListenLevel",
+                                     levelArgs(seenBy(appA, 0), 0.3, false))));
+        QCOMPARE(access->listenLevel(a.key.fingerprint(), 0).level, 0.3);
+        QCOMPARE(slice->afGain(), 60);
     }
 };
 

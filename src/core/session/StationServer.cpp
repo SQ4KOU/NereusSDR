@@ -660,6 +660,10 @@
 //               may be taken during its 180 s; the away devices published
 //               for Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    slice.setListenLevel behind the same
+//                                    sliceAccess gate. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -4407,7 +4411,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         // declared sliceAccess with sessionHolder.
         if ((message.commandVerb == "slice.listen" || message.commandVerb == "slice.stopListening"
              || message.commandVerb == "slice.takeControl"
-             || message.commandVerb == "slice.release")
+             || message.commandVerb == "slice.release"
+             || message.commandVerb == "slice.setListenLevel")
             && !peerHasSliceAccess(transport)) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,

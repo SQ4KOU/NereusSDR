@@ -6,7 +6,8 @@
 // R-R3-43: AudioEngine's per-slice receiver audio taps. A tap installed for
 // slice B receives exactly slice B's own audio at the point the local VAX
 // tee reads it: after the MOX gate, before slice mute, slice gain, pan, the
-// mix and master volume, with B's own AF gain undone as local VAX has it.
+// mix and master volume. Like local VAX it carries no AF level: AudioEngine's
+// mixer applies AF (slice control plan Task 6), so nothing is undone here.
 // The master-mix tap and the speakers stay byte-for-byte what they were.
 // =================================================================
 
@@ -259,9 +260,11 @@ private slots:
         h.engine->clearSliceAudioTap(&otherTap);
     }
 
-    // Each tap undoes its own slice's AF gain (its WDSP channel's), the
-    // scaling local VAX uses, with no VAX channel gain or mute involved.
-    void tapUndoesItsOwnSlicesAfGain()
+    // Each tap carries its slice's block as it arrives: the receive
+    // channel's AF setting does not reach the tap, and neither do the VAX
+    // channel gain and mute (slice control plan Task 6; the old tap divided
+    // out the channel's AF gain).
+    void tapIgnoresTheReceiversAfGain()
     {
         Harness h;
         QTemporaryDir config;
@@ -292,15 +295,12 @@ private slots:
         const std::vector<float> b = ramp(-0.5f);
         h.feedBoth(a, b, 1);
 
-        std::vector<float> expectedA = a;
-        std::vector<float> expectedB = b;
-        for (float& sample : expectedA) { sample *= 2.0f; }
-        for (float& sample : expectedB) { sample *= 4.0f; }
-        QVERIFY(tapA.received == expectedA);
-        QVERIFY(tapB.received == expectedB);
+        QVERIFY(tapA.received == a);
+        QVERIFY(tapB.received == b);
 
-        // An AF gain at or below 0.001 is not undone (as the VAX tee).
+        // AF 0 leaves the tap carrying the block.
         rxB->setAfGain(0.0);
+        h.radio->sliceById(h.sliceB)->setAfGain(0);
         tapB.received.clear();
         h.feedBoth(a, b, 1);
         QVERIFY(tapB.received == b);

@@ -283,6 +283,9 @@ struct RemoteAudioSessionHarness {
         sliceA = station.addSlice();
         sliceB = station.addSlice();
         Q_ASSERT(sliceA >= 0 && sliceB >= 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        station.sliceById(sliceA)->setAfGain(100);
+        station.sliceById(sliceB)->setAfGain(100);
         stationAudio->setSliceStreaming(sliceA, true);
         stationAudio->setSliceStreaming(sliceB, true);
         stationAudio->masterMixForTest().setSliceGain(sliceA, 0.60f, -0.95f);

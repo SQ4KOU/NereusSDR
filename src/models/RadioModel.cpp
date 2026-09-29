@@ -591,6 +591,10 @@
 //                device that is not here does not count in the preselector
 //                choice. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 6: the slice audio view carries
+//                the AF level, and an AF change republishes it; the mixer
+//                applies AF (JJ's ruling). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -11102,6 +11106,9 @@ void RadioModel::publishSliceAudioView()
         v.muted = s->muted();
         v.headphones = s->outputRoute() == SliceModel::OutputRoute::Headphones;
         v.vaxChannel = s->vaxChannel();
+        // Slice control plan Task 6: the AF level, applied in the mix to
+        // the controller's audio (JJ's ruling), 0..100 as 0..1.
+        v.afGain = static_cast<float>(std::clamp(s->afGain(), 0, 100)) / 100.0f;
     }
     for (int id = 0; id < AudioEngine::kMaxSliceAudioViews; ++id) {
         m_audioEngine->setSliceAudioView(id, views[static_cast<size_t>(id)]);
@@ -11521,6 +11528,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     connect(slice, &SliceModel::outputRouteChanged, this,
             [this](SliceModel::OutputRoute) { publishSliceAudioView(); });
     connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
+    connect(slice, &SliceModel::afGainChanged, this, [this](int) { publishSliceAudioView(); });
     publishSliceAudioView();
 
     // ── The transmitter needs a home the moment one exists ───────────────

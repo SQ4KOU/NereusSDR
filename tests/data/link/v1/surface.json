@@ -2402,6 +2402,34 @@
         },
         {
             "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "level",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "muted",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.setListenLevel"
+        },
+        {
+            "arguments": [
             ],
             "capability": "settingsBackupVersion",
             "capabilityVersion": 1,

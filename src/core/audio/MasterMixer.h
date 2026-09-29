@@ -67,6 +67,15 @@
 //                 sum, and the local sums may leave them out. NereusSDR-
 //                 original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-29 -- Slice control and shared listening plan Task 6: the AF
+//                 level rides into accumulate() and scales the slice in
+//                 its controller's sums, and each sum may also listen to
+//                 slices it does not control, at its own level, unpanned,
+//                 with a continuous hand-off between the two. Every owner
+//                 output is written each drain (a slot with no slice left
+//                 stale audio in its buffer before). NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -209,6 +218,7 @@ warren@wpratt.com
 //
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -274,8 +284,16 @@ public:
     // It picks which of the two sums tryDrain() builds the slice into
     // (VAX design 6.2: speakers OR headphones). A change of route is a
     // ramp too, so the slice crossfades from one output to the other.
+    //
+    // Slice control plan Task 6: `level` is the slice's AF level (0..1),
+    // applied here rather than in WDSP, and only in the sums of the device
+    // that controls the slice (the local sums through localMask, an owner's
+    // through its sliceMask). A listener's sum carries its own level
+    // instead (OwnerOutput::listenLevels), so the controller's AF and mute
+    // never reach it.
     void accumulate(int sliceId, const float* samples, int frames,
-                    bool muted = false, bool headphones = false);
+                    bool muted = false, bool headphones = false,
+                    float level = 1.0f);
 
 
     // Audio thread: sum one block if every barrier member has frames
@@ -311,11 +329,26 @@ public:
     // gain whichever local sum the slot's route builds it into. An owner
     // with no slice bit but a monitor route is not skipped.
     enum class OwnerMonitor : std::uint8_t { None, Speakers, Headphones };
+    //
+    // Slice control plan Task 6 (shared listening): `listenMask` names the
+    // slices this owner hears without controlling them, each into its
+    // speakers sum at listenLevels[id] (32 entries, 0 when muted), ramped,
+    // with no pan and no route of the controller's. A slice in both masks
+    // is the controller's. `listenSlot` (0..kMaxListenSlots-1) keys the
+    // ramp state this owner keeps from drain to drain; -1 keeps none, so
+    // the owner cannot listen. When a slice leaves an owner's sliceMask
+    // and enters its listenMask in the same drain, its listen level starts
+    // where the controller's gain was and ramps to the listen level, so a
+    // hand-off never steps by more than the two levels differ.
+    static constexpr int kMaxListenSlots = 7;
     struct OwnerOutput {
         std::uint32_t sliceMask{0};
         float* speakers{nullptr};
         float* headphones{nullptr};
         OwnerMonitor monitor{OwnerMonitor::None};
+        std::uint32_t listenMask{0};
+        const float* listenLevels{nullptr};
+        int listenSlot{-1};
     };
     // As the two-sum tryDrain, except that speakersOut and headphonesOut
     // carry only the slices `localMask` names (slot ids outside 0..31, the
@@ -325,9 +358,16 @@ public:
     // member (only the transmit monitor is queued), and returns 0 otherwise:
     // a member's own call drains the period, so a second drain never hands
     // the outputs two blocks in one period (Task 32, the MOX-gated slice).
+    //
+    // Slice control plan Task 6: `localListenMask` and `localListenLevels`
+    // are the local sums' listening, as an owner's listenMask and
+    // listenLevels (the hosting desktop listening to another device's
+    // slice plays it here at its own level).
     int tryDrain(float* speakersOut, float* headphonesOut, int maxFrames,
                  std::uint32_t localMask, OwnerOutput* owners, int ownerCount,
-                 bool localOutOfMask = true, bool onlyWithoutMembers = false);
+                 bool localOutOfMask = true, bool onlyWithoutMembers = false,
+                 std::uint32_t localListenMask = 0,
+                 const float* localListenLevels = nullptr);
 
     // Test seam: ramp length in frames (default kDefaultRampFrames).
     void setRampFrames(int frames);
@@ -406,8 +446,17 @@ private:
     //   }
     static const float* upSlewWindow();
 
+    // Listening ramp state per sum: [0] the local sums, [1 + listenSlot]
+    // each owner's.
+    static constexpr int kListenLanes = 1 + kMaxListenSlots;
+    using LaneLevels = std::array<float, kListenLanes>;
+    static_assert(kListenLanes == 8, "SliceState::ctlSeed lists one -1 per lane");
+
     struct SliceState {
         std::atomic<float> gain{1.0f};
+        // Slice control plan Task 6: the AF level, written by accumulate()
+        // on the audio thread; applied in the controller's sums only.
+        std::atomic<float> level{1.0f};
         std::atomic<float> pan{0.0f};
         std::atomic<bool>  muted{false};
         // R-R3-45: routed to the headphones sum instead of the speakers.
@@ -461,6 +510,15 @@ private:
         float stagedHpCurL{0.0f};
         float stagedHpCurR{0.0f};
         bool drainStaged{false};
+
+        // Slice control plan Task 6, audio thread only: each sum's ramped
+        // listen level, and the controller's gain in each sum the slice
+        // was controlled in last drain (-1 where it was not), the start
+        // of a hand-off's ramp.
+        LaneLevels listenCur{};
+        LaneLevels ctlSeed{-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
+        LaneLevels stagedListenCur{};
+        LaneLevels stagedCtlSeed{-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f};
     };
 
     // Grow (or first-allocate) a slice's ring to hold at least the upstream

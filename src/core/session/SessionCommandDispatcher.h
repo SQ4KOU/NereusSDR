@@ -207,6 +207,10 @@
 //                                    device's explicit tx.setTxSlice
 //                                    choice. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    handleSliceListenLevel for
+//                                    slice.setListenLevel. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -578,6 +582,9 @@ private:
     // Slice control plan Task 4 (sliceAccessVersion 1): slice.listen,
     // slice.stopListening, slice.takeControl and slice.release.
     void handleSliceAccessVerb(const NereusSDR::SessionMessage& invoke);
+    // Slice control plan Task 6: slice.setListenLevel, a listener's own
+    // level and mute (SliceAccessController::setListenLevel).
+    void handleSliceListenLevel(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

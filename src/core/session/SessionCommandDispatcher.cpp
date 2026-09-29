@@ -256,6 +256,10 @@
 //                                    nobody else on it releases it, and it
 //                                    closes. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    slice.setListenLevel, a listener's own
+//                                    level and mute for a slice it hears.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -503,8 +507,8 @@ QString notRepresentableReason()
 //   support.collect,
 //   support.setLogCategories supportBundleVersion 1 (the bundle is written
 //                          on a worker thread; its answer comes later)
-//   slice.listen, slice.stopListening, slice.takeControl, slice.release
-//                          sliceAccessVersion 1, to a device whose hello
+//   slice.listen, slice.stopListening, slice.takeControl, slice.release,
+//   slice.setListenLevel   sliceAccessVersion 1, to a device whose hello
 //                          declares sliceAccess with sessionHolder
 //                          (SliceAccessController answers them)
 //
@@ -863,6 +867,12 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"slice.release",
          {arg("sliceId", kInt), arg("incarnation", kInt), arg("controlRevision", kInt)},
          "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Slice control plan Task 6: a listener's own level (0..1) and mute
+        // for a slice it hears; the controller's AF is not touched.
+        {"slice.setListenLevel",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("level", kDouble),
+          arg("muted", kBool)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -1085,6 +1095,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     if (invoke.commandVerb == "slice.listen" || invoke.commandVerb == "slice.stopListening"
         || invoke.commandVerb == "slice.takeControl" || invoke.commandVerb == "slice.release") {
         handleSliceAccessVerb(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "slice.setListenLevel") {
+        handleSliceListenLevel(invoke);
         return;
     }
     // Slice control plan Task 4: a device that shares slices may make any
@@ -2869,6 +2883,72 @@ void SessionCommandDispatcher::handleSliceAccessVerb(const SessionMessage& invok
     emit commandResultReady(SessionMessages::commandResult(
         verb, invoke.commandId, result.accepted, result.reason,
         result.accepted ? result.affected : QList<QByteArray>{}, values));
+}
+
+// Slice control plan Task 6 (sliceAccessVersion 1): a listener's own level
+// and mute for one slice. The level is 0..1 and is applied in the Core's
+// mixer to this device's audio only (SliceAccessController::setListenLevel).
+void SessionCommandDispatcher::handleSliceListenLevel(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const auto refuseUnread = [this, &invoke, &verb] {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+    };
+    if (!hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation", "level", "muted"})) {
+        refuseUnread();
+        return;
+    }
+    qint64 sliceId = -1;
+    qint64 incarnation = -1;
+    double level = -1.0;
+    bool muted = false;
+    bool haveLevel = false;
+    bool haveMuted = false;
+    for (const MirrorUpdate& argument : invoke.arguments) {
+        if (argument.name == "sliceId" || argument.name == "incarnation") {
+            if (argument.kind != MirrorWireKind::Int64
+                || argument.value.typeId() != QMetaType::LongLong) {
+                refuseUnread();
+                return;
+            }
+            (argument.name == "sliceId" ? sliceId : incarnation) = argument.value.toLongLong();
+        } else if (argument.name == "level") {
+            if (argument.kind != MirrorWireKind::Float64
+                || argument.value.typeId() != QMetaType::Double) {
+                refuseUnread();
+                return;
+            }
+            level = argument.value.toDouble();
+            haveLevel = true;
+        } else if (argument.name == "muted") {
+            if (argument.kind != MirrorWireKind::Bool
+                || argument.value.typeId() != QMetaType::Bool) {
+                refuseUnread();
+                return;
+            }
+            muted = argument.value.toBool();
+            haveMuted = true;
+        }
+    }
+    if (!haveLevel || !haveMuted || sliceId < 0 || sliceId > 63 || incarnation < 0
+        || !std::isfinite(level) || level < 0.0 || level > 1.0) {
+        refuseUnread();
+        return;
+    }
+    if (m_sliceAccessController.isNull() || m_requester.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot share slices between devices."), {});
+        return;
+    }
+    SliceOwnership::SliceRef ref;
+    ref.sliceId = static_cast<int>(sliceId);
+    ref.incarnation = static_cast<quint64>(incarnation);
+    const SliceAccessController::Result result =
+        m_sliceAccessController->setListenLevel(m_requester, ref, level, muted);
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, {}));
 }
 
 void SessionCommandDispatcher::handleConfirmAnswer(const SessionMessage& invoke)

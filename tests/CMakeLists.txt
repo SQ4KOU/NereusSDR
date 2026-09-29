@@ -1667,12 +1667,17 @@ nereus_add_test(tst_audio_engine_vax_gain)
 
 # ── R3 receiver audio (R-R3-43) Task 2: per-slice receiver audio taps ────────
 # A slice tap carries exactly that slice's audio at the VAX tee's point (after
-# the MOX gate, before mute/gain/pan/mix/master volume) with its own AF gain
-# undone; the master tap and speakers stay byte-for-byte unchanged.
+# the MOX gate, before mute/gain/pan/mix/master volume) with no AF level in
+# it; the master tap and speakers stay byte-for-byte unchanged.
 nereus_add_test(tst_audio_engine_slice_tap)
 # iPhone app Task 76 (R-IOS-31, ruling 9.2): one mix per owner, and the
 # Core's local output playing the station device's slices only.
 nereus_add_test(tst_audio_engine_owner_mix)
+# Slice control plan Task 6: listeners hear a slice at their own level, the
+# mixer applies each slice's AF, and VAX stays audible at AF 0.
+nereus_add_test(tst_slice_listen_audio)
+target_compile_definitions(tst_slice_listen_audio PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Phase 3O Sub-Phase 9 Task 9.2b: VaxApplet smoke tests ────────────────────
 # Widget-level construction, signal plumbing, AppSettings round-trip.

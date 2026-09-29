@@ -54,6 +54,11 @@
 //                 [v2.10.3.15]; it was inverted); the type cache starts at
 //                 Linear Phase, where WDSP opens the channel. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 6 (JJ's ruling): the WDSP panel
+//                 gain is held at unity and AudioEngine's mixer applies the
+//                 AF level, a departure from Thetis radio.cs, which sets AF
+//                 as SetRXAPanelGain1. By J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2198,7 +2203,14 @@ void RxChannel::setAfGain(double gain)
         //     yet, and recorder gain hooks belong in the recorder module when it lands.
         // WDSP: third_party/wdsp/src/patchpanel.c:142 — assigns directly to
         //   rxa[channel].panel.p->gain1 under csDSP critical section.
-        SetRXAPanelGain1(m_channelId, gain);
+        //
+        // Slice control plan Task 6 (JJ's ruling), a departure from the
+        // radio.cs wiring above: the AF level is applied in AudioEngine's
+        // mixer, to the controller's audio only, so each listener can hear
+        // the slice at its own level and VAX stays audible at AF 0. The
+        // panel gain stays at unity; m_afGain is kept as the slice's value.
+        Q_UNUSED(gain);
+        SetRXAPanelGain1(m_channelId, kPanelGain1Unity);
     });
 #endif
 }
@@ -2722,8 +2734,11 @@ void RxChannel::applyActive(bool active, bool drainOnStop)
         // The model layer will follow up with the persisted slice gain; this
         // is a defence-in-depth seed for the gap between createRxChannel and
         // the first slice sync.
+        //
+        // Slice control plan Task 6: unity, not m_afGain; the mixer applies
+        // the AF level (see setAfGain).
         if (active) {
-            SetRXAPanelGain1(m_channelId, m_afGain.load());
+            SetRXAPanelGain1(m_channelId, kPanelGain1Unity);
         }
 #endif
         qCDebug(lcDsp) << "RxChannel" << m_channelId
@@ -2745,7 +2760,8 @@ void RxChannel::applyActive(bool active, bool drainOnStop)
         applyActiveOnLane(active, drainOnStop, /*alsoRequested=*/false);
 #ifdef HAVE_WDSP
         if (active) {
-            SetRXAPanelGain1(m_channelId, m_afGain.load());
+            // Slice control plan Task 6: unity; the mixer applies AF.
+            SetRXAPanelGain1(m_channelId, kPanelGain1Unity);
         }
 #endif
     });

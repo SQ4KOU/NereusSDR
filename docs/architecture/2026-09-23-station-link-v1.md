@@ -1037,8 +1037,8 @@ When a feature is off, its version is 0:
   the `SliceAccess` object per slice (`access:<id>`, section 7.1), each
   slice the device has joined as `slice:<id>` and every other as
   `marker:<id>` (section 7.5), the verbs `slice.listen`,
-  `slice.stopListening`, `slice.takeControl` and `slice.release`
-  (section 9.1), `setActiveSliceById` on any joined slice, and the
+  `slice.stopListening`, `slice.takeControl`, `slice.release` and
+  `slice.setListenLevel` (section 9.1), `setActiveSliceById` on any joined slice, and the
   `controlTaken` notice. A Core without the feature, and a peer that did
   not declare it, refuse the verbs: "Update this app to listen to and take
   slices on this Core." to the peer, "This Core cannot share slices
@@ -3273,6 +3273,20 @@ object says who controls and who listens. The verbs (section 9.1):
   slice is given one (section 7.1). Its layout is not saved, so after a
   restart, or when the radio connects with no slice, the Core makes one
   Slice A that nobody owns.
+- `slice.setListenLevel {sliceId, incarnation, level, muted}` sets the
+  device's own listening level (0 to 1) and mute for a slice it listens
+  to without controlling it. It changes only what that device hears: the
+  slice's AF gain and mute, which its controller sets, are untouched, and
+  two listeners of one slice each hear it at their own level. A new
+  listener, and a former controller that stays on as a listener, start at
+  the slice's AF gain at that moment. From a device not listening to the
+  slice it is refused, "You are not listening to slice <letter>. Listen in
+  first."; a level outside 0 to 1, or not a number, is refused as
+  unreadable. Each listened slice joins the device's audio centered at
+  this level. The Core applies each slice's AF gain in its own mixer (the
+  operator's audio at the AF gain, each listener's at its own level), not
+  in the receive channel, so the VAX bus and slice taps carry the slice
+  at a fixed level whatever the AF gain, and stay audible at AF 0.
 - `setActiveSliceById` from a session with the feature makes any slice it
   has joined its active receive slice; only a slice it controls also
   becomes its active slice (ruling 5.10). From an older window, today's
@@ -4120,11 +4134,13 @@ command (`biasMode` "ClassA" or "ClassAB", `fanMode` "Auto", "Quiet" or
 "Continuous", or `ledIntensity` 0 to 100), and none or more than one is
 refused.
 
-`slice.listen`, `slice.stopListening`, `slice.takeControl` and
-`slice.release` (`sliceAccessVersion` 1, section 7.5) name the slice by
+`slice.listen`, `slice.stopListening`, `slice.takeControl`,
+`slice.release` and `slice.setListenLevel` (`sliceAccessVersion` 1,
+section 7.5) name the slice by
 `sliceId` and `incarnation`, each a whole number of 0 or more (read from
 the `access:<id>` object); take and release add the `controlRevision`
-the device saw. `slice.listen` and `slice.takeControl` return the slice's
+the device saw, and `slice.setListenLevel` adds `level` (`f64`, 0 to 1)
+and `muted` (`bool`). `slice.listen` and `slice.takeControl` return the slice's
 `controlRevision` afterwards in `values` (`i64`), and each accepted verb
 names `slice:<id>` and `access:<id>` in `affected`. From a peer without
 the feature they are refused before they are read (section 6.3). A
@@ -4273,6 +4289,7 @@ letter, controllerDeviceId}`) in its `values` (section 7.5).
 | `slice.stopListening` | `sliceId` i64, `incarnation` i64 | `sliceAccessVersion` | 1 | 11 |
 | `slice.takeControl` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
 | `slice.release` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.setListenLevel` | `sliceId` i64, `incarnation` i64, `level` f64, `muted` bool | `sliceAccessVersion` | 1 | 11 |
 | `station.settingsExport.begin` | none | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.read` | `transferId` utf8, `offset` i64 | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.cancel` | `transferId` utf8 | `settingsBackupVersion` | 1 | 11 |

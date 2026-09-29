@@ -65,6 +65,9 @@
 //               monitor-audio; while its device holds transmit and MON is
 //               on, MON rides in its main or headphones stream. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 6: the owner mix also sums the
+//               slices this device listens to, at its own listen level.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -710,6 +713,9 @@ private:
     DaemonSpectrumSource& m_source;
     QMap<MediaSourceKey, SourceRuntime>& m_sources;
     int m_ownerMix{-1};
+    // Slice control plan Task 6: follows this device's listen levels while
+    // it holds an owner mix.
+    QMetaObject::Connection m_listenLevelConnection;
     /// coreBusyLimitsSources() as last applied to the sources.
     bool m_transformsFollowFrameRate = false;
     NoiseFloorEstimator m_noiseFloorEstimator;
