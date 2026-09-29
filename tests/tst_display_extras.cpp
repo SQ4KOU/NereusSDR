@@ -388,6 +388,69 @@ DisplayExtrasFrame fullFrame(const DisplayCodecContext& context)
 
 class TstDisplayExtras : public QObject {
     Q_OBJECT
+private:
+    // Two endpoints on one source frame, the same but for `normalize`:
+    // the mean difference of their traces (normalised minus plain).
+    double normaliseShiftFor(const QJsonObject& traceFields)
+    {
+        Harness harness;
+        if (!harness.establishSession()) { return 1000.0; }
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        if (!harness.startReadyPeer()) { return 1000.0; }
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        const QJsonObject wide{{QStringLiteral("minDbm"), -400.0},
+                               {QStringLiteral("maxDbm"), 100.0}};
+        const QJsonObject base = withFields(wide, traceFields);
+        harness.client.sendMediaControl(
+            withFields(withFields(subscription(7, harness.sliceId, centreHz), base),
+                       {{QStringLiteral("normalize"), true}}),
+            harness.client.sessionEpoch());
+        harness.client.sendMediaControl(
+            withFields(subscription(8, harness.sliceId, centreHz), base),
+            harness.client.sessionEpoch());
+        if (!QTest::qWaitFor([&] { return harness.controller.activeEndpointCount() == 2; },
+                             10'000)) {
+            return 1000.0;
+        }
+        QMap<quint32, QMap<quint64, DisplayCodecFrame>> frames;
+        QMap<quint32, DisplayCodecDecoder> decoders;
+        int cursor = 0;
+        quint64 shared = 0;
+        const auto sameFrame = [&] {
+            harness.feedRadio(0.15);
+            QTest::qWait(20);
+            const QList<QByteArray>& displays = harness.mediaTransport->displays;
+            for (; cursor < displays.size(); ++cursor) {
+                const QByteArray& bytes = displays.at(cursor);
+                if (bytes.startsWith("NSDX")) { continue; }
+                const quint32 endpoint = static_cast<quint8>(bytes.at(11));
+                const auto decoded = decoders[endpoint].decode(bytes);
+                if (decoded.disposition == DisplayCodecDisposition::Accepted) {
+                    frames[endpoint].insert(decoded.frame.producerTimestamp, decoded.frame);
+                }
+            }
+            for (auto it = frames[7].cbegin(); it != frames[7].cend(); ++it) {
+                if (frames[8].contains(it.key())) {
+                    shared = it.key();
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (!QTest::qWaitFor(sameFrame, 30'000)) { return 1000.0; }
+        const DisplayCodecFrame normalised = frames[7].value(shared);
+        const DisplayCodecFrame plain = frames[8].value(shared);
+        double sum = 0.0;
+        int n = 0;
+        for (int x = 0; x < plain.traceDbm.size() && x < normalised.traceDbm.size(); ++x) {
+            if (plain.traceDbm.at(x) < -380.0f || plain.traceDbm.at(x) > 80.0f) { continue; }
+            sum += normalised.traceDbm.at(x) - plain.traceDbm.at(x);
+            ++n;
+        }
+        harness.finish();
+        return n > 100 ? sum / n : 1000.0;
+    }
+
 private slots:
     void initTestCase()
     {
@@ -561,8 +624,10 @@ private slots:
         // 192 kHz over 4096 bins.
         const double binWidthHz = 192000.0 / 4096.0;
         const float shift = 7.5f - 10.0f * std::log10(static_cast<float>(binWidthHz));
-        QCOMPARE(a.displayShiftDb(binWidthHz), 0.0f);
-        QVERIFY(std::abs(b.displayShiftDb(binWidthHz) - shift) < 1.0e-5f);
+        // Average (2): normalise applies. Peak (0): only the calibration.
+        QCOMPARE(a.displayShiftDb(binWidthHz, 2), 0.0f);
+        QVERIFY(std::abs(b.displayShiftDb(binWidthHz, 2) - shift) < 1.0e-5f);
+        QVERIFY(std::abs(b.displayShiftDb(binWidthHz, 0) - 7.5f) < 1.0e-5f);
         const QVector<QVector<float>> rows = recordedRows(40, 64);
         for (int i = 0; i < rows.size(); ++i) {
             DisplayCodecFrame frame;
@@ -573,6 +638,7 @@ private slots:
             DisplayExtrasInputs inputs;
             inputs.fps = 30;
             inputs.binWidthHz = binWidthHz;
+            inputs.traceDetector = 2;   // Average: normalise applies
             const DisplayExtrasFrame x = a.process(frame, inputs);
             const DisplayExtrasFrame y = b.process(frame, inputs);
             QCOMPARE(y.peakBlobs->size(), x.peakBlobs->size());
@@ -1291,6 +1357,25 @@ private slots:
         }
         QVERIFY(moved > 100);
         harness.finish();
+    }
+
+    // Thetis applies the 1 Hz normalise only with the Average, Sample and
+    // RMS pan detectors (specHPSDR.cs:288-294 [v2.10.3.15]); the desktop
+    // does, so the Core must too: with Peak a normalise request moves
+    // nothing, with Average it moves the trace by -10 log10(bin width).
+    void normaliseFollowsTheTraceDetector()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#endif
+        QJsonObject average = plane();
+        average.insert(QStringLiteral("detector"), static_cast<int>(SpectrumDetectorMode::Average));
+        const QJsonObject peakTrace{{QStringLiteral("trace"), plane()}};
+        const QJsonObject averageTrace{{QStringLiteral("trace"), average}};
+        const double peak = normaliseShiftFor(peakTrace);
+        const double avg = normaliseShiftFor(averageTrace);
+        QVERIFY2(std::abs(peak) <= 500.0 / 255.0, qPrintable(QString::number(peak)));
+        QVERIFY2(avg < -5.0, qPrintable(QString::number(avg)));
     }
 
     void aRequestTheCoreCannotReadIsRefused()

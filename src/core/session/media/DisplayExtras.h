@@ -206,6 +206,9 @@ struct DisplayExtrasInputs {
     bool transmitting {false};
     /// The source's bin width (sample rate / FFT size), for normalise.
     double binWidthHz {0.0};
+    /// The endpoint's trace detector: normalise applies only with Average,
+    /// Sample or RMS (normalizeAppliesToDetector), as on the desktop.
+    int traceDetector {0};
 };
 
 class DisplayExtrasProcessor {
@@ -232,8 +235,10 @@ public:
     bool retuneClarity();
 
     /// What the Core adds to every dBm it sends for this endpoint:
-    /// calibrationOffsetDb plus the normalise shift.
-    float displayShiftDb(double binWidthHz) const;
+    /// calibrationOffsetDb plus the normalise shift, which applies only with
+    /// the Average, Sample and RMS trace detectors (2, 3, 4), as Thetis
+    /// updateNormalizePan and the desktop do.
+    float displayShiftDb(double binWidthHz, int traceDetector) const;
 
     /// Runs the computations on one reduced frame as the Core produced it
     /// (before the shift) and returns the sections asked for, shifted, for

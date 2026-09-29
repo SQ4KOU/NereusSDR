@@ -13,6 +13,11 @@
 //                                    Re-tune for one endpoint
 //                                    (displayExtrasVersion 2).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-18: normalise applies only
+//                                    with the Average, Sample and RMS
+//                                    trace detectors, as the desktop and
+//                                    Thetis do. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayExtras.h"
@@ -570,11 +575,13 @@ bool DisplayExtrasProcessor::retuneClarity()
     return true;
 }
 
-float DisplayExtrasProcessor::displayShiftDb(double binWidthHz) const
+float DisplayExtrasProcessor::displayShiftDb(double binWidthHz, int traceDetector) const
 {
     const float calibration = m_request.calibrationOffsetDb
         ? static_cast<float>(*m_request.calibrationOffsetDb) : 0.0f;
-    return calibration + normalizeShiftDb(m_request.normalize.value_or(false), binWidthHz);
+    return calibration + normalizeShiftDb(
+        m_request.normalize.value_or(false) && normalizeAppliesToDetector(traceDetector),
+        binWidthHz);
 }
 
 DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& frame,
@@ -586,7 +593,7 @@ DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& fram
     out.encoderSequence = frame.encoderSequence;
 
     const int fps = std::max(1, inputs.fps);
-    const float shift = displayShiftDb(inputs.binWidthHz);
+    const float shift = displayShiftDb(inputs.binWidthHz, inputs.traceDetector);
     const QVector<float>& trace = frame.traceDbm;
 
     // The desktop's triggers: fast attack on a band change, a tune of more
