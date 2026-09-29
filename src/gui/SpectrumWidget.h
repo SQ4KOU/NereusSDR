@@ -206,6 +206,7 @@ mw0lge@grange-lane.co.uk
 #include <QPainterPath>
 #include <QPixmap>
 #include <QColor>
+#include <functional>
 #include <QPoint>
 #include <QMap>
 #include <QHash>
@@ -1127,6 +1128,7 @@ public:
     // a live ClarityController. Exposed in tests only; production code
     // uses the onNoiseFloorChanged() slot via signal/slot connection.
     void testApplyNoiseFloor(float nfDbm) { onNoiseFloorChanged(nfDbm); }
+    void gridFollowTickForTest() { gridFollowTick(); }
 
     // DispNormalize — normalize-to-1-Hz before display.
     // Routes to SetDisplayNormOneHz in the WDSP spectrum engine.
@@ -1137,6 +1139,10 @@ public:
     // the WDSP spectrum engine is integrated (Task 5.x).
     void setDispNormalize(bool on);
     bool dispNormalize() const { return m_dispNormalize; }
+    // Normalise is on and the spectrum detector is Average, Sample or RMS
+    // (Thetis applies it only then; DisplayFollowers
+    // normalizeAppliesToDetector). The stored choice is dispNormalize().
+    bool normalizeActive() const;
 
     // ShowPeakValueOverlay — scan visible bins, render "Peak: X.X dBm @ Y.YYYY MHz"
     // as corner text. Refreshed on a timer throttled by m_peakTextDelayMs.
@@ -1355,6 +1361,11 @@ public:
     int  panIndex() const { return m_panIndex; }
     void loadSettings();
     void loadSpectrumPeaksSettings();
+    // The grid's noise-floor tracking rule both feeds share, and its timer.
+    void applyGridFollow(float nfDbm);
+    void updateGridFollowTimer();
+    // Applies a shared (once for every pan) setting to every other pan.
+    void shareWithOtherPans(const std::function<void(SpectrumWidget*)>& apply);
     void saveSettings();
     // Public coalesced-save trigger. Used by setup pages that call setDbmRange()
     // directly (which has no internal save) and need to ensure the new range
@@ -1505,6 +1516,8 @@ public slots:
     // Range delta uses std::abs() — abs incase //MW0LGE [2.9.0.7] [original inline comment from console.cs:46081]
     // NereusSDR-original: global panadapter default, no RX1/RX2 split.
     void onNoiseFloorChanged(float nfDbm);
+    // Thetis tmrAutoAGC port: the grid rule on the pan's own noise floor.
+    void gridFollowTick();
 
     // ── Waterfall scrollback (sub-epic E) ─────────────────────────────────
     // Reset the rewind ring buffer back to empty + live state. Public so
@@ -3111,11 +3124,21 @@ private:
     bool m_adjustGridMinToNF{false};
     int  m_nfOffsetGridFollow{0};    // dB offset added to NF estimate (default 0)
     bool m_maintainNFAdjustDelta{false};
+    // Thetis tmrAutoAGC port (gridFollowTick): the display noise floor
+    // Thetis exposes (m_fNoiseFloorRX1, lerp + NF shift) and whether it is
+    // good (m_bNoiseFloorGoodRX1), the 500 ms timer, and when Clarity last
+    // fed this pan (a pan Clarity feeds keeps Clarity's grid).
+    float   m_gridFollowNfDbm{-200.0f};
+    bool    m_gridFollowNfGood{false};
+    QTimer* m_gridFollowTimer{nullptr};
+    qint64  m_lastClarityGridNfMs{0};
+    static constexpr qint64 kClarityGridHoldMs = 1500;
 
     // From Thetis specHPSDR.cs:325 [v2.10.3.13] NormOneHzPan
     bool m_dispNormalize{false};
 
     // From Thetis console.cs:20073 peak_text_delay=500 [v2.10.3.13]
+    // Upstream tags preserved: //MW0LGE (from cited console.cs:20070) [v2.10.3.15]
     // Color from console.cs:20278 Color.DodgerBlue [v2.10.3.13]
     bool            m_showPeakValueOverlay{false};
     OverlayPosition m_peakValuePosition{OverlayPosition::TopRight};

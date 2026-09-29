@@ -4,6 +4,9 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-28: R-IOS-18: the display shift applies normalise only with
+//               the endpoint's Average, Sample or RMS trace detector.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data
@@ -4391,7 +4394,8 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
                 extrasFrame = current.extras->process(
                     *reduced, displayExtrasInputs(current, binWidthHz, nowNs));
             }
-            const float shift = current.extras->displayShiftDb(binWidthHz);
+            const float shift = current.extras->displayShiftDb(
+                binWidthHz, static_cast<int>(current.request.trace.detector));
             if (shift != 0.0f) {
                 for (QVector<float>* plane : {&reduced->traceDbm, &reduced->waterfallDbm,
                                               &reduced->wideDbm}) {
@@ -4470,6 +4474,7 @@ DisplayExtrasInputs DaemonMediaController::displayExtrasInputs(const EndpointEnt
     inputs.centreHz = context.exactCentreHz;
     inputs.spanHz = context.exactSpanHz;
     inputs.binWidthHz = binWidthHz;
+    inputs.traceDetector = static_cast<int>(entry.request.trace.detector);
     if (m_radioModel) {
         if (const SliceModel* slice = m_radioModel->sliceById(entry.sliceId)) {
             inputs.sliceHz = slice->frequency();

@@ -2624,6 +2624,17 @@ nereus_add_test(tst_waterfall_defaults_changes)
 # reaches every existing pan at once, and a new pan starts with them.
 nereus_add_test(tst_spectrum_peaks_all_pans EXTRA_LABELS gui)
 
+# Display settings stored once for every pan (spectrum overlays, normalize,
+# peak value readout, grid noise-floor tracking, band plan text size, the
+# per-band grid, dB step and 3D floor) reach every pan when one changes, so
+# another pan's later save cannot write the old value back.
+nereus_add_test(tst_display_shared_settings_all_pans EXTRA_LABELS gui)
+
+# Grid noise-floor tracking follows the pan's own display noise floor every
+# 500 ms, as Thetis tmrAutoAGC does (console.cs:46136-46167 [v2.10.3.15]),
+# so it works with Clarity off; a pan Clarity feeds keeps Clarity's grid.
+nereus_add_test(tst_grid_follows_display_noise_floor EXTRA_LABELS gui)
+
 # Thetis resets a receiver's peaks when its display centre moves or its
 # display edges change (display.cs:907-921, 1214-1245 [v2.10.3.15]); a pan
 # does the same, local or remote.

@@ -3080,7 +3080,8 @@ int StationServer::displayExtrasVersion() const
     // 2 (R-IOS-27, R-IOS-06): also the clarity-retune operation.
     // 3: activePeakHold.onTx, and the peak hold's hold time and transmit
     // gate as the desktop's.
-    return m_mediaEnabled ? 3 : 0;
+    // 4 (R-IOS-18): noiseFloor.fastAttack and the noise floor state section.
+    return m_mediaEnabled ? 4 : 0;
 }
 
 int StationServer::deviceAdminVersion() const
@@ -7189,7 +7190,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 11);
+            const int version = qMin(declared, 12);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -9799,7 +9800,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 11) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 12) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

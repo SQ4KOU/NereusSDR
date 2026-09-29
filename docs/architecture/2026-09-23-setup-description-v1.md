@@ -1,4 +1,4 @@
-# Setup description versions 1–8
+# Setup description versions 1–12
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -81,8 +81,9 @@ edited value at this boundary is an eight-digit `#RRGGBBAA` string, including
 the final alpha byte. This is ColorSwatchButton's phone-facing format; the
 desktop's own AppSettings uses Qt `HexArgb` (`#AARRGGBB`) and is not copied to
 the phone. Core accepts only the ten named IDs/phone keys and exact default
-colors. The hidden Waterfall Low Color row and Reset Colors action remain
-undescribed. Appearance's source category is V7; its RGBA defaults are sent
+colors. The hidden Waterfall Low Color row remains undescribed (it is an
+unbuilt feature on the desktop); version 12 describes the Reset Colors action
+(below). Appearance's source category is V7; its RGBA defaults are sent
 only to V4+ peers, while older projections retain all ten
 color controls without `default`. No station settings permission is needed.
 
@@ -147,10 +148,11 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 11. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-11 ceiling, and Appearance a version-7
-ceiling with its prior version-4 projection for V4–V6; the other
-categories on this source retain version 3.
+future declaration at version 12. Hardware has a version-6 ceiling, PA a
+version-5 ceiling, Display a version-12 ceiling, and Appearance a version-12
+ceiling with its prior version-4 projection for V4–V6 and version-7
+projection for V7–V11; the other categories on this source retain
+version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -315,6 +317,98 @@ Appearance. No new Core setting or wire verb is defined. V1–V10
 projections retain their prior version numbers, page lists and
 11/14/21/29/33 control counts; V11 has 48 Display controls on five partial
 pages. Phone parsing and dispatch of V11 are separately owned.
+
+Version 12 describes the rest of Setup > Display after Spectrum Peaks, and
+Appearance's Reset all colors. Every new row has
+`requiresDescriptionVersion:12` and a `binding.phone` that is the desktop's
+own key or, for a button, an action identity; the Core accepts each row only
+as the exact closed object it publishes. V1–V11 projections keep their
+versions, page lists and control counts (Display V11: 48 controls on five
+pages; Appearance V7: 13 controls); V12 has 100 Display controls on seven
+pages and 14 Appearance controls.
+
+Display pages, in the desktop's order: Spectrum Defaults gains a Profile
+section (Reset to Smooth Defaults, Enable Clarity) before Fast Fourier
+Transform and a Spectrum Overlays section after Rendering (Show cursor
+frequency, Show bin width, Show noise floor, NF shift, NF line width, NF line,
+text and fast-attack colours, Normalize trace, Show peak value overlay, its position and
+refresh, Get Monitor Hz). Waterfall Defaults gains Levels (High and Low
+Threshold, AGC, Use spectrum min/max, Copy spectrum min/max) and Waterfall
+NF-AGC (Enable, NF offset) before Display, Color Scheme at the end of
+Display, and Rewind history (Depth) and Time (Timestamp Position and Mode)
+after Overlays. The new Grid & Scales page (`display.gridScales`) has Grid
+(Show grid, Show dBm scale strip, dB Max and dB Min per band, dB Step),
+Labels (Freq Label Align, Show zero line, Show FPS overlay), Noise-Floor
+Tracking (Adjust grid min, NF offset, Maintain grid range) and Copy (Copy
+waterfall thresholds). Multimeter gains Show decimal point, Signal Units
+(Display units) and Signal History (History duration). TX Display gains
+Waterfall Amplitude Scale (Low and High Level, Palette, Low Color). The new
+3D View page (`display.threeD`) has one 3D VIEW section: Reset 3D, Spectrum
+(2D or 3D), 3D Floor per band, 3D Gain, Span, Angle and Slice Shadow. The two
+new pages describe every control they have and carry no `coverage`. The
+desktop's defaults, ranges and labels are the published ones; the ids, keys,
+defaults and ranges are listed in `resources/setup/display.json`.
+
+Rows that feed the display extras subscription use `applies:"subscription"`
+and gate on `displayExtrasVersion:1`: Enable Clarity, the waterfall
+thresholds, AGC, Use spectrum min/max, NF-AGC and its offset (together the
+`waterfallLevels` field: `clarity` when Clarity is on, else `noiseFloorAgc`
+when NF-AGC is on, else `agc` when AGC is on, else `manual`; low and high are
+the thresholds, or the pan's spectrum bottom and top with Use spectrum
+min/max; offset is the NF offset), Show noise floor and NF shift (the
+`noiseFloor` field) and Normalize trace (`normalize`, sent true only while
+the spectrum detector is Average, Sample or RMS; the Core applies it only
+then too). The NF line width and line and text colours draw the extras'
+noise floor and gate on the same capability; the fast-attack colour needs
+the noise floor state (`noiseFloor.fastAttack`) and gates on
+`displayExtrasVersion:4`. The 3D Spectrum choice sets the subscription's
+`wideSpanFactor` and gates on `remoteMediaVersion:1`. The Grid & Scales
+noise-floor tracking rows follow the pan's display noise floor as Thetis
+does (every 500 ms, not while transmitting, the extras' noise floor while
+its state is not fast attack), or Clarity's estimate from the Core's
+`noise-floor` operation while Clarity is on; they gate on
+`displayExtrasVersion:4`. The TX
+Display waterfall rows colour the transmit display and gate on
+`txDisplayVersion:1`. Every other row changes only the phone's drawing,
+`applies:"live"`, with no gate.
+
+Three closed fields are new in version 12. `enabledWhen:{"phone":<key>,
+"oneOf":[<values>]}` enables a row only while the named row of this
+description holds one of the values (Normalize: spectrum detector 2, 3 or 4;
+the waterfall thresholds, AGC and NF-AGC rows: Use spectrum min/max false;
+the grid NF offset and Maintain grid range: Adjust grid min true); the
+desktop disables the same rows. `perBand:{"label":<template>}` marks a row
+the desktop keeps once per band: the value is stored under
+`<binding.phone>_<band>` for the pan's current band (160m, 80m, 60m, 40m,
+30m, 20m, 17m, 15m, 12m, 10m, 6m, GEN, WWV or XVTR; the band of the pan's
+centre frequency as `Band::bandFromFrequency` finds it), shared by every pan,
+and the label shows the band where the template has `%1`. `confirm` is the
+desktop's exact question before a destructive action: the renderer asks it
+with Yes and No, No the default, and acts only on Yes.
+
+A `kind:"button"` row with a `binding.phone` is a phone action. It has no
+value or default and acts on the pan the page is editing, exactly as the
+desktop's button acts on its active pan, in a local or a remote window:
+`smoothDefaults` sets Color Scheme to Clarity Blue (7), Spectrum Averaging to
+Log Recursive (3), Trace & Fill Color to `#FFFFFFE6`, Fill under trace off,
+waterfall AGC on and Update Period 30 ms; `getMonitorHz` sets FPS to the
+screen's refresh rate rounded and held to 10–60, as an edit of the FPS row
+(the same availability); `copySpectrumMinMax` sets High Threshold to the
+pan's spectrum top and Low Threshold to its bottom; `copyWaterfallThresholds`
+sets the current band's dB Max and dB Min to the waterfall High and Low
+Threshold, rounded; `reset3d` sets the six 3D rows to their defaults (3D
+Floor for the current band); `resetColors` sets the ten Colors & Theme
+swatches to their defaults. No action writes a Core setting except
+`getMonitorHz` through the FPS row.
+
+Not described, with the reason: Line Width (the phone has its own line
+width, D75), Cal Offset and Display Thread Priority (the Core calibrates and
+schedules the display; a remote window disables both), the noise floor text
+position (disabled on the desktop, no effect), the TX Custom Gradient (no
+gradient editor kind), the Waterfall Low Level Color (unbuilt) and the
+Multimeter peak hold, text hold, averaging window, digital delay and history
+enable (unbuilt). Derived readouts (bin width, delay, effective rewind) and
+the cross-links are not controls.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

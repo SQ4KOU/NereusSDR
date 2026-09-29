@@ -203,6 +203,7 @@
         {"id": "media-nsdc1-transmit", "file": "media/nsdc1-transmit.bin", "kind": "media", "requires": {"txDisplayVersion": 1}},
         {"id": "media-nsdx1-full", "file": "media/nsdx1-full.bin", "kind": "media", "requires": {"displayExtrasVersion": 1}},
         {"id": "media-nsdx1-noise-floor", "file": "media/nsdx1-noise-floor.bin", "kind": "media", "requires": {"displayExtrasVersion": 1}},
+        {"id": "media-nsdx1-noise-floor-state", "file": "media/nsdx1-noise-floor-state.bin", "kind": "media", "requires": {"displayExtrasVersion": 4}},
         {"id": "media-nsdx1-other-generation", "file": "media/nsdx1-other-generation.bin", "kind": "media", "requires": {"displayExtrasVersion": 1}},
         {"id": "media-nsdx1-unknown-section", "file": "media/nsdx1-unknown-section.bin", "kind": "media", "requires": {"displayExtrasVersion": 1}},
         {"id": "media-nsdx1-truncated", "file": "media/nsdx1-truncated.bin", "kind": "media", "requires": {"displayExtrasVersion": 1}},

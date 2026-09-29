@@ -337,6 +337,8 @@ private slots:
     {
         SpectrumWidget widget;
         widget.setDispNormalize(true);
+        // Normalise applies with the Average, Sample and RMS detectors only.
+        widget.setSpectrumDetector(SpectrumDetector::Average);
         SpectrumEndpointContext context;
         context.codec = {41, 1, -180, 0, 128, 128, 0};
         context.exactCentreHz = 14225000;

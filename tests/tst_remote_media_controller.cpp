@@ -5132,6 +5132,9 @@ private slots:
         auto* widget = applet->spectrumWidget();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
         widget->setDispNormalize(false);
+        // Normalise applies with the Average, Sample and RMS detectors only
+        // (Thetis updateNormalizePan); the normalise step below needs one.
+        widget->setSpectrumDetector(SpectrumDetector::Average);
         widget->setWfUseSpectrumMinMax(false);
         // The stored levels colour the waterfall (no AGC, no Clarity); the
         // run-time levels are runtimeWaterfallLevelsWidenTheDbmWindow's.

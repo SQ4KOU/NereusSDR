@@ -1120,7 +1120,7 @@ QJsonObject guiToCoreOps()
           {QStringLiteral("enabled"), QStringLiteral("holdMs"),
            QStringLiteral("fallDbPerSec"), QStringLiteral("onTx")}},
          {QStringLiteral("noiseFloor"),
-          {QStringLiteral("enabled"), QStringLiteral("shiftDb")}},
+          {QStringLiteral("enabled"), QStringLiteral("fastAttack"), QStringLiteral("shiftDb")}},
          {QStringLiteral("waterfallLevels"),
           {QStringLiteral("mode"), QStringLiteral("lowDbm"), QStringLiteral("highDbm"),
            QStringLiteral("offsetDb")}}}));
@@ -1134,7 +1134,7 @@ QJsonObject guiToCoreOps()
                declaredOp(kMedia, peer + QStringList{QStringLiteral("endpointId"),
                                                      QStringLiteral("contextGeneration")}));
     // DaemonMediaController.cpp handleClarityRetune (R-IOS-27, R-IOS-06):
-    // displayExtrasVersion 2 (the Core now sends 3).
+    // displayExtrasVersion 2 (the Core now sends 4).
     ops.insert(QStringLiteral("clarity-retune"),
                declaredOp(extras, peer + QStringList{QStringLiteral("endpointId")}));
     // DaemonMediaController.cpp handleAudio: profile only from a GUI that

@@ -344,6 +344,10 @@ void TstLinkConformanceRegen::writeNsdxDatagrams()
     };
     QVERIFY(write(QStringLiteral("nsdx1-full"), full, expectation(full, context)));
     QVERIFY(write(QStringLiteral("nsdx1-noise-floor"), floor, expectation(floor, context)));
+    const QByteArray state =
+        encodeDisplayExtras(LinkMediaVectors::nsdxNoiseFloorStateFrame(), context);
+    QVERIFY(!state.isEmpty());
+    QVERIFY(write(QStringLiteral("nsdx1-noise-floor-state"), state, expectation(state, context)));
     QVERIFY(write(QStringLiteral("nsdx1-other-generation"), full, expectation(full, newer)));
     const QByteArray unknown = LinkMediaVectors::nsdxUnknownSection(full);
     QVERIFY(write(QStringLiteral("nsdx1-unknown-section"), unknown,

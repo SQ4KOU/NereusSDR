@@ -63,6 +63,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 
 using namespace NereusSDR;
@@ -224,7 +225,8 @@ QJsonObject everyExtra()
              QJsonObject{{QStringLiteral("enabled"), true}, {QStringLiteral("holdMs"), 2000},
                          {QStringLiteral("fallDbPerSec"), 6.0}}},
             {QStringLiteral("noiseFloor"),
-             QJsonObject{{QStringLiteral("enabled"), true}, {QStringLiteral("shiftDb"), 0.0}}},
+             QJsonObject{{QStringLiteral("enabled"), true}, {QStringLiteral("shiftDb"), 0.0},
+                         {QStringLiteral("fastAttack"), true}}},
             {QStringLiteral("waterfallLevels"),
              QJsonObject{{QStringLiteral("mode"), QStringLiteral("agc")},
                          {QStringLiteral("lowDbm"), -122.0},
@@ -388,6 +390,69 @@ DisplayExtrasFrame fullFrame(const DisplayCodecContext& context)
 
 class TstDisplayExtras : public QObject {
     Q_OBJECT
+private:
+    // Two endpoints on one source frame, the same but for `normalize`:
+    // the mean difference of their traces (normalised minus plain).
+    double normaliseShiftFor(const QJsonObject& traceFields)
+    {
+        Harness harness;
+        if (!harness.establishSession()) { return 1000.0; }
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        if (!harness.startReadyPeer()) { return 1000.0; }
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        const QJsonObject wide{{QStringLiteral("minDbm"), -400.0},
+                               {QStringLiteral("maxDbm"), 100.0}};
+        const QJsonObject base = withFields(wide, traceFields);
+        harness.client.sendMediaControl(
+            withFields(withFields(subscription(7, harness.sliceId, centreHz), base),
+                       {{QStringLiteral("normalize"), true}}),
+            harness.client.sessionEpoch());
+        harness.client.sendMediaControl(
+            withFields(subscription(8, harness.sliceId, centreHz), base),
+            harness.client.sessionEpoch());
+        if (!QTest::qWaitFor([&] { return harness.controller.activeEndpointCount() == 2; },
+                             10'000)) {
+            return 1000.0;
+        }
+        QMap<quint32, QMap<quint64, DisplayCodecFrame>> frames;
+        QMap<quint32, DisplayCodecDecoder> decoders;
+        int cursor = 0;
+        quint64 shared = 0;
+        const auto sameFrame = [&] {
+            harness.feedRadio(0.15);
+            QTest::qWait(20);
+            const QList<QByteArray>& displays = harness.mediaTransport->displays;
+            for (; cursor < displays.size(); ++cursor) {
+                const QByteArray& bytes = displays.at(cursor);
+                if (bytes.startsWith("NSDX")) { continue; }
+                const quint32 endpoint = static_cast<quint8>(bytes.at(11));
+                const auto decoded = decoders[endpoint].decode(bytes);
+                if (decoded.disposition == DisplayCodecDisposition::Accepted) {
+                    frames[endpoint].insert(decoded.frame.producerTimestamp, decoded.frame);
+                }
+            }
+            for (auto it = frames[7].cbegin(); it != frames[7].cend(); ++it) {
+                if (frames[8].contains(it.key())) {
+                    shared = it.key();
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (!QTest::qWaitFor(sameFrame, 30'000)) { return 1000.0; }
+        const DisplayCodecFrame normalised = frames[7].value(shared);
+        const DisplayCodecFrame plain = frames[8].value(shared);
+        double sum = 0.0;
+        int n = 0;
+        for (int x = 0; x < plain.traceDbm.size() && x < normalised.traceDbm.size(); ++x) {
+            if (plain.traceDbm.at(x) < -380.0f || plain.traceDbm.at(x) > 80.0f) { continue; }
+            sum += normalised.traceDbm.at(x) - plain.traceDbm.at(x);
+            ++n;
+        }
+        harness.finish();
+        return n > 100 ? sum / n : 1000.0;
+    }
+
 private slots:
     void initTestCase()
     {
@@ -561,8 +626,10 @@ private slots:
         // 192 kHz over 4096 bins.
         const double binWidthHz = 192000.0 / 4096.0;
         const float shift = 7.5f - 10.0f * std::log10(static_cast<float>(binWidthHz));
-        QCOMPARE(a.displayShiftDb(binWidthHz), 0.0f);
-        QVERIFY(std::abs(b.displayShiftDb(binWidthHz) - shift) < 1.0e-5f);
+        // Average (2): normalise applies. Peak (0): only the calibration.
+        QCOMPARE(a.displayShiftDb(binWidthHz, 2), 0.0f);
+        QVERIFY(std::abs(b.displayShiftDb(binWidthHz, 2) - shift) < 1.0e-5f);
+        QVERIFY(std::abs(b.displayShiftDb(binWidthHz, 0) - 7.5f) < 1.0e-5f);
         const QVector<QVector<float>> rows = recordedRows(40, 64);
         for (int i = 0; i < rows.size(); ++i) {
             DisplayCodecFrame frame;
@@ -573,6 +640,7 @@ private slots:
             DisplayExtrasInputs inputs;
             inputs.fps = 30;
             inputs.binWidthHz = binWidthHz;
+            inputs.traceDetector = 2;   // Average: normalise applies
             const DisplayExtrasFrame x = a.process(frame, inputs);
             const DisplayExtrasFrame y = b.process(frame, inputs);
             QCOMPARE(y.peakBlobs->size(), x.peakBlobs->size());
@@ -805,13 +873,14 @@ private slots:
         frame.peakHoldDbm = hold;
         frame.noiseFloorDbm = -120.0f;
         frame.waterfallLevelsDbm = std::make_pair(-130.0f, -60.0f);
+        frame.noiseFloorFastAttack = true;
         const QByteArray bytes = encodeDisplayExtras(frame, context);
         QCOMPARE(quint32(bytes.size()),
                  displayExtrasWorstCaseBytes(kDisplayExtrasKnownSections,
                                              SpectrumEndpoint::kMaxPixels));
         QVERIFY(bytes.size() <= kDisplayExtrasMaxBytes);
         QVERIFY(bytes.size() <= DisplayCodecEncoder::kMaxEncodedBytes);
-        QCOMPARE(bytes.size(), 20 + 121 + (3 + 5 * 32 + 4096) + 4 + 8);
+        QCOMPARE(bytes.size(), 20 + 121 + (3 + 5 * 32 + 4096) + 4 + 8 + 1);
     }
 
     void malformedDatagramsAreRefused_data()
@@ -827,7 +896,7 @@ private slots:
         };
         QTest::newRow("magic") << with(3, 'Y') << int(DisplayExtrasReason::BadMagic);
         QTest::newRow("version") << with(4, 2) << int(DisplayExtrasReason::UnsupportedVersion);
-        QTest::newRow("unknown section") << with(5, 0x1F)
+        QTest::newRow("unknown section") << with(5, 0x3F)
                                          << int(DisplayExtrasReason::UnknownSections);
         QTest::newRow("no section") << with(5, 0) << int(DisplayExtrasReason::Malformed);
         QTest::newRow("header size") << with(7, 21) << int(DisplayExtrasReason::Malformed);
@@ -871,7 +940,8 @@ private slots:
         QCOMPARE(*request.averageTimeMs, 30);
         // Absent, the waterfall takes averageTimeMs (the Core's fallback).
         QVERIFY(!request.waterfallAverageTimeMs.has_value());
-        QCOMPARE(int(request.sections()), 0x0F);
+        QVERIFY(request.noiseFloor->fastAttack);
+        QCOMPARE(int(request.sections()), 0x1F);
         DisplayExtrasRequest none;
         QVERIFY(parseDisplayExtrasRequest(QJsonObject{}, none));
         QVERIFY(none.empty());
@@ -1014,13 +1084,75 @@ private slots:
         }
         Harness harness;
         // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune; 3: the peak
-        // hold's hold time and activePeakHold.onTx.
-        QCOMPARE(harness.server.displayExtrasVersion(), 3);
+        // hold's hold time and activePeakHold.onTx; 4: noiseFloor.fastAttack
+        // and the noise floor state section.
+        QCOMPARE(harness.server.displayExtrasVersion(), 4);
         QVERIFY(!harness.server.displayExtrasAvailable()); // no session yet
         QVERIFY(harness.establishSession());
         QVERIFY(harness.server.displayExtrasAvailable());
-        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 3);
+        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 4);
         harness.finish();
+    }
+
+    // Version 4: noiseFloor may ask for the fast-attack state with an
+    // optional `fastAttack` member; the state travels in section 0x10, one
+    // byte, bit 0 the fast attack (the desktop's grey NF line).
+    void noiseFloorFastAttackStateParsesAndTravels()
+    {
+        DisplayExtrasRequest request;
+        QVERIFY(parseDisplayExtrasRequest(
+            QJsonObject{{QStringLiteral("noiseFloor"),
+                         QJsonObject{{QStringLiteral("enabled"), true},
+                                     {QStringLiteral("shiftDb"), 0.0},
+                                     {QStringLiteral("fastAttack"), true}}}},
+            request));
+        QCOMPARE(int(request.sections()), 0x04 | 0x10);
+        QVERIFY(!parseDisplayExtrasRequest(
+            QJsonObject{{QStringLiteral("noiseFloor"),
+                         QJsonObject{{QStringLiteral("enabled"), true},
+                                     {QStringLiteral("shiftDb"), 0.0},
+                                     {QStringLiteral("fastAttack"), 1}}}},
+            request));
+        // Without the member, or false, no state section: older apps keep
+        // exactly today's datagrams.
+        QVERIFY(parseDisplayExtrasRequest(
+            QJsonObject{{QStringLiteral("noiseFloor"),
+                         QJsonObject{{QStringLiteral("enabled"), true},
+                                     {QStringLiteral("shiftDb"), 0.0}}}},
+            request));
+        QCOMPARE(int(request.sections()), 0x04);
+
+        // A hand-built datagram: noise floor -118.75 and state 1.
+        const DisplayCodecContext context = smallContext();
+        QByteArray bytes("NSDX");
+        bytes.append(char(1));
+        bytes.append(char(0x04 | 0x10));
+        bytes.append(char(0));
+        bytes.append(char(20));
+        for (const quint32 value : {quint32(context.endpointId),
+                                    quint32(context.contextGeneration), quint32(5)}) {
+            for (int shift = 24; shift >= 0; shift -= 8) {
+                bytes.append(char((value >> shift) & 0xFF));
+            }
+        }
+        quint32 floorBits = 0;
+        const float floor = -118.75f;
+        std::memcpy(&floorBits, &floor, sizeof floorBits);
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            bytes.append(char((floorBits >> shift) & 0xFF));
+        }
+        bytes.append(char(1));
+        const DisplayExtrasDecodeResult decoded = decodeDisplayExtras(bytes, context);
+        QVERIFY(decoded.accepted);
+        QCOMPARE(*decoded.frame.noiseFloorDbm, -118.75f);
+        // The encoder writes the same bytes.
+        QCOMPARE(encodeDisplayExtras(decoded.frame, context), bytes);
+        // Any other bit in the state byte is refused.
+        QByteArray other = bytes;
+        other[other.size() - 1] = char(2);
+        QVERIFY(!decodeDisplayExtras(other, context).accepted);
+        // A missing state byte is truncated.
+        QVERIFY(!decodeDisplayExtras(bytes.left(bytes.size() - 1), context).accepted);
     }
 
     void anEndpointThatAsksGetsExtrasBesideEachFrame()
@@ -1089,9 +1221,11 @@ private slots:
             // Every section, or every one but the peak hold while it is
             // held back after the first reset; never the other way round.
             const int sections = int(decoded.frame.sections());
-            QVERIFY2(sections == 0x0F || (sections == 0x0D && !seenPeakHold),
+            QVERIFY2(sections == 0x1F || (sections == 0x1D && !seenPeakHold),
                      qPrintable(QString::number(sections)));
-            seenPeakHold = seenPeakHold || sections == 0x0F;
+            seenPeakHold = seenPeakHold || sections == 0x1F;
+            // The fast-attack state travels beside the floor (version 4).
+            QVERIFY(decoded.frame.noiseFloorFastAttack.has_value());
             QVERIFY(displays.at(i).size() <= kDisplayExtrasMaxBytes);
             QVERIFY(i > 0 && displays.at(i - 1).startsWith("NSDC"));
             DisplayCodecDecoder check;
@@ -1291,6 +1425,65 @@ private slots:
         }
         QVERIFY(moved > 100);
         harness.finish();
+    }
+
+    // Thetis applies the 1 Hz normalise only with the Average, Sample and
+    // RMS pan detectors (specHPSDR.cs:288-294 [v2.10.3.15]); the desktop
+    // does, so the Core must too: with Peak a normalise request moves
+    // nothing, with Average it moves the trace by -10 log10(bin width).
+    // The state section reports the Core's own noise floor follower: a band
+    // change puts it into fast attack (the desktop's grey line), and it
+    // leaves once the floor has settled, as the desktop's does.
+    void theNoiseFloorStateFollowsFastAttack()
+    {
+        DisplayExtrasRequest request;
+        request.noiseFloor = DisplayExtrasRequest::NoiseFloor{true, 0.0, true};
+        DisplayExtrasProcessor station(request);
+        const QVector<QVector<float>> rows = recordedRows(300, 64);
+        DisplayExtrasInputs inputs;
+        inputs.fps = 30;
+        inputs.sliceHz = 14200000.0;
+        inputs.band = 5;
+        bool sawSettled = false;
+        for (int i = 0; i < 200; ++i) {
+            DisplayCodecFrame frame;
+            frame.context = {1, 1, -180.0f, 0.0f, 64, 64, 0};
+            frame.traceDbm = rows.at(i);
+            frame.waterfallDbm = rows.at(i);
+            inputs.nowMs = static_cast<qint64>(i) * 33;
+            const DisplayExtrasFrame out = station.process(frame, inputs);
+            QVERIFY(out.noiseFloorFastAttack.has_value());
+            QCOMPARE(*out.noiseFloorFastAttack, station.noiseFloor().fastAttack());
+            sawSettled = sawSettled || !*out.noiseFloorFastAttack;
+        }
+        QVERIFY(sawSettled);
+        inputs.band = 6;   // a band change
+        DisplayCodecFrame frame;
+        frame.context = {1, 1, -180.0f, 0.0f, 64, 64, 0};
+        frame.traceDbm = rows.at(200);
+        frame.waterfallDbm = rows.at(200);
+        inputs.nowMs += 33;
+        QVERIFY(*station.process(frame, inputs).noiseFloorFastAttack);
+        // Without the member, no state.
+        DisplayExtrasRequest plain;
+        plain.noiseFloor = DisplayExtrasRequest::NoiseFloor{true, 0.0};
+        DisplayExtrasProcessor older(plain);
+        QVERIFY(!older.process(frame, inputs).noiseFloorFastAttack.has_value());
+    }
+
+    void normaliseFollowsTheTraceDetector()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#endif
+        QJsonObject average = plane();
+        average.insert(QStringLiteral("detector"), static_cast<int>(SpectrumDetectorMode::Average));
+        const QJsonObject peakTrace{{QStringLiteral("trace"), plane()}};
+        const QJsonObject averageTrace{{QStringLiteral("trace"), average}};
+        const double peak = normaliseShiftFor(peakTrace);
+        const double avg = normaliseShiftFor(averageTrace);
+        QVERIFY2(std::abs(peak) <= 500.0 / 255.0, qPrintable(QString::number(peak)));
+        QVERIFY2(avg < -5.0, qPrintable(QString::number(avg)));
     }
 
     void aRequestTheCoreCannotReadIsRefused()

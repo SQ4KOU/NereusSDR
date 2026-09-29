@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 12,
   "category": {
     "id": "appearance",
     "title": "Appearance",
@@ -125,6 +125,23 @@
               },
               "applies": "live",
               "default": "#FF783C2E"
+            }
+          ]
+        },
+        {
+          "title": "Reset",
+          "controls": [
+            {
+              "id": "appearance.colorsTheme.resetColors",
+              "label": "Reset all colors to defaults",
+              "tooltip": "Reset all spectrum and waterfall colors to factory defaults. Other display settings (FPS, averaging, thresholds, etc.) are not affected.",
+              "kind": "button",
+              "binding": {
+                "phone": "resetColors"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 12,
+              "confirm": "Reset all spectrum and waterfall colors to factory defaults?\n\nCustom colors set here will be discarded. Other display settings are not affected."
             }
           ]
         }

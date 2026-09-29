@@ -2325,10 +2325,22 @@ DisplayExtrasFrame LinkMediaVectors::nsdxNoiseFloorFrame()
     return frame;
 }
 
+DisplayExtrasFrame LinkMediaVectors::nsdxNoiseFloorStateFrame()
+{
+    // Display extras version 4: the floor and its state section (0x10),
+    // here in fast attack.
+    DisplayExtrasFrame frame = nsdxNoiseFloorFrame();
+    frame.encoderSequence = 3;
+    frame.noiseFloorFastAttack = true;
+    return frame;
+}
+
 QByteArray LinkMediaVectors::nsdxUnknownSection(const QByteArray& full)
 {
+    // 0x10 is the noise floor state section since display extras version 4;
+    // 0x20 is still unknown.
     QByteArray bytes = full;
-    bytes[5] = static_cast<char>(static_cast<quint8>(bytes.at(5)) | 0x10);
+    bytes[5] = static_cast<char>(static_cast<quint8>(bytes.at(5)) | 0x20);
     return bytes;
 }
 
@@ -2417,6 +2429,9 @@ QJsonObject LinkMediaVectors::toJson(const DisplayExtrasDecodeResult& result)
     }
     if (frame.noiseFloorDbm) {
         out.insert(QStringLiteral("noiseFloorDbm"), static_cast<double>(*frame.noiseFloorDbm));
+    }
+    if (frame.noiseFloorFastAttack) {
+        out.insert(QStringLiteral("noiseFloorFastAttack"), *frame.noiseFloorFastAttack);
     }
     if (frame.waterfallLevelsDbm) {
         out.insert(QStringLiteral("waterfallLevelsDbm"),

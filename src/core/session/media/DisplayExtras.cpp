@@ -13,6 +13,15 @@
 //                                    Re-tune for one endpoint
 //                                    (displayExtrasVersion 2).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-18: version 4, the noise floor
+//                                    state section (fast attack) asked by
+//                                    noiseFloor.fastAttack. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-18: normalise applies only
+//                                    with the Average, Sample and RMS
+//                                    trace detectors, as the desktop and
+//                                    Thetis do. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayExtras.h"
@@ -194,6 +203,9 @@ quint8 DisplayExtrasRequest::sections() const
     if (activePeakHold && activePeakHold->enabled) { sections |= kDisplayExtrasPeakHold; }
     if (noiseFloor && noiseFloor->enabled) { sections |= kDisplayExtrasNoiseFloor; }
     if (waterfallLevels) { sections |= kDisplayExtrasWaterfallLevels; }
+    if (noiseFloor && noiseFloor->enabled && noiseFloor->fastAttack) {
+        sections |= kDisplayExtrasNoiseFloorState;
+    }
     return sections;
 }
 
@@ -249,8 +261,14 @@ bool parseDisplayExtrasRequest(const QJsonObject& subscribe, DisplayExtrasReques
     }
     if (subscribe.contains(QStringLiteral("noiseFloor"))) {
         DisplayExtrasRequest::NoiseFloor floor;
-        if (!objectWithKeys(subscribe.value(QStringLiteral("noiseFloor")),
-                            {"enabled", "shiftDb"}, object)
+        // fastAttack is optional (displayExtrasVersion 4); absent is false.
+        const QJsonValue raw = subscribe.value(QStringLiteral("noiseFloor"));
+        const bool withFastAttack = raw.isObject()
+            && raw.toObject().contains(QStringLiteral("fastAttack"));
+        if (!(withFastAttack ? objectWithKeys(raw, {"enabled", "shiftDb", "fastAttack"}, object)
+                             : objectWithKeys(raw, {"enabled", "shiftDb"}, object))
+            || (withFastAttack
+                && !boolValue(object.value(QStringLiteral("fastAttack")), floor.fastAttack))
             || !boolValue(object.value(QStringLiteral("enabled")), floor.enabled)
             || !numberIn(object.value(QStringLiteral("shiftDb")),
                          NoiseFloorFollower::kShiftMinDb, NoiseFloorFollower::kShiftMaxDb,
@@ -330,6 +348,7 @@ quint8 DisplayExtrasFrame::sections() const
     if (peakHoldDbm) { sections |= kDisplayExtrasPeakHold; }
     if (noiseFloorDbm) { sections |= kDisplayExtrasNoiseFloor; }
     if (waterfallLevelsDbm) { sections |= kDisplayExtrasWaterfallLevels; }
+    if (noiseFloorFastAttack) { sections |= kDisplayExtrasNoiseFloorState; }
     return sections;
 }
 
@@ -347,6 +366,9 @@ quint32 displayExtrasWorstCaseBytes(quint8 sections, int traceSamples)
     }
     if ((sections & kDisplayExtrasWaterfallLevels) != 0) {
         bytes += 8;
+    }
+    if ((sections & kDisplayExtrasNoiseFloorState) != 0) {
+        bytes += 1;
     }
     return bytes;
 }
@@ -402,6 +424,9 @@ QByteArray encodeDisplayExtras(const DisplayExtrasFrame& frame,
         }
         appendF32(bytes, frame.waterfallLevelsDbm->first);
         appendF32(bytes, frame.waterfallLevelsDbm->second);
+    }
+    if (frame.noiseFloorFastAttack) {
+        appendU8(bytes, *frame.noiseFloorFastAttack ? kDisplayExtrasNoiseFloorFastAttack : 0);
     }
     if (bytes.size() > kDisplayExtrasMaxBytes) {
         return {};
@@ -483,6 +508,14 @@ DisplayExtrasDecodeResult decodeDisplayExtras(const QByteArray& bytes,
         }
         if (!finite(low) || !finite(high)) { return rejected(DisplayExtrasReason::Malformed); }
         frame.waterfallLevelsDbm = std::make_pair(low, high);
+    }
+    if ((sections & kDisplayExtrasNoiseFloorState) != 0) {
+        quint8 state = 0;
+        if (!reader.u8(state)) { return rejected(DisplayExtrasReason::Truncated); }
+        if ((state & ~kDisplayExtrasNoiseFloorFastAttack) != 0) {
+            return rejected(DisplayExtrasReason::Malformed);
+        }
+        frame.noiseFloorFastAttack = state != 0;
     }
     if (!reader.atEnd()) {
         return rejected(DisplayExtrasReason::Malformed);
@@ -570,11 +603,13 @@ bool DisplayExtrasProcessor::retuneClarity()
     return true;
 }
 
-float DisplayExtrasProcessor::displayShiftDb(double binWidthHz) const
+float DisplayExtrasProcessor::displayShiftDb(double binWidthHz, int traceDetector) const
 {
     const float calibration = m_request.calibrationOffsetDb
         ? static_cast<float>(*m_request.calibrationOffsetDb) : 0.0f;
-    return calibration + normalizeShiftDb(m_request.normalize.value_or(false), binWidthHz);
+    return calibration + normalizeShiftDb(
+        m_request.normalize.value_or(false) && normalizeAppliesToDetector(traceDetector),
+        binWidthHz);
 }
 
 DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& frame,
@@ -586,7 +621,7 @@ DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& fram
     out.encoderSequence = frame.encoderSequence;
 
     const int fps = std::max(1, inputs.fps);
-    const float shift = displayShiftDb(inputs.binWidthHz);
+    const float shift = displayShiftDb(inputs.binWidthHz, inputs.traceDetector);
     const QVector<float>& trace = frame.traceDbm;
 
     // The desktop's triggers: fast attack on a band change, a tune of more
@@ -647,6 +682,9 @@ DisplayExtrasFrame DisplayExtrasProcessor::process(const DisplayCodecFrame& fram
     }
     if (m_request.noiseFloor && m_request.noiseFloor->enabled) {
         m_noiseFloor.process(trace, fps, inputs.nowMs);
+        if (m_request.noiseFloor->fastAttack) {
+            out.noiseFloorFastAttack = m_noiseFloor.fastAttack();
+        }
         out.noiseFloorDbm = m_noiseFloor.lerpAverage()
             + NoiseFloorFollower::clampShiftDb(static_cast<float>(m_request.noiseFloor->shiftDb))
             + shift;

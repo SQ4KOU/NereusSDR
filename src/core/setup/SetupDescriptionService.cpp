@@ -29,6 +29,86 @@ static void initializeSetupResources()
 namespace NereusSDR {
 namespace {
 
+// Display and Appearance version 12 (R-IOS-18, R-IOS-27): the rest of
+// Setup > Display after Spectrum Peaks, and Appearance's Reset Colors. Each
+// described row is closed: the resource must carry exactly this object. The
+// rows are phone-owned (binding.phone is the desktop's own key); buttons are
+// phone actions whose semantics docs/architecture/2026-09-23-setup-
+// description-v1.md defines, the same on the desktop, local or remote.
+// Each control is its own raw string piece (MSVC limits one piece to 16 KB).
+constexpr char kDisplayV12Controls[] =
+    R"json([)json"
+    R"json({"id":"display.spectrumDefaults.smoothDefaults","label":"Reset to Smooth Defaults","tooltip":"Overwrite this panadapter's spectrum and waterfall look with the NereusSDR smooth-default profile: Clarity Blue palette, log-recursive averaging, a white trace without fill, waterfall AGC on and a 30 ms waterfall update period. FFT size, frequency, band stack, and per-band grid ranges are not affected.","kind":"button","binding":{"phone":"smoothDefaults"},"applies":"live","requiresDescriptionVersion":12,"confirm":"This will overwrite your current Spectrum and Waterfall display settings with the NereusSDR smooth-default profile.\n\nYour FFT size, frequency, band stack, and per-band grid ranges are NOT affected.\n\nContinue?"},)json"
+    R"json({"id":"display.spectrumDefaults.clarity","label":"Enable Clarity (adaptive waterfall tuning)","tooltip":"Clarity keeps the waterfall thresholds centered on the actual noise floor as band conditions and tuning change. Uses a 30th-percentile estimator with 3-second EWMA smoothing and a \u00b12 dB deadband. When off, thresholds are fixed at their last values.","kind":"toggle","binding":{"phone":"ClarityEnabled"},"applies":"subscription","requiresDescriptionVersion":12,"default":true,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.showCursorFreq","label":"Show cursor frequency","tooltip":"Display the frequency at the cursor position (always in MHz). Same toggle as the on-spectrum overlay-panel Cursor Freq button.","kind":"toggle","binding":{"phone":"DisplayShowCursorFreq"},"applies":"live","requiresDescriptionVersion":12,"default":true},)json"
+    R"json({"id":"display.spectrumDefaults.showBinWidth","label":"Show bin width","tooltip":"Display the current FFT bin width (sample rate / FFT size) in the spectrum corner.","kind":"toggle","binding":{"phone":"DisplayShowBinWidth"},"applies":"live","requiresDescriptionVersion":12,"default":false},)json"
+    R"json({"id":"display.spectrumDefaults.showNoiseFloor","label":"Show noise floor","tooltip":"Display the noise floor as a horizontal dashed line + dBm box+text.","kind":"toggle","binding":{"phone":"DisplayShowNoiseFloor"},"applies":"subscription","requiresDescriptionVersion":12,"default":false,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.noiseFloorShift","label":"NF shift:","tooltip":"Operator-tunable offset added to the rendered NF level, from -12 to +12 dB.","kind":"decimal","binding":{"phone":"DisplayNoiseFloorShiftDb"},"applies":"subscription","requiresDescriptionVersion":12,"min":-12,"max":12,"step":0.5,"decimals":1,"unit":"dB","default":0,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.noiseFloorLineWidth","label":"Line width:","tooltip":"Width of the horizontal NF dashed line.","kind":"decimal","binding":{"phone":"DisplayNoiseFloorLineWidth"},"applies":"live","requiresDescriptionVersion":12,"min":1,"max":5,"step":0.5,"decimals":1,"unit":"px","default":1,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.noiseFloorColor","label":"Line:","tooltip":"Color for the NF line + 8x8 box.","kind":"colour","binding":{"phone":"DisplayNoiseFloorColor"},"applies":"live","requiresDescriptionVersion":12,"default":"#FF40FFFF","gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.noiseFloorTextColor","label":"Text:","tooltip":"Color for the NF dBm label text.","kind":"colour","binding":{"phone":"DisplayNoiseFloorTextColor"},"applies":"live","requiresDescriptionVersion":12,"default":"#FFFF00FF","gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.noiseFloorFastColor","label":"Fast-attack:","tooltip":"Color shown during fast-attack (band/freq/MOX change).","kind":"colour","binding":{"phone":"DisplayNoiseFloorFastColor"},"applies":"live","requiresDescriptionVersion":12,"default":"#C8C8C8FF","gate":{"capability":"displayExtrasVersion","min":4}},)json"
+    R"json({"id":"display.spectrumDefaults.normalize","label":"Normalize trace","tooltip":"Normalize the spectrum trace to a 1 Hz reference bandwidth. Only active for Average, Sample, or RMS detector modes.","kind":"toggle","binding":{"phone":"DisplayDispNormalize"},"applies":"subscription","requiresDescriptionVersion":12,"enabledWhen":{"phone":"DisplaySpectrumDetector","oneOf":[2,3,4]},"default":false,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.spectrumDefaults.showPeakValue","label":"Show peak value overlay","tooltip":"Display the peak signal level and frequency as a text overlay in the spectrum corner.","kind":"toggle","binding":{"phone":"DisplayShowPeakValueOverlay"},"applies":"live","requiresDescriptionVersion":12,"default":false},)json"
+    R"json({"id":"display.spectrumDefaults.peakValuePosition","label":"Peak value position:","tooltip":"Corner position for the peak value readout.","kind":"choice","binding":{"phone":"DisplayPeakValuePosition"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"Top Left"},{"value":1,"label":"Top Right"},{"value":2,"label":"Bottom Left"},{"value":3,"label":"Bottom Right"}],"default":1},)json"
+    R"json({"id":"display.spectrumDefaults.peakTextDelay","label":"Peak value refresh:","tooltip":"Refresh interval for the peak value overlay in milliseconds.","kind":"integer","binding":{"phone":"DisplayPeakTextDelayMs"},"applies":"live","requiresDescriptionVersion":12,"min":50,"max":10000,"step":50,"unit":"ms","default":500},)json"
+    R"json({"id":"display.spectrumDefaults.getMonitorHz","label":"Get Monitor Hz","tooltip":"Query the primary screen refresh rate and snap the FPS slider to the nearest valid value.","kind":"button","binding":{"phone":"getMonitorHz"},"applies":"live","requiresDescriptionVersion":12},)json"
+    R"json({"id":"display.waterfallDefaults.highThreshold","label":"High Threshold:","tooltip":"Waterfall High Signal - Show High Color above this value (gradient in between).","kind":"slider","binding":{"phone":"DisplayWfHighLevel"},"applies":"subscription","requiresDescriptionVersion":12,"min":-200,"max":0,"step":1,"unit":"dBm","enabledWhen":{"phone":"DisplayWfUseSpectrumMinMax","oneOf":[false]},"default":-62,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.lowThreshold","label":"Low Threshold:","tooltip":"Waterfall Low Signal - Show Low Color below this value (gradient in between).","kind":"slider","binding":{"phone":"DisplayWfLowLevel"},"applies":"subscription","requiresDescriptionVersion":12,"min":-200,"max":0,"step":1,"unit":"dBm","enabledWhen":{"phone":"DisplayWfUseSpectrumMinMax","oneOf":[false]},"default":-122,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.agc","label":"AGC","tooltip":"Automatically calculates Low Level Threshold for Waterfall.","kind":"toggle","binding":{"phone":"DisplayWfAgc"},"applies":"subscription","requiresDescriptionVersion":12,"enabledWhen":{"phone":"DisplayWfUseSpectrumMinMax","oneOf":[false]},"default":true,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.useSpectrumMinMax","label":"Use spectrum min/max","tooltip":"Spectrum Grid min/max used for low and high level","kind":"toggle","binding":{"phone":"DisplayWfUseSpectrumMinMax"},"applies":"subscription","requiresDescriptionVersion":12,"default":false,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.copySpectrumMinMax","label":"Copy spectrum min/max \u2192 waterfall thresholds","tooltip":"Copies the current spectrum display dB max and dB min values into the waterfall High Threshold and Low Threshold above.","kind":"button","binding":{"phone":"copySpectrumMinMax"},"applies":"live","requiresDescriptionVersion":12},)json"
+    R"json({"id":"display.waterfallDefaults.nfAgc","label":"Enable NF-AGC","tooltip":"When enabled, the waterfall low/high thresholds automatically track the estimated noise floor. The offset below sets how far below the noise floor the low threshold is placed.","kind":"toggle","binding":{"phone":"WaterfallNFAGCEnabled"},"applies":"subscription","requiresDescriptionVersion":12,"enabledWhen":{"phone":"DisplayWfUseSpectrumMinMax","oneOf":[false]},"default":false,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.nfAgcOffset","label":"NF offset:","tooltip":"Offset applied above the estimated noise floor when computing the waterfall low threshold. Negative values place the low threshold below the noise floor (recommended).","kind":"integer","binding":{"phone":"WaterfallAGCOffsetDb"},"applies":"subscription","requiresDescriptionVersion":12,"min":-60,"max":60,"step":1,"unit":"dB","enabledWhen":{"phone":"DisplayWfUseSpectrumMinMax","oneOf":[false]},"default":0,"gate":{"capability":"displayExtrasVersion","min":1}},)json"
+    R"json({"id":"display.waterfallDefaults.colorScheme","label":"Color Scheme:","tooltip":"Waterfall color palette. Each scheme maps signal level to a different color gradient from low (dark) to high (bright).","kind":"choice","binding":{"phone":"DisplayWfColorScheme"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"Default"},{"value":1,"label":"Enhanced"},{"value":2,"label":"Spectran"},{"value":3,"label":"BlackWhite"},{"value":4,"label":"LinLog"},{"value":5,"label":"LinRad"},{"value":6,"label":"Custom"},{"value":7,"label":"Clarity Blue"}],"default":0},)json"
+    R"json({"id":"display.waterfallDefaults.historyDepth","label":"Depth:","tooltip":"Maximum amount of waterfall history kept for rewind. Effective rewind is capped at 16384 rows; slow the update period to extend depth at fast refresh rates.","kind":"choice","binding":{"phone":"DisplayWaterfallHistoryMs"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":60000,"label":"60 seconds"},{"value":300000,"label":"5 minutes"},{"value":900000,"label":"15 minutes"},{"value":1200000,"label":"20 minutes"}],"default":1200000},)json"
+    R"json({"id":"display.waterfallDefaults.timestampPosition","label":"Timestamp Position:","tooltip":"Position of the time stamp drawn on each waterfall row. None disables timestamps; Left and Right place them at the respective edge.","kind":"choice","binding":{"phone":"DisplayWfTimestampPos"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"None"},{"value":1,"label":"Left"},{"value":2,"label":"Right"}],"default":0},)json"
+    R"json({"id":"display.waterfallDefaults.timestampMode","label":"Timestamp Mode:","tooltip":"Time zone used for waterfall timestamps. UTC uses Coordinated Universal Time; Local uses the system clock time zone.","kind":"choice","binding":{"phone":"DisplayWfTimestampMode"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"UTC"},{"value":1,"label":"Local"}],"default":0},)json"
+    R"json({"id":"display.gridScales.showGrid","label":"Show grid","tooltip":"Display the Major Grid on the Panadapter including the frequency numbers","kind":"toggle","binding":{"phone":"DisplayGridEnabled"},"applies":"live","requiresDescriptionVersion":12,"default":true},)json"
+    R"json({"id":"display.gridScales.dbmScale","label":"Show dBm scale strip (right edge)","tooltip":"Show the reference-level scale on the right edge of the spectrum. Disable to give the spectrum trace the full widget width.","kind":"toggle","binding":{"phone":"DisplayDbmScaleVisible"},"applies":"live","requiresDescriptionVersion":12,"default":true},)json"
+    R"json({"id":"display.gridScales.dbMax","label":"dB Max (per band):","tooltip":"Signal level at the top of the display in dB, for the current band. Each band keeps its own value.","kind":"integer","binding":{"phone":"DisplayGridMax"},"applies":"live","requiresDescriptionVersion":12,"min":-200,"max":0,"step":1,"unit":"dB","perBand":{"label":"dB Max (%1):"},"default":-40},)json"
+    R"json({"id":"display.gridScales.dbMin","label":"dB Min (per band):","tooltip":"Signal level at the bottom of the display in dB, for the current band. Each band keeps its own value.","kind":"integer","binding":{"phone":"DisplayGridMin"},"applies":"live","requiresDescriptionVersion":12,"min":-200,"max":0,"step":1,"unit":"dB","perBand":{"label":"dB Min (%1):"},"default":-140},)json"
+    R"json({"id":"display.gridScales.dbStep","label":"dB Step (global):","tooltip":"Horizontal grid step size in dB. Sets the spacing between dB grid lines across all bands (global, not per-band).","kind":"integer","binding":{"phone":"DisplayGridStep"},"applies":"live","requiresDescriptionVersion":12,"min":1,"max":40,"step":1,"unit":"dB","default":10},)json"
+    R"json({"id":"display.gridScales.freqLabelAlign","label":"Freq Label Align:","tooltip":"Sets the alignment of the frequency labels on the grid callouts on the display.","kind":"choice","binding":{"phone":"DisplayFreqLabelAlign"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"Left"},{"value":1,"label":"Center"},{"value":2,"label":"Right"},{"value":3,"label":"Auto"},{"value":4,"label":"Off"}],"default":1},)json"
+    R"json({"id":"display.gridScales.zeroLine","label":"Show zero line","tooltip":"Show a horizontal line at 0 dBm on the panadapter grid.","kind":"toggle","binding":{"phone":"DisplayShowZeroLine"},"applies":"live","requiresDescriptionVersion":12,"default":false},)json"
+    R"json({"id":"display.gridScales.showFps","label":"Show FPS overlay","tooltip":"Show FPS reading in top left of spectrum area","kind":"toggle","binding":{"phone":"DisplayShowFps"},"applies":"live","requiresDescriptionVersion":12,"default":false},)json"
+    R"json({"id":"display.gridScales.adjustGridMinToNoiseFloor","label":"Adjust grid min to track noise floor","tooltip":"When enabled, the lower grid boundary automatically follows the live noise floor estimate. The grid min is set to NF + offset.","kind":"toggle","binding":{"phone":"DisplayAdjustGridMinToNoiseFloor"},"applies":"live","requiresDescriptionVersion":12,"default":false,"gate":{"capability":"displayExtrasVersion","min":4}},)json"
+    R"json({"id":"display.gridScales.noiseFloorOffset","label":"NF offset:","tooltip":"Offset added to the noise floor estimate to compute the grid min. Use a negative value to place the grid min below the noise floor.","kind":"integer","binding":{"phone":"DisplayNFOffsetGridFollow"},"applies":"live","requiresDescriptionVersion":12,"min":-60,"max":60,"step":1,"unit":"dB","enabledWhen":{"phone":"DisplayAdjustGridMinToNoiseFloor","oneOf":[true]},"default":0,"gate":{"capability":"displayExtrasVersion","min":4}},)json"
+    R"json({"id":"display.gridScales.maintainGridRange","label":"Maintain grid range (move max with min)","tooltip":"When enabled, the grid max is also moved so the dB range stays constant as the grid min tracks the noise floor.","kind":"toggle","binding":{"phone":"DisplayMaintainNFAdjustDelta"},"applies":"live","requiresDescriptionVersion":12,"enabledWhen":{"phone":"DisplayAdjustGridMinToNoiseFloor","oneOf":[true]},"default":false,"gate":{"capability":"displayExtrasVersion","min":4}},)json"
+    R"json({"id":"display.gridScales.copyWaterfallThresholds","label":"Copy waterfall thresholds \u2192 spectrum min/max","tooltip":"Copies the current waterfall High Threshold and Low Threshold into the spectrum dB max and dB min for the current band.","kind":"button","binding":{"phone":"copyWaterfallThresholds"},"applies":"live","requiresDescriptionVersion":12},)json"
+    R"json({"id":"display.multimeter.showDecimal","label":"Show decimal point in readouts","tooltip":"Display a decimal digit in S-meter and dBm text readouts (e.g. S5.3 or -85.6 dBm).","kind":"toggle","binding":{"phone":"MultimeterShowDecimal"},"applies":"live","requiresDescriptionVersion":12,"default":true},)json"
+    R"json({"id":"display.multimeter.unitMode","label":"Display units:","tooltip":"Sets the unit used for signal level readouts across all meter items. S = IARU S-scale (S1\u2013S9+dB), dBm = -130 to 0, uV = microvolts at 50\u03a9.","kind":"choice","binding":{"phone":"MultimeterUnitMode"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":0,"label":"S"},{"value":1,"label":"dBm"},{"value":2,"label":"uV"}],"default":1},)json"
+    R"json({"id":"display.multimeter.historyDuration","label":"History duration:","tooltip":"Total time span shown in the signal history graph (1\u2013600 000 ms).","kind":"integer","binding":{"phone":"MultimeterSignalHistoryDurationMs"},"applies":"live","requiresDescriptionVersion":12,"min":1000,"max":600000,"step":1,"unit":"ms","default":60000},)json"
+    R"json({"id":"display.txDisplay.wfLowLevel","label":"Low Level:","tooltip":"Waterfall Low Signal. Show Low Color below this value, with gradient in between.","kind":"integer","binding":{"phone":"DisplayTxWfLowLevel"},"applies":"live","requiresDescriptionVersion":12,"min":-200,"max":200,"step":5,"unit":"dBm","default":-70,"gate":{"capability":"txDisplayVersion","min":1}},)json"
+    R"json({"id":"display.txDisplay.wfHighLevel","label":"High Level:","tooltip":"Waterfall High Signal. Show High Color above this value, with gradient in between.","kind":"integer","binding":{"phone":"DisplayTxWfHighLevel"},"applies":"live","requiresDescriptionVersion":12,"min":-200,"max":200,"step":5,"unit":"dBm","default":30,"gate":{"capability":"txDisplayVersion","min":1}},)json"
+    R"json({"id":"display.txDisplay.wfPalette","label":"Palette:","tooltip":"Sets the color scheme for the TX waterfall.","kind":"choice","binding":{"phone":"DisplayTxWfPalette"},"applies":"live","requiresDescriptionVersion":12,"options":[{"value":1,"label":"Enhanced"},{"value":2,"label":"Spectran"},{"value":3,"label":"BlackWhite"},{"value":4,"label":"LinLog"},{"value":5,"label":"LinRad"},{"value":0,"label":"LinAuto"},{"value":6,"label":"Custom"}],"default":1,"gate":{"capability":"txDisplayVersion","min":1}},)json"
+    R"json({"id":"display.txDisplay.wfLowColor","label":"Low Color:","tooltip":"Color used when the signal level is at or below the Low Level set above.","kind":"colour","binding":{"phone":"DisplayTxWfLowColor"},"applies":"live","requiresDescriptionVersion":12,"default":"#000000FF","gate":{"capability":"txDisplayVersion","min":1}},)json"
+    R"json({"id":"display.threeD.reset","label":"Reset 3D to defaults","tooltip":"Restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle and 3D Slice Shadow to their ship defaults (2D Waterfall / 6 dB / 70% / 100% / 50% / off).","kind":"button","binding":{"phone":"reset3d"},"applies":"live","requiresDescriptionVersion":12,"confirm":"This will restore Spectrum render mode, 3D Floor, 3D Gain, 3D Span, 3D Angle and 3D Slice Shadow to their ship defaults.\n\nContinue?"},)json"
+    R"json({"id":"display.threeD.renderMode","label":"Spectrum:","tooltip":"2D: FFT trace + waterfall.\n3D: perspective stacked-trace spectrum stream.","kind":"choice","binding":{"phone":"DisplaySpectrumRenderMode"},"applies":"subscription","requiresDescriptionVersion":12,"options":[{"value":0,"label":"2D Waterfall"},{"value":1,"label":"3D Stacked Trace"}],"default":0,"gate":{"capability":"remoteMediaVersion","min":1}},)json"
+    R"json({"id":"display.threeD.floor","label":"3D Floor:","tooltip":"","kind":"slider","binding":{"phone":"Display3DFloorDepth"},"applies":"live","requiresDescriptionVersion":12,"min":0,"max":24,"step":1,"unit":"dB","perBand":{"label":"3D Floor:"},"default":6},)json"
+    R"json({"id":"display.threeD.gain","label":"3D Gain:","tooltip":"3D surface color gain: how far down the signal range the colormap reaches.\nHigher = color down toward the noise floor; lower = color only on the strongest signals.","kind":"slider","binding":{"phone":"Display3DGain"},"applies":"live","requiresDescriptionVersion":12,"min":0,"max":100,"step":1,"unit":"%","default":70},)json"
+    R"json({"id":"display.threeD.span","label":"3D Span:","tooltip":"3D surface width: how far the nearest traces overhang the plot edges, using spectrum the radio sends from outside the panadapter.\nHigher = the empty wedges beside the surface close from the front; 0 = the classic narrowing trapezoid.","kind":"slider","binding":{"phone":"Display3DSpan"},"applies":"live","requiresDescriptionVersion":12,"min":0,"max":100,"step":1,"unit":"%","default":100},)json"
+    R"json({"id":"display.threeD.angle","label":"3D Angle:","tooltip":"Viewing angle for the 3D surface: low looks along the traces edge-on, high looks down on them.\n50 is the classic fixed angle.","kind":"slider","binding":{"phone":"Display3DAngle"},"applies":"live","requiresDescriptionVersion":12,"min":0,"max":100,"step":1,"unit":"%","default":50},)json"
+    R"json({"id":"display.threeD.sliceShadow","label":"3D Slice Shadow","tooltip":"Darken each slice's passband onto the 3D surface so it leans back\nwith the perspective, instead of drawing flat on top of it.","kind":"toggle","binding":{"phone":"Display3DSliceShadow"},"applies":"live","requiresDescriptionVersion":12,"default":false})json"
+    R"json(])json";
+constexpr char kAppearanceV12ResetColours[] =
+    R"json({"id":"appearance.colorsTheme.resetColors","label":"Reset all colors to defaults","tooltip":"Reset all spectrum and waterfall colors to factory defaults. Other display settings (FPS, averaging, thresholds, etc.) are not affected.","kind":"button","binding":{"phone":"resetColors"},"applies":"live","requiresDescriptionVersion":12,"confirm":"Reset all spectrum and waterfall colors to factory defaults?\n\nCustom colors set here will be discarded. Other display settings are not affected."})json";
+
+const QHash<QString, QJsonObject>& displayV12Controls()
+{
+    static const QHash<QString, QJsonObject> table = [] {
+        QHash<QString, QJsonObject> controls;
+        const QJsonArray rows = QJsonDocument::fromJson(QByteArray(kDisplayV12Controls)).array();
+        for (const QJsonValue& row : rows) {
+            const QJsonObject control = row.toObject();
+            controls.insert(control.value(QStringLiteral("id")).toString(), control);
+        }
+        return controls;
+    }();
+    return table;
+}
+
+
 QJsonObject expectedAntennaRowsTable(bool tx, HPSDRModel model)
 {
     const SkuUiProfile sku = skuUiProfileFor(model);
@@ -171,7 +251,7 @@ bool validDiagnosticsEnvelope(const QJsonObject& root)
 bool validAppearanceEnvelope(const QJsonObject& root)
 {
     const QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
-    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(7)
+    if (root.size() != 3 || root.value(QStringLiteral("version")) != QJsonValue(12)
         || root.value(QStringLiteral("category")) != QJsonValue(QJsonObject{
             {QStringLiteral("id"), QStringLiteral("appearance")},
             {QStringLiteral("title"), QStringLiteral("Appearance")},
@@ -184,11 +264,20 @@ bool validAppearanceEnvelope(const QJsonObject& root)
         || page.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Colors & Theme"))
         || page.value(QStringLiteral("where")) != QJsonValue(QStringLiteral("phone"))
         || page.value(QStringLiteral("coverage")) != QJsonValue(QStringLiteral("partial"))
-        || sections.size() != 1) { return false; }
+        || sections.size() != 2) { return false; }
     const QJsonObject section = sections.first().toObject();
     if (section.size() != 2
         || section.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Spectrum"))
         || section.value(QStringLiteral("controls")).toArray().size() != 10) { return false; }
+    // Version 12: the Reset section holds only Reset all colors.
+    const QJsonObject reset = sections.at(1).toObject();
+    const QJsonArray resetControls = reset.value(QStringLiteral("controls")).toArray();
+    if (reset.size() != 2
+        || reset.value(QStringLiteral("title")) != QJsonValue(QStringLiteral("Reset"))
+        || resetControls.size() != 1
+        || !SetupDescription::validateAppearanceResetColours(resetControls.first().toObject())) {
+        return false;
+    }
     const QJsonObject meterPage = pages.at(1).toObject();
     const QJsonArray meterSections = meterPage.value(QStringLiteral("sections")).toArray();
     if (meterPage.size() != 5
@@ -220,9 +309,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("diagnostics")
               && root.value(QStringLiteral("version")) == QJsonValue(3))
          && !(id == QLatin1String("display")
-              && root.value(QStringLiteral("version")) == QJsonValue(11))
+              && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("appearance")
-              && root.value(QStringLiteral("version")) == QJsonValue(7))
+              && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(5))
          && !(id == QLatin1String("hardware")
@@ -292,7 +381,11 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(10))
                                 && !(id == QLatin1String("display")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(11)))))
+                                         == QJsonValue(11))
+                                && !((id == QLatin1String("display")
+                                      || id == QLatin1String("appearance"))
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(12)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -338,7 +431,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (id == QLatin1String("appearance")
                         && !SetupDescription::validateAppearanceColourBinding(control)
-                        && !SetupDescription::validateAppearanceMeterStyleBinding(control))
+                        && !SetupDescription::validateAppearanceMeterStyleBinding(control)
+                        && !SetupDescription::validateAppearanceResetColours(control))
                     || (id == QLatin1String("diagnostics")
                         && !SetupDescription::validateSettingsHygienePanel(control))
                     || (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("command"))
@@ -584,6 +678,12 @@ bool SetupDescription::validateDisplaySettingBinding(const QJsonObject& control)
 
 bool SetupDescription::validateDisplayPhoneBinding(const QJsonObject& control)
 {
+    // Version 12: the exact closed row, or nothing.
+    const auto v12 = displayV12Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    if (v12 != displayV12Controls().constEnd()) {
+        return control == *v12;
+    }
     struct RendererSpec {
         const char* id;
         const char* key;
@@ -889,6 +989,13 @@ bool SetupDescription::validateAppearanceColourBinding(const QJsonObject& contro
         }
     }
     return false;
+}
+
+bool SetupDescription::validateAppearanceResetColours(const QJsonObject& control)
+{
+    static const QJsonObject expected =
+        QJsonDocument::fromJson(QByteArray(kAppearanceV12ResetColours)).object();
+    return !expected.isEmpty() && control == expected;
 }
 
 bool SetupDescription::validateAppearanceMeterStyleBinding(const QJsonObject& control)
@@ -1747,11 +1854,14 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     category.insert(QStringLiteral("pages"), pages);
     const int ceiling = categoryId == QLatin1String("hardware") ? 6
         : categoryId == QLatin1String("pa") ? 5
-        : categoryId == QLatin1String("appearance") ? 7
-        : categoryId == QLatin1String("display") ? 11 : 3;
+        : categoryId == QLatin1String("appearance") ? 12
+        : categoryId == QLatin1String("display") ? 12 : 3;
+    // Appearance changed at 4, 7 and 12: versions 7-11 all see version 7.
     category.insert(QStringLiteral("version"),
                     categoryId == QLatin1String("appearance") && version < 7
                         ? qMin(version, 4)
+                        : categoryId == QLatin1String("appearance") && version < 12
+                            ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4) : qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
