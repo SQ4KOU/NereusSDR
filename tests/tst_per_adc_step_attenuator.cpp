@@ -429,6 +429,58 @@ private slots:
         ctrl.setRadioConnection(nullptr);
     }
 
+    // Auto-attenuate acts per receiver on the ADC that overloaded, as Thetis
+    // does (console.cs 21584-21700): RX1 reacts only to slice A's ADC, RX2
+    // only to the other ADC in use, each with its own undo.
+    void autoAttenuateActsOnTheAdcThatOverloaded()
+    {
+        StepAttenuatorController ctrl;
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:0a"));
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setAutoAttMode(AutoAttMode::Classic);
+        ctrl.setAutoAttEnabled(true);
+        radio.sends.clear();
+
+        const auto overload = [&ctrl](int adc) {
+            for (int i = 0; i < 4; ++i) {  // red once the level passes 3
+                ctrl.onAdcOverflow(adc);
+                ctrl.tick();
+            }
+        };
+
+        // ADC1 (slice B's) overloads: only the other ADC's attenuator moves.
+        overload(1);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QVERIFY(ctrl.rx2AttenuatorDb() > 0);
+        for (const auto& send : radio.sends) {
+            QCOMPARE(send.first, 1);
+        }
+        // It clears: undo puts it back (undo delay off).
+        ctrl.tick();
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 0);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+
+        // ADC0 (slice A's) overloads: only slice A's attenuator moves.
+        radio.sends.clear();
+        overload(0);
+        QVERIFY(ctrl.attenuatorDb() > 0);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 0);
+        for (const auto& send : radio.sends) {
+            QCOMPARE(send.first, 0);
+        }
+        ctrl.tick();
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+
+        // No slice on ADC1: its overload moves nothing (no receiver there).
+        ctrl.setAdcRouting(0, -1, Band::Band20m, false);
+        overload(1);
+        QCOMPARE(ctrl.attenuatorDb(), 0);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 0);
+        ctrl.setRadioConnection(nullptr);
+    }
+
     // Controller sends: slice A's value only to slice A's ADC, the other
     // ADC's only to it, and a routing call that moves nothing sends nothing.
     void eachValueGoesOnlyToItsAdc()

@@ -202,6 +202,10 @@ void StepAttenuatorController::setAutoAttEnabled(bool on)
         // From Thetis console.cs:21509-21514: clear stack when auto-att off.
         applyClassicUndo();
     }
+    if (!on) {
+        // R-R3-46 / R-R3-11: the other ADC's too, restored as slice A's is.
+        clearRx2AutoAtt(true);
+    }
     // RxApplet listens here to flip S-ATT ↔ A-ATT on HL2.  See
     // mi0bot-Thetis console.cs:21342-21365 [v2.10.3.13-beta2] AutoAttRX1
     // setter — same convention, same label.
@@ -924,14 +928,29 @@ void StepAttenuatorController::tick()
 
     // Auto-attenuate on red overload.
     if (m_autoAttEnabled) {
+        // R-R3-46 / R-R3-11: per receiver, on the ADC it uses, as Thetis:
+        // From Thetis console.cs:21584-21588 [v2.10.3.15]:
+        //   int nRX1ADCinUse = GetADCInUse(nRX1DDCinUse); // (rx1)
+        //
+        //   // rx1
+        //   if (((_adc_overloaded[0] && _adc_overload_level[0] > 3) && nRX1ADCinUse == 0) || ((_adc_overloaded[1] && _adc_overload_level[1] > 3) && nRX1ADCinUse == 1)) // rx1 overload
+        // and the same for RX2 on nRX2ADCinUse (console.cs 21668-21672).
+        // Slice A's attenuator answers only its own ADC's overload (and the
+        // other ADC's while diversity links them: Thetis's RX2 bump then
+        // sets RX1's through the link); the other ADC's own attenuator
+        // answers its ADC (runRx2AutoAtt).
+        const auto red = [this](int adc) {
+            return adc >= 0 && adc < kMaxAdcs
+                && m_adcState[static_cast<size_t>(adc)].level > kRedThreshold;
+        };
         bool anyRed = false;
         int redAdc = -1;
-        for (int i = 0; i < kMaxAdcs; ++i) {
-            if (m_adcState[static_cast<size_t>(i)].level > kRedThreshold) {
-                anyRed = true;
-                redAdc = i;
-                break;
-            }
+        if (red(m_rx1Adc)) {
+            anyRed = true;
+            redAdc = m_rx1Adc;
+        } else if (m_adcAttLinked && red(m_rx2Adc)) {
+            anyRed = true;
+            redAdc = m_rx2Adc;
         }
 
         // P1 full-parity §4.1: defence-in-depth — the setAutoAttMode +
@@ -951,6 +970,8 @@ void StepAttenuatorController::tick()
             return;
         }
 
+        runRx2AutoAtt(!m_adcAttLinked && red(m_rx2Adc));
+
         if (anyRed) {
             if (!adaptiveAllowed) {
                 applyClassicAutoAtt(redAdc);
@@ -968,6 +989,79 @@ void StepAttenuatorController::tick()
                 applyAdaptiveAutoAtt(-1);  // decay path
             }
         }
+    }
+}
+
+// --- Auto-attenuate for the other ADC's attenuator (R-R3-46 / R-R3-11) ---
+//
+// Thetis's RX2 auto-attenuate, run on the other ADC in use:
+// From Thetis console.cs:21675-21690 [v2.10.3.15]:
+//   if (_rx2_step_att_enabled)
+//   {
+//       har.stepAttenuator = RX2AttenuatorData;
+//       har.band = RX2Band;
+//
+//       int att = har.stepAttenuator + (_adc_overloaded[0] ? _adc_step_shift[0] : _adc_step_shift[1]);
+//       if (att > 31) att = 31;
+//
+//       if (att != har.stepAttenuator)
+//       {
+//           RX2AttenuatorData = att;
+//           _auto_att_last_hold_time_rx2 = now;
+//           _historic_attenuator_readings_rx2.Push(har);
+// and its undo when the overload clears (console.cs 21721-21746). It
+// follows slice A's Classic bump and undo here (the step and the ceiling as
+// applyClassicAutoAtt takes them), with the one auto-attenuate enable and
+// undo settings NereusSDR keeps. Thetis steps RX2's preamp mode when its
+// step attenuator is off; the second ADC's preamp is one switch here, so
+// that branch has nothing to step. Adaptive is a NereusSDR extension of
+// slice A's attenuator; the other ADC keeps Thetis's Classic behaviour.
+void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
+{
+    if (m_rx2Adc < 0 || m_adcAttLinked) {
+        return;
+    }
+    if (overloaded) {
+        if (!m_stepAttEnabled) {
+            return;
+        }
+        const int shift = m_adcState[static_cast<size_t>(m_rx2Adc)].level;
+        const int newAtt = std::min(m_rx2AttDb + shift, m_maxAttDb);
+        if (newAtt != m_rx2AttDb) {
+            if (m_rx2ClassicSavedAttDb < 0) {
+                m_rx2ClassicSavedAttDb = m_rx2AttDb;
+            }
+            m_rx2AttDb = newAtt;
+            sendRx2Attenuation();
+            emit rx2AttenuationChanged(m_rx2AttDb);
+            m_rx2LastAutoAttTimeMs = QDateTime::currentMSecsSinceEpoch();
+        }
+        return;
+    }
+    if (m_rx2ClassicSavedAttDb < 0) {
+        return;
+    }
+    if (m_autoUndoEnabled) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 holdMs = static_cast<qint64>(m_autoUndoDelaySec) * 1000;
+        if ((now - m_rx2LastAutoAttTimeMs) < holdMs) {
+            return;
+        }
+    }
+    clearRx2AutoAtt(true);
+}
+
+void StepAttenuatorController::clearRx2AutoAtt(bool restore)
+{
+    if (m_rx2ClassicSavedAttDb < 0) {
+        return;
+    }
+    const int saved = m_rx2ClassicSavedAttDb;
+    m_rx2ClassicSavedAttDb = -1;
+    if (restore && saved != m_rx2AttDb) {
+        m_rx2AttDb = saved;
+        sendRx2Attenuation();
+        emit rx2AttenuationChanged(m_rx2AttDb);
     }
 }
 
@@ -1281,6 +1375,13 @@ void StepAttenuatorController::setRx2Band(Band band)
     //       int tmp = rx2_agct_by_band[(int)rx2_band]; //[2.10.3.6]MW0LGE see comment in RX1Band
     // The other ADC's preamp is not kept per band here (NereusSDR's second
     // ADC preamp is one switch, rx1Preamp).
+    // Thetis keep_att_entries_for_band drops RX2's auto-attenuate history on
+    // a band change (console.cs 21566-21569); the value the band keeps is
+    // the one it had before auto-attenuate raised it.
+    if (m_rx2ClassicSavedAttDb >= 0) {
+        m_rx2AttDb = m_rx2ClassicSavedAttDb;
+        m_rx2ClassicSavedAttDb = -1;
+    }
     m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
     m_rx2Band = band;
     const auto it = m_rx2BandAttDb.find(static_cast<int>(band));

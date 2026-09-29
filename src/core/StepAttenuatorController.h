@@ -776,6 +776,12 @@ private:
     void sendAttenuatorToAdc(int adc, int dB);
     // The other ADC's band follows its controlling slice (setAdcRouting).
     void setRx2Band(Band band);
+    // Thetis's RX2 auto-attenuate on the other ADC in use (tick()).
+    void runRx2AutoAtt(bool overloaded);
+    // Drop the other ADC's auto-attenuate state, restoring its value.
+    void clearRx2AutoAtt(bool restore);
+    int m_rx2ClassicSavedAttDb{-1};
+    qint64 m_rx2LastAutoAttTimeMs{0};
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);
