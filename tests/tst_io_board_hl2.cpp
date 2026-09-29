@@ -3,6 +3,11 @@
 #include <QSignalSpy>
 #include "core/IoBoardHl2.h"
 
+#include <QElapsedTimer>
+#include <atomic>
+#include <thread>
+#include <vector>
+
 using namespace NereusSDR;
 
 class TestIoBoardHl2 : public QObject {
@@ -198,6 +203,71 @@ private slots:
         io.applyI2cReadResponse(0x80 | (0x3d << 1), 0x00, 0x00, 0x00, 0x08);
         QCOMPARE(answered.count(), 1);
         QCOMPARE(answered.at(0).at(1).value<quint8>(), quint8(6));
+    }
+
+    // ── Threads ──
+
+    // The main thread (the I2C tool) and the connection thread (the poll)
+    // both queue transactions while the codec takes them on the connection
+    // thread. Every transaction must come out once, each producer's in the
+    // order it queued them, and the depth must stay in range.
+    void i2cQueue_isSafeAcrossThreads() {
+        IoBoardHl2 io;
+        constexpr int kPerProducer = 20000;
+        std::atomic<bool> stop{false};
+        const auto produce = [&io, &stop](quint8 producer) {
+            for (int i = 0; i < kPerProducer && !stop.load();) {
+                IoBoardHl2::I2cTxn txn;
+                txn.bus = producer;
+                txn.address = quint8(i & 0x7F);
+                txn.control = quint8((i >> 7) & 0xFF);
+                txn.writeData = quint8((i >> 15) & 0xFF);
+                if (io.enqueueI2c(txn)) {
+                    ++i;
+                } else {
+                    std::this_thread::yield();
+                }
+            }
+        };
+        std::vector<int> next(2, 0);
+        int received = 0;
+        int outOfOrder = 0;
+        int badDepth = 0;
+        std::thread consumer([&]() {
+            QElapsedTimer deadline;
+            deadline.start();
+            while (received < 2 * kPerProducer && deadline.elapsed() < 5000) {
+                const int depth = io.i2cQueueDepth();
+                if (depth < 0 || depth > IoBoardHl2::kMaxI2cQueue) {
+                    ++badDepth;
+                }
+                IoBoardHl2::I2cTxn txn;
+                if (!io.dequeueI2c(txn)) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                const int producer = txn.bus;
+                const int index = txn.address | (txn.control << 7) | (txn.writeData << 15);
+                if (producer < 0 || producer > 1 || index != next[producer]) {
+                    ++outOfOrder;
+                } else {
+                    ++next[producer];
+                }
+                ++received;
+            }
+            stop.store(true);
+        });
+        std::thread a(produce, quint8(0));
+        std::thread b(produce, quint8(1));
+        a.join();
+        b.join();
+        consumer.join();
+        QCOMPARE(outOfOrder, 0);
+        QCOMPARE(badDepth, 0);
+        QCOMPARE(received, 2 * kPerProducer);
+        QCOMPARE(next[0], kPerProducer);
+        QCOMPARE(next[1], kPerProducer);
+        QVERIFY(io.i2cQueueIsEmpty());
     }
 };
 

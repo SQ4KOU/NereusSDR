@@ -244,7 +244,7 @@ public:
     explicit IoBoardHl2(QObject* parent = nullptr);
 
     // ── I2C queue ──
-    // Circular FIFO buffer, kMaxI2cQueue slots, enqueue/dequeue/depth/clear.
+    // Bounded FIFO, kMaxI2cQueue slots, safe from any thread without a lock.
     bool   enqueueI2c(const I2cTxn& txn);
     bool   dequeueI2c(I2cTxn& out);
     int    i2cQueueDepth() const;
@@ -376,11 +376,22 @@ signals:
     void currentOcByteChanged(quint8 ocByte, int bandIdx, bool mox);
 
 private:
-    // Circular FIFO for I2C queue (oldest entry at head, newest at tail-1).
-    std::array<I2cTxn, kMaxI2cQueue> m_i2cQueue{};
-    int  m_i2cHead{0};
-    int  m_i2cTail{0};
-    int  m_i2cCount{0};
+    // The I2C queue is filled from the main thread (the I2C tool, the
+    // output pins) and from the connection thread (the poll, the probe),
+    // and emptied by the codec on the connection thread as it builds each
+    // C&C frame. It is a bounded lock-free queue (each slot carries a
+    // sequence number; producers and consumers claim positions with a
+    // compare-exchange), so no thread ever waits on a lock and the send
+    // path never blocks. FIFO order holds across all producers.
+    static_assert((kMaxI2cQueue & (kMaxI2cQueue - 1)) == 0,
+                  "the I2C queue indexes by mask");
+    struct I2cSlot {
+        std::atomic<quint64> sequence{0};
+        I2cTxn txn;
+    };
+    std::array<I2cSlot, kMaxI2cQueue> m_i2cSlots{};
+    alignas(64) std::atomic<quint64> m_i2cEnqueuePos{0};
+    alignas(64) std::atomic<quint64> m_i2cDequeuePos{0};
 
     // When each pending read went out (nowMs()), parallel to m_pendingReads.
     std::array<qint64, kMaxI2cQueue> m_pendingSentMs{};
@@ -405,8 +416,9 @@ private:
     // Last EP6 I2C read response — mirrors prn->i2c.read_data[] + flag.
     I2cReadResponse m_lastI2cRead{};
 
-    // Pending-read FIFO — parallel to m_i2cQueue.  Each codec dequeue of a
-    // read txn pushes a record; each EP6 response pops the oldest.
+    // Pending-read FIFO — parallel to the I2C queue.  Each codec dequeue of a
+    // read txn pushes a record; each EP6 response pops the oldest.  Both run
+    // on the connection thread, so this FIFO needs no guard.
     std::array<PendingRead, kMaxI2cQueue> m_pendingReads{};
     int m_pendingHead{0};
     int m_pendingTail{0};
