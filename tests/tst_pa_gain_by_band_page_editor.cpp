@@ -697,11 +697,13 @@ void TstPaGainByBandPageEditor::on_air_locks_the_transmitting_band_while_another
     model.setOtherDeviceHoldsRefusal({});
 }
 
-// Job B item 2: the page reads the transmitting band afresh, not latched at
-// key. A band change while keyed moves the open row (Thetis OnTXBandChanged,
-// setup.cs:23835-23839 [v2.10.3.15]), and an edit moves the drive only when
-// it is to the band transmitting now, so no edit is saved against one band
-// while it moves another band's drive.
+// Job B item 2, corrected by the fix round: the page's open row is the band
+// the Core transmits on, which holds while keyed. Setup's _adjustingBand
+// moves only in OnTXBandChanged (setup.cs:23836-23840 [v2.10.3.15]), raised
+// by the TXBand setter, and that setter returns while MOX
+// (//[2.10.3.6]MW0LGE no band change on TX fix). So a retune while keyed
+// leaves the keyed band's row open (it is the row driving the PA), and the
+// row moves with the next band change after unkey.
 void TstPaGainByBandPageEditor::on_air_follows_the_transmitting_band_through_a_band_change()
 {
     RadioModel model;
@@ -719,29 +721,41 @@ void TstPaGainByBandPageEditor::on_air_follows_the_transmitting_band_through_a_b
     mox->setMox(true);  // logical test state, no radio transport
     QTRY_VERIFY(model.isCoreOnAir());
     QVERIFY(page.gainSpinForTest(Band::Band20m)->isEnabled());
-    QVERIFY(!page.gainSpinForTest(Band::Band40m)->isEnabled());
+    QVERIFY(!page.gainSpinForTest(Band::Band17m)->isEnabled());
 
-    slice->setFrequency(7100000.0);
-    QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band40m));
-    QVERIFY(page.gainSpinForTest(Band::Band40m)->isEnabled());
-    QVERIFY(page.adjustSpinForTest(Band::Band40m, 2)->isEnabled());
-    QVERIFY(!page.gainSpinForTest(Band::Band20m)->isEnabled());
-    QCOMPARE(page.gainSpinForTest(Band::Band20m)->toolTip(), RadioModel::paOnAirLockedReason());
+    slice->setFrequency(18100000.0);
+    QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band20m));
+    QVERIFY(page.gainSpinForTest(Band::Band20m)->isEnabled());
+    QVERIFY(page.adjustSpinForTest(Band::Band20m, 2)->isEnabled());
+    QVERIFY(!page.gainSpinForTest(Band::Band17m)->isEnabled());
+    QCOMPARE(page.gainSpinForTest(Band::Band17m)->toolTip(), RadioModel::paOnAirLockedReason());
 
-    // An edit to the old band (the spin box reached programmatically) is
-    // saved against that band and leaves the drive alone.
-    page.adjustSpinForTest(Band::Band20m, 5)->setValue(-1.0);
-    QCOMPARE(model.paProfileManager()->activeProfile()->getAdjust(Band::Band20m, 5), -1.0f);
+    // An edit to the retuned band (the spin box reached programmatically)
+    // is saved against that band and leaves the drive alone.
+    page.adjustSpinForTest(Band::Band17m, 5)->setValue(-1.0);
+    QCOMPARE(model.paProfileManager()->activeProfile()->getAdjust(Band::Band17m, 5), -1.0f);
     QCOMPARE(model.transmitModel().power(), 100);
 
-    // An edit to the band transmitting now moves the drive to its step.
-    page.adjustSpinForTest(Band::Band40m, 2)->setValue(-0.5);
-    QCOMPARE(model.paProfileManager()->activeProfile()->getAdjust(Band::Band40m, 2), -0.5f);
+    // An edit to the band still transmitting moves the drive to its step.
+    page.adjustSpinForTest(Band::Band20m, 2)->setValue(-0.5);
+    QCOMPARE(model.paProfileManager()->activeProfile()->getAdjust(Band::Band20m, 2), -0.5f);
     QCOMPARE(model.transmitModel().power(), 30);
 
     mox->setMox(false);
     QTRY_VERIFY(!model.isCoreOnAir());
     QVERIFY(page.gainSpinForTest(Band::Band20m)->isEnabled());
+    QVERIFY(page.gainSpinForTest(Band::Band17m)->isEnabled());
+
+    // Off the air the next band change moves the transmit band; key again
+    // and the 17 m row is the open one.
+    slice->setFrequency(18110000.0);
+    QCOMPARE(model.paOnAirBandIndex(), static_cast<int>(Band::Band17m));
+    mox->setMox(true);
+    QTRY_VERIFY(model.isCoreOnAir());
+    QVERIFY(page.gainSpinForTest(Band::Band17m)->isEnabled());
+    QVERIFY(!page.gainSpinForTest(Band::Band20m)->isEnabled());
+    mox->setMox(false);
+    QTRY_VERIFY(!model.isCoreOnAir());
 }
 
 QTEST_MAIN(TstPaGainByBandPageEditor)

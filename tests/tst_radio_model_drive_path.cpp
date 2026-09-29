@@ -917,6 +917,62 @@ private slots:
         QCOMPARE(tx.tunePowerForTxBand(), 60);
     }
 
+    // Setup's _adjustingBand moves only in OnTXBandChanged
+    // (setup.cs:23836-23840 [v2.10.3.15]), which the TXBand setter raises;
+    // the setter returns while MOX (//[2.10.3.6]MW0LGE no band change on TX
+    // fix). nudPAProfileGain_ValueChanged runs console.PWR = console.PWR,
+    // which drives with GainByBand(TXBand, ...). So the editable row and the
+    // driving row stay the band keyed on, through a retune while keyed.
+    void keyedRetune_holdsTheOnAirPaRow()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setFrequency(14200000.0);
+        pump();
+        QSignalSpy bandSpy(&model, &RadioModel::transmitBandChanged);
+        model.transmitModel().setPower(100);
+        pump();
+
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        QVERIFY(model.paOnAirNow());
+        slice->setFrequency(18100000.0);
+        pump();
+        QCOMPARE(bandSpy.count(), 0);
+
+        const int band20 = static_cast<int>(Band::Band20m);
+        const int band17 = static_cast<int>(Band::Band17m);
+        QCOMPARE(model.paOnAirBandIndex(), band20);
+        QVERIFY(model.paOnAirEditRefusal(false, band20, true).isEmpty());
+        QCOMPARE(model.paOnAirEditRefusal(false, band17, true),
+                 RadioModel::paOnAirLockedReason());
+
+        // The 20 m gain edit moves the live drive.
+        conn->txDriveLog.clear();
+        PaProfileManager* pm = model.paProfileManager();
+        PaProfile edited = *pm->activeProfile();
+        edited.setGainForBand(Band::Band20m, edited.getGainForBand(Band::Band20m) - 10.0f);
+        QVERIFY(pm->saveProfile(pm->activeProfileName(), edited));
+        model.applyPaEditOnAir(RadioModel::PaProfileAction::SetGain, -1);
+        pump();
+        QVERIFY2(!conn->txDriveLog.isEmpty(), "the 20 m gain edit moved no drive");
+
+        // After unkey the next band change moves the row.
+        mox->setMox(false);
+        pump();
+        slice->setFrequency(18110000.0);
+        pump();
+        QCOMPARE(bandSpy.count(), 1);
+        QCOMPARE(model.paOnAirBandIndex(), band17);
+    }
+
     // The TXBand setter assigns the band's slider limits
     // (console.cs:17539-17540 [v2.10.3.15]:
     //   ptbPWR.LimitValue = limitPower_by_band[(int)value];

@@ -157,6 +157,10 @@
 //                 air moves the drive to that step, as Thetis's
 //                 nudAdjustGain_ValueChanged does. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: the open row follows the Core's
+//                 transmit band change, which holds while keyed, not the
+//                 slice's band. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -909,9 +913,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // the holder too.
     connect(model, &RadioModel::transmitHolderChanged, this,
             [this]() { applyPaSettingsGate(); });
-    // The transmitting band is read afresh, not latched at key: a band
-    // change while keyed moves the open row (Thetis OnTXBandChanged,
-    // setup.cs:23835-23839 [v2.10.3.15], re-runs enabledAllPAnuds).
+    // The open row is the Core's transmit band (paOnAirBandIndex), which
+    // holds while keyed: Thetis OnTXBandChanged (setup.cs:23835-23839
+    // [v2.10.3.15]) moves _adjustingBand only from the TXBand setter, and
+    // that returns while MOX. The row follows the transmit band change; the
+    // slice followers below cover a remote window, whose transmit band is
+    // the transmit slice's.
+    connect(model, &RadioModel::transmitBandChanged, this,
+            [this]() { refreshOnAirBand(); });
     const auto followSlice = [this](SliceModel* slice) {
         if (!slice) {
             return;

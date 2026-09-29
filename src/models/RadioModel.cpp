@@ -653,6 +653,11 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3577,6 +3582,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // [v2.10.3.15]).
             m_txBand = transmitSliceBand();
             m_txBandKnown = true;
+            emit transmitBandChanged();
             m_transmitModel.setPowerLimit(
                 m_transmitModel.limitPowerForBand(m_txBand));
             m_transmitModel.setTunePowerLimit(
@@ -5366,10 +5372,14 @@ QString RadioModel::paHolderOnlyReason()
 
 int RadioModel::paOnAirBandIndex() const
 {
-    // The band the Core transmits on: the transmit slice's, else its last
-    // band (restoreNormalTxDrive reads the same).
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band txBand = txSlice ? bandFromFrequency(txSlice->frequency()) : m_lastBand;
+    // The band the Core transmits on: m_txBand (Thetis _tx_band) once known,
+    // the band the drive math reads (driveTxBand). It holds while keyed, as
+    // _adjustingBand does: that moves only in OnTXBandChanged, raised by the
+    // TXBand setter, which returns while MOX
+    // (//[2.10.3.6]MW0LGE no band change on TX fix). Before the first
+    // transmit band is known, and on a remote window, the transmit slice's
+    // band, else the last band.
+    const Band txBand = driveTxBand();
     // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
     //   setAdjustingBand(newBand);
     //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
@@ -6179,8 +6189,16 @@ void RadioModel::applyTransmitBand(Band band, bool initializing)
     if (initializing) {
         oldBand = band; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
     }
+    const bool bandMoved = !m_txBandKnown || m_txBand != band;
     m_txBand = band;
     m_txBandKnown = true;
+    // OnTXBandChanged (setup.cs:23835-23839 [v2.10.3.15]) moves the PA
+    // page's adjusting band (setAdjustingBand(newBand);
+    // lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX));
+    // paOnAirBandIndex readers follow this.
+    if (bandMoved) {
+        emit transmitBandChanged();
+    }
 
     // From Thetis console.cs:17525-17528 [v2.10.3.15]:
     //   Band lo_band = Band.FIRST;

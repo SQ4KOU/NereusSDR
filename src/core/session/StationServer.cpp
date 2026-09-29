@@ -739,6 +739,9 @@
 //               coreAddressesVersion 1, only to a device signed in with its
 //               own key that declared coreAddresses (peerGetsCoreAddresses).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: PA on-air gate review: the on-air PA publish also follows
+//               the Core's transmit band change. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-28: R-R3-49 / R-IOS-18: Setup description version 13 (PA and
 //               Hardware Config); the description also carries the Core's
 //               radio for Radio Info. J.J. Boyd (KG4VCF), AI-assisted via
@@ -2447,6 +2450,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         };
         applyPaOnAir(radioModel->isCoreOnAir());
         connect(radioModel, &RadioModel::coreOnAirChanged, this, applyPaOnAir);
+        // The open row is the Core's transmit band, which holds while keyed;
+        // a transmit band change while on the air (not through MOX) moves it.
+        connect(radioModel, &RadioModel::transmitBandChanged, this,
+                [this, applyPaOnAir]() {
+                    if (m_radioModel && m_radioModel->isCoreOnAir()) {
+                        applyPaOnAir(true);
+                    }
+                });
     }
     if (m_transmitHolder) {
         connect(m_transmitHolder.get(), &TransmitHolder::changed, this, [this]() {

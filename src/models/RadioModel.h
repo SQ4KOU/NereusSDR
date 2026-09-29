@@ -399,6 +399,11 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -5070,6 +5075,10 @@ signals:
     void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
+    // R-R3-49: the Core's transmit band (Thetis _tx_band, m_txBand) changed
+    // or became known or unknown. It holds while keyed, so paOnAirBandIndex
+    // follows this, not a slice's band.
+    void transmitBandChanged();
     // R-R3-32 (parity Task 6): paReadings() changed.
     void paReadingsChanged();
     // Parity Task 33: paRawAdc() changed.
