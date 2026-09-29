@@ -1476,6 +1476,9 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // Parity ruling C4: the rate box on a Core without setRadioSampleRate.
+        {"src/core/session/IStationLink.h", "radioSampleRateUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

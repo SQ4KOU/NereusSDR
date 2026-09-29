@@ -71,6 +71,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/session/IStationLink.h"
+#include "OperatorWording.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/StationClient.h"
@@ -184,6 +185,32 @@ private:
     }
 };
 
+/// Parity ruling C4: a link that records the rate requests, and says
+/// whether its Core offers the radio-wide rate (radioHardwareVersion 8).
+class RateLink : public NereusSDR::IStationLink {
+public:
+    bool radioWide = false;
+    QList<int> sliceRequests;
+    QList<int> radioRequests;
+
+    CommandOutcome requestAddSlice(const QString&) override { return {}; }
+    CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+    CommandOutcome requestRemoveSlice(int) override { return {}; }
+    CommandOutcome requestActiveSlice(int) override { return {}; }
+    CommandOutcome requestSliceSampleRate(int sliceId, int) override
+    {
+        sliceRequests.append(sliceId);
+        return { true, QString() };
+    }
+    bool stationLinkReady() const override { return true; }
+    bool radioSampleRateAvailable() const override { return radioWide; }
+    CommandOutcome requestRadioSampleRate(int rateHz) override
+    {
+        radioRequests.append(rateHz);
+        return { true, QString() };
+    }
+};
+
 QList<int> sliceIds(const RadioModel& model)
 {
     QList<int> ids;
@@ -207,6 +234,7 @@ private slots:
     void remoteAddSliceCreatesTheSliceOnTheDaemonAndTheClientAdoptsTheStationsId();
     void remoteRemoveSliceRemovesItOnTheDaemon();
     void remoteSampleRateRequestReachesTheDaemon();
+    void remoteRadioSampleRateIsOneRequestOrEachReceiversOnAnOlderCore();
     void remoteCtunPinAndExplicitCentreAreCoreOwnedAndMirroredToCohosts();
     void remoteCtunDispatcherRejectsDuplicateOrFractionalArguments();
     void localCtunPinIsolatesIndependentStreams();
@@ -370,6 +398,36 @@ void TstRemoteSliceCommands::remoteSampleRateRequestReachesTheDaemon()
     QCOMPARE(results.count(), 1);
     QCOMPARE(results.first().at(1).toBool(), true);
     QCOMPARE(retuneRejected.count(), 0);
+}
+
+// Parity ruling C4: a remote window's Radio Info rate is one radio-wide
+// request to a Core that offers it (every receiver and the radio's own
+// rate, as a local window's change), and on an older Core each of the
+// window's receivers' own request, lowest id first, as before.
+void TstRemoteSliceCommands::remoteRadioSampleRateIsOneRequestOrEachReceiversOnAnOlderCore()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    RateLink link;
+    remote.attachStation(&link);
+    QCOMPARE(remote.addSliceWithStationId(2), 2);
+    QCOMPARE(remote.addSliceWithStationId(0), 0);
+    QCOMPARE(remote.addSliceWithStationId(1), 1);
+
+    QVERIFY(!remote.radioSampleRateReachesEveryReceiver());
+    remote.requestRadioSampleRate(96000);
+    QCOMPARE(link.sliceRequests, (QList<int>{0, 1, 2}));
+    QVERIFY(link.radioRequests.isEmpty());
+
+    link.sliceRequests.clear();
+    link.radioWide = true;
+    QVERIFY(remote.radioSampleRateReachesEveryReceiver());
+    remote.requestRadioSampleRate(192000);
+    QCOMPARE(link.radioRequests, QList<int>{192000});
+    QVERIFY(link.sliceRequests.isEmpty());
+    remote.detachStation();
+
+    // The older Core's reason is plain words.
+    QVERIFY(OperatorWording::isPlain(IStationLink::radioSampleRateUnavailableReason()));
 }
 
 void TstRemoteSliceCommands::

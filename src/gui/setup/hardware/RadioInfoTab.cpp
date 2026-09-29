@@ -25,9 +25,11 @@
 //                 top sample rate is the protocol's, not the board row's.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Parity ruling C4: a remote window's rate change goes to
-//                 every one of its receivers, as a local window's live
-//                 change does. J.J. Boyd (KG4VCF), AI-assisted via
-//                 Anthropic Claude Code.
+//                 every receiver and the radio's own rate, as a local
+//                 window's live change does (RadioModel::
+//                 requestRadioSampleRate); on an older Core, each of its
+//                 receivers, with the reason on the rate box. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -83,11 +85,10 @@
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
 #include "core/SampleRateCatalog.h"
+#include "core/session/IStationLink.h"
 #include "gui/ComboStyle.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
-
-#include <algorithm>
 
 #include <QCheckBox>
 #include <QClipboard>
@@ -255,6 +256,13 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         ? QStringLiteral("—")
         : info.address.toString());
 
+    // Parity ruling C4: a remote window on an older Core changes only its
+    // own receivers' rate; the rate box says so.
+    m_sampleRateRx1Combo->setToolTip(
+        m_model && !m_model->radioSampleRateReachesEveryReceiver()
+            ? IStationLink::radioSampleRateUnavailableReason()
+            : QString());
+
     // Rebuild RX1 combo from allowedSampleRates(proto, caps, model) — matches
     // Thetis setup.cs:847-852 filtering (per-protocol list ∩ caps.sampleRates,
     // with the RedPitaya extra-384k exception). Default selection is 192000
@@ -339,31 +347,14 @@ void RadioInfoTab::onSampleRateChanged(int index)
         //
         // R-R3-46: a remote window's radio is the Core's. The rate saved
         // above stays the Core's default for that radio (its next connect).
-        // Parity ruling C4: every one of this window's receivers changes
-        // now, without a reconnect, as a local window's live change moves
-        // every receiver, each through the request the receiver's own rate
-        // menu sends (lowest id first). On Protocol 1 the first request
-        // already moves the whole radio and the rest find it at the rate;
-        // on Protocol 2 each moves its receiver. Another device's
-        // receivers are that device's to change (the several-devices
-        // design, ruling 5.9), and a change that disturbs one is asked of
-        // it by the Core's confirm step.
-        if (m_model && !m_model->ownsLocalDsp()) {
-            QList<int> ids;
-            for (SliceModel* slice : m_model->slices()) {
-                if (slice != nullptr) {
-                    ids.append(slice->sliceIndex());
-                }
-            }
-            std::sort(ids.begin(), ids.end());
-            for (int id : std::as_const(ids)) {
-                m_model->requestSliceSampleRate(id, rate);
-            }
-        } else if (m_model) {
-            // R-R3-39: the change runs on the receive lane; this returns at
-            // once, and wireSampleRateChanged hides the banner when it is
-            // done.
-            m_model->setSampleRateLiveAsync(rate);
+        // Parity ruling C4: every window makes the same change now, without
+        // a reconnect: every receiver and the radio's own rate
+        // (RadioModel::requestRadioSampleRate; a remote window asks the
+        // Core, whose confirm step asks another device first). R-R3-39: a
+        // local change runs on the receive lane; this returns at once, and
+        // wireSampleRateChanged hides the banner when it is done.
+        if (m_model) {
+            m_model->requestRadioSampleRate(rate);
         }
         updateReconnectBanner();
     }

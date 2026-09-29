@@ -10,6 +10,9 @@
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // 2026-09-28: Parity ruling C12: a window's per-band grid write reaches the
 // Core's pans. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-28: Parity ruling C4: radioHardwareVersion 8, setRadioSampleRate
+// for a paired device, off the air. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -4355,6 +4358,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 message.commandVerb, message.commandId, false,
                 StationRadios::pairedDeviceReason(), {}));
             break;
+        }
+        // Parity ruling C4 (radioHardwareVersion 8): the radio's sample
+        // rate is a radio-wide change, so like the Core's radio verbs it is
+        // for a paired device, and like the transmit region it waits while
+        // the radio is on the air, whoever holds transmit (the change stops
+        // the radio's data flow).
+        if (message.commandVerb == "setRadioSampleRate") {
+            QString refusal;
+            if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+                refusal = QStringLiteral("Change the radio's sample rate from a paired device.");
+            } else if (!m_radioModel.isNull()) {
+                m_radioModel->stationOnAirRefusal(&refusal);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
         }
         {
             // A revoke of the requester's own device, or a token session
@@ -9561,7 +9582,11 @@ int StationServer::radioHardwareVersion() const
     // air (they reach the N2ADR filter board in the transmit path); a read
     // and the three switches are not (Thetis sets the switches with no MOX
     // check).
-    return m_radioModel->ioBoardFacade()->isBound() ? 7 : 2;
+    //
+    // 8 (parity ruling C4): the radio's sample rate from a window
+    // (setRadioSampleRate), every receiver and the radio's own rate, as a
+    // local window's Radio Info change; for a paired device, off the air.
+    return m_radioModel->ioBoardFacade()->isBound() ? 8 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

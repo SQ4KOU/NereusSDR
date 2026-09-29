@@ -1,5 +1,8 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-09-28: parity ruling C4: setRadioSampleRate is asked of the other
+// devices as a radio-wide change and answers later, off the air.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // no-port-check: NereusSDR-original.
 // =================================================================
 // src/core/session/StationSharedSettings.cpp  (NereusSDR)
@@ -887,6 +890,26 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
               kHz(reach.fromRateHz), kHz(rateHz));
         return c;
     }
+    if (verb == "setRadioSampleRate") {
+        // Parity ruling C4: the whole radio's rate, every receiver (the
+        // several-devices design, 7.1: a radio-wide change that stops the
+        // data flow). Every slice's rate changes; none moves or closes.
+        const int rateHz = intArgument(args, "rateHz");
+        const int fromRateHz = model.connectionSampleRateHz();
+        c.target = QStringLiteral("radioRate");
+        c.targetValue = QString::number(fromRateHz);
+        c.shared = fromRateHz > 0 && rateHz != fromRateHz;
+        c.scope.radio = true;
+        c.scope.stopsDataFlow = true;
+        for (SliceModel* slice : model.slices()) {
+            if (slice != nullptr) {
+                c.scope.planned.insert(slice->sliceIndex(), DisturbanceCheck::Effect::Changes);
+            }
+        }
+        const auto kHz = [](int hz) { return QStringLiteral("%1 kHz").arg(hz / 1000); };
+        words(QStringLiteral("Sample rate"), kHz(fromRateHz), kHz(rateHz));
+        return c;
+    }
     if (verb == "setAlexRxAntenna" || verb == "setAlexRxAntennaForRadio") {
         const int band = intArgument(args, "band");
         const int antenna = intArgument(args, "antenna");
@@ -1385,6 +1408,15 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     }
     // The radio may have keyed after the question was shown. Recheck
     // before applying a region change or removal and before any side effect.
+    // Parity ruling C4: and before a radio-wide sample rate change.
+    if (question.held == ConfirmStep::Held::Command
+        && question.original.commandVerb == "setRadioSampleRate" && !m_radioModel.isNull()) {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
+                                                  false, onAir, {});
+        }
+    }
     if (question.held == ConfirmStep::Held::SettingsWrite
         && question.original.objectKey == "BandPlanRegion") {
         const QString onAir = transmitSettingOnAirRefusal(QStringLiteral("BandPlanRegion"));
@@ -1467,8 +1499,10 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
             }
         }
     }
+    // Parity ruling C4: the radio-wide rate answers later the same way.
     const bool rateChange = question.held == ConfirmStep::Held::Command
-        && question.original.commandVerb == "requestSliceSampleRate";
+        && (question.original.commandVerb == "requestSliceSampleRate"
+            || question.original.commandVerb == "setRadioSampleRate");
     // The other devices' slices the plan cannot place close. For a sample
     // rate (the only change with closes), fix wave: the rate change closes
     // them itself, and only once it is certain, so a refused change closes

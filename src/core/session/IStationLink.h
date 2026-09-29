@@ -46,6 +46,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
+//                                    (radioHardwareVersion 8). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-04  J.J. Boyd / KG4VCF  Remote daemon R2 Task 4: station-link
 //                                    seam. AI-assisted transformation via
 //                                    Anthropic Claude Code.
@@ -515,6 +518,16 @@ public:
     // I/O board outputs on or off.
     virtual CommandOutcome requestIoBoardOutput(int /*pin*/, bool /*on*/)
     { return { false, ioBoardI2cUnavailableReason() }; }
+
+    // Parity ruling C4, verb "setRadioSampleRate" (radioHardwareVersion 8):
+    // the radio's sample rate, as a local window's Radio Info change makes
+    // it (every receiver and the radio's own rate). The default refuses; a
+    // window then asks each of its receivers instead.
+    virtual bool radioSampleRateAvailable() const { return false; }
+    static QString radioSampleRateUnavailableReason()
+    { return QStringLiteral("This Core changes the sample rate of this window's receivers only. Updating the Core may help."); }
+    virtual CommandOutcome requestRadioSampleRate(int /*rateHz*/)
+    { return { false, radioSampleRateUnavailableReason() }; }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The
