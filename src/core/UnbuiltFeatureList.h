@@ -21,6 +21,9 @@
 //                 isBuilt() and the test seams moved here from
 //                 src/gui/UnbuiltFeatures.{h,cpp} unchanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - ExportRadio leaves the list: Export Connected Radio is
+//                 built. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -83,7 +86,6 @@ enum class UnbuiltFeature {
     ApfParams,        // Setup > DSP > CW peak filter bandwidth and gain (built after R4)
     AmSquelchTail,    // Setup > DSP > AM/SAM maximum squelch tail (built after R4)
     FmDeviation,      // Setup > DSP > FM deviation and de-emphasis (built after R4)
-    ExportRadio,      // Setup > Diagnostics > Export / Import: Export Connected Radio
     FmTransmit,       // Setup > DSP > FM transmit group; the VFO flag's FM repeater minus,
                       // simplex and plus buttons, the Offset box and Rev (table rows fm-tx,
                       // fm-repeater and fm-flag)
