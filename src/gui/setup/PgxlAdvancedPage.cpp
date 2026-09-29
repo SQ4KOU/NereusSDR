@@ -67,6 +67,8 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 4: Standby while
 //                                    operate=1 is unconfirmed. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 14 ids.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -243,6 +245,7 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
         // the output limit, counters and fault history are the Core's.
         buildRemoteSections(topLay);
         topLay->addStretch();
+        applySetupIds();
         return;
     }
 
@@ -298,6 +301,8 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
     updateConnectionUi(m_model && m_model->pgxlConnection()
                        && m_model->pgxlConnection()->isConnected());
     updateOperateButton();
+
+    applySetupIds();
 }
 
 // R-R3-49 (parity Task 9, operator amendment 2026-09-25): the local tab's
@@ -630,10 +635,9 @@ void PgxlAdvancedPage::buildPairingSection(QVBoxLayout* topLay)
     m_pairAttemptCheckbox = new QCheckBox(
         QStringLiteral("Auto-pair on connect"));
     m_pairAttemptCheckbox->setToolTip(
-        QStringLiteral("When enabled, NereusSDR sends the flexradio "
-                       "pairing handshake to PGXL on every successful "
-                       "9008 connect. Disable only if pairing is "
-                       "managed externally."));
+        QStringLiteral("When enabled, NereusSDR pairs the Power Genius with "
+                       "the radio each time it connects. Turn this off only "
+                       "if the pairing is done some other way."));
     form->addRow(QStringLiteral("Pairing:"), m_pairAttemptCheckbox);
 
     // TX antenna
@@ -724,7 +728,7 @@ void PgxlAdvancedPage::buildDiagnosticsSection(QVBoxLayout* topLay)
     addRow(0, QStringLiteral("Uptime"),               m_uptimeLabel);
     addRow(1, QStringLiteral("Last RTT"),              m_rttLabel);
     addRow(2, QStringLiteral("Keepalive Missed"),      m_keepaliveMissedLabel);
-    addRow(3, QStringLiteral("Reconnects (session)"),  m_reconnectCountLabel);
+    addRow(3, QStringLiteral("Reconnects (this run)"),  m_reconnectCountLabel);
     addRow(4, QStringLiteral("Frames In"),             m_framesInLabel);
     addRow(5, QStringLiteral("Frames Out"),            m_framesOutLabel);
     addRow(6, QStringLiteral("Bytes In"),              m_bytesInLabel);
@@ -1596,6 +1600,39 @@ QString PgxlAdvancedPage::formatBytes(quint64 bytes)
             .arg(static_cast<double>(bytes) / 1024.0, 0, 'f', 1);
     }
     return QStringLiteral("%1 B").arg(bytes);
+}
+
+void PgxlAdvancedPage::applySetupIds()
+{
+    // Setup description version 14: this page's ids.
+    const std::pair<QWidget*, const char*> setupIds[] = {
+        {m_nickname, "nickname"},
+        {m_fanModeCombo, "fanMode"},
+        {m_ledSlider, "ledIntensity"},
+        {m_powerCapCheck, "powerCap"},
+        {m_powerCapSpin, "powerCapW"},
+        {m_dhcpCheck, "dhcp"},
+        {m_ipEdit, "address"},
+        {m_netmaskEdit, "netmask"},
+        {m_gatewayEdit, "gateway"},
+        {m_applyIfconfBtn, "applyNetwork"},
+        {m_pairAttemptCheckbox, "pairAttempt"},
+        {m_uptimeLabel, "connectedSinceMs"},
+        {m_rttLabel, "lastRttMs"},
+        {m_keepaliveMissedLabel, "keepaliveMissed"},
+        {m_reconnectCountLabel, "reconnectCount"},
+        {m_framesInLabel, "framesIn"},
+        {m_framesOutLabel, "framesOut"},
+        {m_bytesInLabel, "bytesIn"},
+        {m_bytesOutLabel, "bytesOut"},
+        {m_clearFaultsBtn, "clearFaults"},
+        {m_revertBtn, "revert"},
+        {m_saveAndRebootBtn, "saveReboot"}};
+    for (const auto& [widget, id] : setupIds) {
+        if (widget) {
+            widget->setProperty("nereusSetupId", QStringLiteral("catNetwork.powerGenius.") + QLatin1String(id));
+        }
+    }
 }
 
 }  // namespace NereusSDR

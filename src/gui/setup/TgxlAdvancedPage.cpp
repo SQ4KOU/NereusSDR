@@ -48,6 +48,8 @@
 //                                    before applying network settings
 //                                    (operator decision 2026-09-24).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 14 ids.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TgxlAdvancedPage.h"
@@ -369,6 +371,7 @@ TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
         });
         onDiagnosticsChanged();
         refreshRemote();
+        applySetupIds();
         return;
     }
 
@@ -434,6 +437,8 @@ TgxlAdvancedPage::TgxlAdvancedPage(RadioModel* model, QWidget* parent)
     // Initial UI state
     updateConnectionUi(m_model && m_model->tgxlConnection()
                        && m_model->tgxlConnection()->isConnected());
+
+    applySetupIds();
 }
 
 TgxlAdvancedPage::~TgxlAdvancedPage() = default;
@@ -682,7 +687,7 @@ void TgxlAdvancedPage::buildDiagnosticsSection(QVBoxLayout* topLay)
     addRow(0, QStringLiteral("Uptime"),               m_uptimeLabel);
     addRow(1, QStringLiteral("Last RTT"),              m_rttLabel);
     addRow(2, QStringLiteral("Keepalive Missed"),      m_keepaliveMissedLabel);
-    addRow(3, QStringLiteral("Reconnects (session)"),  m_reconnectCountLabel);
+    addRow(3, QStringLiteral("Reconnects (this run)"),  m_reconnectCountLabel);
     addRow(4, QStringLiteral("Frames In"),             m_framesInLabel);
     addRow(5, QStringLiteral("Frames Out"),            m_framesOutLabel);
     addRow(6, QStringLiteral("Bytes In"),              m_bytesInLabel);
@@ -1352,6 +1357,37 @@ QString TgxlAdvancedPage::formatBytes(quint64 bytes)
             .arg(static_cast<double>(bytes) / 1024.0, 0, 'f', 1);
     }
     return QStringLiteral("%1 B").arg(bytes);
+}
+
+void TgxlAdvancedPage::applySetupIds()
+{
+    // Setup description version 14: this page's ids.
+    const std::pair<QWidget*, const char*> setupIds[] = {
+        {m_nickname, "nickname"},
+        {m_ant1Label, "ant1Label"},
+        {m_ant2Label, "ant2Label"},
+        {m_ant3Label, "ant3Label"},
+        {m_dhcpCheck, "dhcp"},
+        {m_ipEdit, "address"},
+        {m_netmaskEdit, "netmask"},
+        {m_gatewayEdit, "gateway"},
+        {m_applyIfconfBtn, "applyNetwork"},
+        {m_autoRecallCheck, "autoRecall"},
+        {m_uptimeLabel, "connectedSinceMs"},
+        {m_rttLabel, "lastRttMs"},
+        {m_keepaliveMissedLabel, "keepaliveMissed"},
+        {m_reconnectCountLabel, "reconnectCount"},
+        {m_framesInLabel, "framesIn"},
+        {m_framesOutLabel, "framesOut"},
+        {m_bytesInLabel, "bytesIn"},
+        {m_bytesOutLabel, "bytesOut"},
+        {m_revertBtn, "revert"},
+        {m_saveAndRebootBtn, "saveReboot"}};
+    for (const auto& [widget, id] : setupIds) {
+        if (widget) {
+            widget->setProperty("nereusSetupId", QStringLiteral("catNetwork.tunerGenius.") + QLatin1String(id));
+        }
+    }
 }
 
 }  // namespace NereusSDR

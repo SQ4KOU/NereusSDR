@@ -5,6 +5,9 @@
 // translated here; all AppSettings keys are attributed in TciProtocol.h.
 // 2026-09-27 - Parity Task 23 Core TCI options and read-only bind,
 //              J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 14 ids on the
+//              Peripherals rows. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -1592,6 +1595,16 @@ void PeripheralsPage::buildRow(int row, const QString& name,
     statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_statusLabels[idx] = statusLabel;
     m_grid->addWidget(statusLabel, row, 5);
+
+    // Setup description version 14: this row's ids. The one button is
+    // described as Connect and Disconnect (its caption follows the phase).
+    const QString id = QStringLiteral("catNetwork.fourO3A.")
+        + (idx == 0 ? QStringLiteral("tgxl") : QStringLiteral("pgxl"));
+    ipEdit->setProperty("nereusSetupId", id + QStringLiteral("Host"));
+    portSpin->setProperty("nereusSetupId", id + QStringLiteral("Port"));
+    connectBtn->setProperty("nereusSetupIds", QStringList{id + QStringLiteral("Connect"),
+                                                          id + QStringLiteral("Disconnect")});
+    statusLabel->setProperty("nereusSetupId", id + QStringLiteral("Status"));
 }
 
 bool PeripheralsPage::isRemoteMode() const

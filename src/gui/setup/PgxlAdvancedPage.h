@@ -138,6 +138,8 @@ private slots:
     void onSliceBindingChanged();
 
 private:
+    // Setup description version 14: the described widgets' ids.
+    void applySetupIds();
     // Build each section
     void buildIdentitySection(QVBoxLayout* topLay);
     void buildHardwareSection(QVBoxLayout* topLay);

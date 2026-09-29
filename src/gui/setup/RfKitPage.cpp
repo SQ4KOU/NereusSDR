@@ -42,6 +42,8 @@
 //                 waits on the air, and a click refused there shows the
 //                 remote window's reason. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 14 ids.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
@@ -131,6 +133,35 @@ RfKitPage::RfKitPage(RadioModel* model, QWidget* parent)
     connect(timer, &QTimer::timeout, this, &RfKitPage::refreshLiveStatus);
     timer->start();
     refreshLiveStatus();  // initial paint
+
+    // Setup description version 14: this page's ids.
+    const std::pair<QWidget*, const char*> setupIds[] = {
+        {m_master, "enabled"},
+        {m_liveStatusLabel, "status"},
+        {m_bandFollowLabel, "bandFollow"},
+        {m_hostEdit, "host"},
+        {m_portSpin, "port"},
+        {m_autoReconnect, "autoReconnect"},
+        {m_pollIntervalSpin, "pollInterval"},
+        {m_testConnBtn, "connect"},
+        {m_disconnectBtn, "disconnect"},
+        {m_setTciBtn, "tciMode"},
+        {m_resetErrBtn, "resetError"},
+        {m_antLabelEdits[0], "ant1Label"},
+        {m_antLabelEdits[1], "ant2Label"},
+        {m_antLabelEdits[2], "ant3Label"},
+        {m_antLabelEdits[3], "ant4Label"}};
+    for (const auto& [widget, id] : setupIds) {
+        if (widget) {
+            widget->setProperty("nereusSetupId", QStringLiteral("catNetwork.rfKit.") + QLatin1String(id));
+        }
+    }
+    if (m_diagnosticsLabel) {
+        m_diagnosticsLabel->setProperty("nereusSetupIds", QStringList{
+            QStringLiteral("catNetwork.rfKit.pollsOk"), QStringLiteral("catNetwork.rfKit.pollsFailed"),
+            QStringLiteral("catNetwork.rfKit.rtt"), QStringLiteral("catNetwork.rfKit.reconnects"),
+            QStringLiteral("catNetwork.rfKit.connectedSince"), QStringLiteral("catNetwork.rfKit.lastPoll")});
+    }
 }
 
 QWidget* RfKitPage::buildGeneralTab()
@@ -152,7 +183,7 @@ QWidget* RfKitPage::buildGeneralTab()
 
     m_master = new QCheckBox(tr("Enable RF-Kit Amplifier integration"), tab);
     m_master->setToolTip(
-        tr("Gates the Rf2ks applet in the right-column panel and the RF2K-S "
+        tr("Gates the RF-Kit applet in the right-column panel and the RF2K-S "
            "configuration tab below.  Off by default; turn on only when an "
            "RF-Kit RF2K-S amplifier is connected.  Setting is scoped to the "
            "currently connected radio."));
@@ -161,7 +192,7 @@ QWidget* RfKitPage::buildGeneralTab()
     lay->addWidget(m_master);
 
     auto* helper = new QLabel(tr(
-        "When enabled, the Rf2ks applet appears in the right-column panel, "
+        "When enabled, the RF-Kit applet appears in the right-column panel, "
         "the analog S-meter switches to 2 kW scale when the amp is in OPERATE, "
         "and TCI band tracking flows to the amp automatically. When disabled, "
         "the applet hides and the RF2K-S tab below grays out."), tab);
