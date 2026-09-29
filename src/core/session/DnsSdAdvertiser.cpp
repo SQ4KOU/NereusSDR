@@ -12,6 +12,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): the sixth TXT entry,
 //               `devices`. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-16): the seventh TXT entry,
+//               `radio`. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "DnsSdAdvertiser.h"
@@ -99,6 +102,8 @@ DnsSdTxtEntries dnsSdTxtEntries(const DnsSdRecord& record, QString* error)
         {QByteArrayLiteral("name"), record.label.toLatin1()},
         // iPhone app Task 71 (ruling 10.4): how many devices hold a place.
         {QByteArrayLiteral("devices"), QByteArray::number(record.devicesConnected)},
+        // iPhone app plan Task 25 (R-IOS-16): the station's radio state.
+        {QByteArrayLiteral("radio"), stationLanRadioName(record.radio).toLatin1()},
     };
     if (error) {
         error->clear();

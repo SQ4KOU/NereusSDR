@@ -39,6 +39,9 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): the sixth TXT entry,
 //               `devices`. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-16): the seventh TXT entry,
+//               `radio`. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -86,6 +89,10 @@ struct DnsSdRecord {
     /// Core, 0 to kStationLanMaxDevicesConnected (0 on a Core no device has
     /// claimed). A number only: who is on the Core never goes here.
     int devicesConnected = 0;
+    /// iPhone app plan Task 25 (R-IOS-16): `radio`, the station's radio
+    /// state as the announcement carries it ("offline", "connected" or
+    /// "waiting").
+    StationLanRadio radio = StationLanRadio::Offline;
     /// kDnsSdAllInterfaces, an interface index, or kDnsSdThisComputerOnly.
     quint32 interfaceIndex = kDnsSdAllInterfaces;
 
@@ -95,8 +102,8 @@ struct DnsSdRecord {
 using DnsSdTxtEntries = QList<QPair<QByteArray, QByteArray>>;
 
 /// The TXT entries, in order v, id, claimed, pair, name, devices (iPhone app
-/// Task 71: the sixth, after name; `v` stays 1, since a client ignores a key
-/// it does not know). Empty, with `error` set, when the record cannot be
+/// Task 71: the sixth, after name), radio (iPhone app plan Task 25: the
+/// seventh); `v` stays 1, since a client ignores a key it does not know. Empty, with `error` set, when the record cannot be
 /// advertised (an identity that is not 32 bytes, a label outside section
 /// 14's alphabet or length, a device count outside 0 to 4).
 DnsSdTxtEntries dnsSdTxtEntries(const DnsSdRecord& record, QString* error = nullptr);

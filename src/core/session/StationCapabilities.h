@@ -314,6 +314,7 @@ struct StationCapabilities {
     /// same minor-11 block, after displayExtrasVersion. 0: a window's
     /// transmit settings stay greyed and say the Core cannot take them.
     /// 9 also offers validated BandPlanRegion edits and the TX passband guard.
+    /// 10 (iPhone app plan Task 40) adds `transmit.micMuted`, the mic mute.
     int transmitSettingsVersion = 0;
     /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
     /// runs the desktop's band button on a slice (its saved frequency, mode
@@ -508,6 +509,9 @@ struct StationCapabilities {
     /// after txStateVersion and only with it.
     /// 2 also carries Core-scaled PA raw forward watts and forward/reverse
     /// voltage (outbound Float64), following the same raw sample cadence.
+    /// 3 also carries the seven stage readings a local window's container
+    /// meters show (eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
+    /// alcGainDb, alcGroupDb; A9), read with the other meters.
     int txReadingsVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A

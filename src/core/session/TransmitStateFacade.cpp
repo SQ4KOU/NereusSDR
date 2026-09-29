@@ -43,6 +43,10 @@
 //               record; compressionDb, the pump's COMP reading. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: A9 (iPhone app plan Task 39): the seven stage readings
+//               (txReadingsVersion 3) compared, applied and cleared with
+//               the meters. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -91,7 +95,11 @@ bool sameReadings(const TxMeterReadings& a, const TxMeterReadings& b)
         && sameReading(a.reflectedPowerWatts, b.reflectedPowerWatts)
         && sameReading(a.swr, b.swr) && sameReading(a.alcDb, b.alcDb)
         && sameReading(a.micLevelDb, b.micLevelDb)
-        && sameReading(a.compressionDb, b.compressionDb);
+        && sameReading(a.compressionDb, b.compressionDb)
+        && sameReading(a.eqDb, b.eqDb) && sameReading(a.levelerDb, b.levelerDb)
+        && sameReading(a.levelerGainDb, b.levelerGainDb) && sameReading(a.cfcDb, b.cfcDb)
+        && sameReading(a.cfcGainDb, b.cfcGainDb) && sameReading(a.alcGainDb, b.alcGainDb)
+        && sameReading(a.alcGroupDb, b.alcGroupDb);
 }
 
 } // namespace
@@ -595,6 +603,17 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
     } else if (propertyName == "compressionDb") {
         // Parity Task 33 follow-up: the Core's COMP reading.
         readings.compressionDb = value.toDouble();
+        meters = true;
+    } else if (double* stage = propertyName == "eqDb"        ? &readings.eqDb
+                             : propertyName == "levelerDb"     ? &readings.levelerDb
+                             : propertyName == "levelerGainDb" ? &readings.levelerGainDb
+                             : propertyName == "cfcDb"         ? &readings.cfcDb
+                             : propertyName == "cfcGainDb"     ? &readings.cfcGainDb
+                             : propertyName == "alcGainDb"     ? &readings.alcGainDb
+                             : propertyName == "alcGroupDb"    ? &readings.alcGroupDb
+                                                               : nullptr) {
+        // A9 (txReadingsVersion 3): the Core's seven stage readings.
+        *stage = value.toDouble();
         meters = true;
     } else if (propertyName == "stopReason") {
         stop = value.toString() != m_stopReason;

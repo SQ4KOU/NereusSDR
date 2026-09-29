@@ -90,6 +90,11 @@
 //                 not send with the reason; panMaxBinSource, a remote
 //                 window's Max Bin from the slice's own pan. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - A9 (iPhone app plan Task 39): a remote window's EQ,
+//                 Leveler, Leveler gain, CFC, CFC gain, ALC gain and ALC
+//                 group meters read the Core's stage readings
+//                 (txReadingsVersion 3); below it they name the reason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -266,7 +271,7 @@ const QList<int>& MeterPoller::remoteTxBindingsNotSent()
 {
     // Task 39: txState v1 carries forward and reflected power, SWR, ALC and
     // MIC; parity Task 33's txReadingsVersion 1 adds COMP (compressionDb).
-    // These seven readings stay on the Core.
+    // A9: txReadingsVersion 3 adds these seven, a Core below it keeps them.
     static const QList<int> bindings{
         MeterBinding::TxEq,       MeterBinding::TxLeveler, MeterBinding::TxLevelerGain,
         MeterBinding::TxCfc,      MeterBinding::TxCfcGain,
@@ -277,7 +282,19 @@ const QList<int>& MeterPoller::remoteTxBindingsNotSent()
 
 QString MeterPoller::remoteTxMeterNotSentText()
 {
-    return tr("The Core does not send this meter to a remote window yet.");
+    // A9: only a Core below txReadingsVersion 3 leaves these out now.
+    return TransmitState::txReadingNotSentText();
+}
+
+void MeterPoller::setRemoteTxStageReadingsAvailable(std::function<bool()> available)
+{
+    m_remoteTxStageReadingsAvailable = std::move(available);
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+bool MeterPoller::remoteTxStageReadingsAvailable() const
+{
+    return m_remoteTxStageReadingsAvailable && m_remoteTxStageReadingsAvailable();
 }
 
 QString MeterPoller::remoteTransmitUnavailableText() const
@@ -292,13 +309,15 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
     }
     const QString unavailable = remoteTransmitUnavailableText();
     const bool readings = remoteTxReadingsAvailable();
+    const bool stages = remoteTxStageReadingsAvailable();
     if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown
-        && readings == m_remoteTxReadingsShown) {
+        && readings == m_remoteTxReadingsShown && stages == m_remoteTxStageReadingsShown) {
         return;
     }
     m_remoteTxAvailabilityShown = true;
     m_remoteTxUnavailableShown = unavailable;
     m_remoteTxReadingsShown = readings;
+    m_remoteTxStageReadingsShown = stages;
     // Parity Task 33 follow-up: the COMP reading comes with the Core's
     // transmit readings (txReadingsVersion 1).
     const QString compReason = readings ? QString() : TransmitState::txReadingNotSentText();
@@ -309,7 +328,7 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
         for (int bindingId = MeterBinding::TxPower; bindingId <= MeterBinding::TxCfcGain;
              ++bindingId) {
             QString reason = unavailable;
-            if (reason.isEmpty() && notSent.contains(bindingId)) {
+            if (reason.isEmpty() && !stages && notSent.contains(bindingId)) {
                 reason = remoteTxMeterNotSentText();
             }
             if (reason.isEmpty() && bindingId == MeterBinding::TxComp) {
@@ -350,6 +369,18 @@ void MeterPoller::pollRemoteTxMeters()
     // Parity Task 33 follow-up: the COMP reading, from a Core that sends it.
     if (remoteTxReadingsAvailable()) {
         handOutTxReading(MeterBinding::TxComp, state->compressionDb());
+    }
+    // A9: the seven container stage readings, from a Core that sends them
+    // (txReadingsVersion 3), already worked as the local poll works its
+    // own transmit channel's (thetisTxReading, kTxReadings).
+    if (remoteTxStageReadingsAvailable()) {
+        handOutTxReading(MeterBinding::TxEq, state->eqDb());
+        handOutTxReading(MeterBinding::TxLeveler, state->levelerDb());
+        handOutTxReading(MeterBinding::TxLevelerGain, state->levelerGainDb());
+        handOutTxReading(MeterBinding::TxCfc, state->cfcDb());
+        handOutTxReading(MeterBinding::TxCfcGain, state->cfcGainDb());
+        handOutTxReading(MeterBinding::TxAlcGain, state->alcGainDb());
+        handOutTxReading(MeterBinding::TxAlcGroup, state->alcGroupDb());
     }
 }
 

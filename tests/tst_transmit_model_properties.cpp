@@ -17,6 +17,10 @@
 //                                    applets and the container MON button
 //                                    work in a remote window.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  iPhone app plan Task 40: micMuted on the
+//                                    link silences the Core's mic, version
+//                                    10. AI-assisted via Anthropic Claude
+//                                    Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the Core offers at
 //                                    least transmitSettingsVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -250,6 +254,7 @@ private slots:
     void remoteTxAppletControlsReachTheCore();
     void remotePhoneCwControlsReachTheCore();
     void containerMonButtonTogglesTheCoresMon();
+    void micMutedIsOnTheLinkAndSilencesTheCoreMic();
 
 private:
     QTemporaryDir m_securityDir;
@@ -383,13 +388,15 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 9);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 9);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 10);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 10);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
     QVERIFY(s.client->transmitSettingsAvailable(9));
-    QVERIFY(!s.client->transmitSettingsAvailable(10));
+    // 10 since iPhone app plan Task 40's mic mute (micMuted).
+    QVERIFY(s.client->transmitSettingsAvailable(10));
+    QVERIFY(!s.client->transmitSettingsAvailable(11));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in
@@ -676,6 +683,9 @@ void TstTransmitModelProperties::eachSettingIsRefusedOnTheAir()
          QVariant(qlonglong(coreTx.amCarrierLevel() == 60 ? 61 : 60))},
         {"dexpEnabled", MirrorWireKind::Bool, QVariant(!coreTx.dexpEnabled())},
         {"micGainDb", MirrorWireKind::Int64, QVariant(qlonglong(coreTx.micGainDb() == 2 ? 3 : 2))},
+        // iPhone app plan Task 40: a receive-only Core's mic mute waits
+        // with the other settings.
+        {"micMuted", MirrorWireKind::Bool, QVariant(!coreTx.micMuted())},
     };
     for (const auto& c : cases) {
         const QVariant before = coreTx.property(c.name);
@@ -1018,5 +1028,53 @@ void TstTransmitModelProperties::containerMonButtonTogglesTheCoresMon()
     QCOMPARE(coreTx.monEnabled(), before);
 }
 
+// iPhone app plan Task 40: the Core's mic mute as `transmit.micMuted`
+// (true = muted), appended after voxEnabled so every earlier ordinal stays.
+// A write mutes the Core's TX chain as Thetis's chkMicMute does (the
+// preamp at 0.0), unmuting restores the mic level, and the change reaches
+// every window. Never persisted: the mic starts in use.
+void TstTransmitModelProperties::micMutedIsOnTheLinkAndSilencesTheCoreMic()
+{
+    TransmitModel tx;
+    const MirrorSchema& schema = MirrorSchema::forObject(&tx);
+    const MirrorProperty* vox = schema.byName("voxEnabled");
+    const MirrorProperty* muted = schema.byName("micMuted");
+    QVERIFY(vox);
+    QVERIFY(muted);
+    QCOMPARE(muted->kind, MirrorWireKind::Bool);
+    QCOMPARE(muted->ordinal, quint16(vox->ordinal + 1));
+    QVERIFY(muted->isWritable);
+    QVERIFY(MirrorPolicy::inboundAllowed("TransmitModel", "micMuted"));
+
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TransmitModel& windowTx = s.window.transmitModel();
+    QVERIFY(!coreTx.micMuted());
+    const double inUse = std::pow(10.0, coreTx.micGainDb() / 20.0);
+    QTRY_VERIFY(std::abs(s.txChannel.lastMicPreampForTest() - inUse) < 1e-9);
+
+    // A raw write, as the phone sends it.
+    const SessionPropertyResult mute =
+        s.writeTransmit("micMuted", MirrorWireKind::Bool, QVariant(true));
+    QVERIFY2(mute.accepted, qPrintable(mute.reason));
+    QVERIFY(coreTx.micMuted());
+    QTRY_COMPARE(s.txChannel.lastMicPreampForTest(), 0.0);
+
+    // The window's own change, as its model sends it (the raw write above
+    // is this session's own, which the Core withholds from its view).
+    windowTx.setMicMuted(true);
+    windowTx.setMicMuted(false);
+    QTRY_VERIFY(!coreTx.micMuted());
+    QTRY_VERIFY(std::abs(s.txChannel.lastMicPreampForTest() - inUse) < 1e-9);
+
+    // The Core's own change reaches the window.
+    coreTx.setMicMute(false);
+    QTRY_VERIFY(windowTx.micMuted());
+    coreTx.setMicMute(true);
+    QTRY_VERIFY(!windowTx.micMuted());
+}
+
 QTEST_MAIN(TstTransmitModelProperties)
+
 #include "tst_transmit_model_properties.moc"

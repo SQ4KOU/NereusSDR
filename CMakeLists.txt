@@ -1410,6 +1410,9 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # iPhone app Task 25 (D41): the unbuilt features list the catalogue's
+    # tools read (the desktop's hide helpers stay in src/gui).
+    src/core/UnbuiltFeatureList.cpp
     src/core/setup/SetupDescriptionService.cpp
     # Parity Task 19 (R-IOS-25): the link's record streams.
     src/core/session/RecordStream.cpp

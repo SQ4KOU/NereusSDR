@@ -925,6 +925,11 @@ public:
     /// readings (txReadingsVersion 1): `txState`'s forwardAdcRaw and
     /// reflectedAdcRaw, and the txCfcCompression stream.
     bool txReadingsAvailable() const;
+    /// A9 (iPhone app plan Task 39): the Core also sends the seven stage
+    /// readings a local window's container meters show (txReadingsVersion
+    /// 3): `txState`'s eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb,
+    /// alcGainDb and alcGroupDb.
+    bool txStageReadingsAvailable() const;
     /// Parity Task 33: whether this window shows the CFC bar chart. While
     /// true (and the Core sends it) the window subscribes to the Core's
     /// txCfcCompression stream, again after each reconnect; false

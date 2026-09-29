@@ -54,6 +54,11 @@
 //   forwardRawPowerWatts, forwardAdcVolts, reflectedAdcVolts
 //                          Core-scaled PA Values from the current radio's
 //                          model and raw ADC sample (txReadingsVersion 2)
+//   eqDb, levelerDb, levelerGainDb, cfcDb, cfcGainDb, alcGainDb, alcGroupDb
+//                          Thetis's EQ, LEVELER, LVL_G, CFC_AV, CFC_G,
+//                          ALC_G and ALC_GROUP readings, with the meters, as
+//                          a local window's container meters show them
+//                          (A9, txReadingsVersion 3)
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -100,6 +105,10 @@
 //               compressionDb, the COMP reading. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: A9 (iPhone app plan Task 39): the seven stage readings
+//               (eqDb .. alcGroupDb) appended (txReadingsVersion 3). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <optional>
@@ -172,6 +181,15 @@ class TransmitState final : public QObject {
     Q_PROPERTY(double forwardRawPowerWatts READ forwardRawPowerWatts NOTIFY adcRawChanged)
     Q_PROPERTY(double forwardAdcVolts READ forwardAdcVolts NOTIFY adcRawChanged)
     Q_PROPERTY(double reflectedAdcVolts READ reflectedAdcVolts NOTIFY adcRawChanged)
+    // A9 (txReadingsVersion 3): the container meters' seven stage
+    // readings, appended so every earlier ordinal stays.
+    Q_PROPERTY(double eqDb READ eqDb NOTIFY metersChanged)
+    Q_PROPERTY(double levelerDb READ levelerDb NOTIFY metersChanged)
+    Q_PROPERTY(double levelerGainDb READ levelerGainDb NOTIFY metersChanged)
+    Q_PROPERTY(double cfcDb READ cfcDb NOTIFY metersChanged)
+    Q_PROPERTY(double cfcGainDb READ cfcGainDb NOTIFY metersChanged)
+    Q_PROPERTY(double alcGainDb READ alcGainDb NOTIFY metersChanged)
+    Q_PROPERTY(double alcGroupDb READ alcGroupDb NOTIFY metersChanged)
 
 public:
     // The link's stopReason values.
@@ -238,6 +256,13 @@ public:
     double alcDb() const { return m_meters.alcDb; }
     double micLevelDb() const { return m_meters.micLevelDb; }
     double compressionDb() const { return m_meters.compressionDb; }
+    double eqDb() const { return m_meters.eqDb; }
+    double levelerDb() const { return m_meters.levelerDb; }
+    double levelerGainDb() const { return m_meters.levelerGainDb; }
+    double cfcDb() const { return m_meters.cfcDb; }
+    double cfcGainDb() const { return m_meters.cfcGainDb; }
+    double alcGainDb() const { return m_meters.alcGainDb; }
+    double alcGroupDb() const { return m_meters.alcGroupDb; }
     TxMeterReadings meters() const { return m_meters; }
     bool txEnding() const { return m_txEnding; }
     QString stopReason() const { return m_stopReason; }

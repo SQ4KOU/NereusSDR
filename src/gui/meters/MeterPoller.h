@@ -45,6 +45,11 @@
 //                 out MIC and COMP readings; setRemoteTxReadingsAvailable,
 //                 the Core's COMP reading (txState's compressionDb). J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - A9 (iPhone app plan Task 39): the seven container stage
+//                 meters from a Core at txReadingsVersion 3
+//                 (setRemoteTxStageReadingsAvailable); a Core below it
+//                 names the reason. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -231,11 +236,13 @@ public:
     // meters from its Core right now (not connected, or a Core that does
     // not send them), or empty when it has: then every transmit binding
     // the object does not carry (remoteTxBindingsNotSent) is shown disabled
-    // with remoteTxMeterNotSentText; otherwise every transmit binding is,
-    // with that text. Remote role only.
+    // with remoteTxMeterNotSentText until the Core sends them too
+    // (setRemoteTxStageReadingsAvailable); otherwise every transmit
+    // binding is, with that text. Remote role only.
     void setRemoteTransmitState(TransmitState* state,
                                 std::function<QString()> unavailableText);
-    /// The transmit bindings the Core's `txState` does not carry.
+    /// The transmit bindings a Core below txReadingsVersion 3 does not
+    /// carry in `txState`: the seven container stage meters (A9).
     static const QList<int>& remoteTxBindingsNotSent();
     // R-R3-49 (parity Task 33 follow-up): whether the Core sends its
     // transmit readings (txReadingsVersion 1), which carry the COMP reading
@@ -244,6 +251,12 @@ public:
     void setRemoteTxReadingsAvailable(std::function<bool()> available);
     /// Why: the Core sends transmit state but not this meter.
     static QString remoteTxMeterNotSentText();
+    // A9 (iPhone app plan Task 39): whether the Core sends the seven stage
+    // readings (txReadingsVersion 3: `txState`'s eqDb .. alcGroupDb). While
+    // true the remoteTxBindingsNotSent bindings get them while transmitting,
+    // as a local window's get its own transmit channel's; while false they
+    // show remoteTxMeterNotSentText.
+    void setRemoteTxStageReadingsAvailable(std::function<bool()> available);
     // R-R3-32 (remote-window parity Task 6): the model whose
     // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
     // every poll, in a local window (this radio) and a remote one (the
@@ -463,6 +476,9 @@ private:
     std::function<bool()> m_remoteTxReadingsAvailable;
     bool m_remoteTxReadingsShown{false};
     bool remoteTxReadingsAvailable() const;
+    std::function<bool()> m_remoteTxStageReadingsAvailable;
+    bool m_remoteTxStageReadingsShown{false};
+    bool remoteTxStageReadingsAvailable() const;
 };
 
 } // namespace NereusSDR

@@ -40,6 +40,10 @@
 //               announcement-2-devices; the trailing vector follows the count.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-16): lan-announcement-2-radio
+//               and -waiting; the trailing vector follows the radio state.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-26: transmit group fix wave M9: the "tx" channel keepalive.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
@@ -80,6 +84,8 @@ private slots:
     void writeLanAnnouncement();
     void writeLanAnnouncement2();
     void writeLanAnnouncement2Devices();
+    void writeLanAnnouncement2Radio();
+    void writeLanAnnouncement2Waiting();
     void writeLanAnnouncement2Trailing();
     void writeDnsSdTxt();
     void writeTxChannelKeepalive();
@@ -157,12 +163,36 @@ void TstLinkConformanceRegen::writeLanAnnouncement2Devices()
                               {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
 }
 
+// iPhone app plan Task 25 (R-IOS-16): the counted Core with its radio
+// state appended, and the same Core waiting for a radio.
+void TstLinkConformanceRegen::writeLanAnnouncement2Radio()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Radio();
+    QString error;
+    const QByteArray bytes = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("lan-announcement-2-radio"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
+void TstLinkConformanceRegen::writeLanAnnouncement2Waiting()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Waiting();
+    QString error;
+    const QByteArray bytes = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("lan-announcement-2-waiting"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
 // Schema 2 extends by appending: the same Core with bytes after its known
-// fields (the device count the last of them), which a reader ignores (link
+// fields (the radio state the last of them), which a reader ignores (link
 // document section 14.1).
 void TstLinkConformanceRegen::writeLanAnnouncement2Trailing()
 {
-    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Devices();
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Radio();
     QString error;
     const QByteArray known = encodeStationLanAnnouncement(value, &error);
     QVERIFY2(!known.isEmpty(), qPrintable(error));

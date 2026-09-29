@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 9
+            "value": 10
         },
         {
             "kind": "i64",
@@ -368,7 +368,7 @@
         {
             "kind": "i64",
             "name": "txReadingsVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -2420,7 +2420,7 @@
         "lanAnnouncementMaxBytes": {
             "source": "kStationLanMaxSchema2DatagramBytes",
             "unit": "bytes",
-            "value": 480
+            "value": 481
         },
         "maxDeviceSessions": {
             "source": "StationServer::kMaxDeviceSessions",
@@ -7004,6 +7004,12 @@
                     "kind": "bool",
                     "name": "voxEnabled",
                     "ordinal": 85
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micMuted",
+                    "ordinal": 86
                 }
             ]
         },
@@ -7230,6 +7236,48 @@
                     "kind": "f64",
                     "name": "reflectedAdcVolts",
                     "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "eqDb",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerDb",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "levelerGainDb",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcDb",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "cfcGainDb",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGainDb",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcGroupDb",
+                    "ordinal": 43
                 }
             ]
         },

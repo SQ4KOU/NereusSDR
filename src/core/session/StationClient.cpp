@@ -4740,6 +4740,11 @@ bool StationClient::txReadingsAvailable() const
         && m_capabilities.txStateVersion >= 1 && m_capabilities.txReadingsVersion >= 1;
 }
 
+bool StationClient::txStageReadingsAvailable() const
+{
+    return txReadingsAvailable() && m_capabilities.txReadingsVersion >= 3;
+}
+
 void StationClient::setCfcCompressionWanted(bool wanted)
 {
     if (m_cfcCompressionWanted == wanted) {
