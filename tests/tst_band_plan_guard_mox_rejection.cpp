@@ -46,6 +46,10 @@
 //                 ExtendedTransmit setting; the old ExtendedTxAllowed is
 //                 ignored (both keys restored by a scope guard). Item 4:
 //                 band plan refusals in operator words.
+//   2026-09-29 : Different-band transmit by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. The Core's
+//                 PreventTxOnDifferentBandToRx compares the transmitting
+//                 slice with the same device's other slices.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
@@ -57,6 +61,7 @@
 
 #include "core/MoxController.h"
 #include "core/AppSettings.h"
+#include "core/SliceOwnership.h"
 #include "core/TxSliceArbiter.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/WdspTypes.h"
@@ -543,6 +548,145 @@ private slots:
         QVERIFY(!keyed());
         settings.remove(QStringLiteral("ExtendedTransmit"));
         QVERIFY(!keyed());
+    }
+
+    // JJ's ruling (2026-09-29): Thetis's "Prevent TX'ing on a different
+    // band to the RX band" (_preventTXonDifferentBandToRXband, default off,
+    // console.cs:29451-29465 [v2.10.3.15]) is one Core setting,
+    // PreventTxOnDifferentBandToRx. Thetis compares the TX band with the RX
+    // band in split; NereusSDR has no split, so a key is refused when the
+    // transmitting slice is on a different band from another slice the
+    // same device has open. Slices another device holds do not count. Only
+    // exactly "True" turns it on.
+    void preventDifferentBandComparesTheSameDevicesOtherSlices()
+    {
+        auto& settings = AppSettings::instance();
+        const QString key = QStringLiteral("PreventTxOnDifferentBandToRx");
+        const auto restore = qScopeGuard([&settings, &key] { settings.remove(key); });
+        settings.remove(key);
+
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        const int aId = model.addSlice();
+        const int bId = model.addSlice();
+        SliceModel* const a = model.sliceById(aId);
+        SliceModel* const b = model.sliceById(bId);
+        QVERIFY(a && b);
+        a->setDspMode(DSPMode::USB);
+        a->setFrequency(14'200'000.0);
+        b->setDspMode(DSPMode::LSB);
+        b->setFrequency(7'150'000.0);
+        QVERIFY(model.setActiveSliceById(aId));
+
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        const auto keyed = [&model]() {
+            model.moxController()->setMox(true);
+            QCoreApplication::processEvents();
+            const bool on = model.moxController()->isMox();
+            model.moxController()->setMox(false);
+            QCoreApplication::processEvents();
+            return on;
+        };
+        const QString refusal = QStringLiteral(
+            "Transmit would be on 20 m while another slice you have open is on 40 m, "
+            "and Setup is set to prevent transmitting on a different band.");
+
+        // Off (Thetis's default): never refuses.
+        QVERIFY(keyed());
+        settings.setValue(key, QStringLiteral("true"));
+        QVERIFY(keyed());
+        settings.setValue(key, QStringLiteral("False"));
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 0);
+
+        // On: the other slice on 40 m refuses, naming both bands.
+        settings.setValue(key, QStringLiteral("True"));
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), refusal);
+
+        // Same band: keys.
+        b->setFrequency(14'250'000.0);
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 1);
+        b->setFrequency(7'150'000.0);
+
+        // The station's own slices count whether marked or not.
+        model.sliceOwnership()->setOwner(bId, SliceOwnership::stationDevice());
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 2);
+
+        // Another device's slice does not count.
+        model.sliceOwnership()->setOwner(aId, SliceOwnership::stationDevice());
+        model.sliceOwnership()->setOwner(bId, QByteArrayLiteral("phone"));
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 2);
+
+        // Both slices the phone's: its other slice counts.
+        model.sliceOwnership()->setOwner(aId, QByteArrayLiteral("phone"));
+        QVERIFY(!keyed());
+        QCOMPARE(rejected.size(), 3);
+        QCOMPARE(rejected.at(2).at(0).toString(), refusal);
+
+        // Off again: never refuses.
+        settings.remove(key);
+        QVERIFY(keyed());
+        QCOMPARE(rejected.size(), 3);
+    }
+
+    // Thetis checks the different band first, before the US 60 m mode rule
+    // and CheckValidTXFreq (console.cs:29451, :29467, :29486 [v2.10.3.15]);
+    // the mode allow-list is NereusSDR's and stays ahead of it.
+    void preventDifferentBandRefusesBeforeTheBandEdges()
+    {
+        auto& settings = AppSettings::instance();
+        const QString key = QStringLiteral("PreventTxOnDifferentBandToRx");
+        const auto restore = qScopeGuard([&settings, &key] { settings.remove(key); });
+        settings.setValue(key, QStringLiteral("True"));
+
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        model.transmitModel().setMicSource(MicSource::Radio);
+        model.transmitModel().setFilterLow(100);
+        model.transmitModel().setFilterHigh(2900);
+        const int aId = model.addSlice();
+        const int bId = model.addSlice();
+        SliceModel* const a = model.sliceById(aId);
+        SliceModel* const b = model.sliceById(bId);
+        QVERIFY(a && b);
+        b->setDspMode(DSPMode::LSB);
+        b->setFrequency(7'150'000.0);
+        QVERIFY(model.setActiveSliceById(aId));
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        const auto refusal = [&]() {
+            model.moxController()->setMox(true);
+            QCoreApplication::processEvents();
+            model.moxController()->setMox(false);
+            QCoreApplication::processEvents();
+            return rejected.isEmpty() ? QString() : rejected.takeLast().at(0).toString();
+        };
+
+        // A filter edge past the top of 20 m.
+        a->setDspMode(DSPMode::USB);
+        a->setFrequency(14'349'000.0);
+        QCOMPARE(refusal(), QStringLiteral(
+            "Transmit would be on 20 m while another slice you have open is on 40 m, "
+            "and Setup is set to prevent transmitting on a different band."));
+        // AM on US 60 m.
+        a->setDspMode(DSPMode::AM);
+        a->setFrequency(5'357'000.0);
+        QCOMPARE(refusal(), QStringLiteral(
+            "Transmit would be on 60 m while another slice you have open is on 40 m, "
+            "and Setup is set to prevent transmitting on a different band."));
+        // A mode that cannot transmit is still named first.
+        a->setDspMode(DSPMode::FM);
+        a->setFrequency(14'200'000.0);
+        QCOMPARE(refusal(), QStringLiteral("FM transmit is not available yet"));
     }
 
     void invalidStoredRegionCannotWrapIntoAnAllowedRegion_data()

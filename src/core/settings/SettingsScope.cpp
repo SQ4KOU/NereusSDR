@@ -530,6 +530,14 @@ const Rule kWholeKeys[] = {
     // operator ticks it again. Written only with transmit permission and
     // never while the radio is on the air (StationServer).
     { "ExtendedTransmit", SettingsScope::Station },
+    // JJ's ruling (2026-09-29): Prevent transmitting on a different band
+    // is one setting of the Core's, default off, read by the Core's
+    // transmit gate. It keeps Thetis's key name, so a value the Core
+    // already saved carries forward; a remote computer's own old value is
+    // no longer read (reads go to the Core). It only restricts transmit.
+    // Written only with transmit permission and never while the radio is
+    // on the air (StationServer).
+    { "PreventTxOnDifferentBandToRx", SettingsScope::Station },
     { "Region", SettingsScope::Station }, // GeneralOptionsPage.cpp's FRS
                                             // region combo, same reasoning.
 
@@ -641,7 +649,6 @@ const Rule kWholeKeys[] = {
     // saved value from an older version stays on the computer that saved
     // it and is ignored: it never turns Extended transmit on.
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
-    { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },
 };
 
 } // namespace

@@ -114,7 +114,6 @@ enum class UnbuiltFeature {
     WaterfallLowColor, // Colors & Theme low-level color has no gradient setter
     MultimeterAveraging, // MeterPoller stores window size but does not average readings
     TxGridScale,      // TX Display grid controls are an inert placeholder
-    CrossBandSplitGuard, // Thetis VFO-B split guard is retired in Phase 3F
 };
 
 namespace UnbuiltFeatures {

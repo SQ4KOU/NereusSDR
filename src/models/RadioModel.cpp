@@ -15279,8 +15279,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             //
             // The closure derives region from AppSettings (key "BandPlanRegion"
             // with Region2/UnitedStates as safe default matching Thetis).
-            // preventDifferentBand and extended are not yet plumbed into RadioModel
-            // (deferred to 3M-2+ as per the plan §L.1 TODO annotation).
+            // preventDifferentBand and extended are the Core's
+            // PreventTxOnDifferentBandToRx and ExtendedTransmit settings,
+            // read at every key.
             //
             // Cite: pre-code review §0.3 + MoxController.h K.2 API contract.
             if (m_moxController) {
@@ -17367,10 +17368,56 @@ void RadioModel::installBandPlanMoxCheck()
         const bool extended = extendedTransmitSetting();
         // The filter edges below are skipped for TUNE (bIgnoreFilter):
         //MW0LGE_21d filter outside band, ignore option  [original inline comment from console.cs:6784]
+        // From Thetis console.cs:29451-29465 [v2.10.3.15]
+        //MW0LGE [2.9.0.7]
+        //   if (_preventTXonDifferentBandToRXband && ((!RX2Enabled && VFOBTX && RX1Band != TXBand) || ...
+        // Thetis compares the split TX band (VFO B) with the RX band, so it
+        // only fires in split. NereusSDR has no split (JJ's ruling
+        // 2026-09-29): the RX band is that of another slice the device
+        // about to transmit has open. Slices other devices hold do not
+        // count; the station window and slices held for an absent device
+        // are one device, the station device.
+        const bool preventDifferentBand = preventTxOnDifferentBandSetting();
+        Band rxBand = txBand;
+        if (preventDifferentBand) {
+            const auto subjectOf = [this](int sliceId) {
+                QByteArray subject = m_sliceOwnership
+                    ? m_sliceOwnership->mark(sliceId).subject() : QByteArray();
+                if (subject.isEmpty()) {
+                    subject = SliceOwnership::stationDevice();
+                }
+                return subject;
+            };
+            const QByteArray txSubject = subjectOf(slice->sliceIndex());
+            QList<int> others;
+            if (m_sliceOwnership) {
+                others = m_sliceOwnership->liveSlices();
+            } else {
+                for (const SliceModel* s : m_slices) {
+                    if (s) {
+                        others.append(s->sliceIndex());
+                    }
+                }
+            }
+            for (const int otherId : others) {
+                if (otherId == slice->sliceIndex() || subjectOf(otherId) != txSubject) {
+                    continue;
+                }
+                const SliceModel* other = sliceById(otherId);
+                if (!other) {
+                    continue;
+                }
+                const Band otherBand = bandFromFrequency(other->frequency());
+                if (otherBand != txBand) {
+                    rxBand = otherBand;
+                    break;
+                }
+            }
+        }
         const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
             m_bandPlan.checkMoxAllowed(region, freqHz, mode,
-                                       txBand, txBand,
-                                       /*preventDifferentBand=*/false,
+                                       rxBand, txBand,
+                                       preventDifferentBand,
                                        extended, filterLow, filterHigh,
                                        /*ignoreFilter=*/m_isTuning);
         if (!bandPlanResult.ok) {
@@ -23974,9 +24021,21 @@ bool RadioModel::extendedTransmitSetting()
            == QStringLiteral("True");
 }
 
+bool RadioModel::preventTxOnDifferentBandSetting()
+{
+    // Exactly "True" turns it on; anything else, or no value, is off
+    // (Thetis's _preventTXonDifferentBandToRXband default false,
+    // console.cs:20843 [v2.10.3.15]).
+    return AppSettings::instance()
+               .value(QString::fromLatin1(kPreventTxOnDifferentBandKey), QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
 void RadioModel::reportTransmitGateSettingChanged(const QString& key)
 {
-    if (key == QLatin1String(kExtendedTransmitKey)) {
+    if (key == QLatin1String(kExtendedTransmitKey)
+        || key == QLatin1String(kPreventTxOnDifferentBandKey)) {
         emit transmitGateSettingChanged(key);
     }
 }

@@ -944,7 +944,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 4 |
-| `transmitSettingsVersion` | 13 |
+| `transmitSettingsVersion` | 14 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
@@ -1376,6 +1376,27 @@ When a feature is off, its version is 0:
   window: the OC transmit pins (Thetis greys them under MOX) and General
   Region. A window on an older Core keeps its transmit settings disabled on
   the air with "The radio is on the air. Try again when it stops."
+  Version 14 adds General Options' Prevent transmitting on a different
+  band as the Core's settings key `PreventTxOnDifferentBandToRx` ("True"
+  or "False"; absent means off, Thetis's default at console.cs:20843
+  [v2.10.3.15]). It was each app's own key and is now the station's: the
+  Core's own saved value carries over, and a remote computer's old value
+  is no longer read. The Core's transmit gate reads it at every key: while
+  it is "True" a key is refused when the slice about to transmit is on a
+  different band from another slice the same device has open (slices other
+  devices hold do not count). Thetis compares the TX VFO's band with RX1's
+  and only in split (console.cs:29451-29465 [v2.10.3.15]); a station has no
+  split, so the comparison is against the device's other slices. The
+  check runs after the mode allow-list and before the US 60 m and band
+  edge checks, and its refusal keeps the band plan refusal (no new code)
+  with the sentence "Transmit would be on <band> while another slice you
+  have open is on <band>, and Setup is set to prevent transmitting on a
+  different band." Writes and removals take the same gates as
+  `ExtendedTransmit` (a permitted session, never on the air), and a value
+  that is neither "True" nor "False" is refused "Prevent transmitting on a
+  different band is either on or off." A window whose Core offers less
+  than 14 shows the box disabled with "This Core does not have Prevent
+  transmitting on a different band. Update the Core to use it."
 - `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
@@ -4335,6 +4356,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `BandPlanName` | station |
 | 3. whole key | `BandPlanRegion` | station |
 | 3. whole key | `ExtendedTransmit` | station |
+| 3. whole key | `PreventTxOnDifferentBandToRx` | station |
 | 3. whole key | `Region` | station |
 | 3. whole key | `CWPitch` | station |
 | 3. whole key | `Nr3ModelPath` | station |
@@ -4361,7 +4383,6 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `RxOnly` | station |
 | 3. whole key | `ModMon/FbStream` | station |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
-| 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
 
 <!-- /surface -->
 

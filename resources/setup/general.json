@@ -143,6 +143,26 @@
           "title": "Options",
           "controls": [
             {
+              "id": "general.options.preventDifferentBand",
+              "label": "Prevent TX'ing on a different band to the RX band",
+              "tooltip": "Refuse to transmit when the transmitting slice is on a different band from another slice this device has open",
+              "kind": "toggle",
+              "binding": {
+                "setting": "PreventTxOnDifferentBandToRx"
+              },
+              "applies": "live",
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 14,
+                "offAir": true,
+                "transmit": true
+              }
+            },
+            {
               "id": "general.options.hideFeedback",
               "label": "Hide feedback level",
               "tooltip": "When checked, the bottom-banner FB indicator shows \"Feedback\" text instead of the numeric level. Same as right-clicking the FB indicator.",

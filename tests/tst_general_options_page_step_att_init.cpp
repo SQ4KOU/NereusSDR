@@ -123,6 +123,48 @@ private slots:
         settings.remove(QStringLiteral("ExtendedTxAllowed"));
     }
 
+    // JJ's ruling (2026-09-29): Prevent TX'ing on a different band is the
+    // Core's PreventTxOnDifferentBandToRx, shown (never hidden), changed
+    // only off the air, and followed when a device changes it on the Core.
+    // The key name is Thetis's own, so this Core's saved value carries on.
+    void preventDifferentBandIsTheCoresSettingAndWaitsForReceive()
+    {
+        auto& settings = AppSettings::instance();
+        const QString key = QStringLiteral("PreventTxOnDifferentBandToRx");
+        settings.setValue(key, QStringLiteral("True"));
+        RadioModel model;
+        GeneralOptionsPage page(&model);
+        auto* prevent = page.findChild<QCheckBox*>(QStringLiteral("chkPreventTXonDifferentBandToRX"));
+        QVERIFY(prevent);
+        QVERIFY(!prevent->isHidden());
+        QCOMPARE(prevent->property("nereusSetupId").toString(),
+                 QStringLiteral("general.options.preventDifferentBand"));
+        QVERIFY(prevent->isChecked());
+        QVERIFY(prevent->isEnabled());
+        QCOMPARE(prevent->toolTip(), QStringLiteral(
+            "Refuse to transmit when the transmitting slice is on a different band from "
+            "another slice this device has open"));
+        prevent->setChecked(false);
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("False"));
+
+        model.transmitModel().setMox(true);
+        QVERIFY(!prevent->isEnabled());
+        QCOMPARE(prevent->toolTip(), RadioModel::onAirReason());
+        prevent->setChecked(true); // A stale/programmatic edit is refused too.
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("False"));
+        QVERIFY(!prevent->isChecked());
+        model.transmitModel().setMox(false);
+        QVERIFY(prevent->isEnabled());
+        prevent->setChecked(true);
+        QCOMPARE(settings.value(key).toString(), QStringLiteral("True"));
+
+        // The Core's own window follows a change a device made on the Core.
+        settings.setValue(key, QStringLiteral("False"));
+        model.reportTransmitGateSettingChanged(key);
+        QVERIFY(!prevent->isChecked());
+        settings.remove(key);
+    }
+
     void invalidStoredRegionNeedsAnExplicitSelection()
     {
         auto& settings = AppSettings::instance();

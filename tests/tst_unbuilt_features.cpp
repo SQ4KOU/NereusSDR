@@ -837,9 +837,6 @@ QMap<F, QList<Surface>> surfaces()
                                          text(QStringLiteral("Averaging window:")))};
     map[F::TxGridScale] = {onPage(QStringLiteral("TX Display"), QStringLiteral("grid scale"),
                                  [](QWidget* p) { return groupShown(p, QStringLiteral("TX Grid Scale")); })};
-    map[F::CrossBandSplitGuard] = {
-        onPage(QStringLiteral("Options"), QStringLiteral("VFO-B split guard"),
-               named(QStringLiteral("chkPreventTXonDifferentBandToRX")))};
     return map;
 }
 

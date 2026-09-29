@@ -164,6 +164,19 @@ private:
     void refreshExtendedAvailability();
     bool extendedEditAvailable();
     void syncExtendedFromSetting();
+    // JJ's ruling (2026-09-29): Prevent transmitting on a different band
+    // is the Core's PreventTxOnDifferentBandToRx, gated as Extended at
+    // transmitSettingsVersion 14 (kTransmitSettingsDifferentBandVersion).
+    void refreshPreventDifferentBandAvailability();
+    bool preventDifferentBandEditAvailable();
+    void syncPreventDifferentBandFromSetting();
+    // The shared gate of the Core's transmit-gate settings: usable where the
+    // Core takes the change (this computer's own radio off the air with
+    // nobody else holding transmit, or a Core at `version` that permits
+    // this device to transmit, off the air), and the plain reason if not.
+    bool transmitGateEditAvailable(int version);
+    QString transmitGateReason(int version, const QString& olderCoreText,
+                               const QString& unavailableText);
     bool m_regionSettingsAvailable{false};
     QString m_regionSettingsReason;
     void buildHardwareConfigGroup();

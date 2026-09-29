@@ -9111,8 +9111,8 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     QString reason;
     // Changing a transmit region, including removing it to restore the
     // default, always waits for RX, regardless of who holds transmit. So
-    // does Extended transmit (addendum G-42: refused while anyone is
-    // transmitting).
+    // do Extended transmit and Prevent transmitting on a different band
+    // (addendum G-42: refused while anyone is transmitting).
     if ((key == QLatin1String("BandPlanRegion") || isTransmitGateSettingKey(key))
         && m_radioModel) {
         m_radioModel->stationOnAirRefusal(&reason);
@@ -9143,7 +9143,8 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 
 bool StationServer::isTransmitGateSettingKey(const QString& key)
 {
-    return key == QLatin1String(RadioModel::kExtendedTransmitKey);
+    return key == QLatin1String(RadioModel::kExtendedTransmitKey)
+        || key == QLatin1String(RadioModel::kPreventTxOnDifferentBandKey);
 }
 
 QString StationServer::transmitGateSettingRefusal(SessionTransport* transport,
@@ -9169,7 +9170,9 @@ QString StationServer::transmitGateSettingRefusal(SessionTransport* transport,
     }
     if (value != nullptr && value->toString() != QLatin1String("True")
         && value->toString() != QLatin1String("False")) {
-        return QStringLiteral("Extended transmit is either on or off.");
+        return key == QLatin1String(RadioModel::kPreventTxOnDifferentBandKey)
+            ? QStringLiteral("Prevent transmitting on a different band is either on or off.")
+            : QStringLiteral("Extended transmit is either on or off.");
     }
     return {};
 }
@@ -10061,7 +10064,12 @@ int StationServer::transmitSettingsVersion() const
     // held, ruling 7.7).
     // Still off the air, as locally: the OC transmit pins (Thetis greys
     // them under MOX) and General > Region.
-    return m_radioModel.isNull() ? 0 : kTransmitSettingsOnAirVersion;
+    // 14: General Options' Prevent transmitting on a different band, the
+    // Core's PreventTxOnDifferentBandToRx setting ("True"/"False", default
+    // off), read by the Core's transmit gate, which compares the
+    // transmitting slice's band with the device's other slices; changed
+    // only with transmit permission and off the air, as Extended.
+    return m_radioModel.isNull() ? 0 : kTransmitSettingsDifferentBandVersion;
 }
 
 bool StationServer::takesTransmitSettingsOnAir(SessionTransport* transport) const
