@@ -65,6 +65,10 @@
 //               the real remaining time and swallows real expiries. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-28: stationSetup.deferOwnConnection and the openOwnConnection
+//               step (addendum G-53: the placeFreed fixture). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -903,13 +907,51 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     if (steps.isEmpty()) {
         return QStringLiteral("session fixture: no steps");
     }
+    // The runner's own connection opened later, by an openOwnConnection
+    // step, instead of before the first step: a fixture that passes more
+    // virtual time than the station's sign-in deadline before its own
+    // client signs in (placeFreed, 180 s after a device left).
+    const QJsonValue deferValue =
+        fixture.value(QStringLiteral("stationSetup")).toObject()
+            .value(QStringLiteral("deferOwnConnection"));
+    if (!deferValue.isUndefined() && !deferValue.isBool()) {
+        return QStringLiteral("session fixture: stationSetup.deferOwnConnection must be true "
+                              "or false");
+    }
+    const bool deferOwn = deferValue.toBool(false);
+    if (deferOwn && runsOn(fixture, QStringLiteral("app"))) {
+        return QStringLiteral("session fixture: stationSetup.deferOwnConnection runs on the "
+                              "station only");
+    }
+    bool ownOpen = !deferOwn;
     for (int index = 0; index < steps.size(); ++index) {
         const QString where = QStringLiteral("step %1").arg(index);
         if (!steps.at(index).isObject()) {
             return where + QStringLiteral(": not an object");
         }
         const QJsonObject step = steps.at(index).toObject();
-        if (step.contains(QStringLiteral("from"))) {
+        // A step of the runner's own client names no other client.
+        const bool ownStep =
+            (step.contains(QStringLiteral("from"))
+             && !step.contains(QStringLiteral("client")) && !step.contains(QStringLiteral("to")))
+            || (step.contains(QStringLiteral("expectClosed"))
+                && !step.value(QStringLiteral("expectClosed")).toObject()
+                        .contains(QStringLiteral("client")));
+        if (ownStep && !ownOpen) {
+            return where + QStringLiteral(": the runner's own client has no connection before "
+                                          "the openOwnConnection step");
+        }
+        if (step.contains(QStringLiteral("openOwnConnection"))) {
+            problem = expectKeys(step, {QStringLiteral("openOwnConnection")}, {}, where);
+            if (problem.isEmpty()
+                && (step.value(QStringLiteral("openOwnConnection")) != QJsonValue(true)
+                    || !deferOwn || ownOpen)) {
+                problem = where + QStringLiteral(": openOwnConnection must be true, once, in a "
+                                                 "fixture whose stationSetup.deferOwnConnection "
+                                                 "is true");
+            }
+            ownOpen = true;
+        } else if (step.contains(QStringLiteral("from"))) {
             const QString from = step.value(QStringLiteral("from")).toString();
             if (from == QStringLiteral("client")) {
                 problem = expectKeys(step,
@@ -982,11 +1024,16 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
             }
         } else {
             problem = where + QStringLiteral(": not a message, advanceMs, expectClosed, "
-                                             "connect, close or radioPtt step");
+                                             "connect, close, radioPtt or openOwnConnection "
+                                             "step");
         }
         if (!problem.isEmpty()) {
             return problem;
         }
+    }
+    if (!ownOpen) {
+        return QStringLiteral("session fixture: stationSetup.deferOwnConnection is true and no "
+                              "step opens the runner's own connection");
     }
     return QString();
 }
@@ -1364,6 +1411,9 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     }
 
     transport.setAnswersPings(setup.value(QStringLiteral("clientAnswersPings")).toBool(true));
+    // stationSetup.deferOwnConnection: the caller has not connected the
+    // runner's own client; the openOwnConnection step does.
+    bool ownConnected = !setup.value(QStringLiteral("deferOwnConnection")).toBool(false);
 
     Captures captures;
     captures.insert(QStringLiteral("token"), server.token());
@@ -1496,6 +1546,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             what = QStringLiteral("advanceMs");
         } else if (step.contains(QStringLiteral("radioPtt"))) {
             what = QStringLiteral("radioPtt");
+        } else if (step.contains(QStringLiteral("openOwnConnection"))) {
+            what = QStringLiteral("openOwnConnection");
         } else if (step.contains(QStringLiteral("connect"))) {
             what = QStringLiteral("connect %1").arg(step.value(QStringLiteral("connect")).toString());
         } else if (step.contains(QStringLiteral("close"))) {
@@ -1631,6 +1683,29 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (!error.isEmpty()) {
                 return QStringLiteral("%1: %2").arg(describe(index), error);
             }
+        } else if (step.contains(QStringLiteral("openOwnConnection"))) {
+            // stationSetup.deferOwnConnection: the runner's own client
+            // connects now, the way another client's connect step reaches
+            // the station, and the fixture plays its hello and sign-in as
+            // usual. Its sign-in deadline starts here.
+            if (ownConnected) {
+                return QStringLiteral("%1: the runner's own connection is already open")
+                    .arg(describe(index));
+            }
+            ownConnected = true;
+            {
+                const LinkVirtualClock::Hold connecting(clock);
+                if (connectClientHook()) {
+                    connectClientHook()(&transport, server);
+                } else {
+                    auto* stationEnd =
+                        new LoopbackTransport(QStringLiteral("conformance"), &server);
+                    stationEnd->linkTo(&transport);
+                    server.acceptTransport(stationEnd);
+                }
+            }
+            settle();
+            clock.scan();
         } else if (step.contains(QStringLiteral("radioPtt"))) {
             // iPhone app plan Task 77: the radio's own PTT level, as its
             // status frames report it.
@@ -1763,7 +1838,7 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             }
         } else {
             return QStringLiteral("step %1: not a message, advanceMs, expectClosed, connect, "
-                                  "close or radioPtt step")
+                                  "close, radioPtt or openOwnConnection step")
                 .arg(index);
         }
     }

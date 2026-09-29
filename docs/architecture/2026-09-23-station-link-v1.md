@@ -5514,7 +5514,12 @@ A client step may carry `"client": "<name>"` and a station step
 without matching), and `{"close": "<name>"}` closes its connection;
 `expectClosed` may carry `"client"` too. The station's messages are
 matched per client, in that client's own arrival order. `otherConnections`
-stays for sockets that never sign in. **An app's runner** plays only its
+stays for sockets that never sign in. With `stationSetup.deferOwnConnection`
+true the fixture's own client is not connected before the first step: a
+step `{"openOwnConnection": true}`, exactly once, connects it, and its
+sign-in deadline starts there, so a fixture can pass more virtual time than
+that deadline before its own client signs in; no step of the own client may
+come before it, and such a fixture runs on the station alone. **An app's runner** plays only its
 own client: it skips other clients' steps and the station messages sent
 to them, and a `connect` or `close` step names nothing it plays. A fixture
 where the own client shares the Core names the features its `hello`
@@ -5676,6 +5681,7 @@ role.
 | `maxSlices` | with `receivers`, the slice cap | 5 |
 | `alexRxAntennas` | iPhone app plan Task 75: the static radio's receive antenna per band, 14 numbers 1 to 3 in `Band` order (160 m to XVTR), and band tracking on (the per-band antenna switch of section 7.6) as though a radio were connected; only with `"radio": "static"` | none (no band tracking) |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
+| `deferOwnConnection` | the fixture's own client connects at its `openOwnConnection` step instead of before the first step (above); station fixtures only | false |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
 The station runner starts every fixture from an empty settings profile,
@@ -5704,6 +5710,7 @@ same on every machine.
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
+| `place-freed` | The device (`otherClients` `"self"`) signs in and drops; its 3 minutes run out, freeing its place; four other devices fill the Core; 20 s later the device's own connection opens (`deferOwnConnection`) and signs in: it is let through `auth.result` and sent `session.held` with `placeFreed` `{secondsAgo: 20}`. Runs on the station alone |
 | `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later.", `retryable` true, no code. Runs on the station alone |
 | `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
