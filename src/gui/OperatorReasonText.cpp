@@ -73,8 +73,8 @@ constexpr Entry kEntries[] = {
      "The Core could not set up the spectrum for this receiver.", "Refused"},
     {"This receiver's spectrum stopped on the Core.", "Refused: not ready",
      "The spectrum for this receiver stopped on the Core.", "Refused"},
-    {"The receiver's spectrum is not ready yet.", "Refused: not ready",
-     "The Core does not have this receiver's spectrum ready yet.", "Refused"},
+    {"The receiver's spectrum is not ready.", "Refused: not ready",
+     "The Core does not have this receiver's spectrum ready.", "Refused"},
     {"The extended view is not available right now.", "Refused: no wide view",
      "The Core cannot provide the extended view right now.", "Refused"},
     {"The Core stopped its display service.", "Refused: Core stopping",
@@ -143,7 +143,7 @@ constexpr Entry kEntries[] = {
     {"client-disabled", nullptr,
      "This app stopped asking for this receiver's audio."},
     {"media-not-ready", nullptr,
-     "Audio from the Core is not ready yet. This app asks for it again when it is."},
+     "Audio from the Core is not ready. This app asks for it again when it is."},
     {"radio-offline", nullptr,
      "The radio at the Core is offline. This receiver's audio comes back with the radio."},
     {"encoder-unavailable", nullptr,
@@ -264,7 +264,7 @@ constexpr Entry kEntries[] = {
     {"Unsupported NNR diagnostic mode.", nullptr,
      "That NNR diagnostic setting is not available."},
     {"The NNR receiver is not ready.", nullptr,
-     "NNR is not ready on this receiver yet."},
+     "NNR is not ready on this receiver."},
 
     // The Core's certificate, StationClient.cpp: shown after "Last failure:"
     // and in the link-lost toast. "Certificate fingerprint" is the one name
@@ -355,6 +355,9 @@ constexpr Entry kEntries[] = {
 // shown in the same words as before. None is written in the sources any
 // more (tst_operator_wording_sweep checks both ways).
 constexpr Entry kOlderCoreEntries[] = {
+    // A Core from before 2026-09-29 said "yet" here.
+    {"The receiver's spectrum is not ready yet.", "Refused: not ready",
+     "The Core does not have this receiver's spectrum ready.", "Refused"},
     {"session display budget exceeded", "Refused: Core busy",
      "The Core's display limit has no room left for this pan.", "Refused"},
     {"endpoint limit reached", "Refused: pan limit",
@@ -378,7 +381,7 @@ constexpr Entry kOlderCoreEntries[] = {
     {"source configuration became unavailable", "Refused: not ready",
      "The spectrum for this receiver stopped on the Core.", "Refused"},
     {"source geometry is unavailable", "Refused: not ready",
-     "The Core does not have this receiver's spectrum ready yet.", "Refused"},
+     "The Core does not have this receiver's spectrum ready.", "Refused"},
     {"wideband source is unavailable", "Refused: no wide view",
      "The Core cannot provide the extended view right now.", "Refused"},
     {"display budget authority retired", "Refused: Core stopping",
@@ -440,7 +443,7 @@ constexpr Entry kOlderCoreEntries[] = {
     {"Unknown PureSignal action.", nullptr,
      "The Core does not know this PureSignal action."},
     {"Remote PureSignal actuation requires R4 transmit support.", nullptr,
-     "PureSignal cannot be run from a remote window yet."},
+     "PureSignal cannot be run from a remote window."},
     {"This PureSignal command identity is already pending.", nullptr,
      "This PureSignal request is already in progress."},
     {"Unknown receiver or invalid NNR action arguments.", nullptr,

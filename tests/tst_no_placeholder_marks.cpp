@@ -27,6 +27,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  No reachable text says "yet"; the
+//                                    NYI tooltip's new words. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -87,13 +90,17 @@ StationStartupSelection remoteCore()
 // and markNyi's tooltips, and the "Phase X" roadmap placeholder. Fix wave
 // I2: also roadmap wording, which promises later work instead of saying
 // what a control does: a numbered phase ("Phase 3M-1"), "deferred",
-// "follow-up", "will appear here" and "will add".
+// "follow-up", "will appear here" and "will add". JJ's rule for what the
+// phone and the app show (2026-09-29): "yet" promises a future, so no text
+// a user can reach says it; and markNyi's own tooltip, "This control is
+// not built."
 const QRegularExpression& placeholderWording()
 {
     static const QRegularExpression pattern(
         QStringLiteral("\\bNYI\\b|not yet implemented|\\bPhase X\\b|Available in Phase"
                        "|\\bPhase [0-9]|\\bdeferred\\b|\\bfollow-up\\b|\\bfollow up\\b"
-                       "|will appear here|\\bwill add\\b"),
+                       "|will appear here|\\bwill add\\b|control is not built"
+                       "|\\byet\\b"),
         QRegularExpression::CaseInsensitiveOption);
     return pattern;
 }
@@ -336,6 +343,8 @@ private slots:
             QStringLiteral("Deferred to a later release"),
             QStringLiteral("Follow-up work"),
             QStringLiteral("Profiles will appear here"),
+            // JJ's rule: "yet" promises a future.
+            QStringLiteral("Band stacking is not ready yet."),
         };
         for (const QString& text : roadmap) {
             {

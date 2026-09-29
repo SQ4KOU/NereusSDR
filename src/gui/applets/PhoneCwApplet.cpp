@@ -615,9 +615,9 @@ void PhoneCwApplet::buildCwPage(QWidget* page)
     layout->setAlignment(Qt::AlignCenter);
 
     auto* label = new QLabel(QStringLiteral(
-        "Sending CW from NereusSDR is not built yet.\n\n"
-        "Speed, pitch, sidetone, break-in and keyer controls\n"
-        "belong on this page once it is."
+        "NereusSDR does not send CW in this version.\n\n"
+        "Speed, pitch, sidetone, break-in and keyer\n"
+        "controls are not available."
     ), page);
     label->setAlignment(Qt::AlignCenter);
     label->setWordWrap(true);

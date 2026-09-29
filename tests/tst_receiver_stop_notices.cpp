@@ -79,7 +79,7 @@ private slots:
         QVERIFY(ReceiverStopNotices::isReceiverStop(
             QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason)));
         // A TCI refusal is not a receiver stop: it keeps its own toast.
-        QVERIFY(!ReceiverStopNotices::isReceiverStop(QStringLiteral("Apps cannot transmit through TCI from a remote window yet.")));
+        QVERIFY(!ReceiverStopNotices::isReceiverStop(QStringLiteral("Apps cannot transmit through TCI from a remote window.")));
         // Every toast it can raise is in plain words.
         ReceiverStopNotices notices;
         for (const char* wire : {"encoder-unavailable", "slice-removed", "receiver-limit"}) {

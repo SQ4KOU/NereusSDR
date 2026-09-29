@@ -616,7 +616,7 @@ void DspAssetDialog::updateButtons()
         m_restoreButton->setToolTip(canRestore ? QString()
             : !refusal.isEmpty() ? refusal
             : tr("Restore applies a correction and requires permission to transmit. "
-                 "It is not yet available from a remote window; import and export work."));
+                 "It is not available from a remote window; import and export work."));
     }
     for (QComboBox* selector : m_slotSelectors) {
         if (selector) {

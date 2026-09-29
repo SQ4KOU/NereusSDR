@@ -1830,7 +1830,7 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     if (!stop && *action != Ps3Action::SaveCorrection
         && !(arming && m_pureSignalArmingOffered)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
-                   QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
+                   QStringLiteral("PureSignal cannot be run from a remote window."), {});
         return;
     }
     // Fix wave M2 (ruling 8.5): stopping the two-tone test is a release of

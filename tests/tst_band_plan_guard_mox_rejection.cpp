@@ -6,7 +6,7 @@
 // Phase 3M-1b Task K.2: MoxController::setMox(true) rejection path.
 //
 // Covers:
-//   1. MoxCheckFn callback: CW mode → moxRejected("CW transmit is not available yet");
+//   1. MoxCheckFn callback: CW mode → moxRejected("CW transmit is not available on this Core");
 //      MOX state stays Rx.
 //   2. AM mode → accepted (AM/SAM/DSB TX via WDSP ammod);
 //      MOX state stays Rx.
@@ -115,7 +115,7 @@ private slots:
             QString::number(static_cast<int>(Region::UnitedStates)));
     }
 
-    // ── 1. CW mode + setMox(true) → moxRejected("CW transmit is not available yet") ─
+    // ── 1. CW mode + setMox(true) → moxRejected("CW transmit is not available on this Core") ─
 
     void cwl_setMox_emitsMoxRejected()
     {
@@ -131,7 +131,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("CW transmit is not available yet"));
+                 QStringLiteral("CW transmit is not available on this Core"));
         // MOX state must NOT have advanced.
         QVERIFY(!ctrl.isMox());
         QCOMPARE(ctrl.state(), MoxState::Rx);
@@ -151,7 +151,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("CW transmit is not available yet"));
+                 QStringLiteral("CW transmit is not available on this Core"));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -185,7 +185,7 @@ private slots:
 
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
-                 QStringLiteral("FM transmit is not available yet"));
+                 QStringLiteral("FM transmit is not available on this Core"));
         QVERIFY(!ctrl.isMox());
     }
 
@@ -590,7 +590,7 @@ private slots:
         QCOMPARE(rejectedSpy.count(), 1);
         QCOMPARE(rejectedSpy.at(0).at(0).toString(),
                  QStringLiteral("Remote transmit controls are not available "
-                                "from this Core yet."));
+                                "from this Core."));
         QVERIFY(!model.moxController()->isMox());
     }
 
@@ -625,13 +625,13 @@ private slots:
     void tooltipForMode_cwl_returnsCwPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::CWL);
-        QCOMPARE(tip, QStringLiteral("CW transmit is not available yet"));
+        QCOMPARE(tip, QStringLiteral("CW transmit is not available on this Core"));
     }
 
     void tooltipForMode_cwu_returnsCwPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::CWU);
-        QCOMPARE(tip, QStringLiteral("CW transmit is not available yet"));
+        QCOMPARE(tip, QStringLiteral("CW transmit is not available on this Core"));
     }
 
     void tooltipForMode_am_returnsManualMox()
@@ -643,7 +643,7 @@ private slots:
     void tooltipForMode_fm_returnsAudioPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::FM);
-        QCOMPARE(tip, QStringLiteral("FM transmit is not available yet"));
+        QCOMPARE(tip, QStringLiteral("FM transmit is not available on this Core"));
     }
 
     void tooltipForMode_sam_returnsManualMox()
@@ -661,7 +661,7 @@ private slots:
     void tooltipForMode_drm_returnsAudioPhase()
     {
         const QString tip = TxApplet::tooltipForMode(DSPMode::DRM);
-        QCOMPARE(tip, QStringLiteral("DRM transmit is not available yet"));
+        QCOMPARE(tip, QStringLiteral("DRM transmit is not available on this Core"));
     }
 
     void tooltipForMode_spec_returnsNotSupported()

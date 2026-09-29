@@ -136,7 +136,7 @@ TxRefusal micNotConnected()
     // Fix wave C1: the Core never keys a remote device's voice on its own
     // microphone; the device waits for its line.
     return make(kMicNotReady,
-                QStringLiteral("This device's microphone is not connected to the Core yet. "
+                QStringLiteral("This device's microphone is not connected to the Core. "
                                "Wait a moment and try again."));
 }
 
@@ -145,7 +145,7 @@ TxRefusal remoteMicNotReady()
     // Fix wave M4: the device's own microphone, not the Core's Audio
     // settings, is what to wait for.
     return make(kMicNotReady,
-                QStringLiteral("No sound has reached the Core from this device's microphone yet. "
+                QStringLiteral("No sound has reached the Core from this device's microphone. "
                                "Wait a moment and try again."));
 }
 

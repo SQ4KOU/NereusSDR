@@ -114,7 +114,7 @@ private slots:
         ConnectionTargetRow row = GuiConnectionController::lanCoreRow(endpoint, {paired});
         QVERIFY(row.pairable);
         QVERIFY(!row.connectable);
-        QCOMPARE(row.state, QStringLiteral("Not paired yet"));
+        QCOMPARE(row.state, QStringLiteral("Not paired"));
         endpoint.announcement.pairing = StationLanPairing::Code;
         row = GuiConnectionController::lanCoreRow(endpoint, {paired});
         QVERIFY(row.pairable);
@@ -170,7 +170,7 @@ private slots:
         advertised.claimed = false;
         advertised.pairing = StationLanPairing::Closed;
         const QString closed = GuiConnectionController::lanCoreNextStep(advertised);
-        QCOMPARE(closed, QStringLiteral("No device has paired with this Core yet. Its pairing "
+        QCOMPARE(closed, QStringLiteral("No device is paired with this Core. Its pairing "
                                         "closed after too many wrong codes. Run nereusd pairing "
                                         "open on the Core's computer to open it again."));
         QVERIFY(!closed.contains(QStringLiteral("paired with other devices")));
@@ -179,7 +179,7 @@ private slots:
         // The other branches are unchanged.
         advertised.pairing = StationLanPairing::Click;
         QCOMPARE(GuiConnectionController::lanCoreNextStep(advertised),
-                 QStringLiteral("No device has paired with this Core yet. Select Pair to pair "
+                 QStringLiteral("No device is paired with this Core. Select Pair to pair "
                                 "this computer with it."));
         advertised.pairing = StationLanPairing::Code;
         QCOMPARE(GuiConnectionController::lanCoreNextStep(advertised),

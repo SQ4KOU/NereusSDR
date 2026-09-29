@@ -650,7 +650,7 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         s.value("User/IdentityLastSaved").toString();
     QString summary;
     if (persistedCall.isEmpty()) {
-        summary = "No identity saved yet. Fill in the fields above and click Save.";
+        summary = "No identity saved. Fill in the fields above and click Save.";
     } else {
         summary = QString("Current identity: %1 / %2")
                       .arg(persistedCall, persistedGrid);

@@ -405,7 +405,7 @@ void NetworkDiagnosticsDialog::refresh()
     const std::optional<RadioLinkStats::Snapshot> link =
         linkConn ? std::optional<RadioLinkStats::Snapshot>(linkConn->linkStats())
                  : std::nullopt;
-    const QString notMeasured = tr("Not measured yet");
+    const QString notMeasured = tr("Not measured");
     if (m_jitterLabel) {
         m_jitterLabel->setText(link && link->jitterMs
             ? QString::asprintf("%.2f ms", *link->jitterMs) : notMeasured);

@@ -359,7 +359,7 @@ void buildPhase8WarningRows(
     contentLayout->insertWidget(contentLayout->count() - 1, noPaSupportBanner);
 
     ganymedeWarning = new QLabel(QStringLiteral(
-        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier yet. "
+        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier. "
         "The PA Gain table below applies to the radio's internal PA."), parent);
     ganymedeWarning->setStyleSheet(bannerInfoStyle());
     ganymedeWarning->setWordWrap(true);
@@ -511,8 +511,8 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // the user-visible tooltip stays plain English; the upstream cite is
     // kept in this source comment.
     m_newCalCheck->setToolTip(QStringLiteral(
-        "New-calibration mode marker. No client-side behavior is hooked "
-        "to it yet — tracked for parity only."));
+        "New-calibration mode marker. Nothing in this app acts on it; "
+        "it is kept for parity only."));
     // From Thetis chkPANewCal Visible=false default at setup.designer.cs:47417
     // [v2.10.3.13]; Thetis Ctrl+Alt+A keyhandler (setup.cs:12490-12498) unhides
     // it. NereusSDR has no live behaviour wired to NewCal mode (deferred to
@@ -736,8 +736,8 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     m_bypassPaSettingsCheck->setToolTip(QStringLiteral(
         "Bypass the board-specific PA calibration table (BP PA). "
         "When checked, the generic Hermes gain row is used instead "
-        "of the ANAN-G2E factory row. Useful if you have not yet "
-        "calibrated PA gain for this radio."));
+        "of the ANAN-G2E factory row. Useful when PA gain for this "
+        "radio is not calibrated."));
     m_bypassPaSettingsCheck->setVisible(false);  // hidden until applyCapabilityVisibility
     contentLayout()->insertWidget(contentLayout()->count() - 1,
                                    m_bypassPaSettingsCheck);
@@ -825,7 +825,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_noPaSupportBanner);
 
     m_ganymedeWarning = new QLabel(QStringLiteral(
-        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier yet. "
+        "NereusSDR has no settings for the ANAN Ganymede 500 W amplifier. "
         "The PA Gain table below applies to the radio's internal PA."), this);
     m_ganymedeWarning->setStyleSheet(bannerInfoStyle());
     m_ganymedeWarning->setWordWrap(true);
@@ -893,7 +893,7 @@ void PaGainByBandPage::setTransmitPermitted(bool permitted, const QString& reaso
 {
     m_paKeyingPermitted = permitted;
     m_paKeyingReason = reason.isEmpty()
-        ? tr("Remote transmit controls are not available from this Core yet.")
+        ? tr("Remote transmit controls are not available from this Core.")
         : reason;
     gateTransmitControls(paKeyingControls(), m_paKeyingPermitted, m_paKeyingReason);
 }

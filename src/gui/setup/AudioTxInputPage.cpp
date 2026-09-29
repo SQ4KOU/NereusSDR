@@ -384,7 +384,7 @@ void AudioTxInputPage::setTransmitPermitted(bool permitted, const QString& reaso
 {
     m_heldTransmitPermitted = permitted;
     m_heldTransmitReason = reason.isEmpty()
-        ? tr("Remote transmit controls are not available from this Core yet.")
+        ? tr("Remote transmit controls are not available from this Core.")
         : reason;
     applyHeldControlGate();
 }

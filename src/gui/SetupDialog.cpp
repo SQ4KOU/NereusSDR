@@ -297,7 +297,7 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     m_dspReceiverSelection = new DspReceiverSelection(this);
     m_transmitPermitted = model && model->ownsLocalDsp();
     m_transmitSettingsPermitted = m_transmitPermitted;
-    m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
+    m_transmitReason = tr("Remote transmit controls are not available from this Core.");
     m_localUnavailableReason = tr(
         "These settings control audio and signal processing on this computer. "
         "While connected to a Core, the Core does that work, so they cannot be "
@@ -961,7 +961,7 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
     m_transmitReason = reason.isEmpty()
-        ? tr("Remote transmit controls are not available from this Core yet.") : reason;
+        ? tr("Remote transmit controls are not available from this Core.") : reason;
     refreshTransmitPresentation();
 }
 
@@ -1365,7 +1365,7 @@ void SetupDialog::buildTree()
     // permission. DDC Routing (a placeholder locally too) stays declared
     // unavailable; its keys are per-MAC as well.
     const QString hardwareReason = tr(
-        "The radio's hardware settings cannot be changed from a remote window yet.");
+        "The radio's hardware settings cannot be changed from a remote window.");
     registerPage(hardware, "Hardware Config", SetupScope::Core, [this]() -> QWidget* {
         auto* hwPage = new HardwarePage(m_model);
         connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,

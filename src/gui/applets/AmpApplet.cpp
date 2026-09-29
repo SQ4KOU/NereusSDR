@@ -392,7 +392,7 @@ QString AmpApplet::coreDiagnosticsText(RadioModel* model)
 
 QString AmpApplet::remoteUnavailableReason()
 {
-    return tr("Amplifier control is not available from a remote window yet.");
+    return tr("Amplifier control is not available from a remote window.");
 }
 
 // R-R3-22 / R-R3-47: the words the 4O3A page's remote Power Genius tab

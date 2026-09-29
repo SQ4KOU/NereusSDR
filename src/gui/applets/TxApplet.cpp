@@ -2251,13 +2251,13 @@ QString TxApplet::tooltipForMode(DSPMode mode)
     // 3M-3b). DRM names DRM.
     case DSPMode::CWL:
     case DSPMode::CWU:
-        return QStringLiteral("CW transmit is not available yet");
+        return QStringLiteral("CW transmit is not available on this Core");
 
     case DSPMode::FM:
-        return QStringLiteral("FM transmit is not available yet");
+        return QStringLiteral("FM transmit is not available on this Core");
 
     case DSPMode::DRM:
-        return QStringLiteral("DRM transmit is not available yet");
+        return QStringLiteral("DRM transmit is not available on this Core");
 
     case DSPMode::SPEC:
     default:
@@ -2645,7 +2645,7 @@ void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unava
 {
     m_psArmingPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
-        ? tr("Remote transmit controls are not available from this Core yet.")
+        ? tr("Remote transmit controls are not available from this Core.")
         : unavailableReason;
     gateTransmitControl(m_psaBtn, permitted, reason);
     syncPsaFromFacade();

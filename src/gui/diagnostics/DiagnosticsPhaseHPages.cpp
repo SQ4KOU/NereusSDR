@@ -115,7 +115,7 @@ void ConnectionQualityPage::buildUI()
     auto* histGroup = addSection(QStringLiteral("60 s History"));
     auto* histLayout = qobject_cast<QVBoxLayout*>(histGroup->layout());
     m_historyPlaceholder = new QLabel(
-        QStringLiteral("The 60 s history graph is not shown yet."));
+        QStringLiteral("The 60 s history graph is not shown."));
     m_historyPlaceholder->setStyleSheet(QStringLiteral("color: #888;"));
     histLayout->addWidget(m_historyPlaceholder);
     histGroup->setObjectName(QStringLiteral("connectionHistoryGroup"));
@@ -551,7 +551,7 @@ void ExportImportConfigPage::refreshExportAvailability()
     const bool remote = remoteWindow();
     m_importAllBtn->setEnabled(!remote);
     const QString importText = remote
-        ? tr("Importing a combined window and Core backup is not available yet.")
+        ? tr("Importing a combined window and Core backup is not available.")
         : tr("Imports a local XML settings file. Restart after importing.");
     m_importExplanation->setText(importText);
     m_importAllBtn->setToolTip(importText);
@@ -585,7 +585,7 @@ bool ExportImportConfigPage::radioExportAllowed(QString* reason) const
     if (remote && !m_stationSettingsAvailable) {
         if (reason) {
             *reason = m_stationUnavailableReason.isEmpty()
-                ? tr("The Core's settings are not available yet.")
+                ? tr("The Core's settings are not available.")
                 : m_stationUnavailableReason;
         }
         return false;
@@ -603,7 +603,7 @@ QByteArray ExportImportConfigPage::connectedRadioXml(const AppSettings& settings
     }
     const QMap<QString, QVariant> values = settings.hardwareValues(mac);
     if (values.isEmpty()) {
-        if (error) { *error = tr("No settings are saved for the connected radio yet."); }
+        if (error) { *error = tr("No settings are saved for the connected radio."); }
         return {};
     }
     // A store that holds this radio's keys and nothing else, serialized
@@ -743,7 +743,7 @@ void ExportImportConfigPage::onImportAllClicked()
 {
     if (remoteWindow()) {
         QMessageBox::information(this, tr("Import Unavailable"),
-            tr("Importing a combined window and Core backup is not available yet."));
+            tr("Importing a combined window and Core backup is not available."));
         return;
     }
     const QString src = QFileDialog::getOpenFileName(

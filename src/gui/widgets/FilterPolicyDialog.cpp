@@ -86,7 +86,7 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
                   : QStringLiteral("BYPASS");
     auto* stateLbl = new QLabel(
         stationState && !stationStateAvailable
-            ? tr("Core filter state is not available yet.")
+            ? tr("Core filter state is not available.")
             : QStringLiteral("Effective: %1\nReason: %2").arg(effectiveText, state.reasonText),
         stateGroup);
     stateLbl->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 11px;"));

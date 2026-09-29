@@ -2578,7 +2578,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || !std::isfinite(sourceCentreHz - sourceHalfRate)
         || !std::isfinite(sourceCentreHz + sourceHalfRate)) {
         return rejectAllocation(control, endpointId, revision,
-                                QStringLiteral("The receiver's spectrum is not ready yet."));
+                                QStringLiteral("The receiver's spectrum is not ready."));
     }
     auto existing = m_endpoints.find(endpointId);
     if (existing != m_endpoints.end()

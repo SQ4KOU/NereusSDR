@@ -64,7 +64,7 @@ using NereusSDR::Test::LoopbackTransport;
 namespace {
 
 const QString kOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-const QString kNotYet = QStringLiteral("PureSignal cannot be run from a remote window yet.");
+const QString kNotYet = QStringLiteral("PureSignal cannot be run from a remote window.");
 
 const QList<QByteArray> kArmingVerbs = {
     QByteArrayLiteral("ps3.single"), QByteArrayLiteral("ps3.automatic"),
@@ -563,7 +563,7 @@ void TstRemotePureSignalArming::psaFollowsItsOwnGate()
     auto* psa = applet.findChild<QPushButton*>(QStringLiteral("TxAppletPsaBtn"));
     QVERIFY(psa);
     const QString remoteReason =
-        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        QStringLiteral("Remote transmit controls are not available from this Core.");
     applet.setTransmitPermitted(false, remoteReason);
     applet.setPureSignalArmingPermitted(true);
     QVERIFY(psa->isEnabled());

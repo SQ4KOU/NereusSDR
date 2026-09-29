@@ -89,7 +89,7 @@ using namespace NereusSDR;
 namespace {
 
 const QString kRemoteTransmitReason =
-    QStringLiteral("Remote transmit controls are not available from this Core yet.");
+    QStringLiteral("Remote transmit controls are not available from this Core.");
 
 QList<QAction*> actionsByText(const QObject* root, const QString& text)
 {
@@ -680,7 +680,7 @@ private slots:
         emit container->bandStackRequested(5);
         QVERIFY(toastShown(window, MainWindow::containerBandStackReason()));
         QCOMPARE(MainWindow::containerBandStackReason(),
-                 QStringLiteral("Band stacking is not ready yet."));
+                 QStringLiteral("Band stacking is not ready."));
         store->resetPreset(DSPMode::USB, 2);
         store->resetPreset(DSPMode::USB, 4);
         QVERIFY(sessions.replace({}, false));

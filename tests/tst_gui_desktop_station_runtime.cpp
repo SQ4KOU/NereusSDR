@@ -221,16 +221,16 @@ private slots:
         reach.serviceRegistered = false;
         reach.bonjourActive = false;
         QCOMPARE(GuiDesktopStationRuntime::reachText(QStringLiteral("10.0.0.5"), 50055, reach),
-                 QStringLiteral("Listening on 10.0.0.5, port 50055. Not announced by Bonjour yet. "
-                                "Not registered with the remote access service at rv.example.net "
-                                "yet."));
+                 QStringLiteral("Listening on 10.0.0.5, port 50055. Not announced by Bonjour. "
+                                "Not registered with the remote access service at "
+                                "rv.example.net."));
         reach.bonjourAvailable = false;
         reach.serviceConfigured = false;
         reach.listening = false;
         reach.listenerRetryPending = true;
         const QString text = GuiDesktopStationRuntime::reachText(QString(), 50055, reach);
         QVERIFY(text.startsWith(QStringLiteral("Port 50055 on every network on this computer is "
-                                               "not open yet; trying again.")));
+                                               "not open; trying again.")));
         QVERIFY(text.contains(QStringLiteral("Bonjour is not available on this computer")));
         QVERIFY(text.endsWith(QStringLiteral("paired devices reach it only on this network.")));
     }

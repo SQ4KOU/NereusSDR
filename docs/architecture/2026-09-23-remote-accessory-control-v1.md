@@ -189,7 +189,7 @@ contract; each feature has its own version.
   this Core, and says "This Core does not let this app put the Power
   Genius in operate or standby, scan for it or save its address. Updating
   the Core may help." if asked anyway (the applet's OPERATE keeps
-  "Amplifier control is not available from a remote window yet.", the
+  "Amplifier control is not available from a remote window.", the
   Power Genius tab's Operate the receive-only reason, and Scan LAN's
   tooltip says "This Core does not scan for a Power Genius for this app.
   Updating the Core may help.").
@@ -199,7 +199,7 @@ contract; each feature has its own version.
   RF-Kit amplifier in operate or standby, switch its antenna or TCI mode,
   or save its address. Updating the Core may help." if asked anyway (the
   applet's OPERATE and ANT keep "Amplifier control is not available from a
-  remote window yet.", and "Set amp to TCI mode" says "The Core puts the
+  remote window.", and "Set amp to TCI mode" says "The Core puts the
   amplifier in TCI mode itself while the Core's TCI server is on.").
 - An app that sees `remotePgxlControlVersion` below 3 (or
   `remoteTgxlControlVersion` 0, or no entry) does not offer to change the
@@ -1371,7 +1371,7 @@ Pairing is not operating: the Core pairs an admitted PGXL
 A remote window shows these controls disabled: on a Core below
 `remotePgxlControlVersion` 4, the Power Genius tab's Operate button with
 the receive-only reason and the Power Genius applet's OPERATE with
-"Amplifier control is not available from a remote window yet."; on a Core
+"Amplifier control is not available from a remote window."; on a Core
 below `remoteRfKitControlVersion` 4, the RF-Kit applet's OPERATE and
 antenna buttons with that reason and the RF-Kit page's "Set amp to TCI
 mode" button (the Core sets TCI mode itself while the station's TCI

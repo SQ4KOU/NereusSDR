@@ -2127,7 +2127,7 @@ private slots:
                     // it has its own reason, independent of Core availability.
                     QVERIFY(!importAll->isEnabled());
                     QVERIFY(importAll->accessibleDescription().contains(
-                        QStringLiteral("not available yet")));
+                        QStringLiteral("is not available.")));
                 } else {
                     QVERIFY2(gated.isEmpty(), qPrintable(label));
                 }
@@ -2738,7 +2738,7 @@ private slots:
         // Transmit fields: disabled with the transmit reason; the receive
         // fields beside them stay live.
         const QString transmitReason = QStringLiteral(
-            "Remote transmit controls are not available from this Core yet.");
+            "Remote transmit controls are not available from this Core.");
         auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(antennas != nullptr);
         // Parity Task 12: Antenna Control's transmit half follows whether
@@ -3229,7 +3229,7 @@ private slots:
         // transmitSettingsVersion 6; PA Gain's auto-calibrate sweep, which
         // keys the radio, keeps the transmit permission.
         const QString transmitReason = QStringLiteral(
-            "Remote transmit controls are not available from this Core yet.");
+            "Remote transmit controls are not available from this Core.");
         auto* const notice = dialog.findChild<QLabel*>(
             QStringLiteral("setupTransmitUnavailable"));
         QVERIFY(notice != nullptr);
@@ -3541,7 +3541,7 @@ private slots:
         for (int i = 0; i < 4; ++i) {
             QVERIFY(sliders.at(i)->isEnabled());
         }
-        const QString reason = QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        const QString reason = QStringLiteral("Remote transmit controls are not available from this Core.");
         remoteApplet.setTransmitPermitted(false, reason);
         QCOMPARE(txRow->toolTip(), reason);
         remoteApplet.setTransmitPermitted(true, QString());

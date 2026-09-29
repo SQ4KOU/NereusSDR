@@ -5265,7 +5265,7 @@ bool RadioModel::setTunePowerForTxBandForStation(int watts, QString* reason, boo
     }
     refreshTransmitTuneBand();
     if (!m_transmitModel.setTunePowerForTxBand(watts)) {
-        if (reason) { *reason = QStringLiteral("The Core has no transmit band yet."); }
+        if (reason) { *reason = QStringLiteral("The Core has no transmit band."); }
         return false;
     }
     return true;
@@ -9704,7 +9704,7 @@ QString plainReceiveLayoutProblem(const QString& reason)
         return RadioModel::tr("It is larger than this program can store.");
     }
     if (has("MAC address")) {
-        return RadioModel::tr("The radio has not identified itself yet.");
+        return RadioModel::tr("The radio has not identified itself.");
     }
     if (has("JSON") || has("schema") || has("invalid slice")) {
         return damaged();
@@ -14154,7 +14154,7 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
     BandSeed seed = BandDefaults::seedFor(band);
     if (!seed.valid) {
         // XVTR today. Becomes meaningful once the XVTR epic ships.
-        const QString reason = QStringLiteral("Band %1 ignored: transverter config not yet supported")
+        const QString reason = QStringLiteral("Band %1 ignored: transverter settings are not available")
                                    .arg(bandLabel(band));
         qCDebug(lcConnection) << reason;
         emit bandClickIgnored(band, reason);
@@ -17323,7 +17323,7 @@ void RadioModel::installBandPlanMoxCheck()
             safety::BandPlanGuard::MoxCheckResult refused{
                 false, m_role == Role::Remote
                            ? QStringLiteral("Remote transmit controls are not available "
-                                            "from this Core yet.")
+                                            "from this Core.")
                            : TxRefusals::stationReceiveOnly().text};
             refused.refusalCode = TxRefusals::kStationReceiveOnly;
             return refused;
@@ -22502,7 +22502,7 @@ void RadioModel::setTune(bool on)
         if (receiveOnlyTxOperationsBlocked()) {
             emit tuneRefused(
                 QStringLiteral("Remote transmit controls are not available "
-                               "from this Core yet."));
+                               "from this Core."));
             return;
         }
 
@@ -26718,7 +26718,7 @@ QString RadioModel::beginTgxlAutotune(bool fromHardware)
     // no carrier. With both this and a remote window's missing transmit,
     // the operator is told both (M6).
     const QString remoteReason = receiveOnlyTxOperationsBlocked()
-        ? QStringLiteral("Automatic tuning is not available from this Core yet.")
+        ? QStringLiteral("Automatic tuning is not available from this Core.")
         : QString();
     const QString refusal = transmitBlockReasonAlongside(remoteReason);
     if (!refusal.isEmpty()) {
