@@ -372,6 +372,12 @@
 //               pairingAvailable() and requestDeviceAdmin() for the This
 //               Core page. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Addendum G-42: transmitSettingsPermitted
+//                                    and transmitPermissionReason, this
+//                                    window's transmit permission for the
+//                                    settings only a permitted device may
+//                                    change. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -928,6 +934,8 @@ public:
     /// takes this window's transmit settings while its radio is off the
     /// air. False: IStationLink::transmitSettingsUnavailableReason().
     bool transmitSettingsAvailable(int minVersion = 1) const override;
+    bool transmitSettingsPermitted() const override;
+    QString transmitPermissionReason() const override;
     /// R-R3-49 (parity Task 7): minor 11 and transmitSettingsVersion 7: the
     /// Core takes this window's PureSignal arming off the air.
     bool pureSignalArmingOffered() const;

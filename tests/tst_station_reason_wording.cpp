@@ -170,7 +170,8 @@
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42: the Extended transmit
-//                                    setting's refusal forwards.
+//                                    setting's refusal forwards, and the
+//                                    window's transmitPermissionReason.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -1474,6 +1475,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // Addendum G-42: the window's own words when the Core gave none for
+        // why this device may not change Extended transmit.
+        {"src/core/session/IStationLink.h", "transmitPermissionReason",
+         "a remote window's own fallback when its Core does not say why it may not transmit"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-46 (parity Task 14): HL2 Options' I2C tool and Pin Control,

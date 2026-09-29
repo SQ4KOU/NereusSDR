@@ -167,6 +167,12 @@
 //                                    device verbs (deviceAdminAvailable,
 //                                    pairingAvailable, requestDeviceAdmin).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Addendum G-42: transmitSettingsPermitted
+//                                    and transmitPermissionReason, this
+//                                    window's transmit permission for the
+//                                    settings only a permitted device may
+//                                    change. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QString>
@@ -461,6 +467,15 @@ public:
     /// dialog's version gates also close on the air. The default refuses,
     /// for links that did not negotiate it.
     virtual bool transmitSettingsAvailable(int /*minVersion*/ = 1) const { return false; }
+    /// Addendum G-42: whether the Core lets this device change the
+    /// transmit settings it takes only from a device it permits to
+    /// transmit (Extended transmit): the Core's txPermitted for this
+    /// session. The default refuses.
+    virtual bool transmitSettingsPermitted() const { return false; }
+    /// Why not, in the Core's words when it gave them (txRefusalReason);
+    /// empty while permitted.
+    virtual QString transmitPermissionReason() const
+    { return QStringLiteral("This device cannot transmit through this Core."); }
     /// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     /// Tune Power slider. The Core sets the tune power for the band it
     /// transmits on and the tune drive source to the tune slider, as the

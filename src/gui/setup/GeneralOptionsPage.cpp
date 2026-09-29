@@ -338,7 +338,10 @@ bool GeneralOptionsPage::extendedEditAvailable()
     if (!radio || !m_regionSettingsAvailable) { return false; }
     if (radio->ownsLocalDsp()) { return !radio->stationOnAirRefusal(nullptr); }
     const IStationLink* link = radio->stationLink();
-    return link && link->transmitSettingsAvailable(11) && !radio->isCoreOnAir();
+    // The Core takes the change only from a device it permits to transmit,
+    // so without that the box is disabled rather than refused after a tick.
+    return link && link->transmitSettingsAvailable(11) && link->transmitSettingsPermitted()
+        && !radio->isCoreOnAir();
 }
 
 void GeneralOptionsPage::syncExtendedFromSetting()
@@ -361,10 +364,13 @@ void GeneralOptionsPage::refreshExtendedAvailability()
         const IStationLink* link = radio ? radio->stationLink() : nullptr;
         const bool olderCore = radio && !radio->ownsLocalDsp() && m_regionSettingsAvailable
             && link && !link->transmitSettingsAvailable(11);
+        const bool notPermitted = radio && !radio->ownsLocalDsp() && link
+            && !link->transmitSettingsPermitted();
         reason = !m_regionSettingsAvailable && !m_regionSettingsReason.isEmpty()
             ? m_regionSettingsReason
             : onAir ? RadioModel::onAirReason()
             : olderCore ? tr("This Core does not have Extended transmit. Update the Core to use it.")
+            : notPermitted ? link->transmitPermissionReason()
             : tr("Extended transmit is not available on this Core.");
     }
     // From Thetis setup.designer.cs:8121 [v2.10.3.15] (the enabled tooltip).

@@ -4336,18 +4336,19 @@ private slots:
             QVERIFY(regionCombo->isEnabled());
             regionCombo->setCurrentIndex(3);
             QTRY_COMPARE(stationSettings.value(QStringLiteral("BandPlanRegion")).toInt(), 3);
-            // Addendum G-42: Extended is the Core's setting. The window's box
-            // is live at transmitSettingsVersion 11 off the air; this
-            // receive-only session has no transmit permission, so the Core
-            // refuses the tick and the box goes back to the Core's value.
-            // A change on the Core reaches the window's box.
+            // Addendum G-42: Extended is the Core's setting, changed only by
+            // a device the Core permits to transmit. This receive-only
+            // session is not, so the box is disabled with the Core's own
+            // reason instead of being refused after a tick. A change on the
+            // Core still reaches the window's box.
             QVERIFY(client->transmitSettingsAvailable(11));
             auto* extendedBox = regionPage.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
             QVERIFY(extendedBox);
-            QVERIFY(extendedBox->isEnabled());
+            QVERIFY(!extendedBox->isEnabled());
+            QCOMPARE(extendedBox->toolTip(), QStringLiteral("This Core is set to receive only."));
             QVERIFY(!extendedBox->isChecked());
             extendedBox->setChecked(true);
-            QTRY_VERIFY(!extendedBox->isChecked());
+            QVERIFY(!extendedBox->isChecked());
             QVERIFY(!stationSettings.contains(QStringLiteral("ExtendedTransmit")));
             stationSettings.setValue(QStringLiteral("ExtendedTransmit"), QStringLiteral("True"));
             QTRY_VERIFY(extendedBox->isChecked());
@@ -4395,7 +4396,9 @@ private slots:
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
             QTRY_VERIFY(regionCombo->isEnabled());
-            QTRY_VERIFY(extendedBox->isEnabled());
+            QTRY_COMPARE(extendedBox->toolTip(),
+                         QStringLiteral("This Core is set to receive only."));
+            QVERIFY(!extendedBox->isEnabled());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
             QTRY_VERIFY(txApplet->tunePowerSlider()->isEnabled());
             QTRY_VERIFY(lev->isEnabled());
