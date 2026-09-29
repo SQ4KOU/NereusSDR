@@ -850,7 +850,7 @@ does the fitting; `tst_band_link_fit` holds it to this paragraph. The
 desktop declares `band2m` 1. It never sends band 27, a 2 m antenna entry
 or a `2m` watts key to a Core without `band2mVersion` 1
 (`BandLinkFit::forStationWithout2m`); its 2 m band button is greyed with
-"This Core does not have the 2 m band yet. Updating the Core adds it."
+"This Core does not have the 2 m band. Updating the Core adds it."
 Existing settings are not moved: a value an operator saved for GEN while
 tuned to 2 m stays GEN's, and 2 m starts from its own defaults (the band
 stack seed 144.200 MHz USB, Thetis clsBandStackManager.cs:2160
