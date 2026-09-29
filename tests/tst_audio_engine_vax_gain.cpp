@@ -334,15 +334,15 @@ private slots:
         h.engine->setVaxMuted(5, true);
         QCOMPARE(h.engine->vaxMuted(1), false);
     }
-    // ── 13. The tee divides by the feeding slice's own AF gain ─────────────
+    // ── 13. The tee carries the slice without its AF level ──────────────
     //
-    // R-R3-43 local VAX fix: AF gain is applied inside WDSP (PanelGain1),
-    // upstream of rxBlockReady, and the tee undoes it so a digital-mode app
-    // hears a level independent of the speaker slider. It must undo the AF
-    // gain of the slice that produced the block. It used to read receiver
-    // 1's (WDSP channel 0) for every slice, so slice B on VAX 1 came out at
-    // slice A's compensation.
-    void vaxTeeUsesTheFeedingSlicesOwnAfGain() {
+    // Slice control plan Task 6 (JJ's ruling): the receive channel's
+    // PanelGain1 stays at unity and AudioEngine's mixer applies each slice's
+    // AF level, so the block reaching the tee has no AF gain in it and the
+    // tee no longer divides one out. A digital-mode app hears the same level
+    // at any AF setting, AF 0 included. (The old tee multiplied by 1 / AF,
+    // here 2 and 4.)
+    void vaxTeeIgnoresTheSlicesAfGain() {
         Harness h = makeHarness();
         QTemporaryDir config;
         QVERIFY(config.isValid());
@@ -364,7 +364,6 @@ private slots:
         RxChannel* const rxA = channelFor(sliceA);
         RxChannel* const rxB = channelFor(sliceB);
         QVERIFY(rxA != nullptr && rxB != nullptr);
-        // Powers of two, so the compensated samples compare exactly.
         rxA->setAfGain(0.5);
         rxB->setAfGain(0.25);
 
@@ -372,14 +371,26 @@ private slots:
         QCOMPARE(vax1->pushCount(), 1);
         const auto gotB = bufferAsFloats(vax1);
         for (int i = 0; i < kTestStereoFloats; ++i) {
-            QCOMPARE(gotB[i], kTestSamples[i] * 4.0f);
+            QCOMPARE(gotB[i], kTestSamples[i]);
         }
 
         h.engine->rxBlockReady(sliceA, kTestSamples.data(), kTestFrames);
         QCOMPARE(vax2->pushCount(), 1);
         const auto gotA = bufferAsFloats(vax2);
         for (int i = 0; i < kTestStereoFloats; ++i) {
-            QCOMPARE(gotA[i], kTestSamples[i] * 2.0f);
+            QCOMPARE(gotA[i], kTestSamples[i]);
+        }
+
+        // AF 0 on the receiver and on the slice: VAX still hears the block.
+        rxB->setAfGain(0.0);
+        h.radio->sliceById(sliceB)->setAfGain(0);
+        h.engine->rxBlockReady(sliceB, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax1->pushCount(), 2);
+        const auto gotB0 = bufferAsFloats(vax1);
+        const int tail = static_cast<int>(gotB0.size()) - kTestStereoFloats;
+        QVERIFY(tail >= 0);
+        for (int i = 0; i < kTestStereoFloats; ++i) {
+            QCOMPARE(gotB0[static_cast<size_t>(tail + i)], kTestSamples[i]);
         }
     }
 };

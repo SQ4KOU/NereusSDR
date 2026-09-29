@@ -31,6 +31,9 @@
 //   2026-09-29: The phone's direct addresses: setCoreAddresses(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 8b: retireTokenAndRevoke and
+//               revokeStopsPairingToken. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -257,6 +260,40 @@ DeviceAdminResult StationDevicesFacade::revoke(const QString& id)
     }
     qCInfo(lcDevices) << "A paired device was removed";
     return {true, QString()};
+}
+
+bool StationDevicesFacade::revokeStopsPairingToken(const QString& id) const
+{
+    if (!m_devices.isValid() || !m_tokens.isActive()) {
+        return false;
+    }
+    bool ok = false;
+    const QByteArray raw = StationIdentity::fromBase64Url(id, &ok);
+    const std::optional<PairedDevice> device = ok ? m_devices.find(raw) : std::nullopt;
+    return device && device->enrolledThroughToken;
+}
+
+DeviceAdminResult StationDevicesFacade::retireTokenAndRevoke(const QString& id)
+{
+    // Slice control plan Task 8b (JJ's bench: a computer that joined with
+    // the token could not be removed from This Core). Fix wave R1-I3 still
+    // holds: while the token works such a computer would join again, so the
+    // token stops first. Anything else is revoke() as it is.
+    if (!revokeStopsPairingToken(id)) {
+        return revoke(id);
+    }
+    // Checked before anything changes: once the token stops, the removal
+    // must not leave the Core with no paired device (Fix wave R1-I1), which
+    // revoke() would refuse after the token was already gone.
+    if (m_devices.list().size() <= 1) {
+        return {false, QStringLiteral("Pair another device first, or reset this Core from its "
+                                      "own computer.")};
+    }
+    const DeviceAdminResult retired = retireToken();
+    if (!retired.accepted) {
+        return retired;
+    }
+    return revoke(id);
 }
 
 DeviceAdminResult StationDevicesFacade::rename(const QString& label)

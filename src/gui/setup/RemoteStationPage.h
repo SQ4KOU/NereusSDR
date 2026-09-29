@@ -8,6 +8,8 @@
 #include <QString>
 #include <QVector>
 
+#include <functional>
+
 class QCheckBox;
 class QGroupBox;
 class QLabel;
@@ -29,6 +31,13 @@ public:
         QString pairedText;
         QString lastSeenText;
         bool revocable = true;
+        /// Slice control plan Task 8b: removing it first stops the Core
+        /// accepting its pairing token (it joined with the token, which
+        /// still works); the removal asks before it goes ahead.
+        bool removalStopsPairingToken = false;
+        /// Why Revoke is unavailable, when it is; empty for the page's own
+        /// words.
+        QString revokeReason;
     };
     struct State {
         bool available = false;
@@ -49,6 +58,11 @@ public:
 
     explicit RemoteStationPage(QWidget* parent = nullptr);
     void setState(const State& state);
+    /// Task 8b: asks the operator to go ahead (title, text, the go-ahead
+    /// button's words); true to go ahead. A message box unless set (tests).
+    using Confirmation = std::function<bool(const QString& title, const QString& text,
+                                            const QString& goAhead)>;
+    void setConfirmation(Confirmation confirmation) { m_confirmation = std::move(confirmation); }
     const State& state() const { return m_state; }
     /// iPhone app plan Task 78 item 8 (R-IOS-07): who is connected to the
     /// Core on this computer now, from its session registry.
@@ -61,6 +75,9 @@ signals:
     void startWithComputerRequested(bool enabled);
     void renameRequested(const QString& name);
     void revokeRequested(const QByteArray& id);
+    /// Task 8b: remove `id`, stopping the Core accepting its pairing token
+    /// first, as the operator confirmed.
+    void revokeStoppingPairingTokenRequested(const QByteArray& id);
     void addDeviceRequested();
     void keyBackupAcknowledgedRequested();
     // Opens this window's Connections through SetupDialog/MainWindow.
@@ -70,7 +87,9 @@ private:
     void refresh();
     void rebuildDevices();
     void applyGate(QWidget* control, bool allowed, const QString& reason);
+    bool confirm(const QString& title, const QString& text, const QString& goAhead);
     State m_state;
+    Confirmation m_confirmation;
     QCheckBox* m_runCore = nullptr;
     QCheckBox* m_keepRunning = nullptr;
     QCheckBox* m_startWithComputer = nullptr;

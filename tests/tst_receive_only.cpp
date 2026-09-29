@@ -50,6 +50,10 @@
 //               and the window signs in to an upgraded Core with its token
 //               (seedUpgradedCoreToken). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11 (Q15): the MOX tooltip cases
+//               follow the transmit slice, not the active one. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -603,9 +607,11 @@ private slots:
                  TxApplet::tooltipForMode(static_cast<DSPMode>(mode)));
     }
 
-    // Fix wave M3: the MOX tooltip, and the lock over it, follow the active
-    // slice when it changes, not the slice that was active at construction.
-    void txAppletMoxFollowsTheActiveSlice()
+    // Fix wave M3: the MOX tooltip, and the lock over it, follow the slice
+    // when it changes, not the slice at construction. Slice control plan
+    // Task 11 (Q15): that is the transmit slice, so moving only the active
+    // slice leaves the tooltip on the transmit slice's mode.
+    void txAppletMoxFollowsTheTransmitSlice()
     {
         Rig rig;
         rig.model->addSlice();
@@ -613,6 +619,7 @@ private slots:
         SliceModel* first = rig.model->slices().at(0);
         SliceModel* second = rig.model->slices().at(1);
         rig.model->setActiveSlice(0);
+        QVERIFY(rig.model->requestTxHandoffToSlice(first->sliceIndex()));
         first->setDspMode(DSPMode::USB);
         second->setDspMode(DSPMode::CWU);
         TxApplet applet(rig.model.get());
@@ -620,6 +627,8 @@ private slots:
         QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::USB));
 
         rig.model->setActiveSlice(1);
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::USB));
+        QVERIFY(rig.model->requestTxHandoffToSlice(second->sliceIndex()));
         QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::CWU));
         // The new slice's mode changes reach the tooltip; the old one's do not.
         second->setDspMode(DSPMode::FM);
@@ -630,7 +639,7 @@ private slots:
         // Under receive only the lock stays on across a slice change, and
         // comes off to the new slice's tooltip.
         rig.model->setRxOnly(true);
-        rig.model->setActiveSlice(0);
+        QVERIFY(rig.model->requestTxHandoffToSlice(first->sliceIndex()));
         QVERIFY(!mox->isEnabled());
         QCOMPARE(mox->toolTip(), rig.model->rxOnlyReason());
         rig.model->setRxOnly(false);
@@ -676,7 +685,8 @@ private slots:
         QVERIFY(!mox->isEnabled());
         QCOMPARE(mox->toolTip(), waiting);
 
-        rig.model->setActiveSlice(1);
+        // Slice control plan Task 11: the tooltip follows the transmit slice.
+        QVERIFY(rig.model->requestTxHandoffToSlice(second->sliceIndex()));
         QCOMPARE(mox->toolTip(), waiting);
         second->setDspMode(DSPMode::FM);
         QCOMPARE(mox->toolTip(), waiting);

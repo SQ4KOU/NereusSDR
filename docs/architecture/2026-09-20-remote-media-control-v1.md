@@ -763,8 +763,9 @@ one. Its offer, contexts and packets are exactly as before.
 
 Each stream is one receiver's own audio: 48 kHz stereo taken where local VAX
 takes it, after the transmit gate and before the slice's mute, gain and pan,
-the mix and the speakers' volume, with that slice's AF gain undone as local
-VAX undoes it. While the transmit gate withholds the slice's audio the stream
+the mix and the speakers' volume. The slice's AF gain is applied in the
+Core's mixer, not in the receive channel, so neither local VAX nor this
+stream carries it, and both stay audible at AF 0. While the transmit gate withholds the slice's audio the stream
 sends nothing and its RTP timestamps advance over the gap. A receiver stream
 runs beside the main one; starting, stopping or changing it never restarts or
 re-announces the main stream, and the main `audio` control never touches a
@@ -852,6 +853,19 @@ while it runs; a receiver routed to the headphones is heard only there.
 For any other GUI the main stream carries both mixes added together, as
 before. Neither mix carries master volume or mute; those are the GUI's
 own, on its speakers only.
+
+Shared listening (slice control plan Task 6, `sliceAccessVersion` 1 in
+the station link): a device's main stream carries the slices it controls
+at their AF gain, pan and mute, and each slice it listens to without
+controlling at the device's own listening level (`slice.setListenLevel`),
+centered, and not muted by the controller's mute. Two listeners of one
+slice hear it at their own levels; the controller's AF gain changes only
+the controller's audio. When control of a slice passes to or from the
+device, its audio moves between the two without a gap. The Core's own
+speakers follow the same rule for the Core's own device. This departs
+from Thetis, which sets the AF gain in the receive channel
+(`SetRXAPanelGain1`); the Core holds that gain at 1.0 and applies AF in
+its mixer.
 
 GUI-to-Core `headphones-audio` has exactly these fields:
 

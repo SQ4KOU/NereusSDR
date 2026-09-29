@@ -781,6 +781,75 @@
 //   2026-09-29: R-R3-49 / R-IOS-18: Setup description version 15 (the rest
 //               of DSP, Transmit, Audio, Diagnostics and CAT & Network).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: who may
+//               see, hear and change a slice is SliceAccessPolicy's
+//               (changeRefusal, mediaSessionControlsSlice / HearsSlice /
+//               SeesSlice, a listener's refusal words). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 3: a
+//               revoked device and a token window that has gone leave the
+//               slices whose owner they were. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4:
+//               sliceAccessVersion for a peer that declares sliceAccess,
+//               the SliceAccess objects, each view's slice and marker
+//               forms on a join, a leave or a change of controller, the
+//               listen, stop listening, take control and release verbs
+//               (SliceAccessController) with the controlTaken notice, a
+//               listener's refusal words, and a lone device adopting only
+//               unclaimed slices. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control fix wave for the Tasks 1-4 review: a slice a
+//               transmit move waits to land on counts as transmitting, and
+//               a change of control clears the transmit selection of any
+//               holder whose flag is on the slice; a device that leaves,
+//               is revoked or stays away past its 180 s stops listening,
+//               and a slice kept only for it closes; a record of each
+//               device's explicit transmit choice, written only by
+//               tx.setTxSlice and the hosting desktop's own selection;
+//               each slice's onAir refreshed on every MOX step and when a
+//               transmit move starts or stops waiting. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-29: slice control plan Task 7: a slice nobody is on closes
+//               whatever the count (the Core may have none). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-29: slice control plan Task 8 (approved policy 6):
+//               releaseDeviceClaims at the end of a device's 180 s (for
+//               that absence only), leave, a token window's end, revoke and
+//               a fifth device's take; no new holds; an away device's slice
+//               may be taken during its 180 s; the away devices published
+//               for Amendment 8a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    slice.setListenLevel behind the same
+//                                    sliceAccess gate. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: the station device as a peer
+//               for the hosting desktop (invokeAsStationDevice, runInvoke,
+//               peerFor, the notice handler): its slice requests take the
+//               same dispatcher, checks and confirm step as a remote
+//               device's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: the keying gate refuses a key
+//               on a slice taken from another device and not chosen, and
+//               only an explicit choice (tx.setTxSlice, the hosting
+//               desktop's selection) clears the taken mark. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-29: slice control plan Task 17: sliceHolderWords() names who
+//               holds a slice in a refusal: the device's name, the plain
+//               word for its kind, or "another device"; the Core only for
+//               nobody or the station device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1):
+//               a slice nobody is on closes only once it stops
+//               transmitting (closeUnclaimedOrDefer, fireDeferredCloses);
+//               slice.release and slice.stopListening on the station's
+//               frozen slice are refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -809,6 +878,7 @@
 #include "core/session/IStationLink.h"
 #include "core/session/StationTelemetry.h"
 #include <QDateTime>
+#include <limits>
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include "core/station/StationRadios.h"
@@ -830,6 +900,9 @@
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SliceAccessController.h"
+#include "core/session/SliceAccessPolicy.h"
+#include "core/session/SliceAccessSet.h"
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
 #include "core/MoxController.h"
@@ -926,6 +999,18 @@ struct StationServer::PendingRelayWatch {
 };
 
 namespace {
+
+// Slice control plan Task 10: the station device's stand-in transport.
+// Nothing is written to it: send() hands what is addressed to it to the
+// hosting desktop's callbacks (StationServer::deliverToStation).
+class StationDeviceTransport final : public SessionTransport {
+public:
+    void sendText(const QByteArray&) override {}
+    void ping() override {}
+    void closeLink(const QString&) override {}
+    bool isOpen() const override { return true; }
+    QString peerDescription() const override { return QStringLiteral("this computer"); }
+};
 Q_LOGGING_CATEGORY(lcStation, "nereus.station")
 
 // The wire identities the five singleton mirrored models are watched
@@ -2094,6 +2179,24 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
     m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
                             m_supportedMajors.end());
+    // Slice control plan Task 10: the station device as a peer that shares
+    // slices, for the hosting desktop's requests (invokeAsStationDevice).
+    m_stationTransport = std::make_unique<StationDeviceTransport>();
+    m_stationPeer.transport = m_stationTransport.get();
+    m_stationPeer.description = QStringLiteral("this computer");
+    m_stationPeer.helloReceived = true;
+    m_stationPeer.authenticated = true;
+    m_stationPeer.snapshotComplete = true;
+    m_stationPeer.agreedMajor = kSessionProtocolMajor;
+    m_stationPeer.agreedMinor = kSessionProtocolMinor;
+    m_stationPeer.features = {{QByteArrayLiteral("deviceAuth"), 1},
+                              {QByteArrayLiteral("sessionHolder"), 1},
+                              {QByteArrayLiteral("sliceAccess"), 1}};
+    m_stationPeer.deviceId = SliceOwnership::stationDevice();
+    m_stationPeer.sessionDeviceId = SliceOwnership::stationDevice();
+    m_stationPeer.placeSettled = true;
+    // Above any id ++m_nextSessionId gives an admitted session.
+    m_stationPeer.sessionId = std::numeric_limits<quint64>::max();
     // iPhone app plan Task 34: the Core's blanket receive-only policy is now
     // its remote_transmit setting (setRemoteTransmitAllowed). Deny, the
     // default, keeps it as before: the hardware-owning model refuses every
@@ -2183,6 +2286,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_txGate.setTransmitHolder(m_transmitHolder.get());
     connect(m_transmitHolder.get(), &TransmitHolder::changed, this,
             &StationServer::onTransmitHolderChanged);
+    // Slice control fix wave (whole-branch review, Critical 1): the station
+    // freeze ends with the holder's key; a close waiting for it may run.
+    connect(m_transmitHolder.get(), &TransmitHolder::changed, this,
+            &StationServer::scheduleDeferredCloses);
     m_connectedDevices->setTransmitProvider([this]() {
         ConnectedDevicesFacade::TransmitState state;
         if (const auto holder = m_transmitHolder->holder()) {
@@ -2300,6 +2407,19 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             request.source = keyer.isStation() && source == PttMode::Mic
                                  ? TransmitHolder::Source::RadioPtt
                                  : TransmitHolder::Source::Device;
+            // Slice control plan Task 11 (ruling Q8): a key that would land
+            // on a slice the device took from another device and has not
+            // chosen, with no other slice it may transmit on, is refused.
+            // The radio's own PTT transmits where the flag is (ruling 8.11).
+            // Asked after the holder's own refusals, so another device's
+            // hold is still named first.
+            if (request.source == TransmitHolder::Source::Device
+                && m_transmitHolder->keyRefusalFor(request.deviceId, request.program).isEmpty()) {
+                if (const TxRefusal taken = takenSliceKeyRefusal(request.deviceId);
+                    !taken.isEmpty()) {
+                    return {KeyingVerdict::Refuse, taken};
+                }
+            }
             const quint64 epochBefore = m_transmitHolder->epoch();
             const KeyingAnswer answer = m_transmitHolder->askKey(request);
             // Fix wave 2, Important 2: a take whose key never starts (a
@@ -2335,6 +2455,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 m_transmitHolder->setKeyed(false);
             }
             m_transmitHolder->onMoxReading(on);
+            // Slice control fix wave (minor): each slice's onAir reads MOX
+            // itself (a key walking down, a move waiting for the unkey),
+            // so it is refreshed on every MOX step, not only when the
+            // holder changes.
+            if (m_sliceAccessSet) {
+                m_sliceAccessSet->refresh();
+            }
+            // Slice control fix wave (whole-branch review, Critical 1): a
+            // close waiting for the unkey runs once MOX reads off.
+            scheduleDeferredCloses();
             // Task 77 (ruling 8.1): the station device's take (the radio's
             // PTT, the Core's own keys, its VOX) no longer ends with its
             // key: the station holds transmit, unkeyed, until a device
@@ -2523,38 +2653,52 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         }
     });
     // iPhone app Task 73 (ruling 4.11): revoking a device closes its slices,
-    // held ones included, and forgets its saved layout. The Core's last
-    // slice is never closed; it stays, owned by nobody.
+    // held ones included, and forgets its saved layout. Slice control plan
+    // Task 8: a slice it controlled that others listen to stays for them.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
-        if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
-            // Fix wave: and its C-Tune pins.
-            m_radioModel->clearStreamCtunPinsAnchoredBy(id);
-            SliceOwnership* ownership = m_radioModel->sliceOwnership();
-            QList<int> slices = ownership->ownedBy(id);
-            slices += ownership->heldFor(id);
-            for (int sliceId : std::as_const(slices)) {
-                if (!closeSliceFor(sliceId, QByteArray())) {
-                    ownership->setOwner(sliceId, QByteArray());
-                }
-            }
-        }
+        // Slice control plan Task 8: every claim goes, as at the end of its
+        // 180 s; its saved layout is forgotten below.
+        releaseDeviceClaims(id, std::nullopt);
         DeviceLayoutStore::forgetDevice(AppSettings::instance(), id);
         m_slicesNotRestored.remove(id);
+        m_explicitTxSlice.remove(id);
         // iPhone app Task 74 (7.4): its questions and waiting notices go.
         m_confirm->forgetDevice(id);
     });
     // iPhone app Task 73 (ruling 4.11): the end of a device's 180 s.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
-            [this](const QByteArray& deviceId) {
+            [this](const QByteArray& deviceId, quint64 awayGeneration) {
+                // Slice control plan Task 8: only for the absence that
+                // ended (never a later one, never after it came back).
+                if (!m_deviceSessions->isCurrentAbsence(deviceId, awayGeneration)) {
+                    return;
+                }
                 // Fix wave 2: a slice another device took while this one
                 // was away lived only in its Take it back notice; now that
                 // Take it back is gone it is saved like the device's own.
                 saveTakenSlicesFor(deviceId);
-                releaseDeviceSlices(deviceId);
+                releaseDeviceClaims(deviceId, awayGeneration);
             });
+    // Slice control plan Task 8, Amendment 8a: the devices away within
+    // their 180 s, for the preselector and the several-devices questions.
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, this, [this]() {
+        if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
+            return;
+        }
+        QSet<QByteArray> away;
+        for (const DeviceSessionRegistry::Entry& entry : m_deviceSessions->entries()) {
+            if (entry.state == DeviceSessionRegistry::State::Away) {
+                away.insert(entry.deviceId);
+            }
+        }
+        m_radioModel->sliceOwnership()->setAwayDevices(away);
+    });
     // iPhone app plan Task 34 (ruling 8.15): its 180 s ended.
     connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
-            [this](const QByteArray& id) {
+            [this](const QByteArray& id, quint64 awayGeneration) {
+                if (!m_deviceSessions->isCurrentAbsence(id, awayGeneration)) {
+                    return;
+                }
                 m_transmitHolder->release(id, QStringLiteral("The device was away too long."));
             });
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
@@ -2890,8 +3034,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     return;
                 }
                 SessionTransport* to = nullptr;
-                const auto dispatching = m_peers.constFind(m_dispatchingTransport);
-                if (dispatching != m_peers.cend() && dispatching->sessionId == key.sessionId) {
+                const Peer* dispatching = m_dispatchingTransport != nullptr
+                                              ? peerPtr(m_dispatchingTransport)
+                                              : nullptr;
+                if (dispatching != nullptr && dispatching->sessionId == key.sessionId) {
                     to = m_dispatchingTransport;
                     m_resultSentInDispatch = true;
                 } else {
@@ -3174,12 +3320,104 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             &SliceMarkerSet::refreshOwners);
     connect(m_devices.get(), &DeviceStore::devicesChanged, m_markers,
             &SliceMarkerSet::refreshOwners);
+    // Slice control plan Task 4: who controls and who listens to each
+    // slice, one SliceAccess object per slice, made after the markers so a
+    // slice's object.create and its marker's go out before it. Only a view
+    // that shares slices receives them (ownershipAllows).
+    m_sliceAccessSet = new SliceAccessSet(radioModel, m_mirror, [this](int sliceId) {
+        SliceAccess::Fields fields;
+        if (!m_radioModel) {
+            return fields;
+        }
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const QByteArray controller = ownership->mark(sliceId).owner;
+        fields.controllerDeviceId = controller.isEmpty() ? QString() : wireIdOf(controller);
+        fields.controlRevision = static_cast<qint64>(ownership->controlRevision(sliceId));
+        QJsonArray listeners;
+        QJsonArray receiving;
+        for (const QByteArray& device : ownership->listenersOf(sliceId)) {
+            listeners.append(wireIdOf(device));
+            if (ownership->activeRxFor(device) == sliceId) {
+                receiving.append(wireIdOf(device));
+            }
+        }
+        fields.listenerDeviceIds =
+            QString::fromUtf8(QJsonDocument(listeners).toJson(QJsonDocument::Compact));
+        fields.activeRxDeviceIds =
+            QString::fromUtf8(QJsonDocument(receiving).toJson(QJsonDocument::Compact));
+        const SliceModel* slice = m_radioModel->sliceById(sliceId);
+        fields.txSelected = slice != nullptr && slice->txSliceMarked();
+        fields.onAir = sliceTransmitting(sliceId);
+        return fields;
+    }, this);
+    connect(m_sliceAccessSet, &SliceAccessSet::accessCreated, this,
+            [this](const QByteArray& key, const QByteArray& className,
+                   const QList<MirrorUpdate>& snapshot) {
+                sendToEveryView(SessionMessages::objectCreate(key, className, snapshot));
+            });
+    connect(m_sliceAccessSet, &SliceAccessSet::accessDestroyed, this,
+            [this](const QByteArray& key, const QByteArray& className) {
+                sendToEveryView(SessionMessages::objectDestroy(key, className));
+            });
+    if (radioModel) {
+        // Slice control plan Task 4: every view's forms of a slice as they
+        // were last decided, kept from its creation to its removal.
+        const auto noteForms = [this](int sliceId) {
+            if (m_radioModel) {
+                const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+                m_sliceForms.insert(sliceId, SliceFormState{ownership->mark(sliceId),
+                                                            ownership->listenersOf(sliceId)});
+            }
+        };
+        for (SliceModel* slice : radioModel->slices()) {
+            if (slice != nullptr) {
+                noteForms(slice->sliceIndex());
+            }
+        }
+        connect(radioModel, &RadioModel::sliceAdded, this, noteForms);
+        connect(radioModel, &RadioModel::sliceRemoved, this, [this](int sliceId) {
+            m_sliceForms.remove(sliceId);
+            for (auto it = m_takenNotChosenForTx.begin(); it != m_takenNotChosenForTx.end(); ++it) {
+                it->remove(sliceId);
+            }
+            // Fix wave (Important 4): a closed slice is nobody's choice.
+            for (auto it = m_explicitTxSlice.begin(); it != m_explicitTxSlice.end();) {
+                it = it.value() == sliceId ? m_explicitTxSlice.erase(it) : std::next(it);
+            }
+        });
+        // Fix wave (Important 4): the hosting desktop's own selection is
+        // the station device's explicit choice.
+        connect(radioModel, &RadioModel::txSliceSelected, this, [this](int sliceId) {
+            m_explicitTxSlice.insert(SliceOwnership::stationDevice(), sliceId);
+            // Task 11: a slice it took is its transmit slice once chosen.
+            m_takenNotChosenForTx[SliceOwnership::stationDevice()].remove(sliceId);
+        });
+        // The checks and the change behind slice.listen, slice.stopListening,
+        // slice.takeControl and slice.release (and, in Task 10, the hosting
+        // desktop's own window).
+        SliceAccessController::Hooks hooks;
+        hooks.transmitting = [this](int sliceId) { return sliceTransmitting(sliceId); };
+        hooks.cannotHandOff = [this](const QByteArray& controller, int sliceId) {
+            return handOffRefusal(controller, sliceId);
+        };
+        hooks.clearTransmitSelection = [this](const QByteArray& former, int sliceId) {
+            clearTransmitSelection(former, sliceId);
+        };
+        hooks.tookControl = [this](const QByteArray& taker, int sliceId) {
+            m_takenNotChosenForTx[taker].insert(sliceId);
+        };
+        hooks.close = [this](int sliceId) { return closeSliceNobodyIsOn(sliceId); };
+        m_sliceAccessController = new SliceAccessController(radioModel, std::move(hooks), this);
+        connect(m_sliceAccessController, &SliceAccessController::controlTaken, this,
+                &StationServer::tellControlTaken);
+        m_dispatcher->setSliceAccessController(m_sliceAccessController);
+    }
     // connectedDevices.listeningOn: a device's slices, their bands and
     // modes.
     m_connectedDevices->setListeningProvider(
         [this](const QByteArray& deviceId) { return listeningOn(deviceId); });
     m_dispatcher->setSliceAccess([this](const QByteArray& requester, int sliceId) {
-        return sliceRefusal(requester, sliceId);
+        return changeRefusal(requester, sliceId);
     });
     // iPhone app plan Task 34: the on-air refusals (ruling 7.4) and the
     // holder's tx.setTxSlice (ruling 8.10).
@@ -3212,6 +3450,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             const TxRefusal refusal = m_transmitHolder->keyRefusalFor(requester);
             return refusal.isEmpty() ? TxRefusals::notHolder() : refusal;
+        };
+        // Slice control fix wave (Important 4): only tx.setTxSlice writes
+        // a device's explicit transmit choice.
+        access.txSliceChosen = [this](const QByteArray& requester, int sliceId) {
+            m_explicitTxSlice.insert(requester, sliceId);
+            // Slice control plan Task 11 (ruling Q8): a slice it took is its
+            // transmit slice once it chooses it here, never by a binding
+            // it got by itself.
+            m_takenNotChosenForTx[requester].remove(sliceId);
         };
         // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
         access.keying = [this](const RemoteKeying::Command& command, RemoteKeying::Reply reply) {
@@ -3272,6 +3519,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     if (radioModel) {
         connect(radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
                 &StationServer::onSliceOwnerChanged);
+        // Slice control plan Task 4: a join or a leave (stop listening, the
+        // listener half of a claims removal) swaps that view's form too.
+        connect(radioModel->sliceOwnership(), &SliceOwnership::listenersChanged, this,
+                &StationServer::onSliceAccessChanged);
         const auto followSlice = [this](SliceModel* slice) {
             if (slice == nullptr) {
                 return;
@@ -3310,17 +3561,33 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // Ruling 8.11: the flag never moves while the station device
             // is keyed.
             arbiter->setFrozen([this]() { return stationFrozenSlice() >= 0; });
+            // Slice control fix wave: a move waiting for the unkey makes its
+            // slice read as on the air (sliceTransmitting).
+            connect(arbiter, &TxSliceArbiter::pendingHandoffChanged, this, [this](int) {
+                if (m_sliceAccessSet) {
+                    m_sliceAccessSet->refresh();
+                }
+                // Fix wave (whole-branch review, Critical 1): a close
+                // waiting on the pending slice may run now.
+                scheduleDeferredCloses();
+            });
             // Ruling 8.10: the holder's choice is remembered for the next
             // time it holds transmit; connectedDevices.transmittingOn.
             connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
                     [this](int, int newId) {
                         const auto holder = m_transmitHolder->holder();
                         if (holder && m_radioModel
-                            && m_radioModel->sliceOwnership()->mark(newId).subject()
-                                   == holder->deviceId) {
+                            && SliceAccessPolicy::mayTransmitOn(
+                                *m_radioModel->sliceOwnership(), holder->deviceId, newId)) {
                             m_chosenTxSlice.insert(holder->deviceId, newId);
+                            // Slice control plan Task 11: the taken mark goes
+                            // only on an explicit choice (txSliceChosen,
+                            // txSliceSelected), never on this binding.
                         }
                         m_connectedDevices->refresh();
+                        if (m_sliceAccessSet) {
+                            m_sliceAccessSet->refresh();
+                        }
                     });
         }
         // Fix wave I2: a question naming a slice that closed can no longer
@@ -3576,7 +3843,7 @@ void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
         ? held.result
         : SessionMessages::commandResult(held.result.commandVerb, held.result.commandId, false,
                                          refusal, {});
-    if (to != nullptr && m_peers.contains(to)) {
+    if (to != nullptr && hasPeer(to)) {
         sendToPeer(to, answer);
     }
     if (held.proceed || held.tellOnFinish) {
@@ -3601,15 +3868,15 @@ QSslConfiguration StationServer::tlsConfiguration() const
 
 quint16 StationServer::peerAgreedMajor(SessionTransport* peer) const
 {
-    const auto it = m_peers.constFind(peerKey(peer));
-    return it != m_peers.constEnd() ? it->agreedMajor : quint16(0);
+    const Peer* it = peerPtr(peer);
+    return it != nullptr ? it->agreedMajor : quint16(0);
 }
 
 bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& feature,
                                  int minVersion) const
 {
-    const auto it = m_peers.constFind(peerKey(peer));
-    if (it == m_peers.constEnd() || !it->features.contains(feature)) {
+    const Peer* it = peerPtr(peer);
+    if (it == nullptr || !it->features.contains(feature)) {
         return false;
     }
     return it->features.value(feature) >= minVersion;
@@ -3627,6 +3894,117 @@ QByteArray StationServer::encodeFor(SessionTransport* transport,
 {
     const QByteArray wire = SessionMessages::encode(message);
     return peerKnows2m(transport) ? wire : BandLinkFit::forPeerWithout2m(wire);
+}
+
+StationServer::Peer StationServer::peerFor(SessionTransport* transport) const
+{
+    if (isStationTransport(transport)) {
+        return m_stationPeer;
+    }
+    return m_peers.value(transport);
+}
+
+const StationServer::Peer* StationServer::peerPtr(SessionTransport* transport) const
+{
+    if (isStationTransport(transport)) {
+        return &m_stationPeer;
+    }
+    const auto it = m_peers.constFind(peerKey(transport));
+    return it != m_peers.constEnd() ? &it.value() : nullptr;
+}
+
+bool StationServer::hasPeer(SessionTransport* transport) const
+{
+    return isStationTransport(transport) || m_peers.contains(transport);
+}
+
+void StationServer::deliverToStation(const SessionMessage& message)
+{
+    // Slice control plan Task 10: what the Core sends the station device
+    // goes to the hosting desktop's callbacks, never onto a wire.
+    switch (message.kind) {
+    case SessionMessageKind::CommandResult: {
+        const ResultKey key{m_stationPeer.sessionId, message.commandVerb, message.commandId};
+        const auto it = m_stationAnswers.find(key);
+        if (it == m_stationAnswers.end()) {
+            return;
+        }
+        const StationAnswer answer = it.value();
+        // "Waiting for you to confirm." is not the last answer: the final
+        // one follows the question, under the same verb and id.
+        bool awaiting = false;
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == "phase"
+                && update.value.toString() == QLatin1String("needsConfirmation")) {
+                awaiting = !message.accepted;
+            }
+        }
+        if (!awaiting && isLastResult(message)) {
+            m_stationAnswers.erase(it);
+        }
+        if (answer) {
+            answer(message);
+        }
+        return;
+    }
+    case SessionMessageKind::ConfirmRequest:
+        if (m_stationQuestion) {
+            m_stationQuestion(message);
+        }
+        return;
+    case SessionMessageKind::Notice:
+        if (m_stationNotice) {
+            m_stationNotice(message);
+        }
+        return;
+    default:
+        return;
+    }
+}
+
+void StationServer::invokeAsStationDevice(const SessionMessage& invoke, StationAnswer answer,
+                                          StationAnswer question)
+{
+    static const QList<QByteArray> kHostVerbs = {
+        QByteArrayLiteral("removeSlice"),        QByteArrayLiteral("addSlice"),
+        QByteArrayLiteral("addSliceOnPan"),      QByteArrayLiteral("setActiveSliceById"),
+        QByteArrayLiteral("slice.listen"),       QByteArrayLiteral("slice.stopListening"),
+        QByteArrayLiteral("slice.takeControl"),  QByteArrayLiteral("slice.release"),
+        QByteArrayLiteral("slice.setListenLevel"), QByteArrayLiteral("confirm.proceed"),
+        QByteArrayLiteral("confirm.cancel"),     QByteArrayLiteral("notice.takeBack"),
+    };
+    if (invoke.kind != SessionMessageKind::CommandInvoke
+        || !kHostVerbs.contains(invoke.commandVerb)) {
+        if (answer) {
+            answer(SessionMessages::commandResult(
+                invoke.commandVerb, invoke.commandId, false,
+                QStringLiteral("The Core does not know this request. Updating the Core may help."),
+                {}));
+        }
+        return;
+    }
+    if (answer) {
+        m_stationAnswers.insert(
+            ResultKey{m_stationPeer.sessionId, invoke.commandVerb, invoke.commandId}, answer);
+    }
+    if (question) {
+        m_stationQuestion = std::move(question);
+    }
+    runInvoke(m_stationTransport.get(), invoke);
+}
+
+void StationServer::setStationNoticeHandler(StationAnswer notice)
+{
+    m_stationNotice = std::move(notice);
+    if (!m_stationNotice) {
+        return;
+    }
+    // Any waiting as an away device's do are handed over now.
+    const QList<ConfirmStep::Notice> waiting =
+        m_confirm->takePending(SliceOwnership::stationDevice());
+    for (const ConfirmStep::Notice& notice : waiting) {
+        sendNotice(m_stationTransport.get(), notice);
+    }
 }
 
 quint16 StationServer::serverPort() const
@@ -3881,9 +4259,27 @@ bool StationServer::peerHoldsSessions(SessionTransport* transport) const
 
 bool StationServer::peerHasSessionHolderVersion(SessionTransport* transport) const
 {
-    const auto it = m_peers.constFind(transport);
-    return it != m_peers.cend() && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+    const Peer* it = isStationTransport(transport) ? &m_stationPeer : nullptr;
+    if (it == nullptr) {
+        const auto found = m_peers.constFind(transport);
+        it = found != m_peers.cend() ? &found.value() : nullptr;
+    }
+    return it != nullptr && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerHoldsSessions(transport) && sessionHolderVersion() >= 1;
+}
+
+int StationServer::sliceAccessVersion() const
+{
+    // Slice control plan Task 4: a Core that runs its radio keeps who
+    // controls and who listens to each slice.
+    return m_radioModel && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
+}
+
+bool StationServer::peerHasSliceAccess(SessionTransport* transport) const
+{
+    return peerHasSessionHolderVersion(transport)
+        && peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 1)
+        && sliceAccessVersion() >= 1;
 }
 
 void StationServer::noteActivity(SessionTransport* transport)
@@ -4301,7 +4697,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // give up their slices now. A paired device that dropped keeps them
         // for its 180 s (graceEnded).
         if (leaving || sessionDevice.startsWith("token:")) {
-            releaseDeviceSlices(sessionDevice);
+            releaseDeviceClaims(sessionDevice, std::nullopt);
             if (!self) { return; }
         }
         // iPhone app plan Task 34 (ruling 8.15): the holder that left on
@@ -4346,7 +4742,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
                 if (!self) { return; }
             }
             // Fix wave: the C-Tune pins are not the session's. They end
-            // when their device leaves for good (releaseDeviceSlices and
+            // when their device leaves for good (releaseDeviceClaims and
             // revocation), so a device coming back keeps them (ruling 4.8).
         } else if (m_ps3SubscriberEpoch == mediaEpoch) {
             m_ps3SubscriberEpoch = 0;
@@ -4903,6 +5299,22 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to change the TX EQ curve on this Core."), {}));
             break;
         }
+        // Slice control plan Task 4: listening and control came with
+        // sliceAccessVersion 1, for a device at minor 11 whose hello
+        // declared sliceAccess with sessionHolder.
+        if ((message.commandVerb == "slice.listen" || message.commandVerb == "slice.stopListening"
+             || message.commandVerb == "slice.takeControl"
+             || message.commandVerb == "slice.release"
+             || message.commandVerb == "slice.setListenLevel")
+            && !peerHasSliceAccess(transport)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                sliceAccessVersion() < 1
+                    ? QStringLiteral("This Core cannot share slices between devices.")
+                    : QStringLiteral("Update this app to listen to and take slices on this Core."),
+                {}));
+            break;
+        }
         // R-IOS-27, R-IOS-06: a slice's band buttons came with
         // bandSelectVersion 1, in the minor-11 block.
         if (message.commandVerb == "slice.selectBand"
@@ -5088,60 +5500,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // A revoke of the requester's own device, or a token session
             // retiring the token, ends this connection only after its
             // result (sent synchronously by dispatch()) has gone out.
-            m_dispatchingTransport = transport;
-            m_pendingEnd.reset();
-            m_resultSentInDispatch = false;
-            // iPhone app Task 72 (ruling 5.8): the command acts for this
-            // session, so a DSP-asset job it starts is this device's.
-            m_dispatcher->setSessionOwner(sessionOwner(m_peers.value(transport).sessionId));
-            // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
-            // off the air, set per dispatch like the owner (checkpoint join).
-            m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
-            // Remote parity on the air (transmitSettingsVersion 13): whether
-            // this peer's transmit-setting commands are taken on the air.
-            m_dispatcher->setTransmitSettingsOnAir(takesTransmitSettingsOnAir(transport));
-            // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
-            // whose slices it may name and whose active slice it sets.
-            m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
-            // iPhone app Task 74: a receiver change may be the anchor's
-            // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
-            // iPhone app Task 75: a setting that affects every device
-            // (the several-devices design, 7.1) is asked first.
-            // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
-            // or moving it to another band, waits for the radio's press to
-            // end.
-            const QString antennaRefusal = radioAntennaRowRefusal(transport, message);
-            const TxRefusal frozen = antennaRefusal.isEmpty() ? freezeRefusalFor(message)
-                                                                 : TxRefusal{};
-            if (!antennaRefusal.isEmpty()) {
-                send(transport, SessionMessages::commandResult(
-                    message.commandVerb, message.commandId, false, antennaRefusal, {}));
-                m_resultSentInDispatch = true;
-            } else if (!frozen.isEmpty()) {
-                send(transport, SessionMessages::commandResult(
-                    message.commandVerb, message.commandId, false, frozen.text, {},
-                    {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
-                     {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
-                m_resultSentInDispatch = true;
-            } else if (!handleSharedSetting(transport, message)
-                && !handleReceiverCommand(transport, message)) {
-                m_dispatcher->dispatch(message);
-            }
-            sendHeldQuestions();
-            m_dispatcher->setRequester({});
-            m_dispatcher->setPureSignalArmingOffered(false);
-            m_dispatcher->setTransmitSettingsOnAir(false);
-            m_dispatcher->setSessionOwner({});
-            m_dispatchingTransport = nullptr;
-            // iPhone app Task 71: a result still owed (it arrives on a later
-            // turn), or a PureSignal action's later phases, goes to this
-            // session, not to whichever session holds media.
-            if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
-                m_resultRoutes.insert(
-                    ResultKey{m_peers.value(transport).sessionId, message.commandVerb,
-                              message.commandId},
-                    QPointer<SessionTransport>(transport));
-            }
+            runInvoke(transport, message);
             if (m_pendingEnd) {
                 const auto [reason, code] = *m_pendingEnd;
                 m_pendingEnd.reset();
@@ -5163,7 +5522,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     case SessionMessageKind::MediaControl: {
         // iPhone app Task 76 (the link, section 11): from each admitted
         // session, for its own media.
-        const quint64 epoch = m_peers.value(transport).mediaEpoch;
+        const quint64 epoch = peerFor(transport).mediaEpoch;
         if (epoch != 0 && mediaAvailable(epoch)) {
             emit mediaControlReceived(message.mediaPayload, epoch);
         }
@@ -5446,8 +5805,11 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         // lastSeen and lastAddress, on every authenticated connection, and
         // the short name the device sent this time (Part C fix wave: it
         // replaces the stored one when usable; outside the signed transcript).
+        // Slice control plan Task 8b: and its name, as it sends it now (a
+        // window run with a profile names the profile).
         m_devices->touch(deviceId, address,
-                         message.device ? message.device->shortName : QString());
+                         message.device ? message.device->shortName : QString(),
+                         message.device ? message.device->name : QString());
         if (const std::optional<PairedDevice> paired = m_devices->find(deviceId)) {
             name = paired->name;
             shortName = paired->shortName;
@@ -5790,7 +6152,7 @@ void StationServer::refreshHeld()
     const QList<HeldQuestion> questions = m_heldQueue;
     for (const HeldQuestion& q : questions) {
         if (q.transport && m_peers.contains(q.transport)
-            && m_peers.value(q.transport).heldSerial == q.serial) {
+            && peerFor(q.transport).heldSerial == q.serial) {
             if (m_deviceSessions->now() >= q.deadlineMs) {
                 dropPeer(q.transport, QString::fromLatin1(kCoreFullReason), true, false,
                          QString::fromLatin1(SessionEndCode::kCoreFull));
@@ -5849,7 +6211,7 @@ void StationServer::handleTakeover(SessionTransport* transport, const SessionMes
     // move can invalidate what the app last displayed.
     sendHeld(transport);
     if (!self) return;
-    if (!m_peers.contains(transport) || m_peers.value(transport).heldSerial != serial) return;
+    if (!m_peers.contains(transport) || peerFor(transport).heldSerial != serial) return;
     if (message.heldRevision != m_heldRevision) return;
     const QJsonArray candidates = heldCandidates();
     bool selectable = false;
@@ -5973,7 +6335,7 @@ void StationServer::finishTakeover(quint64 serial, const QByteArray& targetId,
         // cannot restore the incumbent's slices or place.
         saveTakenSlicesFor(targetId);
         if (!self) return;
-        releaseDeviceSlices(targetId);
+        releaseDeviceClaims(targetId, std::nullopt);
         if (!self) return;
         const auto afterSlices = m_deviceSessions->entry(targetId);
         if (!afterSlices) return;
@@ -6001,7 +6363,7 @@ void StationServer::finishTakeover(quint64 serial, const QByteArray& targetId,
         auto current = std::find_if(m_heldQueue.begin(), m_heldQueue.end(),
                                     [serial](const HeldQuestion& q) { return q.serial == serial; });
         if (current == m_heldQueue.end() || !taker || !m_peers.contains(taker)
-            || m_peers.value(taker).heldSerial != serial) return;
+            || peerFor(taker).heldSerial != serial) return;
         const HeldQuestion selected = *current;
         m_heldQueue.erase(current);
         m_peers[taker].heldSerial = 0;
@@ -6034,7 +6396,7 @@ void StationServer::sendPairFail(SessionTransport* transport, const QString& rea
                                  qint64 retryAfterMs)
 {
     send(transport, SessionMessages::pairFail(reason, std::max<qint64>(0, retryAfterMs)));
-    qCInfo(lcStation) << "Pairing refused for" << m_peers.value(transport).description << ":"
+    qCInfo(lcStation) << "Pairing refused for" << peerFor(transport).description << ":"
                       << reason;
     // A code this connection took is burned here (dropPeer).
     dropPeer(transport, reason, false, /*retryable=*/false);
@@ -6460,7 +6822,7 @@ void StationServer::handlePairFailFromDevice(SessionTransport* transport)
 
 void StationServer::promoteToSession(SessionTransport* transport)
 {
-    const QString description = m_peers.value(transport).description;
+    const QString description = peerFor(transport).description;
 
     // iPhone app Task 71: no other session is ended here, ever. The remote
     // design's section 7.1 preemption is gone (the several-devices design,
@@ -6531,7 +6893,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     qCInfo(lcStation) << "Session established with" << description;
     emit clientAuthenticated(description);
-    const quint64 epoch = m_peers.value(transport).mediaEpoch;
+    const quint64 epoch = peerFor(transport).mediaEpoch;
     if (sharesChanged) {
         emit displayBudgetChanged();
     }
@@ -6639,6 +7001,8 @@ void StationServer::buildMirror()
     m_registry->backfillExistingSlices();
     // iPhone app Task 73: and a marker for each.
     m_markers->backfill();
+    // Slice control plan Task 4: and who controls and listens to each.
+    m_sliceAccessSet->backfill();
 }
 
 bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport)
@@ -6713,7 +7077,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             result.reason = QStringLiteral("The Core owns Setup descriptions.");
             results.append(result);
         }
-        if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+        if (peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor
             && message.writeId != 0) {
             send(transport,
                  SessionMessages::propertyResult(message.objectKey, message.writeId, results));
@@ -6726,12 +7090,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     {
         QString refusal;
         bool withValues = false;
-        const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+        const QByteArray requester = peerFor(transport).sessionDeviceId;
         if (message.objectKey.startsWith("slice:")) {
             bool ok = false;
             const int sliceId = message.objectKey.mid(6).toInt(&ok);
             if (ok) {
-                refusal = sliceRefusal(requester, sliceId);
+                refusal = changeRefusal(requester, sliceId);
                 // Fix wave I2 (ruling 8.11): the transmit slice is frozen
                 // while the station device keys it.
                 if (refusal.isEmpty()) {
@@ -6771,7 +7135,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                 }
                 results.append(result);
             }
-            if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
+            if (peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor
                 && message.writeId != 0) {
                 send(transport,
                      SessionMessages::propertyResult(message.objectKey, message.writeId, results));
@@ -6833,21 +7197,21 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         previous.insert(value.name, value);
     }
     QHash<QByteArray, QString> refusals;
-    const bool negotiated = m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor;
+    const bool negotiated = peerFor(transport).agreedMinor >= kDspControlSessionProtocolMinor;
     // R-R3-46: only a peer that was offered the object may change it, and
     // only while the Core's controller is behind it.
     const bool stepAttWrite = message.objectKey == kStepAttKey;
     const bool alexWrite = message.objectKey == kAlexAntennasKey;
     QString stepAttRefusal;
     if (stepAttWrite
-        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         stepAttRefusal =
             QStringLiteral("Update this app to change the radio's attenuator on this Core.");
     } else if (stepAttWrite
                && (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound())) {
         stepAttRefusal = QStringLiteral("The Core has no attenuator ready.");
     } else if (alexWrite
-               && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+               && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         stepAttRefusal =
             QStringLiteral("Update this app to change the radio's antennas on this Core.");
     } else if (alexWrite && radioHardwareVersion() < 2) {
@@ -6895,7 +7259,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     // transmit verbs' (the transmit safety boundary).
     const bool transmitObjectWrite = message.objectKey == QByteArray(kTransmitKey);
     const TxDecision txDecision = txDecisionFor(transport);
-    const QByteArray writer = m_peers.value(transport).sessionDeviceId;
+    const QByteArray writer = peerFor(transport).sessionDeviceId;
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
@@ -7056,7 +7420,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // Ruling 5.7: this session's write. Its changes, here and on other
         // objects, are withheld from its own view and reach every other.
         const MirrorApplyResult result = m_mirror->applyInbound(
-            message.objectKey, update.name, update.value, m_peers.value(transport).view.data());
+            message.objectKey, update.name, update.value, peerFor(transport).view.data());
         if (!result.accepted) {
             refusals.insert(update.name, result.reason);
         } else if (transmitObjectWrite && update.name == "voxEnabled" && !writer.isEmpty()
@@ -7140,7 +7504,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     }
     // An older peer was never offered `stepAtt`; it gets nothing back for it.
     const bool olderStepAttPeer = (stepAttWrite || alexWrite)
-        && m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
+        && peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor;
     if (!corrections.isEmpty() && !olderStepAttPeer) {
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
@@ -7150,7 +7514,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // write's side effects can move a declared feature's property (a
         // slice's frequency moves its diversityPattern), which only a peer
         // that declared it is sent.
-        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)
+        if (fitNnrLimitToPeer(delta, peerFor(transport).agreedMinor)
             && fitTxEqCurveToPeer(transport, delta)
             && fitPeerOnlyProperties(transport, delta)
             && fitAdcAttenuatorsToPeer(transport, delta)) {
@@ -7379,7 +7743,7 @@ QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const Q
     if (!match.hasMatch() || m_radioModel.isNull()) {
         return {};
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return {};
     }
@@ -7388,11 +7752,19 @@ QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const Q
     if (!ok) {
         return {};
     }
-    // Only the slice's owner; a slice that is not live has none, so its
-    // keys (which would seed the next slice under that id) are nobody's.
+    // Only the slice's controller (slice control plan Task 2: a listener
+    // changes nothing); a slice that is not live has none, so its keys
+    // (which would seed the next slice under that id) are nobody's.
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    if (ownership->isLive(sliceId) && ownership->mark(sliceId).owner == requester) {
+    if (ownership->isLive(sliceId)
+        && SliceAccessPolicy::mayChange(*ownership, requester, sliceId)) {
         return {};
+    }
+    // Slice control plan Task 4: a listener's words to a listener that
+    // shares slices.
+    if (ownership->isLive(sliceId) && ownership->isListening(requester, sliceId)
+        && deviceSharesSlices(requester)) {
+        return listenerChangeReason(sliceId);
     }
     return ownedElsewhereReason(sliceId);
 }
@@ -7710,7 +8082,7 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
         return;
     }
     expireSettingsExports();
-    const quint64 sessionId = m_peers.value(transport).sessionId;
+    const quint64 sessionId = peerFor(transport).sessionId;
     const auto stringField = [](const QByteArray& name, const QString& value) {
         return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(value)};
     };
@@ -7753,7 +8125,7 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
         // A caller may reenter during serialization. Never hand its bytes to
         // a replacement or a closing session.
         if (!settingsExportEligible(transport)
-            || m_peers.value(transport).sessionId != sessionId) return;
+            || peerFor(transport).sessionId != sessionId) return;
         if (m_settingsExports.contains(sessionId) || m_settingsExports.size() >= 4) {
             reply(false, QStringLiteral("The Core is busy sending settings. Try again shortly."));
             return;
@@ -7826,9 +8198,74 @@ void StationServer::handleSettingsExport(SessionTransport* transport,
     reply(false, QStringLiteral("The Core does not know this settings export request."));
 }
 
+void StationServer::runInvoke(SessionTransport* transport, const SessionMessage& message)
+{
+    m_dispatchingTransport = transport;
+    m_pendingEnd.reset();
+    m_resultSentInDispatch = false;
+    // iPhone app Task 72 (ruling 5.8): the command acts for this
+    // session, so a DSP-asset job it starts is this device's.
+    m_dispatcher->setSessionOwner(sessionOwner(peerFor(transport).sessionId));
+    // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
+    // off the air, set per dispatch like the owner (checkpoint join).
+    m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
+    // Remote parity on the air (transmitSettingsVersion 13): whether
+    // this peer's transmit-setting commands are taken on the air.
+    m_dispatcher->setTransmitSettingsOnAir(takesTransmitSettingsOnAir(transport));
+    // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
+    // whose slices it may name and whose active slice it sets.
+    m_dispatcher->setRequester(peerFor(transport).sessionDeviceId);
+    // Slice control plan Task 4: and whether it shares slices.
+    m_dispatcher->setRequesterSharesSlices(peerHasSliceAccess(transport));
+    // iPhone app Task 74: a receiver change may be the anchor's
+    // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
+    // iPhone app Task 75: a setting that affects every device
+    // (the several-devices design, 7.1) is asked first.
+    // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
+    // or moving it to another band, waits for the radio's press to
+    // end.
+    const QString antennaRefusal = radioAntennaRowRefusal(transport, message);
+    const TxRefusal frozen = antennaRefusal.isEmpty() ? freezeRefusalFor(message)
+                                                         : TxRefusal{};
+    if (!antennaRefusal.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false, antennaRefusal, {}));
+        m_resultSentInDispatch = true;
+    } else if (!frozen.isEmpty()) {
+        send(transport, SessionMessages::commandResult(
+            message.commandVerb, message.commandId, false, frozen.text, {},
+            {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+             {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
+        m_resultSentInDispatch = true;
+    } else if (!handleSharedSetting(transport, message)
+        && !handleReceiverCommand(transport, message)) {
+        m_dispatcher->dispatch(message);
+    }
+    sendHeldQuestions();
+    m_dispatcher->setRequester({});
+    m_dispatcher->setRequesterSharesSlices(false);
+    m_dispatcher->setPureSignalArmingOffered(false);
+    m_dispatcher->setTransmitSettingsOnAir(false);
+    m_dispatcher->setSessionOwner({});
+    m_dispatchingTransport = nullptr;
+    // iPhone app Task 71: a result still owed (it arrives on a later
+    // turn), or a PureSignal action's later phases, goes to this
+    // session, not to whichever session holds media.
+    if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
+        m_resultRoutes.insert(
+            ResultKey{peerFor(transport).sessionId, message.commandVerb,
+                      message.commandId},
+            QPointer<SessionTransport>(transport));
+    }
+}
+
 void StationServer::send(SessionTransport* transport, const SessionMessage& message)
 {
     if (transport == nullptr) {
+        return;
+    }
+    if (isStationTransport(transport)) {
+        deliverToStation(message);
         return;
     }
     transport->sendText(encodeFor(transport, message));
@@ -7932,6 +8369,10 @@ bool StationServer::isLastResult(const SessionMessage& result)
 
 void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage& original)
 {
+    if (isStationTransport(transport)) {
+        deliverToStation(original);
+        return;
+    }
     if (transport == nullptr || !m_peers.contains(transport)) {
         return;
     }
@@ -8542,7 +8983,12 @@ bool StationServer::ownershipAllows(SessionTransport* transport,
 {
     switch (message.kind) {
     case SessionMessageKind::Schema:
-        // A marker's class only to a view with the feature.
+        // A marker's class only to a view with the feature; the access
+        // class (slice control plan Task 4) only to a view that shares
+        // slices.
+        if (message.className == "SliceAccess") {
+            return peerHasSliceAccess(transport);
+        }
         return message.className != "SliceMarker" || peerHasSessionHolderVersion(transport);
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::ObjectDestroy:
@@ -8550,6 +8996,11 @@ bool StationServer::ownershipAllows(SessionTransport* transport,
         break;
     default:
         return true;
+    }
+    // Slice control plan Task 4: who controls and who listens, to a view
+    // that shares slices, every slice's.
+    if (message.objectKey.startsWith("access:")) {
+        return peerHasSliceAccess(transport);
     }
     const bool slice = message.objectKey.startsWith("slice:");
     const bool marker = message.objectKey.startsWith("marker:");
@@ -8561,38 +9012,100 @@ bool StationServer::ownershipAllows(SessionTransport* transport,
         return false;
     }
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    int sliceId = -1;
     if (slice) {
         bool ok = false;
-        const int sliceId = message.objectKey.mid(6).toInt(&ok);
-        // Its own: owned by this device (a held slice is the station
-        // device's, so never here).
-        return ok && !peer->sessionDeviceId.isEmpty()
-            && ownership->mark(sliceId).owner == peer->sessionDeviceId;
+        sliceId = message.objectKey.mid(6).toInt(&ok);
+        if (!ok) {
+            return false;
+        }
+    } else {
+        sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
+        if (sliceId < 0) {
+            return false;
+        }
     }
-    // A marker: to a view with the feature, and never to the device whose
-    // slice it is (the one it is held for, when held).
+    // One it may see is its slice: its controller or a listener (slice
+    // control plan Task 2). A held slice is the station device's. A marker
+    // goes to a view with the feature: for one that shares slices, every
+    // slice it has not joined; for any other, never the slice of the device
+    // it is (the one it is held for, when held).
+    if (slice) {
+        return SliceAccessPolicy::maySee(*ownership, peer->sessionDeviceId, sliceId);
+    }
+    return sliceFormsFor(transport, peer->sessionDeviceId, ownership->mark(sliceId),
+                         ownership->listenersOf(sliceId))
+        .marker;
+}
+
+StationServer::SliceForms StationServer::sliceFormsFor(SessionTransport* transport,
+                                                       const QByteArray& device,
+                                                       const SliceOwnership::Mark& mark,
+                                                       const QList<QByteArray>& listeners) const
+{
+    SliceForms forms;
+    // listeners (SliceOwnership::listenersOf) names the controller first.
+    forms.slice = !device.isEmpty() && listeners.contains(device);
     if (!peerHasSessionHolderVersion(transport)) {
-        return false;
+        return forms;
     }
-    const int sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
-    return sliceId >= 0 && ownership->mark(sliceId).subject() != peer->sessionDeviceId;
+    forms.marker = peerHasSliceAccess(transport) ? !forms.slice : mark.subject() != device;
+    return forms;
+}
+
+QString StationServer::sliceHolderWords(const QByteArray& device) const
+{
+    // Slice control plan Task 17: who holds a slice, in a refusal. The Core
+    // only for a slice nobody holds or the station device holds; otherwise
+    // the device's name (the operator's own word, ruling 4.3), the plain
+    // word for its kind when it has none, and "another device" when the
+    // Core knows neither. kindWord reads an empty kind as a computer, so an
+    // empty kind is checked first.
+    if (device.isEmpty()) {
+        return QStringLiteral("the Core");
+    }
+    const std::optional<ConnectedDevicesFacade::DeviceWords> words =
+        m_connectedDevices->describe(device);
+    if (words && !words->name.isEmpty()) {
+        return words->name;
+    }
+    if (device == SliceOwnership::stationDevice()) {
+        return QStringLiteral("the Core");
+    }
+    if (words && !words->kind.isEmpty()) {
+        const QString kind = DeviceSessionRegistry::kindWord(words->kind).toLower();
+        return QStringLiteral("a %1").arg(kind);
+    }
+    return QStringLiteral("another device");
 }
 
 QString StationServer::ownedElsewhereReason(int sliceId) const
 {
-    QString owner;
-    if (m_radioModel) {
-        const QByteArray subject = m_radioModel->sliceOwnership()->mark(sliceId).subject();
-        if (const auto words = m_connectedDevices->describe(subject)) {
-            owner = words->name;
-        }
-    }
-    // The owner's name is the operator's own word (ruling 4.3), never held
+    // The holder's name is the operator's own word (ruling 4.3), never held
     // to the wording rules; the sentence around it is.
-    if (owner.isEmpty()) {
-        return QStringLiteral("That slice belongs to the Core. It can be changed only there.");
-    }
+    const QByteArray subject =
+        m_radioModel ? m_radioModel->sliceOwnership()->mark(sliceId).subject() : QByteArray();
+    const QString owner = sliceHolderWords(subject);
     return QStringLiteral("That slice belongs to %1. It can be changed only there.").arg(owner);
+}
+
+QString StationServer::listenerChangeReason(int sliceId) const
+{
+    // Slice control plan Task 2: a listener's refusal, for a window that
+    // listens (Task 4 sends it); older windows keep ownedElsewhereReason.
+    // The controller's name is the operator's own word (ruling 4.3), never
+    // held to the wording rules; the sentence around it is.
+    const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
+    const QByteArray controller =
+        m_radioModel ? m_radioModel->sliceOwnership()->mark(sliceId).owner : QByteArray();
+    if (m_radioModel && controller.isEmpty()) {
+        return QStringLiteral("Nobody controls slice %1. Take control to change it.")
+            .arg(letter);
+    }
+    const QString owner = sliceHolderWords(controller);
+    return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
+        .arg(letter)
+        .arg(owner);
 }
 
 // ── iPhone app plan Task 34: transmit ────────────────────────────────────
@@ -8769,6 +9282,10 @@ void StationServer::onTransmitHolderChanged()
     refreshTxMarks();
     // Task 77 (ruling 8.10): a new holder's transmit slice.
     bindTransmitSliceForHolder();
+    // Slice control plan Task 4: each slice's txSelected and onAir.
+    if (m_sliceAccessSet) {
+        m_sliceAccessSet->refresh();
+    }
     // Fix wave I4 (ruling 8.1): txState names the holder for every device.
     if (m_transmitState) {
         TransmitState::Holder published;
@@ -8965,7 +9482,11 @@ TxRefusal StationServer::freezeRefusalFor(const SessionMessage& message) const
         return {};
     }
     if (message.kind == SessionMessageKind::CommandInvoke
-        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand")) {
+        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand"
+            // Slice control fix wave (whole-branch review, Critical 1):
+            // leaving the frozen slice could close it under the key.
+            || message.commandVerb == "slice.release"
+            || message.commandVerb == "slice.stopListening")) {
         for (const MirrorUpdate& a : message.arguments) {
             if (a.name == "sliceId") {
                 return stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
@@ -8988,18 +9509,32 @@ TxRefusal StationServer::onAirPropertyRefusal(const QByteArray& requester,
     return transmitPath ? onAirRefusal(requester) : TxRefusal{};
 }
 
-QString StationServer::sliceRefusal(const QByteArray& requester, int sliceId) const
+QString StationServer::changeRefusal(const QByteArray& requester, int sliceId) const
 {
     if (m_radioModel.isNull() || requester.isEmpty()) {
         return {};
     }
     const SliceOwnership* ownership = m_radioModel->sliceOwnership();
     // A slice that is not there is the verb's own refusal ("no longer on
-    // the Core"), not this one.
-    if (!ownership->isLive(sliceId) || ownership->mark(sliceId).owner == requester) {
+    // the Core"), not this one. Only the controller changes a slice (slice
+    // control plan Task 2): a listener is refused like any other device.
+    if (!ownership->isLive(sliceId)
+        || SliceAccessPolicy::mayChange(*ownership, requester, sliceId)) {
         return {};
     }
+    // Slice control plan Task 4: a device that listens and shares slices
+    // is told who controls the slice and that it can take control; an
+    // older window keeps today's words.
+    if (ownership->isListening(requester, sliceId) && deviceSharesSlices(requester)) {
+        return listenerChangeReason(sliceId);
+    }
     return ownedElsewhereReason(sliceId);
+}
+
+bool StationServer::deviceSharesSlices(const QByteArray& device) const
+{
+    SessionTransport* transport = liveTransportFor(device);
+    return transport != nullptr && peerHasSliceAccess(transport);
 }
 
 QJsonArray StationServer::listeningOn(const QByteArray& deviceId) const
@@ -9121,7 +9656,8 @@ void StationServer::placeSlicesForAdmission(const QByteArray& deviceId)
     m_connectedDevices->refresh();
 }
 
-bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed)
+bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed,
+                                  bool unclaimed)
 {
     const QPointer<StationServer> self(this);
     if (m_radioModel.isNull()) {
@@ -9129,8 +9665,11 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedS
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);
     // The Core keeps one slice: its last is never closed for another
-    // device's reason.
-    if (slice == nullptr || m_radioModel->slices().size() <= 1) {
+    // device's reason. Slice control plan Task 8: a slice nobody is on
+    // closes whatever the count (the claims rule).
+    if (slice == nullptr
+        || (unclaimed ? !m_radioModel->sliceOwnership()->unclaimed().contains(sliceId)
+                      : m_radioModel->slices().size() <= 1)) {
         return false;
     }
     SavedSlice saved;
@@ -9140,7 +9679,11 @@ bool StationServer::closeSliceFor(int sliceId, const QByteArray& saveFor, SavedS
     saved.dspMode = slice->dspMode();
     const QString mac = m_radioModel->currentRadioMac();
     // Removing saves the slice's own settings to its keys first.
-    m_radioModel->removeSlice(sliceId);
+    if (unclaimed) {
+        m_radioModel->closeUnclaimedSlice(sliceId);
+    } else {
+        m_radioModel->removeSlice(sliceId);
+    }
     if (!self || !m_radioModel) return false;
     if (m_radioModel->sliceById(sliceId) != nullptr) {
         return false;
@@ -9211,11 +9754,17 @@ void StationServer::saveTakenSlicesFor(const QByteArray& deviceId)
     }
 }
 
-void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
+void StationServer::releaseDeviceClaims(const QByteArray& deviceId,
+                                        std::optional<quint64> awayGeneration)
 {
     const QPointer<StationServer> self(this);
     if (m_radioModel.isNull() || deviceId.isEmpty()
         || m_radioModel->role() != RadioModel::Role::Local) {
+        return;
+    }
+    // Slice control plan Task 8: an old expiry never acts on a device that
+    // came back (or dropped again since).
+    if (awayGeneration && !m_deviceSessions->isCurrentAbsence(deviceId, *awayGeneration)) {
         return;
     }
     // Fix wave: a device gone for good takes its C-Tune pins with it; the
@@ -9223,53 +9772,123 @@ void StationServer::releaseDeviceSlices(const QByteArray& deviceId)
     m_radioModel->clearStreamCtunPinsAnchoredBy(deviceId);
     if (!self || !m_radioModel) return;
     SliceOwnership* ownership = m_radioModel->sliceOwnership();
-    const QList<int> owned = ownership->ownedBy(deviceId);
-    const bool token = deviceId.startsWith("token:");
-    // Ruling 4.11: with another device on the Core they close (saved for a
-    // paired device); with none they keep running, the station device's,
-    // held for their owner, as a Core with one client keeps its slices. A
-    // token window cannot be recognised again: its slices pass to nobody.
-    const bool others = anotherDeviceHoldsAPlace(deviceId);
-    for (int sliceId : owned) {
-        if (others) {
-            const bool closed = closeSliceFor(sliceId, token ? QByteArray() : deviceId);
-            if (!self) return;
-            if (closed) continue;
-        }
-        if (token) {
-            ownership->setOwner(sliceId, QByteArray());
-        } else {
-            ownership->hold(sliceId, deviceId);
-        }
-        if (!self) return;
+    // Ruling Q8: the transmit selection of each slice it controlled goes
+    // with its control.
+    QList<int> controlled = ownership->ownedBy(deviceId);
+    controlled += ownership->heldFor(deviceId);
+    for (int sliceId : std::as_const(controlled)) {
+        clearTransmitSelection(deviceId, sliceId);
+        if (!self || !m_radioModel) return;
     }
+    // Approved policy 6: every control and listening claim goes at once.
+    // No slice is held for it (Q12).
+    const SliceOwnership::ClaimsRemoved removed = ownership->removeClaims(deviceId);
+    if (!self || !m_radioModel) return;
+    // A slice with nobody left on it closes, the Core's last included; one
+    // it controlled is saved for a paired device, whose next admission
+    // restores it. A slice others still listen to stays, with no
+    // controller, for them.
+    const bool token = deviceId.startsWith("token:");
+    const bool saves = !token && deviceId != SliceOwnership::stationDevice();
+    // A token window alone on the Core keeps today's rule: its slices pass
+    // to nobody and stay, so the window signing in again (with the token,
+    // or with the key it enrolled) adopts them with their tuning. It cannot
+    // be recognised, and nothing is saved for it.
+    const bool keptForAdoption = token && !anotherDeviceHoldsAPlace(deviceId);
+    // Slice control fix wave (whole-branch review, Critical 1): a slice
+    // still on the air (the radio's own PTT on it) is not closed under the
+    // key; its close waits for the unkey (closeUnclaimedOrDefer).
+    for (int sliceId : removed.releasedControl) {
+        if (keptForAdoption || !ownership->unclaimed().contains(sliceId)) {
+            continue;
+        }
+        closeUnclaimedOrDefer(sliceId, saves ? deviceId : QByteArray(), /*saveLayout=*/true);
+        if (!self || !m_radioModel) return;
+    }
+    for (int sliceId : removed.leftListening) {
+        if (ownership->unclaimed().contains(sliceId)) {
+            closeUnclaimedOrDefer(sliceId, QByteArray(), /*saveLayout=*/false);
+            if (!self || !m_radioModel) return;
+        }
+    }
+    m_explicitTxSlice.remove(deviceId);
     m_connectedDevices->refresh();
 }
 
 void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
                                         const QByteArray& oldHeldFor)
 {
+    Q_UNUSED(oldOwner);
+    Q_UNUSED(oldHeldFor);
     if (m_radioModel.isNull()) {
         return;
     }
     // Fix wave I2: a question naming a slice that changed owner can no
     // longer be proceeded.
     dropQuestionsNaming(sliceId);
+    // Slice control plan Task 4 (ruling Q8): a slice that passed from a
+    // device is no longer one it took and has not chosen to transmit on.
+    const QByteArray owner = m_radioModel->sliceOwnership()->mark(sliceId).owner;
+    for (auto it = m_takenNotChosenForTx.begin(); it != m_takenNotChosenForTx.end(); ++it) {
+        if (it.key() != owner) {
+            it->remove(sliceId);
+        }
+    }
+    // Slice control fix wave, round 2: an explicit transmit choice goes
+    // whenever the slice leaves that device's control, however it left
+    // (a layout restore, a token release and a revoke as well as take and
+    // release).
+    {
+        const SliceOwnership& ownership = *m_radioModel->sliceOwnership();
+        for (auto it = m_explicitTxSlice.begin(); it != m_explicitTxSlice.end();) {
+            it = it.value() == sliceId
+                    && !SliceAccessPolicy::mayChange(ownership, it.key(), sliceId)
+                ? m_explicitTxSlice.erase(it)
+                : std::next(it);
+        }
+    }
     // The markers name the new owner before any view is given one.
     m_markers->refreshOwners();
     // Task 77 (ruling 5.4a): the TX mark follows the owner.
     refreshTxMarks();
     m_connectedDevices->refresh();
+    // Ruling 5.8: a change of owner reaches each view as object.destroy of
+    // the form it had and object.create of the form it has now (slice
+    // control plan Task 4: decided from the forms as they were last sent,
+    // so the new controller that already listened is sent nothing).
+    onSliceAccessChanged(sliceId);
+}
+
+void StationServer::onSliceAccessChanged(int sliceId)
+{
+    if (m_radioModel.isNull()) {
+        return;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    // A slice being made or removed is announced by its own object.create
+    // and object.destroy.
+    if (!ownership->isLive(sliceId)) {
+        return;
+    }
+    const SliceFormState after{ownership->mark(sliceId), ownership->listenersOf(sliceId)};
+    const auto known = m_sliceForms.constFind(sliceId);
+    if (known == m_sliceForms.cend()) {
+        // Changed before its sliceAdded reached the views: its creation
+        // carries the forms as they are now.
+        m_sliceForms.insert(sliceId, after);
+        return;
+    }
+    const SliceFormState before = *known;
+    if (before.mark == after.mark && before.listeners == after.listeners) {
+        return;
+    }
+    m_sliceForms.insert(sliceId, after);
     if (m_ownerChangesInBurst) {
         // Every view is about to receive its whole burst again.
         return;
     }
-    const SliceOwnership::Mark before{oldOwner, oldHeldFor};
-    const SliceOwnership::Mark after = m_radioModel->sliceOwnership()->mark(sliceId);
     const QByteArray sliceKey = ObjectRegistry::keyForSlice(sliceId);
     const QByteArray markerKey = SliceMarkerSet::keyFor(sliceId);
-    // Ruling 5.8: a change of owner reaches each view as object.destroy of
-    // the form it had and object.create of the form it has now.
     const QList<SessionTransport*> transports = m_peers.keys();
     for (SessionTransport* transport : transports) {
         const auto peer = m_peers.constFind(transport);
@@ -9283,31 +9902,276 @@ void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
         if (!m_deviceSessions->entry(device)) {
             continue;
         }
-        const bool markers = peerHasSessionHolderVersion(transport);
-        const bool hadSlice = before.owner == device;
-        const bool hasSlice = after.owner == device;
-        const bool hadMarker = markers && before.subject() != device;
-        const bool hasMarker = markers && after.subject() != device;
+        const SliceForms had = sliceFormsFor(transport, device, before.mark, before.listeners);
+        SliceForms has = sliceFormsFor(transport, device, after.mark, after.listeners);
+        // Now: the one it may see (slice control plan Task 2).
+        has.slice = SliceAccessPolicy::maySee(*ownership, device, sliceId);
         const QPointer<MirrorView> view = peer->view;
-        if (hadSlice && !hasSlice) {
+        if (had.slice && !has.slice) {
             send(transport, SessionMessages::objectDestroy(sliceKey, QByteArrayLiteral("SliceModel")));
         }
-        if (hadMarker && !hasMarker) {
+        if (had.marker && !has.marker) {
             send(transport, SessionMessages::objectDestroy(markerKey, QByteArrayLiteral("SliceMarker")));
         }
-        if (!hadSlice && hasSlice && !view.isNull()) {
+        if (!had.slice && has.slice && !view.isNull()) {
             if (const QObject* object = m_mirror->watchedObject(sliceKey)) {
                 view->deliver(SessionMessages::objectCreate(
                     sliceKey, MirrorSchema::shortClassName(object->metaObject()->className()),
                     m_mirror->snapshot(sliceKey)));
             }
         }
-        if (!hadMarker && hasMarker && !view.isNull()
+        if (!had.marker && has.marker && !view.isNull()
             && m_mirror->watchedObject(markerKey) != nullptr) {
             view->deliver(SessionMessages::objectCreate(markerKey, QByteArrayLiteral("SliceMarker"),
                                                         m_mirror->snapshot(markerKey)));
         }
     }
+}
+
+// ── Slice control plan Task 4: listening and control ─────────────────────
+
+QString StationServer::wireIdOf(const QByteArray& device) const
+{
+    if (device == SliceOwnership::stationDevice()) {
+        return QString::fromLatin1(SliceOwnership::stationDevice());
+    }
+    if (const auto words = m_connectedDevices->describe(device)) {
+        return words->wireId;
+    }
+    return device.startsWith("token:") ? QString::fromLatin1(device)
+                                       : StationIdentity::toBase64Url(device);
+}
+
+bool StationServer::sliceTransmitting(int sliceId) const
+{
+    if (m_radioModel.isNull() || sliceId < 0) {
+        return false;
+    }
+    // Ruling 8.11: the slice the station freeze holds.
+    if (stationFrozenSlice() == sliceId) {
+        return true;
+    }
+    // Slice control fix wave (Critical 1): the slice a transmit move waits
+    // to land on (the unkey gate) counts as transmitting, so its control
+    // cannot pass before the flag lands there.
+    if (const TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+        arbiter != nullptr && arbiter->pendingHandoffSliceId() == sliceId) {
+        return true;
+    }
+    const SliceModel* txSlice = m_radioModel->txBoundSlice();
+    if (txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
+        return false;
+    }
+    // The transmit slice while a holder is on the air, or while MOX has
+    // not yet read off after its key ended.
+    if (onAirHolder()) {
+        return true;
+    }
+    const MoxController* mox = m_radioModel->moxController();
+    return mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
+}
+
+QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId) const
+{
+    const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
+    // Ruling Q7: control passes only from a controller that stays on as a
+    // listener, which a window that does not share slices cannot do. The
+    // Core's own position is not a device that can be asked.
+    if (controller == SliceOwnership::stationDevice()) {
+        // Slice control plan Task 8: a slice the Core keeps for a device
+        // that is not here may be taken, as an away device's slice may.
+        if (!m_radioModel.isNull() && m_radioModel->sliceOwnership()->mark(sliceId).isHeld()) {
+            return {};
+        }
+        return QStringLiteral("Slice %1 is run by the Core itself, so control of it cannot "
+                              "pass to this device.")
+            .arg(letter);
+    }
+    const QString name = planDevice(controller).name;
+    SessionTransport* transport = liveTransportFor(controller);
+    if (transport == nullptr) {
+        // Slice control plan Task 8: a device away within its 180 s stays
+        // joined as a listener and finds itself one when it returns.
+        const std::optional<DeviceSessionRegistry::Entry> away =
+            m_deviceSessions->entry(controller);
+        if (away && away->state == DeviceSessionRegistry::State::Away) {
+            return {};
+        }
+        return QStringLiteral("%1 is away, so control of slice %2 cannot pass now. Try again "
+                              "when it is back.")
+            .arg(name, letter);
+    }
+    if (!peerHasSliceAccess(transport)) {
+        return QStringLiteral("%1 needs an update before control of slice %2 can pass to "
+                              "another device.")
+            .arg(name, letter);
+    }
+    return {};
+}
+
+void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId)
+{
+    if (m_radioModel.isNull()) {
+        return;
+    }
+    // Ruling Q8 (b): its remembered transmit choice no longer names it.
+    if (!former.isEmpty() && m_chosenTxSlice.value(former, -1) == sliceId) {
+        m_chosenTxSlice.remove(former);
+    }
+    if (!former.isEmpty() && m_explicitTxSlice.value(former, -1) == sliceId) {
+        m_explicitTxSlice.remove(former);
+    }
+    // Ruling Q8 (a), ruling 8.12's close path: while a device holds
+    // transmit on this slice, the flag moves to another of the holder's
+    // slices; with none, transmit is released to nobody. Never keyed here:
+    // a take or a release of a transmitting slice was refused before this.
+    // Slice control fix wave (the review's third-holder case): the holder
+    // need not be the former controller. A device holding transmit with the
+    // flag parked on this slice loses that selection as well, the taker
+    // included (taking control grants no transmit). The radio's own PTT
+    // keeps ruling 8.11: it transmits where the flag is.
+    const SliceModel* txSlice = m_radioModel->txBoundSlice();
+    if (!m_transmitHolder || txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
+        return;
+    }
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (!holder || holder->deviceId.isEmpty()
+        || holder->source == TransmitHolder::Source::RadioPtt) {
+        return;
+    }
+    const QByteArray holderId = holder->deviceId;
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice != nullptr && slice->sliceIndex() != sliceId && arbiter != nullptr
+            && SliceAccessPolicy::mayTransmitOn(*ownership, holderId, slice->sliceIndex())) {
+            if (arbiter->requestHandoff(slice->sliceIndex(), holderId)) {
+                return;
+            }
+        }
+    }
+    qCInfo(lcStation) << "Control of the transmit slice passed; transmit is released";
+    m_transmitHolder->release(holderId,
+                              QStringLiteral("The device holding transmit no longer controls "
+                                             "its transmit slice."));
+}
+
+bool StationServer::closeSliceNobodyIsOn(int sliceId)
+{
+    if (m_radioModel.isNull() || m_radioModel->sliceById(sliceId) == nullptr) {
+        return false;
+    }
+    // Slice control plan Task 7: a slice nobody is on closes whatever the
+    // count; the Core may be left with none.
+    if (m_radioModel->sliceOwnership()->unclaimed().contains(sliceId)) {
+        // Fix wave (whole-branch review, Critical 1): not under a key; the
+        // close waits for the unkey.
+        return closeUnclaimedOrDefer(sliceId, QByteArray(), /*saveLayout=*/false);
+    }
+    // Its controller's own close (a release with nobody else on it): the
+    // last slice stays for the release to hand to nobody first.
+    if (m_radioModel->slices().size() <= 1) {
+        return false;
+    }
+    m_radioModel->removeSlice(sliceId);
+    return m_radioModel && m_radioModel->sliceById(sliceId) == nullptr;
+}
+
+bool StationServer::closeUnclaimedOrDefer(int sliceId, const QByteArray& saveFor,
+                                          bool saveLayout)
+{
+    if (m_radioModel.isNull() || m_radioModel->sliceById(sliceId) == nullptr) {
+        return false;
+    }
+    // Slice control fix wave (whole-branch review, Critical 1): a slice on
+    // the air is never closed under the key. Its close is kept for this
+    // incarnation and runs once the radio is in receive, if nobody came
+    // back to it meanwhile.
+    if (sliceTransmitting(sliceId)) {
+        DeferredClose deferred;
+        deferred.incarnation = m_radioModel->sliceOwnership()->incarnation(sliceId);
+        deferred.saveFor = saveFor;
+        deferred.saveLayout = saveLayout;
+        m_deferredCloses.insert(sliceId, deferred);
+        qCInfo(lcStation) << "A slice nobody is on closes once it stops transmitting:" << sliceId;
+        return false;
+    }
+    m_deferredCloses.remove(sliceId);
+    if (saveLayout) {
+        return closeSliceFor(sliceId, saveFor, nullptr, /*unclaimed=*/true);
+    }
+    return m_radioModel->closeUnclaimedSlice(sliceId);
+}
+
+void StationServer::scheduleDeferredCloses()
+{
+    if (m_deferredCloses.isEmpty() || m_deferredClosesQueued) {
+        return;
+    }
+    m_deferredClosesQueued = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_deferredClosesQueued = false;
+        fireDeferredCloses();
+    });
+}
+
+void StationServer::fireDeferredCloses()
+{
+    const QPointer<StationServer> self(this);
+    if (m_radioModel.isNull() || m_deferredCloses.isEmpty()) {
+        return;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const QList<int> ids = m_deferredCloses.keys();
+    for (int sliceId : ids) {
+        const auto it = m_deferredCloses.constFind(sliceId);
+        if (it == m_deferredCloses.constEnd()) {
+            continue;
+        }
+        const DeferredClose deferred = it.value();
+        // Another slice on the id, or someone on it again: nothing to close.
+        if (m_radioModel->sliceById(sliceId) == nullptr
+            || ownership->incarnation(sliceId) != deferred.incarnation
+            || !ownership->unclaimed().contains(sliceId)) {
+            m_deferredCloses.remove(sliceId);
+            continue;
+        }
+        if (sliceTransmitting(sliceId)) {
+            continue;
+        }
+        closeUnclaimedOrDefer(sliceId, deferred.saveFor, deferred.saveLayout);
+        if (!self || !m_radioModel) return;
+    }
+}
+
+void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
+                                     const QByteArray& taker)
+{
+    // Slice control plan Task 8: the station device is the former
+    // controller only of a slice it kept for a device that is not here;
+    // nobody there listens.
+    if (m_radioModel.isNull() || former.isEmpty() || former == SliceOwnership::stationDevice()) {
+        return;
+    }
+    const SliceModel* slice = m_radioModel->sliceById(sliceId);
+    if (slice == nullptr) {
+        return;
+    }
+    const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
+    ConfirmStep::Notice notice;
+    notice.device = former;
+    notice.prompt.kind = QStringLiteral("controlTaken");
+    notice.prompt.takeBack = false;
+    notice.prompt.slices = QJsonArray{QJsonObject{
+        {QStringLiteral("sliceId"), sliceId},
+        {QStringLiteral("letter"), letter},
+        {QStringLiteral("frequencyHz"), slice->frequency()},
+        {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
+        {QStringLiteral("band"), static_cast<int>(slice->band())},
+    }};
+    notice.reason = QStringLiteral("%1 took control of slice %2. You are still listening.")
+                        .arg(planDevice(taker).name, letter);
+    tellDevice(notice, taker);
 }
 
 void StationServer::setMediaEnabled(bool enabled)
@@ -9389,7 +10253,7 @@ void StationServer::publishBudgetToChangedSessions()
             continue;
         }
         const QByteArray entries = budgetEntriesFor(transport);
-        if (entries == m_peers.value(transport).publishedBudget) {
+        if (entries == peerFor(transport).publishedBudget) {
             continue;
         }
         m_peers[transport].publishedBudget = entries;
@@ -9644,24 +10508,45 @@ QList<quint64> StationServer::mediaSessionEpochs() const
 quint64 StationServer::mediaSessionEpoch() const
 {
     SessionTransport* primary = primaryMediaSession();
-    return primary != nullptr ? m_peers.value(primary).mediaEpoch : 0;
+    return primary != nullptr ? peerFor(primary).mediaEpoch : 0;
 }
 
 QByteArray StationServer::mediaSessionDevice(quint64 epoch) const
 {
     SessionTransport* transport = mediaSessionFor(epoch);
-    return transport != nullptr ? m_peers.value(transport).sessionDeviceId : QByteArray();
+    return transport != nullptr ? peerFor(transport).sessionDeviceId : QByteArray();
 }
 
-bool StationServer::mediaSessionOwnsSlice(quint64 epoch, int sliceId) const
+bool StationServer::mediaSessionControlsSlice(quint64 epoch, int sliceId) const
 {
-    // Ruling 9.1: a device's own slices, as SliceOwnership records them.
+    // Ruling 9.1: a device's own slices, as SliceOwnership records them;
+    // slice control plan Task 2: the controller only.
     const QByteArray device = mediaSessionDevice(epoch);
     if (device.isEmpty() || m_radioModel.isNull()
         || m_radioModel->sliceOwnership() == nullptr) {
         return false;
     }
-    return m_radioModel->sliceOwnership()->mark(sliceId).owner == device;
+    return SliceAccessPolicy::mayChange(*m_radioModel->sliceOwnership(), device, sliceId);
+}
+
+bool StationServer::mediaSessionHearsSlice(quint64 epoch, int sliceId) const
+{
+    const QByteArray device = mediaSessionDevice(epoch);
+    if (device.isEmpty() || m_radioModel.isNull()
+        || m_radioModel->sliceOwnership() == nullptr) {
+        return false;
+    }
+    return SliceAccessPolicy::mayHear(*m_radioModel->sliceOwnership(), device, sliceId);
+}
+
+bool StationServer::mediaSessionSeesSlice(quint64 epoch, int sliceId) const
+{
+    const QByteArray device = mediaSessionDevice(epoch);
+    if (device.isEmpty() || m_radioModel.isNull()
+        || m_radioModel->sliceOwnership() == nullptr) {
+        return false;
+    }
+    return SliceAccessPolicy::maySee(*m_radioModel->sliceOwnership(), device, sliceId);
 }
 
 bool StationServer::mediaAvailableFor(SessionTransport* transport) const
@@ -9840,7 +10725,7 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
         // What a first session would be given: the whole total.
         return displayBudgetTotalFor(nullptr);
     }
-    return displayBudgetLimits(m_peers.value(primary).mediaEpoch);
+    return displayBudgetLimits(peerFor(primary).mediaEpoch);
 }
 
 std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits(quint64 epoch) const
@@ -9946,7 +10831,7 @@ bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
 {
     // Sent only at agreed minor 11 (the minor-11 capabilities block).
     return transport != nullptr
-        && m_peers.value(transport).agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerFor(transport).agreedMinor >= kRadioIdentitySessionProtocolMinor
         && transmitSettingsVersion() >= 1;
 }
 
@@ -10287,7 +11172,7 @@ void StationServer::handleTxWatchTicket(SessionTransport* transport,
         answer(false, QStringLiteral("The Core cannot provide a separate transmit watch connection for this device."));
         return;
     }
-    const Peer& peer = m_peers.value(transport);
+    const Peer& peer = peerFor(transport);
     const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
                                                peer.txWatchGeneration,
                                                m_deviceAuth->newChallenge());
@@ -10369,7 +11254,7 @@ void StationServer::handleTxWatchRelay(SessionTransport* transport,
         answer(false, QStringLiteral("A transmit watch ticket or path is already in use. Try again shortly."));
         return;
     }
-    const Peer peer = m_peers.value(transport);
+    const Peer peer = peerFor(transport);
     const auto ticket = m_txWatchServer->issue(transport, peer.sessionId, peer.deviceId,
                                                peer.txWatchGeneration,
                                                m_deviceAuth->newChallenge());
@@ -11288,6 +12173,13 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             if (peerHoldsSessions(transport)) {
                 caps.sessionHolderEntry = true;
                 caps.sessionHolderVersion = sessionHolderVersion();
+                // Slice control plan Task 4: sharing slices, for a peer
+                // that declared sliceAccess as well; any other peer is sent
+                // no entry, so its capabilities are today's.
+                if (peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 1)) {
+                    caps.sliceAccessEntry = true;
+                    caps.sliceAccessVersion = sliceAccessVersion();
+                }
             }
             // iPhone app plan Task 34: remote transmit, last, for a peer whose
             // hello declared remoteTx 1; any other peer is sent no entry.
@@ -11618,7 +12510,7 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
                                                        accepted, reason, {}));
     };
-    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+    if (peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         answer(false, QStringLiteral("Update this app to see the Core's spots."));
         return;
     }
@@ -11964,7 +12856,7 @@ void StationServer::handleModMonitorReset(SessionTransport* transport,
         send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
                                                        accepted, reason, {}));
     };
-    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+    if (peerFor(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
         answer(false, QStringLiteral("Update this app to see the Core's modulation monitor."));
         return;
     }

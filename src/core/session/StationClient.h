@@ -389,6 +389,22 @@
 //                                    a window of a current Core that
 //                                    answers as an older one.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5:
+//               sliceAccess() (SliceAccessMirror), remoteSliceAccessAvailable,
+//               requestListen, requestStopListening, requestTakeControl,
+//               requestRelease and sliceAccessHeld. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel
+//               (slice.setListenLevel), a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: setTokenSliceAccessForTest,
+//               a remote window test's bench link declares sliceAccess
+//               with sessionHolder, as a device-key sign-in does.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -437,6 +453,7 @@ class SessionTransport;
 class SwitchableTransport;
 class MediaTunnel;
 class RemoteDevicesState;
+class SliceAccessMirror;
 class SettingsProxy;
 class TransmitState;
 class TxWatchClient;
@@ -1017,6 +1034,10 @@ public:
     // ── iPhone app plan Task 78: several devices on one Core ────────────
     /// What the Core says about the other devices (never null).
     RemoteDevicesState* remoteDevices() const { return m_remoteDevices; }
+    /// Slice control plan Task 5: who controls and who listens to each
+    /// slice on the Core, as its `access:<id>` objects say (never null;
+    /// empty on a Core without sliceAccessVersion).
+    SliceAccessMirror* sliceAccess() const { return m_sliceAccess; }
     /// The Core treats this window as a device that shares it: it signed
     /// in with this computer's own key, declared sessionHolder 1, and the
     /// Core answered sessionHolderVersion 1 at minor 11.
@@ -1033,6 +1054,11 @@ public:
     /// at once when nothing changed. Returns the command id, 0 when it
     /// could not be sent.
     quint32 requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed);
+    /// Slice control plan Task 11 (U8): `tx.setTxSlice {sliceId}`, the
+    /// holder's choice of the slice it transmits on (ruling 8.10: a keyed
+    /// move unkeys first). The answer arrives on deviceCommandFinished.
+    /// Returns the command id, 0 when it could not be sent.
+    quint32 requestTxSlice(int sliceId);
     /// `confirm.proceed {id, choice}` (-1 for a question with no choices).
     quint32 proceedQuestion(qint64 id, qint64 choice);
     /// `confirm.cancel {id}`.
@@ -1056,6 +1082,9 @@ public:
     /// numbered the token window with.
     void setTokenSessionHolderForTest(const QString& wireId)
     { m_tokenSessionHolderIdForTest = wireId; }
+    /// Test seam: with setTokenSessionHolderForTest, the bench link also
+    /// declares sliceAccess, as a device-key sign-in always does.
+    void setTokenSliceAccessForTest(bool declares) { m_tokenSliceAccessForTest = declares; }
     /// Test seam: an older window, which never declares sessionHolder.
     void setDeclaresSessionHolder(bool declares) { m_declaresSessionHolder = declares; }
 #endif
@@ -1178,6 +1207,21 @@ public:
     static QString station2mUnavailableReason();
     QString band2mUnavailableReason() const override;
     CommandOutcome requestSelectBand(int sliceId, int band) override;
+    // Slice control plan Task 5 (sliceAccessVersion 1 at minor 11): listen
+    // to, stop listening to, take control of and release a slice. The
+    // answers arrive on deviceCommandFinished; the access objects follow.
+    // setActiveSliceById (requestActiveSlice) also chooses a listened slice
+    // as this window's receive slice on such a Core.
+    bool remoteSliceAccessAvailable() const override;
+    CommandOutcome requestListen(int sliceId, quint64 incarnation) override;
+    CommandOutcome requestStopListening(int sliceId, quint64 incarnation) override;
+    CommandOutcome requestTakeControl(int sliceId, quint64 incarnation,
+                                      quint64 controlRevision) override;
+    CommandOutcome requestRelease(int sliceId, quint64 incarnation,
+                                  quint64 controlRevision) override;
+    // Task 14b: this window's own volume and mute for a listened slice.
+    CommandOutcome requestListenLevel(int sliceId, quint64 incarnation, double level,
+                                      bool muted) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
@@ -1423,11 +1467,17 @@ signals:
     /// `atMs` on the Core's clock.
     void cfcCompressionReceived(const QList<double>& binsDb, qint64 atMs);
     /// iPhone app plan Task 78: a several-devices verb was answered
-    /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack).
+    /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack; slice
+    /// control plan Task 5: slice.listen, slice.stopListening,
+    /// slice.takeControl, slice.release).
     /// `awaitingConfirmation` when the Core asked a question instead (it
     /// follows as a confirm.request).
     void deviceCommandFinished(const QByteArray& verb, quint32 commandId, bool accepted,
                                const QString& reason, bool awaitingConfirmation);
+    /// Slice control plan Task 5: a change to slice `sliceId` was held back
+    /// here because this window only listens to it; `reason` is the Core's
+    /// listener words. Nothing was sent.
+    void sliceAccessHeld(int sliceId, const QString& reason);
     /// The holder's rules or this window's ability to take transmit changed.
     void transmitTakeAvailabilityChanged();
     /// Fix wave M6: voxArmedHere() changed.
@@ -1682,11 +1732,13 @@ private:
     bool m_declaredSessionHolder = false;
     bool m_declaresSessionHolder = true;
     QString m_tokenSessionHolderIdForTest;
+    bool m_tokenSliceAccessForTest = false;
     RemoteDevicesState* m_remoteDevices = nullptr;
     /// Task 78 item 3: the device that took this window's place, from the
     /// end that stopped it, so the next session.held starts on it (Take it
     /// back). Cleared once a session is let in.
     QString m_takeBackDeviceId;
+    SliceAccessMirror* m_sliceAccess = nullptr;
     QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
     bool m_enrolledDeviceKey = false;

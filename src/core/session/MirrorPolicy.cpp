@@ -190,6 +190,9 @@
 //                 sliders own the per-band maps and a peer's write is
 //                 refused. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-28 - Slice control plan Task 4: SliceAccess, sliceId and
+//                 incarnation ConstantSnapshot, the rest Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -1000,6 +1003,19 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceMarker", "band", MirrorDirection::Outbound },
     { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
     { "SliceMarker", "psPaused", MirrorDirection::Outbound },
+
+    // Slice control plan Task 4 (sliceAccessVersion 1): who controls and
+    // who listens to each slice, read-only. Control changes only through
+    // slice.takeControl and slice.release, membership through slice.listen
+    // and slice.stopListening.
+    { "SliceAccess", "sliceId", MirrorDirection::ConstantSnapshot },
+    { "SliceAccess", "incarnation", MirrorDirection::ConstantSnapshot },
+    { "SliceAccess", "controllerDeviceId", MirrorDirection::Outbound },
+    { "SliceAccess", "controlRevision", MirrorDirection::Outbound },
+    { "SliceAccess", "listenerDeviceIds", MirrorDirection::Outbound },
+    { "SliceAccess", "activeRxDeviceIds", MirrorDirection::Outbound },
+    { "SliceAccess", "txSelected", MirrorDirection::Outbound },
+    { "SliceAccess", "onAir", MirrorDirection::Outbound },
 
     // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
     // transmitter, read-only. It changes only as the radio keys, unkeys and

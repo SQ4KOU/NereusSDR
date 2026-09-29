@@ -202,6 +202,16 @@
 //                                    for the PA Gain page's on-the-air
 //                                    holder rule. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
+//                                    plan Task 5: remoteSliceAccessAvailable
+//                                    and the listen, stop listening, take
+//                                    control and release requests
+//                                    (sliceAccessVersion 1). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 14b:
+//                                    requestListenLevel, a listened slice's
+//                                    own volume and mute. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -266,6 +276,33 @@ public:
     virtual QString band2mUnavailableReason() const { return {}; }
     virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
     { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
+
+    /// Slice control plan Task 5 (sliceAccessVersion 1 at minor 11): the
+    /// Core shares slices between devices with this window. Verbs
+    /// "slice.listen" and "slice.stopListening" (sliceId, incarnation) and
+    /// "slice.takeControl" and "slice.release" (sliceId, incarnation,
+    /// controlRevision), with the values the window was shown in the
+    /// slice's `access:<id>` object. The defaults refuse, for links that
+    /// did not negotiate it.
+    virtual bool remoteSliceAccessAvailable() const { return false; }
+    static QString sliceAccessUnavailableReason()
+    { return QStringLiteral("This Core cannot share slices with this app. Updating the Core may help."); }
+    virtual CommandOutcome requestListen(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestStopListening(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestTakeControl(int /*sliceId*/, quint64 /*incarnation*/,
+                                              quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestRelease(int /*sliceId*/, quint64 /*incarnation*/,
+                                          quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    /// Slice control plan Task 14b: "slice.setListenLevel" (sliceId,
+    /// incarnation, level 0..1, muted), this window's own volume and mute
+    /// for a slice it listens to (the flag's "Your volume").
+    virtual CommandOutcome requestListenLevel(int /*sliceId*/, quint64 /*incarnation*/,
+                                              double /*level*/, bool /*muted*/)
+    { return { false, sliceAccessUnavailableReason() }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.

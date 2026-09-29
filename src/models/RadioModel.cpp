@@ -720,6 +720,58 @@
 //                 under FIXED (console.cs:30094-30104, 30180-30185
 //                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 2: the transmit arbiter's access
+//                check, the holder's fallback on a close and
+//                setActiveSliceByIdFor ask SliceAccessPolicy.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave, round 2: a layout entry with no
+//                owner restores with nobody listening, so a lone device
+//                adopts it again. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 7: zero slices is a valid idle
+//                Core. closeUnclaimedSlice closes an unclaimed slice
+//                whatever the count, the transmit binding is released with
+//                the last slice, hasTransmitSlice gates keying, and a Core
+//                with no slice saves no layout (ruling Q10).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 8, Amendment 8a: a slice of a
+//                device that is not here does not count in the preselector
+//                choice. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 6: the slice audio view carries
+//                the AF level, and an AF change republishes it; the mixer
+//                applies AF (JJ's ruling). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 11 fix: the transmit band's tune
+//                power does not change while transmitting (Thetis's MOX
+//                gate on TXBand, console.cs [v2.10.3.15]). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave (whole-branch review, Minor 3):
+//                requestTxHandoffToSlice checks the station's access, as
+//                the remote tx.setTxSlice does. NereusSDR-original. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1057,6 +1109,7 @@ warren@wpratt.com
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
@@ -1346,6 +1399,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         };
         connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
         connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);
+        // Slice control plan Task 8, Amendment 8a: an away device's slices
+        // leave the preselector choice and count again when it is back
+        // (its hold returns, or it is no longer away).
+        connect(m_sliceOwnership, &SliceOwnership::awayChanged, this,
+                [this]() { republishAlexAdcSlices(); });
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this,
+                [this](int sliceId, const QByteArray&, const QByteArray& oldHeldFor) {
+                    if (!oldHeldFor.isEmpty() || m_sliceOwnership->mark(sliceId).isHeld()) {
+                        republishAlexAdcSlices();
+                    }
+                });
     }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
@@ -2043,8 +2107,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // iPhone app plan Task 77 (ruling 8.13): whose each slice is, each
     // owner's active slice and who holds transmit, for tx.setTxSlice, the
     // bind at a change of holder and the first bind.
-    m_txSliceArbiter->setOwnerLookup(
-        [this](int sliceId) { return m_sliceOwnership->mark(sliceId).subject(); },
+    // Slice control plan Task 2: transmit follows SliceAccessPolicy (whose
+    // slice it is; a slice a device only listens to never carries its
+    // transmit).
+    m_txSliceArbiter->setTransmitAccess(
+        [this](const QByteArray& device, int sliceId) {
+            return SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, device, sliceId);
+        },
         [this](const QByteArray& owner) { return m_sliceOwnership->activeFor(owner); });
     m_txSliceArbiter->setHolderLookup([this]() { return m_sliceOwnership->transmitHolder(); });
 
@@ -2082,12 +2151,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // The arbiter drops MOX before it flips the binding, so this always runs
     // with the transmitter unkeyed.
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
-            this, [this](int, int) {
+            this, [this](int, int newId) {
         rebindAccessorySlice();
         rebindIoBoardSlice();
         // R-R3-49 (parity Task 2): the transmit band's tune power.
         refreshTransmitTuneBand();
-        pushTxFrequencyFromTxSlice();
+        // Slice control plan Task 7: the binding released with the last
+        // slice has no frequency to push.
+        if (newId >= 0) {
+            pushTxFrequencyFromTxSlice();
+        }
         pushTxModeAndBandpass();
         applyTxAntennaFromBoundSlice();
         if (m_moxController) {
@@ -10462,6 +10535,10 @@ bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
         return false;
     }
     if (role() == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            if (reason) { *reason = slice->readOnlyListenerReason(); }
+            return false;
+        }
         const auto result = m_station ? m_station->requestNnrDiagnostics(sliceId, testMode, outputMode)
             : IStationLink::CommandOutcome{false, tr("This app is not connected to the Core.")};
         if (reason) { *reason = result.reason; }
@@ -11734,6 +11811,18 @@ QVector<int> RadioModel::allowedStreamSampleRates() const
     return out;
 }
 
+bool RadioModel::holdSliceRequestForListener(int sliceId)
+{
+    // Slice control plan Task 5. The Core refuses these from a listener as
+    // it refuses any change; holding them here keeps the window from
+    // showing a change that never happened.
+    if (m_role != Role::Remote) {
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    return slice != nullptr && slice->holdForListener();
+}
+
 // Codex review round 7, PR #293. See RadioModel.h.
 void RadioModel::applyRestoredSampleRate(SliceModel* slice)
 {
@@ -11823,6 +11912,9 @@ void RadioModel::applySavedSliceSampleRates(const QHash<int, int>& saved,
 bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(QStringLiteral("the C-Tune pin change")));
             return false;
@@ -11845,6 +11937,9 @@ bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceRetuneRejected(sliceId,
                 noStationReason(QStringLiteral("the C-Tune center change")));
@@ -12018,6 +12113,9 @@ void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
     // allocator) is the one worth putting in front of an operator. It
     // comes back through reportStationRetuneRejected().
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action =
             QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000);
         if (m_station == nullptr) {
@@ -12842,6 +12940,9 @@ void RadioModel::publishSliceAudioView()
         v.muted = s->muted();
         v.headphones = s->outputRoute() == SliceModel::OutputRoute::Headphones;
         v.vaxChannel = s->vaxChannel();
+        // Slice control plan Task 6: the AF level, applied in the mix to
+        // the controller's audio (JJ's ruling), 0..100 as 0..1.
+        v.afGain = static_cast<float>(std::clamp(s->afGain(), 0, 100)) / 100.0f;
     }
     for (int id = 0; id < AudioEngine::kMaxSliceAudioViews; ++id) {
         m_audioEngine->setSliceAudioView(id, views[static_cast<size_t>(id)]);
@@ -13034,7 +13135,25 @@ void RadioModel::clearNnrLimit(SliceModel* slice)
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
 {
     if (m_txSliceArbiter == nullptr) { return false; }
-    return m_txSliceArbiter->requestHandoff(sliceId);
+    // Slice control fix wave (whole-branch review, Minor 3): the Core's own
+    // window moves transmit only onto a slice it may carry transmit on, or
+    // one nobody is on (the station's rule, as StationTciController's);
+    // another device's slice, or one the window only listens to, is
+    // refused as the remote verb refuses it.
+    if (m_role == Role::Local && m_sliceOwnership != nullptr
+        && m_sliceOwnership->isLive(sliceId)
+        && !SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership,
+                                             SliceOwnership::stationDevice(), sliceId)
+        && !SliceAccessPolicy::stationMayChangeUnclaimed(*m_sliceOwnership, sliceId)) {
+        emit m_txSliceArbiter->handoffBlocked(sliceId,
+                                              QStringLiteral("That slice is another device's."));
+        return false;
+    }
+    if (!m_txSliceArbiter->requestHandoff(sliceId)) {
+        return false;
+    }
+    emit txSliceSelected(sliceId);
+    return true;
 }
 
 int RadioModel::addSlice(const QString& initialPanId)
@@ -13130,6 +13249,11 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // once, as an ordinary new slice does, instead of waiting for
     // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
+    // Slice control plan Task 5: a change held back on a slice a remote
+    // window only listens to is announced once, here, for the window.
+    connect(slice, &SliceModel::listenerWriteHeld, this, [this, slice](const QString& reason) {
+        emit sliceRequestHeldForListener(slice->sliceIndex(), reason);
+    });
     // Most persisted slice signals are wired by wireSliceSignals only once a
     // radio connects. A disconnected station still exposes writable receiver
     // properties, so track their edits while layout persistence is held.
@@ -13267,6 +13391,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     connect(slice, &SliceModel::outputRouteChanged, this,
             [this](SliceModel::OutputRoute) { publishSliceAudioView(); });
     connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
+    connect(slice, &SliceModel::afGainChanged, this, [this](int) { publishSliceAudioView(); });
     publishSliceAudioView();
 
     // ── The transmitter needs a home the moment one exists ───────────────
@@ -13594,7 +13719,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         if (slice == txBoundSlice()) {
             pushTxFrequencyFromTxSlice();
             // R-R3-49 (parity Task 2): the transmit band's tune power.
-            refreshTransmitTuneBand();
+            // Slice control plan Task 11 fix: the band holds while the
+            // Core transmits (MOX, TUNE or two-tone), as Thetis's TXBand
+            // setter and SetTXBand refuse a change under MOX:
+            // From Thetis console.cs:17517-17518 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // From Thetis console.cs:6512-6513 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // Nothing re-evaluates on the unkey; the next retune carries
+            // the band, as in Thetis. A move of the binding is not gated:
+            // the arbiter unkeys before it moves transmit (ruling 8.10).
+            if (!isTransmitting()) {
+                refreshTransmitTuneBand();
+            }
         }
     });
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
@@ -13737,6 +13876,9 @@ void RadioModel::removeSlice(int sliceId)
     // STATION made. removeSliceWithStationId() is the door the session's
     // own inbound object.destroy comes through.
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action = QStringLiteral("the request to close this slice");
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(action));
@@ -13751,7 +13893,24 @@ void RadioModel::removeSlice(int sliceId)
     removeSliceImpl(sliceId);
 }
 
-void RadioModel::removeSliceImpl(int sliceId, bool persist)
+bool RadioModel::closeUnclaimedSlice(int sliceId)
+{
+    // Slice control plan Task 7: the claims rule. A slice closes when it has
+    // no controller and nobody on it, whatever the count.
+    if (m_role != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->unclaimed().contains(sliceId)) {
+        return false;
+    }
+    removeSliceImpl(sliceId, true, true);
+    return sliceById(sliceId) == nullptr;
+}
+
+bool RadioModel::hasTransmitSlice() const
+{
+    return txBoundSlice() != nullptr;
+}
+
+void RadioModel::removeSliceImpl(int sliceId, bool persist, bool mayCloseLast)
 {
     const int position = m_slices.indexOf(sliceById(sliceId));
     if (position < 0) {
@@ -13765,7 +13924,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // window's last slice when the window shares the Core as a device
     // (another device took its receiver); the window shows an empty band
     // that offers a take (the several-devices design, section 12).
-    if (m_slices.size() == 1
+    // Slice control plan Task 7: and the claims rule's close of an
+    // unclaimed slice (closeUnclaimedSlice), which may leave none.
+    if (m_slices.size() == 1 && !mayCloseLast
         && !(m_role == Role::Remote && m_stationMayCloseLastSlice)) {
         return;
     }
@@ -13798,7 +13959,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         // from being re-admitted on the victim's behalf.
         clearRadeRxTarget(m_radeRxTarget.ownerSerial);
     }
-    if (victim->isTxSlice() && m_txSliceArbiter) {
+    // Slice control plan Task 7: the last slice has no other slice to hand
+    // transmit to; the binding is released once it has left the list.
+    if (victim->isTxSlice() && m_txSliceArbiter && m_slices.size() > 1) {
         const int fallbackPosition = (position == 0) ? 1 : 0;
         SliceModel* fallback = m_slices.at(fallbackPosition);
         // iPhone app plan Task 77 (ruling 8.12): the holder's transmit slice
@@ -13811,7 +13974,7 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
                 for (int id : m_sliceOwnership->ownedBy(holder)) {
                     SliceModel* own = sliceById(id);
                     if (own != nullptr && own != victim
-                        && m_sliceOwnership->mark(id).subject() == holder) {
+                        && SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, holder, id)) {
                         fallback = own;
                         break;
                     }
@@ -13848,6 +14011,10 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // Reassert the invariant after the victim leaves the list.
     if (m_txSliceArbiter) {
         m_txSliceArbiter->syncToSliceList();
+        // Slice control plan Task 7: no slice left, so no transmit slice.
+        if (m_slices.isEmpty()) {
+            m_txSliceArbiter->releaseBinding();
+        }
     }
 
     // No explicit wideband push here. removeSlice reaches
@@ -15015,11 +15182,27 @@ void RadioModel::refreshFreedvReportedFrequency()
 
 bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
 {
+    // Slice control plan Task 2: only a slice `owner` may change.
     if (role() != Role::Local || sliceById(sliceId) == nullptr
-        || m_sliceOwnership->mark(sliceId).owner != owner) {
+        || !SliceAccessPolicy::mayChange(*m_sliceOwnership, owner, sliceId)) {
         return false;
     }
     m_sliceOwnership->setActive(owner, sliceId);
+    applyActiveSlices();
+    return true;
+}
+
+bool RadioModel::setActiveRxFor(const QByteArray& device, int sliceId)
+{
+    // Slice control plan Task 3: any joined slice may be the device's
+    // receive focus; only one it may change is also its active slice.
+    if (role() != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->setActiveRx(device, sliceId)) {
+        return false;
+    }
+    if (SliceAccessPolicy::mayChange(*m_sliceOwnership, device, sliceId)) {
+        m_sliceOwnership->setActive(device, sliceId);
+    }
     applyActiveSlices();
     return true;
 }
@@ -15359,6 +15542,12 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
     if (!slice) {
         // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    // Slice control plan Task 5: a band change on a slice a remote window
+    // only listens to is held back, whichever path would carry it.
+    if (m_role == Role::Remote && holdSliceRequestForListener(slice->sliceIndex())) {
         return;
     }
 
@@ -18668,6 +18857,15 @@ void RadioModel::installBandPlanMoxCheck()
             refused.refusalCode = TxRefusals::kNotReady;
             return refused;
         }
+        // Slice control plan Task 7: a Core with no slice has nothing to
+        // transmit on; every key is refused, the radio's own PTT included,
+        // before any other check.
+        if (!hasTransmitSlice()) {
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
+        }
 
         bool regionOk = false;
         const int regionInt = AppSettings::instance()
@@ -18684,7 +18882,12 @@ void RadioModel::installBandPlanMoxCheck()
 
         const SliceModel* slice = txBoundSlice();
         if (!slice) {
-            return {false, QStringLiteral("No slice is set to transmit.")};
+            // Checked above (hasTransmitSlice); kept as the guard for the
+            // dereference below.
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
         }
 
         // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX
@@ -21035,6 +21238,14 @@ void RadioModel::republishAlexAdcSlices()
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s == nullptr) { continue; }
 
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it)
+        // never widens a filter for the devices that are.
+        if (m_role == Role::Local && m_sliceOwnership != nullptr
+            && m_sliceOwnership->isAwaySlice(s->sliceIndex())) {
+            continue;
+        }
+
         // An unbound slice has no DDC, so it is not on any chain and must not
         // drag a filter wide on behalf of a receiver that is not running.
         // chainForStream returns -1 for exactly that case.
@@ -22002,6 +22213,17 @@ bool RadioModel::captureReceiveLayout(QString* error)
     if (!m_receiveLayoutManaged) {
         return true;
     }
+    // Slice control plan Task 7 (ruling Q10): a Core left with no slice
+    // saves no layout, so a restart starts as a first start does, with one
+    // Slice A nobody owns. Never reached before admission (the pending and
+    // protected guards of every caller).
+    if (m_slices.isEmpty()) {
+        ReceiveLayoutStore::forget(AppSettings::instance(), m_receiveLayoutMac);
+        if (error) {
+            error->clear();
+        }
+        return true;
+    }
     QList<ReceiveSliceState> slices;
     bool hasRadeMode = false;
     for (const SliceModel* slice : std::as_const(m_slices)) {
@@ -22154,6 +22376,16 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
             m_sliceOwnership->hold(state.id, state.owner);
         } else {
             m_sliceOwnership->setOwner(state.id, QByteArray());
+            // Slice control fix wave, round 2: listeners are not part of a
+            // layout (ruling Q11), so an entry with no owner restores with
+            // nobody on it. Its former controller stays joined through the
+            // owner change, which left the slice released to a listener
+            // that ruling Q9 never lets adopt it: the lone device read
+            // "Nobody controls" on its own slice.
+            const QList<QByteArray> listeners = m_sliceOwnership->listenersOf(state.id);
+            for (const QByteArray& device : listeners) {
+                m_sliceOwnership->leave(device, state.id);
+            }
         }
     }
     m_sliceOwnership->setOrder(order);
@@ -29276,7 +29508,8 @@ void RadioModel::stopExternalDiversityRoute()
 
 // Codex review, PR #293. See RadioModel.h for the defect and for why this
 // rehomes instead of removing.
-int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
+int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds,
+                                   const PanScope* scope)
 {
     if (livePanIds.isEmpty()) {
         return 0;
@@ -29286,6 +29519,9 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
     int moved = 0;
     for (SliceModel* s : std::as_const(m_slices)) {
         if (!s) { continue; }
+        // Scoped: only a slice this window controls is its to move. Writing
+        // the shared pan key of any other slice moves it for its controller.
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         if (livePanIds.contains(s->panKey())) { continue; }
         // setPanKey emits panKeyChanged, which is what MainWindow needs in
         // order to move the slice's VfoWidget onto the surviving pan. Its
@@ -29295,6 +29531,19 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
         ++moved;
     }
     return moved;
+}
+
+// Slice control and listening, layout change rule. See RadioModel.h.
+QList<int> RadioModel::listenedOffPans(const QStringList& panIds,
+                                       const PanScope& scope) const
+{
+    QList<int> off;
+    for (auto it = scope.listenedOn.constBegin(); it != scope.listenedOn.constEnd(); ++it) {
+        if (scope.controlled.contains(it.key())) { continue; }
+        if (!panIds.contains(it.value())) { off << it.key(); }
+    }
+    std::sort(off.begin(), off.end());
+    return off;
 }
 
 // See RadioModel.h.
@@ -29323,21 +29572,27 @@ bool RadioModel::panHasSlicesFor(const QString& panId, const QByteArray& owner,
 }
 
 // Codex review round 5, PR #293. See RadioModel.h.
-int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
+int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                          const PanScope* scope)
 {
+    auto movable = [scope](const SliceModel* s) {
+        return s && (!scope || scope->controlled.contains(s->sliceIndex()));
+    };
     int moved = 0;
-    for (const QString& emptyPan : pansWithoutSlices(panIds)) {
+    for (const QString& emptyPan : pansWithoutSlices(panIds, scope)) {
         // Find a pan carrying more than one slice and take one of its
         // extras. Recounted every iteration, because the previous move
-        // changed the occupancy this decision rests on.
+        // changed the occupancy this decision rests on. Scoped, only
+        // controlled slices count and only they may donate: a listened
+        // slice sharing a pan with a controlled one is never moved.
         QHash<QString, int> occupancy;
         for (const SliceModel* s : m_slices) {
-            if (s) { occupancy[s->panKey()] += 1; }
+            if (movable(s)) { occupancy[s->panKey()] += 1; }
         }
 
         SliceModel* donor = nullptr;
         for (SliceModel* s : std::as_const(m_slices)) {
-            if (!s) { continue; }
+            if (!movable(s)) { continue; }
             if (occupancy.value(s->panKey()) > 1) { donor = s; break; }
         }
         if (!donor) {
@@ -29354,13 +29609,22 @@ int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
 }
 
 // Codex review round 4, PR #293. See RadioModel.h.
-QStringList RadioModel::pansWithoutSlices(const QStringList& panIds) const
+QStringList RadioModel::pansWithoutSlices(const QStringList& panIds,
+                                          const PanScope* scope) const
 {
     QSet<QString> occupied;
     for (const SliceModel* s : m_slices) {
         if (!s) { continue; }
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         const QString key = s->panKey();
         if (!key.isEmpty()) { occupied.insert(key); }
+    }
+    if (scope) {
+        // A listened slice occupies the pan this window placed it on.
+        for (auto it = scope->listenedOn.constBegin();
+             it != scope->listenedOn.constEnd(); ++it) {
+            if (!it.value().isEmpty()) { occupied.insert(it.value()); }
+        }
     }
 
     QStringList empty;

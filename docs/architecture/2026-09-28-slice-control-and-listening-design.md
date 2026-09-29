@@ -155,17 +155,23 @@ The resulting mapping:
   joined slice is visible in one of this device's pans, so there are no
   tabs for hidden joined slices. Listening disables shared tuning and DSP
   edits, with the controller named and Take control reachable. Volume and
-  mute stay on the existing AF slider and mute (U5); the RX applet has none
-  today (the flag and title bar are the audio surfaces), and the current
-  audio plumbing does not yet provide the per-device mix U5 needs.
+  mute stay on the existing AF slider and mute (U5), which Task 14b made
+  each listener's own level in the audio mixer; the RX applet has no volume
+  or mute (the flag and title bar are the audio surfaces).
 - TX stays explicitly bound to the selected transmit slice even when a
   different slice is selected for receive. The TX applet's letter row (U8)
   selects among this device's controlled slices through the existing
   transmit-slice behavior (while keyed it unkeys, then moves). The current
   active-RX-dependent TX applet bindings need a safety audit when this is
   implemented.
-- A new view of an existing slice does not create a physical receiver or
-  change shared tuning. Replacing or hiding a view no longer retains
+- If a slice is already visible, focus its existing pane, including a
+  floating pane (U2: the floater comes forward and the slice becomes this
+  window's RX; nothing moves). If unseen, it goes into the main window
+  (U1): an empty main-window pane, else the window grows to the next layout
+  that fits in the single window, else the operator picks a destination.
+  Growing adds no slice to any other empty pane and never opens a floating
+  pane. A new view of an existing slice does not create a physical receiver
+  or change shared tuning. Replacing or hiding a view no longer retains
   listening: U7 supersedes the earlier proposal that listening continue
   until an explicit leave, and the earlier proposal of RX applet tabs for
   hidden joined slices.

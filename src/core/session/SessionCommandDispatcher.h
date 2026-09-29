@@ -204,6 +204,29 @@
 //                                    (transmitSettingsVersion 15) through
 //                                    CfcProfileAccess. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    slice access check is the change
+//                                    predicate (SliceAccessPolicy), so a
+//                                    listener's verbs are refused.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    slice.listen, slice.stopListening,
+//                                    slice.takeControl and slice.release
+//                                    (SliceAccessController);
+//                                    setActiveSliceById on a listened
+//                                    slice, and removeSlice from a
+//                                    controller others listen with as a
+//                                    release (ruling Q6).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Important 4):
+//                                    TransmitAccess::txSliceChosen, a
+//                                    device's explicit tx.setTxSlice
+//                                    choice. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    handleSliceListenLevel for
+//                                    slice.setListenLevel. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -226,6 +249,7 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceAccessController;
 class SliceModel;
 class StationRadios;
 
@@ -334,6 +358,16 @@ public:
     /// a new slice has no owner and setActiveSliceById moves the one active
     /// slice.
     void setRequester(const QByteArray& device) { m_requester = device; }
+    /// Slice control plan Task 4: the listen, stop listening, take control
+    /// and release checks (StationServer's). Not owned. Without one
+    /// slice.listen, slice.stopListening, slice.takeControl and
+    /// slice.release are refused in plain words.
+    void setSliceAccessController(SliceAccessController* controller);
+    /// Slice control plan Task 4: whether the requester of the dispatches
+    /// that follow shares slices (sliceAccessVersion 1 reached it): its
+    /// setActiveSliceById may name any slice it listens to. The Core sets
+    /// it with the requester and clears it after.
+    void setRequesterSharesSlices(bool shares) { m_requesterSharesSlices = shares; }
     /// Fix wave after the several-devices group review: the next
     /// requestSliceSampleRate dispatched (a confirmed rate change) closes
     /// `closing` through `close`, and only once the change is certain
@@ -363,6 +397,9 @@ public:
     }
     /// The plain refusal for `requester` naming `sliceId`, or empty when it
     /// may: "That slice belongs to <owner>. It can be changed only there."
+    /// Slice control plan Task 2: the change predicate
+    /// (SliceAccessPolicy::mayChange through StationServer::changeRefusal),
+    /// so a device that only listens to a slice is refused too.
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
     void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
 
@@ -381,6 +418,9 @@ public:
     struct TransmitAccess {
         std::function<TxRefusal(const QByteArray& requester)> onAir;
         std::function<TxRefusal(const QByteArray& requester)> txSlice;
+        /// Slice control fix wave (Important 4): tx.setTxSlice from
+        /// `requester` was accepted for `sliceId`, its explicit choice.
+        std::function<void(const QByteArray& requester, int sliceId)> txSliceChosen;
         std::function<void(const RemoteKeying::Command& command, RemoteKeying::Reply reply)>
             keying;
         /// Task 37 (R-IOS-13): tx.keepalive {sequence, epoch} from
@@ -591,6 +631,12 @@ private:
     void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
     // iPhone app Task 74 (R-IOS-30, sessionHolderVersion 1).
     void handleConfirmAnswer(const NereusSDR::SessionMessage& invoke);
+    // Slice control plan Task 4 (sliceAccessVersion 1): slice.listen,
+    // slice.stopListening, slice.takeControl and slice.release.
+    void handleSliceAccessVerb(const NereusSDR::SessionMessage& invoke);
+    // Slice control plan Task 6: slice.setListenLevel, a listener's own
+    // level and mute (SliceAccessController::setListenLevel).
+    void handleSliceListenLevel(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
@@ -606,6 +652,9 @@ private:
     std::function<void(int)> m_rateClose;
     QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
+    // Slice control plan Task 4.
+    QPointer<SliceAccessController> m_sliceAccessController;
+    bool m_requesterSharesSlices = false;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
     TxEqCurveAccess m_txEqCurveAccess;

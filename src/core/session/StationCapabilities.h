@@ -205,6 +205,10 @@
 //   2026-09-29 - kTransmitSettingsCfcProfileVersion (15): the CFC band
 //                editor published and cfc.setProfile. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 4: sliceAccessVersion, appended
+//                after radioAntennaRowsVersion, only for a peer that
+//                declared sliceAccess with sessionHolder. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -398,6 +402,16 @@ struct StationCapabilities {
     /// paTransmitBand 1, on a Core with a radio model; any other peer's
     /// capabilities and radio object are today's.
     int paTransmitBandVersion = 0;
+    /// Slice control plan Task 4: 1 means the Core sends a `SliceAccess`
+    /// object per slice (`access:<id>`), the joined slices as `slice:<id>`
+    /// and every other as `marker:<id>`, and takes slice.listen,
+    /// slice.stopListening, slice.takeControl and slice.release. Appended
+    /// after paTransmitBandVersion in the minor-11 block, and only to a
+    /// peer whose hello declared `sliceAccess` 1 with sessionHolder and
+    /// deviceAuth (sliceAccessEntry); any other peer is sent no entry and
+    /// reads 0, so its descriptor is exactly today's.
+    bool sliceAccessEntry = false;
+    int sliceAccessVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

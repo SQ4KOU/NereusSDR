@@ -147,6 +147,9 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
 //               confirm.request holder (takeTransmit). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the
+//               notice kind controlTaken documented. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -372,7 +375,8 @@ struct SessionPrompt {
     /// Both: confirm.request panMove, takeReceiver, takeSlice (Tasks 75 and
     /// 77 add sharedSetting and takeTransmit); notice sliceMoved,
     /// sliceClosed, receiverTaken, sliceTaken, transmitTaken (Task 77),
-    /// graceEnded, slicesNotRestored.
+    /// graceEnded, slicesNotRestored; controlTaken (slice control plan
+    /// Task 4).
     QString kind;
 
     // ── confirm.request ─────────────────────────────────────────────────

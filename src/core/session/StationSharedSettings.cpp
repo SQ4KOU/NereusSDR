@@ -98,6 +98,18 @@
 //               slice A's ADC, rx2AttenuationDb the other ADC's (both while
 //               diversity links them). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: a verb
+//               naming a slice the requester may not change
+//               (changeRefusal) is left to the dispatcher's refusal.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8, Amendment 8a: a slice of a
+//               device that is not here is never named in a question. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: requesters are read through
+//               peerFor, so the station device is one. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -393,6 +405,12 @@ DisturbanceCheck::Topology StationServer::sharedTopology() const
         if (slice == nullptr) {
             continue;
         }
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it) is
+        // never named in a question; the change still reaches it. It stays
+        // in the topology so ruling 7.1a can tell its device on its return
+        // (and close it when a rate cannot keep it); connectedAffected()
+        // leaves it out of the question.
         DisturbanceCheck::SliceInfo info;
         info.sliceId = slice->sliceIndex();
         info.device = ownership != nullptr ? ownership->mark(info.sliceId).subject() : QByteArray();
@@ -1334,8 +1352,22 @@ QList<DisturbanceCheck::Affected> StationServer::connectedAffected(
     const QList<DisturbanceCheck::Affected>& affected) const
 {
     QList<DisturbanceCheck::Affected> connected;
+    const SliceOwnership* ownership =
+        m_radioModel.isNull() ? nullptr : m_radioModel->sliceOwnership();
     for (const DisturbanceCheck::Affected& a : affected) {
-        if (planDevice(a.device).state != QLatin1String("away")) {
+        if (planDevice(a.device).state == QLatin1String("away")) {
+            continue;
+        }
+        // Slice control plan Task 8, Amendment 8a: a device whose disturbed
+        // slices are all away slices (kept for it) is not here to ask.
+        bool here = ownership == nullptr || a.slices.isEmpty();
+        for (const DisturbanceCheck::AffectedSlice& s : a.slices) {
+            if (ownership == nullptr || !ownership->isAwaySlice(s.sliceId)) {
+                here = true;
+                break;
+            }
+        }
+        if (here) {
             connected.append(a);
         }
     }
@@ -1497,7 +1529,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
         return false;
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return false;
     }
@@ -1505,7 +1537,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     // own check (ruling 5.9), before anything is asked.
     if (message.kind == SessionMessageKind::CommandInvoke) {
         const int sliceId = intArgument(message.arguments, "sliceId");
-        if (sliceId >= 0 && !sliceRefusal(requester, sliceId).isEmpty()) {
+        if (sliceId >= 0 && !changeRefusal(requester, sliceId).isEmpty()) {
             return false;
         }
     }
@@ -1749,7 +1781,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         later.closedDevices = closedDevices;
         // Fix wave I1: keyed by the asking session, so another device's
         // rate change with the same command id never finishes this one.
-        const quint64 session = m_peers.value(transport).sessionId;
+        const quint64 session = peerFor(transport).sessionId;
         m_deferredProceeds.insert(
             ResultKey{session, question.original.commandVerb, question.original.commandId},
             later);
@@ -1819,7 +1851,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     if (result.accepted && m_holdingRadioChange && !m_heldRadioChange
         && question.target == QLatin1String("radio")) {
         HeldRadioChange held;
-        held.key = ResultKey{m_peers.value(transport).sessionId, invoke.commandVerb,
+        held.key = ResultKey{peerFor(transport).sessionId, invoke.commandVerb,
                              invoke.commandId};
         held.result = result;
         held.proceed = true;
@@ -1867,7 +1899,7 @@ bool StationServer::finishDeferredProceed(const ResultKey& key, const SessionMes
     // The proceed's own route (recorded because its answer came later) is
     // used here, and goes.
     m_resultRoutes.remove(ResultKey{key.sessionId, later.proceedVerb, later.proceedId});
-    if (!later.transport.isNull() && m_peers.contains(later.transport.data())) {
+    if (!later.transport.isNull() && hasPeer(later.transport.data())) {
         sendToPeer(later.transport.data(),
                    SessionMessages::commandResult(later.proceedVerb, later.proceedId,
                                                   result.accepted, result.reason,

@@ -10,6 +10,10 @@
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: ownsSlice
+//               split into controlsSlice, hearsSlice and seesSlice. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the media `replace`
 //               operation: a second peer beside the current one, audio on
 //               both across the move, displays on a keyframe, the old one
@@ -64,6 +68,9 @@
 //               monitor-audio; while its device holds transmit and MON is
 //               on, MON rides in its main or headphones stream. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 6: the owner mix also sums the
+//               slices this device listens to, at its own listen level.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -284,6 +291,10 @@ public:
     /// integration tests. Endpoint internals remain session-private.
     int activeEndpointCount() const;
     int activeSourceCount() const;
+    /// Test hook (slice control plan Task 4): every audio sender this
+    /// session runs now (the speakers' mix, the headphones mix, each
+    /// receiver stream's), so a test can see none was remade.
+    QList<const DaemonAudioSender*> audioSendersForTest() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
     /// The Opus target, bit/s, for the speakers' mix and the headphones mix
     /// this controller sends (R-R3-23: nereusd's audio_bitrate). Applies to
@@ -483,7 +494,11 @@ private:
     void acquireOwnerMix();
     void releaseOwnerMix();
     void refreshOwnerMixMask();
-    bool ownsSlice(int sliceId) const;
+    /// Slice control plan Task 2 (SliceAccessPolicy): whether this
+    /// session's device controls, may hear, or may see `sliceId`.
+    bool controlsSlice(int sliceId) const;
+    bool hearsSlice(int sliceId) const;
+    bool seesSlice(int sliceId) const;
     /// Every endpoint on `key` of every controller sharing the engines.
     template <typename Fn>
     void forEachSharedEndpoint(const MediaSourceKey& key, Fn&& fn);
@@ -708,6 +723,9 @@ private:
     DaemonSpectrumSource& m_source;
     QMap<MediaSourceKey, SourceRuntime>& m_sources;
     int m_ownerMix{-1};
+    // Slice control plan Task 6: follows this device's listen levels while
+    // it holds an owner mix.
+    QMetaObject::Connection m_listenLevelConnection;
     /// coreBusyLimitsSources() as last applied to the sources.
     bool m_transformsFollowFrameRate = false;
     NoiseFloorEstimator m_noiseFloorEstimator;

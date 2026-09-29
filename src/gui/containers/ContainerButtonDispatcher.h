@@ -45,6 +45,12 @@
 //   2026-09-27  J.J. Boyd / KG4VCF  A11 / R-R3-49 (parity Task 31): the
 //                                    DUP hooks (display duplex).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 15 fix round
+//                                    1: the sliceRefusal hook refuses a
+//                                    slice another device controls with
+//                                    the RX applet's reason, in remote and
+//                                    hosting windows. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -78,6 +84,10 @@ public:
         std::function<void()> togglePower;
         // Present only while this local window hosts the Core.
         std::function<bool()> desktopHosting;
+        // Slice control plan Task 15 fix round 1: why this window may not
+        // change a slice (one another device controls, the RX applet's
+        // reason), empty when it may. Local and remote windows alike.
+        std::function<QString(int sliceId)> sliceRefusal;
         std::function<bool()> desktopMoxOn;
         std::function<bool()> desktopTuneOn;
         std::function<void(bool)> requestDesktopMox;

@@ -263,6 +263,33 @@
 //               station server as its cfcParaEqData write
 //               (CfcProfileAccess). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    slice access check is the change
+//                                    predicate (SliceAccessPolicy), so a
+//                                    listener's verbs are refused.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    slice.listen, slice.stopListening,
+//                                    slice.takeControl and slice.release;
+//                                    setActiveSliceById on a listened
+//                                    slice; removeSlice as a release from a
+//                                    controller others listen with (ruling
+//                                    Q6). AI-assisted via Anthropic Claude
+//                                    Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Important 4):
+//                                    TransmitAccess::txSliceChosen, a
+//                                    device's explicit tx.setTxSlice
+//                                    choice. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 7: a device
+//                                    closing the Core's last slice with
+//                                    nobody else on it releases it, and it
+//                                    closes. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    slice.setListenLevel, a listener's own
+//                                    level and mute for a slice it hears.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -277,6 +304,7 @@
 #include "core/SettingsHygiene.h"
 #include "core/session/SettingsHygieneWire.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/SliceAccessController.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
@@ -518,6 +546,10 @@ QString notRepresentableReason()
 //   support.collect,
 //   support.setLogCategories supportBundleVersion 1 (the bundle is written
 //                          on a worker thread; its answer comes later)
+//   slice.listen, slice.stopListening, slice.takeControl, slice.release,
+//   slice.setListenLevel   sliceAccessVersion 1, to a device whose hello
+//                          declares sliceAccess with sessionHolder
+//                          (SliceAccessController answers them)
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -905,6 +937,26 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // it itself; the dispatcher never routes it.
         {"session.pathTicket", {}, "controlSwitchVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // Slice control plan Task 4: listening to another device's slice
+        // and taking or releasing control of one, each naming the slice by
+        // its id and incarnation (`access:<id>`), take and release with the
+        // control revision the device saw.
+        {"slice.listen", {arg("sliceId", kInt), arg("incarnation", kInt)}, "sliceAccessVersion",
+         1, kRadioIdentitySessionProtocolMinor},
+        {"slice.stopListening", {arg("sliceId", kInt), arg("incarnation", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"slice.takeControl",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("controlRevision", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"slice.release",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("controlRevision", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Slice control plan Task 6: a listener's own level (0..1) and mute
+        // for a slice it hears; the controller's AF is not touched.
+        {"slice.setListenLevel",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("level", kDouble),
+          arg("muted", kBool)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -1123,6 +1175,37 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         }
         emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {"dspAssets"});
         return;
+    }
+
+    // Slice control plan Task 4: listening and control, answered by the
+    // Core's SliceAccessController, which checks the slice itself.
+    if (invoke.commandVerb == "slice.listen" || invoke.commandVerb == "slice.stopListening"
+        || invoke.commandVerb == "slice.takeControl" || invoke.commandVerb == "slice.release") {
+        handleSliceAccessVerb(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "slice.setListenLevel") {
+        handleSliceListenLevel(invoke);
+        return;
+    }
+    // Slice control plan Task 4: a device that shares slices may make any
+    // slice it listens to its active receive slice
+    // (RadioModel::setActiveRxFor); an older window keeps today's rule.
+    if (invoke.commandVerb == "setActiveSliceById" && m_requesterSharesSlices
+        && !m_requester.isEmpty() && !m_sliceAccessController.isNull()) {
+        int sliceId = -1;
+        if (findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok) {
+            const int previous = m_radioModel->sliceOwnership()->activeRxFor(m_requester);
+            const SliceAccessController::Result result =
+                m_sliceAccessController->selectRx(m_requester, sliceId);
+            QList<QByteArray> affected = result.affected;
+            if (result.accepted && previous >= 0 && previous != sliceId) {
+                affected.append(ObjectRegistry::keyForSlice(previous));
+            }
+            emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                       result.accepted ? affected : QList<QByteArray>{});
+            return;
+        }
     }
 
     // iPhone app Task 73 (ruling 5.9): a device addresses only its own
@@ -1717,6 +1800,12 @@ void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
                    QStringLiteral("That slice is no longer on the Core."), {});
         return;
     }
+    // Slice control fix wave (Important 4): the device's explicit choice.
+    // Without a requester the Core's own window chose, and RadioModel's
+    // txSliceSelected records it.
+    if (!m_requester.isEmpty() && m_transmitAccess.txSliceChosen) {
+        m_transmitAccess.txSliceChosen(m_requester, sliceId);
+    }
     QList<QByteArray> affected;
     for (const SliceModel* slice : m_radioModel->slices()) {
         if (slice != nullptr) {
@@ -1736,6 +1825,8 @@ bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& inv
     // or one held for a device, whatever receivers are in use (fix wave
     // C1). slice.selectBand and notch.addAtSlice (R-IOS-27) joined at the
     // checkpoint merge: a band button or +TNF acts on its own slice only.
+    // Slice control plan Task 2: "its own" is the change predicate, so a
+    // listener's verbs on a slice it hears are refused as well.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
@@ -2135,6 +2226,32 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
+        return;
+    }
+    // Slice control plan Task 4 (ruling Q6): closing a slice other devices
+    // still listen to, from its controller, releases it instead: it stays
+    // for them. An older window's close follows the same rule.
+    if (!m_requester.isEmpty() && !m_sliceAccessController.isNull()
+        && m_sliceAccessController->closeIsRelease(m_requester, sliceId)) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceAccessController::Result result = m_sliceAccessController->release(
+            m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));
+        emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)}
+                                   : QList<QByteArray>{});
+        return;
+    }
+    // Slice control plan Task 7: the Core's last slice closes by the claims
+    // rule when its controller closes it and nobody else is on it (a
+    // release that leaves nobody on it); the Core then has no slice.
+    if (m_radioModel->slices().size() <= 1 && !m_requester.isEmpty()
+        && !m_sliceAccessController.isNull()) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceAccessController::Result result = m_sliceAccessController->release(
+            m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));
+        emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)}
+                                   : QList<QByteArray>{});
         return;
     }
     if (m_radioModel->slices().size() <= 1) {
@@ -2826,6 +2943,139 @@ void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
 // iPhone app Task 74 (R-IOS-30): confirm.proceed {id, choice},
 // confirm.cancel {id}, notice.takeBack {id}. The arguments are read here;
 // what they do is the Core's confirm step (StationServer).
+void SessionCommandDispatcher::setSliceAccessController(SliceAccessController* controller)
+{
+    m_sliceAccessController = controller;
+}
+
+// Slice control plan Task 4 (sliceAccessVersion 1): the slice by its id and
+// incarnation, take and release with the control revision the device saw.
+// StationServer refuses these to a device that did not declare
+// sliceAccess before they reach here.
+void SessionCommandDispatcher::handleSliceAccessVerb(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool withRevision = verb == "slice.takeControl" || verb == "slice.release";
+    const auto exactUnsigned = [&invoke](const QByteArray& name, quint64* value) {
+        for (const MirrorUpdate& argument : invoke.arguments) {
+            if (argument.name != name) {
+                continue;
+            }
+            if (argument.kind != MirrorWireKind::Int64
+                || argument.value.typeId() != QMetaType::LongLong
+                || argument.value.toLongLong() < 0) {
+                return false;
+            }
+            *value = static_cast<quint64>(argument.value.toLongLong());
+            return true;
+        }
+        return false;
+    };
+    quint64 sliceId = 0;
+    SliceOwnership::SliceRef ref;
+    quint64 revision = 0;
+    const bool shape = withRevision
+        ? hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation", "controlRevision"})
+        : hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation"});
+    if (!shape || !exactUnsigned("sliceId", &sliceId) || sliceId > 63
+        || !exactUnsigned("incarnation", &ref.incarnation)
+        || (withRevision && !exactUnsigned("controlRevision", &revision))) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    ref.sliceId = static_cast<int>(sliceId);
+    if (m_sliceAccessController.isNull() || m_requester.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot share slices between devices."), {});
+        return;
+    }
+    SliceAccessController::Result result;
+    if (verb == "slice.listen") {
+        result = m_sliceAccessController->listen(m_requester, ref);
+    } else if (verb == "slice.stopListening") {
+        result = m_sliceAccessController->stopListening(m_requester, ref);
+    } else if (verb == "slice.takeControl") {
+        result = m_sliceAccessController->takeControl(m_requester, ref, revision);
+    } else {
+        result = m_sliceAccessController->release(m_requester, ref, revision);
+    }
+    QList<MirrorUpdate> values;
+    if (result.accepted && (verb == "slice.listen" || verb == "slice.takeControl")) {
+        values.append(MirrorUpdate{0, QByteArrayLiteral("controlRevision"), MirrorWireKind::Int64,
+                                   QVariant(static_cast<qlonglong>(result.controlRevision))});
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, values));
+}
+
+// Slice control plan Task 6 (sliceAccessVersion 1): a listener's own level
+// and mute for one slice. The level is 0..1 and is applied in the Core's
+// mixer to this device's audio only (SliceAccessController::setListenLevel).
+void SessionCommandDispatcher::handleSliceListenLevel(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const auto refuseUnread = [this, &invoke, &verb] {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+    };
+    if (!hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation", "level", "muted"})) {
+        refuseUnread();
+        return;
+    }
+    qint64 sliceId = -1;
+    qint64 incarnation = -1;
+    double level = -1.0;
+    bool muted = false;
+    bool haveLevel = false;
+    bool haveMuted = false;
+    for (const MirrorUpdate& argument : invoke.arguments) {
+        if (argument.name == "sliceId" || argument.name == "incarnation") {
+            if (argument.kind != MirrorWireKind::Int64
+                || argument.value.typeId() != QMetaType::LongLong) {
+                refuseUnread();
+                return;
+            }
+            (argument.name == "sliceId" ? sliceId : incarnation) = argument.value.toLongLong();
+        } else if (argument.name == "level") {
+            if (argument.kind != MirrorWireKind::Float64
+                || argument.value.typeId() != QMetaType::Double) {
+                refuseUnread();
+                return;
+            }
+            level = argument.value.toDouble();
+            haveLevel = true;
+        } else if (argument.name == "muted") {
+            if (argument.kind != MirrorWireKind::Bool
+                || argument.value.typeId() != QMetaType::Bool) {
+                refuseUnread();
+                return;
+            }
+            muted = argument.value.toBool();
+            haveMuted = true;
+        }
+    }
+    if (!haveLevel || !haveMuted || sliceId < 0 || sliceId > 63 || incarnation < 0
+        || !std::isfinite(level) || level < 0.0 || level > 1.0) {
+        refuseUnread();
+        return;
+    }
+    if (m_sliceAccessController.isNull() || m_requester.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot share slices between devices."), {});
+        return;
+    }
+    SliceOwnership::SliceRef ref;
+    ref.sliceId = static_cast<int>(sliceId);
+    ref.incarnation = static_cast<quint64>(incarnation);
+    const SliceAccessController::Result result =
+        m_sliceAccessController->setListenLevel(m_requester, ref, level, muted);
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, {}));
+}
+
 void SessionCommandDispatcher::handleConfirmAnswer(const SessionMessage& invoke)
 {
     const bool proceed = invoke.commandVerb == "confirm.proceed";

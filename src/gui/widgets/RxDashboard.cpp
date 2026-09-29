@@ -24,6 +24,11 @@
 // saved choice (SliceModel::nnrLimitChanged). J.J. Boyd (KG4VCF), with
 // Anthropic Claude Code assistance.
 //
+// 2026-09-29 update (slice control plan Task 13): the slice tag sits in a
+// picker, "RX [letter] <state> ▾", that opens the all-slice chooser; with
+// no slice it reads "Choose a slice". J.J. Boyd (KG4VCF), with Anthropic
+// Claude Code assistance.
+//
 // Signal mapping verified against SliceModel.h 2026-04-30:
 //   agcModeChanged(AGCMode)  nbModeChanged(NbMode)
 //   dspModeChanged(DSPMode)  activeNrChanged(NrSlot)  apfEnabledChanged(bool)
@@ -37,6 +42,7 @@
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPushButton>
 
 namespace NereusSDR {
 
@@ -78,13 +84,46 @@ void RxDashboard::buildUi()
     hbox->setSpacing(4);
 
     // Slice tag — which slice these readings belong to. Prepended so a
-    // multi-pan operator isn't left guessing.
-    m_sliceTag = new QLabel(QString(m_sliceLetter), this);
+    // multi-pan operator isn't left guessing. Slice control plan Task 13:
+    // inside the picker that opens the all-slice chooser (the approved
+    // bottom area: "RX [letter] <state> ▾").
+    m_picker = new QPushButton(this);
+    m_picker->setObjectName(QStringLiteral("rxChooserPicker"));
+    m_picker->setAccessibleName(tr("Choose a slice"));
+    m_picker->setToolTip(tr("Every slice on this Core: listen in, take control, or make a new "
+                            "slice"));
+    m_picker->setCursor(Qt::PointingHandCursor);
+    m_picker->setStyleSheet(QStringLiteral(
+        "QPushButton#rxChooserPicker { background: transparent; border: 1px solid %1;"
+        " border-radius: 3px; padding: 0px 4px; }"
+        "QPushButton#rxChooserPicker:hover { border-color: %2; }")
+        .arg(Style::kBorderSubtle, Style::kAccent));
+    auto* picker = new QHBoxLayout(m_picker);
+    picker->setContentsMargins(4, 0, 4, 0);
+    picker->setSpacing(4);
+    // A button's own size hint ignores the labels inside it: the layout
+    // sizes the picker to its words.
+    picker->setSizeConstraint(QLayout::SetFixedSize);
+    auto* rx = new QLabel(tr("RX"), m_picker);
+    rx->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(Style::kTextSecondary));
+    m_sliceTag = new QLabel(QString(m_sliceLetter), m_picker);
+    m_sliceTag->setObjectName(QStringLiteral("rxSliceTag"));
     m_sliceTag->setStyleSheet(QStringLiteral(
         "QLabel { color: #0a0a14; background: %1; border-radius: 3px;"
         " padding: 1px 5px; font-weight: bold; font-size: 11px; }")
         .arg(Style::kAccent));
-    hbox->addWidget(m_sliceTag);
+    m_pickerState = new QLabel(tr("Choose a slice"), m_picker);
+    m_pickerState->setObjectName(QStringLiteral("rxChooserState"));
+    m_pickerState->setStyleSheet(
+        QStringLiteral("color: %1; font-size: 11px;").arg(Style::kTextPrimary));
+    auto* arrow = new QLabel(QStringLiteral("▾"), m_picker);
+    arrow->setStyleSheet(QStringLiteral("color: %1;").arg(Style::kTextSecondary));
+    for (QLabel* l : {rx, m_sliceTag, m_pickerState, arrow}) {
+        l->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        picker->addWidget(l);
+    }
+    connect(m_picker, &QPushButton::clicked, this, &RxDashboard::chooserRequested);
+    hbox->addWidget(m_picker);
 
     // Build all badges.
     m_modeBadge   = new StatusBadge(this);
@@ -162,6 +201,20 @@ void RxDashboard::buildUi()
     m_sqlBadge->setToolTip(tr(kSqlTooltip));
 }
 
+void RxDashboard::setChooserState(const QString& words)
+{
+    if (m_pickerState == nullptr || m_pickerState->text() == words) {
+        return;
+    }
+    m_pickerState->setText(words);
+    emit residualWidthChanged();
+}
+
+QString RxDashboard::chooserState() const
+{
+    return m_pickerState ? m_pickerState->text() : QString();
+}
+
 void RxDashboard::setSliceLetter(QChar letter)
 {
     if (m_sliceLetter == letter) {
@@ -201,7 +254,8 @@ int RxDashboard::residualWidth() const
     constexpr int kMargins = 20;
     constexpr int kGaps    = 2 * 4;
     int w = kMargins + kGaps;
-    if (m_sliceTag)    { w += m_sliceTag->sizeHint().width(); }
+    // Slice control plan Task 13: the picker holds the slice tag.
+    if (m_picker)      { w += m_picker->layout()->sizeHint().width(); }
     if (m_modeBadge)   { w += m_modeBadge->sizeHint().width(); }
     if (m_filterBadge) { w += m_filterBadge->sizeHint().width(); }
     return w;
@@ -224,6 +278,9 @@ void RxDashboard::bindSlice(SliceModel* slice)
         badge->setClickable(slice != nullptr);
     }
     m_sliceTag->setVisible(slice != nullptr);
+    // Slice control plan Task 13: the picker's default words; a window that
+    // shares slices sets its own (MainWindow, from the chooser's rows).
+    setChooserState(slice != nullptr ? tr("You control") : tr("Choose a slice"));
     if (!slice) {
         setSliceLetter(QChar());
         m_modeBadge->setLabel(QStringLiteral("–"));

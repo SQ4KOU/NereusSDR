@@ -20,6 +20,15 @@
 //                                    stress: a feeder thread delivers blocks
 //                                    for every id while the main thread adds
 //                                    and removes slices (run under TSan)
+//   audioViewCarriesTheAfLevel       the slice's AF level reaches the view
+//   listenChurnWhileBlocksFlow       stress: a feeder thread delivers blocks
+//                                    while the main thread joins, leaves and
+//                                    changes listen levels (run under TSan)
+//
+// Modification history (NereusSDR):
+//   2026-09-29 - Slice control plan Task 6: the AF level in the view and the
+//                listen churn stress. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -169,6 +178,79 @@ private slots:
         feeder.join();
         QVERIFY(blocks.load() > 0);
         QCOMPARE(h.radio->slices().size(), 1);
+    }
+
+    // Slice control plan Task 6: the mixer applies the AF level, so the
+    // view carries it, 0..100 as 0..1.
+    void audioViewCarriesTheAfLevel()
+    {
+        Harness h = makeHarness();
+        const int a = h.radio->addSlice();
+        SliceModel* slice = h.radio->sliceById(a);
+        QVERIFY(slice != nullptr);
+        slice->setAfGain(25);
+        QCOMPARE(h.engine->sliceAudioView(a).afGain, 0.25f);
+        slice->setAfGain(0);
+        QCOMPARE(h.engine->sliceAudioView(a).afGain, 0.0f);
+        slice->setAfGain(100);
+        QCOMPARE(h.engine->sliceAudioView(a).afGain, 1.0f);
+    }
+
+    // Slice control plan Task 6: joins, leaves and level changes on the
+    // control side while the audio thread drains, for ThreadSanitizer.
+    void listenChurnWhileBlocksFlow()
+    {
+        Harness h = makeHarness();
+        const int a = h.radio->addSlice();
+        const int b = h.radio->addSlice();
+        QVERIFY(a >= 0 && b >= 0);
+        h.engine->setSliceStreaming(a, true);
+        h.engine->setSliceStreaming(b, true);
+        const int x = h.engine->acquireOwnerMix();
+        const int y = h.engine->acquireOwnerMix();
+        QVERIFY(x >= 0 && y >= 0);
+        struct NullTap final : MasterMixAudioTap {
+            void consume(const float*, int, int) noexcept override {}
+        };
+        NullTap tapX;
+        NullTap tapY;
+        QVERIFY(h.engine->setOwnerMixAudioTap(x, &tapX));
+        QVERIFY(h.engine->setOwnerMixAudioTap(y, &tapY));
+        h.engine->setOwnerMixSliceMask(x, 1u << a);
+        h.engine->setOwnerMixSliceMask(y, 1u << b);
+
+        std::atomic<bool> stop{false};
+        std::atomic<long> blocks{0};
+        std::thread feeder([&] {
+            while (!stop.load(std::memory_order_acquire)) {
+                h.engine->rxBlockReady(a, kTestSamples.data(), kTestFrames);
+                h.engine->rxBlockReady(b, kTestSamples.data(), kTestFrames);
+                blocks.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+
+        constexpr int kRounds = 2000;
+        for (int round = 0; round < kRounds; ++round) {
+            const float level = static_cast<float>(round % 11) / 10.0f;
+            h.engine->setOwnerMixListen(x, b, level, (round & 3) == 0);
+            h.engine->setOwnerMixListen(y, a, 1.0f - level, false);
+            h.engine->setLocalListen(a, level, (round & 1) != 0);
+            if ((round % 7) == 0) {
+                h.engine->clearOwnerMixListen(x, b);
+                h.engine->clearLocalListen(a);
+            }
+            if ((round % 13) == 0) {
+                h.engine->setOwnerMixSliceMask(x, (round & 1) != 0 ? (1u << b) : (1u << a));
+            }
+        }
+
+        stop.store(true, std::memory_order_release);
+        feeder.join();
+        QVERIFY(blocks.load() > 0);
+        h.engine->releaseOwnerMix(x);
+        h.engine->releaseOwnerMix(y);
+        QCOMPARE(h.engine->ownerMixListenMask(x), 0u);
+        QCOMPARE(h.engine->ownerMixListenMask(y), 0u);
     }
 };
 

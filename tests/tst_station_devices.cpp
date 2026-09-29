@@ -51,6 +51,11 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 8b: a
+//                                    computer that joined with the token
+//                                    removed in one step, and each sign-in's
+//                                    name stored. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -111,12 +116,14 @@ struct Device {
     QString id() const { return StationIdentity::toBase64Url(key.fingerprint()); }
 
     QString shortName;  // Part C fix wave: sent when not empty
+    // Slice control plan Task 8b: the name it signs in with.
+    QString name = QStringLiteral("Shack iPhone");
 
     SessionDeviceBlock block(const QByteArray& challenge, const QByteArray& certSha256,
                              const QByteArray& stationSpki) const
     {
         return SessionDeviceBlock{
-            id(), StationIdentity::toBase64Url(key.publicKeySpki()), QStringLiteral("Shack iPhone"),
+            id(), StationIdentity::toBase64Url(key.publicKeySpki()), name,
             QStringLiteral("phone"),
             StationIdentity::toBase64Url(key.sign(DeviceAuthenticator::transcript(
                 challenge, certSha256, stationSpki, key.publicKeySpki()))),
@@ -593,6 +600,89 @@ private slots:
         QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
                  qPrintable(result.value(QStringLiteral("reason")).toString()));
         QVERIFY(!core.server->deviceStore()->find(computer.key.fingerprint()));
+    }
+
+    // Slice control plan Task 8b (JJ's bench): a computer that joined with
+    // the token is removed from the Core in one step, the Core first
+    // stopping the token. Afterwards the token lets nobody in, the computer
+    // is gone, and another paired device still signs in.
+    void aComputerThatJoinedWithTheTokenIsRemovedInOneStep()
+    {
+        Core core(/*upgradedWithToken=*/true);
+        Device computer;
+        computer.name = QStringLiteral("MacBook-Pro (radxa_5c_r3)");
+        LoopbackTransport* window = core.tokenSession({{"deviceAuth", 1}}, kSessionProtocolMinor,
+                                                      &computer);
+        QVERIFY(window != nullptr);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        QVERIFY(core.deviceSession(phone) != nullptr);
+        QVERIFY(core.devices().tokenActive());
+        QVERIFY(core.devices().revokeStopsPairingToken(computer.id()));
+        QVERIFY(!core.devices().revokeStopsPairingToken(phone.id()));
+
+        const DeviceAdminResult result = core.devices().retireTokenAndRevoke(computer.id());
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QVERIFY(!core.devices().tokenActive());
+        QVERIFY(!core.server->deviceStore()->find(computer.key.fingerprint()));
+        QTRY_VERIFY(!window->isOpen());
+        // The token no longer lets anyone in; the phone still signs in.
+        QVERIFY(core.tokenSession() == nullptr);
+        QVERIFY(core.deviceSession(phone) != nullptr);
+        QVERIFY(core.devices().claimed());
+    }
+
+    // With no other paired device the one step is refused in the existing
+    // words, and nothing changes: the token still works, the computer is
+    // still paired.
+    void theOneStepIsRefusedWhenItWouldLeaveNoPairedDevice()
+    {
+        Core core(/*upgradedWithToken=*/true);
+        Device computer;
+        LoopbackTransport* window = core.tokenSession({{"deviceAuth", 1}}, kSessionProtocolMinor,
+                                                      &computer);
+        QVERIFY(window != nullptr);
+        QCOMPARE(core.server->deviceStore()->list().size(), 1);
+        const DeviceAdminResult result = core.devices().retireTokenAndRevoke(computer.id());
+        QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, QStringLiteral("Pair another device first, or reset this Core "
+                                               "from its own computer."));
+        QVERIFY(OperatorWording::isPlain(result.reason));
+        QVERIFY(core.devices().tokenActive());
+        QVERIFY(core.server->deviceStore()->find(computer.key.fingerprint()));
+        QVERIFY(window->isOpen());
+    }
+
+    // Any other device: the one step is revoke() as it is.
+    void theOneStepForAnyOtherDeviceIsARevoke()
+    {
+        Core core(/*upgradedWithToken=*/true);
+        Device phone;
+        Device tablet;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        QVERIFY(core.server->deviceStore()->add(tablet.record()));
+        QVERIFY(!core.devices().revokeStopsPairingToken(tablet.id()));
+        QVERIFY(core.devices().retireTokenAndRevoke(tablet.id()).accepted);
+        QVERIFY(core.devices().tokenActive());
+        QVERIFY(!core.server->deviceStore()->find(tablet.key.fingerprint()));
+    }
+
+    // Task 8b: each sign-in's name is the one the Core lists, as the short
+    // name is; so a window that now names its profile is listed by it.
+    void eachSignInCarriesTheNameTheCoreStores()
+    {
+        Core core(false);
+        Device computer;
+        QVERIFY(core.server->deviceStore()->add(computer.record()));
+        computer.name = QStringLiteral("MacBook-Pro (radxa_5c_r3)");
+        QVERIFY(core.deviceSession(computer) != nullptr);
+        QCOMPARE(core.server->deviceStore()->find(computer.key.fingerprint())->name,
+                 QStringLiteral("MacBook-Pro (radxa_5c_r3)"));
+        // An unusable one leaves it as it is.
+        computer.name = QString(65, QLatin1Char('a'));
+        QVERIFY(core.deviceSession(computer) != nullptr);
+        QCOMPARE(core.server->deviceStore()->find(computer.key.fingerprint())->name,
+                 QStringLiteral("MacBook-Pro (radxa_5c_r3)"));
     }
 
     void eachSignInCarriesTheShortNameTheCoreStores()

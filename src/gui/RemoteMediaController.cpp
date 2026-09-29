@@ -101,6 +101,7 @@
 #include "core/spectrum/SpectrumReducer.h"
 #include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
+#include "core/session/SliceAccessMirror.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteTransmitClient.h"
@@ -1062,6 +1063,12 @@ struct RemoteMediaController::Private {
         bool pending = false;
         bool initialized = false;
         quint32 rejectedContext = 0;
+        // Slice control plan Task 14a: the Core refused the pin. A fresh
+        // picture alone does not ask again, or a window the Core keeps
+        // refusing (a listener) would ask on every tune. A C-Tune gesture,
+        // a new stream lifetime, or a change in who controls the slice
+        // clears it.
+        bool refused = false;
     };
     QHash<int, CtunState> ctunStreams;
     // R-R3-18/21: one C-Tune centre request in flight per stream. A gesture
@@ -1690,6 +1697,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 || state->requestSliceId != sliceId || state->requestedPin != pinned) { return; }
             state->pending = false;
             state->initialized = accepted;
+            state->refused = !accepted;
             if (!accepted) {
                 // A migration can refuse a request after it leaves the GUI.
                 // Wait for fresh source context before retrying this lifetime.
@@ -1702,6 +1710,15 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             }
             refreshCtunState();
         });
+    if (client && client->sliceAccess()) {
+        // Slice control plan Task 14a: a change in who controls a slice may
+        // turn a refused C-Tune pin into an accepted one, so the next fresh
+        // picture may ask again.
+        connect(client->sliceAccess(), &SliceAccessMirror::changed, this, [this](int) {
+            for (auto& state : d->ctunStreams) { state.refused = false; }
+            refreshCtunState();
+        });
+    }
     connect(client, &StationClient::streamCentreFinished,
             this, &RemoteMediaController::finishCentreRequest);
     connect(client, &QObject::destroyed, this, &RemoteMediaController::stop);
@@ -3742,6 +3759,7 @@ void RemoteMediaController::refreshSubscriptions()
                     state.pending = true;
                     state.initialized = false;
                     state.rejectedContext = 0;
+                    state.refused = false;
                     if (!d->model->requestStreamCtunPinned(slice->sliceIndex(), pinned)) {
                         state.pending = false;
                         state.rejectedContext = current->second.context.codec.contextGeneration;
@@ -4351,6 +4369,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
                     state.pending = true;
                     state.initialized = false;
                     state.rejectedContext = 0;
+                    state.refused = false;
                     if (!d->model->requestStreamCtunPinned(slice->sliceIndex(), pinned)) {
                         state.pending = false;
                         state.rejectedContext = current->second.context.codec.contextGeneration;
@@ -4660,6 +4679,7 @@ void RemoteMediaController::refreshCtunState()
             && d->model->isConnected() && stream >= 0 && epoch != 0
             && (state.initialized || state.pending || currentContext);
         if (available && currentContext && !state.initialized && !state.pending
+            && !state.refused
             && (state.rejectedContext == 0
                 || isNewerGeneration(binding.context.codec.contextGeneration, state.rejectedContext))) {
             // One hardware stream has one effective pin, even when several

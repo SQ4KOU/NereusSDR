@@ -149,6 +149,10 @@
 //                                    so txInhibitReasonVersion and radio's
 //                                    txInhibitReason are. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28: slice control plan Task 4: sliceAccessVersion (the live
+//               client declares sliceAccess), SliceAccess and the
+//               `access:<id>` key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -203,6 +207,7 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceAccessSet.h"
 #include "core/session/SliceMarker.h"
 #include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
@@ -640,7 +645,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"alexLpf", 1},
                                   // PA on-air gate re-review: radio's
                                   // paTransmitBand.
-                                  {"paTransmitBand", 1}})));
+                                  {"paTransmitBand", 1},
+                                  // Slice control plan Task 4: SliceAccess
+                                  // and the slice.* access verbs.
+                                  {"sliceAccess", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -708,6 +716,8 @@ QJsonArray captureCapabilities()
     caps.txInhibitReasonVersion = 1;
     // PA on-air gate re-review: sent to a peer that declared paTransmitBand.
     caps.paTransmitBandVersion = 1;
+    // Slice control plan Task 4: sent to a peer that declared sliceAccess.
+    caps.sliceAccessEntry = true;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -848,6 +858,7 @@ QJsonArray captureObjectKeys()
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
     static const QRegularExpression kMarker(QStringLiteral("^marker:[0-9]+$"));
+    static const QRegularExpression kAccess(QStringLiteral("^access:[0-9]+$"));
     QSet<QString> seen;
     for (const QByteArray& message : *wire) {
         SessionMessage decoded;
@@ -862,6 +873,8 @@ QJsonArray captureObjectKeys()
             pattern = QStringLiteral("slice:<id>");
         } else if (kMarker.match(pattern).hasMatch()) {
             pattern = QStringLiteral("marker:<id>");
+        } else if (kAccess.match(pattern).hasMatch()) {
+            pattern = QStringLiteral("access:<id>");
         }
         if (seen.contains(pattern)) {
             continue;
@@ -1800,6 +1813,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
+            &SliceAccess::staticMetaObject,
             &TransmitState::staticMetaObject,
             &StationVax::staticMetaObject,
             &PaProfilesFacade::staticMetaObject};

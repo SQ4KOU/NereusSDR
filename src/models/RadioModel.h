@@ -431,6 +431,26 @@
 //                 _adjustingBand is; transmitBandChanged tells the PA page
 //                 and the station's PA publish. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1866,6 +1886,8 @@ public:
     /// Factored out of the MainWindow badge handler so both the pan TX badge
     /// and a test can reach it without standing up a MainWindow, the same way
     /// requestSliceSampleRate is.
+    /// Slice control fix wave (Important 4): an accepted request emits
+    /// txSliceSelected, the Core's own window's explicit transmit choice.
     bool requestTxHandoffToSlice(int sliceId);
 
     /// Phase 3F: hardware-capped user-facing slice count. Reads BoardCapabilities.maxSlices
@@ -2161,6 +2183,11 @@ public:
     /// rate is a stream-wide transaction rather than a slice property.
     void applyRestoredSampleRate(SliceModel* slice);
 
+    /// Slice control plan Task 5: on a Remote model, true (and announced)
+    /// when slice `sliceId` is one this window only listens to, so a
+    /// request for it is held back instead of sent.
+    bool holdSliceRequestForListener(int sliceId);
+
     /// R-R3-49: each slice's saved per-band sample rate for the band it is
     /// on (SliceModel::savedSampleRateHz), keyed by slice id; slices with
     /// none saved are left out. connectToRadio reads it before it binds the
@@ -2236,6 +2263,17 @@ public:
     /// call that one, never this.
     void removeSlice(int sliceId);
 
+    /// Slice control plan Task 7 (Local role): closes the slice only when
+    /// SliceOwnership reports it unclaimed (no controller, nobody
+    /// listening, not held for anyone), whatever the slice count, the
+    /// Core's last slice included, and saves its settings as a removal
+    /// does. Returns whether it closed. Zero slices is a valid idle Core.
+    bool closeUnclaimedSlice(int sliceId);
+
+    /// Slice control plan Task 7: whether a slice is bound for transmit.
+    /// With none (a Core with no slice) every key is refused.
+    bool hasTransmitSlice() const;
+
     /// NOTE: still a LIST POSITION, unlike sliceById / removeSlice above.
     /// This API remains positional for internal list navigation only.
     ///
@@ -2284,6 +2322,14 @@ public:
     /// `owner` makes one of its own slices its active slice (ruling 5.10).
     /// False, changing nothing, when the slice is not `owner`'s. Local only.
     bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
+
+    /// Slice control plan Task 3: `device` makes one of the slices it has
+    /// joined (controlled or listened) its active receive slice
+    /// (SliceOwnership::activeRxFor). When it controls the slice this is
+    /// also its active slice, as setActiveSliceByIdFor; a listened slice
+    /// never moves a slice's `active` or the station-level active slice.
+    /// False, changing nothing, when `device` has not joined it. Local only.
+    bool setActiveRxFor(const QByteArray& device, int sliceId);
 
     /// The device holding transmit, empty for none (Task 34 calls this).
     /// While one holds it, its active slice is the station-level one
@@ -2433,7 +2479,31 @@ public:
     /// Lives here rather than in the MainWindow lambda that has the defect,
     /// because MainWindow is not constructible in the test harness and logic
     /// put there cannot be tested at all.
-    int rehomeSlicesToPans(const QStringList& livePanIds);
+    /// Slice control and listening, layout change rule: which slices one
+    /// window may place, and where it shows the ones it only listens to.
+    ///
+    /// A slice's pan key is shared by every device (it mirrors both ways),
+    /// so a window that rehomes or spreads a slice it does not control moves
+    /// that slice for the device that does. A scoped call moves only
+    /// `controlled` slices and counts a pan as occupied when a controlled
+    /// slice has its key or a listened slice is placed there (`listenedOn`,
+    /// slice id to this window's pan id). Every other slice is invisible to
+    /// the scoped calls. A null scope keeps the unscoped behavior, which is
+    /// what a window with no other devices has always had.
+    struct PanScope {
+        QSet<int> controlled;
+        QHash<int, QString> listenedOn;
+    };
+
+    int rehomeSlicesToPans(const QStringList& livePanIds,
+                           const PanScope* scope = nullptr);
+
+    /// The listened slices in `scope` whose placement is not one of
+    /// `panIds`, in slice order. A layout change that returns any of these
+    /// has taken them out of view, and a device hears only slices it can
+    /// see, so the caller stops listening to each one. Nothing about the
+    /// slice itself changes here.
+    QList<int> listenedOffPans(const QStringList& panIds, const PanScope& scope) const;
 
     /// Which of `panIds` currently host no slice, in the order given.
     ///
@@ -2449,7 +2519,8 @@ public:
     /// Occupancy is the question the caller is actually asking, so it is the
     /// question answered here. Co-hosted slices count once: a pan with three
     /// slices on it is occupied, not three-times occupied.
-    QStringList pansWithoutSlices(const QStringList& panIds) const;
+    QStringList pansWithoutSlices(const QStringList& panIds,
+                                  const PanScope* scope = nullptr) const;
 
     /// Slices currently living on `panId`, optionally skipping one.
     ///
@@ -2483,7 +2554,8 @@ public:
     /// The slices needed are already there, so they are moved before any are
     /// made. Only genuinely surplus ones move: a pan holding a single slice is
     /// never raided, or expanding would just relocate the hole.
-    int spreadSlicesOntoEmptyPans(const QStringList& panIds);
+    int spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                  const PanScope* scope = nullptr);
 
     /// Phase 3F closeout — public helper for invoking the antennaAutoSwitched
     /// signal from operator surfaces (Tools menu "Test antenna switch toast"
@@ -5245,6 +5317,10 @@ signals:
     void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);
+    /// Slice control fix wave (Important 4): the Core's own window chose
+    /// `sliceId` for transmit (requestTxHandoffToSlice accepted it). Never
+    /// emitted for a binding the transmitter gets by itself.
+    void txSliceSelected(int sliceId);
     // A restored shared slice may have changed many preferences silently.
     // Consumers must publish a complete snapshot, not duplicate sliceAdded.
     void receiveLayoutHydrated();
@@ -5303,6 +5379,11 @@ signals:
     /// offset all agree again. `reason` is plain English, ready for a status
     /// bar, and names the frequency the slice stayed on.
     void sliceRetuneRejected(int sliceIndex, const QString& reason);
+    /// Slice control plan Task 5: a remote window held back a change to
+    /// slice `sliceId` (one of its setters, or a slice request) because it
+    /// only listens to that slice; nothing was sent. `reason` is the Core's
+    /// listener words (SliceModel::readOnlyListenerReason()).
+    void sliceRequestHeldForListener(int sliceId, const QString& reason);
     /// Parity Task 21 (R-IOS-18): the Core's radios changed (a remote
     /// window), or the Core refused a radio request.
     void stationRadiosChanged();
@@ -6515,7 +6596,9 @@ private:
     /// is shared. removeSlice() now sends a verb on a Role::Remote model,
     /// so the session's own inbound destroy needs a way past that branch
     /// to the removal itself.
-    void removeSliceImpl(int sliceId, bool persist = true);
+    /// `mayCloseLast` (slice control plan Task 7): the claims rule's close
+    /// of an unclaimed slice, which may leave the Core with no slice.
+    void removeSliceImpl(int sliceId, bool persist = true, bool mayCloseLast = false);
     void bindReceiveLayoutSlices();
     bool activateRestoredRadeReceiveOwner(QString* error);
     void setReceiveLayoutRestoreStatus(const QString& state, const QString& message);

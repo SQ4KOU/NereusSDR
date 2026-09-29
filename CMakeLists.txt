@@ -942,6 +942,8 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
     # and each owner's active slice.
     src/core/SliceOwnership.cpp
+    # Slice control plan Task 2: who may see, hear and change each slice.
+    src/core/session/SliceAccessPolicy.cpp
     # iPhone app Task 75 (R-IOS-30): which other devices a radio-wide
     # setting disturbs.
     src/core/DisturbanceCheck.cpp
@@ -1275,10 +1277,18 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): the read-only marker another device sees
     # for a slice that is not its own, one per slice.
     src/core/session/SliceMarker.cpp
+    # Slice control and shared listening plan Task 4: who controls and who
+    # listens to each slice (SliceAccess, access:<id>), and the listen,
+    # stop listening, take control and release checks in one place.
+    src/core/session/SliceAccessSet.cpp
+    src/core/session/SliceAccessController.cpp
     # iPhone app plan Task 78 (R-IOS-02, R-IOS-30): a remote window's copy of
     # who else is on the Core, their slices, and the Core's questions and
     # notices for it.
     src/core/session/RemoteDevicesState.cpp
+    # Slice control and shared listening plan Task 5: a remote window's copy
+    # of the access:<id> objects, which marks a listened slice read-only.
+    src/core/session/SliceAccessMirror.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by
@@ -1549,6 +1559,8 @@ set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/DesktopStationController.cpp
     src/gui/DesktopStationController.h
+    src/gui/HostingSliceActions.cpp
+    src/gui/HostingSliceActions.h
     src/gui/GuiDesktopStationRuntime.cpp
     src/gui/GuiDesktopStationRuntime.h
     src/gui/SliceFlagPresentationBinding.cpp
@@ -1660,6 +1672,8 @@ set(GUI_SOURCES
     src/gui/widgets/OverflowChip.h
     src/gui/widgets/RxDashboard.cpp
     src/gui/widgets/RxDashboard.h
+    src/gui/SliceChooser.cpp
+    src/gui/SliceChooser.h
     src/gui/widgets/StationBlock.cpp
     src/gui/widgets/StationBlock.h
     src/gui/widgets/SpectrumStatusOverlay.cpp

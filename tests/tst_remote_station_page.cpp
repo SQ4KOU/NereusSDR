@@ -215,6 +215,58 @@ private slots:
         button(page, "remoteAccessRename")->click();
         QCOMPARE(rename.size(), 0);
     }
+    // Slice control plan Task 8b: removing a computer that joined with the
+    // pairing token asks first, in plain words that say what stopping the
+    // token does, and goes ahead only when the operator agrees.
+    void removingAComputerThatJoinedWithTheTokenAsksFirst()
+    {
+        RemoteStationPage page;
+        RemoteStationPage::State state = ready();
+        RemoteStationPage::Device joined;
+        joined.id = QByteArray("mac-radxa");
+        joined.name = QStringLiteral("MacBook-Pro (radxa_5c_r3)");
+        joined.pairedText = QStringLiteral("September 25, 2026");
+        joined.lastSeenText = QStringLiteral("Today");
+        joined.removalStopsPairingToken = true;
+        state.devices.append(joined);
+        page.setState(state);
+        QString asked;
+        QString goAheadWords;
+        bool answer = false;
+        page.setConfirmation([&](const QString& title, const QString& text, const QString& goAhead) {
+            asked = title + QLatin1Char('\n') + text;
+            goAheadWords = goAhead;
+            return answer;
+        });
+        QSignalSpy revoke(&page, &RemoteStationPage::revokeRequested);
+        QSignalSpy stopping(&page, &RemoteStationPage::revokeStoppingPairingTokenRequested);
+
+        button(page, "remoteAccessRevoke")->click();
+        QVERIFY(asked.contains(QStringLiteral("MacBook-Pro (radxa_5c_r3)")));
+        QVERIFY(asked.contains(QStringLiteral("stops accepting")));
+        QVERIFY(asked.contains(QStringLiteral("Paired devices keep working")));
+        QVERIFY(asked.contains(QStringLiteral("This is permanent")));
+        QVERIFY(goAheadWords.contains(QStringLiteral("Pairing Token")));
+        QCOMPARE(stopping.size(), 0);
+        QCOMPARE(revoke.size(), 0);
+
+        answer = true;
+        button(page, "remoteAccessRevoke")->click();
+        QCOMPARE(stopping.size(), 1);
+        QCOMPARE(stopping.takeFirst().at(0).toByteArray(), QByteArray("mac-radxa"));
+        QCOMPARE(revoke.size(), 0);
+
+        // The last way in: disabled with the Core's own reason.
+        state.devices = {joined};
+        state.devices.first().revocable = false;
+        state.devices.first().revokeReason =
+            QStringLiteral("Pair another device first, or reset this Core from its own computer.");
+        page.setState(state);
+        QPushButton* last = button(page, "remoteAccessRevoke");
+        QVERIFY(!last->isEnabled());
+        QCOMPARE(last->toolTip(), state.devices.first().revokeReason);
+    }
+
     void renderStates()
     {
         RemoteStationPage page;
@@ -276,6 +328,17 @@ private slots:
             QStringLiteral("(this window)")));
         screenshot(page, QStringLiteral("06-connected-now.png"));
         page.setConnectedDevices(nullptr);
+        // Task 8b: two profiles on one computer, told apart.
+        RemoteStationPage::Device profiled{QByteArray("mac-radxa"),
+                                           QStringLiteral("MacBook-Pro (radxa_5c_r3)"),
+                                           QStringLiteral("September 25, 2026"),
+                                           QStringLiteral("Today"), true};
+        profiled.removalStopsPairingToken = true;
+        state.devices = {{QByteArray("mac"), QStringLiteral("MacBook-Pro"),
+                          QStringLiteral("September 28, 2026"), QStringLiteral("Today"), true},
+                         profiled};
+        page.setState(state);
+        screenshot(page, QStringLiteral("07-two-profiles.png"));
     }
 };
 QTEST_MAIN(RemoteStationPageTest)

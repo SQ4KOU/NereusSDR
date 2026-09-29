@@ -42,6 +42,8 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-29: R-R3-49 / R-IOS-18: PaProfilesFacade joins it. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-28: Slice control plan Task 4: SliceAccess joins it. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -77,6 +79,7 @@
 #include "core/SpotSourceHost.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceAccessSet.h"
 #include "core/session/SliceMarker.h"
 #include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
@@ -904,6 +907,8 @@ private:
                  &ConnectedDevicesFacade::staticMetaObject,
                  // iPhone app Task 73 (R-IOS-02): another device's slice.
                  &SliceMarker::staticMetaObject,
+                 // Slice control plan Task 4: who controls and listens.
+                 &SliceAccess::staticMetaObject,
                  // iPhone app plan Task 39 (D14, R-IOS-13): the Core's transmitter.
                  &TransmitState::staticMetaObject,
                  // iPhone app plan Task 25 (R-IOS-18): the Core's computer's VAX.

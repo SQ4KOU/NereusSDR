@@ -491,6 +491,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "sliceAccessVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -2647,6 +2652,116 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.pathTicket"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.listen"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.stopListening"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.takeControl"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.release"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "level",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "muted",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.setListenLevel"
         },
         {
             "arguments": [
@@ -5400,6 +5515,58 @@
                     "kind": "utf8",
                     "name": "pa",
                     "ordinal": 11
+                }
+            ]
+        },
+        "SliceAccess": {
+            "properties": [
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "controllerDeviceId",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listenerDeviceIds",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "activeRxDeviceIds",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSelected",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "onAir",
+                    "ordinal": 7
                 }
             ]
         },
@@ -8165,6 +8332,10 @@
         {
             "class": "SliceMarker",
             "key": "marker:<id>"
+        },
+        {
+            "class": "SliceAccess",
+            "key": "access:<id>"
         }
     ],
     "settingsScope": {

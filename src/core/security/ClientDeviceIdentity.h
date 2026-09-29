@@ -32,6 +32,10 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8b: a window run with a profile
+//               other than the default carries the profile in its name and
+//               short name. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/StationIdentity.h"
@@ -98,7 +102,23 @@ public:
     /// when nothing is left.
     static QString shortNameFrom(const QString& hostName);
 
+    /// Slice control plan Task 8b: the names of this computer's window run
+    /// with `profile` (AppSettings::profileOverride()). Each profile has its
+    /// own key, so it is its own device on a Core, and two profiles on one
+    /// computer must not share a name. An empty profile (the default) gives
+    /// machineName() / machineShortName() exactly; any other gives the name
+    /// followed by the profile in parentheses, "MacBook-Pro (radxa)", the
+    /// host part cut so the whole fits the Core's limit.
+    static QString machineName(const QString& profile);
+    static QString machineShortName(const QString& profile);
+    /// The two above for a given host name (for tests).
+    static QString deviceNameFrom(const QString& hostName, const QString& profile);
+    static QString shortNameFrom(const QString& hostName, const QString& profile);
+
 private:
+    /// `name` for `hostName` cut to `maxBytes`, followed by " (profile)".
+    static QString withProfile(const QString& hostName, const QString& profile,
+                               int maxBytes, bool shortName);
     /// deviceNameFrom()'s cleaning, cut to `maxBytes`.
     static QString cleanedName(const QString& text, int maxBytes);
 

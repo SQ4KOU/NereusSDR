@@ -643,20 +643,24 @@ void TstRemoteSliceCommands::
     QCOMPARE(station.slices().size(), 1);
     const int onlyId = client.slices().first()->sliceIndex();
 
-    // The daemon refuses to remove the last remaining slice, with that
+    // The daemon refuses to remove a slice it does not have, with that
     // exact reason (SessionCommandDispatcher::handleRemoveSlice). The
     // wording is deliberately one that exists ONLY on the daemon: the
     // client is not allowed to pre-check the same rule and answer in its
-    // own words, or this assertion would pass with nothing relayed.
+    // own words, or this assertion would pass with nothing relayed. (Slice
+    // control plan Task 7: the Core's last slice is no longer refused; its
+    // controller's close closes it.)
+    constexpr int kAbsentSliceId = 7;
+    QVERIFY(station.sliceById(kAbsentSliceId) == nullptr);
     QSignalSpy rejected(&client, &RadioModel::sliceAddRejected);
-    client.removeSlice(onlyId);
+    client.removeSlice(kAbsentSliceId);
 
     // Nothing refused yet -- the command has not even been delivered.
     QCOMPARE(rejected.count(), 0);
 
     QTRY_COMPARE(rejected.count(), 1);
     QVERIFY2(rejected.first().first().toString().contains(
-                 QStringLiteral("The last receiver cannot be removed.")),
+                 QStringLiteral("That receiver is no longer on the Core.")),
              qPrintable(QStringLiteral("the station's own reason did not reach "
                                        "the operator; got: ")
                         + rejected.first().first().toString()));

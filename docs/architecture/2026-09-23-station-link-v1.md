@@ -271,6 +271,21 @@ not carry it: `pair.start`'s `device` block and the code-mode box keep
 `{"publicKey", "name", "kind"}`, and a device signs in straight after
 pairing.
 
+**The name at sign-in** (slice control plan Task 8b). The Core also
+replaces the device's stored `name` at every sign-in whose `name` is
+usable (`DeviceStore::isValidName`, at most 64 bytes of UTF-8, validated
+as above); an unusable one changes nothing and refuses nothing. So a
+device's name on the Core is the one it last signed in with, for a device
+paired by code or by a pairing request as much as for one that enrolled
+through the token: a phone's name follows what it sends at sign-in, and
+renaming the phone renames it on the Core at its next sign-in. The desktop
+names a window run with a profile other than the default "<host>
+(<profile>)", its name and short name both
+(`ClientDeviceIdentity::machineName(profile)` and
+`machineShortName(profile)`), so two profiles on one computer, which are
+two devices with two keys, are told apart; the default profile's names are
+unchanged.
+
 | Case | `auth.result` reason | `retryable` | `code` |
 | --- | --- | --- | --- |
 | Admitted | `""`, accepted true | false | none |
@@ -906,7 +921,16 @@ be read) and sends `{}` otherwise (iPhone app plan Task 18). Signing in
 with that key to a Core it paired with, it also declares `sessionHolder` 1
 (iPhone app plan Task 78), so it is asked, told and may take transmit as
 any device; a token sign-in does not, since it cannot know the id the Core
-numbers a token window by. A client's
+numbers a token window by. **`sliceAccess` 1** (slice control and shared listening plan Task 4):
+listening to another device's slice and taking or releasing control of
+one. A client declares it only together with `sessionHolder` 1 (and so
+`deviceAuth` 1); the station treats it as not declared otherwise. A client
+that declares it receives `sliceAccessVersion` in its capabilities
+(section 6.3), the `SliceAccess` objects (section 7.1), the slices it has
+joined as `slice:<id>` and every other as `marker:<id>` (section 7.5), and
+may send the four `slice.*` access verbs (section 9.1). A client that does
+not sees exactly the wire it was built for. The desktop client declares it
+whenever it declares `sessionHolder`. A client's
 `deviceAuth` 1
 (or later) also asks for the `devices` object and its commands (section
 7.1): the station sends them to no other peer, so a window that declares
@@ -1061,6 +1085,7 @@ change shows as surface drift and as a change to this table.
 | `radeStatusVersion` | 1 |
 | `txInhibitReasonVersion` | 1 |
 | `paTransmitBandVersion` | 1 |
+| `sliceAccessVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1365,6 +1390,23 @@ When a feature is off, its version is 0:
   `paTransmitBand` (section 7.1). A peer that did not declare the feature
   is sent neither this entry nor the property. An app on a Core that sends
   no entry opens the PA row for its own transmit slice's band.
+- `sliceAccessVersion`: optional and appended after
+  `paTransmitBandVersion` (after the last entry before it when that is
+  absent) and before `coreBuildInfo`, only at agreed
+  minor 11 and only to a peer whose hello declared `sliceAccess` 1 with
+  `sessionHolder` 1 and `deviceAuth` 1; any other peer is sent no entry
+  (and reads 0), so its capabilities, its `slice:` and `marker:` objects
+  and its verbs are today's. Two-key gate (section 6.2): agreed minor 11
+  and `sliceAccessVersion` 1 or more. 1 on a Core that runs its radio:
+  the `SliceAccess` object per slice (`access:<id>`, section 7.1), each
+  slice the device has joined as `slice:<id>` and every other as
+  `marker:<id>` (section 7.5), the verbs `slice.listen`,
+  `slice.stopListening`, `slice.takeControl`, `slice.release` and
+  `slice.setListenLevel` (section 9.1), `setActiveSliceById` on any joined slice, and the
+  `controlTaken` notice. A Core without the feature, and a peer that did
+  not declare it, refuse the verbs: "Update this app to listen to and take
+  slices on this Core." to the peer, "This Core cannot share slices
+  between devices." from a Core that cannot.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -2229,7 +2271,8 @@ older window sees only the values it was built for.
 | 96 | `radeStatusVersion` | `i64` |
 | 97 | `txInhibitReasonVersion` | `i64` |
 | 98 | `paTransmitBandVersion` | `i64` |
-| 99 | `coreBuildInfo` | `utf8` |
+| 99 | `sliceAccessVersion` | `i64` |
+| 100 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2538,6 +2581,19 @@ An enum property lists the values its domain allows.
 | 9 | `diagnostics` | `utf8` | outbound |  |
 | 10 | `revision` | `i64` | outbound |  |
 | 11 | `pa` | `utf8` | outbound |  |
+
+**SliceAccess** (8 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `sliceId` | `i64` | constantSnapshot |  |
+| 1 | `incarnation` | `i64` | constantSnapshot |  |
+| 2 | `controllerDeviceId` | `utf8` | outbound |  |
+| 3 | `controlRevision` | `i64` | outbound |  |
+| 4 | `listenerDeviceIds` | `utf8` | outbound |  |
+| 5 | `activeRxDeviceIds` | `utf8` | outbound |  |
+| 6 | `txSelected` | `bool` | outbound |  |
+| 7 | `onAir` | `bool` | outbound |  |
 
 **SliceMarker** (14 properties)
 
@@ -3036,6 +3092,7 @@ destroyed during the session.
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
 | `marker:<id>` | `SliceMarker` |
+| `access:<id>` | `SliceAccess` |
 
 <!-- /surface -->
 
@@ -3591,13 +3648,33 @@ Notes on the keys:
   owner is `txState.holderDeviceId` (the several-devices design, ruling
   5.4a; iPhone app plan Task 77), as on a `slice:` object. A marker has no colour on the wire: a client draws it in
   its letter's colour. A write to a marker is refused (section 7.3).
+  To a session with `sliceAccessVersion` 1 the rule is by membership
+  instead: a marker for every slice it has not joined (section 7.5).
+- **`access:<id>`** (`SliceAccess`, `sliceAccessVersion` 1). One per live
+  slice, made with the slice and destroyed with it, sent only to a session
+  with the feature (its schema too); any other session never receives one.
+  Every property is `outbound`: `sliceId` and `incarnation`
+  (`constantSnapshot`): which slice of that letter this is, never 0 and
+  never reused while the Core runs, so a command naming it never reaches
+  the letter made again after a close); `controllerDeviceId` (the
+  controller's id as `connectedDevices` names it, `""` for none, `station`
+  for the Core's own operating position); `controlRevision` (1 when made,
+  one more on each change of controller); `listenerDeviceIds` (utf8, a
+  JSON array of every joined device's id, the controller first, then in
+  join order); `activeRxDeviceIds` (utf8, a JSON array of the devices
+  whose active receive slice this is); `txSelected` (the marker's
+  `txSlice` rule, ruling 5.4a); `onAir` (the slice is transmitting now).
 - **A change of owner** (a device adopting slices nobody owned, a slice
-  passing to the station for a device that left, a held slice returning)
-  reaches each session as `object.destroy` of the form it had and
-  `object.create` of the form it has now (`slice:<id>` to `marker:<id>`,
-  or back). A session first sent an object of a class after its
-  connect-time burst (its first marker, when a second device arrives) is
-  sent that class's `schema` just before it.
+  passing to the station for a device that left, a held slice returning,
+  a take or a release) reaches each session as `object.destroy` of the
+  form it had and `object.create` of the form it has now (`slice:<id>` to
+  `marker:<id>`, or back); so does a join or a leave for a session with
+  `sliceAccessVersion` 1. A session whose form did not change (a
+  controller that stays on as a listener after a take, a listener that
+  takes control) is sent nothing but the `access:<id>` delta. A session
+  first sent an object of a class after its connect-time burst (its first
+  marker, when a second device arrives) is sent that class's `schema`
+  just before it.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -4209,8 +4286,9 @@ joins any receiver whose window covers its frequency, whoever claimed it,
 as it always has; two devices' slices can therefore share one receiver.
 
 **The anchor.** The device whose slice claimed a receiver anchors it.
-When the anchor's last slice leaves the receiver, the anchor passes to the
-device whose slice has been on it longest; nobody is asked or told. When
+When the anchor's last slice leaves the receiver, or its control passes to
+nobody, the anchor passes to the device whose slice has been on it
+longest; nobody is asked or told. When
 the last slice leaves, the receiver is free. A shared receiver's window
 does not follow a slice's tuning inside it (the slice moves only its own
 shift, as several slices on one receiver always have).
@@ -4218,7 +4296,10 @@ shift, as several slices on one receiver always have).
 **The C-Tune pin** of a shared receiver is its anchor's.
 `requestStreamCtunPinned` from another device is refused with "This
 panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
-<anchor's name>'s.".
+<anchor's name>'s.", or while the anchor is not connected "This
+panadapter shows the receiver of <anchor's name>, which is not connected
+now. Its C-Tune setting stays with <anchor's name> until it is back or
+its three minutes are up.".
 A pin lasts through its anchor's link dropping and its coming back as the
 same device (its `streamCtunPinned` is as it left it); it ends when the
 anchor leaves for good (`session.leave`, a token window's end, the end of
@@ -4282,6 +4363,118 @@ taker's slice and, when one is free, a choice with `sliceId` -1). Its own
 slices at their frequencies, modes and panadapters, with their settings.
 Once taken back, a notice cannot be taken back again ("That can no longer
 be taken back.").
+
+**Listening and control** (`sliceAccessVersion` 1; the slice control
+and shared listening design, docs/architecture/2026-09-28-slice-control-
+and-listening-design.md). Each slice has one controller (its owner) or
+none, and any number of listeners; the controller is always one of them.
+A device sees and hears every slice it has joined and changes only the
+one it controls: a write or a slice verb from a listener is refused with
+"Slice <letter> is controlled by <name>. Take control to change it."
+("Nobody controls slice <letter>. Take control to change it." with no
+controller). A session with the feature receives `slice:<id>` for every
+slice it has joined and `marker:<id>` for every other; a join or a leave
+swaps them as a change of owner does (section 7.1). The `access:<id>`
+object says who controls and who listens. The verbs (section 9.1):
+
+- `slice.listen {sliceId, incarnation}` joins the slice. Nothing is
+  allocated: no slice, receiver or DDC, so it works with every receiver
+  and the slice cap in use. Already joined is accepted and changes
+  nothing. Its result carries the slice's `controlRevision`.
+- `slice.stopListening {sliceId, incarnation}` leaves it. From the
+  controller it is refused, "You control slice <letter>. Use Release to
+  leave it."; not joined, it is accepted and changes nothing. When it was
+  the device's active receive slice, the next slice the device has joined
+  (in creation order) becomes it. A slice left with no controller and no
+  listener closes, the Core's last slice included (the Core then has no
+  slice; see "A Core with no slice" below).
+- `slice.takeControl {sliceId, incarnation, controlRevision}` makes the
+  device its controller in one change: no slice is closed or made, and
+  its receiver, channel and audio stay. The former controller stays a
+  listener (its `slice:<id>` stays; it is sent `notice` `controlTaken`)
+  and every other listener stays. Refused while the slice is
+  transmitting (the transmit slice of a holder on the air, or the one a
+  keyed radio holds), checked when the take is applied: "Slice <letter>
+  is transmitting. Take control once it stops."; and when its controller
+  cannot stay on as a listener: a session without the feature ("<name>
+  needs an update before control of slice <letter> can pass to another
+  device."), or the Core's own position (a slice the Core keeps for a
+  device may be taken, and so may an away device's slice within its 3
+  minutes). When the
+  former controller holds transmit on the slice, the transmit flag moves
+  to another of its slices, or with none transmit is released; its
+  remembered transmit choice no longer names the slice, and the new
+  controller's transmit binding prefers its other slices until it picks
+  this one with `tx.setTxSlice`. Its result carries the new
+  `controlRevision`.
+- `slice.release {sliceId, incarnation, controlRevision}`, from the
+  controller only ("Only the device that controls slice <letter> can
+  release it."): the controller is cleared and it leaves. The slice stays
+  for its other listeners with no controller (nobody adopts it, not even a
+  device alone on the Core; `slice.takeControl` does), refused while it
+  transmits ("Slice <letter> is transmitting. Release it once it
+  stops."), or closes when nobody else is on it, the Core's last slice
+  included. A `removeSlice` from a controller of a slice others listen
+  to acts as this release, from an older window too, and so does its
+  `removeSlice` of the Core's last slice.
+
+  A Core with no slice: zero slices is a valid idle state. No receiver
+  streams (Protocol 1 still streams its first receiver, as the protocol
+  needs one), no slice is active, nothing is bound for transmit and every
+  key is refused (`noTransmitSlice`, section 18). `addSlice` and
+  `addSliceOnPan` make a working slice again, and a device let in with no
+  slice is given one (section 7.1). Its layout is not saved, so after a
+  restart, or when the radio connects with no slice, the Core makes one
+  Slice A that nobody owns.
+- `slice.setListenLevel {sliceId, incarnation, level, muted}` sets the
+  device's own listening level (0 to 1) and mute for a slice it listens
+  to without controlling it. It changes only what that device hears: the
+  slice's AF gain and mute, which its controller sets, are untouched, and
+  two listeners of one slice each hear it at their own level. A new
+  listener, and a former controller that stays on as a listener, start at
+  the slice's AF gain at that moment. From a device not listening to the
+  slice it is refused, "You are not listening to slice <letter>. Listen in
+  first."; a level outside 0 to 1, or not a number, is refused as
+  unreadable. Each listened slice joins the device's audio centered at
+  this level. The Core applies each slice's AF gain in its own mixer (the
+  operator's audio at the AF gain, each listener's at its own level), not
+  in the receive channel, so the VAX bus and slice taps carry the slice
+  at a fixed level whatever the AF gain, and stay audible at AF 0.
+- `setActiveSliceById` from a session with the feature makes any slice it
+  has joined its active receive slice; only a slice it controls also
+  becomes its active slice (ruling 5.10). From an older window, today's
+  rule.
+
+Each verb names the slice by `sliceId` and `incarnation` (the
+`access:<id>` object's): a slice closed and its letter made again is
+refused, "That slice has closed. Choose it again from the list.". Take
+and release carry the `controlRevision` the device saw: of two devices
+that saw the same one, the first is applied and the other refused,
+"Someone else changed who controls slice <letter>. Look again and try
+once more.".
+
+**Listeners, the refused Add and the take questions** (`sliceAccessVersion`
+1, slice control plan Task 9). An `addSlice` or `addSliceOnPan` from a
+session with the feature, refused because every receiver or the slice cap
+is in use, carries `usableSlices` in its `values` (`utf8`): a JSON array,
+one entry per live slice in id order, `{sliceId, incarnation, letter,
+controllerDeviceId}` (`controllerDeviceId` empty for a slice nobody
+controls), so the device can offer to listen to one with `slice.listen`.
+The `takeReceiver` or `takeSlice` question that follows is unchanged. In
+a question to a session with the feature (a `panMove`, `takeReceiver` or
+`takeSlice`, Take it back's included) each slice named, in `affected` and
+in a choice, also carries `listenerDeviceIds`, an array of the device ids
+that listen to it, its controller first. On proceed the Core also asks
+again when a slice the answer would close or move has a listener the
+question did not name; a listener who left since is no reason to ask
+again. When the answer closes a slice, each of its listeners other than
+its controller and the device that answered is sent `notice`
+`sliceClosed` (no Take it back) naming the slice and who closed it:
+"<name> took the receiver slice <letter> was on. You were listening to
+it.", "<name> took slice <letter>, which you were listening to.", or for
+a pan move "<name> moved their panadapter. Slice <letter>, which you were
+listening to, closed: no receiver was free.". A session without the
+feature gets none of these.
 
 **An older window** (a session without `sessionHolderVersion` 1) is never
 asked: it gets the refusal only, naming the devices involved. When a take
@@ -4363,9 +4556,13 @@ radio's own PTT took transmit, its names then "Radio" and its kind
 `station`) naming who did it,
 `slices` `[{sliceId, letter, frequencyHz, mode, band}]` (closed ones
 included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
-Take it back), `receiverTaken` and `sliceTaken` (Take it back),
+Take it back; `sliceClosed` also to a closed slice's listeners, above), `receiverTaken` and `sliceTaken` (Take it back),
 `settingChanged` (section 7.6: `change`, who, no Take it back),
 `transmitTaken` (section 18.9: who took transmit, Take it back),
+`controlTaken` (`sliceAccessVersion` 1: another device took control of
+the device's slice, which it still listens to; who, the slice, no Take
+it back: "<taker's name> took control of slice <letter>. You are still
+listening."),
 `graceEnded`, `slicesNotRestored`, `antennaKept` and `tuneEnded` (about
 the device's own state: no `by` keys, no Take it back). `tuneEnded`
 (iPhone app plan Task 77 fix round 4) tells a device that its accepted
@@ -5146,6 +5343,20 @@ command (`biasMode` "ClassA" or "ClassAB", `fanMode` "Auto", "Quiet" or
 "Continuous", or `ledIntensity` 0 to 100), and none or more than one is
 refused.
 
+`slice.listen`, `slice.stopListening`, `slice.takeControl`,
+`slice.release` and `slice.setListenLevel` (`sliceAccessVersion` 1,
+section 7.5) name the slice by
+`sliceId` and `incarnation`, each a whole number of 0 or more (read from
+the `access:<id>` object); take and release add the `controlRevision`
+the device saw, and `slice.setListenLevel` adds `level` (`f64`, 0 to 1)
+and `muted` (`bool`). `slice.listen` and `slice.takeControl` return the slice's
+`controlRevision` afterwards in `values` (`i64`), and each accepted verb
+names `slice:<id>` and `access:<id>` in `affected`. From a peer without
+the feature they are refused before they are read (section 6.3). A
+refused `addSlice` or `addSliceOnPan` from a peer with the feature
+carries `usableSlices` (`utf8`, a JSON array of `{sliceId, incarnation,
+letter, controllerDeviceId}`) in its `values` (section 7.5).
+
 <!-- surface:commands -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
 
@@ -5298,6 +5509,11 @@ refused.
 | `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 | `session.pathTicket` | none | `controlSwitchVersion` | 1 | 11 |
+| `slice.listen` | `sliceId` i64, `incarnation` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.stopListening` | `sliceId` i64, `incarnation` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.takeControl` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.release` | `sliceId` i64, `incarnation` i64, `controlRevision` i64 | `sliceAccessVersion` | 1 | 11 |
+| `slice.setListenLevel` | `sliceId` i64, `incarnation` i64, `level` f64, `muted` bool | `sliceAccessVersion` | 1 | 11 |
 | `station.settingsExport.begin` | none | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.read` | `transferId` utf8, `offset` i64 | `settingsBackupVersion` | 1 | 11 |
 | `station.settingsExport.cancel` | `transferId` utf8 | `settingsBackupVersion` | 1 | 11 |
@@ -6210,20 +6426,33 @@ device, away or not. The heartbeat timeout stays retryable: that end is
 what starts a device's 3 minutes.
 
 **What happens to a device's slices** (iPhone app plan Task 73; the
-several-devices design, rulings 4.11, 4.12 and 5.2). An away device's
-slices keep running, its own, their markers `ownerAway`. When its 3
-minutes end, or it leaves with `session.leave`, its slices close and the
-Core saves them for its return, with each slice's own settings; if no
-other device is on the Core they keep running instead, held for it. A
-token window's slices are not saved (it cannot be recognised again): with
-another device on the Core they close, otherwise they pass to nobody.
-Removing a device closes its slices, held ones included, and forgets what
-was saved for it. The Core never closes its last slice for any of these;
-that one stays, held (or owned by nobody). When a device is let in, the
-Core returns the slices held for it, restores its saved slices where they
-fit (a receiver window that covers each or a free receiver; its old
-letter when free, else the lowest free), keeps any that do not fit for
-next time, and, if it still owns none, gives it one (section 7.1).
+several-devices design, rulings 4.11, 4.12 and 5.2; slice control plan
+Task 8). An away device's slices keep running, its own, their markers
+`ownerAway`, and it stays a listener of what it listened to. When its 3
+minutes end (for that absence only: a device that came back, or dropped
+again since, keeps its claims), or it leaves with `session.leave`, every
+claim it has goes at once. A slice it controlled that another device
+listens to keeps running with no controller for that listener; one
+nobody else is on closes, and the Core saves it for the device's return,
+with the slice's own settings, the Core's last slice included (the Core
+then has no slice). It leaves every slice it only listened to, and one
+with nobody left closes. No slice is held for it. A token window's
+claims go the same way when its session ends; its slices are not saved
+(it cannot be recognised again). Removing a device, and a fifth device
+taking its place, release its claims the same way; removing it also
+forgets what was saved for it. Slices held for a device (a layout
+restored after a restart, ruling 5.3) are released with its other claims.
+While a device is away within its 3 minutes, another device may take
+control of its idle slice (`slice.takeControl`); the away device stays a
+listener and, back, finds it so. A device's slices while it is away, or
+held for it, never count in the receive filter choice and are never
+named in a question about a change that would affect other devices
+(section 7.3); such a change reaching only them applies at once. When a
+device is let in, the Core returns the slices held for it, restores its
+saved slices where they fit (a receiver window that covers each or a
+free receiver; its old letter when free, else the lowest free), never
+over a slice that still exists, keeps any that do not fit for next time,
+and, if it still owns none, gives it one (section 7.1).
 
 **Routing with several devices** (iPhone app plan Task 72; the
 several-devices design, ruling 5.8). Each session has its own view of the
@@ -6953,8 +7182,9 @@ same on every machine.
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
 | `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
+| `slice-access` | This device declares `sliceAccess` with `sessionHolder` (slice control plan Task 4): its capabilities end with `sliceAccessVersion` 1, its burst carries the `SliceAccess` schema and `access:0` (the incarnation and control revision recorded, controller and only listener this device, its active receive slice, not transmitting). `slice.listen` on its own slice is accepted and changes nothing, returning the revision; `slice.stopListening` is refused "You control slice A. Use Release to leave it."; `slice.takeControl` with the revision seen is accepted with no change; `slice.release` with another revision is refused "Someone else changed who controls slice A. Look again and try once more."; each verb with a renamed argument is refused "The Core could not read this request.". Runs on the station alone |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
-| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
+| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: nobody else is on its slice, so the slice closes and is saved for it (the Core has no slice). This device, let in meanwhile, gets a slice of its own; the other device signs in again and its saved slice is restored under the lowest free letter, which this device sees as a marker with `ownerAway` false |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`) and whose device's media carries a microphone line (stationSetup `microphoneLine`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Each key and unkey also moves `txState` (section 18.8): `keyed`, who keyed and how (`keyedTrigger` `screen`, `tci`, `tune`), `keyedSinceMs` on the runner's virtual clock and 180 s left for the phone. Runs on the station and the app |
 | `key-without-microphone` | On the same Core as `unheld-key` but with no microphone line for the device (stationSetup `microphoneLine` absent): a person's `tx.key {trigger:"screen"}` is refused `micNotReady`, "This device's microphone is not connected to the Core. Wait a moment and try again.", and nothing keys; a program's key on unheld transmit is still refused `programNeedsTransmit` first. Runs on the station and the app |
@@ -7268,12 +7498,16 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `notHolder` | Take transmit on this device first. | `takeTransmit` |
 | `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
 | `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
+| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice) | |
+| `chooseTransmitSlice` | You took this slice from another device. Choose it for transmit first with its TX button. (a key whose transmit binding would land on a slice this device took from another device and has not chosen with `tx.setTxSlice`, or the hosting desktop's TX button, while it has no other slice it may transmit on) | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two
 sentences without codes; `keyEnded` answers a copy of a key the Core has
 already stopped (section 18.6); `holderOnAir` is ruling 7.4's; `notHolder` answers
 `tx.setTxSlice` while nobody holds transmit, a case the design does not
-settle.
+settle. `chooseTransmitSlice` is the slice control plan's ruling Q8(c):
+a lone window or phone keying on its own slice is never refused for not
+having sent `tx.setTxSlice`.
 
 ### 18.4 While the holder is on the air
 

@@ -537,6 +537,14 @@ void RxApplet::buildUi()
             " border-radius: 3px; font-weight: bold; font-size: 11px; }"
         ).arg(VfoWidget::sliceColor(0).name(), Style::kBlueText));
         row->addWidget(m_sliceBadge);
+        // Slice control plan Task 15: the badge's menu offers the bound
+        // slice's access actions, so Take control is reachable with a
+        // single slice (when the tab row is hidden) too.
+        m_sliceBadge->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_sliceBadge, &QWidget::customContextMenuRequested, this,
+                [this](const QPoint& pos) {
+            showSliceMenu(m_badgeSliceId, m_sliceBadge, pos);
+        });
 
         // Control 2: Lock button (checkable, 20×20, emoji 🔓/🔒)
         // Live in S2.9 — wired to SliceModel::setLocked (client-side guard).
@@ -555,7 +563,7 @@ void RxApplet::buildUi()
             m_lockBtn->setText(locked
                 ? QString::fromUtf8("\xF0\x9F\x94\x92")   // 🔒
                 : QString::fromUtf8("\xF0\x9F\x94\x93")); // 🔓
-            if (!m_updatingFromModel && m_slice) {
+            if (!m_updatingFromModel && m_slice && !isListening()) {
                 m_slice->setLocked(locked);
             }
         });
@@ -577,6 +585,7 @@ void RxApplet::buildUi()
             "QPushButton:hover { color: #66aaff; }"  // §A2 one-off hover derived from #4488ff
         ));
         connect(m_rxAntBtn, &QPushButton::clicked, this, [this] {
+            if (isListening()) { return; }  // Task 15: another device controls it
             // B3: AntennaPopupBuilder — capability-gated popup (Phase 3P-I-a T22).
             QMenu menu(this);
             // Dark popup palette — without this, Ubuntu's default theme renders
@@ -624,6 +633,7 @@ void RxApplet::buildUi()
             "QPushButton:hover { color: #ff6666; }"  // §A2 one-off hover derived from #ff4444
         ));
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
+            if (isListening()) { return; }  // Task 15: another device controls it
             // B3: AntennaPopupBuilder TX mode — only main ANT1-3 (Phase 3P-I-a T22).
             QMenu menu(this);
             // Dark popup palette — see RX button above. Issue #98.
@@ -696,7 +706,7 @@ void RxApplet::buildUi()
         // Tier 1 wiring: mode combo → SliceModel::setDspMode()
         connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             const QString name = m_modeCombo->currentText();
             m_slice->setDspMode(SliceModel::modeFromName(name));
         });
@@ -744,7 +754,7 @@ void RxApplet::buildUi()
         // {1, 10, 100, 500, 1k, 10k}. Down = previous, Up = next.
         // Wraps at both ends. Issue #69.
         connect(m_stepDown, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             const int current = m_slice->stepHz();
             int idx = 0;
             for (int i = 0; i < kStageOneStepLadderSize; ++i) {
@@ -755,7 +765,7 @@ void RxApplet::buildUi()
             m_slice->setStepHz(kStageOneStepLadder[prev]);
         });
         connect(m_stepUp, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             const int current = m_slice->stepHz();
             int idx = 0;
             for (int i = 0; i < kStageOneStepLadderSize; ++i) {
@@ -814,7 +824,7 @@ void RxApplet::buildUi()
         m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         connect(m_filterPassband, &FilterPassbandWidget::filterChanged,
                 this, [this](int lo, int hi) {
-            if (m_slice) { m_slice->setFilter(lo, hi); }
+            if (m_slice && !isListening()) { m_slice->setFilter(lo, hi); }
         });
         leftCol->addWidget(m_filterPassband);
     }
@@ -850,7 +860,7 @@ void RxApplet::buildUi()
         m_panSlider->setFixedHeight(18);
         m_panSlider->setStyleSheet(Style::sliderHStyle());
         connect(m_panSlider, &QSlider::valueChanged, this, [this](int val) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setAudioPan((val - 50) / 50.0);
         });
         row->addWidget(m_panSlider, 1);
@@ -874,7 +884,7 @@ void RxApplet::buildUi()
 
         m_sqlBtn = greenToggle(QStringLiteral("SQL"), 52, 20);
         connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setSsqlEnabled(on);
         });
         row->addWidget(m_sqlBtn);
@@ -886,7 +896,7 @@ void RxApplet::buildUi()
         m_sqlSlider->setFixedHeight(18);
         m_sqlSlider->setStyleSheet(Style::sliderHStyle());
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int val) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setSsqlThresh(static_cast<double>(val));
         });
         row->addWidget(m_sqlSlider, 1);
@@ -1002,7 +1012,7 @@ void RxApplet::buildUi()
         // Tier 1 wiring
         connect(m_agcCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int idx) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             const auto mode = static_cast<AGCMode>(
                 m_agcCombo->itemData(idx).toInt());
             m_slice->setAgcMode(mode);
@@ -1039,6 +1049,7 @@ void RxApplet::buildUi()
         // From Thetis v2.10.3.13 setup.designer.cs:38679 — chkAutoAGCRX1.ToolTip
         m_agcAutoLabel->setToolTip(QStringLiteral("Automatically adjust AGC based on Noise Floor"));
         connect(m_agcAutoLabel, &QPushButton::clicked, this, [this]() {
+            if (isListening()) { return; }  // Task 15: another device controls it
             emit autoAgcToggled(!m_autoAgcActive);
         });
         headerRow->addWidget(m_agcAutoLabel);
@@ -1072,7 +1083,7 @@ void RxApplet::buildUi()
 
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             m_agcTLabel->setText(QString::number(v));
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setAgcThreshold(v);
         });
 
@@ -1123,23 +1134,23 @@ void RxApplet::buildUi()
         // Wire RIT controls to SliceModel (live in S2.8).
         // Toggle → enable/disable RIT on the slice.
         connect(m_ritOnBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setRitEnabled(on);
         });
         // Minus/Plus → decrement/increment by current step, clamped to ±10000 Hz.
         connect(m_ritMinus, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             int step = m_slice->stepHz();
             m_slice->setRitHz(std::clamp(m_slice->ritHz() - step, -10000, 10000));
         });
         connect(m_ritPlus, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             int step = m_slice->stepHz();
             m_slice->setRitHz(std::clamp(m_slice->ritHz() + step, -10000, 10000));
         });
         // Zero → reset RIT offset to 0.
         connect(m_ritZero, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             m_slice->setRitHz(0);
         });
 
@@ -1184,23 +1195,23 @@ void RxApplet::buildUi()
         // Wire XIT controls to SliceModel (B6).
         // Toggle → enable/disable XIT on the slice.
         connect(m_xitOnBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (m_updatingFromModel || !m_slice) { return; }
+            if (m_updatingFromModel || !m_slice || isListening()) { return; }
             m_slice->setXitEnabled(on);
         });
         // Minus/Plus → decrement/increment by current step, clamped to ±10000 Hz.
         connect(m_xitMinus, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             int step = m_slice->stepHz();
             m_slice->setXitHz(std::clamp(m_slice->xitHz() - step, -10000, 10000));
         });
         connect(m_xitPlus, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             int step = m_slice->stepHz();
             m_slice->setXitHz(std::clamp(m_slice->xitHz() + step, -10000, 10000));
         });
         // Zero → reset XIT offset to 0.
         connect(m_xitZero, &QPushButton::clicked, this, [this]() {
-            if (!m_slice) { return; }
+            if (!m_slice || isListening()) { return; }
             m_slice->setXitHz(0);
         });
     }
@@ -1346,6 +1357,9 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
         const int low  = fp.low;
         const int high = fp.high;
         connect(btn, &QPushButton::clicked, this, [this, low, high, mode] {
+            // Task 15: another device controls this slice; neither the RX
+            // preset nor the Shift-click TX match applies.
+            if (isListening()) { return; }
             applyFilterPreset(low, high);
             // Shift+click — also snap the TX passband to match the RX preset
             // (Thetis-style alignment shortcut).  Convert IQ-space preset
@@ -1401,6 +1415,9 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
 
         m_filterBtns.append(btn);
         m_filterGrid->addWidget(btn, i / kCols, i % kCols);
+        // Task 15: a rebuild while listening (the controlling device changed
+        // the mode) holds the new buttons like the rest.
+        holdForListening(btn);
     }
 
     // 2026-05-12 bench fix (PR #238): force the grid to re-resolve
@@ -1417,7 +1434,7 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
 
 void RxApplet::applyFilterPreset(int low, int high)
 {
-    if (!m_slice) { return; }
+    if (!m_slice || isListening()) { return; }
     // low/high come directly from SliceModel::presetsForMode() — no mode-switching needed.
     m_slice->setFilter(low, high);
 }
@@ -1480,12 +1497,130 @@ void RxApplet::setSlice(SliceModel* slice)
 void RxApplet::setSliceIndex(int idx)
 {
     if (idx >= 0) {
+        m_badgeSliceId = idx;
         m_sliceBadge->setText(QString(QChar(QLatin1Char(static_cast<char>('A' + idx)))));
         m_sliceBadge->setStyleSheet(QStringLiteral(
             "QLabel { background: %1; color: %2;"
             " border-radius: 3px; font-weight: bold; font-size: 11px; }"
         ).arg(VfoWidget::sliceColor(idx).name(), Style::kBlueText));
     }
+}
+
+// ── Slice control plan Task 15: listening on a slice another device controls ──
+//
+// Mirrors VfoWidget's slice access (Task 14a): on a listened slice every
+// shared tuning and DSP control is disabled with the reason naming the
+// controlling device, and each write site also returns early, so no path
+// through the applet writes the slice. The attenuator and preamp row is
+// the radio's hardware, not the slice's, and stays as it is.
+namespace {
+constexpr const char* kSavedTip     = "RxSavedAccessTooltip";
+constexpr const char* kSavedDesc    = "RxSavedAccessDescription";
+constexpr const char* kSavedEnabled = "RxSavedAccessEnabled";
+} // namespace
+
+void RxApplet::setSliceAccess(const VfoWidget::SliceAccess& access)
+{
+    if (access == m_sliceAccess) { return; }
+    m_sliceAccess = access;
+    applySliceAccess();
+}
+
+void RxApplet::setSliceTabAccess(const QHash<int, VfoWidget::SliceAccess>& access)
+{
+    m_tabAccess = access;
+}
+
+void RxApplet::setSliceAccessPending(const QString& pending)
+{
+    m_accessPending = pending;
+}
+
+QList<QWidget*> RxApplet::listeningHeldControls() const
+{
+    QList<QWidget*> held{
+        m_lockBtn, m_rxAntBtn, m_txAntBtn, m_modeCombo, m_stepDown, m_stepUp,
+        m_filterPassband, m_panSlider, m_sqlBtn, m_sqlSlider,
+        m_agcCombo, m_agcTSlider, m_agcAutoLabel,
+        m_ritOnBtn, m_ritZero, m_ritMinus, m_ritPlus,
+        m_xitOnBtn, m_xitZero, m_xitMinus, m_xitPlus,
+    };
+    for (QPushButton* btn : m_filterBtns) {
+        held.append(btn);
+    }
+    held.removeAll(nullptr);
+    return held;
+}
+
+void RxApplet::holdForListening(QWidget* control)
+{
+    if (!control) { return; }
+    if (isListening()) {
+        if (!control->property(kSavedEnabled).isValid()) {
+            control->setProperty(kSavedTip, control->toolTip());
+            control->setProperty(kSavedDesc, control->accessibleDescription());
+            control->setProperty(kSavedEnabled, control->isEnabled());
+        }
+        control->setEnabled(false);
+        control->setToolTip(m_sliceAccess.heldReason);
+        control->setAccessibleDescription(m_sliceAccess.heldReason);
+        return;
+    }
+    if (!control->property(kSavedEnabled).isValid()) { return; }
+    control->setToolTip(control->property(kSavedTip).toString());
+    control->setAccessibleDescription(control->property(kSavedDesc).toString());
+    control->setEnabled(control->property(kSavedEnabled).toBool());
+    control->setProperty(kSavedTip, QVariant());
+    control->setProperty(kSavedDesc, QVariant());
+    control->setProperty(kSavedEnabled, QVariant());
+}
+
+void RxApplet::applySliceAccess()
+{
+    for (QWidget* control : listeningHeldControls()) {
+        holdForListening(control);
+    }
+}
+
+void RxApplet::populateSliceMenu(QMenu& menu, int sliceId)
+{
+    VfoWidget::SliceAccess access = m_tabAccess.value(sliceId);
+    if (!m_tabAccess.contains(sliceId) && m_slice && m_slice->sliceIndex() == sliceId) {
+        access = m_sliceAccess;
+    }
+    const auto addAccessAction = [this, &menu, sliceId](const QString& text,
+                                                       void (RxApplet::*signal)(int)) {
+        QAction* act = menu.addAction(text);
+        if (!m_accessPending.isEmpty()) {
+            act->setEnabled(false);
+            act->setToolTip(m_accessPending);
+        }
+        connect(act, &QAction::triggered, this, [this, signal, sliceId]() {
+            if (!m_accessPending.isEmpty()) { return; }
+            emit (this->*signal)(sliceId);
+        });
+    };
+    switch (access.state) {
+    case VfoWidget::SliceAccess::State::Listening:
+        addAccessAction(tr("Take control"), &RxApplet::takeControlRequested);
+        addAccessAction(tr("Stop listening"), &RxApplet::stopListeningRequested);
+        break;
+    case VfoWidget::SliceAccess::State::Controlled:
+        addAccessAction(tr("Release"), &RxApplet::releaseRequested);
+        break;
+    case VfoWidget::SliceAccess::State::Unshared:
+        break;
+    }
+}
+
+void RxApplet::showSliceMenu(int sliceId, QWidget* anchor, const QPoint& pos)
+{
+    if (sliceId < 0 || !anchor) { return; }
+    QMenu menu(this);
+    menu.setStyleSheet(QString::fromLatin1(kPopupMenu));
+    populateSliceMenu(menu, sliceId);
+    if (menu.actions().isEmpty()) { return; }
+    menu.exec(anchor->mapToGlobal(pos));
 }
 
 // Phase 3F (Bug 3): rebuild the per-slice tab row to mirror the live slice
@@ -1525,6 +1660,12 @@ void RxApplet::updateSliceButtons(const QVector<SliceModel*>& slices,
             auto* btn = new QToolButton(m_sliceTabRow);
             btn->setCheckable(true);
             btn->setFixedSize(22, 20);
+            // Task 15: a tab's menu offers that slice's access actions.
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn, &QWidget::customContextMenuRequested, this,
+                    [this, btn](const QPoint& pos) {
+                showSliceMenu(m_sliceGroup->id(btn), btn, pos);
+            });
             m_sliceBtns.append(btn);
             const int insertAt = m_sliceTabLayout->count() - 1;
             m_sliceTabLayout->insertWidget(insertAt < 0 ? 0 : insertAt, btn);
@@ -1556,7 +1697,16 @@ void RxApplet::updateSliceButtons(const QVector<SliceModel*>& slices,
             " border-radius: 3px; font-weight: bold; font-size: 10px; padding: 0; }"
             "QToolButton:checked { background: %1; color: #000000; }")
             .arg(c.name()));
-        btn->setToolTip(QStringLiteral("Slice %1").arg(s->sliceLetter()));
+        // Task 15: a shared slice's tab says who controls it.
+        const auto access = m_tabAccess.constFind(sliceIdx);
+        if (access != m_tabAccess.constEnd()
+            && access->state != VfoWidget::SliceAccess::State::Unshared
+            && !access->line.isEmpty()) {
+            btn->setToolTip(QStringLiteral("Slice %1: %2")
+                                .arg(s->sliceLetter()).arg(access->line));
+        } else {
+            btn->setToolTip(QStringLiteral("Slice %1").arg(s->sliceLetter()));
+        }
         btn->setChecked(sliceIdx == activeSliceIndex);
     }
 
@@ -2128,6 +2278,14 @@ void RxApplet::populateAntennaButtons(Band band)
 
     // Update button text directly — bypasses the connectSlice() signal chain
     // so the change is immediate regardless of whether the slice is "connected".
+    // Task 15: on a slice another device controls, the band's antenna is
+    // that device's to apply; show the slice's own antenna and never write.
+    if (isListening()) {
+        m_rxAntBtn->setText(m_slice->rxAntenna());
+        m_txAntBtn->setText(txLabel);
+        return;
+    }
+
     m_rxAntBtn->setText(rxLabel);
     m_txAntBtn->setText(txLabel);
 
@@ -2139,6 +2297,16 @@ void RxApplet::populateAntennaButtons(Band band)
 }
 
 #ifdef NEREUS_BUILD_TESTS
+QString RxApplet::sliceTabToolTipForTest(int sliceId) const
+{
+    for (QToolButton* btn : m_sliceBtns) {
+        if (btn && m_sliceGroup && m_sliceGroup->id(btn) == sliceId) {
+            return btn->toolTip();
+        }
+    }
+    return QString();
+}
+
 int RxApplet::stepAttMaxForTest() const
 {
     return m_stepAttSpin ? m_stepAttSpin->maximum() : -1;

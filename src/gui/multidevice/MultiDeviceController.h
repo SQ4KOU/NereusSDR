@@ -17,9 +17,14 @@
 //                       sharedSetting / panMove: ConfirmChangeDialog;
 //                       takeReceiver / takeSlice: TakeReceiverDialog;
 //                       each answers confirm.proceed or confirm.cancel
-//   notice              a NoticeCard on the band, Take it back when offered
+//   notice              a NoticeCard on the band, Take it back when offered;
+//                       controlTaken is a refusal toast instead (slice
+//                       control plan Task 5)
 //   session.held        the Core is full: ReplaceDeviceDialog, answered
 //                       with session.takeover (Task 78 item 7, G-53)
+//   slice access        a refused listen, stop listening, take control or
+//                       release, and a change held back on a slice this
+//                       window only listens to, are refusals
 //   markers             foreignMarkers() for each panadapter
 //
 // Nothing here keys the radio: a take never keys (the link document,
@@ -33,6 +38,13 @@
 //   2026-09-28: the fifth-device choice (Task 78 item 7, G-53). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               controlTaken notice and the slice access refusals and holds
+//               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: questionDialog(), shared with
+//               the hosting desktop's HostingSliceActions. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -42,6 +54,8 @@
 #include <QPointer>
 #include <QVector>
 
+#include <functional>
+
 class QDialog;
 class QWidget;
 
@@ -49,6 +63,7 @@ namespace NereusSDR {
 
 class NoticeCard;
 class RemoteDevicesState;
+struct SessionPrompt;
 class StationClient;
 
 class MultiDeviceController : public QObject {
@@ -75,13 +90,26 @@ public:
     static QVector<SpectrumWidget::ForeignSliceMarker> foreignMarkers(
         const RemoteDevicesState& devices);
 
+    /// The dialog for a confirm.request question: TakeTransmitDialog,
+    /// TakeReceiverDialog (takeReceiver, takeSlice) or ConfirmChangeDialog.
+    /// `choice`, when given, is set to what the answer's choice is read
+    /// from when the dialog is accepted (-1 for none). A remote window and
+    /// the hosting desktop ask with the same dialogs.
+    static QDialog* questionDialog(const SessionPrompt& prompt, QWidget* parent,
+                                   std::function<qint64()>* choice);
+    /// Notice cards stacked from the foot of `host` upwards, newest at the
+    /// foot (a remote window's and the hosting desktop's alike).
+    static void stackNoticeCards(QWidget* host, QList<NoticeCard*> cards);
+
     /// The dialog open now (a question, or the window's own take question),
     /// or null.
     QDialog* openDialog() const { return m_dialog.data(); }
     QList<NoticeCard*> noticeCards() const;
 
 signals:
-    /// A refusal to show the operator (a take, an answer, Take it back).
+    /// A refusal to show the operator (a take, an answer, Take it back; a
+    /// slice access verb, a change held back on a listened slice, another
+    /// device taking control of a slice this window controlled).
     void refusal(const QString& reason);
     /// tx.take was accepted: this window holds transmit.
     void transmitTaken();

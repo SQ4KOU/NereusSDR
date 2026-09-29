@@ -346,6 +346,28 @@
 //                IStationLink query, and a holder change reaches the
 //                window's model (reportTransmitHolderChanged). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the hello
+//               declares sliceAccess with sessionHolder; the `access:<id>`
+//               objects are held by no model object until Task 5. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               `access:<id>` objects go to SliceAccessMirror, which marks
+//               a listened slice read-only; remoteSliceAccessAvailable and
+//               slice.listen, slice.stopListening, slice.takeControl and
+//               slice.release, answered on deviceCommandFinished; a change
+//               held back on a listened slice is sliceAccessHeld. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel sends
+//               slice.setListenLevel for a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: a test's token bench link
+//               declares sliceAccess with sessionHolder when
+//               setTokenSliceAccessForTest asks. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -380,6 +402,7 @@
 #include "core/session/MediaTunnel.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessMirror.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
@@ -417,6 +440,7 @@
 #include <QWebSocket>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -677,6 +701,14 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     }
     // iPhone app plan Task 78: who else is on the Core.
     m_remoteDevices = new RemoteDevicesState(this);
+    // Slice control plan Task 5: who controls and who listens to each
+    // slice; it marks a slice this window only listens to read-only.
+    m_sliceAccess = new SliceAccessMirror(m_radioModel.data(), m_remoteDevices, this);
+    if (!m_radioModel.isNull()) {
+        // A slice request the model held back for a listened slice.
+        connect(m_radioModel.data(), &RadioModel::sliceRequestHeldForListener, this,
+                [this](int sliceId, const QString& reason) { emit sliceAccessHeld(sliceId, reason); });
+    }
     connect(m_transmitState, &TransmitState::holderChanged, this,
             &StationClient::transmitTakeAvailabilityChanged);
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
@@ -867,6 +899,15 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                 }
                 const QByteArray className =
                     MirrorSchema::shortClassName(object->metaObject()->className());
+                // Slice control plan Task 5: a slice this window only
+                // listens to sends nothing; the Core refuses a listener's
+                // every write. Its setters hold a change back before it
+                // gets here; what is left (the pan it is shown on) is this
+                // window's own.
+                if (const auto* slice = qobject_cast<const SliceModel*>(object);
+                    slice != nullptr && slice->isReadOnlyListener()) {
+                    return;
+                }
                 for (const MirrorUpdate& update : updates) {
                     // OUTBOUND is MirrorPolicy-gated: this is the exact
                     // direction that table describes, so a property the
@@ -1982,6 +2023,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // Task 78: who else was on the Core was this session's.
     m_declaredSessionHolder = false;
     m_remoteDevices->clear();
+    // Slice control plan Task 5: so were its access objects. The slices keep
+    // their read-only marks until the next session's objects arrive.
+    m_sliceAccess->clear();
     if (m_radioModel) {
         m_radioModel->setStationMayCloseLastSlice(false);
     }
@@ -2656,6 +2700,10 @@ void StationClient::onTransportText(const QByteArray& wire)
             m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
         }
         m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+        // Slice control plan Task 5: every slice the snapshot named is
+        // marked from the access objects it sent (none: not read-only).
+        m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
+        m_sliceAccess->refreshSlices();
         emit transmitTakeAvailabilityChanged();
         refreshSettingsHygiene();
         const QPointer<StationClient> watchSelf(this);
@@ -2963,6 +3011,9 @@ bool StationClient::signIn(const SessionMessage& hello)
         }
         if (m_declaresSessionHolder) {
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
+            // Slice control plan Task 4: listening to and taking another
+            // device's slice (the rest of the window's side is Task 5).
+            features.insert(QByteArrayLiteral("sliceAccess"), 1);
         }
         m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3008,6 +3059,9 @@ bool StationClient::signIn(const SessionMessage& hello)
     if (!m_tokenSessionHolderIdForTest.isEmpty() && m_declaresSessionHolder
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
         features.insert(QByteArrayLiteral("sessionHolder"), 1);
+        if (m_tokenSliceAccessForTest) {
+            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+        }
         m_declaredSessionHolder = true;
     }
     send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3121,6 +3175,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
     }
     m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+    m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
     emit transmitTakeAvailabilityChanged();
     if (!self || m_sessionEpoch != epoch) { return; }
     if (m_handshakeComplete) {
@@ -3672,7 +3727,6 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
     if (objectKey == QByteArrayLiteral("devices")) {
         return nullptr;
     }
-
     const int sliceId = idFromKey(objectKey, kSliceKeyPrefix);
     if (sliceId < 0) {
         qCWarning(lcStationClient)
@@ -3812,6 +3866,12 @@ void StationClient::handleObjectCreate(const SessionMessage& message)
         m_remoteDevices->applyObject(message.objectKey, message.updates);
         return;
     }
+    // Slice control plan Task 5: who controls and who listens to a slice.
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_pendingStationSchemas.remove(message.className);
+        m_sliceAccess->applyObject(message.objectKey, message.updates);
+        return;
+    }
     QObject* target = resolveOrCreate(message.objectKey, message.className);
     if (target == nullptr) {
         return;
@@ -3835,6 +3895,10 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
         m_remoteDevices->destroyObject(message.objectKey);
         return;
     }
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_sliceAccess->destroyObject(message.objectKey);
+        return;
+    }
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
     m_propertyWriteIds.remove(message.objectKey);
@@ -3853,6 +3917,10 @@ void StationClient::handleDelta(const SessionMessage& message)
 {
     if (RemoteDevicesState::holdsKey(message.objectKey)) {
         m_remoteDevices->applyObject(message.objectKey, message.updates);
+        return;
+    }
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_sliceAccess->applyObject(message.objectKey, message.updates);
         return;
     }
     QObject* target = m_objects.value(message.objectKey).data();
@@ -4270,6 +4338,10 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
     m_outboundMirror->watch(objectKey, object);
     if (auto* slice = qobject_cast<SliceModel*>(object)) {
         const QPointer<StationClient> owner(this);
+        // Slice control plan Task 5: the Core's own state is applied to a
+        // listened slice; only a change this window makes is held back.
+        // (RadioModel announces a held change, sliceRequestHeldForListener.)
+        slice->setStationApplyProbe([owner]() { return owner && owner->m_applyingInbound; });
         slice->setNnrSettingsApplier([owner](const NnrSettings& requested, QString* reason)
                                        -> std::optional<NnrSettings> {
             if (owner && (owner->m_applyingInbound || owner->nnrControlAvailable())) {
@@ -4601,6 +4673,83 @@ StationClient::CommandOutcome StationClient::requestSelectBand(int sliceId, int 
     return sendCommand("slice.selectBand", sliceId,
                        { intArgument("sliceId", sliceId), intArgument("band", band) },
                        QStringLiteral("the band change"));
+}
+
+bool StationClient::remoteSliceAccessAvailable() const
+{
+    // Slice control plan Task 5: the Core sends sliceAccessVersion only to
+    // a window that declared sliceAccess with sessionHolder.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.sliceAccessVersion >= 1;
+}
+
+namespace {
+
+MirrorUpdate countArgument(const QByteArray& name, quint64 value)
+{
+    // An incarnation or a control revision: a non-negative i64 on the wire.
+    return MirrorUpdate{ 0, name, MirrorWireKind::Int64,
+                         QVariant(static_cast<qlonglong>(value)) };
+}
+
+} // namespace
+
+StationClient::CommandOutcome StationClient::requestListen(int sliceId, quint64 incarnation)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestListen(sliceId, incarnation);
+    }
+    return sendCommand("slice.listen", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation) },
+                       QStringLiteral("the request to listen to this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestStopListening(int sliceId,
+                                                                  quint64 incarnation)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestStopListening(sliceId, incarnation);
+    }
+    return sendCommand("slice.stopListening", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation) },
+                       QStringLiteral("the request to stop listening to this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestTakeControl(int sliceId, quint64 incarnation,
+                                                                quint64 controlRevision)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestTakeControl(sliceId, incarnation, controlRevision);
+    }
+    return sendCommand("slice.takeControl", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         countArgument("controlRevision", controlRevision) },
+                       QStringLiteral("the request to take control of this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestRelease(int sliceId, quint64 incarnation,
+                                                            quint64 controlRevision)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestRelease(sliceId, incarnation, controlRevision);
+    }
+    return sendCommand("slice.release", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         countArgument("controlRevision", controlRevision) },
+                       QStringLiteral("the request to release this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestListenLevel(int sliceId, quint64 incarnation,
+                                                                double level, bool muted)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestListenLevel(sliceId, incarnation, level, muted);
+    }
+    const double clamped = std::isfinite(level) ? std::clamp(level, 0.0, 1.0) : 0.0;
+    return sendCommand("slice.setListenLevel", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         doubleArgument("level", clamped), boolArgument("muted", muted) },
+                       QStringLiteral("the change to your volume for this slice"));
 }
 
 StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
@@ -6477,9 +6626,17 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             awaiting = !message.accepted;
         }
     }
+    // Slice control plan Task 5: the four slice access verbs are answered
+    // where the window's several-devices refusals are shown; Task 14b adds
+    // a listened slice's own volume (slice.setListenLevel), Task 11 the
+    // transmit slice's choice (tx.setTxSlice).
     if (message.commandVerb == "tx.take" || message.commandVerb == "confirm.proceed"
         || message.commandVerb == "confirm.cancel" || message.commandVerb == "notice.takeBack"
-        || message.commandVerb == "session.leave") {
+        || message.commandVerb == "session.leave" || message.commandVerb == "slice.listen"
+        || message.commandVerb == "slice.stopListening"
+        || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release"
+        || message.commandVerb == "slice.setListenLevel"
+        || message.commandVerb == "tx.setTxSlice") {
         m_pendingCommands.remove(message.commandId);
         emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
                                    message.reason, awaiting);
@@ -7304,6 +7461,19 @@ quint32 StationClient::requestTakeTransmit(bool shown, qint64 holderEpoch, bool 
                                  QVariant(shownKeyed)});
     }
     return invokeCommand(QByteArrayLiteral("tx.take"), args);
+}
+
+quint32 StationClient::requestTxSlice(int sliceId)
+{
+    // tx.setTxSlice came with remoteTxVersion 1 (iPhone app plan Task 34);
+    // the Core answers notHolder while this window does not hold transmit.
+    if (!sessionHolderAvailable() || !remoteTransmitAvailable() || sliceId < 0) {
+        return 0;
+    }
+    return invokeCommand(
+        QByteArrayLiteral("tx.setTxSlice"),
+        {MirrorUpdate{0, QByteArrayLiteral("sliceId"), MirrorWireKind::Int64,
+                      QVariant(static_cast<qint64>(sliceId))}});
 }
 
 quint32 StationClient::proceedQuestion(qint64 id, qint64 choice)
