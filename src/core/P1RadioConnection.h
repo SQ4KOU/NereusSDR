@@ -910,6 +910,9 @@ private:
     // Float→int16 + EP2 zone fill helper.
     // Returns true if 63 samples were available and written, false if underrun.
     bool fillTxZone(quint8* zone63) noexcept;
+    // G-05 follow-up: setMox(false) drops whatever is still queued (and an
+    // unused key cushion), so none of it leads the next key.
+    void discardTxIqOnUnkey() noexcept;
 
     // Hardware config from profile
     int     m_txDrive{0};
