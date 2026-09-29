@@ -593,7 +593,8 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
     // SKU-specific tooltip for chkEXT2OutOnTx is picked in applySkuProfile().
     m_chkRxOutOnTx->setToolTip(tr("Enable RX Bypass Out relay on transmit."));
     m_chkExt1OutOnTx->setToolTip(tr("Route Ext 1 to receive path during transmit."));
-    m_chkRxOutOverride->setToolTip(tr("Disable the RX Bypass Out relay (chkDisableRXOut in Thetis)."));
+    // The Thetis control for this relay is chkDisableRXOut.
+    m_chkRxOutOverride->setToolTip(tr("Disable the RX Bypass Out relay."));
     m_chkUseTxAntForRx->setToolTip(tr("Use the TX antenna for RX instead of the RX antenna."));
 
     // Initialize state from controller.

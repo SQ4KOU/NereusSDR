@@ -61,7 +61,7 @@
             {
               "id": "display.spectrumDefaults.window",
               "label": "Window",
-              "tooltip": "FFT window function. Rectangular has the narrowest main lobe but the worst sidelobes. Blackman-Harris (4T or 7T) gives strong sidelobe rejection. Flat-Top is best for amplitude calibration. Kaiser is parameterized (KaiserPi shape parameter).",
+              "tooltip": "FFT window function. Rectangular has the narrowest main lobe but the worst sidelobes. Blackman-Harris (4T or 7T) gives strong sidelobe rejection. Flat-Top is best for amplitude calibration. Kaiser is parameterized (Kaiser Pi shape parameter).",
               "kind": "choice",
               "binding": {
                 "setting": "DisplayFftWindow"
@@ -81,7 +81,7 @@
             {
               "id": "display.spectrumDefaults.hzPerBinTarget",
               "label": "Hz/bin Target",
-              "tooltip": "Auto-zoom override: target a constant Hz/bin regardless of zoom. Set to 0 (\"Off\") to use the default bins-in-window behavior (FFT replans on zoom). When > 0, the FFT size is fixed at sampleRate / target so the trace delivers the requested resolution at any zoom level, which is handy for hunting narrow signals (CW, digital). Floor at the FFT slider value still applies (slider sets the minimum FFT size).",
+              "tooltip": "Auto-zoom override: target a constant Hz/bin regardless of zoom. Set to 0 (\"Off\") to use the default bins-in-window behavior (FFT replans on zoom). When > 0, the FFT size is fixed at sample rate / target so the trace delivers the requested resolution at any zoom level, which is handy for hunting narrow signals (CW, digital). Floor at the FFT slider value still applies (slider sets the minimum FFT size).",
               "kind": "decimal",
               "binding": {
                 "setting": "DisplayHzPerBinTarget"
@@ -152,7 +152,7 @@
             {
               "id": "display.spectrumDefaults.averageTime",
               "label": "Spectrum Avg Time:",
-              "tooltip": "Spectrum averaging time constant. Larger = heavier smoothing, slower response. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis.",
+              "tooltip": "Spectrum averaging time constant. Larger = heavier smoothing, slower response. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)).",
               "kind": "integer",
               "binding": {"phone": "DisplaySpectrumAverageTimeMs"},
               "applies": "subscription",
@@ -454,7 +454,7 @@
             {
               "id": "display.waterfallDefaults.averageTime",
               "label": "WF Avg Time:",
-              "tooltip": "Waterfall averaging time constant. Independent from the spectrum averaging time. Larger = heavier smoothing. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)) per Thetis.",
+              "tooltip": "Waterfall averaging time constant. Independent from the spectrum averaging time. Larger = heavier smoothing. Translates to a frame-by-frame alpha via α = exp(−1 / (fps × τ)).",
               "kind": "integer",
               "binding": {"phone": "DisplayWaterfallAverageTimeMs"},
               "applies": "subscription",
@@ -553,7 +553,7 @@
             {
               "id": "display.multimeter.pollingDelay",
               "label": "Polling delay:",
-              "tooltip": "How often the meter values are read from WDSP (10–2000 ms). Lower values give faster response; higher values reduce CPU load.",
+              "tooltip": "How often the meter values are updated (10–2000 ms). Lower values give faster response; higher values reduce CPU load.",
               "kind": "integer",
               "binding": {
                 "setting": "MultimeterDelayMs"
@@ -699,7 +699,7 @@
             {
               "id": "display.txDisplay.panAvTime",
               "label": "Time:",
-              "tooltip": "TX panadapter averaging time constant in milliseconds. Larger values give smoother traces at the cost of slower response to transients. Internally divided by 1000 to drive the WDSP exponential back-multiplier.",
+              "tooltip": "TX panadapter averaging time constant in milliseconds. Larger values give smoother traces at the cost of slower response to transients.",
               "kind": "integer",
               "binding": {
                 "setting": "DisplayTxPanAvTimeMs"

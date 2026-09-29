@@ -687,14 +687,14 @@ void GeneralOptionsPage::buildOptionsGroup()
     //   feedback level from the info bar".  Thetis preserves the typo
     //   "Feeback" in the objectName — NereusSDR uses corrected spelling
     //   in user-visible text, source-cite preserves the typo for traceability.
-    // The "Mirror of FB-label right-click" tooltip cue is NereusSDR-original
+    // The "Same as right-clicking the FB indicator" tooltip cue is NereusSDR-original
     // (Thetis has no banner-click hook explanation in tooltip).
     m_chkHideFeedback = new QCheckBox(tr("Hide feedback level"), group);
     m_chkHideFeedback->setObjectName(QStringLiteral("chkHideFeedbackLevel"));
     m_chkHideFeedback->setProperty("nereusSetupId", "general.options.hideFeedback");
     m_chkHideFeedback->setToolTip(
         tr("When checked, the bottom-banner FB indicator shows \"Feedback\" "
-           "text instead of the numeric level. Mirror of FB-label right-click."));
+           "text instead of the numeric level. Same as right-clicking the FB indicator."));
     m_chkHideFeedback->setChecked(
         AppSettings::instance().value(QStringLiteral("HideFeedbackLevel"),
                                        QStringLiteral("False")).toString() == QStringLiteral("True"));
@@ -715,7 +715,7 @@ void GeneralOptionsPage::buildOptionsGroup()
     m_chkSwapRedBlue->setProperty("nereusSetupId", "general.options.swapRedBlue");
     m_chkSwapRedBlue->setToolTip(
         tr("For users with red/blue color blindness or alternate display "
-           "preferences. Mirror of FB-label left-click."));
+           "preferences. Same as left-clicking the FB indicator."));
     m_chkSwapRedBlue->setChecked(
         AppSettings::instance().value(QStringLiteral("InvertRedBluePsa"),
                                        QStringLiteral("False")).toString() == QStringLiteral("True"));

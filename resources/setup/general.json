@@ -139,7 +139,7 @@
             {
               "id": "general.options.hideFeedback",
               "label": "Hide feedback level",
-              "tooltip": "When checked, the bottom-banner FB indicator shows \"Feedback\" text instead of the numeric level. Mirror of FB-label right-click.",
+              "tooltip": "When checked, the bottom-banner FB indicator shows \"Feedback\" text instead of the numeric level. Same as right-clicking the FB indicator.",
               "kind": "toggle",
               "binding": {
                 "phone": "HideFeedbackLevel"
@@ -149,7 +149,7 @@
             {
               "id": "general.options.swapRedBlue",
               "label": "Swap red and blue PS-A feedback colors",
-              "tooltip": "For users with red/blue color blindness or alternate display preferences. Mirror of FB-label left-click.",
+              "tooltip": "For users with red/blue color blindness or alternate display preferences. Same as left-clicking the FB indicator.",
               "kind": "toggle",
               "binding": {
                 "phone": "InvertRedBluePsa"

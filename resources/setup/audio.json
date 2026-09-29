@@ -63,7 +63,7 @@
             {
               "id": "audio.txProfile.amCarrierLevel",
               "label": "AM carrier level",
-              "tooltip": "AM / SAM / DSB carrier level (%).  100 % = full carrier, as in Thetis.  In AM the TX filter is symmetric: +/- High cutoff around the carrier.",
+              "tooltip": "AM / SAM / DSB carrier level (%).  100 % = full carrier.  In AM the TX filter is symmetric: +/- High cutoff around the carrier.",
               "kind": "integer",
               "binding": {
                 "property": {
