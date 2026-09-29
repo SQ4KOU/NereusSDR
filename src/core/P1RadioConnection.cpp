@@ -79,6 +79,10 @@
 //                and RADE_L as DIGL on REG_OP_MODE (operator ruling
 //                2026-09-29). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board poll waits on its step
+//                while the manual I2C tool holds the polling pause (mi0bot
+//                console.cs:25930-25935 [@c26a8a4]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - G-05: txIqRingDrained and txIqRingLengthMs, so an
 //                operator's unkey waits for the transmit I/Q ring to drain,
 //                for at most its 84 ms length. J.J. Boyd (KG4VCF),
@@ -3748,7 +3752,10 @@ int P1RadioConnection::ccMaxBank() const
 // written as DIGU and RADE_L as DIGL. The fault reaction (TX inhibit) lives in RadioModel, which hands
 // each REG_FAULT read to TxInhibitMonitor. The aerial values arrive from
 // RadioModel::applyAlexAntennaForBand (setIoBoardAerials), composed by
-// AlexController::hl2IoBoardAerials. Not here yet: the auto-tune protocol.
+// AlexController::hl2IoBoardAerials. While the manual I2C tool holds the
+// pause (IoBoardHl2::setPollingPause, mi0bot SetI2CPollingPause) a tick
+// does nothing and the step stays where it is. Not here yet: the auto-tune
+// protocol.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setIoBoardTxState(int dspMode, qint64 frequencyHz)
 {
@@ -3765,6 +3772,13 @@ void P1RadioConnection::setIoBoardAerials(quint8 aerialMode, quint8 aerialPorts)
 void P1RadioConnection::ioBoardPollTick()
 {
     if (!m_caps || !m_caps->hasIoBoardHl2 || !m_ioBoard || !m_ioBoard->isDetected()) {
+        return;
+    }
+    // From mi0bot console.cs:25930-25935 [@c26a8a4]:
+    //   // Delay and continue to delay if we have been paused
+    //   do { await Task.Delay(40); } while (I2CPollingPause);
+    // The manual I2C tool holds the pause; the poll waits on this step.
+    if (m_ioBoard->isPollingPaused()) {
         return;
     }
     using Reg = IoBoardHl2::Register;

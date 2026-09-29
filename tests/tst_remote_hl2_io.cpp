@@ -284,6 +284,7 @@ private slots:
     void localAlexHpfSwitchesStayLiveOnTheAir();
     void reasonsArePlain();
     void inputStripFollowsThePinsAndTransmitLocalAndRemote();
+    void toolReadsPauseThePollUntilAnswered();
 
 private:
     QTemporaryDir m_securityDir;
@@ -783,6 +784,100 @@ void TstRemoteHl2Io::inputStripFollowsThePinsAndTransmitLocalAndRemote()
     QTRY_COMPARE(tab->inputBitsForTest(), quint8(0x11));
     s.core.unkey();
     QTRY_VERIFY(!tab->inputStripTxForTest());
+}
+
+
+// mi0bot setup.cs:21457/21501 (btnI2CRead), 21516/21529 (btnI2CWrite) and
+// 30014/30035, 30048/30052 (the output strip) [@c26a8a4] bracket each
+// transaction with console.SetI2CPollingPause(true) ... (false), and the
+// poll waits while it is held (console.cs:25930-25935). Here the pause is
+// held while a read the tool waits on is outstanding: answered or given up,
+// it is released. A remote window's read pauses the Core's poll.
+void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
+{
+    {
+        LocalHl2 local;
+        IoBoardHl2& board = local.model->ioBoardMutable();
+        board.setDetected(true);
+        local.p1.setIoBoard(&board);
+        QVERIFY(!board.isPollingPaused());
+
+        Outcome read;
+        RadioModel::IoBoardI2cRequest request;
+        request.address = 0x1D;
+        request.reg = 0x0A;
+        local.model->requestIoBoardI2c(request, read.done());
+        QVERIFY(board.isPollingPaused());
+        // The poll waits on its step.
+        const int step = board.currentStep();
+        local.p1.ioBoardPollTickForTest();
+        QCOMPARE(board.currentStep(), step);
+        QCOMPARE(board.i2cQueueDepth(), 1);
+        QVERIFY(compose(board).composed);
+        QVERIFY(board.isPollingPaused());
+        answer(board, 0x00, 0x00, 0x00, 0x40);
+        QVERIFY(read.called && read.ok);
+        QVERIFY(!board.isPollingPaused());
+        local.p1.ioBoardPollTickForTest();
+        QCOMPARE(board.currentStep(), (step + 1) % IoBoardHl2::kStateMachineSteps);
+        // Send what the poll queued, answering its reads so the next
+        // answer below belongs to the tool.
+        while (!board.i2cQueueIsEmpty()) {
+            if (compose(board).bytes[1] == 0x07) {
+                answer(board, 0x00, 0x00, 0x00, 0x00);
+            }
+        }
+
+        // An output pin pauses it until the register is read back.
+        Outcome pin;
+        local.model->setIoBoardOutput(2, true, pin.done());
+        QVERIFY(pin.called && pin.ok);
+        QVERIFY(board.isPollingPaused());
+        QCOMPARE(compose(board).bytes[1], quint8(0x06));   // the write
+        QVERIFY(board.isPollingPaused());
+        QCOMPARE(compose(board).bytes[1], quint8(0x07));   // the readback
+        answer(board, 0x00, 0x00, 0x00, 0x04);
+        QVERIFY(!board.isPollingPaused());
+        QCOMPARE(local.model->ioBoardFacade()->outputs(), 0x04);
+
+        // A read the radio does not answer releases it when the tool gives
+        // up (last here: the board still expects that answer).
+        Outcome lost;
+        request.reg = 0x0B;
+        local.model->requestIoBoardI2c(request, lost.done());
+        QVERIFY(board.isPollingPaused());
+        QVERIFY(compose(board).composed);
+        QTRY_VERIFY(lost.called);
+        QVERIFY(!lost.ok);
+        QVERIFY(!board.isPollingPaused());
+
+        // A write alone does not hold it: the queue keeps its order.
+        Outcome write;
+        request.write = true;
+        request.reg = 0x20;
+        request.value = 0x01;
+        local.model->requestIoBoardI2c(request, write.done());
+        QVERIFY(write.called && write.ok);
+        QVERIFY(!board.isPollingPaused());
+        local.p1.setIoBoard(nullptr);
+    }
+
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(!s.board().isPollingPaused());
+    Outcome remote;
+    RadioModel::IoBoardI2cRequest request;
+    request.address = 0x1D;
+    request.reg = 0x0A;
+    s.window.requestIoBoardI2c(request, remote.done());
+    QTRY_VERIFY(s.board().isPollingPaused());
+    QVERIFY(compose(s.board()).composed);
+    answer(s.board(), 0x00, 0x00, 0x00, 0x11);
+    QTRY_VERIFY(remote.called);
+    QVERIFY(remote.ok);
+    QVERIFY(!s.board().isPollingPaused());
+    QString keyed;
+    QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
 }
 
 QTEST_MAIN(TstRemoteHl2Io)

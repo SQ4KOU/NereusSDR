@@ -644,6 +644,11 @@
 //                 I/O board its aerial values (AlexController
 //                 hl2IoBoardAerials; mi0bot Alex.cs:445-446 [@c26a8a4]).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: the I/O board poll pauses while an HL2
+//                 Options I2C read or output readback waits on its answer,
+//                 as mi0bot's SetI2CPollingPause callers do (setup.cs
+//                 21457-21529, 30014-30052 [@c26a8a4]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -26312,6 +26317,16 @@ RadioModel::IoBoardProbeOutcome RadioModel::requestIoBoardProbe()
 // on-air rule for the tool; NereusSDR refuses a write and an output pin on
 // the air, because they reach the I/O board and the N2ADR filter board in
 // the transmit path (the remote-window parity plan's ruling for Task 14).
+//
+// From mi0bot setup.cs:21457/21501, 21516/21529 and 30014/30035,
+// 30048/30052 [@c26a8a4]: each handler brackets its transaction with
+// console.SetI2CPollingPause(true) ... (false), so the I/O board poll
+// (console.cs:25930-25935) waits while the manual transaction has the bus.
+// Here the pause is held while any read the tool is waiting on (a manual
+// read, or the output register's readback) is outstanding, and released
+// when the last is answered or gives up. A write needs no hold of its own:
+// the I2C queue is a FIFO, so nothing the poll queues can go ahead of it.
+// The Core holds it for a remote window's requests, which run here.
 // ---------------------------------------------------------------------------
 QString RadioModel::ioBoardNoAnswerReason()
 {
@@ -26390,12 +26405,30 @@ void RadioModel::finishIoBoardRead(quint64 id, bool ok, qint64 value, const QStr
         if (m_pendingIoBoardReads.at(i).id == id) {
             IoBoardI2cDone done = std::move(m_pendingIoBoardReads[i].done);
             m_pendingIoBoardReads.removeAt(i);
+            updateIoBoardPollingPause();
             if (done) {
                 done(ok, value, reason);
             }
             return;
         }
     }
+}
+
+void RadioModel::updateIoBoardPollingPause()
+{
+    m_ioBoard.setPollingPause(!m_pendingIoBoardReads.isEmpty());
+}
+
+void RadioModel::expectIoBoardRead(quint8 address, quint8 reg, IoBoardI2cDone done)
+{
+    wireIoBoardTool();
+    PendingIoBoardRead read;
+    read.id = m_nextIoBoardReadId++;
+    read.address = address;
+    read.reg = reg;
+    read.done = std::move(done);
+    m_pendingIoBoardReads.append(std::move(read));
+    updateIoBoardPollingPause();
 }
 
 void RadioModel::enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value)
@@ -26472,13 +26505,7 @@ void RadioModel::requestIoBoardI2c(const IoBoardI2cRequest& request, IoBoardI2cD
         finish(true, 0, {});
         return;
     }
-    wireIoBoardTool();
-    PendingIoBoardRead read;
-    read.id = m_nextIoBoardReadId++;
-    read.address = address;
-    read.reg = reg;
-    read.done = std::move(done);
-    m_pendingIoBoardReads.append(std::move(read));
+    expectIoBoardRead(address, reg, std::move(done));
     enqueueIoBoardTxn(address, reg, /*write=*/false, 0);
 }
 
@@ -26553,6 +26580,9 @@ void RadioModel::refreshIoBoardOutputs()
     if (!ioBoardI2cUnreachableReason().isEmpty() || !m_ioBoard.isDetected()) {
         return;
     }
+    // From mi0bot setup.cs:30014-30035 [@c26a8a4]: the poll pauses until
+    // the readback is answered or gives up.
+    expectIoBoardRead(IoBoardHl2::kI2cAddrGeneral, kOutputRegister, {});
     enqueueIoBoardTxn(IoBoardHl2::kI2cAddrGeneral, kOutputRegister, /*write=*/false, 0);
 }
 

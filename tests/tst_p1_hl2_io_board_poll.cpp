@@ -15,6 +15,8 @@
 //   case 3, 6:         REG_RF_INPUTS = IOBoardAerialMode, when it changed
 //   case 5, 9:         REG_ANTENNA = IOBoardAerialPorts, when it changed
 //   case 11:           state = 0
+// and the manual I2C tool's pause (console.cs:25640-25646 SetI2CPollingPause,
+// 25931-25935): the poll waits on its step while the pause is held.
 // Every register goes to bus 1 (the second bus), device 0x1d
 // (IoBoardHl2.cs:139, 180).
 //
@@ -235,6 +237,32 @@ private slots:
         // Back to DIGL itself: the same value, so nothing is written.
         conn.setIoBoardTxState(static_cast<int>(DSPMode::DIGL), 7177000);
         compare(step(conn, io), {});
+    }
+
+    void aPauseHoldsThePollOnItsStep()
+    {
+        // mi0bot console.cs:25640-25646 SetI2CPollingPause and 25931-25935
+        // [@c26a8a4]: while the manual I2C tool holds the pause, the poll
+        // waits where it is (do { await Task.Delay(40); } while
+        // (I2CPollingPause)); when it lets go, the poll carries on from
+        // that step.
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        IoBoardHl2 io;
+        io.setDetected(true);
+        conn.setIoBoard(&io);
+        conn.setIoBoardTxState(static_cast<int>(DSPMode::USB), 14074000);
+        compare(step(conn, io), {write(32, 1)});   // 0
+        QVERIFY(!io.isPollingPaused());
+        io.setPollingPause(true);
+        QVERIFY(io.isPollingPaused());
+        for (int i = 0; i < 5; ++i) {
+            compare(step(conn, io), {});
+            QCOMPARE(io.currentStep(), 1);
+        }
+        io.setPollingPause(false);
+        compare(step(conn, io), {readPins()});     // 1, where it stopped
+        QCOMPARE(io.currentStep(), 2);
     }
 };
 

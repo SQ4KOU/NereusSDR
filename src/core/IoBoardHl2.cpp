@@ -27,6 +27,8 @@
 //                HL2 I/O page UI.
 //   2026-09-26 - Remote-window parity Task 14 (R-R3-46): i2cReadAnswered.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: setPollingPause / isPollingPaused. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -211,6 +213,26 @@ void IoBoardHl2::advanceStep()
 {
     m_currentStep = (m_currentStep + 1) % kStateMachineSteps;
     emit stepAdvanced(m_currentStep);
+}
+
+// From mi0bot console.cs:25642-25646 [@c26a8a4]:
+//   public void SetI2CPollingPause( bool pause )
+//   {
+//       I2CPollingPause = pause;
+//       if (pause) Thread.Sleep(45);
+//   }
+// NereusSDR difference: no 45 ms sleep. mi0bot sleeps so a poll read
+// already in flight is answered before the manual one goes; here the queue
+// is a FIFO the codec sends one per C&C frame, so a read the poll queued
+// before the pause still goes, and is answered, ahead of the manual one.
+void IoBoardHl2::setPollingPause(bool pause)
+{
+    m_pollingPaused.store(pause, std::memory_order_release);
+}
+
+bool IoBoardHl2::isPollingPaused() const
+{
+    return m_pollingPaused.load(std::memory_order_acquire);
 }
 
 QString IoBoardHl2::stepDescriptor(int step) const

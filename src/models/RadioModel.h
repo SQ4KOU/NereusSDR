@@ -406,6 +406,11 @@
 //                 TX inhibit holds, as Thetis's TXInhibit setter does
 //                 (console.cs:15341-15363 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: expectIoBoardRead and
+//                 updateIoBoardPollingPause, the I/O board poll's pause
+//                 while the I2C tool waits on a read (mi0bot
+//                 SetI2CPollingPause [@c26a8a4]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -7737,6 +7742,12 @@ private:
     void wireIoBoardTool();
     void enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value);
     void finishIoBoardRead(quint64 id, bool ok, qint64 value, const QString& reason);
+    // A read the tool waits on (address, register), answered to `done`;
+    // holds the I/O board poll's pause until it is answered or gives up.
+    void expectIoBoardRead(quint8 address, quint8 reg, IoBoardI2cDone done);
+    // The poll pauses while any read above is outstanding (mi0bot
+    // SetI2CPollingPause).
+    void updateIoBoardPollingPause();
     bool m_paCurrentReported{false};
     bool m_paTemperatureReported{false};
     // R-R3-46 (parity Task 6): the remote window's PA reload.
