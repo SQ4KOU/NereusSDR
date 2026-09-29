@@ -51,7 +51,8 @@
 // R-IOS-13 / R-R3-49 (2026-09-28, J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code):
 //  18. transmit.txEqCurve equals the parametric panel for every factory
-//      profile, a custom curve and an out-of-order curve; an unreadable
+//      profile, a custom curve, an out-of-order curve and odd values
+//      (unrounded, missing fields, out of range); an unreadable
 //      value is "unavailable" while the panel shows the Core's fallback.
 //
 // =================================================================
@@ -695,6 +696,88 @@ private slots:
         compareToWidget(curve, dlg.parametricWidget());
         QCOMPARE(dlg.findChild<QRadioButton*>(QStringLiteral("TxEqParaBands18Radio"))->isChecked(),
                  true);
+    }
+
+    // Odd saved values: the panel and the Core's curve read them by one
+    // parser (ParaEqCurve), so they agree on rounding, missing fields and
+    // out-of-range points. Each value is loaded after a different curve,
+    // so nothing is left over from the widget's earlier state.
+    void curveMatchesDialogForOddValues()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        const QString odd[] = {
+            // Unrounded: PointsFromJson rounds F to 0.001 Hz, G and the
+            // preamp to 0.1 dB, Q to 0.01.
+            QStringLiteral(R"({"band_count":5,"parametric_eq":true,"global_gain_db":2.345,)"
+                           R"("frequency_min_hz":20.00049,"frequency_max_hz":3333.3333,)"
+                           R"("points":[{"frequency_hz":20,"gain_db":1.26,"q":7.777},)"
+                           R"({"frequency_hz":500.0004,"gain_db":-3.14159,"q":1.234},)"
+                           R"({"frequency_hz":1234.5678,"gain_db":0.05,"q":2.005},)"
+                           R"({"frequency_hz":2000.0006,"gain_db":0.15,"q":3.335},)"
+                           R"({"frequency_hz":3333,"gain_db":-0.25,"q":9.999}]})"),
+            // Missing fields: no frequency_min_hz (0), parametric_eq,
+            // band_count or global_gain_db; a point with only a frequency.
+            QStringLiteral(R"({"frequency_max_hz":1800,)"
+                           R"("points":[{"frequency_hz":100,"gain_db":3,"q":2},)"
+                           R"({"frequency_hz":700},)"
+                           R"({"gain_db":-5,"q":4},)"
+                           R"({"frequency_hz":1800,"gain_db":1,"q":1}]})"),
+            // Out of range: a point above the range, one below, gains and
+            // Qs past the panel's limits, the preamp too.
+            QStringLiteral(R"({"band_count":5,"parametric_eq":true,"global_gain_db":50,)"
+                           R"("frequency_min_hz":100,"frequency_max_hz":2600,)"
+                           R"("points":[{"frequency_hz":100,"gain_db":40,"q":0},)"
+                           R"({"frequency_hz":9000,"gain_db":-40,"q":99},)"
+                           R"({"frequency_hz":-50,"gain_db":12,"q":0.1},)"
+                           R"({"frequency_hz":1300,"gain_db":24.04,"q":20.004},)"
+                           R"({"frequency_hz":2600,"gain_db":-24.06,"q":0.199}]})"),
+            // A range wholly above the panel's previous one.
+            QStringLiteral(R"({"band_count":3,"parametric_eq":true,"global_gain_db":0,)"
+                           R"("frequency_min_hz":5000,"frequency_max_hz":9000,)"
+                           R"("points":[{"frequency_hz":5000,"gain_db":1,"q":1},)"
+                           R"({"frequency_hz":7000,"gain_db":2,"q":2},)"
+                           R"({"frequency_hz":9000,"gain_db":3,"q":3}]})"),
+        };
+        for (const QString& json : odd) {
+            tx.setTxEqParaEqData(ParaEqEnvelope::encode(customCurveJson()));
+            tx.setTxEqParaEqData(ParaEqEnvelope::encode(json));
+            const QJsonObject curve = curveOf(tx);
+            QCOMPARE(curve.value(QStringLiteral("state")).toString(), QStringLiteral("saved"));
+            compareToWidget(curve, dlg.parametricWidget());
+            if (QTest::currentTestFailed()) {
+                qWarning() << json;
+                return;
+            }
+        }
+        // Spot checks on the last three, worked from PointsFromJson.
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[0]));
+        QJsonObject c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("preampDb")).toDouble(), 2.3);
+        QCOMPARE(c.value(QStringLiteral("minHz")).toDouble(), 20.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(1).toObject()
+                     .value(QStringLiteral("gainDb")).toDouble(), -3.1);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[1]));
+        c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("minHz")).toDouble(), 0.0);
+        QCOMPARE(c.value(QStringLiteral("parametric")).toBool(), false);
+        // The point with no frequency reads 0 Hz and sorts second, moved
+        // to 5 Hz; the one with only a frequency (700 Hz) is third, gain
+        // 0 and Q 0 clamped to 0.2.
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(1).toObject()
+                     .value(QStringLiteral("frequencyHz")).toDouble(), 5.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(2).toObject()
+                     .value(QStringLiteral("q")).toDouble(), 0.2);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[2]));
+        c = curveOf(tx);
+        QCOMPARE(c.value(QStringLiteral("preampDb")).toDouble(), 24.0);
+        QCOMPARE(c.value(QStringLiteral("points")).toArray().at(0).toObject()
+                     .value(QStringLiteral("gainDb")).toDouble(), 24.0);
+        QCOMPARE(dlg.parametricWidget()->frequencyMinHz(), 100.0);
+        tx.setTxEqParaEqData(ParaEqEnvelope::encode(odd[3]));
+        QCOMPARE(dlg.parametricWidget()->frequencyMinHz(), 5000.0);
+        QCOMPARE(dlg.parametricWidget()->frequencyMaxHz(), 9000.0);
     }
 
     void unreadableCurveIsUnavailableAndDialogShowsTheCoresFallback()

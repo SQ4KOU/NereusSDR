@@ -2962,7 +2962,10 @@ Each point:
   (`PointsFromJson`): each value clamped to the ranges above, the
   frequency rounded to 0.001 Hz, the gain and the preamp to 0.1 dB and Q to
   0.01, with round half to even. The first point is moved to `minHz`, the
-  last to `maxHz`.
+  last to `maxHz`. A field missing from the saved JSON reads as 0 (false
+  for Use Q Factors), as Thetis's JSON reader leaves it; a Q of 0 then
+  clamps to 0.2. The desktop dialog loads the value through the same
+  reader, so it always shows exactly `txEqCurve`.
 - **Ordering.** The points are in the order the dialog draws them
   (Thetis's panel ordering, with the TX panel's settings):
   1. Sorted by `frequencyHz`, lowest first. Two points at the same

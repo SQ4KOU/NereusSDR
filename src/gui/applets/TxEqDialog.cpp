@@ -96,6 +96,13 @@
 //                 low/high and Use Q Factors controls as setParaEQData
 //                 does (eqform.cs:3312-3368 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): the panel loads the
+//                 model's value through ParaEqCurve (PointsFromJson with
+//                 its rounding, GetDefaults when it fails), as Thetis's
+//                 ParaEQTXData setter does, not through the widget's
+//                 LoadFromJson, so it always equals the Core's txEqCurve.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -1367,40 +1374,40 @@ void TxEqDialog::syncParametricFromModel()
     if (!m_radio || !m_parametricWidget || m_updatingFromModel) { return; }
     const QString blob = m_radio->transmitModel().txEqParaEqData();
 
-    // From Thetis eqform.cs:3269-3271 + Common.cs:1764-1790
-    // [v2.10.3.13] — Decompress_gzip(value) before loading points.
-    QString json;
-    if (!blob.isEmpty()) {
-        const std::optional<QString> decoded = ParaEqEnvelope::decode(blob);
-        if (decoded.has_value()) {
-            json = *decoded;
-        } else if (blob.trimmed().startsWith(QLatin1Char('{'))) {
-            // Compatibility for profiles saved by pre-fix PR #159 builds that
-            // briefly stored raw JSON before the Thetis envelope was wired here.
-            json = blob;
-        }
-    }
+    // R-IOS-13 / R-R3-49: the TX panel loads the model's value as Thetis's
+    // does, through the Core's own reader, so the panel and the Core's
+    // txEqCurve never disagree. From Thetis eqform.cs:3276-3317
+    // [v2.10.3.15] (ParaEQTXData's setter: Decompress_gzip, PointsFromJson
+    // with its rounding and clamping, GetDefaults when that fails) and
+    // eqform.cs:3344-3349 [v2.10.3.15] (setParaEQData's TX branch:
+    // ParametricEQ, BandCount, GlobalGainDb, FrequencyMinHz,
+    // FrequencyMaxHz, SetPointsData). The points go in as the panel orders
+    // them (ParaEqCurve::txEqDisplayPoints, the same enforceOrdering
+    // SetPointsData runs), so a tie in frequency lands as the Core draws it
+    // whatever band ids the widget holds from an earlier curve.
+    const ParaEqCurve::TxEqPoints shown = ParaEqCurve::txEqDisplayPoints(
+        ParaEqCurve::txEqPointsFromParaEqData(blob));
 
     m_updatingFromModel = true;
     {
         QSignalBlocker b(m_parametricWidget);
-        const bool loaded = !json.isEmpty() && m_parametricWidget->loadFromJson(json);
-        if (!loaded) {
-            // R-IOS-13 / R-R3-49: a blank or broken value shows the flat
-            // curve the Core applies in its place, as Thetis's panel does.
-            // From Thetis eqform.cs:3312-3315 [v2.10.3.15] (ParaEQTXData's
-            // setter: GetDefaults when PointsFromJson fails) and
-            // eqform.cs:3344-3349 [v2.10.3.15] (setParaEQData's TX branch).
-            const ParaEqCurve::TxEqPoints d = ParaEqCurve::defaultTxEqPoints();
-            m_parametricWidget->setParametricEq(d.parametricEq);
-            m_parametricWidget->setBandCount(d.bandCount);
-            m_parametricWidget->setGlobalGainDb(d.preampDb);
-            m_parametricWidget->setFrequencyMinHz(d.minHz);
-            m_parametricWidget->setFrequencyMaxHz(d.maxHz);
-            m_parametricWidget->setPointsData(QVector<double>(d.f.begin(), d.f.end()),
-                                              QVector<double>(d.g.begin(), d.g.end()),
-                                              QVector<double>(d.q.begin(), d.q.end()));
+        m_parametricWidget->setParametricEq(shown.parametricEq);
+        m_parametricWidget->setBandCount(shown.bandCount);
+        m_parametricWidget->setGlobalGainDb(shown.preampDb);
+        // Thetis sets FrequencyMinHz then FrequencyMaxHz; each setter
+        // ignores a value on the wrong side of the other end, so a new
+        // range wholly above the old one would keep the old low end.
+        // Setting the high end first in that case lands the saved range.
+        if (shown.minHz >= m_parametricWidget->frequencyMaxHz()) {
+            m_parametricWidget->setFrequencyMaxHz(shown.maxHz);
+            m_parametricWidget->setFrequencyMinHz(shown.minHz);
+        } else {
+            m_parametricWidget->setFrequencyMinHz(shown.minHz);
+            m_parametricWidget->setFrequencyMaxHz(shown.maxHz);
         }
+        m_parametricWidget->setPointsData(QVector<double>(shown.f.begin(), shown.f.end()),
+                                          QVector<double>(shown.g.begin(), shown.g.end()),
+                                          QVector<double>(shown.q.begin(), shown.q.end()));
     }
     syncParametricControlsFromWidget();
     updateEditRowFromSelection();

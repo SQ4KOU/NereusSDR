@@ -38,6 +38,11 @@
 //                 Core sends as transmit.txEqCurve (station link document,
 //                 "The TX EQ curve"). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): readCurveJson, the
+//                 deserialise-and-check block PointsFromJson and
+//                 LoadFromJson share, so the Core and ParametricEqWidget
+//                 read a saved curve by one parser. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -158,11 +163,14 @@ double jsonDouble(const QJsonObject& o, const char* key)
 
 } // namespace
 
-// From Thetis ucParametricEq.cs:1392-1452 [v2.10.3.15] (PointsFromJson),
-// with the TX panel's _db_min/_db_max/_q_min/_q_max (eqform.cs:959-970).
-// Json.NET leaves a missing field at its default (0, false); a document or
-// point that is not a JSON object fails, as its deserialiser does.
-bool pointsFromJson(const QString& json, TxEqPoints& out)
+// From Thetis ucParametricEq.cs:1403-1428 and 1490-1515 [v2.10.3.15]: the
+// deserialise-and-check block PointsFromJson and LoadFromJson share, word
+// for word. JsonConvert.DeserializeObject<EqJsonState> (cs:220-252) leaves
+// a missing field at its C# default: band_count 0, parametric_eq false,
+// global_gain_db, frequency_min_hz, frequency_max_hz, and each point's
+// frequency_hz, gain_db and q 0. A document or point that is not a JSON
+// object fails, as the deserialiser throws.
+bool readCurveJson(const QString& json, CurveJson& out)
 {
     //   if (string.IsNullOrWhiteSpace(json)) return false;
     if (json.trimmed().isEmpty()) { return false; }
@@ -192,30 +200,54 @@ bool pointsFromJson(const QString& json, TxEqPoints& out)
     if (std::isnan(stateMaxHz) || std::isinf(stateMaxHz)) { return false; }
     if (stateMaxHz <= stateMinHz) { return false; }
 
-    const int pointCount = points.size();
+    CurveJson r;
+    r.bandCount      = bandCount;
+    r.parametricEq   = state.value(QStringLiteral("parametric_eq")).toBool(false);
+    r.globalGainDb   = jsonDouble(state, "global_gain_db");
+    r.frequencyMinHz = stateMinHz;
+    r.frequencyMaxHz = stateMaxHz;
+    r.f.reserve(static_cast<std::size_t>(points.size()));
+    r.g.reserve(static_cast<std::size_t>(points.size()));
+    r.q.reserve(static_cast<std::size_t>(points.size()));
+    for (const QJsonValue& value : points) {
+        if (!value.isObject()) { return false; }
+        const QJsonObject jp = value.toObject();
+        r.f.push_back(jsonDouble(jp, "frequency_hz"));
+        r.g.push_back(jsonDouble(jp, "gain_db"));
+        r.q.push_back(jsonDouble(jp, "q"));
+    }
+    out = std::move(r);
+    return true;
+}
+
+// From Thetis ucParametricEq.cs:1392-1452 [v2.10.3.15] (PointsFromJson),
+// with the TX panel's _db_min/_db_max/_q_min/_q_max (eqform.cs:959-970).
+bool pointsFromJson(const QString& json, TxEqPoints& out)
+{
+    CurveJson state;
+    if (!readCurveJson(json, state)) { return false; }
+
+    const int pointCount = static_cast<int>(state.f.size());
     TxEqPoints r;
     r.f.resize(static_cast<std::size_t>(pointCount));
     r.g.resize(static_cast<std::size_t>(pointCount));
     r.q.resize(static_cast<std::size_t>(pointCount));
 
-    r.parametricEq = state.value(QStringLiteral("parametric_eq")).toBool(false);
-    r.preampDb     = roundDigits(clamp(jsonDouble(state, "global_gain_db"), kTxEqDbMin, kTxEqDbMax), 1);
-    r.minHz        = roundDigits(stateMinHz, 3);
-    r.maxHz        = roundDigits(stateMaxHz, 3);
-    r.bandCount    = bandCount;
+    r.parametricEq = state.parametricEq;
+    r.preampDb     = roundDigits(clamp(state.globalGainDb, kTxEqDbMin, kTxEqDbMax), 1);
+    r.minHz        = roundDigits(state.frequencyMinHz, 3);
+    r.maxHz        = roundDigits(state.frequencyMaxHz, 3);
+    r.bandCount    = state.bandCount;
 
     for (int i = 0; i < pointCount; ++i) {
-        if (!points.at(i).isObject()) { return false; }
-        const QJsonObject jp = points.at(i).toObject();
-
-        double pointFrequencyHz = clamp(jsonDouble(jp, "frequency_hz"), stateMinHz, stateMaxHz);
-        const double gainDb = clamp(jsonDouble(jp, "gain_db"), kTxEqDbMin, kTxEqDbMax);
-        const double q = clamp(jsonDouble(jp, "q"), kTxEqQMin, kTxEqQMax);
-
-        if (i == 0) { pointFrequencyHz = stateMinHz; }
-        if (i == pointCount - 1) { pointFrequencyHz = stateMaxHz; }
-
         const auto k = static_cast<std::size_t>(i);
+        double pointFrequencyHz = clamp(state.f[k], state.frequencyMinHz, state.frequencyMaxHz);
+        const double gainDb = clamp(state.g[k], kTxEqDbMin, kTxEqDbMax);
+        const double q = clamp(state.q[k], kTxEqQMin, kTxEqQMax);
+
+        if (i == 0) { pointFrequencyHz = state.frequencyMinHz; }
+        if (i == pointCount - 1) { pointFrequencyHz = state.frequencyMaxHz; }
+
         r.f[k] = roundDigits(pointFrequencyHz, 3);
         r.g[k] = roundDigits(gainDb, 1);
         r.q[k] = roundDigits(q, 2);

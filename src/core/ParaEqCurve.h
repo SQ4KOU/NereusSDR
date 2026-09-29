@@ -38,6 +38,9 @@
 //                 Core sends as transmit.txEqCurve (station link document,
 //                 "The TX EQ curve"). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49 (follow-up): readCurveJson, the
+//                 parser the Core and ParametricEqWidget share. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -226,6 +229,25 @@ struct TxEqPoints {
     bool   parametricEq = true;
     int    bandCount    = kTxEqDefaultBandCount;
 };
+
+/// A saved curve's JSON as Thetis's EqJsonState holds it after
+/// JsonConvert.DeserializeObject: unclamped, unrounded, missing fields at
+/// their C# defaults (0, false).
+struct CurveJson {
+    int    bandCount      = 0;
+    bool   parametricEq   = false;
+    double globalGainDb   = 0.0;
+    double frequencyMinHz = 0.0;
+    double frequencyMaxHz = 0.0;
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+};
+
+/// The deserialise-and-check block ucParametricEq's PointsFromJson and
+/// LoadFromJson share: false where both refuse the value. The one parser
+/// the Core (pointsFromJson) and ParametricEqWidget::loadFromJson use.
+bool readCurveJson(const QString& json, CurveJson& out);
 
 /// ucParametricEq.PointsFromJson with the TX panel's limits: the points of
 /// a saved curve's JSON, each clamped and rounded as Thetis does, in the
