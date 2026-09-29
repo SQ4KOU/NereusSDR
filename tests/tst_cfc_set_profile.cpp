@@ -9,7 +9,7 @@
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-29  J.J. Boyd / KG4VCF  Created (transmitSettingsVersion 15,
-//                                    Setup description version 17).
+//                                    Setup description version 19).
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -355,6 +355,8 @@ private slots:
         wide.f.back() = 20001.0;
         result = phone.setProfile(CfcProfile::publishedJson(wide, QStringLiteral("saved")), revision);
         QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, QStringLiteral("Choose a low and a high end from 0 to 20000 Hz, the "
+                                               "high end at least 1000 Hz above the low end."));
 
         result = phone.setProfile(QStringLiteral("[1,2]"), revision);
         QVERIFY(!result.accepted);
@@ -414,6 +416,51 @@ private slots:
             }
             return false;
         }, 3000));
+        QCOMPARE(result.reason, writeReason);
+        QCOMPARE(m_core->transmitModel().cfcParaEqData(), before);
+    }
+
+    // A peer that may not change the transmit settings is told that first,
+    // whatever revision or values it sent: not that its table is stale, and
+    // not which value is out of range.
+    void permissionIsCheckedBeforeRevisionAndValues()
+    {
+        m_server->setRemoteTransmitAllowed(true);
+        Device phone(m_server.get(), this, {{"cfcProfile", 1}});
+        QVERIFY(phone.ready());
+        const QString before = m_core->transmitModel().cfcParaEqData();
+
+        const quint32 writeId = 4343;
+        phone.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            QByteArrayLiteral("transmit"),
+            {MirrorUpdate{1, "cfcParaEqData", MirrorWireKind::Utf8,
+                          QVariant(CfcProfile::encode(makeProfile(10)))}},
+            writeId)));
+        QString writeReason;
+        QVERIFY(QTest::qWaitFor([&]() {
+            for (const SessionMessage& message : phone.messages()) {
+                if (message.kind == SessionMessageKind::PropertyResult
+                    && message.writeId == writeId && !message.propertyResults.isEmpty()) {
+                    writeReason = message.propertyResults.first().reason;
+                    return true;
+                }
+            }
+            return false;
+        }, 3000));
+        QVERIFY(!writeReason.isEmpty());
+
+        SessionMessage result = phone.setProfile(
+            CfcProfile::publishedJson(makeProfile(10), QStringLiteral("saved")),
+            QStringLiteral("not-the-cores-revision"));
+        QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, writeReason);
+
+        CfcProfile::Profile wide = makeProfile(5);
+        wide.maxHz = 20001.0;
+        wide.f.back() = 20001.0;
+        result = phone.setProfile(CfcProfile::publishedJson(wide, QStringLiteral("saved")),
+                                  revisionOf(m_core->transmitModel().cfcProfile()));
+        QVERIFY(!result.accepted);
         QCOMPARE(result.reason, writeReason);
         QCOMPARE(m_core->transmitModel().cfcParaEqData(), before);
     }

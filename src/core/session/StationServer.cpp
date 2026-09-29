@@ -8221,6 +8221,21 @@ void StationServer::handleCfcProfileCommand(SessionTransport* transport,
         answer(false, QStringLiteral("The Core cannot change its transmit settings."));
         return;
     }
+    // Permission first, in the order applyPropertyWrite gates a `transmit`
+    // write: a peer that may not change the transmit settings is told so,
+    // not that its table is stale or which value is out of range.
+    if (m_radioModel->receiveOnlyStationPolicy()) {
+        if (!transmitSettingsOffered(transport)) {
+            answer(false, QString::fromLatin1(kReceiveOnlyTransmitReason));
+            return;
+        }
+    } else {
+        const TxDecision decision = txDecisionFor(transport);
+        if (!decision.permitted) {
+            answer(false, decision.refusal.text);
+            return;
+        }
+    }
     QString profileJson;
     QString expectedRevision;
     bool haveProfile = false;
