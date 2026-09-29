@@ -236,7 +236,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
                     QStringLiteral("False")).toString() == QStringLiteral("True");
         m_sendIqToVaxCheck->setChecked(on);
         auto* note = new QLabel(
-            QStringLiteral("(not built yet)"), box);
+            QStringLiteral("(not available)"), box);
         note->setStyleSheet(QLatin1String(kNoteStyle));
         row->addWidget(m_sendIqToVaxCheck);
         row->addWidget(note);
@@ -264,7 +264,7 @@ void AudioAdvancedPage::buildFeatureFlagsSection()
                     QStringLiteral("False")).toString() == QStringLiteral("True");
         m_txMonitorToVaxCheck->setChecked(on);
         auto* note = new QLabel(
-            QStringLiteral("(not built yet)"), box);
+            QStringLiteral("(not available)"), box);
         note->setStyleSheet(QLatin1String(kNoteStyle));
         row->addWidget(m_txMonitorToVaxCheck);
         row->addWidget(note);

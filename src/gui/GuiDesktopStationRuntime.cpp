@@ -567,7 +567,7 @@ QString GuiDesktopStationRuntime::reachText(const QString& bind, int port,
     if (reach.listening) {
         text = tr("Listening on %1, port %2.").arg(where).arg(port);
     } else if (reach.listenerRetryPending) {
-        text = tr("Port %1 on %2 is not open yet; trying again.").arg(port).arg(where);
+        text = tr("Port %1 on %2 is not open; trying again.").arg(port).arg(where);
     } else {
         text = tr("Not listening on %1, port %2.").arg(where).arg(port);
     }
@@ -577,7 +577,7 @@ QString GuiDesktopStationRuntime::reachText(const QString& bind, int port,
         text += tr(" Bonjour is not available on this computer, so devices on this network "
                    "need its address.");
     } else {
-        text += tr(" Not announced by Bonjour yet.");
+        text += tr(" Not announced by Bonjour.");
     }
     if (!reach.serviceConfigured) {
         text += tr(" No remote access service is set up, so paired devices reach it only "
@@ -586,7 +586,7 @@ QString GuiDesktopStationRuntime::reachText(const QString& bind, int port,
         text += tr(" Registered with the remote access service at %1, so paired devices "
                    "reach it away from this network.").arg(reach.serviceHost);
     } else {
-        text += tr(" Not registered with the remote access service at %1 yet.")
+        text += tr(" Not registered with the remote access service at %1.")
                     .arg(reach.serviceHost);
     }
     return text;

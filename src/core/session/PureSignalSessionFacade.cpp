@@ -335,7 +335,7 @@ quint32 PureSignalSessionFacade::requestAction(Ps3Action action, const QVariantM
         if (!stop && action != Ps3Action::SaveCorrection && !permitted) {
             const QString refusal = isArmingAction(action) ? armingRefusal() : QString();
             m_lastError = refusal.isEmpty()
-                ? QStringLiteral("PureSignal cannot be run from a remote window yet.") : refusal;
+                ? QStringLiteral("PureSignal cannot be run from a remote window.") : refusal;
             emit statusChanged();
             return 0;
         }

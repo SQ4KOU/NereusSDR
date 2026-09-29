@@ -1371,8 +1371,8 @@ bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
         || control.value(QStringLiteral("tooltip")) != QJsonValue(QStringLiteral(
             "Bypass the board-specific PA calibration table (BP PA). "
             "When checked, the generic Hermes gain row is used instead "
-            "of the ANAN-G2E factory row. Useful if you have not yet "
-            "calibrated PA gain for this radio."))
+            "of the ANAN-G2E factory row. Useful when PA gain for this "
+            "radio is not calibrated."))
         || control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("toggle"))
         || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
         || control.value(QStringLiteral("gate")).toObject() != QJsonObject{

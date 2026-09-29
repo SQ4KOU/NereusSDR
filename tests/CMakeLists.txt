@@ -2687,7 +2687,7 @@ nereus_add_test(tst_band_plan_guard_mode_allow_list)
 #   MoxController::setMoxCheck(fn) + moxRejected(QString) signal.
 #
 # MoxController cases (8):
-#   1. CWL → moxRejected("CW transmit is not available yet"); state stays Rx.
+#   1. CWL → moxRejected("CW transmit is not available on this Core"); state stays Rx.
 #   2. CWU → moxRejected with CW reason.
 #   3. AM  → accepted (AM/SAM/DSB TX enabled); FM still rejected.
 #   4. FM  → moxRejected with audio-modes reason.
@@ -2700,9 +2700,9 @@ nereus_add_test(tst_band_plan_guard_mode_allow_list)
 #
 # TxApplet::tooltipForMode static helper (12):
 #   USB/LSB/DIGL/DIGU → normal "Manual transmit (MOX)" tooltip.
-#   CWL/CWU → "CW transmit is not available yet".
-#   AM/SAM/DSB → allowed; FM → "FM transmit is not available yet";
-#   DRM → "DRM transmit is not available yet".
+#   CWL/CWU → "CW transmit is not available on this Core".
+#   AM/SAM/DSB → allowed; FM → "FM transmit is not available on this Core";
+#   DRM → "DRM transmit is not available on this Core".
 #   SPEC → "Mode not supported for TX".
 #
 # Total: ~20 test cases. Uses QTEST_GUILESS_MAIN; no RadioModel required.

@@ -229,19 +229,19 @@ QString StationStatusPage::renderPage() const
         pairing = QStringLiteral("<p>A device has paired with this Core.</p>");
     } else if (showsCode()) {
         pairing = QStringLiteral(
-                      "<p>No device has paired with this Core yet.</p>"
+                      "<p>No device is paired with this Core.</p>"
                       "<p class=\"code\">Pairing code: <strong>%1</strong></p>"
                       "<p>Type this code into the NereusSDR app on your phone or computer to "
                       "pair it with this Core.</p>")
                       .arg(server->pairingWindow()->currentCode().toHtmlEscaped());
     } else if (server->pairingWindow() != nullptr
                && server->pairingWindow()->state() == PairingWindow::State::ClosedUnclaimed) {
-        pairing = QStringLiteral("<p>No device has paired with this Core yet.</p>"
+        pairing = QStringLiteral("<p>No device is paired with this Core.</p>"
                                  "<p>Pairing closed after too many wrong pairing codes. Run "
                                  "nereusd pairing open on this Core's computer to open it "
                                  "again.</p>");
     } else {
-        pairing = QStringLiteral("<p>No device has paired with this Core yet.</p>"
+        pairing = QStringLiteral("<p>No device is paired with this Core.</p>"
                                  "<p>A new pairing code appears here shortly.</p>");
     }
 

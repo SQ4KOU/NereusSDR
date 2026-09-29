@@ -5126,7 +5126,7 @@ These command groups need a sentence beyond the table:
   takes them from a peer at agreed minor 11 while its radio is off the air
   and refuses them while it is on the air ("The radio is on the air. Try
   again when it stops."). Any other peer gets "PureSignal cannot be run
-  from a remote window yet." as before, and so does `ps3.twoTone` with
+  from a remote window." as before, and so does `ps3.twoTone` with
   `enabled` true from every peer: the two-tone test keys the radio and
   waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false
   and `ps3.saveCorrection` are taken as before. A taken action answers
@@ -6301,7 +6301,7 @@ same on every machine.
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`) and whose device's media carries a microphone line (stationSetup `microphoneLine`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Each key and unkey also moves `txState` (section 18.8): `keyed`, who keyed and how (`keyedTrigger` `screen`, `tci`, `tune`), `keyedSinceMs` on the runner's virtual clock and 180 s left for the phone. Runs on the station and the app |
-| `key-without-microphone` | On the same Core as `unheld-key` but with no microphone line for the device (stationSetup `microphoneLine` absent): a person's `tx.key {trigger:"screen"}` is refused `micNotReady`, "This device's microphone is not connected to the Core yet. Wait a moment and try again.", and nothing keys; a program's key on unheld transmit is still refused `programNeedsTransmit` first. Runs on the station and the app |
+| `key-without-microphone` | On the same Core as `unheld-key` but with no microphone line for the device (stationSetup `microphoneLine` absent): a person's `tx.key {trigger:"screen"}` is refused `micNotReady`, "This device's microphone is not connected to the Core. Wait a moment and try again.", and nothing keys; a program's key on unheld transmit is still refused `programNeedsTransmit` first. Runs on the station and the app |
 | `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). `txState` follows the key (180 s left, 179 a second later), and the watchdog's stop is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Conformance device went quiet, so the Core stopped transmitting." Runs on the station and the app |
 | `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. `txState` follows each key, and the holder's dropped link is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Other device 1 went quiet, so the Core stopped transmitting." Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
@@ -6603,7 +6603,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `swr` | The SWR is over the interlock's limit. Check the antenna, or change the interlock in Setup. | |
 | `otherDeviceHolds` | <holder> has the transmitter. | `takeTransmit` |
 | `programNeedsTransmit` | A program can transmit only while this device has transmit. Take transmit here first. | `takeTransmit` |
-| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core yet. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone yet. Wait a moment and try again. (a remote key whose line sent nothing within 1 s, or did not fill within 250 ms of its first packet, section 18.6) | |
+| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone. Wait a moment and try again. (a remote key whose line sent nothing within 1 s, or did not fill within 250 ms of its first packet, section 18.6) | |
 | `changingHands` | Transmit is changing hands. Try again in a moment. | |
 | `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
 | `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
@@ -6808,7 +6808,7 @@ mode but CWL and CWU), is answered once the line's buffer holds its target
 for the buffer to fill runs from the line's first packet after the key
 arrives; when the buffer has not filled within 250 ms of that packet, or no
 packet has come within 1 s of the key, the key is refused `micNotReady`, "No sound has reached the Core from this device's
-microphone yet. Wait a moment and try again." The holder's own refusals come first, at once.
+microphone. Wait a moment and try again." The holder's own refusals come first, at once.
 Copies of a waiting key, and a new `tx.key` from the same device, get the
 waiting key's answer; a `tx.unkey` from the device while its key waits
 answers that key `keyEnded`, and it never keys. `tx.tune` and
@@ -6817,7 +6817,7 @@ any trigger, a program's included, in a mode that transmits the microphone)
 from a device whose media carries no microphone line (no media yet, as
 right after a reconnect, or a media start without `remoteTxVersion`) is
 refused at once `micNotReady`, "This device's microphone is not connected
-to the Core yet. Wait a moment and try again.", after the session's own
+to the Core. Wait a moment and try again.", after the session's own
 refusals and the holder's, and nothing keys: the Core never puts its own
 microphone on the air for a remote key. While a device is keyed on its
 line, or has VOX armed, the transmitter takes that line instead of the
@@ -6919,7 +6919,7 @@ to the same rules.
 
 **VOX a device armed.** A device whose media carries no microphone line
 cannot arm it: its `transmit.voxEnabled` write is refused "This device's
-microphone is not connected to the Core yet. Wait a moment and try again."
+microphone is not connected to the Core. Wait a moment and try again."
 That refusal is the backstop: a client shows its VOX control disabled with
 the same words while its media carries no microphone line (the desktop's
 TX applet VOX button and Setup's Enable VOX do). It goes off when that

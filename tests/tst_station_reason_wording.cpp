@@ -169,6 +169,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  JJ's rule: a reason that says "yet"
+//                                    fails (it promises a future).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -613,6 +616,13 @@ QString wordingProblemIn(const QString& text)
     const QString developer = developerWordingIn(text);
     if (!developer.isEmpty()) {
         return developer;
+    }
+    // JJ's rule for what the phone shows (2026-09-29): "yet" promises a
+    // future the Core cannot keep; a reason says what is true now.
+    static const QRegularExpression promise(QStringLiteral("\\byet\\b"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    if (promise.match(text).hasMatch()) {
+        return QStringLiteral("yet (say what is true now)");
     }
     const QString station = OperatorWording::coreCalledStationIn(text);
     return station.isEmpty() ? QString() : station + QStringLiteral(" (say the Core)");
@@ -1826,11 +1836,14 @@ private slots:
               // R-R3-21: the Core is the Core, not the station.
               "The station sets this itself; it cannot be changed from here.",
               "This Core has no TCI server for the station.",
-              "Transmit configuration is unavailable on this receive-only station."}) {
+              "Transmit configuration is unavailable on this receive-only station.",
+              // JJ's rule: "yet" promises a future.
+              "PureSignal cannot be run from a remote window yet.",
+              "This device's microphone is not connected to the Core yet."}) {
             QVERIFY2(!wordingProblemIn(QString::fromUtf8(old)).isEmpty(), old);
         }
         for (const char* plain :
-             {"PureSignal cannot be run from a remote window yet.",
+             {"PureSignal cannot be run from a remote window.",
               "The Core could not read this request.",
               "Update this app to set up the Power Genius on this Core.",
               "Choose an SWR protection limit from %1 to %2.",

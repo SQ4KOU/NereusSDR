@@ -110,7 +110,7 @@ void DiagSignalGeneratorPage::buildUI()
         grid->addWidget(m_sweepEnableCheck, 0, 0, 1, 2);
 
         m_sweepRangeLabel = new QLabel(
-            QStringLiteral("Sweep range settings are not built yet"), group);
+            QStringLiteral("Sweep range settings are not available in this version"), group);
         m_sweepRangeLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
         m_sweepRangeLabel->setAlignment(Qt::AlignCenter);
         grid->addWidget(m_sweepRangeLabel, 1, 0, 1, 2);

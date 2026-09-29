@@ -157,7 +157,7 @@ void PanadapterApplet::setTakeTransmitOffered(bool offered, const QString& holde
 
 QString PanadapterApplet::noSliceHintText()
 {
-    return QStringLiteral("No slice here yet. Add one with +RX.");
+    return QStringLiteral("No slice here. Add one with +RX.");
 }
 
 void PanadapterApplet::setNoSliceHintAllowed(bool allowed)

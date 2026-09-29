@@ -314,16 +314,16 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
         // U+00A0 between each number and its unit keeps them on one line.
         lines << (playback.arrivalJitterMs
             ? QStringLiteral("Arrival jitter: %1\u00A0ms").arg(qRound(*playback.arrivalJitterMs))
-            : QStringLiteral("Arrival jitter: not measured yet"));
+            : QStringLiteral("Arrival jitter: not measured"));
         lines << (playback.expectedPackets > 0
             ? QStringLiteral("Missing packets: %1 of %2")
                   .arg(playback.missingPackets).arg(playback.expectedPackets)
-            : QStringLiteral("Missing packets: none received yet"));
+            : QStringLiteral("Missing packets: none received"));
         lines << QStringLiteral("Gaps filled: %1").arg(playback.concealedPackets);
         lines << (playback.speakerQueuedMs
             ? QStringLiteral("Speaker buffer: %1\u00A0ms on this computer")
                   .arg(qRound(*playback.speakerQueuedMs))
-            : QStringLiteral("Speaker buffer: not measured yet"));
+            : QStringLiteral("Speaker buffer: not measured"));
         // R-R3-21: how long arriving audio is held against late packets.
         // It deepens after late packets and eases back on a steady link,
         // so a rise in the delay below has its reason in plain sight.
@@ -338,7 +338,7 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
         if (delay.measurable) {
             lines << (delay.estimate
                 ? QStringLiteral("Audio delay: %1").arg(remoteAudioDelayText(*delay.estimate))
-                : QStringLiteral("Audio delay: not measured yet"));
+                : QStringLiteral("Audio delay: not measured"));
         }
     }
     // R-R3-43: each receiver's own stream to apps, apart from the speakers.
@@ -362,11 +362,11 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
                      .arg(letter,
                           stream.arrivalJitterMs
                               ? QStringLiteral("%1\u00A0ms").arg(qRound(*stream.arrivalJitterMs))
-                              : QStringLiteral("not measured yet"),
+                              : QStringLiteral("not measured"),
                           stream.expectedPackets > 0
                               ? QStringLiteral("%1 of %2").arg(stream.missingPackets)
                                     .arg(stream.expectedPackets)
-                              : QStringLiteral("none received yet"))
+                              : QStringLiteral("none received"))
                      .arg(stream.concealedPackets);
     }
     return lines.join(QLatin1Char('\n'));

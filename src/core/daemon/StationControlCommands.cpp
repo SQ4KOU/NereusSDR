@@ -222,7 +222,7 @@ StationControlReply StationControlCommands::pairingShow(const QString& lead) con
                                 "pairing open opens it again.");
         return {true, lines.join(QLatin1Char('\n'))};
     case PairingWindow::State::OpenUnclaimed:
-        lines << QStringLiteral("Pairing is open: no device has paired with this Core yet.");
+        lines << QStringLiteral("Pairing is open: no device is paired with this Core.");
         break;
     case PairingWindow::State::OpenReopened:
         lines << QStringLiteral("Pairing is open for one more device.");
@@ -253,7 +253,7 @@ StationControlReply StationControlCommands::pairingOpen() const
     }
     if (window->state() == PairingWindow::State::OpenUnclaimed) {
         return pairingShow(QStringLiteral("Pairing is already open, since no device has paired "
-                                          "with this Core yet."));
+                                          "with this Core."));
     }
     if (!core->deviceStore()->isValid()) {
         return {false, kUnreadableList};

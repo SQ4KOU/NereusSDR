@@ -289,8 +289,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     m_rx2LnaSpin->setSuffix(tr(" dB"));
     m_rx2LnaSpin->setEnabled(false);
     m_rx2LnaSpin->setToolTip(
-        tr("Not used yet: every receiver shares the Rx1 calibration until "
-           "each receiver has a calibration of its own."));
+        tr("Not used: every receiver shares the Rx1 calibration."));
     levelCalForm->addRow(tr("Rx2 6m LNA:"), m_rx2LnaSpin);
 
     auto* levelBtnRow = new QHBoxLayout;

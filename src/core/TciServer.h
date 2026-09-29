@@ -214,7 +214,7 @@ public:
 
     // The plain reasons this server gives the operator (never an app).
     static constexpr const char* kRemoteTransmitRefusedReason =
-        "Apps cannot transmit through TCI from a remote window yet.";
+        "Apps cannot transmit through TCI from a remote window.";
     static constexpr const char* kRemoteIqRefusedReason =
         "This Core does not send raw I/Q to this window. Updating the Core may help.";
 

@@ -1043,20 +1043,20 @@ private slots:
         } sites[] = {
             {"src/core/safety/BandPlanGuard.cpp", true,
              {"coming in Phase", "RX/TX band mismatch \u2014"},
-             {"CW transmit is not available yet", "FM transmit is not available yet",
-              "DRM transmit is not available yet",
+             {"CW transmit is not available on this Core", "FM transmit is not available on this Core",
+              "DRM transmit is not available on this Core",
               "RX/TX band mismatch: cross-band TX disabled"}},
             {"src/gui/applets/TxApplet.cpp", true,
              {"coming in Phase"},
-             {"CW transmit is not available yet", "FM transmit is not available yet",
-              "DRM transmit is not available yet"}},
+             {"CW transmit is not available on this Core", "FM transmit is not available on this Core",
+              "DRM transmit is not available on this Core"}},
             {"src/gui/MainWindow.cpp", false,
              {"Phase 3F closeout:", "AntennaSwitchToast surface",
               "TxBoundConfirmDialog surface", "conflict-detection state machine ships"},
              {"Show the antenna switch notice to see how it looks. No antenna changes, "
-              "and antennas do not switch on their own yet.",
+              "and antennas do not switch on their own.",
               "Show the question asked before the transmit antenna moves, to see how it "
-              "looks. No antenna changes, and adding a slice does not ask it yet."}},
+              "looks. No antenna changes, and adding a slice does not ask it."}},
             {"src/gui/setup/hardware/AntennaAlexAntennaControlTab.cpp", true,
              {"TxBoundConfirmDialog before", "toast on RX-only switch", "refuse add-slice"},
              {"Auto - resolve it when safe, and show a notice when only a receive antenna "
@@ -1075,7 +1075,7 @@ private slots:
              {"design spec", "reserved for future phase"}, {}},
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
              {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
-             {"The 60 s history graph is not shown yet.",
+             {"The 60 s history graph is not shown.",
               "Connect a radio to export its settings."}},
             // Fix wave item 2: the VFO flag's tooltips carried Thetis and
             // WDSP file cites and WDSP function names; the cites are
@@ -1199,7 +1199,7 @@ private slots:
               "\u26a0  Disabled. Enable it to route audio"}},
             {"src/gui/setup/DspOptionsPage.cpp",
              {"Sets the internal buffer size. Larger values give sharper filters but add latency.",
-              "Time to last change: none yet"}},
+              "Time to last change: none"}},
             {"src/gui/setup/hardware/OcOutputsHfTab.cpp",
              {"OC pin %1: shows the last OC byte sent to the radio"}},
             {"src/models/RadioModel.cpp",

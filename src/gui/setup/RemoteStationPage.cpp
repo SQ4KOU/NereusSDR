@@ -226,7 +226,7 @@ void RemoteStationPage::refresh()
     m_backupGroup->setVisible(!m_state.keyBackupAcknowledged);
     applyGate(m_backupAcknowledged,
               allowed && m_state.runCore && !m_state.keyBackupPath.isEmpty(),
-              !m_state.keyBackupPath.isEmpty() ? coreReason : tr("The Core key is not available yet."));
+              !m_state.keyBackupPath.isEmpty() ? coreReason : tr("The Core key is not available."));
     rebuildDevices();
 }
 

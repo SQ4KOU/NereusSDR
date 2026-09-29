@@ -2250,7 +2250,7 @@ void DexpVoxPage::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitOk = permitted;
     m_transmitWhy = reason.isEmpty()
-        ? tr("Remote transmit controls are not available from this Core yet.")
+        ? tr("Remote transmit controls are not available from this Core.")
         : reason;
     gateVoxEnable();
 }

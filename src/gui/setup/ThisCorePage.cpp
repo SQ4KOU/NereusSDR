@@ -348,7 +348,7 @@ void ThisCorePage::rebuildDevices()
     }
     m_keyBackupDone->setVisible(!info.keyBackupAcknowledged);
     gate(m_keyBackupDone, usable && !info.keyPath.isEmpty(),
-         !usable ? why : tr("The Core key is not available yet."));
+         !usable ? why : tr("The Core key is not available."));
 }
 
 void ThisCorePage::sendDeviceAdmin(const QByteArray& verb, const QString& id)
@@ -497,7 +497,7 @@ void ThisCorePage::refreshControls()
             m_radioModel != nullptr ? m_radioModel->stationRadioWaiting() : QString();
         const QString line = !hasCore && !waiting.isEmpty() ? waiting
             : m_list->topLevelItemCount() == 0
-                ? tr("The Core has not found a radio yet. Scan again.")
+                ? tr("The Core has not found a radio. Scan again.")
             : !hasCore ? tr("The Core is waiting for you to choose its radio.")
                        : QString();
         m_status->setText(line);

@@ -48,7 +48,7 @@ and the gating it found is fixed in the same change. Line numbers are at
   Station-scoped settings key through `SettingsProxy` (`SettingsScope.cpp`).
 - **Transmit**: follows the negotiated `txPermitted` through
   `MainWindow::transmitControlsPermitted()` (`:10166`) with the reason
-  "Remote transmit controls are not available from this Core yet."; the
+  "Remote transmit controls are not available from this Core."; the
   Core still refuses transmit writes under its receive-only policy
   (`StationServer.cpp:1021-1037`).
 - **Unavailable**: acts on this computer's own radio connection, DSP,
@@ -121,7 +121,7 @@ operator receive session. The three exceptions found are listed under
 | PureSignal applet | Station-backed (PS3 facade); hidden unless PS3 is advertised `:10227-10234` | `PureSignalSessionFacade::requestAction` | `tst_ps3_session` |
 | AM Mod Monitor applet | GUI-local display of a transmit analyser; no remote feed | `RadioModel::setAmModFeedbackWanted`, `ModMon/*` keys | hardware pending (S1) |
 | Power Genius applet: Disconnect/Reconnect | Station-backed (R3 completion Task 1, R-R3-22) | The applet asks the Core, which owns the amp: Disconnect sends `disconnectPgxl`; while the Core is still discovering, connecting, identifying or retrying the item says Cancel (the Peripherals row's word) and sends the same command to cancel the attempt; Reconnect sends `configurePgxl` with the Core's saved address; both need `remotePgxlControlVersion` 2 on a minor-11 session. A line under the gauges shows the Core's `amplifier` phase as it changes and, when the Core refuses the applet's request, its reason through `OperatorReasonText`. Off with a reason while the link is coming up ("Waiting for the Core to connect."), from an older Core ("This Core does not offer Power Genius XL control to this app.") or with no saved address ("Enter the Power Genius address in Setup first."). MainWindow's handler acts on this computer's `PgxlConnection` in a local window only | `tst_remote_gui_gating` (`remoteAmplifierAppletControlsAreUnavailable`), `tst_remote_peripherals` (`remoteAppletsConnectAndDisconnectThroughTheCore`, `remoteWindowSetsUpThePgxlThroughTheCore`); hardware pending (S1) |
-| Power Genius applet: OPERATE | **Unavailable (gated here)** | puts the amp in operate; waits for remote transmit ("Amplifier control is not available from a remote window yet.") | `tst_remote_gui_gating` (`remoteAmplifierAppletControlsAreUnavailable`) |
+| Power Genius applet: OPERATE | **Unavailable (gated here)** | puts the amp in operate; waits for remote transmit ("Amplifier control is not available from a remote window.") | `tst_remote_gui_gating` (`remoteAmplifierAppletControlsAreUnavailable`) |
 | Power Genius applet: gauges, Open PGXL Advanced | GUI-local display / Setup 4O3A (remote placeholder tabs) | availability follows the mirrored `fourO3AEnabled` | `tst_remote_peripherals` |
 | Tuner Genius applet | Transmit + Core-owned accessory | `TunerApplet::setTransmitPermitted`, `setStationConnected`; remote menu uses `requestDisconnectTgxl` | `tst_station_accessory_state`, `tst_remote_peripherals` |
 | RF-Kit RF2K-S applet: Disconnect/Reconnect | Station-backed (R3 completion Task 1, R-R3-22) | The applet asks the Core, which owns the amp: Disconnect sends `disconnectRfKit`; while the Core is still trying the item says Cancel and sends the same command to cancel the attempt; Reconnect sends `configureRfKit` with the Core's saved address; both need `remoteRfKitControlVersion` 2 on a minor-11 session. A line shows the Core's `rfkit` phase as it changes and, when the Core refuses the applet's request (for example with the Core's RF-Kit switch off), its reason through `OperatorReasonText`. Off with a reason while the link is coming up, from an older Core ("This Core does not offer RF-Kit amplifier setup to this app.") or with no saved address. MainWindow's handler acts on this computer's `Rf2ksConnection` in a local window only | `tst_remote_gui_gating` (`remoteRfKitAppletControlsAreUnavailable`), `tst_remote_peripherals` (`remoteAppletsConnectAndDisconnectThroughTheCore`, `remoteWindowSetsUpTheRfKitThroughTheCore`); hardware pending (S1) |
@@ -255,7 +255,7 @@ visible and are not listed.
   until the R3 receiver audio plan (Task 5, R-R3-44): they now work in a
   remote window, and only the applet's TX row waits for remote transmit.
 - Power Genius OPERATE and its Disconnect/Reconnect action: "Amplifier
-  control is not available from a remote window yet." (Disconnect/Reconnect
+  control is not available from a remote window." (Disconnect/Reconnect
   asks the Core since the R3 completion plan, Task 1; OPERATE keeps the
   reason.)
 - Fix wave (September 23): DSP > AGC/ALC TX Leveler and TX ALC groups and

@@ -346,7 +346,7 @@ void DeviceCard::buildLayout()
         pillRow->setSpacing(4);
         auto* pillLbl = new QLabel(QStringLiteral("Negotiated:"));
         pillLbl->setStyleSheet(QLatin1String(kDimLabelStyle));
-        m_negotiatedPill = new QLabel(QStringLiteral("(not yet applied)"));
+        m_negotiatedPill = new QLabel(QStringLiteral("(not applied)"));
         m_negotiatedPill->setStyleSheet(QLatin1String(kPillStyleApplying));
         pillRow->addWidget(pillLbl);
         pillRow->addWidget(m_negotiatedPill);

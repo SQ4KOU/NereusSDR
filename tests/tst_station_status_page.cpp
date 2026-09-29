@@ -562,7 +562,7 @@ private slots:
         QVERIFY(body.contains(QStringLiteral("Shack Core")));
         QVERIFY(body.contains(QStringLiteral("Radio: Hermes Lite 2, Bench HL2, connected.")));
         QVERIFY(body.contains(QStringLiteral("<meta http-equiv=\"refresh\" content=\"5\">")));
-        QVERIFY(body.contains(QStringLiteral("No device has paired with this Core yet.")));
+        QVERIFY(body.contains(QStringLiteral("No device is paired with this Core.")));
 
         core.radio = StationRadioStatus{};
         body = bodyOf(core.get());

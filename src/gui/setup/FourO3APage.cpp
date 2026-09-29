@@ -594,7 +594,7 @@ void FourO3APage::refreshRemotePgxlTab()
     if (!amp->deviceSerial().isEmpty()) { identity << tr("serial %1").arg(amp->deviceSerial()); }
     if (!amp->deviceVersion().isEmpty()) { identity << tr("version %1").arg(amp->deviceVersion()); }
     if (!amp->deviceNickname().isEmpty()) { identity << tr("named %1").arg(amp->deviceNickname()); }
-    m_remotePgxlIdentity->setText(identity.isEmpty() ? tr("Not identified yet")
+    m_remotePgxlIdentity->setText(identity.isEmpty() ? tr("Not identified")
                                                      : identity.join(QStringLiteral(", ")));
     m_remotePgxlReadings->setText(amp->present()
         ? tr("%1, %2 C, %3 V").arg(amp->deviceState())

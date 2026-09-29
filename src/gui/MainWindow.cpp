@@ -879,14 +879,14 @@ QString testAntennaToastToolTip()
 {
     return QStringLiteral("Show the antenna switch notice to see how it looks. "
                           "No antenna changes, and antennas do not switch on "
-                          "their own yet.");
+                          "their own.");
 }
 
 QString testTxBoundReRouteToolTip()
 {
     return QStringLiteral("Show the question asked before the transmit antenna "
                           "moves, to see how it looks. No antenna changes, and "
-                          "adding a slice does not ask it yet.");
+                          "adding a slice does not ask it.");
 }
 } // namespace
 
@@ -3095,7 +3095,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // caps + alex + slice (instead of the stub ANT1/ANT2 list).
     newFlag->setRadioModel(m_radioModel);
     newFlag->setTransmitPermitted(transmitControlsPermitted(),
-        tr("Remote transmit controls are not available from this Core yet."));
+        tr("Remote transmit controls are not available from this Core."));
     newFlag->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
@@ -5625,7 +5625,7 @@ void MainWindow::buildUI()
         hooks.pureSignalArmingPermitted = [this] { return pureSignalArmingPermitted(); };
         hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
         hooks.remoteTransmitReason =
-            tr("Remote transmit controls are not available from this Core yet.");
+            tr("Remote transmit controls are not available from this Core.");
         // Desktop remote transmit: the Core's own reason when it gave one.
         hooks.remoteTransmitReasonNow = [this] { return remoteTransmitReason(); };
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
@@ -11551,7 +11551,7 @@ void MainWindow::onContainerFilterClicked(ContainerWidget* c, int index)
 
 QString MainWindow::containerBandStackReason()
 {
-    return tr("Band stacking is not ready yet.");
+    return tr("Band stacking is not ready.");
 }
 
 int MainWindow::containerFilterContextSlot(int index, int activePreset, int presetCount)
@@ -12098,7 +12098,7 @@ void MainWindow::wireSliceToSpectrum()
     // contextMenuEvent builds AntennaPickerMenu instead of the stub fallback.
     vfo->setRadioModel(m_radioModel);
     vfo->setTransmitPermitted(transmitControlsPermitted(),
-        tr("Remote transmit controls are not available from this Core yet."));
+        tr("Remote transmit controls are not available from this Core."));
     vfo->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
@@ -12925,7 +12925,7 @@ SetupDialog* MainWindow::createSetupDialog()
                 [dialog] { dialog->notifyReceiverSelectionChanged(); });
     }
     dialog->setTransmitPermitted(transmitControlsPermitted(),
-        tr("Remote transmit controls are not available from this Core yet."));
+        tr("Remote transmit controls are not available from this Core."));
     // R-R3-49 (parity Task 1): the transmit settings that key nothing.
     dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(),
                                          transmitSettingsReason());
@@ -13153,7 +13153,7 @@ QString MainWindow::remoteTransmitReason() const
         && !m_stationClient->capabilities().txRefusalReason.isEmpty()) {
         return m_stationClient->capabilities().txRefusalReason;
     }
-    return tr("Remote transmit controls are not available from this Core yet.");
+    return tr("Remote transmit controls are not available from this Core.");
 }
 
 bool MainWindow::rxBypassPermitted() const
@@ -13410,8 +13410,8 @@ void MainWindow::applyRemoteRoleGating()
         action->setToolTip(!ps3Supported
             ? tr("The connected Core has not advertised PureSignal 3.")
             : armingOffered
-                ? tr("PureSignal 3 settings, calibration, saved corrections and diagnostics. The two-tone test is not available from this Core yet.")
-                : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet."));
+                ? tr("PureSignal 3 settings, calibration, saved corrections and diagnostics. The two-tone test is not available from this Core.")
+                : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core."));
     }
     if (m_pureSignalApplet) {
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()

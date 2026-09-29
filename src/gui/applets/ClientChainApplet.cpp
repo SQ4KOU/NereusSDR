@@ -257,7 +257,7 @@ void ClientChainApplet::rebuildCoreRows()
                      client.transmitting ? QStringLiteral(" TX") : QString(),
                      client.subscriptions.isEmpty() ? QStringLiteral("no subscriptions")
                                                      : client.subscriptions.join(QStringLiteral(", ")),
-                     client.lastCommand.isEmpty() ? QStringLiteral("no command yet")
+                     client.lastCommand.isEmpty() ? QStringLiteral("no command")
                                                    : client.lastCommand.left(40)), row);
         label->setWordWrap(true);
         line->addWidget(label, 1);
@@ -413,7 +413,7 @@ QWidget* ClientChainApplet::buildClientRow(
 
         // Last command in monospace, truncated to 40 chars.
         const QString cmdSnippet = session->lastCommand.isEmpty()
-                                       ? QStringLiteral("(no command yet)")
+                                       ? QStringLiteral("(no command)")
                                        : session->lastCommand.left(40);
         auto* cmdLbl = new QLabel(cmdSnippet, row);
         const QFont monoFont = QFontDatabase::systemFont(QFontDatabase::FixedFont);
