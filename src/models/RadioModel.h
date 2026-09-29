@@ -3712,6 +3712,11 @@ public:
     // FIRST, worker constructed second) and assert the bindings still reach
     // it. Non-owning, exactly like the production m_dspWorker.
     void attachDspWorkerForTest(RxDspWorker* w);
+    // The same, with `thread` registered as the worker's running thread the
+    // way the connect path registers m_dspThread, so the receive lane
+    // quiesces the worker from the lane (runOnDspWorkerFromLane) exactly as
+    // it does in production. Pass nullptrs to detach.
+    void attachDspWorkerOnThreadForTest(RxDspWorker* w, QThread* thread);
     // R-R3-39: waits until every job on the receive lane has run and then
     // delivers the answers they queued for this thread. False on timeout.
     bool waitForReceiveLaneForTest(int timeoutMs = 600000);
