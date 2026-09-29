@@ -4,6 +4,9 @@
 // no-port-check: NereusSDR-original.  See RemoteAudioContext.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-27: Remote-window parity Task 32 (R-IOS-13, R-R3-49): the
 //               monitor-audio request and monitor-audio-context codec. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -258,6 +261,12 @@ std::optional<PcmEncoderProfile> remoteAudioL16EncoderFromJson(const QJsonValue&
     return expected;
 }
 
+QString opusBitrateNotOfferedReason()
+{
+    return QStringLiteral("This Core does not offer that audio quality. The audio stays as it "
+                          "was.");
+}
+
 QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
                                      bool detailNegotiated, bool profileNegotiated)
 {
@@ -281,6 +290,11 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
         if (profile == RemoteAudioProfile::Opus && message.profileRefusal) {
             payload.insert(QStringLiteral("profileRefusal"),
                            remoteAudioProfileRefusalToWire(*message.profileRefusal));
+        }
+        // iPhone app plan Task 23: only ever set for a device that sent
+        // `opusBitrate` (audioQualityVersion 1).
+        if (!message.opusBitrateRefusal.isEmpty()) {
+            payload.insert(QStringLiteral("opusBitrateRefusal"), message.opusBitrateRefusal);
         }
         if (profile == RemoteAudioProfile::Lossless) {
             if (message.enabled && message.losslessEncoder) {
@@ -331,8 +345,14 @@ std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payloa
     profileNegotiated = profileNegotiated && detailNegotiated;
     // The profile shape adds "profile" and, beside profile opus only,
     // "profileRefusal"; the rest is checked as the detail shape.
+    // iPhone app plan Task 23: the main context may add
+    // "opusBitrateRefusal" for a device that asked for a bitrate.
+    const bool bitrateRefusal = profileNegotiated && kind == ContextKind::Main
+        && payload.contains(QStringLiteral("opusBitrateRefusal"));
     const qsizetype profileKeys = profileNegotiated
-        ? 1 + (payload.contains(QStringLiteral("profileRefusal")) ? 1 : 0) : 0;
+        ? 1 + (payload.contains(QStringLiteral("profileRefusal")) ? 1 : 0)
+            + (bitrateRefusal ? 1 : 0)
+        : 0;
     const QJsonValue op = payload.value(QStringLiteral("op"));
     const QJsonValue connectionId = payload.value(QStringLiteral("connectionId"));
     const QJsonValue enabled = payload.value(QStringLiteral("enabled"));
@@ -387,6 +407,14 @@ std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payloa
             if (!message.profileRefusal || *message.profile != RemoteAudioProfile::Opus) {
                 return std::nullopt;
             }
+        }
+        if (bitrateRefusal) {
+            const QJsonValue reason = payload.value(QStringLiteral("opusBitrateRefusal"));
+            if (!reason.isString() || reason.toString().isEmpty()
+                || reason.toString().size() > 512) {
+                return std::nullopt;
+            }
+            message.opusBitrateRefusal = reason.toString();
         }
     }
     const bool lossless = message.profile == RemoteAudioProfile::Lossless;

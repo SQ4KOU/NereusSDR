@@ -15,6 +15,9 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated remote Settings
 //                                    Validation refresh and reply lifetime.
 //                                    AI-assisted implementation via Codex.
@@ -320,6 +323,7 @@
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 #include "core/session/StationClient.h"
 #include "core/session/BandLinkFit.h"
@@ -359,6 +363,7 @@
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 
+#include <QAuthenticator>
 #include <QHostAddress>
 #include <QNetworkInterface>
 #include "models/PanadapterModel.h"
@@ -606,6 +611,11 @@ QString StationClient::connectionFailureReason(QAbstractSocket::SocketError erro
     // lookup failure, not this case, and "Network unreachable" (also a
     // NetworkError) means this Mac has no route at all, which Local
     // Network privacy does not produce.
+    // A proxy that demands a login: NereusSDR has none to give it.
+    const QString networkWords = NetworkTrouble::wordsForSocketError(error);
+    if (!networkWords.isEmpty()) {
+        return networkWords;
+    }
     const bool hostUnreachable =
         error == QAbstractSocket::NetworkError
         && (errorText.contains(QLatin1String("Host unreachable"), Qt::CaseInsensitive)
@@ -689,6 +699,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // board, from the Core's own list (stationRadios' models, radioModels 1),
     // never a guess from the model alone.
     m_declaredFeatures.insert(QByteArrayLiteral("radioModels"), 1);
+    // JJ's ruling of 2026-09-28: this window shows and changes the rest of
+    // the Core's TCI server settings (stationTciSettingsVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("stationTciSettings"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -1384,6 +1397,18 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
         ensurePinSatisfied();
     });
 
+    // A proxy that demands a login: NereusSDR gives it none (JJ's ruling of
+    // 2026-09-28), so the socket fails next; its reason says why, whichever
+    // of the error and the close comes first.
+    connect(socket, &QWebSocket::proxyAuthenticationRequired, this,
+            [this, transportGuard](const QNetworkProxy&, QAuthenticator*) {
+                if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
+                    return;
+                }
+                if (m_lastError.isEmpty()) {
+                    m_lastError = NetworkTrouble::proxyNeedsLoginWords();
+                }
+            });
     connect(socket, &QWebSocket::errorOccurred, this,
             [this, socket, transportGuard, host = url.host()](QAbstractSocket::SocketError error) {
                 if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
@@ -4390,7 +4415,7 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         return QStringLiteral("interlock");
     }
     if (verb == "setStationTci" || verb == "setStationTciOptions"
-        || verb == "disconnectStationTciClient") {
+        || verb == "setStationTciSettings" || verb == "disconnectStationTciClient") {
         return QStringLiteral("tci");
     }
     if (verb == "setFourO3AEnabled") {
@@ -5527,6 +5552,30 @@ StationClient::CommandOutcome StationClient::requestStationTciOptions(bool emula
                          boolArgument("emulateSunSdr2Pro", emulateSunSdr2Pro),
                          boolArgument("cwluBecomesCw", cwluBecomesCw),
                          boolArgument("sendInitialState", sendInitialState) },
+                       QStringLiteral("the Core's TCI server settings"));
+}
+
+bool StationClient::stationTciSettingsAvailable() const
+{
+    // JJ's ruling of 2026-09-28: a Core that told this window
+    // stationTciSettingsVersion 1 (it declares stationTciSettings).
+    return stationTciServerAvailable() && m_capabilities.stationTciSettingsVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestStationTciSetting(const QByteArray& name,
+                                                                      const QVariant& value)
+{
+    if (!stationTciSettingsAvailable()) {
+        return { false, stationTciServerUnavailableReason() };
+    }
+    const StationTciModel::Setting* setting = StationTciModel::setting(name);
+    if (setting == nullptr) {
+        return { false, QStringLiteral("The Core's TCI server has no such setting.") };
+    }
+    return sendCommand("setStationTciSettings", -1,
+                       { setting->kind == StationTciModel::Setting::Kind::Bool
+                             ? boolArgument(name, value.toBool())
+                             : intArgument(name, value.toInt()) },
                        QStringLiteral("the Core's TCI server settings"));
 }
 

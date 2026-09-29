@@ -17,6 +17,7 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 #include "core/session/PathRacer.h"
 
@@ -26,6 +27,8 @@
 #include "core/session/SessionTransport.h"
 #include "core/session/StationClient.h"
 
+#include <memory>
+#include <QAuthenticator>
 #include <QHostAddress>
 #include <QHostInfo>
 #include <QLoggingCategory>
@@ -682,14 +685,23 @@ void DirectPathRung::start()
         m_transport = nullptr;
         emit opened(transport);
     });
-    connect(socket, &QWebSocket::errorOccurred, this, [this, transport](QAbstractSocket::SocketError) {
+    // A proxy that demands a login: NereusSDR gives it none, so the socket
+    // fails next; the rung's words say why.
+    auto proxyLogin = std::make_shared<bool>(false);
+    connect(socket, &QWebSocket::proxyAuthenticationRequired, this,
+            [proxyLogin](const QNetworkProxy&, QAuthenticator*) { *proxyLogin = true; });
+    connect(socket, &QWebSocket::errorOccurred, this,
+            [this, transport, proxyLogin](QAbstractSocket::SocketError error) {
         if (m_done || m_transport != transport) {
             return;
         }
         m_done = true;
         m_transport = nullptr;
         transport->deleteLater();
-        emit ended(PathRacer::Outcome::NoAnswer, QString());
+        // Empty but for a proxy that demands a login, which says so.
+        emit ended(PathRacer::Outcome::NoAnswer,
+                   *proxyLogin ? NetworkTrouble::proxyNeedsLoginWords()
+                               : NetworkTrouble::wordsForSocketError(error));
     });
     // Step 2b: the computer's own proxy settings (SystemProxy).
     socket->setProxy(SystemProxy::forUrl(m_url));

@@ -872,6 +872,12 @@ public:
     /// The station's descriptor as applied. Default-constructed before the
     /// capability exchange.
     const StationCapabilities& capabilities() const { return m_capabilities; }
+    /// Test seam: declare a hello feature this window does not (an app's,
+    /// such as audioQuality). Before startSession().
+    void declareFeatureForTest(const QByteArray& name, int version)
+    {
+        m_declaredFeatures.insert(name, version);
+    }
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
@@ -1180,6 +1186,10 @@ public:
                                             bool cwluBecomesCw,
                                             bool sendInitialState) override;
     CommandOutcome requestDisconnectStationTciClient(const QString& id) override;
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
+    bool stationTciSettingsAvailable() const override;
+    CommandOutcome requestStationTciSetting(const QByteArray& name,
+                                            const QVariant& value) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;

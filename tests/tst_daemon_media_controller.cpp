@@ -617,6 +617,8 @@ private slots:
     void minorSevenPeerReceivesLegacyAudioContexts();
     void minorEightAudioContextsCarryEncoderOrReason();
     void configuredAudioBitrateReachesOfferAndContext();
+    void aDeviceChoosesItsOwnMeasuredOpusBitrate();
+    void aDeviceThatNeverAsksGetsTheCoresBitrate();
     void losslessRequestSwitchesAtABlockBoundaryAndAcknowledges();
     void losslessRefusalKeepsOpusAndSaysWhy_data();
     void losslessRefusalKeepsOpusAndSaysWhy();
@@ -3860,6 +3862,106 @@ void TstDaemonMediaController::clockProbeIsAnsweredWithTheCoreClockAndCapture()
     h.finish();
 }
 
+
+// iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1): a device that
+// declared audioQuality chooses its own Opus bitrate from the measured
+// table. 48000 switches the encoder and the context reports 48000 and
+// 20 kHz; a bitrate not in the table is refused with its reason and the
+// running one stays; 24000 (the phone's "save data" choice) reports 8 kHz.
+void TstDaemonMediaController::aDeviceChoosesItsOwnMeasuredOpusBitrate()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    h.controller.setAudioTargetBitrate(24000);
+    h.client.declareFeatureForTest(QByteArrayLiteral("audioQuality"), 1);
+    h.establishSession();
+    QCOMPARE(h.client.capabilities().audioQualityVersion, 1);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QJsonObject context;
+    const auto ask = [&](quint32 revision, int bitrate) {
+        QJsonObject control = audioControl(revision, true, QStringLiteral("opus"));
+        control.insert(QStringLiteral("opusBitrate"), bitrate);
+        const qsizetype before = audioContextsIn(controls).size();
+        QVERIFY(h.client.sendMediaControl(control, h.client.sessionEpoch()));
+        QTRY_VERIFY(audioContextsIn(controls).size() > before);
+        context = audioContextsIn(controls).constLast();
+    };
+
+    ask(1, 48000);
+    std::optional<RemoteAudioContextMessage> decoded =
+        decodeRemoteAudioContext(context, true, true);
+    QVERIFY2(decoded.has_value(), QJsonDocument(context).toJson().constData());
+    QVERIFY(decoded->enabled && decoded->encoder.has_value());
+    QCOMPARE(decoded->encoder->targetBitrate, 48000);
+    QCOMPARE(decoded->encoder->audioBandwidthHz, 20000);
+    QVERIFY(!context.contains(QStringLiteral("opusBitrateRefusal")));
+    QCOMPARE(h.controller.audioStreamBitrate(), 48000);
+
+    // Not in the table: refused with its reason; the running one stays.
+    ask(2, 32000);
+    decoded = decodeRemoteAudioContext(context, true, true);
+    QVERIFY2(decoded.has_value(), QJsonDocument(context).toJson().constData());
+    QCOMPARE(decoded->opusBitrateRefusal, opusBitrateNotOfferedReason());
+    QVERIFY(OperatorWording::isPlain(decoded->opusBitrateRefusal));
+    QVERIFY(decoded->encoder.has_value());
+    QCOMPARE(decoded->encoder->targetBitrate, 48000);
+    QCOMPARE(h.controller.audioStreamBitrate(), 48000);
+
+    // The save-data choice.
+    ask(3, 24000);
+    decoded = decodeRemoteAudioContext(context, true, true);
+    QVERIFY(decoded.has_value() && decoded->encoder.has_value());
+    QCOMPARE(decoded->encoder->targetBitrate, 24000);
+    QCOMPARE(decoded->encoder->audioBandwidthHz, 8000);
+    QVERIFY(decoded->opusBitrateRefusal.isEmpty());
+    h.finish();
+}
+
+// ...and a device that never sends opusBitrate (every app before it) gets
+// the Core's audio_bitrate exactly as before: no audioQualityVersion, the
+// context's shape unchanged, and an opusBitrate from it is not read.
+void TstDaemonMediaController::aDeviceThatNeverAsksGetsTheCoresBitrate()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    h.controller.setAudioTargetBitrate(24000);
+    h.establishSession();
+    QCOMPARE(h.client.capabilities().audioQualityVersion, 0);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    const QJsonObject context = audioContextsIn(controls).constLast();
+    const QStringList keys = context.keys();
+    QCOMPARE(keys, (QStringList{QStringLiteral("connectionId"), QStringLiteral("enabled"),
+                                QStringLiteral("encoder"), QStringLiteral("firstSequence"),
+                                QStringLiteral("firstTimestamp"), QStringLiteral("generation"),
+                                QStringLiteral("op"), QStringLiteral("profile"),
+                                QStringLiteral("revision"), QStringLiteral("ssrc")}));
+    QCOMPARE(context.value(QStringLiteral("encoder")).toObject()
+                 .value(QStringLiteral("targetBitrate")).toInt(), 24000);
+
+    // Its opusBitrate is not one it may send: the control is not read.
+    QJsonObject control = audioControl(2, true, QStringLiteral("opus"));
+    control.insert(QStringLiteral("opusBitrate"), 48000);
+    QVERIFY(h.client.sendMediaControl(control, h.client.sessionEpoch()));
+    QTest::qWait(100);
+    QCOMPARE(audioContextsIn(controls).size(), 1);
+    QCOMPARE(h.controller.audioStreamBitrate(), 24000);
+    h.finish();
+}
 
 namespace {
 

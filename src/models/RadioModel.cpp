@@ -14,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-28 - RADE end-of-over callsigns: an operator's release in RADE
 //                 sends FreeDV's end-of-over frame with the station callsign
 //                 before the radio unkeys (startRadeEndOfOverTail,
@@ -4924,6 +4927,15 @@ bool RadioModel::setStationTciOptionsForStation(bool emulateExpertSdr3, bool emu
                              sendInitialState);
     if (reason) { reason->clear(); }
     return true;
+}
+
+bool RadioModel::setStationTciSettingsForStation(const QVariantMap& changes, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTci) {
+        if (reason) { *reason = QStringLiteral("This Core has no TCI server."); }
+        return false;
+    }
+    return m_stationTci->setSettings(changes, reason);
 }
 
 bool RadioModel::disconnectStationTciClientForStation(const QString& id, QString* reason)

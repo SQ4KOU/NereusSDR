@@ -713,6 +713,41 @@ the transmit window and hands a transmit context and its frames on
 (parity Task 29). Display duplex is held by `tst_display_duplex` and the
 two `duplex` cases of `tst_remote_tx_display` (parity Task 31).
 
+## Per-device audio quality (opusBitrate, audioQualityVersion)
+
+iPhone app plan Task 23 (R-IOS-09). A device whose hello declared the
+feature `audioQuality` 1 is told `audioQualityVersion` 1 (last in the
+minor-11 capabilities block, while the Core offers media). Only then may
+its `audio` control carry `opusBitrate`, a whole number, beside `profile`:
+
+| Field | Meaning |
+| --- | --- |
+| `opusBitrate` | The Opus bitrate this device wants for its main (speakers') stream: one of the catalogue's `audio.opusProfiles` bitrates |
+
+The catalogue's `audio.opusProfiles` lists the station's measured table
+(`OpusAudioCodec.h` `kOpusMeasuredProfiles`, from
+`2026-09-20-remote-daemon-r3-verification/opus-profile-probe.txt`), in
+order: `{bitrate: 24000, bandwidthHz: 8000}` (wideband) and
+`{bitrate: 48000, bandwidthHz: 20000}` (fullband). A profile taken out of
+the table is gone from the catalogue.
+
+A bitrate in the table becomes this device's: the Core rebuilds the
+stream's encoder at the next capture block (sequence and timestamp carry
+on) and answers with an `audio-context` whose `encoder` reports it
+(`targetBitrate`, `audioBandwidthHz`). Any other bitrate is refused: the
+answering `audio-context` adds `opusBitrateRefusal`, plain words ("This
+Core does not offer that audio quality. The audio stays as it was."), and
+the running encoder stays. A later control without `opusBitrate` keeps the
+device's choice; a new media peer starts at the Core's `audio_bitrate`.
+The choice is per device (each media session has its own); receiver
+streams, the headphones mix and the SDP's `maxaveragebitrate` (the Core's
+`audio_bitrate`) do not follow it.
+
+`opusBitrate` from a device that was not told `audioQualityVersion`, or
+without `profile`, makes the control one the Core cannot read (it is not
+taken). A device that never sends it gets the Core's `audio_bitrate`
+exactly as before, and its contexts never carry `opusBitrateRefusal`.
+
 ## Receiver audio (receiver-audio and receiver-audio-context)
 
 Capability `receiverAudioVersion=1` (R-R3-43) negotiates it; the session

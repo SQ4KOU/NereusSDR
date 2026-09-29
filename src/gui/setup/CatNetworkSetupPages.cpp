@@ -428,6 +428,94 @@ void CatTciServerPage::buildCoreGroup()
         connect(option, &QCheckBox::toggled, this, &CatTciServerPage::sendCoreOptions);
         form->addRow(QString(), option);
     }
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
+    // this page's settings, for the Core's server. The captions, ranges and
+    // tooltips are this page's own (the groups below); the ones this page
+    // hides as not built yet are hidden here too.
+    const auto addCheck = [this, form](const char* name, const QString& text,
+                                       const QString& tip, bool unbuilt) {
+        auto* box = new QCheckBox(text, m_coreGroup);
+        box->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+        box->setProperty("nereusSetupId",
+                         QStringLiteral("catNetwork.tciServer.core.%1").arg(QLatin1String(name)));
+        box->setToolTip(tip);
+        m_coreSettingTips.insert(QByteArray(name), tip);
+        const QByteArray key(name);
+        connect(box, &QCheckBox::toggled, this,
+                [this, key](bool on) { sendCoreSetting(key, on); });
+        form->addRow(QString(), box);
+        m_coreSettings.insert(key, box);
+        if (unbuilt) { UnbuiltFeatures::hideUnlessBuilt(box, UnbuiltFeature::TciExtras); }
+    };
+    const auto addSpin = [this, form](const char* name, const QString& label, int min, int max,
+                                      const QString& suffix, const QString& tip, bool unbuilt) {
+        auto* spin = new QSpinBox(m_coreGroup);
+        spin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
+        spin->setRange(min, max);
+        spin->setSuffix(suffix);
+        spin->setKeyboardTracking(false);
+        spin->setProperty("nereusSetupId",
+                          QStringLiteral("catNetwork.tciServer.core.%1").arg(QLatin1String(name)));
+        spin->setToolTip(tip);
+        m_coreSettingTips.insert(QByteArray(name), tip);
+        const QByteArray key(name);
+        connect(spin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this, key](int value) { sendCoreSetting(key, value); });
+        form->addRow(label, spin);
+        m_coreSettings.insert(key, spin);
+        if (unbuilt) { UnbuiltFeatures::hideUnlessBuilt(spin, UnbuiltFeature::TciExtras); }
+        return spin;
+    };
+    addSpin("rateLimitMs", tr("Rate limit:"), NereusSDR::TciUpdateGap::kMinGapMs,
+            NereusSDR::TciUpdateGap::kMaxGapMs, tr(" ms"),
+            tr("How long to wait between frequency updates sent to each TCI app. Changes made "
+               "faster than this reach the app as the latest frequency once the time has "
+               "passed. Off sends every change."), false)->setSpecialValueText(tr("Off"));
+    addCheck("cwBecomesCwuAbove10mhz", tr("CW becomes CWU above 10 MHz"),
+             tr("On bands above 10 MHz, report mode as \"CWU\" instead of \"CW\" or \"CWL\". "
+                "Required by certain logging apps that follow the ARRL sideband convention."),
+             true);
+    addCheck("iqSwap", tr("Swap I/Q channels"),
+             tr("Swap the I and Q samples in the TCI IQ data stream. "
+                "Enabled by default for compatibility with most TCI IQ consumers."), false);
+    addCheck("alwaysStreamIq", tr("Always stream IQ"),
+             tr("Stream IQ data to all connected TCI clients continuously, even if no client "
+                "has explicitly subscribed to the IQ stream. Increases CPU and network load."),
+             false);
+    addSpin("audioBlockSamples", tr("Block size:"), 100, 2048, tr(" samples"),
+            tr("Number of audio samples per TCI audio stream block (100 to 2048). "
+               "Larger blocks reduce overhead but increase latency."), false);
+    {
+        auto* combo = new QComboBox(m_coreGroup);
+        combo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
+        combo->addItems({QStringLiteral("Left"), QStringLiteral("Right"), QStringLiteral("Both")});
+        combo->setProperty("nereusSetupId", QStringLiteral("catNetwork.tciServer.core.txChannel"));
+        const QString channelTip =
+            tr("Which audio channel carries the TX audio in the TCI audio stream. "
+               "\"Both\" sends the same mono signal to both left and right channels.");
+        combo->setToolTip(channelTip);
+        m_coreSettingTips.insert(QByteArrayLiteral("txChannel"), channelTip);
+        connect(combo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this](int index) { sendCoreSetting(QByteArrayLiteral("txChannel"), index); });
+        form->addRow(tr("TX channel:"), combo);
+        m_coreSettings.insert(QByteArrayLiteral("txChannel"), combo);
+        UnbuiltFeatures::hideUnlessBuilt(combo, UnbuiltFeature::TciExtras);
+    }
+    addSpin("rxSensorIntervalMs", tr("RX interval:"), 30, 1000, tr(" ms"),
+            tr("How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients "
+               "that subscribe to sensors (30 to 1000 ms)."), true);
+    addSpin("txSensorIntervalMs", tr("TX interval:"), 30, 1000, tr(" ms"),
+            tr("How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI "
+               "clients that subscribe to sensors (30 to 1000 ms)."), true);
+    addCheck("forgetRx2VfoBOnDisconnect", tr("Forget RX2 VFOB on disconnect"),
+             tr("When a TCI client disconnects, reset RX2 VFOB to its default frequency instead "
+                "of keeping the last value set by the client."), true);
+    addCheck("useRx1VfoaForRx2Vfoa", tr("Use RX1 VFOA for RX2 VFOA"),
+             tr("Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. Required by "
+                "clients that do not maintain independent per-receiver VFO state."), true);
+    addCheck("copyRx2VfobToVfoa", tr("Copy RX2 VFOB to VFOA"),
+             tr("Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. Required by "
+                "apps that drive split mode via VFOB but read back VFOA."), true);
     m_coreReason = new QLabel(m_coreGroup);
     m_coreReason->setObjectName(QStringLiteral("coreTciReason"));
     m_coreReason->setWordWrap(true);
@@ -475,6 +563,44 @@ void CatTciServerPage::refreshCoreGroup()
     for (QCheckBox* option : {m_coreExpert, m_coreSunSdr, m_coreCwlu, m_coreInitial}) {
         option->setEnabled(available && !onAir);
         option->setToolTip(reason);
+    }
+    // JJ's ruling of 2026-09-28: the rest of the server's settings, from a
+    // Core that shares them (stationTciSettingsVersion 1); otherwise shown
+    // disabled with the reason.
+    const bool settingsAvailable = available && link->stationTciSettingsAvailable();
+    const QString settingsReason = !reason.isEmpty() ? reason
+        : !settingsAvailable ? IStationLink::stationTciServerUnavailableReason() : QString();
+    for (auto it = m_coreSettings.cbegin(); it != m_coreSettings.cend(); ++it) {
+        QWidget* control = it.value();
+        if (station && settingsAvailable) {
+            const StationTciModel::Setting* setting = StationTciModel::setting(it.key());
+            const QVariant value = setting ? StationTciModel::valueIn(station->state(), *setting)
+                                           : QVariant();
+            const QSignalBlocker block(control);
+            if (auto* box = qobject_cast<QCheckBox*>(control)) {
+                box->setChecked(value.toBool());
+            } else if (auto* spin = qobject_cast<QSpinBox*>(control)) {
+                spin->setValue(value.toInt());
+            } else if (auto* combo = qobject_cast<QComboBox*>(control)) {
+                combo->setCurrentIndex(value.toInt());
+            }
+        }
+        control->setEnabled(settingsAvailable && !onAir);
+        control->setToolTip(settingsReason.isEmpty() ? m_coreSettingTips.value(it.key())
+                                                     : settingsReason);
+    }
+}
+
+void CatTciServerPage::sendCoreSetting(const QByteArray& name, const QVariant& value)
+{
+    IStationLink* link = m_radioModelRef ? m_radioModelRef->stationLink() : nullptr;
+    if (!link || !link->stationTciSettingsAvailable()) {
+        refreshCoreGroup();
+        return;
+    }
+    const auto outcome = link->requestStationTciSetting(name, value);
+    if (!outcome.sent) {
+        m_coreReason->setText(outcome.reason);
     }
 }
 

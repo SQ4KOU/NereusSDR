@@ -1141,7 +1141,9 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("forwardW"), QStringLiteral("limitW")}},
         // The port number and the Core's addresses (blockedReason).
         {"src/core/StationTciController.cpp", {}, {}, 1,
-         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))"),
+          // A setting's range (StationTciModel::settingsTable()).
+          QStringLiteral("setting->min"), QStringLiteral("setting->max")},
          {// TciServer's own error text, kept for the Core's log line only.
           QStringLiteral("error"),
           // The unknown-client sentence is scanned in this file.
@@ -1155,6 +1157,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("modelOwnedSettingsRefusal(key)")}},
         {"src/core/settings/SettingsScope.cpp", {QStringLiteral("modelOwnedSettingsRefusal")},
          {}, 5},
+        // iPhone app plan Task 23: the audio context's opusBitrateRefusal.
+        {"src/core/session/media/RemoteAudioContext.cpp",
+         {QStringLiteral("opusBitrateNotOfferedReason")}, {}, 1},
         // The display refusals and retirements (rejected, allocation-result).
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
@@ -1164,6 +1169,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
           QStringLiteral("m_headphones.profileRefusal"), QStringLiteral("m_audioProfileRefusal"),
+          // iPhone app plan Task 23: a refused opusBitrate's words, scanned
+          // in RemoteAudioContext.cpp's entry.
+          QStringLiteral("opusBitrateNotOfferedReason()"),
+          QStringLiteral("m_audioBitrateRefusal"),
           // Codes, not reasons (section 17): receiver audio off and
           // profile refusal codes, spectrum limit reasons, retire reasons.
           QStringLiteral("headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline)"),
@@ -1241,6 +1250,7 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),
           QStringLiteral("setStationTciForStation"),
           QStringLiteral("setStationTciOptionsForStation"),
+          QStringLiteral("setStationTciSettingsForStation"),
           QStringLiteral("disconnectStationTciClientForStation"),
           QStringLiteral("setTxInterlockPolicyForStation"),
           QStringLiteral("setPgxlPowerCapForStation"),
@@ -1530,6 +1540,12 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot repair settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
+        // iPhone app plan Task 25 (This Core in a remote window): the
+        // Core's paired devices.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot manage devices"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
+         "a remote window's own reason when it is not signed in as a paired device"},
         // R-IOS-26 / R-R3-49: 2 m as its own band.
         {"src/core/session/IStationLink.h", "band2mUnavailableReason",
          "a remote window's own reason when its Core does not have the 2 m band"},
@@ -1601,7 +1617,9 @@ const QList<ReasonSource>& propertyTextSources()
         // The station TCI server's error (StationTciModel error), worded by
         // blockedReason. The port number and the Core's addresses.
         {"src/core/StationTciController.cpp", {}, {}, 1,
-         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))"),
+          // A setting's range (StationTciModel::settingsTable()).
+          QStringLiteral("setting->min"), QStringLiteral("setting->max")},
          {// TciServer's own error text, kept for the Core's log line only.
           QStringLiteral("error"),
           // The unknown-client sentence is scanned in this file.

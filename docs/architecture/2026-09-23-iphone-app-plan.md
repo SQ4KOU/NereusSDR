@@ -2868,8 +2868,16 @@ measured profile; otherwise greyed), R-R3-23, spec §5.4 item 9.
 
 **Execution note (advisory):** opus. Requires Tasks 19 and 76 (its bitrate is per device).
 
-- [ ] **Step 1:** The measured table and the catalogue section.
-- [ ] **Step 2:** The per-session bitrate, the context and the documents.
+- [x] **Step 1:** The measured table and the catalogue section.
+- [x] **Step 2:** The per-session bitrate, the context and the documents.
+
+Built on `codex/rulings-batch-2` (JJ's ruling of 2026-09-28): the device
+declares the hello feature `audioQuality` 1 and is told
+`audioQualityVersion` 1 last at minor 11; `opusBitrate` rides beside
+`profile`; a refusal is the main context's `opusBitrateRefusal` (plain
+words); 48000 is the default and 24000 the phone's "save data" choice.
+Tests are in `tst_daemon_media_controller` and `tst_station_catalog`
+(no separate `tst_audio_quality_offer`).
 
 ## Task 24: Sound only, proven
 

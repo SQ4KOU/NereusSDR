@@ -514,6 +514,16 @@ struct SessionMessage {
     ///                               "cwluBecomesCw": Bool,
     ///                               "sendInitialState": Bool}
     ///   disconnectStationTciClient -- {"id": Utf8}
+    ///   setStationTciSettings  -- one or more of {"rateLimitMs": Int64,
+    ///                               "cwBecomesCwuAbove10mhz": Bool,
+    ///                               "iqSwap": Bool, "alwaysStreamIq": Bool,
+    ///                               "audioBlockSamples": Int64,
+    ///                               "txChannel": Int64 (0 Left, 1 Right,
+    ///                               2 Both), "rxSensorIntervalMs": Int64,
+    ///                               "txSensorIntervalMs": Int64,
+    ///                               "forgetRx2VfoBOnDisconnect": Bool,
+    ///                               "useRx1VfoaForRx2Vfoa": Bool,
+    ///                               "copyRx2VfobToVfoa": Bool}
     ///   setTxInterlockPolicy   -- {"mode": Int64, "graceMs": Int64,
     ///                               "swrGateEnabled": Bool, "swrGateMax": Double}
     ///   setPgxlPowerCap        -- {"enabled": Bool, "watts": Int64}

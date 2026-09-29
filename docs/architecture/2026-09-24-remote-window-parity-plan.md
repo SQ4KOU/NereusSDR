@@ -2282,8 +2282,14 @@ For the controller, in the plans named; nothing here is a task of this plan.
   and Add a device, the choice order's announcement and TXT field, and the confirm step once
   Task 75 lands.
 - **iPhone plan Task 20** (`:2199-2256`): the desktop's half of B3.2 and B3.10 is fixed here
-  in the window (Task 17) from the granted size and rate; Task 20's display extras stay the
-  phone's, and the desktop does not ask for them (R-R3-12 keeps its own smoothing).
+  in the window (Task 17) from the granted size and rate. Task 20's display extras are the
+  phone's, with one exception (JJ's ruling of 2026-09-28): a remote window's waterfall AGC
+  and NF-AGC ask the Core for their levels (`waterfallLevels` mode `agc` or
+  `noiseFloorAgc`, displayExtrasVersion 1) and colour against the levels the NSDX datagram
+  carries, as the phone does, instead of running the follower on rows the Core has already
+  clamped to the dBm window; the window then holds the pan and the stored levels, so AGC
+  settling asks the Core nothing. The desktop asks for no other extras (R-R3-12 keeps its own
+  smoothing; Clarity keeps the Core's `noise-floor` operation).
 - **iPhone plan Task 35:** its `tx.tune` names the PA auto-calibrate sweep (A8) as a consumer.
 - **iPhone plan Task 39:** `txState` gains the compression and ALC gain readings (A9), and
   its desktop half names Setup > Diagnostics > Radio Status's Forward, Reflected, SWR, PTT

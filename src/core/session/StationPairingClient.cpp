@@ -24,6 +24,7 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 #include "core/session/StationPairingClient.h"
 
@@ -40,6 +41,7 @@
 #include "core/session/SessionTransport.h"
 #include "core/session/StationClient.h"
 
+#include <QAuthenticator>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -428,6 +430,14 @@ void StationPairingClient::begin(bool lan, const QString& normalisedCode, const 
         }
     });
     if (auto* ws = qobject_cast<WebSocketTransport*>(transport)) {
+        // A proxy that demands a login: NereusSDR gives it none (JJ's
+        // ruling of 2026-09-28), so pairing cannot go on; say why at once.
+        connect(ws->socket(), &QWebSocket::proxyAuthenticationRequired, this,
+                [this, attempt](const QNetworkProxy&, QAuthenticator*) {
+            if (attempt == m_attempt && m_state != State::Idle) {
+                fail(NetworkTrouble::proxyNeedsLoginWords());
+            }
+        });
         connect(ws->socket(), &QWebSocket::errorOccurred, this,
                 [this, attempt, ws](QAbstractSocket::SocketError error) {
             if (attempt == m_attempt && m_state != State::Idle) {

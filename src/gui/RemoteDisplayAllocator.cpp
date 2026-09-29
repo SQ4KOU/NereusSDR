@@ -8,6 +8,8 @@
 
 #include "gui/RemoteDisplayAllocator.h"
 
+#include "core/session/media/DisplayExtras.h"
+
 #include <algorithm>
 
 namespace NereusSDR {
@@ -59,8 +61,9 @@ std::optional<DisplayBudgetCharge> totalCharge(const QList<MutableQuality>& qual
         if (quality.suspended) {
             continue;
         }
-        const auto cost = spectrumDisplayCost(quality.pixels, quality.fps,
-                                              quality.intent->includeWidePlane);
+        const auto cost = displayCostWithExtras(quality.pixels, quality.fps,
+                                                quality.intent->includeWidePlane,
+                                                quality.intent->extrasSections);
         if (!cost) {
             return std::nullopt;
         }
@@ -165,8 +168,9 @@ RemoteDisplayAllocation makeAllocation(const QList<MutableQuality>& qualities,
             quality.pixels = source.pixels;
             quality.fps = source.fps;
             quality.framesPerLine = framesPerLine(*source.intent, source.fps);
-            quality.charge = spectrumDisplayCost(source.pixels, source.fps,
-                                                 source.intent->includeWidePlane)->charge;
+            quality.charge = displayCostWithExtras(source.pixels, source.fps,
+                                                   source.intent->includeWidePlane,
+                                                   source.intent->extrasSections)->charge;
         }
         allocation.pans.append(quality);
     }

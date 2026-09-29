@@ -3117,6 +3117,10 @@ public:
     bool setStationTciForStation(bool enabled, int port, QString* reason);
     /// Parity Task 23 (stationTciVersion 2): the station server's four
     /// options, from a window's setStationTciOptions.
+    /// JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest
+    /// of the station server's settings, from a window's or an app's
+    /// setStationTciSettings (StationTciController::setSettings).
+    bool setStationTciSettingsForStation(const QVariantMap& changes, QString* reason);
     bool setStationTciOptionsForStation(bool emulateExpertSdr3, bool emulateSunSdr2Pro,
                                         bool cwluBecomesCw, bool sendInitialState,
                                         QString* reason);

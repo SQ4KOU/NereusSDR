@@ -699,6 +699,18 @@ QJsonArray palettesArray()
     return palettes;
 }
 
+// iPhone app plan Task 23 (R-IOS-09): `audio` {opusProfiles: [{bitrate,
+// bandwidthHz}]}, the station's measured table in its order.
+QJsonObject audioObject(const StationCatalog::Inputs& inputs)
+{
+    QJsonArray profiles;
+    for (const OpusMeasuredProfile& profile : inputs.opusProfiles) {
+        profiles.append(QJsonObject{{QStringLiteral("bitrate"), profile.bitrate},
+                                    {QStringLiteral("bandwidthHz"), profile.bandwidthHz}});
+    }
+    return QJsonObject{{QStringLiteral("opusProfiles"), profiles}};
+}
+
 QJsonArray sliceColoursArray(const StationCatalog::Inputs& inputs)
 {
     QJsonArray colours;
@@ -871,8 +883,9 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("sliceColours"), sliceColoursArray(inputs)},
         {QStringLiteral("tools"), toolsArray(inputs)},
         {QStringLiteral("radioItems"), radioItemsArray(inputs)},
-        // Filled by iPhone app Task 23.
-        {QStringLiteral("audio"), QJsonObject{}},
+        // iPhone app plan Task 23 (R-IOS-09): the Opus profiles a device
+        // may ask for (the audio control's `opusBitrate`).
+        {QStringLiteral("audio"), audioObject(inputs)},
     };
 }
 

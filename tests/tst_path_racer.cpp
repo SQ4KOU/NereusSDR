@@ -69,6 +69,7 @@
 #include "models/RadioModel.h"
 #include "RendezvousTestHarness.h"
 #include "OperatorWording.h"
+#include "fakes/LoginProxy.h"
 
 using namespace NereusSDR;
 using namespace NereusSDR::Test::Rendezvous;
@@ -872,6 +873,23 @@ private slots:
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::Service),
                  StationConnectionAttempt::Outcome::Connected);
         window.client->disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // A network whose proxy demands a login: the Core's address ends with
+    // plain words saying so, not in silence.
+    void aProxyThatNeedsALoginIsSaidPlainly()
+    {
+        NereusSDR::Test::LoginProxy proxy;
+        QVERIFY(proxy.listen());
+        proxy.useAsSystemProxy();
+        DirectPathRung rung(QUrl(QStringLiteral("wss://127.0.0.1:9/")), 1 << 20);
+        QSignalSpy ended(&rung, &PathRung::ended);
+        rung.start();
+        QTRY_COMPARE_WITH_TIMEOUT(ended.size(), 1, 10000);
+        QVERIFY(proxy.requests() >= 1);
+        QCOMPARE(ended.at(0).at(0).value<PathOutcome>(), PathOutcome::NoAnswer);
+        QCOMPARE(ended.at(0).at(1).toString(),
+                 QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide."));
     }
 };
 

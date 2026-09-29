@@ -69,6 +69,7 @@
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "fakes/LoginProxy.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -585,6 +586,23 @@ private slots:
         window.disconnectFromStation(QStringLiteral("test done"));
     }
 
+    // A network whose proxy demands a login: pairing fails with plain words
+    // saying so (NereusSDR has no login to give it).
+    void aProxyThatNeedsALoginIsSaidPlainly()
+    {
+        QTemporaryDir keyDir;
+        NereusSDR::Test::LoginProxy proxy;
+        QVERIFY(proxy.listen());
+        proxy.useAsSystemProxy();
+        StationPairingClient client(makeKey(keyDir), kDeviceName);
+        QSignalSpy failed(&client, &StationPairingClient::failed);
+        client.pairOnThisNetwork(QStringLiteral("127.0.0.1"), 9);
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 10000);
+        QVERIFY(proxy.requests() >= 1);
+        QCOMPARE(failed.first().first().toString(),
+                 QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide."));
+    }
+
 private:
     // The window's own client, signing in by key on a new connection.
     void signInByKey(Core& core, const std::shared_ptr<const ClientDeviceIdentity>& key,
@@ -607,6 +625,7 @@ private:
         QCOMPARE(window.lastEndReport().kind, StationEndReport::Kind::None);
         window.disconnectFromStation(QStringLiteral("test done"));
     }
+
 };
 
 QTEST_MAIN(TstStationPairingClient)

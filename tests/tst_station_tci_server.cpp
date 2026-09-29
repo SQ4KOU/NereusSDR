@@ -30,6 +30,8 @@
 #include <QTcpServer>
 #include <QWebSocket>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QSpinBox>
 #include <QPushButton>
 
 #include "OperatorWording.h"
@@ -123,6 +125,16 @@ public:
         ++optionRequests;
         requestedExpert = expert;
         return {true, {}, quint32(200 + optionRequests)};
+    }
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
+    bool settingsAvailable{true};
+    QList<std::pair<QByteArray, QVariant>> settingRequests;
+    bool stationTciSettingsAvailable() const override
+    { return stationTciServerAvailable() && settingsAvailable; }
+    CommandOutcome requestStationTciSetting(const QByteArray& name, const QVariant& value) override
+    {
+        settingRequests.append({name, value});
+        return {true, {}, quint32(300 + settingRequests.size())};
     }
 };
 
@@ -262,6 +274,110 @@ private slots:
         QVERIFY(controller.setEnabled(false, port, &reason));
     }
 
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
+    // the TCI Server page's settings for the Core's server are the Core's,
+    // at the page's defaults until changed, saved under the page's keys,
+    // held to the page's ranges, and taken whole or not at all.
+    void stationSettingsAreKeptHeldToTheirRangesAndPublished()
+    {
+        RadioModel model;
+        StationTciModel state;
+        StationTciController controller(&model, &state);
+        controller.setBindOverride(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(controller.setEnabled(false, freePort(), &reason));
+        // The defaults the page and the server read.
+        QCOMPARE(state.rateLimitMs(), 100);
+        QVERIFY(!state.cwBecomesCwuAbove10mhz());
+        QVERIFY(state.iqSwap());
+        QVERIFY(!state.alwaysStreamIq());
+        QCOMPARE(state.audioBlockSamples(), 2048);
+        QCOMPARE(state.txChannel(), 2);
+        QCOMPARE(state.rxSensorIntervalMs(), 200);
+        QCOMPARE(state.txSensorIntervalMs(), 200);
+        QVERIFY(!state.forgetRx2VfoBOnDisconnect());
+        QVERIFY(!state.useRx1VfoaForRx2Vfoa());
+        QVERIFY(!state.copyRx2VfobToVfoa());
+
+        QVERIFY(controller.setSettings({{QStringLiteral("iqSwap"), false},
+                                        {QStringLiteral("audioBlockSamples"), 512},
+                                        {QStringLiteral("txChannel"), 0},
+                                        {QStringLiteral("rateLimitMs"), 0},
+                                        {QStringLiteral("copyRx2VfobToVfoa"), true}},
+                                       &reason));
+        QVERIFY(reason.isEmpty());
+        auto& settings = AppSettings::instance();
+        QCOMPARE(settings.value(QStringLiteral("TciIqSwap")).toString(), QStringLiteral("False"));
+        QCOMPARE(settings.value(QStringLiteral("TciAudioStreamSamples")).toString(),
+                 QStringLiteral("512"));
+        QCOMPARE(settings.value(QStringLiteral("TciTxChannel")).toString(), QStringLiteral("Left"));
+        QCOMPARE(settings.value(QStringLiteral("TciRateLimitMs")).toString(), QStringLiteral("0"));
+        QCOMPARE(settings.value(QStringLiteral("TciCopyRx2VfobToVfoa")).toString(),
+                 QStringLiteral("True"));
+        QVERIFY(!state.iqSwap());
+        QCOMPARE(state.audioBlockSamples(), 512);
+        QCOMPARE(state.txChannel(), 0);
+        QCOMPARE(state.rateLimitMs(), 0);
+        QVERIFY(state.copyRx2VfobToVfoa());
+
+        // Out of range, the wrong kind, or a name it does not have: refused
+        // in plain words, and nothing of the request is kept.
+        const QList<QVariantMap> refused{
+            {{QStringLiteral("iqSwap"), true}, {QStringLiteral("audioBlockSamples"), 99}},
+            {{QStringLiteral("rxSensorIntervalMs"), 1001}},
+            {{QStringLiteral("txChannel"), 3}},
+            {{QStringLiteral("iqSwap"), 1}},
+            {{QStringLiteral("port"), 50001}}};
+        for (const QVariantMap& changes : refused) {
+            QVERIFY(!controller.setSettings(changes, &reason));
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+        QVERIFY(!state.iqSwap());
+        QCOMPARE(state.audioBlockSamples(), 512);
+        QCOMPARE(state.rxSensorIntervalMs(), 200);
+        QCOMPARE(state.txChannel(), 0);
+
+        // A value saved out of range reads back held to the range.
+        settings.setValue(QStringLiteral("TciTxSensorIntervalMs"), QStringLiteral("5"));
+        QVERIFY(controller.setSettings({{QStringLiteral("alwaysStreamIq"), true}}, &reason));
+        QCOMPARE(state.txSensorIntervalMs(), 30);
+        QVERIFY(state.alwaysStreamIq());
+    }
+
+    // ...and the Core's dispatcher takes them from a window or an app, one or
+    // more at once, but not while the radio is on the air.
+    void stationSettingsAreRefusedOnAir()
+    {
+        RadioModel model;
+        model.enableStationTci(QStringLiteral("127.0.0.1"));
+        auto* state = model.stationTciModel();
+        SessionCommandDispatcher dispatcher(&model);
+        QSignalSpy results(&dispatcher, &SessionCommandDispatcher::commandResultReady);
+        model.transmitModel().setMox(true);
+        dispatcher.dispatch(SessionMessages::commandInvoke("setStationTciSettings", 1,
+            {{0, "iqSwap", MirrorWireKind::Bool, false}}));
+        QCOMPARE(results.size(), 1);
+        SessionMessage result = qvariant_cast<SessionMessage>(results.last().first());
+        QVERIFY(!result.accepted);
+        QCOMPARE(result.reason, RadioModel::onAirReason());
+        QVERIFY(state->iqSwap());
+        model.transmitModel().setMox(false);
+        dispatcher.dispatch(SessionMessages::commandInvoke("setStationTciSettings", 2,
+            {{0, "iqSwap", MirrorWireKind::Bool, false},
+             {0, "txSensorIntervalMs", MirrorWireKind::Int64, qint64(500)}}));
+        result = qvariant_cast<SessionMessage>(results.last().first());
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QVERIFY(!state->iqSwap());
+        QCOMPARE(state->txSensorIntervalMs(), 500);
+        // A bool where a number goes: not understood.
+        dispatcher.dispatch(SessionMessages::commandInvoke("setStationTciSettings", 3,
+            {{0, "txSensorIntervalMs", MirrorWireKind::Bool, true}}));
+        result = qvariant_cast<SessionMessage>(results.last().first());
+        QVERIFY(!result.accepted);
+        QVERIFY(OperatorWording::isPlain(result.reason));
+        QCOMPARE(state->txSensorIntervalMs(), 500);
+    }
+
     // Exercise the actual Core dispatcher with simulated transmit state;
     // no radio or RF. A rejected disconnect must leave the client connected.
     void stationOptionsAndDisconnectAreRefusedOnAir()
@@ -352,6 +468,40 @@ private slots:
         QVERIFY(!link.requestedExpert);
         QCOMPARE(AppSettings::instance().value(QStringLiteral("TciEmulateExpertSDR3Protocol")),
                  localOption);
+        // JJ's ruling of 2026-09-28: the rest of the page's settings for
+        // the Core's server go to the Core, never to this window's own keys.
+        const auto coreSetting = [&page](const char* name) -> QWidget* {
+            for (QWidget* widget : page.findChildren<QWidget*>()) {
+                if (widget->property("nereusSetupId").toString()
+                    == QStringLiteral("catNetwork.tciServer.core.%1").arg(QLatin1String(name))) {
+                    return widget;
+                }
+            }
+            return nullptr;
+        };
+        auto* iqSwap = qobject_cast<QCheckBox*>(coreSetting("iqSwap"));
+        auto* block = qobject_cast<QSpinBox*>(coreSetting("audioBlockSamples"));
+        auto* channel = qobject_cast<QComboBox*>(coreSetting("txChannel"));
+        QVERIFY(iqSwap && block && channel);
+        QVERIFY(iqSwap->isEnabled());
+        const QVariant localSwap = AppSettings::instance().value(QStringLiteral("TciIqSwap"));
+        iqSwap->click();
+        block->setValue(1024);
+        channel->setCurrentIndex(1);
+        QCOMPARE(link.settingRequests.size(), 3);
+        QCOMPARE(link.settingRequests.at(0).first, QByteArrayLiteral("iqSwap"));
+        QCOMPARE(link.settingRequests.at(1),
+                 std::make_pair(QByteArrayLiteral("audioBlockSamples"), QVariant(1024)));
+        QCOMPARE(link.settingRequests.at(2),
+                 std::make_pair(QByteArrayLiteral("txChannel"), QVariant(1)));
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("TciIqSwap")), localSwap);
+        // A Core that does not share them: shown disabled with the reason.
+        link.settingsAvailable = false;
+        window.reportStationLinkStateChanged();
+        QVERIFY(!iqSwap->isEnabled());
+        QCOMPARE(iqSwap->toolTip(), IStationLink::stationTciServerUnavailableReason());
+        QVERIFY(coreOption->isEnabled());
+
         link.serverVersion2 = false;
         window.reportStationLinkStateChanged();
         QVERIFY(!coreOption->isEnabled());

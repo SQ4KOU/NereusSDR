@@ -991,6 +991,8 @@ change shows as surface drift and as a change to this table.
 | `logCategoryListVersion` | 1 |
 | `radioModelsVersion` | 0 |
 | `coreAddressesVersion` | 1 |
+| `audioQualityVersion` | 1 |
+| `stationTciSettingsVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1190,6 +1192,28 @@ When a feature is off, its version is 0:
   peer that did not declare the feature, or signed in with the token, is
   sent neither this entry nor the property. An app on a Core that sends no
   entry dials the addresses it already keeps (section 21.1).
+- `audioQualityVersion`: optional and appended last, after
+  `coreAddressesVersion` (after the last entry before it when that is absent),
+  only at agreed minor 11 for a peer that declared `audioQuality` 1 while
+  the Core offers media (iPhone app plan Task 23). 1: the device's `audio`
+  control may carry `opusBitrate`, one of the catalogue's
+  `audio.opusProfiles` (remote media control v1, "Per-device audio
+  quality"). A peer sent no entry gets the Core's `audio_bitrate` as
+  before.
+- `stationTciSettingsVersion`: optional and appended last, after
+  `audioQualityVersion` (after the last entry before it when that is
+  absent), only at agreed minor 11 for a peer that declared
+  `stationTciSettings` 1 on a Core at `stationTciVersion` 2 (JJ's ruling of
+  2026-09-28). 1: `stationTci` carries the rest of the Core's TCI server
+  settings as read-only properties (`rateLimitMs`,
+  `cwBecomesCwuAbove10mhz`, `iqSwap`, `alwaysStreamIq`,
+  `audioBlockSamples`, `txChannel` 0 Left 1 Right 2 Both,
+  `rxSensorIntervalMs`, `txSensorIntervalMs`,
+  `forgetRx2VfoBOnDisconnect`, `useRx1VfoaForRx2Vfoa`,
+  `copyRx2VfobToVfoa`; ranges in the remote accessory control document),
+  and the Core takes `setStationTciSettings` with any of them. A peer that
+  did not declare the feature is sent neither this entry nor those
+  properties.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -2011,7 +2035,9 @@ older window sees only the values it was built for.
 | 89 | `logCategoryListVersion` | `i64` |
 | 90 | `radioModelsVersion` | `i64` |
 | 91 | `coreAddressesVersion` | `i64` |
-| 92 | `coreBuildInfo` | `utf8` |
+| 92 | `audioQualityVersion` | `i64` |
+| 93 | `stationTciSettingsVersion` | `i64` |
+| 94 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2524,7 +2550,7 @@ An enum property lists the values its domain allows.
 | 8 | `pairingCode` | `utf8` | outbound |  |
 | 9 | `coreAddresses` | `utf8` | outbound |  |
 
-**StationTciModel** (9 properties)
+**StationTciModel** (20 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2537,6 +2563,17 @@ An enum property lists the values its domain allows.
 | 6 | `emulateSunSdr2Pro` | `bool` | outbound |  |
 | 7 | `cwluBecomesCw` | `bool` | outbound |  |
 | 8 | `sendInitialState` | `bool` | outbound |  |
+| 9 | `rateLimitMs` | `i64` | outbound |  |
+| 10 | `cwBecomesCwuAbove10mhz` | `bool` | outbound |  |
+| 11 | `iqSwap` | `bool` | outbound |  |
+| 12 | `alwaysStreamIq` | `bool` | outbound |  |
+| 13 | `audioBlockSamples` | `i64` | outbound |  |
+| 14 | `txChannel` | `i64` | outbound |  |
+| 15 | `rxSensorIntervalMs` | `i64` | outbound |  |
+| 16 | `txSensorIntervalMs` | `i64` | outbound |  |
+| 17 | `forgetRx2VfoBOnDisconnect` | `bool` | outbound |  |
+| 18 | `useRx1VfoaForRx2Vfoa` | `bool` | outbound |  |
+| 19 | `copyRx2VfobToVfoa` | `bool` | outbound |  |
 
 **StationVax** (18 properties)
 
@@ -4056,7 +4093,7 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
 | `tools` | `[{id, label, where, offered}]`: the desktop's Tools menu in its order, `where` `station` (works at the Core) or `both`; MIDI Mapping and Macro Buttons are not listed |
 | `radioItems` | `[{id, label, offered}]`: Manage Radios, Antenna Setup, Transverters and Protocol Info, in the desktop's Radio-menu order |
-| `audio` | `{}` (filled in a later revision) |
+| `audio` | `{opusProfiles: [{bitrate, bandwidthHz}]}`: the Opus profiles the station has measured, in order (24000 bit/s with 8000 Hz, 48000 bit/s with 20000 Hz); a device told `audioQualityVersion` 1 asks for one as its `opusBitrate` (remote media control v1, "Per-device audio quality") |
 
 `meters`:
 
@@ -4721,6 +4758,7 @@ refused.
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
 | `setStationTciOptions` | `emulateExpertSdr3` bool, `emulateSunSdr2Pro` bool, `cwluBecomesCw` bool, `sendInitialState` bool | `stationTciVersion` | 2 | 11 |
 | `disconnectStationTciClient` | `id` utf8 | `stationTciVersion` | 2 | 11 |
+| `setStationTciSettings` | `rateLimitMs` i64 (optional), `cwBecomesCwuAbove10mhz` bool (optional), `iqSwap` bool (optional), `alwaysStreamIq` bool (optional), `audioBlockSamples` i64 (optional), `txChannel` i64 (optional), `rxSensorIntervalMs` i64 (optional), `txSensorIntervalMs` i64 (optional), `forgetRx2VfoBOnDisconnect` bool (optional), `useRx1VfoaForRx2Vfoa` bool (optional), `copyRx2VfobToVfoa` bool (optional) | `stationTciSettingsVersion` | 1 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
 | `clearAccessoryFaults` | `device` utf8 | `accessoryDataVersion` | 1 | 11 |
@@ -5497,7 +5535,7 @@ Client to station:
 
 | Operation (`op`) | Capability | Fields always present | Fields present with | Object-valued fields |
 | --- | --- | --- | --- | --- |
-| `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
+| `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `opusBitrate` with audioProfileVersion, audioQualityVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
 | `clarity-retune` | `displayExtrasVersion` | `connectionId`, `endpointId`, `op` | none | none |
 | `clock-probe` | `audioClockVersion` | `connectionId`, `id`, `op`, `t0` | none | none |
@@ -5517,7 +5555,7 @@ Station to client:
 | Operation (`op`) | Capability | Fields always present | Fields present with | Object-valued fields |
 | --- | --- | --- | --- | --- |
 | `allocation-result` | `remoteDisplayBudgetVersion` | `accepted`, `acceptedRevision`, `applicationBytesPerSecond`, `budgetGeneration`, `connectionId`, `endpointId`, `messagesPerSecond`, `op`, `reason`, `revision`, `spectrumSampleUnitsPerSecond` | none | none |
-| `audio-context` | `remoteMediaVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `revision`, `ssrc` | `encoder` with enabled=true, remoteAudioStatusVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion; `profileRefusal` with audioProfileVersion, profile=opus, profileRefused, remoteAudioStatusVersion; `reason` with enabled=false, remoteAudioStatusVersion | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
+| `audio-context` | `remoteMediaVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `revision`, `ssrc` | `encoder` with enabled=true, remoteAudioStatusVersion; `opusBitrateRefusal` with audioProfileVersion, audioQualityVersion, opusBitrateRefused, profile=opus, remoteAudioStatusVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion; `profileRefusal` with audioProfileVersion, profile=opus, profileRefused, remoteAudioStatusVersion; `reason` with enabled=false, remoteAudioStatusVersion | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
 | `clock-echo` | `audioClockVersion` | `capturedNs`, `connectionId`, `generation`, `id`, `op`, `rtpTimestamp`, `t0`, `t1`, `t2` | none | none |
 | `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `requestedPixels` with spectrumGrantVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |

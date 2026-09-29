@@ -181,6 +181,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the daemon
 //                                    half of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -953,6 +959,20 @@ public:
     /// fields (iPhone app Task 20, display extras v1).
     bool displayExtrasAvailable() const;
     bool displayExtrasAvailable(quint64 epoch) const;
+    /// iPhone app plan Task 23 (R-IOS-09): the media session `epoch`'s
+    /// device was told audioQualityVersion 1, so its audio control may
+    /// carry `opusBitrate`.
+    bool audioQualityAvailable(quint64 epoch) const;
+    /// JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): `transport`
+    /// declared stationTciSettings 1 at minor 11 on a Core at
+    /// stationTciVersion 2, so it gets the `stationTci` object's other
+    /// eleven settings and may send setStationTciSettings.
+    bool peerGetsStationTciSettings(SessionTransport* transport) const;
+    /// ...and every other peer gets today's `stationTci`: those settings
+    /// taken out of its schema, snapshot and deltas (a delta of only them is
+    /// not sent: false).
+    bool fitStationTciSettingsToPeer(SessionTransport* transport,
+                                     SessionMessage& message) const;
     /// iPhone app Task 76: the epochs of the media sessions live now, in
     /// admission order; the device a media session is for; whether a slice
     /// is that device's own (ruling 9.1: a device subscribes displays and

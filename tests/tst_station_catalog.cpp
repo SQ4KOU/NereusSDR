@@ -529,7 +529,13 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
                                       QStringLiteral("Transverters"),
                                       QStringLiteral("Protocol Info")}));
 
-    QCOMPARE(catalog.value(QStringLiteral("audio")).toObject(), QJsonObject{});
+    // iPhone app plan Task 23: the station's measured Opus table.
+    QCOMPARE(catalog.value(QStringLiteral("audio")).toObject(),
+             (QJsonObject{{QStringLiteral("opusProfiles"),
+                           QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 24000},
+                                                  {QStringLiteral("bandwidthHz"), 8000}},
+                                      QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                                  {QStringLiteral("bandwidthHz"), 20000}}}}}));
 }
 
 // The keys of two objects whose values differ.
@@ -726,6 +732,59 @@ private slots:
                                   static_cast<int>(Band::WWV)}));
         QCOMPARE(ids.first(), 0);
         QCOMPARE(ids.last(), 12);
+    }
+
+    // A five-slice board's fifth slice gets its own colour, slice E's, not
+    // slice A's again: the eight slice colours are AetherSDR's theme seed
+    // (A to H), and the catalogue sends one per slice the board allows.
+    void everySliceTheBoardAllowsHasItsOwnColour()
+    {
+        QCOMPARE(ControlRanges::kSliceColours.size(), std::size_t{8});
+        const QStringList expected{
+            QStringLiteral("#00D4FF"), QStringLiteral("#FF40FF"), QStringLiteral("#40FF40"),
+            QStringLiteral("#FFFF00"), QStringLiteral("#FFA000"), QStringLiteral("#00E0C0"),
+            QStringLiteral("#FF6080"), QStringLiteral("#B080FF")};
+        for (int i = 0; i < expected.size(); ++i) {
+            QCOMPARE(QColor(static_cast<QRgb>(ControlRanges::sliceColour(i))).name().toUpper(),
+                     expected.at(i));
+        }
+        // Past the last colour, slice A's again.
+        QCOMPARE(ControlRanges::sliceColour(8), ControlRanges::sliceColour(0));
+
+        BandPlanManager plans;
+        plans.loadPlans();
+        const QJsonObject catalog = StationCatalog::build(
+            inputsFor(HPSDRModel::ANAN_G2, ProtocolVersion::Protocol2, plans));
+        const QJsonArray colours = catalog.value(QStringLiteral("sliceColours")).toArray();
+        QCOMPARE(colours.size(), 5);
+        QSet<QString> distinct;
+        for (const QJsonValue& colour : colours) {
+            distinct.insert(colour.toString());
+        }
+        QCOMPARE(distinct.size(), 5);
+        QCOMPARE(colours.at(4).toString(), QStringLiteral("#FFA000"));
+    }
+
+    // iPhone app plan Task 23 (R-IOS-09): `audio.opusProfiles` is the
+    // station's measured Opus table, in its order; a profile taken out of
+    // the table is gone from the catalogue.
+    void theAudioKeyListsTheMeasuredOpusProfiles()
+    {
+        BandPlanManager plans;
+        plans.loadPlans();
+        StationCatalog::Inputs inputs =
+            inputsFor(HPSDRModel::ANAN_G2, ProtocolVersion::Protocol2, plans);
+        QJsonObject audio = StationCatalog::build(inputs).value(QStringLiteral("audio")).toObject();
+        QCOMPARE(audio.value(QStringLiteral("opusProfiles")).toArray(),
+                 (QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 24000},
+                                         {QStringLiteral("bandwidthHz"), 8000}},
+                             QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                         {QStringLiteral("bandwidthHz"), 20000}}}));
+        inputs.opusProfiles.removeFirst();
+        audio = StationCatalog::build(inputs).value(QStringLiteral("audio")).toObject();
+        QCOMPARE(audio.value(QStringLiteral("opusProfiles")).toArray(),
+                 (QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                         {QStringLiteral("bandwidthHz"), 20000}}}));
     }
 
     // The two fixtures hold the desktop's own values for their radio.

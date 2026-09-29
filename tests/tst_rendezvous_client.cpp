@@ -128,6 +128,7 @@
 #include "OperatorWording.h"
 #include "RendezvousTestHarness.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "fakes/LoginProxy.h"
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -2016,6 +2017,23 @@ private slots:
         client.connectToService();
         QTRY_COMPARE_WITH_TIMEOUT(unreachable.size(), 1, 15000);
         QCOMPARE(unreachable.at(0).at(0).toString(), words);
+    }
+
+    // A network whose proxy demands a login: the service is unreachable,
+    // and the reason says why in plain words.
+    void aProxyThatNeedsALoginIsSaidPlainly()
+    {
+        NereusSDR::Test::LoginProxy proxy;
+        QVERIFY(proxy.listen());
+        proxy.useAsSystemProxy();
+        RendezvousClient client;
+        client.setServers({QUrl(QStringLiteral("wss://127.0.0.1:9/"))});
+        QSignalSpy unreachable(&client, &RendezvousClient::unreachable);
+        client.connectToService();
+        QTRY_COMPARE_WITH_TIMEOUT(unreachable.size(), 1, 15000);
+        QVERIFY(proxy.requests() >= 1);
+        QCOMPARE(unreachable.at(0).at(0).toString(),
+                 QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide."));
     }
 
     void aTestRunNeverLeavesThisComputer()
