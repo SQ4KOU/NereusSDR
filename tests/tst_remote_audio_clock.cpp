@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <memory>
 
 #include "core/session/media/RemoteAudioRateMatcher.h"
 
@@ -54,93 +56,111 @@ struct ClockRun {
     bool valid = true;
 };
 
-ClockRun runOneHourAtPpm(int ppm)
-{
-    RemoteAudioRateMatcher matcher;
-    if (!matcher.configure(kInputFrames, kOutputFrames, kRingFrames)) {
-        return {.valid = false};
+// One simulated hour at a clock offset, run in pieces (load findings 3):
+// advanceTo() carries the producer and consumer clocks, the matcher and
+// the running measurements on from where the last piece stopped, so the
+// hour is the same deterministic run whether it goes at once or in parts.
+class ClockSimulation {
+public:
+    static constexpr qint64 kTicksPerSecond = 1'000'000;
+
+    explicit ClockSimulation(int ppm)
+        : m_consumerRateDenominator(kTicksPerSecond + ppm)
+    {
+        if (!m_matcher.configure(kInputFrames, kOutputFrames, kRingFrames)) {
+            m_run.valid = false;
+        }
     }
+
+    qint64 reachedTicks() const { return m_reachedTicks; }
+    const ClockRun& run() const { return m_run; }
 
     // Integer phase accumulators keep both clocks deterministic. The network
     // producer is exactly 48 kHz; consumer is 48 kHz * (1 + ppm / 1e6).
-    const qint64 ticksPerSecond = 1'000'000;
-    const qint64 producerPeriodTicks = 40'000;
-    const qint64 consumerPeriodNumerator = 10'000'000'000LL;
-    const qint64 consumerRateDenominator = ticksPerSecond + ppm;
-    const qint64 endTicks = static_cast<qint64>(kSimulatedSeconds) * ticksPerSecond;
-
-    qint64 nextProducer = 0;
-    qint64 nextConsumerNumerator = 0;
-    quint64 sourceFrame = 0;
-    bool hasPrevious = false;
-    float previousLeft = 0.0f;
-    float previousRight = 0.0f;
-    qint64 nextDiagnosticTicks = ticksPerSecond;
-    ClockRun run;
-
-    while (nextProducer < endTicks
-           || nextConsumerNumerator / consumerRateDenominator < endTicks) {
-        const qint64 nextConsumer = nextConsumerNumerator / consumerRateDenominator;
-        if (nextProducer < endTicks && nextProducer <= nextConsumer) {
-            if (!matcher.push(stereoBlock(sourceFrame))) {
-                run.valid = false;
-                break;
-            }
-            sourceFrame += kInputFrames;
-            nextProducer += producerPeriodTicks;
-            if (nextProducer >= nextDiagnosticTicks) {
-                run.maximumRatioDeviation = std::max(run.maximumRatioDeviation,
-                    std::abs(matcher.stats().currentRatio - 1.0));
-                nextDiagnosticTicks += ticksPerSecond;
-            }
-            continue;
-        }
-
-        const QVector<float> output = matcher.take();
-        if (output.size() != kOutputFrames * RemoteAudioRateMatcher::kChannels) {
-            run.valid = false;
-            break;
-        }
-        for (int sample = 0; sample < output.size(); sample += 2) {
-            if (!std::isfinite(output.at(sample)) || !std::isfinite(output.at(sample + 1))) {
-                run.valid = false;
-                break;
-            }
-            const bool postStartup = nextConsumer > kPostStartupTicks;
-            if (postStartup) {
-                const double left = output.at(sample);
-                const double right = output.at(sample + 1);
-                if (hasPrevious) {
-                    run.maximumPostStartupAdjacentDelta = std::max(
-                        run.maximumPostStartupAdjacentDelta,
-                        std::abs(left - static_cast<double>(previousLeft)));
-                    run.maximumPostStartupAdjacentDelta = std::max(
-                        run.maximumPostStartupAdjacentDelta,
-                        std::abs(right - static_cast<double>(previousRight)));
+    // Every event before endTicks runs, in time order (a producer tie
+    // first), exactly as one pass to the hour's end runs them.
+    void advanceTo(qint64 endTicks)
+    {
+        constexpr qint64 producerPeriodTicks = 40'000;
+        constexpr qint64 consumerPeriodNumerator = 10'000'000'000LL;
+        while (m_run.valid
+               && (m_nextProducer < endTicks
+                   || m_nextConsumerNumerator / m_consumerRateDenominator < endTicks)) {
+            const qint64 nextConsumer = m_nextConsumerNumerator / m_consumerRateDenominator;
+            if (m_nextProducer < endTicks && m_nextProducer <= nextConsumer) {
+                if (!m_matcher.push(stereoBlock(m_sourceFrame))) {
+                    m_run.valid = false;
+                    break;
                 }
-                run.leftSquareSum += left * left;
-                run.rightSquareSum += right * right;
-                run.crossProductSum += left * right;
-                ++run.postStartupFrames;
+                m_sourceFrame += kInputFrames;
+                m_nextProducer += producerPeriodTicks;
+                if (m_nextProducer >= m_nextDiagnosticTicks) {
+                    m_run.maximumRatioDeviation = std::max(m_run.maximumRatioDeviation,
+                        std::abs(m_matcher.stats().currentRatio - 1.0));
+                    m_nextDiagnosticTicks += kTicksPerSecond;
+                }
+                continue;
             }
-            previousLeft = output.at(sample);
-            previousRight = output.at(sample + 1);
-            hasPrevious = true;
+
+            const QVector<float> output = m_matcher.take();
+            if (output.size() != kOutputFrames * RemoteAudioRateMatcher::kChannels) {
+                m_run.valid = false;
+                break;
+            }
+            for (int sample = 0; sample < output.size(); sample += 2) {
+                if (!std::isfinite(output.at(sample)) || !std::isfinite(output.at(sample + 1))) {
+                    m_run.valid = false;
+                    break;
+                }
+                const bool postStartup = nextConsumer > kPostStartupTicks;
+                if (postStartup) {
+                    const double left = output.at(sample);
+                    const double right = output.at(sample + 1);
+                    if (m_hasPrevious) {
+                        m_run.maximumPostStartupAdjacentDelta = std::max(
+                            m_run.maximumPostStartupAdjacentDelta,
+                            std::abs(left - static_cast<double>(m_previousLeft)));
+                        m_run.maximumPostStartupAdjacentDelta = std::max(
+                            m_run.maximumPostStartupAdjacentDelta,
+                            std::abs(right - static_cast<double>(m_previousRight)));
+                    }
+                    m_run.leftSquareSum += left * left;
+                    m_run.rightSquareSum += right * right;
+                    m_run.crossProductSum += left * right;
+                    ++m_run.postStartupFrames;
+                }
+                m_previousLeft = output.at(sample);
+                m_previousRight = output.at(sample + 1);
+                m_hasPrevious = true;
+            }
+            if (!m_run.valid) {
+                break;
+            }
+            m_nextConsumerNumerator += consumerPeriodNumerator;
+            if (nextConsumer >= m_nextDiagnosticTicks) {
+                m_run.maximumRatioDeviation = std::max(m_run.maximumRatioDeviation,
+                    std::abs(m_matcher.stats().currentRatio - 1.0));
+                m_nextDiagnosticTicks += kTicksPerSecond;
+            }
         }
-        if (!run.valid) {
-            break;
-        }
-        nextConsumerNumerator += consumerPeriodNumerator;
-        if (nextConsumer >= nextDiagnosticTicks) {
-            run.maximumRatioDeviation = std::max(run.maximumRatioDeviation,
-                std::abs(matcher.stats().currentRatio - 1.0));
-            nextDiagnosticTicks += ticksPerSecond;
-        }
+        m_reachedTicks = endTicks;
+        m_run.stats = m_matcher.stats();
     }
 
-    run.stats = matcher.stats();
-    return run;
-}
+private:
+    RemoteAudioRateMatcher m_matcher;
+    const qint64 m_consumerRateDenominator;
+    qint64 m_nextProducer = 0;
+    qint64 m_nextConsumerNumerator = 0;
+    quint64 m_sourceFrame = 0;
+    bool m_hasPrevious = false;
+    float m_previousLeft = 0.0f;
+    float m_previousRight = 0.0f;
+    // One schedule for both clocks' ratio samples, as the single pass had.
+    qint64 m_nextDiagnosticTicks = kTicksPerSecond;
+    qint64 m_reachedTicks = 0;
+    ClockRun m_run;
+};
 
 } // namespace
 
@@ -303,11 +323,21 @@ private slots:
     // One simulated hour per data row (R-R3-21). QtTest's watchdog bounds
     // each row, not the whole function, at 300 s; both hours in one row
     // took 347 s on a Linux aarch64 host and were aborted mid-hour.
+    // Load findings 3: each hour runs as four quarter-hour data rows, so
+    // QtTest's 300 s watchdog bounds a quarter, not the hour (the hour
+    // passed 300 s above load 200). The rows carry one simulation on in
+    // order; a row run on its own first runs the quarters before it. Every
+    // row checks what must hold throughout; the last also checks the
+    // hour's totals.
     void adaptiveClockStaysBoundedAtPlusAndMinus500Ppm_data()
     {
         QTest::addColumn<int>("ppm");
-        QTest::newRow("-500 ppm") << -500;
-        QTest::newRow("+500 ppm") << 500;
+        QTest::addColumn<int>("quarter");
+        for (const int ppm : {-500, 500}) {
+            for (int quarter = 1; quarter <= kQuarters; ++quarter) {
+                QTest::addRow("%+d ppm, quarter %d", ppm, quarter) << ppm << quarter;
+            }
+        }
     }
 
     void adaptiveClockStaysBoundedAtPlusAndMinus500Ppm()
@@ -316,7 +346,15 @@ private slots:
         QSKIP("WDSP is disabled");
 #else
         QFETCH(int, ppm);
-        const ClockRun run = runOneHourAtPpm(ppm);
+        QFETCH(int, quarter);
+        const qint64 quarterTicks =
+            qint64(kSimulatedSeconds) * ClockSimulation::kTicksPerSecond / kQuarters;
+        std::unique_ptr<ClockSimulation>& simulation = m_simulations[ppm];
+        if (!simulation || simulation->reachedTicks() > quarterTicks * (quarter - 1)) {
+            simulation = std::make_unique<ClockSimulation>(ppm);
+        }
+        simulation->advanceTo(quarterTicks * quarter);
+        const ClockRun& run = simulation->run();
         QVERIFY(run.valid);
         QCOMPARE(run.stats.underflows, 0);
         QCOMPARE(run.stats.overflows, 0);
@@ -324,6 +362,15 @@ private slots:
         QVERIFY(run.stats.ringFillFrames >= 0);
         QVERIFY(run.stats.ringFillFrames <= run.stats.ringCapacityFrames);
         QVERIFY(run.postStartupFrames > 0);
+
+        // The 1703 Hz, 0.2-amplitude channel has the largest normal
+        // sample-to-sample slope: 2A sin(pi*f/48000) is about 0.0445.
+        // 0.08 permits normal filter interpolation while rejecting a
+        // post-startup discontinuity or periodic repair splice.
+        QVERIFY(run.maximumPostStartupAdjacentDelta < 0.08);
+        if (quarter < kQuarters) {
+            return;
+        }
 
         // The staged 64-frame calls expose WDSP's native call cadence.
         // Its instantaneous ratio follows the two carry phases, so its
@@ -340,14 +387,13 @@ private slots:
         QVERIFY(leftRms > 0.05 && leftRms < 0.30);
         QVERIFY(rightRms > 0.05 && rightRms < 0.30);
         QVERIFY(std::abs(normalizedCrossCorrelation) < 0.10);
-
-        // The 1703 Hz, 0.2-amplitude channel has the largest normal
-        // sample-to-sample slope: 2A sin(pi*f/48000) is about 0.0445.
-        // 0.08 permits normal filter interpolation while rejecting a
-        // post-startup discontinuity or periodic repair splice.
-        QVERIFY(run.maximumPostStartupAdjacentDelta < 0.08);
+        simulation.reset();
 #endif
     }
+
+private:
+    static constexpr int kQuarters = 4;
+    std::map<int, std::unique_ptr<ClockSimulation>> m_simulations;
 };
 
 QTEST_GUILESS_MAIN(TstRemoteAudioClock)

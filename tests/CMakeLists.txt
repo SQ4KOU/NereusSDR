@@ -8530,6 +8530,9 @@ nereus_add_test(tst_remote_audio_clock)
 # one hour, not both; on a Linux aarch64 host both hours took 347 s alone
 # and were aborted by that watchdog, and 267 s at the end of a full run.
 # TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
+# Load findings 3: one hour row still passed QtTest's 300 s watchdog above
+# load 200, so each hour now runs as four quarter-hour rows carrying one
+# simulation on; the watchdog bounds a quarter. TIMEOUT unchanged.
 if(TEST tst_remote_audio_clock)
     set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 endif()
