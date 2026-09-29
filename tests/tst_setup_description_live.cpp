@@ -138,6 +138,60 @@ private slots:
         QVERIFY(!core.model->tune());
     }
 
+    // Version 13 (R-R3-46, R-R3-49): a paired phone reads Disable HF PA,
+    // the Alex receive filter rows and the whole radio's sample rate from
+    // the running Core, and an Alex row it edits reaches the Core's
+    // settings; a version 12 phone sees none of them.
+    void pairedV13ReadsHfPaAlexRowsAndSampleRate()
+    {
+        Core core;
+        const RadioInfo info = core.model->currentRadioInfo();
+        // An ANAN-G2 Core: both Alex filter pages. The Core reads its
+        // radio's context again for each peer's snapshot.
+        core.model->setBoardForTest(HPSDRHW::Saturn);
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(core.model->boardCapabilities().board, HPSDRHW::Saturn);
+        Device current(QStringLiteral("Filters V13 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Filters V12 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v13Features = kHolder;
+        v13Features.insert("setupDescription", 13);
+        auto* v13 = core.signIn(current, v13Features);
+        QVERIFY(admitted(v13));
+        const QString transmit = latest(v13->received(), QStringLiteral("setup"),
+                                        QStringLiteral("transmit")).toString();
+        QVERIFY(transmit.contains(QStringLiteral("transmit.power.DisableHfPa")));
+        QCOMPARE(QJsonDocument::fromJson(transmit.toUtf8()).object().value("version"),
+                 QJsonValue(13));
+        const QString hardware = latest(v13->received(), QStringLiteral("setup"),
+                                        QStringLiteral("hardware")).toString();
+        QVERIFY(hardware.contains(QStringLiteral("hardware.alex1Filters.bpf1.6mBP.bypass")));
+        QVERIFY(hardware.contains(QStringLiteral("hardware.alex2Filters.bypass55MhzBpf")));
+        QVERIFY(hardware.contains(QStringLiteral("hardware.radioInfo.sampleRate")));
+
+        QHash<QByteArray, int> v12Features = kHolder;
+        v12Features.insert("setupDescription", 12);
+        auto* v12 = core.signIn(older, v12Features);
+        QVERIFY(admitted(v12));
+        const QString oldTransmit = latest(v12->received(), QStringLiteral("setup"),
+                                           QStringLiteral("transmit")).toString();
+        QVERIFY(!oldTransmit.isEmpty());
+        QVERIFY(!oldTransmit.contains(QStringLiteral("DisableHfPa")));
+        const QString oldHardware = latest(v12->received(), QStringLiteral("setup"),
+                                           QStringLiteral("hardware")).toString();
+        QVERIFY(!oldHardware.contains(QStringLiteral("alex1Filters")));
+        QVERIFY(!oldHardware.contains(QStringLiteral("sampleRate")));
+
+        // The Start box of the 1.5 MHz high-pass row, written as the phone
+        // writes it: hardware/<the Core's radio>/<radioSetting>.
+        const QString key = QStringLiteral("hardware/%1/alex/hpf/1_5MHz/start")
+            .arg(info.macAddress);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("1.9"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("1.9"));
+    }
+
     // R-R3-49 (lead's ruling): the Core refuses a calibration write whole
     // when the value is outside the control's range, says the range in plain
     // words, and hands back its own value; an in-range write is taken.

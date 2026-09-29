@@ -103,6 +103,39 @@
           ]
         },
         {
+          "title": "Operating Parameters",
+          "controls": [
+            {
+              "id": "hardware.radioInfo.sampleRate",
+              "label": "Sample rate (Hz):",
+              "tooltip": "",
+              "kind": "choice",
+              "binding": {
+                "command": {
+                  "verb": "setRadioSampleRate",
+                  "valueProperty": {
+                    "object": "slice:active",
+                    "name": "sampleRateHz"
+                  },
+                  "arguments": {
+                    "rateHz": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 9,
+                "offAir": true
+              },
+              "requiresDescriptionVersion": 13,
+              "options": []
+            }
+          ]
+        },
+        {
           "title": "Support",
           "controls": [
             {
@@ -1091,6 +1124,1173 @@
                   ]
                 }
               ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hardware.alex1Filters",
+      "title": "Alex-1 Filters",
+      "where": "station",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Alex HPF Bands",
+          "controls": [
+            {
+              "id": "hardware.alex1Filters.hpf.1_5MHz.bypass",
+              "label": "1.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/1_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.1_5MHz.start",
+              "label": "1.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/1_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 1.8
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.1_5MHz.end",
+              "label": "1.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/1_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 6.499999
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6_5MHz.bypass",
+              "label": "6.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/6_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6_5MHz.start",
+              "label": "6.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/6_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 6.5
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6_5MHz.end",
+              "label": "6.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/6_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 9.499999
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.9_5MHz.bypass",
+              "label": "9.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/9_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.9_5MHz.start",
+              "label": "9.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/9_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 9.5
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.9_5MHz.end",
+              "label": "9.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/9_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 12.999999
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.13MHz.bypass",
+              "label": "13 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/13MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.13MHz.start",
+              "label": "13 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/13MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 13
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.13MHz.end",
+              "label": "13 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/13MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 19.999999
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.20MHz.bypass",
+              "label": "20 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/20MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.20MHz.start",
+              "label": "20 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/20MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 20
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.20MHz.end",
+              "label": "20 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/20MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 49.999999
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6mBP.bypass",
+              "label": "6m Bypass Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/hpf/6mBP/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6mBP.start",
+              "label": "6m Bypass Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/6mBP/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 50
+            },
+            {
+              "id": "hardware.alex1Filters.hpf.6mBP.end",
+              "label": "6m Bypass End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/hpf/6mBP/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 61.44
+            }
+          ]
+        },
+        {
+          "title": "Saturn BPF1 Bands",
+          "controls": [
+            {
+              "id": "hardware.alex1Filters.bpf1.1_5MHz.bypass",
+              "label": "160m BPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/1_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.1_5MHz.start",
+              "label": "160m BPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/1_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 1.5
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.1_5MHz.end",
+              "label": "160m BPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/1_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.099999
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6_5MHz.bypass",
+              "label": "80/60m BPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/6_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6_5MHz.start",
+              "label": "80/60m BPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/6_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.1
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6_5MHz.end",
+              "label": "80/60m BPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/6_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5.499999
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.9_5MHz.bypass",
+              "label": "40/30m BPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/9_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.9_5MHz.start",
+              "label": "40/30m BPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/9_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5.5
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.9_5MHz.end",
+              "label": "40/30m BPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/9_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 10.999999
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.13MHz.bypass",
+              "label": "20/17/15m BPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/13MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.13MHz.start",
+              "label": "20/17/15m BPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/13MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 11
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.13MHz.end",
+              "label": "20/17/15m BPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/13MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 21.999999
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.20MHz.bypass",
+              "label": "12/10m BPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/20MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.20MHz.start",
+              "label": "12/10m BPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/20MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 22
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.20MHz.end",
+              "label": "12/10m BPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/20MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 34.999999
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6mBP.bypass",
+              "label": "6m BPF/LNA Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex/bpf1/6mBP/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6mBP.start",
+              "label": "6m BPF/LNA Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/6mBP/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 35
+            },
+            {
+              "id": "hardware.alex1Filters.bpf1.6mBP.end",
+              "label": "6m BPF/LNA End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex/bpf1/6mBP/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 61.44
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hardware.alex2Filters",
+      "title": "Alex-2 Filters",
+      "where": "station",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Alex-2 HPF Bands",
+          "controls": [
+            {
+              "id": "hardware.alex2Filters.bypass55MhzBpf",
+              "label": "ByPass / 55 MHz BPF (master)",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/master/bypass55MhzBpf"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.1_5MHz.bypass",
+              "label": "1.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/1_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.1_5MHz.start",
+              "label": "1.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/1_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 1.5
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.1_5MHz.end",
+              "label": "1.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/1_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.099999
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6_5MHz.bypass",
+              "label": "6.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/6_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6_5MHz.start",
+              "label": "6.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/6_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 2.1
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6_5MHz.end",
+              "label": "6.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/6_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5.499999
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.9_5MHz.bypass",
+              "label": "9.5 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/9_5MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.9_5MHz.start",
+              "label": "9.5 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/9_5MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 5.5
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.9_5MHz.end",
+              "label": "9.5 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/9_5MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 10.999999
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.13MHz.bypass",
+              "label": "13 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/13MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.13MHz.start",
+              "label": "13 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/13MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 11
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.13MHz.end",
+              "label": "13 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/13MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 21.999999
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.20MHz.bypass",
+              "label": "20 MHz HPF Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/20MHz/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.20MHz.start",
+              "label": "20 MHz HPF Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/20MHz/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 22
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.20MHz.end",
+              "label": "20 MHz HPF End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/20MHz/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 34.999999
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6mBP.bypass",
+              "label": "6m Bypass Bypass",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "alex2/hpf/6mBP/enabled"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6mBP.start",
+              "label": "6m Bypass Start",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/6mBP/start"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 35
+            },
+            {
+              "id": "hardware.alex2Filters.hpf.6mBP.end",
+              "label": "6m Bypass End",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "alex2/hpf/6mBP/end"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": 0,
+              "max": 200,
+              "step": 0.001,
+              "decimals": 6,
+              "unit": "MHz",
+              "default": 61.44
             }
           ]
         }

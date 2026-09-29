@@ -15,6 +15,10 @@
 #include "core/RadioInfoFacts.h"
 #include "core/ControlRanges.h"
 #include "core/settings/SettingsScope.h"
+#include "core/AlexSettingsKeys.h"
+#include "core/SampleRateCatalog.h"
+#include "core/codec/AlexFilterMap.h"
+#include "models/RadioModel.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -128,10 +132,73 @@ constexpr char kHardwareV13Controls[] =
     R"json({"id":"hardware.radioInfo.firmware","label":"Firmware:","tooltip":"","kind":"readout","binding":{"radioInfo":"firmware"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
     R"json({"id":"hardware.radioInfo.mac","label":"MAC:","tooltip":"","kind":"readout","binding":{"radioInfo":"mac"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
     R"json({"id":"hardware.radioInfo.ip","label":"IP address:","tooltip":"","kind":"readout","binding":{"radioInfo":"ip"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.sampleRate","label":"Sample rate (Hz):","tooltip":"","kind":"choice","binding":{"command":{"verb":"setRadioSampleRate","valueProperty":{"object":"slice:active","name":"sampleRateHz"},"arguments":{"rateHz":{"$controlValue":true}}}},"applies":"live","gate":{"capability":"radioHardwareVersion","min":9,"offAir":true},"requiresDescriptionVersion":13,"options":[]},)json"
     R"json({"id":"hardware.radioInfo.copySupportInfo","label":"Copy Support Info to Clipboard","tooltip":"Copies board identity and firmware version to the clipboard for bug reports.","kind":"button","binding":{"phone":"copySupportInfo"},"applies":"live","requiresDescriptionVersion":13,"copyText":""},)json"
     R"json({"id":"hardware.calibration.txDisplayOffset","label":"Offset:","tooltip":"TX display calibration offset in dB. Applied to TX spectrum display.","kind":"decimal","binding":{"radioSetting":"cal/txDisplayOffset"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"min":-100,"max":100,"step":0.1,"decimals":1,"unit":"dB","default":0},)json"
     R"json({"id":"hardware.hl2Io.n2adrFilter","label":"Enable N2ADR Filter board","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2IoBoard/n2adrFilter"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"default":true})json"
     R"json(])json";
+
+// Transmit version 13 (R-R3-49): Power's PA Control group, "Disable HF PA",
+// which the Core applies on and off the air (transmitSettingsVersion 11).
+constexpr char kTransmitV13Controls[] =
+    R"json([)json"
+    R"json({"id":"transmit.power.DisableHfPa","label":"Disable HF PA","tooltip":"Disables HF PA.","kind":"toggle","binding":{"setting":"DisableHfPa"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":11,"transmit":true},"requiresDescriptionVersion":13,"default":false})json"
+    R"json(])json";
+
+// The page titles and row labels the desktop's Alex-1 Filters and Alex-2
+// Filters tabs show, in the order of alexKeys::kPreselectorSlugs.
+constexpr std::array<const char*, 6> kAlexHpfRowLabels = {
+    "1.5 MHz HPF", "6.5 MHz HPF", "9.5 MHz HPF", "13 MHz HPF", "20 MHz HPF", "6m Bypass"};
+constexpr std::array<const char*, 6> kAlexBpf1RowLabels = {
+    "160m BPF", "80/60m BPF", "40/30m BPF", "20/17/15m BPF", "12/10m BPF", "6m BPF/LNA"};
+
+QHash<QString, QJsonObject> controlsById(const char* json);
+
+// Hardware version 13 (R-R3-46, R-R3-49): the Alex receive filter rows the
+// Core applies (radioHardwareVersion 8): each row's Bypass, Start and End on
+// the Alex-1 high-pass and BPF1 banks and the Alex-2 bank, and the Alex-2
+// master bypass. Defaults are Thetis's spinner values
+// (codec::alex::AlexHpfEdges::thetisDefaults); the edge boxes are the
+// desktop tab's (0 to 200 MHz, step 0.001, six decimals).
+QString alexFilterRowsJson()
+{
+    const codec::alex::AlexHpfEdges defaults = codec::alex::AlexHpfEdges::thetisDefaults();
+    const auto number = [](double value) { return QString::number(value, 'g', 10); };
+    QStringList rows;
+    const auto bank = [&rows, &number](const QString& page, const QString& bankId,
+                                        const QString& prefix,
+                                        const std::array<const char*, 6>& labels,
+                                        const codec::alex::AlexHpfRows& edges) {
+        for (size_t i = 0; i < edges.size(); ++i) {
+            const QString slug = QString::fromLatin1(alexKeys::kPreselectorSlugs[i]);
+            const QString base = QStringLiteral("%1.%2.%3").arg(page, bankId, slug);
+            const QString key = QStringLiteral("%1/%2").arg(prefix, slug);
+            const QString label = QString::fromLatin1(labels[i]);
+            rows << QString::fromLatin1(
+                R"j({"id":"%1.bypass","label":"%2 Bypass","tooltip":"","kind":"toggle","binding":{"radioSetting":"%3/enabled"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8},"requiresDescriptionVersion":13,"default":false})j")
+                .arg(base, label, key);
+            const std::array<std::pair<const char*, double>, 2> leaves{{
+                {"start", edges[i].startMhz}, {"end", edges[i].endMhz}}};
+            for (const auto& [leaf, value] : leaves) {
+                const QString leafName = QString::fromLatin1(leaf);
+                const QString word = leafName == QLatin1String("start")
+                    ? QStringLiteral("Start") : QStringLiteral("End");
+                rows << QString::fromLatin1(
+                    R"j({"id":"%1.%2","label":"%3 %4","tooltip":"","kind":"decimal","binding":{"radioSetting":"%5/%2"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8},"requiresDescriptionVersion":13,"min":0,"max":200,"step":0.001,"decimals":6,"unit":"MHz","default":%6})j")
+                    .arg(base, leafName, label, word, key, number(value));
+            }
+        }
+    };
+    bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("hpf"),
+         QString::fromLatin1(alexKeys::kAlex1HpfPrefix), kAlexHpfRowLabels, defaults.hpf);
+    bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("bpf1"),
+         QString::fromLatin1(alexKeys::kAlex1Bpf1Prefix), kAlexBpf1RowLabels, defaults.bpf1);
+    rows << QString::fromLatin1(
+        R"j({"id":"hardware.alex2Filters.bypass55MhzBpf","label":"ByPass / 55 MHz BPF (master)","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex2/master/bypass55MhzBpf"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8},"requiresDescriptionVersion":13,"default":false})j");
+    bank(QStringLiteral("hardware.alex2Filters"), QStringLiteral("hpf"),
+         QStringLiteral("alex2/hpf"), kAlexHpfRowLabels, defaults.alex2);
+    return QLatin1Char('[') + rows.join(QLatin1Char(',')) + QLatin1Char(']');
+}
 
 QHash<QString, QJsonObject> controlsById(const char* json)
 {
@@ -172,7 +239,18 @@ const QHash<QString, QJsonObject>& paV13Controls()
 
 const QHash<QString, QJsonObject>& hardwareV13Controls()
 {
-    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV13Controls);
+    static const QHash<QString, QJsonObject> table = [] {
+        QHash<QString, QJsonObject> controls = controlsById(kHardwareV13Controls);
+        const QByteArray alex = alexFilterRowsJson().toUtf8();
+        controls.insert(controlsById(alex.constData()));
+        return controls;
+    }();
+    return table;
+}
+
+const QHash<QString, QJsonObject>& transmitV13Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kTransmitV13Controls);
     return table;
 }
 
@@ -400,7 +478,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(14))
-         && !(id == QLatin1String("hardware")
+         && !((id == QLatin1String("hardware") || id == QLatin1String("transmit"))
               && root.value(QStringLiteral("version")) == QJsonValue(13)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
@@ -435,7 +513,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id != QLatin1String("display")
                         && ((control.contains(QStringLiteral("options"))
                              && !(id == QLatin1String("appearance")
-                                  && SetupDescription::validateAppearanceMeterStyleBinding(control)))
+                                  && SetupDescription::validateAppearanceMeterStyleBinding(control))
+                             && !(id == QLatin1String("hardware")
+                                  && SetupDescription::validateHardwareV13Control(control)))
                             || control.contains(QStringLiteral("enabledWhen"))))
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
                         && (root.value(QStringLiteral("version")).toInt()
@@ -473,7 +553,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
                                          == QJsonValue(12))
                                 && !((id == QLatin1String("pa")
-                                      || id == QLatin1String("hardware"))
+                                      || id == QLatin1String("hardware")
+                                      || id == QLatin1String("transmit"))
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
                                          == QJsonValue(13))
                                 && !(id == QLatin1String("pa")
@@ -513,7 +594,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateActiveSlicePropertyBinding(control))
                     || (id == QLatin1String("transmit")
                         && !SetupDescription::validateTransmitPropertyBinding(control)
-                        && !SetupDescription::validateTransmitSettingBinding(control))
+                        && !SetupDescription::validateTransmitSettingBinding(control)
+                        && !SetupDescription::validateTransmitV13Control(control))
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control)
                         && !SetupDescription::validateAntennaRowsTable(control)
@@ -555,8 +637,30 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
         for (int p = 0; p < pages.size(); ++p) {
             const QJsonValue pageId = pages.at(p).toObject().value(QStringLiteral("id"));
             if ((pageId == QJsonValue(QStringLiteral("hardware.antennaAlex")) && !caps.hasAlexFilters)
+                || (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))
+                    && !caps.hasAlexFilters)
+                || (pageId == QJsonValue(QStringLiteral("hardware.alex2Filters"))
+                    && !(caps.hasAlexFilters && caps.hasAlex2))
                 || (pageId == QJsonValue(QStringLiteral("hardware.hl2Io")) && !caps.hasIoBoardHl2)) {
                 pages.removeAt(p--);
+                continue;
+            }
+            // Version 13: the Alex-1 Filters tab shows its Saturn BPF1 Bands
+            // only on the boards AntennaAlexTab::populate names (Saturn,
+            // Saturn MkII and the ANAN-G2E's HermesC10).
+            if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))
+                && caps.board != HPSDRHW::Saturn && caps.board != HPSDRHW::SaturnMKII
+                && caps.board != HPSDRHW::HermesC10) {
+                QJsonObject page = pages.at(p).toObject();
+                QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+                for (int s = 0; s < sections.size(); ++s) {
+                    if (sections.at(s).toObject().value(QStringLiteral("title"))
+                        == QJsonValue(QStringLiteral("Saturn BPF1 Bands"))) {
+                        sections.removeAt(s--);
+                    }
+                }
+                page.insert(QStringLiteral("sections"), sections);
+                pages[p] = page;
             }
         }
         if (pages.isEmpty()) { return {}; }
@@ -700,6 +804,23 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         .value(QStringLiteral("radioInfo")).toString();
                     if (control.contains(QStringLiteral("copyText"))) {
                         control.insert(QStringLiteral("copyText"), facts.supportText());
+                    } else if (control.value(QStringLiteral("id"))
+                               == QJsonValue(QStringLiteral("hardware.radioInfo.sampleRate"))) {
+                        // The rates the desktop's box lists for this radio
+                        // (allowedSampleRates, as RadioInfoTab::populate).
+                        QJsonArray options;
+                        for (int rate : allowedSampleRates(info.protocol, caps, model)) {
+                            options.append(QJsonObject{{QStringLiteral("value"), rate},
+                                                       {QStringLiteral("label"),
+                                                        QString::number(rate)}});
+                        }
+                        control.insert(QStringLiteral("options"), options);
+                        if (options.isEmpty()) {
+                            control.insert(QStringLiteral("availability"), QJsonObject{
+                                {QStringLiteral("enabled"), false},
+                                {QStringLiteral("reason"), QStringLiteral(
+                                    "The radio is not connected, so its sample rate cannot change.")}});
+                        }
                     } else if (!field.isEmpty()) {
                         control.insert(QStringLiteral("value"),
                             field == QLatin1String("board") ? facts.board
@@ -762,6 +883,36 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     controls[c] = control;
                 }
                 if (controls.isEmpty()) { sections.removeAt(s--); continue; }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Transmit version 13: "Disable HF PA" stays on a radio that has no such
+    // switch, disabled with the desktop's reason (PowerPage::applyHfPaGate,
+    // RadioModel::hfPaSwitchAvailable).
+    if (id == QLatin1String("transmit") && !RadioModel::hfPaSwitchAvailable(model)) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    if (control.value(QStringLiteral("id"))
+                        != QJsonValue(QStringLiteral("transmit.power.DisableHfPa"))) {
+                        continue;
+                    }
+                    control.insert(QStringLiteral("availability"), QJsonObject{
+                        {QStringLiteral("enabled"), false},
+                        {QStringLiteral("reason"), RadioModel::hfPaSwitchUnavailableReason()}});
+                    controls[c] = control;
+                }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;
             }
@@ -1626,6 +1777,12 @@ bool SetupDescription::validatePaV14Control(const QJsonObject& control)
     return row != paV14Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateTransmitV13Control(const QJsonObject& control)
+{
+    const auto row = transmitV13Controls().constFind(control.value(QStringLiteral("id")).toString());
+    return row != transmitV13Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
 {
     const auto row = hardwareV13Controls().constFind(
@@ -2100,7 +2257,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const int ceiling = categoryId == QLatin1String("hardware") ? 13
+    const int ceiling = categoryId == QLatin1String("hardware")
+            || categoryId == QLatin1String("transmit") ? 13
         : categoryId == QLatin1String("pa") ? 14
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
@@ -2116,8 +2274,26 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                         : categoryId == QLatin1String("hardware") && version < 13
                             ? qMin(version, 6)
                         : categoryId == QLatin1String("pa") && version < 13
-                            ? qMin(version, 5) : qMin(version, ceiling));
-    // PA changed at 5, 13 and 14; hardware at 6 and 13.
+                            ? qMin(version, 5)
+                        // Transmit changed at 13 (Disable HF PA).
+                        : categoryId == QLatin1String("transmit") && version < 13
+                            ? qMin(version, 3) : qMin(version, ceiling));
+    if (categoryId == QLatin1String("transmit") && version < 13) {
+        // An older peer keeps the page's coverage it was built for.
+        QJsonArray fittedPages = category.value(QStringLiteral("pages")).toArray();
+        for (int i = 0; i < fittedPages.size(); ++i) {
+            QJsonObject page = fittedPages.at(i).toObject();
+            if (page.value(QStringLiteral("id")) == QJsonValue(QStringLiteral("transmit.power"))) {
+                page.insert(QStringLiteral("coverage"), QStringLiteral(
+                    "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has "
+                    "SKU-dependent display conversion; TX TUN Meter and Disable HF PA have "
+                    "no Core apply binding"));
+                fittedPages[i] = page;
+            }
+        }
+        category.insert(QStringLiteral("pages"), fittedPages);
+    }
+    // PA changed at 5, 13 and 14; hardware at 6 and 13; transmit at 13.
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

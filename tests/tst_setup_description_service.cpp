@@ -6,6 +6,8 @@
 #include "core/BoardCapabilities.h"
 #include "core/PaCalProfile.h"
 #include "core/RadioInfoFacts.h"
+#include "core/SampleRateCatalog.h"
+#include "core/codec/AlexFilterMap.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/StationCapabilities.h"
@@ -1133,12 +1135,12 @@ private slots:
             pageIds << page.toObject().value("id").toString();
         }
         QCOMPARE(pageIds, (QStringList{"hardware.radioInfo", "hardware.antennaAlex",
-                                       "hardware.calibration"}));
+                                       "hardware.alex1Filters", "hardware.calibration"}));
         const RadioInfoFacts facts = radioInfoFacts(info, hermes, HPSDRModel::ANAN100);
         QCOMPARE(facts.board, QStringLiteral("ANAN-100"));
         QCOMPARE(facts.firmware, QStringLiteral("32"));
         const QJsonArray radioRows = rowsOf(pageById(hardware, "hardware.radioInfo"));
-        QCOMPARE(radioRows.size(), 8);
+        QCOMPARE(radioRows.size(), 9);
         const QStringList fields{"board", "protocol", "adcCount", "maxRx", "firmware", "mac", "ip"};
         const QStringList values{facts.board, facts.protocol, facts.adcCount, facts.maxRx,
                                  facts.firmware, facts.mac, facts.ip};
@@ -1209,7 +1211,10 @@ private slots:
 
         // Every resource row is closed.
         const QList<QJsonObject> rows = resourceRows(QStringLiteral("hardware"), 13);
-        QCOMPARE(rows.size(), 10);
+        // Radio Info's seven, its sample rate and copy button, TX Display
+        // Cal, N2ADR, and the Alex receive filter rows: three banks of six
+        // rows of three, and the Alex-2 master.
+        QCOMPARE(rows.size(), 11 + 3 * 6 * 3 + 1);
         for (const QJsonObject& row : rows) {
             QVERIFY2(SetupDescriptionService::validateHardwareV13Control(row),
                      qPrintable(row.value("id").toString()));
@@ -1230,6 +1235,218 @@ private slots:
             QCOMPARE(projectedCategory(service.hardware(), version), expected);
         }
         QCOMPARE(projectedCategory(service.hardware(), 14), current);
+    }
+
+    // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
+    // Core applies on and off the air (transmitSettingsVersion 11), in its
+    // own PA Control section after External TX Inhibit, as the desktop page
+    // orders its groups. Older peers keep the rows and coverage they had.
+    void transmitV13DescribesDisableHfPa()
+    {
+        SetupDescriptionService service;
+        const QJsonObject current = projectedCategory(service.transmit(), 13);
+        QCOMPARE(current.value("version"), QJsonValue(13));
+        const QJsonObject power = pageById(current, "transmit.power");
+        QCOMPARE(power.value("coverage"), QJsonValue(
+            "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has SKU-dependent "
+            "display conversion; TX TUN Meter has no Core apply binding"));
+        const QJsonArray sections = power.value("sections").toArray();
+        QCOMPARE(sections.last().toObject().value("title"), QJsonValue("PA Control"));
+        const QJsonArray rows = sections.last().toObject().value("controls").toArray();
+        QCOMPARE(rows.size(), 1);
+        const QJsonObject row = rows.first().toObject();
+        QCOMPARE(row.value("id"), QJsonValue("transmit.power.DisableHfPa"));
+        QCOMPARE(row.value("label"), QJsonValue("Disable HF PA"));
+        QCOMPARE(row.value("tooltip"), QJsonValue("Disables HF PA."));
+        QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"setting", "DisableHfPa"}}));
+        QCOMPARE(QString::fromUtf8(RadioModel::kDisableHfPaKey), QStringLiteral("DisableHfPa"));
+        QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 11}, {"transmit", true}}));
+        QCOMPARE(row.value("default"), QJsonValue(false));
+        QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(row));
+        QVERIFY(!row.contains("availability"));
+        QVERIFY(SetupDescriptionService::validateTransmitV13Control(row));
+        QVERIFY(!SetupDescriptionService::validateTransmitSettingBinding(row));
+        for (const QJsonObject& changed : mutationsOf(row)) {
+            QVERIFY2(!SetupDescriptionService::validateTransmitV13Control(changed),
+                     qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+        }
+        QJsonObject offAir = row;
+        QJsonObject gate = offAir.value("gate").toObject();
+        gate.insert("offAir", true);
+        offAir.insert("gate", gate);
+        QVERIFY(!SetupDescriptionService::validateTransmitV13Control(offAir));
+
+        // A peer before 13: the rows it was built for, version 3 as before,
+        // and the coverage it was sent.
+        for (int version = 3; version <= 12; ++version) {
+            const QJsonObject older = projectedCategory(service.transmit(), version);
+            QCOMPARE(older.value("version"), QJsonValue(3));
+            QVERIFY(!QJsonDocument(older).toJson().contains("DisableHfPa"));
+            QCOMPARE(pageById(older, "transmit.power").value("coverage"), QJsonValue(
+                "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has SKU-dependent "
+                "display conversion; TX TUN Meter and Disable HF PA have no Core apply binding"));
+        }
+
+        // A radio with no HF PA switch keeps the row, disabled with the
+        // desktop's reason; the others have it open.
+        for (const HPSDRModel model : {HPSDRModel::HERMES, HPSDRModel::HPSDR}) {
+            service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes), model);
+            const QJsonObject closed = rowsOf(pageById(projectedCategory(service.transmit(), 13),
+                                                       "transmit.power")).last().toObject();
+            QCOMPARE(closed.value("id"), QJsonValue("transmit.power.DisableHfPa"));
+            QCOMPARE(closed.value("availability"), QJsonValue(QJsonObject{
+                {"enabled", false}, {"reason", RadioModel::hfPaSwitchUnavailableReason()}}));
+        }
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn), HPSDRModel::ANAN_G2);
+        QVERIFY(!rowsOf(pageById(projectedCategory(service.transmit(), 13), "transmit.power"))
+                     .last().toObject().contains("availability"));
+    }
+
+    // Version 13 (R-R3-46, R-R3-49): the Alex receive filter rows the Core
+    // applies (radioHardwareVersion 8), on the pages the desktop's Alex-1 and
+    // Alex-2 Filters tabs are shown for, and Radio Info's sample rate, the
+    // whole radio's (setRadioSampleRate, radioHardwareVersion 9).
+    void hardwareV13DescribesAlexFilterRowsAndSampleRate()
+    {
+        RadioInfo info;
+        info.name = QStringLiteral("ANAN-G2");
+        info.macAddress = QStringLiteral("00:1C:C0:A2:12:34");
+        info.protocol = ProtocolVersion::Protocol2;
+        SetupDescriptionService service;
+        const BoardCapabilities saturn = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        service.setRadioContext(saturn, HPSDRModel::ANAN_G2, info);
+        const QJsonObject g2 = projectedCategory(service.hardware(), 13);
+        QStringList pageIds;
+        for (const QJsonValue& page : g2.value("pages").toArray()) {
+            pageIds << page.toObject().value("id").toString();
+        }
+        QCOMPARE(pageIds, (QStringList{"hardware.radioInfo", "hardware.antennaAlex",
+                                       "hardware.alex1Filters", "hardware.alex2Filters",
+                                       "hardware.calibration"}));
+        const QJsonObject alex1 = pageById(g2, "hardware.alex1Filters");
+        QCOMPARE(alex1.value("title"), QJsonValue("Alex-1 Filters"));
+        const QJsonArray alex1Sections = alex1.value("sections").toArray();
+        QCOMPARE(alex1Sections.size(), 2);
+        QCOMPARE(alex1Sections.at(0).toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        QCOMPARE(alex1Sections.at(1).toObject().value("title"), QJsonValue("Saturn BPF1 Bands"));
+        const codec::alex::AlexHpfEdges defaults = codec::alex::AlexHpfEdges::thetisDefaults();
+        const QStringList slugs{"1_5MHz", "6_5MHz", "9_5MHz", "13MHz", "20MHz", "6mBP"};
+        const auto checkBank = [&slugs](const QJsonArray& rows, const QString& idBase,
+                                        const QString& keyBase, const QStringList& labels,
+                                        const codec::alex::AlexHpfRows& edges) {
+            QCOMPARE(rows.size(), 18);
+            for (int i = 0; i < 6; ++i) {
+                const QJsonObject bypass = rows.at(3 * i).toObject();
+                const QJsonObject start = rows.at(3 * i + 1).toObject();
+                const QJsonObject end = rows.at(3 * i + 2).toObject();
+                const QString id = idBase + slugs.at(i);
+                const QString key = keyBase + slugs.at(i);
+                QCOMPARE(bypass.value("id"), QJsonValue(id + ".bypass"));
+                QCOMPARE(bypass.value("label"), QJsonValue(labels.at(i) + " Bypass"));
+                QCOMPARE(bypass.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                         key + "/enabled"}}));
+                QCOMPARE(bypass.value("default"), QJsonValue(false));
+                QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(bypass));
+                QCOMPARE(start.value("label"), QJsonValue(labels.at(i) + " Start"));
+                QCOMPARE(start.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                        key + "/start"}}));
+                QCOMPARE(start.value("default").toDouble(), edges[size_t(i)].startMhz);
+                QCOMPARE(end.value("label"), QJsonValue(labels.at(i) + " End"));
+                QCOMPARE(end.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                      key + "/end"}}));
+                QCOMPARE(end.value("default").toDouble(), edges[size_t(i)].endMhz);
+                for (const QJsonObject& edge : {start, end}) {
+                    QCOMPARE(edge.value("kind"), QJsonValue("decimal"));
+                    QCOMPARE(edge.value("min").toDouble(), 0.0);
+                    QCOMPARE(edge.value("max").toDouble(), 200.0);
+                    QCOMPARE(edge.value("step").toDouble(), 0.001);
+                    QCOMPARE(edge.value("decimals"), QJsonValue(6));
+                    QCOMPARE(edge.value("unit"), QJsonValue("MHz"));
+                }
+                for (const QJsonObject& row : {bypass, start, end}) {
+                    // No off-air rule: Thetis's per-row setters have no MOX check.
+                    QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
+                        {"capability", "radioHardwareVersion"}, {"min", 8}}));
+                    QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(13));
+                }
+            }
+        };
+        const QStringList hpfLabels{"1.5 MHz HPF", "6.5 MHz HPF", "9.5 MHz HPF", "13 MHz HPF",
+                                    "20 MHz HPF", "6m Bypass"};
+        checkBank(alex1Sections.at(0).toObject().value("controls").toArray(),
+                  "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
+        checkBank(alex1Sections.at(1).toObject().value("controls").toArray(),
+                  "hardware.alex1Filters.bpf1.", "alex/bpf1/",
+                  QStringList{"160m BPF", "80/60m BPF", "40/30m BPF", "20/17/15m BPF",
+                              "12/10m BPF", "6m BPF/LNA"}, defaults.bpf1);
+        const QJsonObject alex2 = pageById(g2, "hardware.alex2Filters");
+        QCOMPARE(alex2.value("title"), QJsonValue("Alex-2 Filters"));
+        QJsonArray alex2Rows = rowsOf(alex2);
+        QCOMPARE(alex2Rows.size(), 19);
+        const QJsonObject master = alex2Rows.takeAt(0).toObject();
+        QCOMPARE(master.value("label"), QJsonValue("ByPass / 55 MHz BPF (master)"));
+        QCOMPARE(master.value("binding"), QJsonValue(QJsonObject{
+            {"radioSetting", "alex2/master/bypass55MhzBpf"}}));
+        QCOMPARE(master.value("default"), QJsonValue(false));
+        checkBank(alex2Rows, "hardware.alex2Filters.hpf.", "alex2/hpf/", hpfLabels,
+                  defaults.alex2);
+
+        // Radio Info's sample rate: the desktop's list for this radio, the
+        // whole radio's rate through setRadioSampleRate, off the air.
+        QJsonObject rate;
+        for (const QJsonValue& raw : rowsOf(pageById(g2, "hardware.radioInfo"))) {
+            if (raw.toObject().value("id") == QJsonValue("hardware.radioInfo.sampleRate")) {
+                rate = raw.toObject();
+            }
+        }
+        QCOMPARE(rate.value("label"), QJsonValue("Sample rate (Hz):"));
+        QCOMPARE(rate.value("kind"), QJsonValue("choice"));
+        QCOMPARE(rate.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "radioHardwareVersion"}, {"min", 9}, {"offAir", true}}));
+        QVERIFY(SetupDescriptionService::validateCommandBinding(rate));
+        QCOMPARE(rate.value("binding").toObject().value("command").toObject().value("verb"),
+                 QJsonValue("setRadioSampleRate"));
+        const std::vector<int> allowed = allowedSampleRates(ProtocolVersion::Protocol2, saturn,
+                                                            HPSDRModel::ANAN_G2);
+        QVERIFY(!allowed.empty());
+        const QJsonArray options = rate.value("options").toArray();
+        QCOMPARE(options.size(), qsizetype(allowed.size()));
+        for (qsizetype i = 0; i < options.size(); ++i) {
+            QCOMPARE(options.at(i).toObject(), (QJsonObject{
+                {"value", allowed[size_t(i)]}, {"label", QString::number(allowed[size_t(i)])}}));
+        }
+        QVERIFY(!rate.contains("availability"));
+
+        // An ALEX board without Alex-2 or BPF1: only the Alex HPF bank.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes), HPSDRModel::ANAN100,
+                                info);
+        const QJsonObject hermes = projectedCategory(service.hardware(), 13);
+        QVERIFY(pageById(hermes, "hardware.alex2Filters").isEmpty());
+        const QJsonArray hermesSections = pageById(hermes, "hardware.alex1Filters")
+            .value("sections").toArray();
+        QCOMPARE(hermesSections.size(), 1);
+        QCOMPARE(hermesSections.first().toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        // The ANAN-G2E shows the BPF1 bank but has no Alex-2.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesC10),
+                                HPSDRModel::ANAN_G2E, info);
+        const QJsonObject g2e = projectedCategory(service.hardware(), 13);
+        QCOMPARE(pageById(g2e, "hardware.alex1Filters").value("sections").toArray().size(), 2);
+        QCOMPARE(pageById(g2e, "hardware.alex2Filters").isEmpty(),
+                 !BoardCapsTable::forBoard(HPSDRHW::HermesC10).hasAlex2);
+        // The HL2 has neither page.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE, info);
+        const QJsonObject hl2 = projectedCategory(service.hardware(), 13);
+        QVERIFY(pageById(hl2, "hardware.alex1Filters").isEmpty());
+        QVERIFY(pageById(hl2, "hardware.alex2Filters").isEmpty());
+
+        // Before 13 none of it.
+        service.setRadioContext(saturn, HPSDRModel::ANAN_G2, info);
+        const QByteArray v12 = QJsonDocument(projectedCategory(service.hardware(), 12)).toJson();
+        QVERIFY(!v12.contains("alex1Filters"));
+        QVERIFY(!v12.contains("alex2Filters"));
+        QVERIFY(!v12.contains("sampleRate"));
     }
 
     void categoriesLoadAndMirrorAsStrings()
@@ -1494,7 +1711,8 @@ private slots:
     void transmitDexpBindingsAreExactMirroredSettings()
     {
         SetupDescriptionService service;
-        const QJsonObject transmit = service.category(QStringLiteral("transmit"));
+        // Version 12's rows; 13's Disable HF PA is transmitV13DescribesDisableHfPa's.
+        const QJsonObject transmit = projectedCategory(service.transmit(), 12);
         QVERIFY(!transmit.isEmpty());
         int count = 0;
         for (const QJsonValue& rawPage : transmit.value(QStringLiteral("pages")).toArray()) {

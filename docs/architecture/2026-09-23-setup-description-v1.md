@@ -150,10 +150,11 @@ semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
 future declaration at version 14. PA has a version-14 ceiling (version 13
 for V13, version 5 for V5–V12) and Hardware a version-13 ceiling (version 6
-for V6–V12); Display a version-12 ceiling, and Appearance a version-12
-ceiling with its prior version-4 projection for V4–V6 and version-7
-projection for V7–V11; the other categories on this source retain
-version 3.
+for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
+the Power page's earlier coverage text); Display a version-12 ceiling, and
+Appearance a version-12 ceiling with its prior version-4 projection for
+V4–V6 and version-7 projection for V7–V11; the other categories on this
+source retain version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -416,7 +417,9 @@ enable (unbuilt). Derived readouts (bin width, delay, effective rewind) and
 the cross-links are not controls.
 
 Version 13 describes the rest of Setup > PA's Watt Meter and PA Values
-pages and three built Hardware Config tabs (R-R3-49, R-IOS-18). Every new row
+pages, three built Hardware Config tabs, the Alex-1 and Alex-2 Filters tabs'
+receive rows, Radio Info's sample rate and Transmit > Power's Disable HF PA
+(R-R3-46, R-R3-49, R-IOS-18). Every new row
 has `requiresDescriptionVersion:13` and the Core accepts it only as the exact
 closed object its resource carries; V1–V12 projections keep their versions,
 page lists and controls (PA V5–V12: version 5, two pages on the ANAN-G2E, one
@@ -509,14 +512,53 @@ has Enable N2ADR Filter board (`hardware.hl2Io.n2adrFilter`, `radioSetting`
 `transmitSettingsVersion:8`; the Core applies its whole preset once the
 radio is back on receive.
 
+Radio Info gains an Operating Parameters section between Board Identity and
+Support with Sample rate (`hardware.radioInfo.sampleRate`, `kind:"choice"`).
+Its binding is the command `setRadioSampleRate {rateHz: $controlValue}`
+with `valueProperty` `slice:active`'s `sampleRateHz`, gate
+`radioHardwareVersion:9` plus `offAir:true`: the whole radio's rate, every
+receiver at once, as the desktop's box changes it. The Core fills `options`
+with the rates the desktop's box lists for its radio (`value` the rate in
+hertz, `label` its digits); with none it adds `availability` disabled with
+"The radio is not connected, so its sample rate cannot change." The Core
+refuses the verb from a device signed in with the pairing token, while the
+radio is on the air, and for a rate outside the list.
+
+Two pages follow Antenna / ALEX, both `where:"station"` and partial:
+Alex-1 Filters (`hardware.alex1Filters`, on every board with ALEX filters)
+and Alex-2 Filters (`hardware.alex2Filters`, only where the board has
+Alex-2). Alex-1 Filters has Alex HPF Bands and, on Saturn, Saturn MkII and
+the ANAN-G2E only (the desktop's own gate), Saturn BPF1 Bands; Alex-2
+Filters has Alex-2 HPF Bands, whose first row is ByPass / 55 MHz BPF
+(master) (`hardware.alex2Filters.bypass55MhzBpf`, `radioSetting`
+`alex2/master/bypass55MhzBpf`). Each bank has six rows in the desktop's
+order, each row three controls with ids `<page>.<bank>.<slug>.bypass`,
+`.start` and `.end` (bank `hpf` or `bpf1`; slugs `1_5MHz`, `6_5MHz`,
+`9_5MHz`, `13MHz`, `20MHz`, `6mBP`), labelled with the desktop's row label
+and Bypass, Start or End, and bound to `radioSetting`
+`<prefix>/<slug>/enabled|start|end` (prefix `alex/hpf`, `alex/bpf1` or
+`alex2/hpf`). Bypass boxes are `True`/`False` toggles, default false; the
+edges are decimals from 0 to 200 MHz, step 0.001, six decimals, unit `MHz`,
+defaulting to Thetis's spinner values. Every row has the gate
+`radioHardwareVersion:8` and no off-air rule: the Core applies a change to
+its radio at once, on or off the air, as Thetis's setters do.
+
+Transmit > Power gains a PA Control section last with Disable HF PA
+(`transmit.power.DisableHfPa`, `setting` `DisableHfPa`, `True`/`False`,
+default false, gate `transmitSettingsVersion:11` plus `transmit:true` and
+no off-air rule: the Core applies it on and off the air, as Thetis does).
+On the Hermes and the Atlas/Metis kit, which have no such switch, the row
+carries `availability` disabled with "This radio cannot switch off its HF
+PA from here."
+
 Not described, with the reason: PA Gain's profile choice, New, Copy, Delete,
 Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
 bank is serialized per profile and no closed profile state or command exists
 on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
 auto-calibration sweep (it keys the radio from the desktop's own window);
-Radio Info's sample rate (it changes the first receiver's rate, not a
-setting) and the ANAN-8000DLE title bar volts/amps box (the desktop's title
-bar); OC Outputs; the rest of Calibration (frequency and level calibration,
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
+Alex-1 Filters tab's five switches above its rows (HPF Bypass, on TX and
+on PureSignal feedback, and the two 6 m LNA boxes) and both tabs' LPF edges (the LPF edges stay hidden on the desktop too); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
 HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or

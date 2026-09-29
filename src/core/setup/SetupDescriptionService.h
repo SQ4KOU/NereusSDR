@@ -44,6 +44,7 @@ public:
     /// Version 14: PA Gain's profile rows (paProfileVersion 1).
     static bool validatePaV14Control(const QJsonObject& control);
     static bool validateHardwareV13Control(const QJsonObject& control);
+    static bool validateTransmitV13Control(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);
     static bool validateDspSettingBinding(const QJsonObject& control);

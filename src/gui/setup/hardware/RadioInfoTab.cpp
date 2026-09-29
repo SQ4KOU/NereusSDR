@@ -35,6 +35,9 @@
 //                 description publishes too; each readout and the copy
 //                 button carry their description ids. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the sample rate box carries its
+//                 Setup description id (version 13). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -164,6 +167,7 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     applyComboStyle(m_sampleRateRx1Combo);
     m_sampleRateRx1Combo->setMinimumWidth(120);
     m_sampleRateRx1Combo->setMaximumWidth(160);
+    m_sampleRateRx1Combo->setProperty("nereusSetupId", "hardware.radioInfo.sampleRate");
 
     // Active RX count widget removed from UI 2026-05-08 — non-functional in
     // single-RX builds (capped at 1, disabled until a radio is connected).

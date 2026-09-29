@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 13,
   "category": {
     "id": "transmit",
     "title": "Transmit",
@@ -11,7 +11,7 @@
       "id": "transmit.power",
       "title": "Power",
       "where": "station",
-      "coverage": "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has SKU-dependent display conversion; TX TUN Meter and Disable HF PA have no Core apply binding",
+      "coverage": "partial: ATT on TX uses the stepAtt facade; Tune fixed drive has SKU-dependent display conversion; TX TUN Meter has no Core apply binding",
       "sections": [
         {
           "title": "Power",
@@ -185,6 +185,32 @@
                 "true": "True",
                 "false": "False"
               }
+            }
+          ]
+        },
+        {
+          "title": "PA Control",
+          "controls": [
+            {
+              "id": "transmit.power.DisableHfPa",
+              "label": "Disable HF PA",
+              "tooltip": "Disables HF PA.",
+              "kind": "toggle",
+              "binding": {
+                "setting": "DisableHfPa"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 11,
+                "transmit": true
+              },
+              "requiresDescriptionVersion": 13,
+              "default": false
             }
           ]
         }

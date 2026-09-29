@@ -30,6 +30,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
+//                Setup description ids (version 13). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -491,6 +494,13 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         w.bypass->setObjectName(QStringLiteral("alexHpfBypass_%1").arg(slug));
         w.start->setObjectName(QStringLiteral("alexHpfStart_%1").arg(slug));
         w.end->setObjectName(QStringLiteral("alexHpfEnd_%1").arg(slug));
+        // Setup description version 13: the same rows on the phone.
+        w.bypass->setProperty("nereusSetupId",
+                              QStringLiteral("hardware.alex1Filters.hpf.%1.bypass").arg(slug));
+        w.start->setProperty("nereusSetupId",
+                             QStringLiteral("hardware.alex1Filters.hpf.%1.start").arg(slug));
+        w.end->setProperty("nereusSetupId",
+                           QStringLiteral("hardware.alex1Filters.hpf.%1.end").arg(slug));
         const QString enabledKey = QStringLiteral("alex/hpf/%1/enabled").arg(slug);
         const QString startKey   = QStringLiteral("alex/hpf/%1/start").arg(slug);
         const QString endKey     = QStringLiteral("alex/hpf/%1/end").arg(slug);
@@ -616,6 +626,12 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         w.bypass->setObjectName(QStringLiteral("alexBpf1Bypass_%1").arg(slug));
         w.start->setObjectName(QStringLiteral("alexBpf1Start_%1").arg(slug));
         w.end->setObjectName(QStringLiteral("alexBpf1End_%1").arg(slug));
+        w.bypass->setProperty("nereusSetupId",
+                              QStringLiteral("hardware.alex1Filters.bpf1.%1.bypass").arg(slug));
+        w.start->setProperty("nereusSetupId",
+                             QStringLiteral("hardware.alex1Filters.bpf1.%1.start").arg(slug));
+        w.end->setProperty("nereusSetupId",
+                           QStringLiteral("hardware.alex1Filters.bpf1.%1.end").arg(slug));
         const QString enabledKey = QStringLiteral("alex/bpf1/%1/enabled").arg(slug);
         const QString startKey   = QStringLiteral("alex/bpf1/%1/start").arg(slug);
         const QString endKey     = QStringLiteral("alex/bpf1/%1/end").arg(slug);

@@ -20,6 +20,8 @@
 #include "gui/setup/SpectrumPeaksPage.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
+#include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
+#include "gui/setup/hardware/AntennaAlexAlex2Tab.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/CalibrationTab.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
@@ -41,6 +43,7 @@
 #include <QAbstractButton>
 #include <QBoxLayout>
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QLineEdit>
@@ -943,12 +946,108 @@ private slots:
                         QCOMPARE(spin->decimals(), control.value("decimals").toInt());
                         QCOMPARE(spin->value(), control.value("default").toDouble());
                     }
+                    if (kind == "choice") {
+                        // The sample rate: the same rates, in the same order.
+                        auto* combo = qobject_cast<QComboBox*>(widget);
+                        QVERIFY2(combo != nullptr, qPrintable(id));
+                        const QJsonArray options = control.value("options").toArray();
+                        QVERIFY(!options.isEmpty());
+                        QCOMPARE(combo->count(), options.size());
+                        for (int i = 0; i < options.size(); ++i) {
+                            QCOMPARE(combo->itemText(i),
+                                     options.at(i).toObject().value("label").toString());
+                            QCOMPARE(combo->itemData(i).toInt(),
+                                     options.at(i).toObject().value("value").toInt());
+                        }
+                    }
                     ++compared;
                 }
             }
         }
-        // Radio Info's seven and its copy button, TX Display Cal, N2ADR.
-        QCOMPARE(compared, 10);
+        // Radio Info's seven, its sample rate and copy button, TX Display
+        // Cal, N2ADR.
+        QCOMPARE(compared, 11);
+    }
+
+    // Version 13 (R-R3-46, R-R3-49): every Alex receive filter row the
+    // Core describes is the desktop tab's row: its group, its row label with
+    // Bypass / Start / End, its box's range, step, decimals and Thetis
+    // default, on the ANAN-G2 (both Alex-1 banks and Alex-2).
+    void describedAlexFilterRowsMatchNativeTabs()
+    {
+        AppSettings::instance().clear();
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        AntennaAlexAlex1Tab alex1(&model);
+        AntennaAlexAlex2Tab alex2(&model);
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn), HPSDRModel::ANAN_G2);
+        const QJsonObject hardware = projectedCategory(service.hardware(), 13);
+        int compared = 0;
+        for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
+            const QJsonObject page = rawPage.toObject();
+            QWidget* tab = page.value("id") == QJsonValue("hardware.alex1Filters")
+                ? static_cast<QWidget*>(&alex1)
+                : page.value("id") == QJsonValue("hardware.alex2Filters")
+                    ? static_cast<QWidget*>(&alex2) : nullptr;
+            if (tab == nullptr) { continue; }
+            for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+                const QJsonObject section = rawSection.toObject();
+                for (const QJsonValue& raw : section.value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    const QString id = control.value("id").toString();
+                    auto* widget = qobject_cast<QWidget*>(bySetupId(*tab, id));
+                    QVERIFY2(widget != nullptr, qPrintable(id + " has no desktop widget"));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                    // The group box the widget sits in has the section's title.
+                    QGroupBox* group = nullptr;
+                    for (QWidget* up = widget->parentWidget(); up && !group; up = up->parentWidget()) {
+                        group = qobject_cast<QGroupBox*>(up);
+                    }
+                    QVERIFY2(group != nullptr, qPrintable(id));
+                    QCOMPARE(group->title(), section.value("title").toString());
+                    if (id == QLatin1String("hardware.alex2Filters.bypass55MhzBpf")) {
+                        auto* box = qobject_cast<QCheckBox*>(widget);
+                        QVERIFY(box != nullptr);
+                        QCOMPARE(box->text(), control.value("label").toString());
+                        QCOMPARE(box->isChecked(), control.value("default").toBool());
+                        ++compared;
+                        continue;
+                    }
+                    // A row: the form's label for the row, then its column.
+                    QFormLayout* form = nullptr;
+                    QLabel* rowLabel = nullptr;
+                    for (QFormLayout* candidate : tab->findChildren<QFormLayout*>()) {
+                        if (auto* label = qobject_cast<QLabel*>(
+                                candidate->labelForField(widget->parentWidget()))) {
+                            form = candidate;
+                            rowLabel = label;
+                        }
+                    }
+                    QVERIFY2(form != nullptr && rowLabel != nullptr, qPrintable(id));
+                    const QString column = id.endsWith(QLatin1String(".bypass")) ? "Bypass"
+                        : id.endsWith(QLatin1String(".start")) ? "Start" : "End";
+                    QCOMPARE(control.value("label").toString(), rowLabel->text() + " " + column);
+                    if (column == QLatin1String("Bypass")) {
+                        auto* box = qobject_cast<QCheckBox*>(widget);
+                        QVERIFY2(box != nullptr, qPrintable(id));
+                        QCOMPARE(box->isChecked(), control.value("default").toBool());
+                    } else {
+                        auto* spin = qobject_cast<QDoubleSpinBox*>(widget);
+                        QVERIFY2(spin != nullptr, qPrintable(id));
+                        QCOMPARE(spin->minimum(), control.value("min").toDouble());
+                        QCOMPARE(spin->maximum(), control.value("max").toDouble());
+                        QCOMPARE(spin->singleStep(), control.value("step").toDouble());
+                        QCOMPARE(spin->decimals(), control.value("decimals").toInt());
+                        QCOMPARE(spin->value(), control.value("default").toDouble());
+                        QCOMPARE(spin->suffix(), " " + control.value("unit").toString());
+                    }
+                    ++compared;
+                }
+            }
+        }
+        // Three banks of six rows of three, and the Alex-2 master.
+        QCOMPARE(compared, 3 * 6 * 3 + 1);
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()
@@ -1272,7 +1371,8 @@ private slots:
         QCOMPARE(pages.last().toObject().value(QStringLiteral("id")),
                  QJsonValue(QStringLiteral("transmit.dexpVox")));
         const QJsonArray described = controls(transmit);
-        QCOMPARE(described.size(), 24);
+        // Version 13 adds Disable HF PA (PA Control).
+        QCOMPARE(described.size(), 25);
         for (const QJsonValue& raw : described) {
             const QJsonObject control = raw.toObject();
             compareControl(control.value(QStringLiteral("id")).toString().startsWith(QStringLiteral("transmit.power."))

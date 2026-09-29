@@ -18,6 +18,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
+//                Setup description ids (version 13). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -270,6 +273,8 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
     // Source: Thetis chkAlex2HPFBypass Text="ByPass/55 MHz BPF" (setup.designer.cs:26479-26488) [@501e3f5]
     m_hpfBypass55 = new QCheckBox(tr("ByPass / 55 MHz BPF (master)"), hpfGroup);
     m_hpfBypass55->setObjectName(QStringLiteral("alex2HpfBypass55"));
+    // Setup description version 13: the same rows on the phone.
+    m_hpfBypass55->setProperty("nereusSetupId", "hardware.alex2Filters.bypass55MhzBpf");
     hpfVBox->addWidget(m_hpfBypass55);
     connect(m_hpfBypass55, &QCheckBox::toggled, this,
             [this](bool checked) {
@@ -306,6 +311,12 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
         w.bypass->setObjectName(QStringLiteral("alex2HpfBypass_%1").arg(slug));
         w.start->setObjectName(QStringLiteral("alex2HpfStart_%1").arg(slug));
         w.end->setObjectName(QStringLiteral("alex2HpfEnd_%1").arg(slug));
+        w.bypass->setProperty("nereusSetupId",
+                              QStringLiteral("hardware.alex2Filters.hpf.%1.bypass").arg(slug));
+        w.start->setProperty("nereusSetupId",
+                             QStringLiteral("hardware.alex2Filters.hpf.%1.start").arg(slug));
+        w.end->setProperty("nereusSetupId",
+                           QStringLiteral("hardware.alex2Filters.hpf.%1.end").arg(slug));
         const QString enabledKey = QStringLiteral("alex2/hpf/%1/enabled").arg(slug);
         const QString startKey   = QStringLiteral("alex2/hpf/%1/start").arg(slug);
         const QString endKey     = QStringLiteral("alex2/hpf/%1/end").arg(slug);
