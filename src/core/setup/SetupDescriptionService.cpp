@@ -375,10 +375,12 @@ constexpr char kPaV14Controls[] =
 // frmCFCConfig.Designer.cs [v2.10.3.15]); steps and decimals are the
 // dialog's spin boxes (nudCFC_f step 1; nudCFC_c and nudCFC_gain 0.1, one
 // decimal; nudCFC_cq and nudCFC_q 0.01, two decimals). Closed as the
-// version 16 rows are.
+// version 16 rows are. No off-air rule: Thetis's frmCFCConfig applies a
+// change on the air (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check),
+// and this Core takes it on the air (transmitSettingsVersion 13).
 constexpr char kDspV19Controls[] =
     R"json([)json"
-    R"json({"id":"dsp.cfc.bands","label":"Configure CFC bands\u2026","tooltip":"Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ.","kind":"table","binding":{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":15,"offAir":true},"requiresDescriptionVersion":19,"bandCounts":[5,10,18],"minSpanHz":1000,"fields":[{"id":"minHz","label":"Low","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"maxHz","label":"High","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"parametric","label":"Use Q Factors","kind":"toggle"},{"id":"precompDb","label":"Pre-Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqGainDb","label":"Post-EQ","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"}],"columns":[{"id":"frequencyHz","label":"Freq","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"compressionDb","label":"Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"compressionQ","label":"Comp Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2},{"id":"postEqGainDb","label":"Gain","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqQ","label":"EQ Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2}]})json"
+    R"json({"id":"dsp.cfc.bands","label":"Configure CFC bands\u2026","tooltip":"Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ.","kind":"table","binding":{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":15},"requiresDescriptionVersion":19,"bandCounts":[5,10,18],"minSpanHz":1000,"fields":[{"id":"minHz","label":"Low","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"maxHz","label":"High","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"parametric","label":"Use Q Factors","kind":"toggle"},{"id":"precompDb","label":"Pre-Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqGainDb","label":"Post-EQ","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"}],"columns":[{"id":"frequencyHz","label":"Freq","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"compressionDb","label":"Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"compressionQ","label":"Comp Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2},{"id":"postEqGainDb","label":"Gain","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqQ","label":"EQ Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2}]})json"
     R"json(])json";
 
 const QHash<QString, QJsonObject>& dspV19Controls()
@@ -1858,8 +1860,12 @@ bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& con
         return false;
     }
     if (object == QLatin1String("transmit")) {
+        // DSP's transmit processing rows (TX Leveler, TX ALC, Phase Rotator,
+        // CFC, CESSB) carry no off-air rule: this Core takes transmit
+        // settings on the air (transmitSettingsVersion 13 or later) from a
+        // session permitted to change them, as the desktop does.
         const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
-        if (gate.value(QStringLiteral("offAir")) != QJsonValue(true)
+        if (gate.contains(QStringLiteral("offAir"))
             || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
             || gate.value(QStringLiteral("min")).toInt() < 4) {
             return false;

@@ -1601,8 +1601,13 @@ private slots:
         QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(19));
         QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"cfcProfile", QJsonObject{
             {"object", "transmit"}, {"name", "cfcProfile"}, {"command", "cfc.setProfile"}}}}));
+        // No off-air rule: Thetis's frmCFCConfig applies a change on the air
+        // (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check), and a Core
+        // at transmitSettingsVersion 13 or later takes it on the air from a
+        // session permitted to change transmit settings.
         QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
-            {"capability", "transmitSettingsVersion"}, {"min", 15}, {"offAir", true}}));
+            {"capability", "transmitSettingsVersion"}, {"min", 15}}));
+        QVERIFY(!row.value("gate").toObject().contains("offAir"));
         QCOMPARE(row.value("bandCounts"), QJsonValue(QJsonArray{5, 10, 18}));
         QCOMPARE(row.value("minSpanHz"), QJsonValue(1000));
         // The ranges CfcProfile::fromPublishedJson takes, in its keys.
@@ -1659,6 +1664,41 @@ private slots:
         QCOMPARE(projectedCategory(service.dsp(), 17), v15);
         QCOMPARE(projectedCategory(service.dsp(), 18), v15);
         QCOMPARE(projectedCategory(service.dsp(), 20), current);
+    }
+
+    // The TX Leveler, TX ALC, Phase Rotator, CFC and CESSB rows carry no
+    // off-air rule: the Core serving this description takes transmit
+    // settings on the air (transmitSettingsVersion 13 or later) from a
+    // session permitted to change them, as the desktop does.
+    void dspTransmitProcessingRowsCarryNoOffAirRule()
+    {
+        SetupDescriptionService service;
+        const QStringList ids{
+            "dsp.agcAlc.txLevelerOn", "dsp.agcAlc.txLevelerMaxGain",
+            "dsp.agcAlc.txLevelerDecay", "dsp.agcAlc.txAlcMaxGain", "dsp.agcAlc.txAlcDecay",
+            "dsp.cfc.phaseRotatorEnabled", "dsp.cfc.phaseRotatorFreqHz",
+            "dsp.cfc.phaseRotatorStages", "dsp.cfc.phaseReverseEnabled", "dsp.cfc.cfcEnabled",
+            "dsp.cfc.cfcPostEqEnabled", "dsp.cfc.cfcPrecompDb", "dsp.cfc.cfcPostEqGainDb",
+            "dsp.cfc.cessbOn"};
+        for (const int version : {3, 15, 19}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : ids) {
+                const QJsonObject row = controlById(dsp, id);
+                QVERIFY2(!row.isEmpty(), qPrintable(QStringLiteral("%1 at %2").arg(id).arg(version)));
+                QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "transmitSettingsVersion"}, {"min", 4}}));
+                QVERIFY(SetupDescriptionService::validateActiveSlicePropertyBinding(row));
+                // The off-air rule is refused: the row is closed without it.
+                QJsonObject offAir = row;
+                QJsonObject gate = row.value("gate").toObject();
+                gate.insert("offAir", true);
+                offAir.insert("gate", gate);
+                QVERIFY2(!SetupDescriptionService::validateActiveSlicePropertyBinding(offAir),
+                         qPrintable(id));
+            }
+        }
+        QVERIFY(!controlById(projectedCategory(service.dsp(), 19), "dsp.cfc.bands")
+                     .value("gate").toObject().contains("offAir"));
     }
 
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the

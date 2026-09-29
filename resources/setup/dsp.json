@@ -207,8 +207,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             },
             {
@@ -225,8 +224,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 0,
               "max": 20,
@@ -247,8 +245,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 1,
               "max": 5000,
@@ -274,8 +271,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 0,
               "max": 120,
@@ -296,8 +292,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 1,
               "max": 50,
@@ -1880,8 +1875,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             },
             {
@@ -1898,8 +1892,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 10,
               "max": 2000,
@@ -1920,8 +1913,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 2,
               "max": 16,
@@ -1941,8 +1933,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             }
           ]
@@ -1964,8 +1955,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             },
             {
@@ -1982,8 +1972,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             },
             {
@@ -2000,8 +1989,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": 0,
               "max": 16,
@@ -2022,8 +2010,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               },
               "min": -24,
               "max": 24,
@@ -2045,8 +2032,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 15,
-                "offAir": true
+                "min": 15
               },
               "requiresDescriptionVersion": 19,
               "bandCounts": [
@@ -2172,8 +2158,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 4,
-                "offAir": true
+                "min": 4
               }
             }
           ]

@@ -983,10 +983,13 @@ accepted only as the exact object in `resources/setup/dsp.json`
   "The CFC band editor"), and a change is sent whole with `cfc.setProfile`
   and that value's `revision` as `expectedRevision`. The Core refuses a
   stale revision, and the phone shows the refusal reason and the new value.
-- `gate` `{"capability":"transmitSettingsVersion","min":15,"offAir":true}`,
-  the same off-air rule as the CFC section's other rows. Below
-  `transmitSettingsVersion` 15 the row shows disabled with the Core's
-  reason.
+- `gate` `{"capability":"transmitSettingsVersion","min":15}`, with no
+  off-air rule: Thetis's CFC dialog applies a change on the air
+  (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check), and the Core
+  takes `cfc.setProfile` on the air from a session permitted to change
+  transmit settings (`transmitSettingsVersion` 13 and later), as the
+  desktop does. Below `transmitSettingsVersion` 15 the row shows disabled
+  with the Core's reason.
 - `bandCounts` `[5,10,18]`: the band counts the editor offers (the
   desktop's 5-band, 10-band and 18-band). Changing the count respreads the
   bands evenly between Low and High, as the desktop's editor does.
@@ -1009,6 +1012,18 @@ The ranges are `CfcProfile`'s, each from Thetis frmCFCConfig.Designer.cs
 `nudCFC_q`; see `CfcProfile.h`), and so are the steps and decimals, with the
 1000 Hz spread from frmCFCConfig.cs:120-140.
 The first band sits on Low and the last on High; the Core keeps them there.
+
+The CFC section's other rows and AGC/ALC's TX Leveler and TX ALC rows
+(`dsp.agcAlc.txLevelerOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+`txAlcMaxGain`, `txAlcDecay`; `dsp.cfc.phaseRotatorEnabled`,
+`phaseRotatorFreqHz`, `phaseRotatorStages`, `phaseReverseEnabled`,
+`cfcEnabled`, `cfcPostEqEnabled`, `cfcPrecompDb`, `cfcPostEqGainDb`,
+`cessbOn`) lose their off-air rule at every description version, for the
+same reason: their gate is `{"capability":"transmitSettingsVersion","min":4}`
+and the Core refuses one that carries `offAir`. The description is always
+served by the Core that applies the edit. With a radio that Core reports
+transmitSettingsVersion 15 and takes these settings on the air; without one it
+reports 0, which fails the `min` and disables the rows anyway.
 
 DSP's category coverage becomes "partial: the NR3 and NNR model files are
 not described" and the CFC page carries no coverage (`coverageV19`). A V15

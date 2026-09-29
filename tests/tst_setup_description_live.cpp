@@ -567,6 +567,9 @@ private slots:
             QCOMPARE(bands.isEmpty(), received != 19);
             if (received == 19) {
                 QVERIFY(SetupDescriptionService::validateDspV19Control(bands));
+                // Published with no off-air rule: the Core takes it on the air.
+                QCOMPARE(bands.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "transmitSettingsVersion"}, {"min", 15}}));
                 QCOMPARE(dsp.value("coverage"),
                          QJsonValue("partial: the NR3 and NNR model files are not described"));
             }
