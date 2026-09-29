@@ -8076,6 +8076,11 @@ target_compile_definitions(tst_station_catalog PRIVATE
 # items follow the radio, the Core and the unbuilt features list. No radio,
 # no listening socket, no audio device.
 nereus_add_test(tst_station_tools EXTRA_LABELS session)
+# iPhone app plan Task 25 (R-IOS-18): the `vax` object and the vaxLevels
+# stream, over a loopback link. No radio, no audio device opened.
+nereus_add_test(tst_station_vax
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

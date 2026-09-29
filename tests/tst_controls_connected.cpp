@@ -706,7 +706,11 @@ private slots:
     }
 
     // Status badges: the dashboard's open the flag tab holding the
-    // setting; the rest have nothing to open and keep the arrow.
+    // setting; the rest have nothing to open and keep the arrow. The
+    // dashboard's open something only while the window has a slice to
+    // describe: with none (a fresh window) they are cleared and inert, as
+    // "Clear RX banner when the desktop has no owned slice" (9925ed9a8)
+    // made them, so they keep the arrow until a slice is active.
     void badgesShowTheHandOnlyWhereAClickOpensSomething()
     {
         GuiSessionCoordinator sessions;
@@ -721,11 +725,25 @@ private slots:
         QVERIFY(dash != nullptr);
         const QList<StatusBadge*> badges = dash->findChildren<StatusBadge*>();
         QCOMPARE(badges.size(), 7);
+        QSignalSpy spy(dash, SIGNAL(badgeClicked(NereusSDR::RxDashboard::Badge)));
+        QVERIFY2(spy.isValid(), "the dashboard reports no badge clicks");
+
+        // No slice: nothing to open, the arrow, and a click does nothing.
+        QVERIFY(window->radioModel()->activeSlice() == nullptr);
+        QVERIFY(dash->slice() == nullptr);
+        for (StatusBadge* badge : badges) {
+            QCOMPARE(badge->cursor().shape(), Qt::ArrowCursor);
+        }
+        QTest::mouseClick(badges.first(), Qt::LeftButton);
+        QCOMPARE(spy.count(), 0);
+
+        // A slice: every dashboard badge opens its flag tab.
+        SliceModel* slice = ensureSlice(window->radioModel());
+        QVERIFY(slice != nullptr);
+        QTRY_COMPARE(dash->slice(), slice);
         for (StatusBadge* badge : badges) {
             QCOMPARE(badge->cursor().shape(), Qt::PointingHandCursor);
         }
-        QSignalSpy spy(dash, SIGNAL(badgeClicked(NereusSDR::RxDashboard::Badge)));
-        QVERIFY2(spy.isValid(), "the dashboard reports no badge clicks");
         QTest::mouseClick(badges.first(), Qt::LeftButton);
         QCOMPARE(spy.count(), 1);
         QVERIFY(sessions.replace({}, false));

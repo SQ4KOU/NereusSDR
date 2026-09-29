@@ -1429,6 +1429,8 @@ list(APPEND CORE_SOURCES
     # iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the mirrored
     # `txState` object (TransmitState).
     src/core/session/TransmitStateFacade.cpp
+    # iPhone app plan Task 25 (R-IOS-18): the mirrored `vax` object.
+    src/core/session/StationVaxFacade.cpp
     # iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
     src/core/session/RemoteKeying.cpp
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the

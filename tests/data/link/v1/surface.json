@@ -421,6 +421,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "vaxVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -6365,6 +6370,118 @@
                 }
             ]
         },
+        "StationVax": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch1Slices",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch2Slices",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch3Slices",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch4Slices",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch1RxGain",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch2RxGain",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch3RxGain",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "ch4RxGain",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch1Muted",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch2Muted",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch3Muted",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "ch4Muted",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch1Device",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch2Device",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch3Device",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ch4Device",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txSlice",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "txGain",
+                    "ordinal": 17
+                }
+            ]
+        },
         "StepAttenuatorFacade": {
             "properties": [
                 {
@@ -7494,6 +7611,10 @@
         {
             "class": "TransmitState",
             "key": "txState"
+        },
+        {
+            "class": "StationVax",
+            "key": "vax"
         },
         {
             "class": "StationCatalog",

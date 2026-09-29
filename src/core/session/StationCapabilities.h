@@ -231,6 +231,13 @@ struct StationCapabilities {
     /// One-band Alex edits bound to the connected radio's canonical MAC.
     /// Optional at minor 11 for a peer declaring radioAntennaRows 1.
     int radioAntennaRowsVersion = 0;
+    /// iPhone app plan Task 25 (R-IOS-18): 1 means the Core sends the `vax`
+    /// object (the station computer's VAX channels) and keeps the
+    /// `vaxLevels` record stream. Sent last in the minor-11 block, only to a
+    /// peer whose hello declared vax 1 (vaxEntry), so every other peer's
+    /// capabilities are today's.
+    bool vaxEntry = false;
+    int vaxVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

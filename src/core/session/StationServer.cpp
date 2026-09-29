@@ -624,6 +624,13 @@
 //   2026-09-28: FreeDV band (R-IOS-26): stationFreedvVersion 2, each
 //               freedvStations record carrying the station's band. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25 (R-IOS-18): vaxVersion 1, the
+//               `vax` object (StationVax) for a peer whose hello declared
+//               vax 1, its writes (levels 0 to 1, txGain only from a device
+//               that may transmit) and the vaxLevels record stream, read 5
+//               times a second while a peer subscribes. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -662,6 +669,7 @@
 #include "core/security/StationIdentity.h"
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
+#include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/TxChannel.h"
 #include "core/session/MirrorSchema.h"
@@ -1064,6 +1072,17 @@ bool isTxStateMessage(const SessionMessage& message)
 {
     return message.objectKey == kTxStateKey
         || (message.kind == SessionMessageKind::Schema && message.className == "TransmitState");
+}
+
+// iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX
+// channels, for a peer at kRadioIdentitySessionProtocolMinor whose hello
+// declared vax 1. Any other peer never sees the object.
+constexpr const char* kVaxKey = "vax";
+
+bool isVaxMessage(const SessionMessage& message)
+{
+    return message.objectKey == kVaxKey
+        || (message.kind == SessionMessageKind::Schema && message.className == "StationVax");
 }
 
 // iPhone app Task 13: why a connection ends when its device is removed, and
@@ -1973,6 +1992,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_transmitState->setClock([this]() { return m_deviceSessions->now(); });
     if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
         m_transmitState->bind(m_radioModel);
+    }
+    // iPhone app plan Task 25 (R-IOS-18): the `vax` object, over the Core's
+    // own audio engine, saving a device's writes where its applet does.
+    m_stationVax = new StationVax(this);
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+        m_stationVax->bind(m_radioModel, m_radioModel->localAudioDevices(), &m_settings);
     }
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
@@ -3578,6 +3603,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
     // Parity Task 33: a gone viewer of the CFC display may end the reads.
     updateCfcCompressionPolling();
+    updateVaxLevelsPolling();
     if (!self) { return; }
     // R-IOS-13 / R-R3-49: the Mod Monitor stops with its last watcher.
     if (m_modMonitor) {
@@ -5865,6 +5891,9 @@ void StationServer::buildMirror()
     // iPhone app plan Task 39 (txStateVersion 1): the transmitter's state
     // and meters. Sent only to a peer at minor 11 that declared remoteTx.
     m_mirror->watch(QByteArray(kTxStateKey), m_transmitState);
+    // iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX.
+    // Sent only to a peer at minor 11 that declared vax.
+    m_mirror->watch(QByteArray(kVaxKey), m_stationVax);
     // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
     // read again now so the snapshot carries the radio as it is. Sent only
     // to a peer at minor 11 (sendToPeer).
@@ -6294,6 +6323,27 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
                 .settingRangeRefusal(update.name, update.value);
             if (!range.isEmpty()) {
                 refusals.insert(update.name, range);
+                continue;
+            }
+        }
+        // iPhone app plan Task 25 (vaxVersion 1): the station computer's
+        // VAX, from a peer that declared vax; a level from 0 to 1, and the
+        // transmit level only from a device that may transmit (a mute and a
+        // receive level apply at once, as the applet's do).
+        if (message.objectKey == QByteArray(kVaxKey)) {
+            if (vaxVersion() < 1 || !peerDeclares(transport, QByteArrayLiteral("vax"), 1)) {
+                refusals.insert(update.name,
+                                QStringLiteral("Update this app to change VAX on the "
+                                               "Core's computer."));
+                continue;
+            }
+            const QString range = StationVax::levelRefusal(update.name, update.value);
+            if (!range.isEmpty()) {
+                refusals.insert(update.name, range);
+                continue;
+            }
+            if (StationVax::isTransmitProperty(update.name) && !txDecision.permitted) {
+                refusals.insert(update.name, txDecision.refusal.text);
                 continue;
             }
         }
@@ -7101,6 +7151,14 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && (minor < kRadioIdentitySessionProtocolMinor
                 || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)
                 || txStateVersion() < 1)) {
+            return;
+        }
+        // iPhone app plan Task 25: nor the station computer's VAX to anyone
+        // but a peer that declared vax, on a Core that publishes VAX.
+        if (isVaxMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("vax"), 1)
+                || vaxVersion() < 1)) {
             return;
         }
         // iPhone app Task 19: nor the catalogue to an older app.
@@ -9742,6 +9800,13 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             }
             // iPhone app plan Task 34: remote transmit, last, for a peer whose
             // hello declared remoteTx 1; any other peer is sent no entry.
+            // iPhone app plan Task 25: the station computer's VAX, last,
+            // for a peer whose hello declared vax 1; any other peer is sent
+            // no entry.
+            if (peerDeclares(transport, QByteArrayLiteral("vax"), 1)) {
+                caps.vaxEntry = true;
+                caps.vaxVersion = vaxVersion();
+            }
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
@@ -9985,6 +10050,16 @@ void StationServer::setUpRecordStreams()
             [this](bool) { updateCfcCompressionPolling(); });
     connect(&m_radioModel->transmitModel(), &TransmitModel::cfcEnabledChanged, this,
             [this](bool) { updateCfcCompressionPolling(); });
+
+    // iPhone app plan Task 25 (vaxVersion 1): the VAX meters, one record
+    // (id "0"), read 5 times a second only while a peer subscribes: the
+    // phone's VAX tool, as the applet reads them only while it is shown.
+    m_recordStreams.emplace(QString::fromLatin1(StationVax::kLevelsStream),
+                            std::make_unique<RecordStream>(
+                                QString::fromLatin1(StationVax::kLevelsStream), 1));
+    m_vaxLevelsTimer = new QTimer(this);
+    m_vaxLevelsTimer->setInterval(StationVax::kLevelsIntervalMs);
+    connect(m_vaxLevelsTimer, &QTimer::timeout, this, &StationServer::pollVaxLevels);
 }
 
 void StationServer::scheduleRecordFlush()
@@ -10069,6 +10144,7 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
         answer(true, QString());
         // Parity Task 33: the last viewer gone, the Core stops reading.
         updateCfcCompressionPolling();
+        updateVaxLevelsPolling();
         if (m_modMonitor) {
             m_modMonitor->subscriptionsChanged();
         }
@@ -10085,6 +10161,9 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     }
     // Parity Task 33: a viewer of the CFC display may start the reads.
     updateCfcCompressionPolling();
+    // iPhone app plan Task 25: and a device with the VAX tool open, the
+    // VAX meters.
+    updateVaxLevelsPolling();
     if (coreLog && m_coreLogTimer != nullptr && !m_coreLogTimer->isActive()) {
         m_coreLogTimer->start();
     }
@@ -10188,6 +10267,84 @@ int StationServer::txReadingsVersion() const
             != m_recordStreams.end()
         ? 3
         : 0;
+}
+
+int StationServer::vaxVersion() const
+{
+    // iPhone app plan Task 25: the station computer's VAX channels, on a
+    // Core whose own audio engine publishes VAX devices (nereusd publishes
+    // none, R-R3-44), with the record stream that carries the meters.
+    if (m_radioModel.isNull() || m_radioModel->role() == RadioModel::Role::Remote
+        || m_recordStreams.find(QString::fromLatin1(StationVax::kLevelsStream))
+               == m_recordStreams.end()) {
+        return 0;
+    }
+    const AudioEngine* audio = m_radioModel->localAudioDevices();
+    return audio != nullptr && audio->vaxOutputsAllowed() ? 1 : 0;
+}
+
+bool StationServer::vaxLevelsPollingForTest() const
+{
+    return m_vaxLevelsTimer != nullptr && m_vaxLevelsTimer->isActive();
+}
+
+void StationServer::setVaxLevelReaderForTest(std::function<void(double*, double*)> reader)
+{
+    m_vaxLevelReader = std::move(reader);
+}
+
+void StationServer::updateVaxLevelsPolling()
+{
+    if (m_vaxLevelsTimer == nullptr) {
+        return;
+    }
+    const auto it = m_recordStreams.find(QString::fromLatin1(StationVax::kLevelsStream));
+    const bool wanted = it != m_recordStreams.end() && it->second->subscriberCount() > 0
+        && vaxVersion() >= 1;
+    if (wanted && !m_vaxLevelsTimer->isActive()) {
+        m_lastVaxLevels = {};
+        m_vaxLevelsTimer->start();
+    } else if (!wanted && m_vaxLevelsTimer->isActive()) {
+        m_vaxLevelsTimer->stop();
+    }
+}
+
+void StationServer::pollVaxLevels()
+{
+    const auto it = m_recordStreams.find(QString::fromLatin1(StationVax::kLevelsStream));
+    if (it == m_recordStreams.end() || m_radioModel.isNull()) {
+        return;
+    }
+    // The meters the applet shows (VaxApplet::pollLevels): each channel's
+    // receive level and the transmit level, 0 to 1.
+    double rx[StationVax::kChannels] = {};
+    double tx = 0.0;
+    if (m_vaxLevelReader) {
+        m_vaxLevelReader(rx, &tx);
+    } else if (AudioEngine* audio = m_radioModel->localAudioDevices()) {
+        for (int i = 0; i < StationVax::kChannels; ++i) {
+            rx[i] = audio->vaxRxLevel(i + 1);
+        }
+        tx = audio->vaxTxLevel();
+    }
+    // Rounded to a thousandth, and sent only when a meter moved.
+    const auto rounded = [](double level) {
+        return std::round(std::clamp(level, 0.0, 1.0) * 1000.0) / 1000.0;
+    };
+    QJsonObject levels{
+        {QStringLiteral("ch1Level"), rounded(rx[0])},
+        {QStringLiteral("ch2Level"), rounded(rx[1])},
+        {QStringLiteral("ch3Level"), rounded(rx[2])},
+        {QStringLiteral("ch4Level"), rounded(rx[3])},
+        {QStringLiteral("txLevel"), rounded(tx)},
+    };
+    if (levels == m_lastVaxLevels) {
+        return;
+    }
+    m_lastVaxLevels = levels;
+    levels.insert(QStringLiteral("atMs"), static_cast<double>(m_deviceSessions->now()));
+    it->second->upsert(QString::fromLatin1(StationVax::kLevelsRecordId), levels);
+    scheduleRecordFlush();
 }
 
 bool StationServer::cfcCompressionPollingForTest() const

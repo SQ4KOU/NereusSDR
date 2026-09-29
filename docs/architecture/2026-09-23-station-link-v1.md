@@ -768,6 +768,13 @@ The desktop's remote window declares it (desktop remote transmit): its
 MOX, TUNE, two-tone, microphone, VOX and TCI programs transmit through the
 Core, and its transmit meters read `txState`.
 
+**`vax` 1** (iPhone app plan Task 25, R-IOS-18): the client shows the VAX
+channels of the computer the Core runs on (its VAX tool). A peer that
+declares it at minor 11 is sent `vaxVersion` (section 6.3) and, when that is
+1, the `vax` object (section 7.1). The station does not declare it, and the
+desktop's remote window does not: its VAX applet runs that computer's own
+VAX channels (R-R3-44).
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -897,6 +904,7 @@ change shows as surface drift and as a change to this table.
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
+| `vaxVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1002,6 +1010,14 @@ When a feature is off, its version is 0:
   `setAlexTxAntennaForRadio` (section 9.1). Missing, malformed and unknown
   versions are unusable. Older peers receive byte-for-byte the previous
   capability shape and keep the existing one-band verbs.
+- `vaxVersion` (iPhone app plan Task 25, R-IOS-18): optional and appended
+  last, after `radioAntennaRowsVersion`, only at agreed minor 11 for a peer
+  whose hello declared `vax` 1; any other peer receives the previous
+  capability shape. 1 on a Core whose own audio engine publishes VAX
+  devices (a Core the desktop hosts) and keeps record streams, 0 otherwise
+  (nereusd publishes none, R-R3-44). At 1 the Core sends that peer the `vax`
+  object (section 7.1), takes its writes (section 7.3), and keeps the
+  `vaxLevels` record stream (section 7.7).
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1755,7 +1771,8 @@ older window sees only the values it was built for.
 | 82 | `miniDisplayVersion` | `i64` |
 | 83 | `accessoryTxVersion` | `i64` |
 | 84 | `radioAntennaRowsVersion` | `i64` |
-| 85 | `coreBuildInfo` | `utf8` |
+| 85 | `vaxVersion` | `i64` |
+| 86 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2279,6 +2296,29 @@ An enum property lists the values its domain allows.
 | 7 | `cwluBecomesCw` | `bool` | outbound |  |
 | 8 | `sendInitialState` | `bool` | outbound |  |
 
+**StationVax** (18 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `ch1Slices` | `utf8` | outbound |  |
+| 1 | `ch2Slices` | `utf8` | outbound |  |
+| 2 | `ch3Slices` | `utf8` | outbound |  |
+| 3 | `ch4Slices` | `utf8` | outbound |  |
+| 4 | `ch1RxGain` | `f64` | bidirectional |  |
+| 5 | `ch2RxGain` | `f64` | bidirectional |  |
+| 6 | `ch3RxGain` | `f64` | bidirectional |  |
+| 7 | `ch4RxGain` | `f64` | bidirectional |  |
+| 8 | `ch1Muted` | `bool` | bidirectional |  |
+| 9 | `ch2Muted` | `bool` | bidirectional |  |
+| 10 | `ch3Muted` | `bool` | bidirectional |  |
+| 11 | `ch4Muted` | `bool` | bidirectional |  |
+| 12 | `ch1Device` | `utf8` | outbound |  |
+| 13 | `ch2Device` | `utf8` | outbound |  |
+| 14 | `ch3Device` | `utf8` | outbound |  |
+| 15 | `ch4Device` | `utf8` | outbound |  |
+| 16 | `txSlice` | `utf8` | outbound |  |
+| 17 | `txGain` | `f64` | bidirectional |  |
+
 **StepAttenuatorFacade** (18 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -2497,6 +2537,7 @@ destroyed during the session.
 | `devices` | `StationDevicesFacade` |
 | `connectedDevices` | `ConnectedDevicesFacade` |
 | `txState` | `TransmitState` |
+| `vax` | `StationVax` |
 | `catalog` | `StationCatalog` |
 | `setup` | `SetupDescription` |
 | `spotSources` | `SpotSourceHost` |
@@ -2715,6 +2756,21 @@ Notes on the keys:
   At `txReadingsVersion` 3, `eqDb`, `levelerDb`, `levelerGainDb`, `cfcDb`,
   `cfcGainDb`, `alcGainDb` and `alcGroupDb` (f64) follow
   `reflectedAdcVolts`.
+- **`vax`** (iPhone app plan Task 25, R-IOS-18; `StationVax`,
+  `vaxVersion` 1): the VAX channels of the computer the Core runs on, as its
+  VAX applet shows them (`VaxApplet.cpp`). Sent only at agreed minor 11 to a
+  peer whose hello declared `vax` 1, on a Core with `vaxVersion` 1. For
+  each channel 1 to 4: `ch<N>Slices` (`utf8`, outbound), the letters of the
+  slices whose VAX channel it is, in slice order (`AB`), empty when none;
+  `ch<N>RxGain` (`f64`, bidirectional), its receive level, 0 to 1;
+  `ch<N>Muted` (`bool`, bidirectional); `ch<N>Device` (`utf8`, outbound),
+  the device name the applet shows. Then `txSlice` (`utf8`, outbound), the
+  transmit slice's letter, empty when none, and `txGain` (`f64`,
+  bidirectional), the level of VAX used as the microphone, 0 to 1. The
+  Core sends the four groups channel by channel within each group (the
+  four `Slices`, then the four `RxGain`, and so on). A change made on that
+  computer (its applet) reaches every such peer. The meters travel as the
+  `vaxLevels` record stream (section 7.7), not as properties.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -3094,6 +3150,20 @@ transmit-side settings keys are written only by a session `txPermitted`
 allows (refused otherwise with the gate's sentence); while another
 device's holder is on the air, a change to the transmit path is refused
 with the on-air sentence (section 18.4).
+
+**The `vax` object** (iPhone app plan Task 25, `vaxVersion` 1). The Core
+takes a write of `ch<N>RxGain`, `ch<N>Muted` or `txGain` only from a peer
+that declared `vax` 1, on a Core at `vaxVersion` 1 (otherwise "Update this
+app to change VAX on the Core's computer."). A level outside 0 to 1, or not
+a number, is refused "A VAX level goes from 0 to 1." `txGain` is taken only
+from a peer the station transmit gate permits (section 18.1) and is
+otherwise refused with the gate's reason. A receive level and a mute apply
+at once, on or off the air, as the applet's controls do; none keys the
+radio. Each accepted write is applied to the Core's audio engine and saved
+under the applet's own keys (`audio/Vax<N>/RxGain` and `audio/Vax<N>/Muted`
+as `0.000`-style and `True`/`False` text, `audio/TxGain`), so the applet on
+that computer shows it and it outlives a restart. The other properties are
+the Core's.
 
 ### 7.5 Receivers several devices share
 
@@ -3617,6 +3687,7 @@ the Core keeps:
 | `coreLog` | 200 | With `supportBundleVersion` 1: one line of the Core's log as its log file has it (`[HH:mm:ss.zzz] INF: text`, addresses already shortened), `id` its number in the Core's log (rising): `line` (string). Keys, tokens and pairing codes are removed as the support bundle removes them. The Core reads its log every 250 ms while a peer follows the stream, and only then; its first backlog is the newest lines at the first subscribe |
 | `txCfcCompression` | 1 | With `txReadingsVersion` 1: the CFC display, one record, `id` `"0"`, replaced each time the Core reads new data: `atMs` (number, when the Core read it, in milliseconds on its own monotonic clock) and `binsDbTenths` (string: the 1025 values of the CFC compression display, each rounded to a tenth of a dB, as little-endian int16 tenths, in base64). Bin `i` is `i * 48000 / 1024` Hz; a chart draws the bins over its own frequency range as the local CFC dialog does (Thetis's frmCFCConfig `timerTick`: `binsPerHz` = 1025 / 48000). The Core reads the display every 50 ms, Thetis's interval, only while at least one peer subscribes and its radio is on the air with CFC on, and sends a record only when WDSP says new data is ready |
 | `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
+| `vaxLevels` | 1 | With `vaxVersion` 1: the VAX meters of the computer the Core runs on, one record, `id` `"0"`: `ch1Level` to `ch4Level` and `txLevel` (numbers, 0 to 1, each rounded to a thousandth, as the applet's meters read them: `AudioEngine::vaxRxLevel` and `vaxTxLevel`) and `atMs` (number, the Core's clock in milliseconds when it read them). The Core reads the meters 5 times a second, only while at least one peer subscribes (a device with its VAX tool open), and sends a record only when a meter moved |
 | `txAmModulation` | 1 | With `txModMonitorVersion` 1: the AM Mod Monitor's readings of the transmit I/Q the Core sends its radio (its TX tap, `AmModulationAnalyzer`), one record, `id` `0`, present only while the radio is keyed in AM, SAM or DSB (the transmit slice's mode) and a peer subscribes: `atMs` (number, the Core's clock in ms since the epoch when it read them), `posPeakPct` and `negPeakPct` (numbers, the positive and negative peak modulation in percent since the Core's previous record: the largest of the reads it merged), `posHoldPct` and `negHoldPct` (numbers, the peaks held 1.5 s, then falling as the Core's analyzer lets them fall), `carrierLevel` (number, the carrier in linear envelope units, 0 to 1 at the radio's full scale), `carrierDbfs` (number, that in dB, -120 with no carrier), `carrierPresent`, `carrierLow` and `carrierHigh` (booleans: a carrier is measured, below 0.05, above 0.98), `scopeRateHz` (number, the rate of the scope's points) and `scopePctTenths` (string: the envelope trace, oldest first, each point's percent modulation in tenths as a little-endian int16, in base64; at most 512 points, a longer trace reduced by keeping the largest-magnitude point of each group). Asymmetry is `posHoldPct` minus `negHoldPct` |
 | `txAmModulationFeedback` | 1 | With `txModMonitorVersion` 1: the same record for the PureSignal feedback receiver (the PA's output as the radio samples it), on the receiver `ModMon/FbStream` names (section 8.1); present under the same rule, and measured only while PureSignal's feedback runs on the Core's radio |
 

@@ -146,6 +146,9 @@
 //                 readings (eqDb .. alcGroupDb) Outbound (txReadingsVersion
 //                 3). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - iPhone app plan Task 25: StationVax, the `vax` object
+//                 (vaxVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-28 - iPhone app plan Task 40: TransmitModel micMuted
 //                 Bidirectional (transmitSettingsVersion 10). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -717,6 +720,28 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "emulateSunSdr2Pro", MirrorDirection::Outbound },
     { "StationTciModel", "cwluBecomesCw", MirrorDirection::Outbound },
     { "StationTciModel", "sendInitialState", MirrorDirection::Outbound },
+
+    // iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX.
+    // The slices, device names and transmit slice are the Core's; the
+    // levels and mutes a device may change (StationServer checks them).
+    { "StationVax", "ch1Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch2Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch3Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch4Slices", MirrorDirection::Outbound },
+    { "StationVax", "ch1RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch2RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch3RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch4RxGain", MirrorDirection::Bidirectional },
+    { "StationVax", "ch1Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch2Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch3Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch4Muted", MirrorDirection::Bidirectional },
+    { "StationVax", "ch1Device", MirrorDirection::Outbound },
+    { "StationVax", "ch2Device", MirrorDirection::Outbound },
+    { "StationVax", "ch3Device", MirrorDirection::Outbound },
+    { "StationVax", "ch4Device", MirrorDirection::Outbound },
+    { "StationVax", "txSlice", MirrorDirection::Outbound },
+    { "StationVax", "txGain", MirrorDirection::Bidirectional },
 
     // iPhone app Task 43: the station authors every Setup description.
     { "SetupDescription", "general", MirrorDirection::Outbound },
