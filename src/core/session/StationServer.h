@@ -491,6 +491,7 @@ class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
 class TransmitState;
+class StationVax;
 class RemoteKeying;
 class RemoteTxWatchdog;
 class TxWatchServer;
@@ -1271,6 +1272,21 @@ public:
     /// test (same contract: fills kCfcDisplayBinCount values, true when
     /// WDSP has new data).
     void setCfcDisplayReaderForTest(std::function<bool(double*, int)> reader);
+    /// iPhone app plan Task 25 (R-IOS-18): 1 on a Core whose audio engine
+    /// publishes VAX devices (a Core the desktop hosts), with record
+    /// streams: the `vax` object and the `vaxLevels` stream, for a peer whose
+    /// hello declared `vax` 1. 0 otherwise.
+    int vaxVersion() const;
+    /// The `vax` object (null on a Core without an audio engine).
+    StationVax* stationVax() const { return m_stationVax; }
+    /// Whether the Core reads the VAX meters now (a peer subscribes to
+    /// vaxLevels).
+    bool vaxLevelsPollingForTest() const;
+    /// Replaces the audio engine's VAX meters for a test: fills the four
+    /// receive levels and the transmit level, 0 to 1.
+    void setVaxLevelReaderForTest(std::function<void(double*, double*)> reader);
+    /// Reads the VAX meters once now, as the 5 Hz timer does.
+    void pollVaxLevelsForTest() { pollVaxLevels(); }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// The refusal a capabilities message carries (empty without one).
@@ -1494,6 +1510,9 @@ private:
     // Parity Task 33: the CFC display read every 50 ms while it is wanted.
     void updateCfcCompressionPolling();
     void pollCfcCompression();
+    // iPhone app plan Task 25: the vaxLevels stream's reads.
+    void updateVaxLevelsPolling();
+    void pollVaxLevels();
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
     /// The body of handleSettingsWrite after its checks: applies the write
     /// through the settings proxy. A refusal goes to `refusal` when given,
@@ -2092,6 +2111,12 @@ private:
     // Parity Task 33: the txCfcCompression stream's reader and its timer.
     QTimer* m_cfcPollTimer = nullptr;
     std::function<bool(double*, int)> m_cfcDisplayReader;
+    // iPhone app plan Task 25: the `vax` object and the vaxLevels stream's
+    // reader, its timer and its last record.
+    StationVax* m_stationVax = nullptr;
+    QTimer* m_vaxLevelsTimer = nullptr;
+    std::function<void(double*, double*)> m_vaxLevelReader;
+    QJsonObject m_lastVaxLevels;
     // R-IOS-13 / R-R3-49: the Core's side of the Mod Monitor streams.
     std::unique_ptr<ModMonitorPublisher> m_modMonitor;
     // Parity Task 21: the Core's radios and their stream.

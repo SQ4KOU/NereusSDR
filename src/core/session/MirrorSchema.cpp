@@ -54,6 +54,9 @@
 //   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): TransmitState
 //                 mirrored (`txState`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): StationVax mirrored
+//                 (vaxVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -138,6 +141,9 @@ const char* const kMirroredClasses[] = {
     // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
     // transmitter, its meters and why it last stopped, read-only.
     "NereusSDR::TransmitState",
+    // iPhone app plan Task 25 (R-IOS-18, vaxVersion 1): the VAX channels of
+    // the computer the Core runs on.
+    "NereusSDR::StationVax",
 };
 
 // Per-property exclusions, as (class, property).

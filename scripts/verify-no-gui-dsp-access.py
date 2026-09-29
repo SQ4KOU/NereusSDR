@@ -144,6 +144,11 @@ LOCAL_AUDIO_ALLOWLIST = {
     # devices (AudioEngine::vaxOutputsAllowed), read only, so the VAX Audio
     # tool is offered only where it can open (iPhone app plan Task 25, D41).
     "src/core/session/StationCatalog.cpp": 1,
+    # The Core's `vax` object and vaxLevels stream (iPhone app plan Task 25,
+    # R-IOS-18): the Core computer's own VAX channels, bound on a local
+    # model only, the VAX switch read for vaxVersion, and the meters read
+    # while a device subscribes.
+    "src/core/session/StationServer.cpp": 3,
 }
 
 # A double-quoted C++ string literal, escapes included. Removed from a line

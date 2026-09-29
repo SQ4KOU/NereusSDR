@@ -346,6 +346,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radioAntennaRowsVersion == 1) {
             updates.append(intEntry("radioAntennaRowsVersion", radioAntennaRowsVersion));
         }
+        // iPhone app plan Task 25: the station computer's VAX, last, only
+        // for a peer that declared vax.
+        if (vaxEntry) {
+            updates.append(intEntry("vaxVersion", vaxVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -574,7 +579,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txReadingsVersion"
                    || u.name == "remoteIqVersion"
                    || u.name == "miniDisplayVersion"
-                   || u.name == "radioAntennaRowsVersion") {
+                   || u.name == "radioAntennaRowsVersion"
+                   || u.name == "vaxVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -593,6 +599,9 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.accessoryTxVersion = version;
                 } else if (u.name == "radioAntennaRowsVersion") {
                     caps.radioAntennaRowsVersion = version == 1 ? 1 : 0;
+                } else if (u.name == "vaxVersion") {
+                    caps.vaxEntry = true;
+                    caps.vaxVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {
