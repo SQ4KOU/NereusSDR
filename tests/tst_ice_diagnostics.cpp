@@ -266,11 +266,18 @@ private slots:
         IceDiagnostics::logPath("control", QStringLiteral(
             "juice: agent.c:1626: STUN integrity check failed, password=\"s3cretPw\""));
         IceDiagnostics::logPath("control", QStringLiteral("a=ice-pwd:AzkrYDCUsPbwbZd"));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: ice.c:173: Created local description: ufrag=\"LrY/\", pwd=\"L3mmGGjqLCcSITly1m+ChZ\""));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: ice.c:142: Parsed remote description: ufrag=\"9NCk\", pwd=\"zIrWy2ZPIijuUYVSb2rtre\", candidates=0"));
         IceDiagnostics::installForTest({});
         const QString all = lines.join(QLatin1Char('\n'));
         QVERIFY2(!all.contains(QStringLiteral("s3cretPw")), qPrintable(all));
         QVERIFY2(!all.contains(QStringLiteral("AzkrYDCUsPbwbZd")), qPrintable(all));
         QVERIFY2(all.contains(QStringLiteral("password=\"<hidden>\"")), qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("L3mmGGjqLCcSITly1m+ChZ")), qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("zIrWy2ZPIijuUYVSb2rtre")), qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("pwd=\"<hidden>\", candidates=0")), qPrintable(all));
     }
 
     void offWritesNothing()
@@ -342,6 +349,8 @@ private slots:
         }
         QVERIFY(all.contains(QStringLiteral("[test] selected pair")));
         QVERIFY2(!all.contains(QStringLiteral("a=ice-pwd:")), "a session description reached the log");
+        QVERIFY2(!all.contains(QRegularExpression(QStringLiteral("pwd=\"[^<]"))),
+                 "an ICE password reached the log");
         QVERIFY2(!all.contains(QStringLiteral("Receiving datagram")), "per-packet lines reached the log");
         const QByteArray excerpt = qgetenv("NEREUS_ICE_DIAG_EXCERPT");
         if (!excerpt.isEmpty()) {

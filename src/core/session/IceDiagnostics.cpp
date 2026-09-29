@@ -421,11 +421,12 @@ State& state()
     return s;
 }
 
-// libjuice names a password in one warning; it goes with the addresses.
+// libjuice prints the ICE password in its description lines and one
+// warning; it goes with the addresses.
 QString hideSecrets(QString line)
 {
     static const QRegularExpression secret(QStringLiteral(
-        "(password=\"|ice-pwd:)[^\"\\s]*"));
+        "(password=\"|pwd=\"|ice-pwd:)[^\"\\s]*"));
     return line.replace(secret, QStringLiteral("\\1<hidden>"));
 }
 
