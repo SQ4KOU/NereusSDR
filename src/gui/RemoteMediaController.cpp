@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: audioRestartPendingForTest for the direct silence test.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: direct media, the restart backoff across a move: a pending
 //               audio restart is fenced by its own generation, not by the
 //               connection id, so a restart waiting when media moves to
@@ -3346,6 +3348,11 @@ int RemoteMediaController::directUpgradeDelayMs() const
         return -1;
     }
     return d->directUpgrade->interval();
+}
+
+bool RemoteMediaController::audioRestartPendingForTest() const
+{
+    return d->audioRetryPending;
 }
 
 void RemoteMediaController::updateDirectUpgrade(bool viaTunnel)

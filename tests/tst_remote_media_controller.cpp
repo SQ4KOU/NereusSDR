@@ -6816,14 +6816,25 @@ private slots:
     // window of the move, and the direct-only schedule starts again from
     // its first step. The Core's audio comes back once media is on the
     // tunnel, so the window plays again only if that waiting restart ran.
+    //
+    // The ordering is arranged, not left to timing: the silence clock (the
+    // injected allocation clock) is held still while the audio restarts
+    // step through the backoff, and moved on by one silence window only
+    // once a restart is waiting on the 4 s step. The move then finishes
+    // while that restart waits, which the test asserts.
     void directSilenceFallsBackOnceWhileAudioRestartsBackOff()
     {
         using State = RemoteAudioStatus::State;
         Test::RemoteAudioSessionHarness h;
-        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
-        DaemonMediaController daemonMedia(&h.server, &h.station);
         QElapsedTimer clock;
         clock.start();
+        bool held = false;
+        qint64 heldAt = 0;
+        const RemoteMediaController::AllocationClock silenceClock = [&] {
+            return held ? heldAt : clock.elapsed();
+        };
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr, {}, silenceClock);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
         QList<qint64> requestMs;
         QList<qint64> fallbackMs;
         QList<qint64> directMs;
@@ -6846,24 +6857,42 @@ private slots:
                                   h.kMediaConnectionWaitMs);
         QVERIFY(!h.client.mediaTunnelInUse());
         const QString directId = remoteMedia.mediaConnectionId();
-        const qsizetype before = requestMs.size();
 
-        // The move, seen once it has finished: the Core's audio returns
-        // from here, on the tunnel.
+        // The move, seen once it has finished: whether the restart still
+        // waits then, and the Core's audio returns from here, on the tunnel.
         qint64 movedMs = -1;
-        State stateAtMove = State::NotConnected;
+        bool pendingAtMove = false;
+        qsizetype requestsAtMove = 0;
         connect(&remoteMedia, &RemoteMediaController::networkPathChanged, &remoteMedia, [&] {
             if (movedMs < 0 && remoteMedia.mediaConnectionId() != directId) {
                 movedMs = clock.elapsed();
-                stateAtMove = remoteMedia.audioStatus().state;
+                pendingAtMove = remoteMedia.audioRestartPendingForTest();
+                requestsAtMove = requestMs.size();
                 audio.source.start();
             }
         }, Qt::QueuedConnection);
 
-        // Audio and display both stop; control stays up.
+        // Audio and display both stop; control stays up. The silence clock
+        // holds, so no fallback yet.
+        heldAt = clock.elapsed();
+        held = true;
+        const qsizetype before = requestMs.size();
         audio.source.stop();
-        QTRY_VERIFY_WITH_TIMEOUT(movedMs >= 0, 15000);
-        const qsizetype atMove = requestMs.size();
+        // Two restarts (the 1 s and 2 s steps), then the next one waiting
+        // on the 4 s step.
+        QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= before + 2
+                                     && remoteMedia.audioRestartPendingForTest(), 10000);
+        QCOMPARE(requestMs.size(), before + 2);
+        const qint64 lastBeforeMove = requestMs.last();
+        QCOMPARE(remoteMedia.mediaConnectionId(), directId);
+        QVERIFY(fallbackMs.isEmpty());
+        // A silence window passes on the silence clock: the fallback runs.
+        heldAt += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        QTRY_VERIFY_WITH_TIMEOUT(movedMs >= 0, 10000);
+        QVERIFY2(pendingAtMove, qPrintable(QStringLiteral(
+            "the restart ran before the move finished (moved at %1 ms, last request at %2 ms)")
+            .arg(movedMs).arg(lastBeforeMove)));
+        QCOMPARE(requestsAtMove, before + 2);
         // The waiting restart ran on the new connection and the window
         // plays again.
         QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
@@ -6877,14 +6906,12 @@ private slots:
             parts << QString::number(requestMs.at(i));
         }
         const QString evidence = QStringLiteral(
-            "audio requests at %1 ms; fallback at %2; direct at %3; moved at %4 ms (%5)")
+            "audio requests at %1 ms; fallback at %2; direct at %3; moved at %4 ms")
             .arg(parts.join(QStringLiteral(", ")),
                  fallbackMs.isEmpty() ? QStringLiteral("none")
                                       : QString::number(fallbackMs.first()),
                  directMs.isEmpty() ? QStringLiteral("none") : QString::number(directMs.first()))
-            .arg(movedMs)
-            .arg(stateAtMove == State::Reconnecting ? QStringLiteral("a restart was waiting")
-                                                    : QStringLiteral("no restart waiting"));
+            .arg(movedMs);
         qInfo().noquote() << evidence;
 
         // The fallback ran once, to the tunnel.
@@ -6898,9 +6925,12 @@ private slots:
         // The direct-only schedule starts again at its first step.
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(),
                                   PathRacer::kUpgradeRetryMs[0], 2000);
-        // The restarts went on after the move, each at least the first
-        // backoff step after the one before: no storm.
-        QVERIFY2(requestMs.size() > atMove, qPrintable(evidence));
+        // The waiting restart asked for audio after the move, at its 4 s
+        // step from the request before (the move neither lost nor hurried
+        // it), and every restart kept at least the first step: no storm.
+        QVERIFY2(requestMs.size() > before + 2, qPrintable(evidence));
+        QVERIFY2(requestMs.at(before + 2) > movedMs, qPrintable(evidence));
+        QVERIFY2(requestMs.at(before + 2) - lastBeforeMove >= 3990, qPrintable(evidence));
         for (qsizetype i = before + 1; i < requestMs.size(); ++i) {
             QVERIFY2(requestMs.at(i) - requestMs.at(i - 1) >= 990, qPrintable(evidence));
         }

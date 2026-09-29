@@ -3,6 +3,9 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: direct media: audioRestartPendingForTest, so a test can see an
+//               audio restart waiting on its backoff step. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: direct media fix wave: the silence fallback runs once per
 //               silence, only while the window wants audio, onto the
 //               tunnel alone, and a fallback that brings no media back
@@ -455,6 +458,9 @@ public slots:
     void checkMediaSilence();
 
 public:
+    /// Test only: whether an audio restart is waiting on its backoff step
+    /// (so a test can order a media move against it; no production caller).
+    bool audioRestartPendingForTest() const;
     /// iPhone app plan Task 29 fix wave (review Important 1): media follows
     /// every move of the session. A move marks a replacement pending; it
     /// starts as soon as it can (the media connection ready, unkeyed, VOX
