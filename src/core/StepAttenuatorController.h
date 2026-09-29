@@ -806,7 +806,7 @@ private:
     // RX2's own enable and auto-attenuate settings (Thetis
     // _rx2_step_att_enabled, _auto_att_rx2, _auto_att_undo_rx2,
     // _auto_att_hold_delay_rx2).
-    bool m_rx2StepAttEnabled{true};
+    bool m_rx2StepAttEnabled{false};  // Thetis console.cs:11109
     bool m_rx2AutoAttEnabled{false};
     bool m_rx2AutoUndoEnabled{false};
     int m_rx2AutoUndoDelaySec{5};

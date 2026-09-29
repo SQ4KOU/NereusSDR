@@ -1654,9 +1654,10 @@ void GeneralOptionsPage::refreshRx2StepAtt()
         m_spnRx2StepAttValue->setValue(dB);
     }
     m_spnRx2StepAttValue->setEnabled(rx2Usable && stepOn);
+    // With RX2's own enable off the value waits beside its RX2 Enable box,
+    // as RX1's does; the tooltip says what it is.
     m_spnRx2StepAttValue->setToolTip(
         !rx2Usable ? reason
-        : !stepOn  ? tr("The step attenuator is off.")
                    : tr("Attenuation for slices on the second receiver input (EXT1 or EXT2)."));
 
     // Auto Attenuate RX2 (Thetis setupAttRXControls(2): Undo and Hold follow

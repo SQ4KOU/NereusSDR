@@ -280,7 +280,7 @@ private:
         bool adcLinked{false};
         int rx2AttenuationDb{0};
         int rx2SliceMask{0};
-        bool rx2StepAttEnabled{true};
+        bool rx2StepAttEnabled{false};  // Thetis console.cs:11109
         bool rx2AutoAttEnabled{false};
         bool rx2AutoAttUndo{false};
         int rx2AutoAttUndoDelayMs{5000};

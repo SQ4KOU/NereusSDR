@@ -1106,10 +1106,9 @@ void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
 //   private bool _auto_att_undo_rx2 = false;
 //   private int _auto_att_hold_delay_rx1 = 5;
 //   private int _auto_att_hold_delay_rx2 = 5;
-// The auto-attenuate defaults are Thetis's (off, undo off, 5 s), as RX1's
-// here are. Thetis starts both step attenuator enables false and restores
-// them from its database; NereusSDR's RX1 enable defaults on
-// (options/stepAtt/rx1Enabled "True"), so RX2's starts from RX1's.
+// The defaults are Thetis's: RX2's enable off, auto-attenuate off, undo
+// off, 5 s. A value saved for the radio is kept. While RX2 shares slice A's
+// ADC its enable is RX1's anyway (the mirror below).
 //
 // Receivers on one ADC keep one enable, as Thetis's Setup mirrors the two
 // checkboxes when the ADCs are the same:
@@ -1842,11 +1841,10 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     m_attDb = std::clamp(m_attDb, m_minAttDb, m_maxAttDb);
 
     // R-R3-46 / R-R3-11: the other ADC's own value and band memory, its
-    // enable (RX1's where none is saved) and its auto-attenuate settings
-    // (Thetis's defaults).
+    // enable and its auto-attenuate settings, Thetis's defaults where none
+    // is saved (_rx2_step_att_enabled = false, console.cs:11109).
     m_rx2StepAttEnabled = s.hardwareValue(mac, QStringLiteral("options/stepAtt/rx2Enabled"),
-                                          m_stepAttEnabled ? QStringLiteral("True")
-                                                           : QStringLiteral("False"))
+                                          QStringLiteral("False"))
                               .toString() == QStringLiteral("True");
     if (!rx2OnItsOwnAdc()) {
         m_rx2StepAttEnabled = m_stepAttEnabled;

@@ -565,6 +565,30 @@ private slots:
         QCOMPARE(ctrl.rx2AttenuatorDb(), raised);  // undo on: put back
     }
 
+    // RX2's enable starts at Thetis's default (console.cs:11109,
+    // _rx2_step_att_enabled = false) when the radio has none saved and RX2
+    // is on its own ADC; a saved value is kept.
+    void rx2EnableDefaultsToThetissAndKeepsASavedValue()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:0f");
+        startFromNothing(mac);
+        {
+            StepAttenuatorController ctrl;
+            ctrl.setTickTimerEnabled(false);
+            ctrl.setAdcRouting(0, 1, Band::Band20m, false);
+            ctrl.loadSettings(mac);
+            QVERIFY(ctrl.stepAttEnabled());
+            QVERIFY(!ctrl.rx2StepAttEnabled());
+            ctrl.setRx2StepAttEnabled(true);
+            ctrl.saveSettings(mac);
+        }
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false);
+        ctrl.loadSettings(mac);
+        QVERIFY(ctrl.rx2StepAttEnabled());
+    }
+
     // RX2's enable and auto-attenuate settings are saved for the radio.
     void rx2SettingsSurviveARestart()
     {
