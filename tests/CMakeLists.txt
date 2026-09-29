@@ -7598,10 +7598,13 @@ target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
 # limit in a suite run at load 50 to 110. markingOneFeatureBuiltShowsItsSurfacesOnly
 # (a window per listed feature, about two thirds of the time) runs its rows
 # as tst_unbuilt_features_each1 to _each3, every third feature each, the
-# rest as tst_unbuilt_features (the test's main()).
+# rest as tst_unbuilt_features (the test's main()). Load findings 4:
+# the rest passed 120 s above load 330, so emptiedSetupPageIsNotShownOrFound
+# (every Setup page) runs as tst_unbuilt_features_setup and four cases that
+# build windows as _windows1 and _windows2 (the limit is not raised).
 if(TEST tst_unbuilt_features)
     nereus_split_test(tst_unbuilt_features ENV NEREUS_UNBUILT_FEATURES_GROUP
-        GROUPS each1 each2 each3)
+        GROUPS each1 each2 each3 setup windows1 windows2)
 endif()
 # R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
 # and band buttons act on the container's own slice; the ones with nothing
