@@ -1232,7 +1232,9 @@ void SpectrumDefaultsPage::buildUI()
                 c.name(QColor::HexArgb));
         });
 
-        m_nfFastColorBtn = new ColorSwatchButton(Qt::gray, overlayGroup);
+        // The renderer's default (SpectrumWidget m_noiseFloorFastColor).
+        m_nfFastColorBtn = new ColorSwatchButton(QColor(0xC8, 0xC8, 0xC8), overlayGroup);
+        m_nfFastColorBtn->setProperty("nereusSetupId", "display.spectrumDefaults.noiseFloorFastColor");
         // Default gray, mirroring Thetis m_bDX2_Gray (was in the tooltip).
         m_nfFastColorBtn->setToolTip(QStringLiteral(
             "Color shown during fast-attack (band/freq/MOX change)."));

@@ -421,7 +421,7 @@ private slots:
                 }
             }
         }
-        QCOMPARE(described, 52);
+        QCOMPARE(described, 53);
         // The Spectrum Defaults section of the two top actions and the
         // Appearance reset carry no native group; the rest match groups.
         QCOMPARE(taggedV12.value(&grid), 12);

@@ -78,10 +78,13 @@ struct DisplayExtrasRequest {
         bool onTx {true};
         bool operator==(const ActivePeakHold&) const = default;
     };
-    /// `noiseFloor {enabled, shiftDb}`.
+    /// `noiseFloor {enabled, shiftDb[, fastAttack]}`. `fastAttack`
+    /// (displayExtrasVersion 4, optional, false when absent) also asks for
+    /// the noise floor state section: whether the floor is in fast attack.
     struct NoiseFloor {
         bool enabled {false};
         double shiftDb {0.0};
+        bool fastAttack {false};
         bool operator==(const NoiseFloor&) const = default;
     };
     /// `waterfallLevels {mode, lowDbm, highDbm, offsetDb}`.
@@ -126,7 +129,10 @@ inline constexpr quint8 kDisplayExtrasPeakBlobs = 0x01;
 inline constexpr quint8 kDisplayExtrasPeakHold = 0x02;
 inline constexpr quint8 kDisplayExtrasNoiseFloor = 0x04;
 inline constexpr quint8 kDisplayExtrasWaterfallLevels = 0x08;
-inline constexpr quint8 kDisplayExtrasKnownSections = 0x0F;
+/// Version 4: one byte, bit 0 set while the noise floor is in fast attack.
+inline constexpr quint8 kDisplayExtrasNoiseFloorState = 0x10;
+inline constexpr quint8 kDisplayExtrasNoiseFloorFastAttack = 0x01;
+inline constexpr quint8 kDisplayExtrasKnownSections = 0x1F;
 inline constexpr quint8 kDisplayExtrasVersion = 1;
 inline constexpr quint16 kDisplayExtrasHeaderBytes = 20;
 /// The most blobs a section carries (the desktop's Setup allows 1 to 20).
@@ -150,6 +156,8 @@ struct DisplayExtrasFrame {
     std::optional<QVector<float>> peakHoldDbm;
     std::optional<float> noiseFloorDbm;
     std::optional<std::pair<float, float>> waterfallLevelsDbm;
+    /// Section 0x10 (version 4): the noise floor is in fast attack.
+    std::optional<bool> noiseFloorFastAttack;
 
     quint8 sections() const;
 };

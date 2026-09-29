@@ -1532,7 +1532,7 @@ private slots:
                     displayControls += section.toObject().value("controls").toArray().size();
                 }
             }
-            QCOMPARE(displayControls, expected >= 12 ? 99 : expected >= 11 ? 48 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
+            QCOMPARE(displayControls, expected >= 12 ? 100 : expected >= 11 ? 48 : expected >= 10 ? 33 : expected >= 9 ? 29 : expected >= 8 ? 21 : expected >= 4 ? 14 : 11);
             QCOMPARE(display.value("pages").toArray().size(), expected >= 12 ? 7 : expected >= 11 ? 5 : expected >= 8 ? 4 : 3);
             const QJsonObject appearance = QJsonDocument::fromJson(setupCategoryOnWire(
                 *core.app, "appearance", SessionMessageKind::ObjectCreate).toUtf8()).object();
@@ -1654,7 +1654,7 @@ private slots:
                      QJsonValue(version >= 12 ? 12 : version >= 11 ? 11 : version >= 10 ? 10 : version >= 9 ? 9 : version >= 8 ? 8 : qMin(version, 4)));
             QCOMPARE(appearance.value("version"),
                      QJsonValue(version >= 12 ? 12 : version >= 7 ? 7 : qMin(version, 4)));
-            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : version < 10 ? 29 : version < 11 ? 33 : version < 12 ? 48 : 99);
+            QCOMPARE(controlsOf(display).size(), version < 4 ? 11 : version < 8 ? 14 : version < 9 ? 21 : version < 10 ? 29 : version < 11 ? 33 : version < 12 ? 48 : 100);
             QCOMPARE(display.value("pages").toArray().size(), version < 8 ? 3 : version < 11 ? 4 : version < 12 ? 5 : 7);
             QCOMPARE(controlsOf(appearance).size(), version < 7 ? 10 : version < 12 ? 13 : 14);
             QCOMPARE(appearance.value("pages").toArray().size(), version < 7 ? 1 : 2);
@@ -1920,7 +1920,8 @@ private slots:
             "display.spectrumDefaults.showCursorFreq", "display.spectrumDefaults.showBinWidth",
             "display.spectrumDefaults.showNoiseFloor", "display.spectrumDefaults.noiseFloorShift",
             "display.spectrumDefaults.noiseFloorLineWidth", "display.spectrumDefaults.noiseFloorColor",
-            "display.spectrumDefaults.noiseFloorTextColor", "display.spectrumDefaults.normalize",
+            "display.spectrumDefaults.noiseFloorTextColor",
+            "display.spectrumDefaults.noiseFloorFastColor", "display.spectrumDefaults.normalize",
             "display.spectrumDefaults.showPeakValue", "display.spectrumDefaults.peakValuePosition",
             "display.spectrumDefaults.peakTextDelay", "display.spectrumDefaults.getMonitorHz",
             "display.waterfallDefaults.highThreshold", "display.waterfallDefaults.lowThreshold",
@@ -1946,6 +1947,7 @@ private slots:
             "smoothDefaults", "ClarityEnabled", "DisplayShowCursorFreq",
             "DisplayShowBinWidth", "DisplayShowNoiseFloor", "DisplayNoiseFloorShiftDb",
             "DisplayNoiseFloorLineWidth", "DisplayNoiseFloorColor", "DisplayNoiseFloorTextColor",
+            "DisplayNoiseFloorFastColor",
             "DisplayDispNormalize", "DisplayShowPeakValueOverlay", "DisplayPeakValuePosition",
             "DisplayPeakTextDelayMs", "getMonitorHz", "DisplayWfHighLevel",
             "DisplayWfLowLevel", "DisplayWfAgc", "DisplayWfUseSpectrumMinMax",
@@ -1972,7 +1974,7 @@ private slots:
                 }
             }
         }
-        QCOMPARE(total, 99);
+        QCOMPARE(total, 100);
         QCOMPARE(v12.size(), ids.size());
         for (int i = 0; i < v12.size(); ++i) {
             const QJsonObject control = v12.at(i).toObject();
@@ -2073,12 +2075,11 @@ private slots:
 
         // Built on the desktop but not described: no effect for a phone or a
         // remote window (cal offset, thread priority, the deprecated NF text
-        // position), no data from the Core (NF fast-attack colour), the phone
-        // owns its own (line width, D75), no editor kind (TX custom
+        // position), the phone owns its own (line width, D75), no editor kind (TX custom
         // gradient), or hidden as unbuilt (Multimeter holds and averaging).
         const QString source = service.display();
         for (const char* key : {"DisplayLineWidth", "DisplayCalOffset",
-                                "DisplayShowNoiseFloorPosition", "DisplayNoiseFloorFastColor",
+                                "DisplayShowNoiseFloorPosition",
                                 "DisplayTxWfGradient", "MultimeterPeakHoldMs",
                                 "MultimeterTextHoldMs", "MultimeterAverageWindow",
                                 "MultimeterDigitalDelayMs", "MultimeterSignalHistoryEnabled"}) {
@@ -2328,7 +2329,7 @@ private slots:
                     }
                 }
             }
-            QCOMPARE(count, version >= 12 ? 99 : version >= 11 ? 48 : version >= 10 ? 33 : version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
+            QCOMPARE(count, version >= 12 ? 100 : version >= 11 ? 48 : version >= 10 ? 33 : version >= 9 ? 29 : version >= 8 ? 21 : version >= 4 ? 14 : 11);
             QCOMPARE(optionSliders, version >= 4 ? 2 : 0);
         }
     }

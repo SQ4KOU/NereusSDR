@@ -3043,7 +3043,8 @@ int StationServer::displayExtrasVersion() const
     // 2 (R-IOS-27, R-IOS-06): also the clarity-retune operation.
     // 3: activePeakHold.onTx, and the peak hold's hold time and transmit
     // gate as the desktop's.
-    return m_mediaEnabled ? 3 : 0;
+    // 4 (R-IOS-18): noiseFloor.fastAttack and the noise floor state section.
+    return m_mediaEnabled ? 4 : 0;
 }
 
 int StationServer::deviceAdminVersion() const

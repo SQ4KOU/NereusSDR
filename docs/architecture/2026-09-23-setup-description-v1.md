@@ -322,14 +322,14 @@ Appearance's Reset all colors. Every new row has
 own key or, for a button, an action identity; the Core accepts each row only
 as the exact closed object it publishes. V1–V11 projections keep their
 versions, page lists and control counts (Display V11: 48 controls on five
-pages; Appearance V7: 13 controls); V12 has 99 Display controls on seven
+pages; Appearance V7: 13 controls); V12 has 100 Display controls on seven
 pages and 14 Appearance controls.
 
 Display pages, in the desktop's order: Spectrum Defaults gains a Profile
 section (Reset to Smooth Defaults, Enable Clarity) before Fast Fourier
 Transform and a Spectrum Overlays section after Rendering (Show cursor
-frequency, Show bin width, Show noise floor, NF shift, NF line width, NF line
-and text colours, Normalize trace, Show peak value overlay, its position and
+frequency, Show bin width, Show noise floor, NF shift, NF line width, NF line,
+text and fast-attack colours, Normalize trace, Show peak value overlay, its position and
 refresh, Get Monitor Hz). Waterfall Defaults gains Levels (High and Low
 Threshold, AGC, Use spectrum min/max, Copy spectrum min/max) and Waterfall
 NF-AGC (Enable, NF offset) before Display, Color Scheme at the end of
@@ -355,11 +355,17 @@ when NF-AGC is on, else `agc` when AGC is on, else `manual`; low and high are
 the thresholds, or the pan's spectrum bottom and top with Use spectrum
 min/max; offset is the NF offset), Show noise floor and NF shift (the
 `noiseFloor` field) and Normalize trace (`normalize`, sent true only while
-the spectrum detector is Average, Sample or RMS). The NF line width and
-colours draw the extras' noise floor and gate on the same capability. The 3D
-Spectrum choice sets the subscription's `wideSpanFactor` and gates on
-`remoteMediaVersion:1`; the Grid & Scales noise-floor tracking rows follow
-the Core's `noise-floor` operation and gate on `remoteMediaVersion:1`. The TX
+the spectrum detector is Average, Sample or RMS; the Core applies it only
+then too). The NF line width and line and text colours draw the extras'
+noise floor and gate on the same capability; the fast-attack colour needs
+the noise floor state (`noiseFloor.fastAttack`) and gates on
+`displayExtrasVersion:4`. The 3D Spectrum choice sets the subscription's
+`wideSpanFactor` and gates on `remoteMediaVersion:1`. The Grid & Scales
+noise-floor tracking rows follow the pan's display noise floor as Thetis
+does (every 500 ms, not while transmitting, the extras' noise floor while
+its state is not fast attack), or Clarity's estimate from the Core's
+`noise-floor` operation while Clarity is on; they gate on
+`displayExtrasVersion:4`. The TX
 Display waterfall rows colour the transmit display and gate on
 `txDisplayVersion:1`. Every other row changes only the phone's drawing,
 `applies:"live"`, with no gate.
@@ -396,8 +402,7 @@ swatches to their defaults. No action writes a Core setting except
 Not described, with the reason: Line Width (the phone has its own line
 width, D75), Cal Offset and Display Thread Priority (the Core calibrates and
 schedules the display; a remote window disables both), the noise floor text
-position (disabled on the desktop, no effect), the NF fast-attack colour
-(the Core does not send the fast-attack state), the TX Custom Gradient (no
+position (disabled on the desktop, no effect), the TX Custom Gradient (no
 gradient editor kind), the Waterfall Low Level Color (unbuilt) and the
 Multimeter peak hold, text hold, averaging window, digital delay and history
 enable (unbuilt). Derived readouts (bin width, delay, effective rewind) and

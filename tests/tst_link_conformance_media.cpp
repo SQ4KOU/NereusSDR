@@ -737,6 +737,11 @@ void TstLinkConformanceMedia::nsdxVectorsAreTheStationsEncoderOutput()
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-full")).bytes, full);
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-noise-floor")).bytes,
              encodeDisplayExtras(LinkMediaVectors::nsdxNoiseFloorFrame(), context));
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-noise-floor-state")).bytes,
+             encodeDisplayExtras(LinkMediaVectors::nsdxNoiseFloorStateFrame(), context));
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-nsdx1-noise-floor-state")))
+                 .value(QStringLiteral("noiseFloorFastAttack")),
+             QJsonValue(true));
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-other-generation")).bytes, full);
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-unknown-section")).bytes,
              LinkMediaVectors::nsdxUnknownSection(full));

@@ -59,8 +59,8 @@ private slots:
                                        "display.waterfallDefaults", "display.gridScales",
                                        "display.multimeter", "display.txDisplay",
                                        "display.threeD"}));
-        QCOMPARE(described, 99);
-        QCOMPARE(v12Rows, 51);
+        QCOMPARE(described, 100);
+        QCOMPARE(v12Rows, 52);
         const QJsonObject appearance = QJsonDocument::fromJson(latest(v12->received(),
             QStringLiteral("setup"), QStringLiteral("appearance")).toString().toUtf8()).object();
         QCOMPARE(appearance.value("version"), QJsonValue(12));

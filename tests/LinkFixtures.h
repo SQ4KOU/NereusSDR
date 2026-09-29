@@ -281,7 +281,9 @@ public:
     static NereusSDR::DisplayCodecContext nsdxContext();
     static NereusSDR::DisplayExtrasFrame nsdxFrame();
     static NereusSDR::DisplayExtrasFrame nsdxNoiseFloorFrame();
-    /// The full datagram with an unknown section bit (0x10) set.
+    /// Version 4: the noise floor with its state section (fast attack).
+    static NereusSDR::DisplayExtrasFrame nsdxNoiseFloorStateFrame();
+    /// The full datagram with an unknown section bit (0x20) set.
     static QByteArray nsdxUnknownSection(const QByteArray& full);
     /// A context as a vector names it: endpointId, contextGeneration,
     /// minDbm, maxDbm, traceSamples.

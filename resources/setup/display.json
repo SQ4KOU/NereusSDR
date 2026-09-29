@@ -374,6 +374,22 @@
               }
             },
             {
+              "id": "display.spectrumDefaults.noiseFloorFastColor",
+              "label": "Fast-attack:",
+              "tooltip": "Color shown during fast-attack (band/freq/MOX change).",
+              "kind": "colour",
+              "binding": {
+                "phone": "DisplayNoiseFloorFastColor"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 12,
+              "default": "#C8C8C8FF",
+              "gate": {
+                "capability": "displayExtrasVersion",
+                "min": 4
+              }
+            },
+            {
               "id": "display.spectrumDefaults.normalize",
               "label": "Normalize trace",
               "tooltip": "Normalize the spectrum trace to a 1 Hz reference bandwidth. Only active for Average, Sample, or RMS detector modes.",
@@ -1245,8 +1261,8 @@
               "requiresDescriptionVersion": 12,
               "default": false,
               "gate": {
-                "capability": "remoteMediaVersion",
-                "min": 1
+                "capability": "displayExtrasVersion",
+                "min": 4
               }
             },
             {
@@ -1271,8 +1287,8 @@
               },
               "default": 0,
               "gate": {
-                "capability": "remoteMediaVersion",
-                "min": 1
+                "capability": "displayExtrasVersion",
+                "min": 4
               }
             },
             {
@@ -1293,8 +1309,8 @@
               },
               "default": false,
               "gate": {
-                "capability": "remoteMediaVersion",
-                "min": 1
+                "capability": "displayExtrasVersion",
+                "min": 4
               }
             }
           ]

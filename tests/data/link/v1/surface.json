@@ -258,7 +258,7 @@
         {
             "kind": "i64",
             "name": "displayExtrasVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -3050,6 +3050,7 @@
                     "noiseFloor": [
                         [
                             "enabled",
+                            "fastAttack",
                             "shiftDb"
                         ]
                     ],
