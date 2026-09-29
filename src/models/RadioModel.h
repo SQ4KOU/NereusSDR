@@ -5586,6 +5586,14 @@ private:
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
+    // The transmit slice's band, else m_lastBand: the band refreshTransmitTuneBand
+    // hands the TUNE path and applyTransmitBand.
+    Band transmitSliceBand() const;
+    // Port of Thetis's TXBand setter (console.cs:17511-17545 [v2.10.3.15]):
+    // on a transmit band change, saves PWR into the old band's slot and
+    // loads the new band's stored power into PWR. `initializing` is the
+    // connect-time call after the per-band store loads. Local role only.
+    void applyTransmitBand(Band band, bool initializing);
     // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
     // and list onto `transmit` (activeTxProfile, txProfilesJson).
     void publishTxProfiles();
@@ -6892,6 +6900,11 @@ private:
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
+    // Thetis's _tx_band (console.cs:17511 [v2.10.3.15]): the band PWR was
+    // last loaded for, which drivePowerScroll saves to. Unknown until
+    // applyTransmitBand first runs.
+    Band m_txBand{Band::Band20m};
+    bool m_txBandKnown{false};
     /// iPhone app Task 75 (ruling 5.11a): the band whose receive antenna the
     /// relay keeps while another device listens through it; empty when the
     /// relay follows m_lastBand as always.

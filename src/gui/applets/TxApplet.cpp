@@ -152,6 +152,10 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42 item 4: the tooltip for a
 //                mode that cannot transmit matches the refusal's words.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setCurrentBand no longer recalls PWR
+//                and a local window's RF Power slider no longer saves the
+//                band slot: RadioModel does both (applyTransmitBand,
+//                drivePowerScroll). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1173,6 +1177,14 @@ void TxApplet::wireControls()
         // R-R3-49 (group A fix wave, M3): a remote window writes the band
         // slot and the drive source only to a Core that takes them
         // (transmitSettingsVersion 5); an older Core takes `power` alone.
+        // A local window leaves the band slot to RadioModel, which saves PWR
+        // into its transmit band on powerChanged (drivePowerScroll, the
+        // ptbPWR_Scroll port); saving here too could pick a different band
+        // (this applet's active slice) from the one that transmits.
+        if (m_model && m_model->role() == RadioModel::Role::Local) {
+            tx.setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
+            return;
+        }
         if (!m_powerByBandPermitted) { return; }
         tx.setPowerForBand(txBand(), val);
         // Symmetric to the tune-slider auto-switch above: touching the RF
@@ -2178,8 +2190,6 @@ void TxApplet::setCurrentBand(Band band)
 
     if (!m_model) { return; }
 
-    auto& tx = m_model->transmitModel();
-
     // Update the Tune Power slider to reflect the per-band stored value.
     {
         const int tunePwr = shownTunePower(band);
@@ -2194,27 +2204,12 @@ void TxApplet::setCurrentBand(Band band)
         m_updatingFromModel = false;
     }
 
-    // Update the RF Power slider to reflect the per-band stored value —
-    // ONLY when the band passed in is the canonical TX band (i.e. the
-    // active slice's band).  Matches Thetis TXBand setter at
-    // console.cs:17513 [v2.10.3.13] (`PWR = power_by_band[(int)value];`),
-    // where `_tx_band` is single-source-of-truth for TX state.
-    //
-    // Why the gate: setCurrentBand is wired in MainWindow to BOTH
-    // PanadapterModel::bandChanged and SliceModel::frequencyChanged, so it
-    // can fire from a CTUN pan that does NOT change the slice.  Recalling
-    // the panadapter band's RF power into the live slider would (a) jump
-    // the displayed value off the actual TX band, and (b) leak that
-    // wrong value back into the active slice's band slot via the
-    // setPowerUsingTargetDbm txMode-0 side-effect on the next powerChanged
-    // emission — silently corrupting per-band storage.
-    //
-    // Routed through setPower so the existing reverse-binding lambda
-    // (TxApplet.cpp:905) paints the slider; setPower's same-value
-    // early-return makes the no-band-change call free.
-    if (band == txBand()) {
-        tx.setPower(tx.powerForBand(band));
-    }
+    // The RF Power slider is not recalled here. RadioModel loads the
+    // transmit band's stored power into PWR on a transmit band change and
+    // at connect (applyTransmitBand, the Thetis TXBand setter port at
+    // console.cs:17511-17545 [v2.10.3.15]), and powerChanged paints the
+    // slider. A second recall here would load the band twice, and on a
+    // panadapter-only band change (CTUN) would load the wrong band.
 }
 
 // ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────

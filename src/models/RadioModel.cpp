@@ -43,6 +43,12 @@
 //                 the tune power, TX profile and RADE reset commands take
 //                 `takenOnAir`. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - applyTransmitBand ports Thetis's TXBand setter
+//                 (console.cs:17511-17545 [v2.10.3.15]): the Core loads the
+//                 transmit band's stored power on a band change and at
+//                 connect, with or without a window, and the MOX-edge
+//                 restore saves PWR into the band as ptbPWR_Scroll does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -6085,16 +6091,79 @@ bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
     return true;
 }
 
-// The band the Core transmits on, as the TUNE path reads it (the transmit
-// slice's frequency, else the last band), for tunePowerForTxBand.
+// The band the Core transmits on (the transmit slice's frequency, else the
+// last band): PWR's band through applyTransmitBand, and the TUNE path's for
+// tunePowerForTxBand.
 void RadioModel::refreshTransmitTuneBand()
 {
     if (m_role != Role::Local) {
         return;
     }
+    const Band band = transmitSliceBand();
+    applyTransmitBand(band, /*initializing=*/false);
+    m_transmitModel.setTuneTxBand(band);
+}
+
+Band RadioModel::transmitSliceBand() const
+{
     const SliceModel* const txSlice = txBoundSlice();
-    m_transmitModel.setTuneTxBand(txSlice ? bandFromFrequency(txSlice->frequency())
-                                          : m_lastBand);
+    return txSlice ? bandFromFrequency(txSlice->frequency()) : m_lastBand;
+}
+
+// From Thetis console.cs:17511-17545 [v2.10.3.15] TXBand setter:
+//   //[2.10.3.6]MW0LGE no band change on TX fix
+//   if (MOX) return;
+//   Band old_band = _tx_band;
+//   if (initializing) old_band = value; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+//   _tx_band = value;
+//   if (_tx_band != old_band || initializing)
+//   {
+//       int old_pwr = ptbPWR.Value;
+//       if (initializing) old_pwr = power_by_band[(int)old_band]; // ... MW0LGE
+//       power_by_band[(int)old_band] = old_pwr;
+//       ptbPWR.LimitValue = limitPower_by_band[(int)value];
+//       ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+//       PWR = power_by_band[(int)value];
+//       TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+// TunePWR goes through TransmitModel::setTuneTxBand (refreshTransmitTuneBand).
+// Not ported here: the slider limits (NereusSDR has no per-band PWR limit
+// store), the XVTR lo_band lookup ("Fix Penny O/C VHF control Vk4xv") and
+// the FM TX offset save that follow in the setter.
+void RadioModel::applyTransmitBand(Band band, bool initializing)
+{
+    if (m_role != Role::Local) {
+        return;
+    }
+    //[2.10.3.6]MW0LGE no band change on TX fix
+    if (m_moxController && m_moxController->isMox()) {
+        return;
+    }
+
+    // Upstream's _tx_band starts unset (GEN) and its first real value comes
+    // with initializing; here the first band seen is only recorded, so a
+    // slice added before connect does not move PWR. The connect-time
+    // initializing call loads it.
+    Band oldBand = m_txBandKnown ? m_txBand : band;
+    if (initializing) {
+        oldBand = band; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+    }
+    m_txBand = band;
+    m_txBandKnown = true;
+
+    if (band == oldBand && !initializing) {
+        return;
+    }
+
+    // save values for old band
+    int oldPwr = m_transmitModel.power();
+    if (initializing) {
+        oldPwr = m_transmitModel.powerForBand(oldBand); // we cant use what is set on the trackbar if we are initialisting, becase it is irrelevent, old_band will = value at this point MW0LGE
+    }
+    m_transmitModel.setPowerForBand(oldBand, oldPwr);
+
+    // PWR = power_by_band[(int)value]; powerChanged runs drivePowerScroll,
+    // which recomputes the drive and saves the same value to m_txBand.
+    m_transmitModel.setPower(m_transmitModel.powerForBand(band));
 }
 
 // ---------------------------------------------------------------------------
@@ -15438,6 +15507,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
+        // The TXBand setter's initializing pass (console.cs:17511-17545
+        // [v2.10.3.15]): PWR takes the loaded power for the transmit band.
+        applyTransmitBand(transmitSliceBand(), /*initializing=*/true);
 
         // ── 3M-1c L.1: per-MAC MicProfileManager scope ────────────────────────
         //
@@ -22697,12 +22769,11 @@ void RadioModel::restoreNormalTxDrive()
     // the HL2 tune carve-out mid-tune.
     if (m_transmitModel.isTune())          { return; }
     if (m_transmitModel.isTwoToneActive()) { return; }
-    // Drive only. Upstream's ptbPWR_Scroll here also stores PWR into
-    // power_by_band[_tx_band], a no-op there because the TXBand setter
-    // (console.cs:17520-17543 [v2.10.3.15]) keeps the two equal. A Core
-    // without the TX applet does not recall PWR on a band change, so a
-    // save on every MOX edge could overwrite a band's stored power.
-    applyDriveSliderPower();
+    // ptbPWR_Scroll, as upstream: the drive, and PWR saved into
+    // power_by_band[_tx_band]. applyTransmitBand keeps PWR equal to the
+    // transmit band's slot across band changes (and holds the band while
+    // keyed), so the save lands on the band PWR belongs to.
+    drivePowerScroll();
 }
 
 void RadioModel::drivePowerScroll()
@@ -22716,12 +22787,9 @@ void RadioModel::drivePowerScroll()
     // hardware/<mac>/powerByBand/<band> key.
     applyDriveSliderPower();
     if (!ownsLocalDsp()) { return; }
-    // _tx_band is the transmit slice's band. With no slice there is no
-    // transmit band to save to, and the TX applet (which falls back to its
-    // panadapter band) keeps saving its own slider moves.
-    const SliceModel* const txSlice = txBoundSlice();
-    if (!txSlice) { return; }
-    m_transmitModel.setPowerForBand(bandFromFrequency(txSlice->frequency()),
+    // _tx_band is m_txBand once applyTransmitBand has run, else the band it
+    // would take (the transmit slice's, else m_lastBand).
+    m_transmitModel.setPowerForBand(m_txBandKnown ? m_txBand : transmitSliceBand(),
                                     m_transmitModel.power());
 }
 

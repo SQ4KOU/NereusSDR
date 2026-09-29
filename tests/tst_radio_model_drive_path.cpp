@@ -756,6 +756,90 @@ private slots:
                      .toString(),
                  QStringLiteral("65"));
     }
+
+    // A Core with no window loads the transmit band's stored power on a
+    // band change (Thetis TXBand setter, console.cs:17511-17545
+    // [v2.10.3.15]: power_by_band[old] = PWR; PWR = power_by_band[new]).
+    void headlessBandChange_loadsStoredPower()
+    {
+        AppSettings::instance().clear();
+        RadioModel model;
+        model.addSlice();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+        slice->setFrequency(7100000.0);
+        pump();
+        TransmitModel& tx = model.transmitModel();
+        tx.setPowerForBand(Band::Band20m, 33);
+        tx.setPower(60);
+        pump();
+        QCOMPARE(tx.powerForBand(Band::Band40m), 60);
+
+        slice->setFrequency(14200000.0);
+        pump();
+        QCOMPARE(tx.power(), 33);
+        QCOMPARE(tx.powerForBand(Band::Band40m), 60);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 33);
+
+        slice->setFrequency(7150000.0);
+        pump();
+        QCOMPARE(tx.power(), 60);
+
+        // A retune inside the band leaves PWR where it is.
+        tx.setPower(61);
+        slice->setFrequency(7200000.0);
+        pump();
+        QCOMPARE(tx.power(), 61);
+        QCOMPARE(tx.powerForBand(Band::Band40m), 61);
+    }
+
+    // The start-of-transmit restore saves PWR into the transmit band's slot
+    // (mi0bot console.cs:30272 [v2.10.3.13-beta2] calls ptbPWR_Scroll) and
+    // no other band's; a retune while keyed does not change the band.
+    void moxEdgeSave_doesNotOverwriteAnotherBand()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn, HPSDRModel::ANAN8000D);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        auto detach = qScopeGuard([&]{ model.injectConnectionForTest(nullptr); });
+        TransmitModel& tx = model.transmitModel();
+        SliceModel* slice = model.activeSlice();
+        QVERIFY(slice != nullptr);
+
+        // setupModel leaves the slice on 80 m.
+        tx.setPowerForBand(Band::Band40m, 70);
+        tx.setPower(40);
+        pump();
+        QCOMPARE(tx.powerForBand(Band::Band80m), 40);
+
+        slice->setFrequency(7100000.0);
+        pump();
+        QCOMPARE(tx.power(), 70);
+
+        // Something wrote the 40 m slot behind PWR's back; the start of
+        // transmit puts PWR back into it.
+        tx.setPowerForBand(Band::Band40m, 20);
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        pump();
+        QCOMPARE(tx.powerForBand(Band::Band40m), 70);
+        QCOMPARE(tx.powerForBand(Band::Band80m), 40);
+        QCOMPARE(tx.power(), 70);
+
+        // MW0LGE no band change on TX: a retune while keyed keeps PWR and
+        // leaves the new band's slot alone.
+        const int band20Before = tx.powerForBand(Band::Band20m);
+        slice->setFrequency(14200000.0);
+        pump();
+        QCOMPARE(tx.power(), 70);
+        QCOMPARE(tx.powerForBand(Band::Band20m), band20Before);
+        QCOMPARE(tx.powerForBand(Band::Band40m), 70);
+
+        mox->setMox(false);
+        pump();
+    }
 };
 
 QTEST_MAIN(TestRadioModelDrivePath)
