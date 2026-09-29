@@ -210,6 +210,7 @@ private:
     UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
     int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
     QByteArray                m_pendingRequester;      // who asked for the waiting move
+    QByteArray                m_pendingHolder;         // who held transmit when it was asked
     TransmitAccess            m_mayTransmit;           // Task 77, slice control Task 2
     ActiveLookup              m_active;                // Task 77
     HolderLookup              m_holder;                // Task 77

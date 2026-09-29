@@ -26,6 +26,10 @@
 //                                    and pendingHandoffChanged announces
 //                                    the waiting target. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control fix wave, round 2: a
+//                                    dropped waiting move says whether
+//                                    transmit or the slice changed hands.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
@@ -298,6 +302,7 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
                                [this](UnkeyOutcome) {
                 const int pending = m_pendingHandoffId;
                 const QByteArray requester = m_pendingRequester;
+                const QByteArray askedHolder = m_pendingHolder;
                 setPending(-1, QByteArray());
                 SliceModel* next = sliceWithId(pending);
                 if (!next || next->isTxSlice()) {
@@ -307,9 +312,15 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
                 // so a slice another device took while the key ended never
                 // carries this holder's transmit.
                 if (!pendingMayLand(pending, requester)) {
-                    emit handoffBlocked(pending,
-                                        QStringLiteral("Another device controls that slice now, "
-                                                       "so the transmit slice did not move."));
+                    // Fix wave, round 2: say what changed hands.
+                    const QByteArray holderNow = m_holder ? m_holder() : QByteArray();
+                    const bool transmitPassed = holderNow != askedHolder;
+                    emit handoffBlocked(
+                        pending, transmitPassed
+                            ? QStringLiteral("Transmit passed to another device, so the "
+                                             "transmit slice did not move.")
+                            : QStringLiteral("Another device controls that slice now, "
+                                             "so the transmit slice did not move."));
                     return;
                 }
                 flipTo(next);
@@ -329,6 +340,9 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
 void TxSliceArbiter::setPending(int sliceId, const QByteArray& requester)
 {
     m_pendingRequester = requester;
+    // Fix wave, round 2: who held transmit when the move was asked, so a
+    // dropped move can say whether transmit or the slice changed hands.
+    m_pendingHolder = sliceId >= 0 && m_holder ? m_holder() : QByteArray();
     if (m_pendingHandoffId == sliceId) {
         return;
     }

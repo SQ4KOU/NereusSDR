@@ -567,8 +567,56 @@ private slots:
         QCOMPARE(arb.pendingHandoffSliceId(), -1);
         QCOMPARE(blocked.count(), 1);
         QCOMPARE(blocked.first().at(0).toInt(), 1);
+        QCOMPARE(blocked.first().at(1).toString(),
+                 QStringLiteral("Another device controls that slice now, so the transmit slice "
+                                "did not move."));
         QCOMPARE(pending.count(), 2);
         QCOMPARE(pending.last().at(0).toInt(), -1);
+    }
+
+    // Slice control fix wave, round 2: transmit, not the slice, changed
+    // hands while the move waited. The move is dropped and the reason says
+    // what changed.
+    void a_waiting_move_dropped_because_transmit_passed_says_so()
+    {
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 2);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox.setMox(true);
+        QTRY_COMPARE(mox.state(), MoxState::Tx);
+        QList<std::function<void()>> bounds;
+        UnkeyGate gate(&mox, []() {}, [](const QString&) {});
+        gate.setScheduler([&bounds](int, QObject*, std::function<void()> fire) {
+            bounds.append(std::move(fire));
+        });
+        const QHash<int, QByteArray> controller{{0, QByteArrayLiteral("A")},
+                                                {1, QByteArrayLiteral("A")}};
+        QByteArray holder = QByteArrayLiteral("A");
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMoxController(&mox);
+        arb.setUnkeyGate(&gate);
+        arb.setTransmitAccess(
+            [&controller](const QByteArray& device, int sliceId) {
+                return controller.value(sliceId) == device;
+            },
+            [](const QByteArray&) { return 0; });
+        arb.setHolderLookup([&holder]() { return holder; });
+        QSignalSpy blocked(&arb, &TxSliceArbiter::handoffBlocked);
+
+        QVERIFY(arb.requestHandoff(1, QByteArrayLiteral("A")));
+        holder = QByteArrayLiteral("B");                 // transmit passed while the key ended
+        QCOMPARE(bounds.size(), 1);
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("unkey was not confirmed")));
+        bounds.first()();
+
+        QVERIFY(slices[0]->isTxSlice());
+        QVERIFY(!slices[1]->isTxSlice());
+        QCOMPARE(blocked.count(), 1);
+        QCOMPARE(blocked.first().at(1).toString(),
+                 QStringLiteral("Transmit passed to another device, so the transmit slice did "
+                                "not move."));
     }
 
     // The holder at the answer counts too: the local window's move (no
