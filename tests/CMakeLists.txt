@@ -4574,6 +4574,13 @@ target_compile_definitions(tst_p2_mic_boost_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_line_in_wire)
 target_compile_definitions(tst_p1_line_in_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# HL2 bank 0 C3 bits 3 and 4 (Band Volts, Disable PS Sync) follow the saved
+# HL2 options, both off by default; other P1 boards keep Thetis's dither and
+# random on. Source: mi0bot Console/setup.cs:2843-2848, 13376-13390 [@c26a8a4];
+# Thetis Console/setup.cs:296-298 [v2.10.3.15].
+nereus_add_test(tst_p1_hl2_band_volts_ps_sync fakes/P1FakeRadio.cpp)
+target_compile_definitions(tst_p1_hl2_band_volts_ps_sync PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.2: P2 line_in wire-byte snapshot ──────────────────────
 # 10 tests pin the line_in bit (CmdTx byte 50 bit 0 = 0x01) in
 # P2RadioConnection::setLineIn():

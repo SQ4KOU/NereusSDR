@@ -30,6 +30,11 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Band Volts and Disable PS Sync: on a Hermes Lite 2,
+//                bank 0 C3 bits 3 and 4 follow the saved HL2 options (off by
+//                default), as mi0bot setup.cs:2843-2848 and 13376-13390
+//                [@c26a8a4] do; other boards keep Thetis's dither and random
+//                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -267,6 +272,14 @@ public slots:
     void setPuresignalRun(bool run) override;
     void setMicPTTDisabled(bool disabled) override;
     void setMicXlr(bool xlrJack) override;
+
+    // HL2 only: the Band Volts and Disable PS Sync options, which a Hermes
+    // Lite 2 takes in bank 0 C3 bits 3 and 4 (the ADC dither and random bits
+    // on every other board). Stored for the next connect; on an HL2 already
+    // connected they reach the wire on the next frame. Ignored on any other
+    // board. From mi0bot Console/setup.cs:13376-13390 [@c26a8a4].
+    void setHl2BandVolts(bool on);
+    void setHl2PsSync(bool on);
 
     // Set the P1-only per-DDC ADC routing word (Thetis `P1_adc_cntrl`).
     //
@@ -746,6 +759,12 @@ private:
     // Per-ADC state — initialized from HardwareProfile at connect time
     bool    m_dither[3]{true, true, true};
     bool    m_random[3]{true, true, true};
+    // The HL2 options behind bank 0 C3 bits 3 and 4 on a Hermes Lite 2
+    // (setHl2BandVolts / setHl2PsSync), off until the saved options arrive.
+    bool    m_hl2BandVolts{false};
+    bool    m_hl2PsSync{false};
+    // The radio is run as a Hermes Lite 2 (HPSDRModel::HERMESLITE).
+    bool    isHl2() const;
     bool    m_rxPreamp[3]{};
     int     m_stepAttn[3]{};      // per-ADC step attenuator (0-31)
     int     m_txStepAttn{0};
