@@ -39,6 +39,10 @@
 //                (bank 17) are the saved HL2 options, as mi0bot
 //                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: bank 18 carries the saved Reset on
+//                Ethernet disconnect, as mi0bot setup.cs:21257-21262
+//                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -296,6 +300,13 @@ public slots:
     //   // MI0BOT: Controls the hardware PTT hang in the HL2
     void setHl2TxLatency(int ms);
     void setHl2PttHang(int ms);
+
+    // HL2 only: Reset on Ethernet disconnect, bank 18 C4. Stored; the next
+    // round of the banks sends it, as mi0bot's SetResetOnDisconnect only
+    // stores the bit.
+    // From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
+    //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+    void setHl2ResetOnDisconnect(bool on);
 
     // Set the P1-only per-DDC ADC routing word (Thetis `P1_adc_cntrl`).
     //
@@ -784,6 +795,9 @@ private:
     // values arrive.
     int     m_hl2TxLatencyMs{20};
     int     m_hl2PttHangMs{12};
+    // HL2 bank 18: reset on Ethernet disconnect, off as mi0bot's
+    // create_rnet leaves it (netInterface.c:1724 [@c26a8a4]).
+    bool    m_hl2ResetOnDisconnect{false};
     // The radio is run as a Hermes Lite 2 (HPSDRModel::HERMESLITE).
     bool    isHl2() const;
     bool    m_rxPreamp[3]{};

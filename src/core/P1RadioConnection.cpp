@@ -65,6 +65,10 @@
 //                (bank 17) are the saved HL2 options, as mi0bot
 //                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: bank 18 carries the saved Reset on
+//                Ethernet disconnect, as mi0bot setup.cs:21257-21262
+//                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1450,6 +1454,11 @@ void P1RadioConnection::setHl2TxLatency(int ms)
 void P1RadioConnection::setHl2PttHang(int ms)
 {
     m_hl2PttHangMs = ms;
+}
+
+void P1RadioConnection::setHl2ResetOnDisconnect(bool on)
+{
+    m_hl2ResetOnDisconnect = on;
 }
 
 void P1RadioConnection::setPreamp(bool enabled)
@@ -3000,6 +3009,12 @@ CodecContext P1RadioConnection::buildCodecContext() const
     if (m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
         ctx.hl2PttHang   = m_hl2PttHangMs;    // 5-bit field (bank 17 C3), ms
         ctx.hl2TxLatency = m_hl2TxLatencyMs;  // 7-bit field (bank 17 C4), ms
+        // Bank 18 C4: reset on Ethernet disconnect, the HL2 Options check
+        // box, as mi0bot's chkDisconnectReset handler sends it
+        // (setup.cs:21257-21262 [@c26a8a4]):
+        //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+        //   NetworkIO.SetResetOnDisconnect(v);
+        ctx.hl2ResetOnDisconnect = m_hl2ResetOnDisconnect;
     }
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P1 wire byte.

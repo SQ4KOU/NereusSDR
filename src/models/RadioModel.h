@@ -1053,8 +1053,8 @@ public:
     // applies the default, off.
     void applyDisableHfPaSetting(const QVariant& value);
     // Pushes the saved HL2 options the radio takes on the wire (Band Volts,
-    // Disable PS Sync, TX buffer latency, PTT hang) to a P1 connection.
-    // Nothing without one.
+    // Disable PS Sync, TX buffer latency, PTT hang, reset on Ethernet
+    // disconnect) to a P1 connection. Nothing without one.
     void applyHl2Options();
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
