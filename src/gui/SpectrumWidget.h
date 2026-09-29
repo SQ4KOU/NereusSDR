@@ -213,7 +213,9 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 #include <QPropertyAnimation>
 
+#include <functional>
 #include <optional>
+#include <QStringList>
 
 #include "core/spectrum/ActivePeakHoldTrace.h"
 #include "core/spectrum/DisplayFollowers.h"
@@ -977,6 +979,12 @@ public:
     // "ShowPerfOverlay"; View -> Performance Overlay wires here.
     void setShowPerfOverlay(bool on);
     bool showPerfOverlay() const { return m_showPerfOverlay; }
+    // Parity ruling C13: in a remote window, the Core's counters the
+    // overlay shows below this computer's, each group headed. Read at each
+    // overlay refresh; empty (the default) in a local window.
+    void setCorePerfLinesProvider(std::function<QStringList()> provider);
+    /// The overlay's lines as drawn (this computer's, then the Core's).
+    QStringList perfOverlayLines() const;
 
     // B8 Task 21: cursor frequency readout visibility.
     // Default true (matches the previously always-on behavior).
@@ -2871,6 +2879,7 @@ private:
     // (predates the 3DSS port) caught while verifying -DNEREUS_GPU_SPECTRUM=OFF
     // for this fix wave.
     bool m_showPerfOverlay{false};
+    std::function<QStringList()> m_corePerfLinesProvider;
     // 1 Hz timer that polls memory pressure + drives perf overlay refresh.
     // Owned by SpectrumWidget via Qt parent ownership.
     QTimer* m_perfPollTimer{nullptr};

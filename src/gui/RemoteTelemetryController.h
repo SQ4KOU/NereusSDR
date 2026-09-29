@@ -64,6 +64,10 @@ public:
     qint64 nowMs() const;
     QString bannerText() const;
     QString detailText() const;
+    // Parity ruling C13: the Core's radio-link drops and audio drops for
+    // View > Performance Overlay, headed as the Core's; one line saying so
+    // when no current readings are in.
+    static QStringList performanceOverlayLines(const RemoteTelemetryView& view);
     // An injected clock makes sampling manually driven for deterministic
     // lifecycle tests; the production clock keeps its automatic timer.
     void sampleNow();

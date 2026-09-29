@@ -352,6 +352,9 @@
 //                preset, as the VFO flag's and RX applet's do; a band-stack
 //                right-click says band stacking is not ready yet. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Parity ruling C13: a remote window's Performance
+//                Overlay adds the Core's drops (wireSpectrumForPan).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4153,6 +4156,17 @@ void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
     refreshForeignMarkers();
 
     configureSpectrumForPanForTest(sw, panId);
+
+    // Parity ruling C13: in a remote window the Performance Overlay shows
+    // the Core's drops too, headed as the Core's.
+    if (!m_radioModel->ownsLocalDsp()) {
+        const QPointer<MainWindow> self(this);
+        sw->setCorePerfLinesProvider([self]() -> QStringList {
+            if (!self || !self->m_remoteTelemetry) { return {}; }
+            return RemoteTelemetryController::performanceOverlayLines(
+                self->m_remoteTelemetry->current());
+        });
+    }
 
     // Seed the new pan with the CURRENT connection state. Without this a pan
     // created after connect sits at the Disconnected default until the next

@@ -534,6 +534,30 @@ QString RemoteTelemetryController::bannerText() const
     return parts.join(QStringLiteral("  ·  "));
 }
 
+QStringList RemoteTelemetryController::performanceOverlayLines(const RemoteTelemetryView& view)
+{
+    // The overlay's own terse columns (SpectrumWidget's perf overlay), each
+    // value from the Core's latest telemetry; a missing one reads "-",
+    // never 0.
+    const auto value = [](std::optional<double> v, int decimals) {
+        return v ? QString::number(*v, 'f', decimals) : QStringLiteral("-");
+    };
+    if (view.state != RemoteTelemetryView::State::Current) {
+        return {QStringLiteral("the Core: no current readings")};
+    }
+    const StationRadioTelemetry& radio = view.radio;
+    QStringList lines{QStringLiteral("the Core:")};
+    lines << QStringLiteral("radio  lost %1% (5 s) gap %2 ms")
+                 .arg(value(radio.packetLossPercent, 2), value(radio.packetGapMs, 1));
+    if (radio.hl2SequenceGaps) {
+        lines << QStringLiteral("radio  sequence gaps %1").arg(*radio.hl2SequenceGaps);
+    }
+    lines << QStringLiteral("audio  drops %1/s not sent %2/s")
+                 .arg(value(view.coreAudio.sourceDropsPerSecond, 1),
+                      value(view.coreAudio.sendRejectedPerSecond, 1));
+    return lines;
+}
+
 QString RemoteTelemetryController::detailText() const
 {
     if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("No current measurements while disconnected."); }
