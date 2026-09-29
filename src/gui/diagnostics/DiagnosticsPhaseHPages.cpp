@@ -184,16 +184,16 @@ void SettingsValidationPage::buildUI()
 
     auto* btnRow = new QHBoxLayout;
     m_refreshBtn = new QPushButton(QStringLiteral("Re-validate"));
-    m_resetBtn   = new QPushButton(QStringLiteral("Reset to Defaults"));
+    m_repairBtn  = new QPushButton(QStringLiteral("Repair Invalid Settings"));
     m_forgetBtn  = new QPushButton(QStringLiteral("Forget This Radio"));
     btnRow->addWidget(m_refreshBtn);
-    btnRow->addWidget(m_resetBtn);
+    btnRow->addWidget(m_repairBtn);
     btnRow->addWidget(m_forgetBtn);
     btnRow->addStretch();
     layout->addLayout(btnRow);
 
     connect(m_refreshBtn, &QPushButton::clicked, this, &SettingsValidationPage::onRevalidateClicked);
-    connect(m_resetBtn,   &QPushButton::clicked, this, &SettingsValidationPage::onResetClicked);
+    connect(m_repairBtn,  &QPushButton::clicked, this, &SettingsValidationPage::onRepairClicked);
     connect(m_forgetBtn,  &QPushButton::clicked, this, &SettingsValidationPage::onForgetClicked);
 
     contentLayout()->addStretch();
@@ -254,18 +254,24 @@ void SettingsValidationPage::setStationSettingsAvailable(bool available, const Q
     gateStationControls({m_forgetBtn}, available && hygiene && paired,
         !hygiene ? unavailable : paired ? reason
             : QStringLiteral("Pair this computer with the Core to forget its radio settings."));
-    const bool localReset = !m_model || m_model->ownsLocalDsp();
-    gateStationControls({m_resetBtn}, available && localReset,
-        localReset ? reason : QStringLiteral("Reset to defaults is not available on this Core."));
+    // G-38: Repair runs on the Core from a remote window (station.
+    // repairSettings, settingsHygieneVersion 2), with Forget's gates.
+    const bool repair = !m_model || m_model->ownsLocalDsp()
+        || (link && link->settingsRepairAvailable());
+    gateStationControls({m_repairBtn}, available && repair && paired,
+        !repair ? IStationLink::settingsRepairUnavailableReason() : paired ? reason
+            : QStringLiteral("Pair this computer with the Core to repair its radio settings."));
 }
 
-void SettingsValidationPage::onResetClicked()
+void SettingsValidationPage::onRepairClicked()
 {
     if (m_model == nullptr) { return; }
     const QString mac = m_model->currentRadioMac();
     const auto reply = QMessageBox::question(
-        this, QStringLiteral("Reset Settings"),
-        QStringLiteral("Reset all per-board settings to defaults for this radio?"),
+        this, QStringLiteral("Repair Settings"),
+        QStringLiteral("Repair the settings that are invalid for this radio? Values outside "
+                       "its range are brought back into range, and settings for hardware it "
+                       "does not have are removed."),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     // The Core's settings can go away while the question is open; Yes then
     // changes nothing (R3 Setup fix wave, final review M2).
@@ -275,6 +281,8 @@ void SettingsValidationPage::onResetClicked()
             QString reason;
             if (m_model->stationOnAirRefusal(&reason)) { return; }
             m_model->settingsHygiene().resetSettingsToDefaults(mac, m_model->boardCapabilities());
+        } else if (IStationLink* link = m_model->stationLink(); link && link->settingsRepairAvailable()) {
+            link->requestSettingsHygiene("station.repairSettings", mac);
         }
     }
 }
@@ -287,7 +295,7 @@ void SettingsValidationPage::onForgetClicked()
         this, QStringLiteral("Forget Radio"),
         QStringLiteral("Forget all settings for this radio?"),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    // See onResetClicked(): re-checked after the question returns.
+    // See onRepairClicked(): re-checked after the question returns.
     if (reply == QMessageBox::Yes && m_stationSettingsAvailable && !mac.isEmpty()
         && mac == m_model->currentRadioMac()) {
         if (m_model->ownsLocalDsp()) {

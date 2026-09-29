@@ -88,13 +88,13 @@ public:
 private slots:
     void refresh();
     void onRevalidateClicked();
-    void onResetClicked();
+    void onRepairClicked();
     void onForgetClicked();
 
 private:
     RadioModel*  m_model{nullptr};
     QListWidget* m_issueList{nullptr};
-    QPushButton* m_resetBtn{nullptr};
+    QPushButton* m_repairBtn{nullptr};
     QPushButton* m_forgetBtn{nullptr};
     QPushButton* m_refreshBtn{nullptr};
     // The last availability pushed by setStationSettingsAvailable(). Read

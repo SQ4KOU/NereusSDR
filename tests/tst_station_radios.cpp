@@ -35,6 +35,7 @@
 // =================================================================
 
 #include <QtTest>
+#include <algorithm>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -144,6 +145,65 @@ private slots:
         QVERIFY(results.takeFirst().accepted);
         QVERIFY(!settings.contains(QStringLiteral("hardware/%1/sAtt").arg(kHl2)));
         QCOMPARE(settings.value(QStringLiteral("hardware/%1/sAtt").arg(kG2)).toInt(), 99);
+    }
+
+    // G-38: Repair invalid settings from a remote window runs the same
+    // repair as a local window (SettingsHygiene::resetSettingsToDefaults):
+    // the current radio's MAC only, refused on the air, and it answers with
+    // the re-validated issue list.
+    void settingsRepairRunsTheLocalRepairOnTheCurrentRadioOnly()
+    {
+        auto& settings = AppSettings::instance();
+        RadioModel core;
+        core.setBoardForTest(HPSDRHW::Hermes);
+        core.setLastRadioInfoForTest(radio(kHl2, HPSDRHW::Hermes, QStringLiteral("Hermes")));
+        core.setConnectionStateForTest(ConnectionState::Connected);
+        const QString attKey = QStringLiteral("hardware/%1/sAtt").arg(kHl2);
+        const QString otherAttKey = QStringLiteral("hardware/%1/sAtt").arg(kG2);
+        const QString apolloKey = QStringLiteral("hardware/%1/apollo/enabled").arg(kHl2);
+        settings.setValue(attKey, 99);
+        settings.setValue(otherAttKey, 99);
+        settings.setValue(apolloKey, QStringLiteral("True"));
+        SessionCommandDispatcher dispatcher(&core);
+        QList<SessionMessage> results;
+        connect(&dispatcher, &SessionCommandDispatcher::commandResultReady, this,
+                [&results](const SessionMessage& m) { results.append(m); });
+
+        const auto spec = std::find_if(
+            SessionCommandDispatcher::verbSpecs().cbegin(),
+            SessionCommandDispatcher::verbSpecs().cend(),
+            [](const CommandVerbSpec& s) { return s.verb == "station.repairSettings"; });
+        QVERIFY(spec != SessionCommandDispatcher::verbSpecs().cend());
+        QCOMPARE(spec->capability, QByteArray("settingsHygieneVersion"));
+        QCOMPARE(spec->capabilityVersion, 2);
+
+        MoxController* mox = core.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        dispatcher.dispatch(invoke("station.repairSettings", 1, {macArg(kHl2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(!results.takeFirst().accepted);
+        QCOMPARE(settings.value(attKey).toInt(), 99);
+        mox->setMox(false);
+        QTRY_VERIFY(!core.stationOnAirRefusal(nullptr));
+
+        dispatcher.dispatch(invoke("station.repairSettings", 2, {macArg(kG2)}));
+        QCOMPARE(results.size(), 1);
+        QVERIFY(!results.takeFirst().accepted);
+        QCOMPARE(settings.value(otherAttKey).toInt(), 99);
+
+        dispatcher.dispatch(invoke("station.repairSettings", 3, {macArg(kHl2)}));
+        QCOMPARE(results.size(), 1);
+        const SessionMessage repaired = results.takeFirst();
+        QVERIFY2(repaired.accepted, qPrintable(repaired.reason));
+        const BoardCapabilities& caps = core.boardCapabilities();
+        QCOMPARE(settings.value(attKey).toInt(), caps.attenuator.maxDb);
+        QCOMPARE(settings.contains(apolloKey), caps.hasApollo);
+        QCOMPARE(settings.value(otherAttKey).toInt(), 99);
+        const auto issues = SettingsHygieneWire::decode(repaired.updates);
+        QVERIFY(issues);
+        QCOMPARE(issues->mac, kHl2);
     }
 
     void initTestCase()

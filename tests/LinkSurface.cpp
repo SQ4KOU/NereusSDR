@@ -555,7 +555,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
-                                  {"settingsHygiene", 1}, {"coreBuildInfo", 1},
+                                  {"settingsHygiene", 2}, {"coreBuildInfo", 1},
                                   {"settingsBackup", 1},
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
@@ -599,7 +599,7 @@ QJsonArray captureCapabilities()
     caps.sessionHolderEntry = true;
     // iPhone app plan Task 34: sent to a peer that declared remoteTx.
     caps.remoteTxEntry = true;
-    caps.settingsHygieneVersion = 1;
+    caps.settingsHygieneVersion = 2;
     caps.coreBuildInfo = CoreBuildInfo{QStringLiteral("0.5.2"), QStringLiteral("link-surface@fixture")};
     caps.settingsBackupVersion = 1;
     caps.remoteIqVersion = 1;

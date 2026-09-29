@@ -141,8 +141,10 @@ Version 3 adds one closed `kind:settingsHygiene` panel in Diagnostics >
 Settings Validation, with ID `diagnostics.settingsValidation.health`. Its
 `binding` is exactly `{"settingsHygiene":{"version":1}}` and its gate is
 `settingsHygieneVersion:1`. It describes the existing validation issue list
-and three desktop actions in order: Re-validate, Reset to Defaults (always
-disabled with the Core's reason), and Forget This Radio. It is not a generic
+and three desktop actions in order: Re-validate, Repair Invalid Settings
+(its own gate `settingsHygieneVersion:2`, paired-device and off-air like
+Forget, disabled with the Core's reason below that gate; G-38), and Forget
+This Radio. It is not a generic
 command or result binding. The actual peer must separately declare
 `settingsHygiene:1` and receive that capability; a descriptor alone grants
 nothing. A V3 peer still receives the older controls with their existing
@@ -457,8 +459,10 @@ healthy list. Revalidation is coalesced or serialized. Forget requires a
 paired-device key, is disabled while on air or busy, and starts with a
 default-cancel confirmation. After confirmation the client rechecks its
 session, MAC, pairing and on-air state; the Core checks authority again on
-dispatch. `fixActionId` is diagnostic text and never auto-executed. Reset
-remains disabled because its operator-facing semantics are unsettled. The
+dispatch. `fixActionId` is diagnostic text and never auto-executed. Repair sends
+only that MAC to `station.repairSettings` under Forget's rules (paired-device
+key, off air, default-cancel confirmation, rechecked after confirmation) and
+is offered only at `settingsHygieneVersion` 2. The
 panel does not describe Export / Import or Logs.
 
 On the ANAN-G2E only, the partial `PA Gain` page also describes the existing

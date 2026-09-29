@@ -2161,7 +2161,7 @@ private slots:
                 if (label == QStringLiteral("Settings Validation")) {
                     for (const QString& text : {QStringLiteral("Re-validate"),
                                                 QStringLiteral("Forget This Radio"),
-                                                QStringLiteral("Reset to Defaults")}) {
+                                                QStringLiteral("Repair Invalid Settings")}) {
                         QPushButton* button = buttonWithText(page, text);
                         QVERIFY(button != nullptr);
                         QVERIFY(!button->isEnabled());
@@ -2471,9 +2471,14 @@ private slots:
         QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
         const QSet<QString> heldBefore = proxy.droppedWhileOffline();
 
-        QPushButton* const reset = buttonWithText(page, QStringLiteral("Reset to Defaults"));
-        QVERIFY(reset != nullptr);
-        QVERIFY(!reset->isEnabled());
+        // G-38: a Core without settingsHygieneVersion 2 (this link offers
+        // validation and forget only) keeps Repair disabled with its reason.
+        QPushButton* const repair = buttonWithText(page, QStringLiteral("Repair Invalid Settings"));
+        QVERIFY(repair != nullptr);
+        dialog.setStationSettingsAvailable(true, kStationReason);
+        QVERIFY(!repair->isEnabled());
+        QCOMPARE(repair->toolTip(), IStationLink::settingsRepairUnavailableReason());
+        dialog.setStationSettingsAvailable(false, kStationReason);
         for (const QString& text : {QStringLiteral("Forget This Radio")}) {
             QPushButton* const button = buttonWithText(page, text);
             QVERIFY(button != nullptr);

@@ -847,8 +847,16 @@ private slots:
         QCOMPARE(panel.value("actions").toArray().size(), 3);
         QCOMPARE(panel.value("actions").toArray().at(0).toObject().value("label"),
                  QJsonValue("Re-validate"));
-        QCOMPARE(panel.value("actions").toArray().at(1).toObject().value("enabled"),
-                 QJsonValue(false));
+        // G-38: Repair Invalid Settings, with Forget's gates, needs
+        // settingsHygieneVersion 2 (an older Core keeps it disabled).
+        const QJsonObject repair = panel.value("actions").toArray().at(1).toObject();
+        QCOMPARE(repair.value("id"), QJsonValue("repair"));
+        QCOMPARE(repair.value("label"), QJsonValue("Repair Invalid Settings"));
+        QCOMPARE(repair.value("paired"), QJsonValue(true));
+        QCOMPARE(repair.value("offAir"), QJsonValue(true));
+        QCOMPARE(repair.value("gate").toObject(),
+                 (QJsonObject{{"capability", "settingsHygieneVersion"}, {"min", 2}}));
+        QVERIFY(!repair.contains("enabled"));
         QCOMPARE(panel.value("actions").toArray().at(2).toObject().value("label"),
                  QJsonValue("Forget This Radio"));
 
@@ -866,9 +874,14 @@ private slots:
         reject("gate", QJsonObject{{"capability", "settingsHygieneVersion"},
                                     {"min", 1}, {"transmit", true}});
         QJsonArray actions = panel.value("actions").toArray();
-        QJsonObject reset = actions.at(1).toObject();
-        reset.insert("enabled", true);
-        actions[1] = reset;
+        QJsonObject repairAction = actions.at(1).toObject();
+        repairAction.remove("gate");
+        actions[1] = repairAction;
+        reject("actions", actions);
+        actions = panel.value("actions").toArray();
+        repairAction = actions.at(1).toObject();
+        repairAction.remove("paired");
+        actions[1] = repairAction;
         reject("actions", actions);
         actions = panel.value("actions").toArray();
         QJsonObject validate = actions.at(0).toObject();

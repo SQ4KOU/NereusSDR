@@ -205,11 +205,23 @@ QJsonObject expectedSettingsHygienePanel()
         {QStringLiteral("actions"), QJsonArray{
             QJsonObject{{QStringLiteral("id"), QStringLiteral("validate")},
                         {QStringLiteral("label"), QStringLiteral("Re-validate")}},
-            QJsonObject{{QStringLiteral("id"), QStringLiteral("reset")},
-                        {QStringLiteral("label"), QStringLiteral("Reset to Defaults")},
-                        {QStringLiteral("enabled"), false},
+            // G-38: Repair Invalid Settings (station.repairSettings),
+            // with Forget's gates, on a Core at settingsHygieneVersion 2.
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("repair")},
+                        {QStringLiteral("label"), QStringLiteral("Repair Invalid Settings")},
+                        {QStringLiteral("paired"), true},
+                        {QStringLiteral("offAir"), true},
+                        {QStringLiteral("gate"), QJsonObject{
+                            {QStringLiteral("capability"), QStringLiteral("settingsHygieneVersion")},
+                            {QStringLiteral("min"), 2}}},
                         {QStringLiteral("reason"), QStringLiteral(
-                            "Reset to defaults is not available on this Core.")}},
+                            "Repair invalid settings is not available on this Core. "
+                            "Updating the Core may help.")},
+                        {QStringLiteral("confirmation"), QJsonObject{
+                            {QStringLiteral("title"), QStringLiteral("Repair Settings")},
+                            {QStringLiteral("message"), QStringLiteral(
+                                "Repair the settings that are invalid for this radio?")},
+                            {QStringLiteral("default"), QStringLiteral("cancel")}}}},
             QJsonObject{{QStringLiteral("id"), QStringLiteral("forget")},
                         {QStringLiteral("label"), QStringLiteral("Forget This Radio")},
                         {QStringLiteral("paired"), true},

@@ -597,14 +597,18 @@ void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReaso
         return static_cast<QPushButton*>(nullptr);
     };
     auto* validate = button(validation, QStringLiteral("Re-validate"));
-    auto* validationReset = button(validation, QStringLiteral("Reset to Defaults"));
+    auto* validationRepair = button(validation, QStringLiteral("Repair Invalid Settings"));
     auto* validationForget = button(validation, QStringLiteral("Forget This Radio"));
-    auto* statusReset = button(status, QStringLiteral("Reset to defaults"));
+    auto* statusRepair = button(status, QStringLiteral("Repair invalid settings"));
     auto* statusForget = button(status, QStringLiteral("Forget this radio"));
     QVERIFY(validate && validate->isEnabled());
-    for (QPushButton* reset : {validationReset, statusReset}) {
-        QVERIFY(reset && !reset->isEnabled());
-        QCOMPARE(reset->toolTip(), QStringLiteral("Reset to defaults is not available on this Core."));
+    // G-38: this Core offers Repair (settingsHygieneVersion 2); a window
+    // signed in with the pairing token still cannot run it.
+    QTRY_VERIFY(s.client->settingsRepairAvailable());
+    for (QPushButton* repair : {validationRepair, statusRepair}) {
+        QVERIFY(repair && !repair->isEnabled());
+        QCOMPARE(repair->toolTip(),
+                 QStringLiteral("Pair this computer with the Core to repair its radio settings."));
     }
     for (QPushButton* forget : {validationForget, statusForget}) {
         QVERIFY(forget && !forget->isEnabled());

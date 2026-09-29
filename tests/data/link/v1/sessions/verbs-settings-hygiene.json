@@ -46,7 +46,7 @@
                 "peer": "$string",
                 "majors": "$majors",
                 "features": {
-                    "settingsHygiene": 1
+                    "settingsHygiene": 2
                 }
             }
         },
@@ -460,7 +460,7 @@
                         "kind": "i64",
                         "name": "settingsHygieneVersion",
                         "ordinal": 0,
-                        "value": 1
+                        "value": 2
                     },
                     {
                         "kind": "i64",
@@ -789,6 +789,82 @@
                 "reason": "The Core could not read this request.",
                 "type": "command.result",
                 "verb": "station.validateSettings"
+            }
+        },
+        {
+            "advanceMs": 50
+        },
+        {
+            "from": "client",
+            "role": "scripted",
+            "message": {
+                "type": "command.invoke",
+                "verb": "station.repairSettings",
+                "id": 2602,
+                "args": [
+                    {
+                        "ordinal": 0,
+                        "name": "mac",
+                        "kind": "utf8",
+                        "value": "AA:BB:CC:DD:EE:01"
+                    }
+                ]
+            }
+        },
+        {
+            "from": "station",
+            "message": {
+                "accepted": true,
+                "affected": [],
+                "id": 2602,
+                "reason": "",
+                "type": "command.result",
+                "verb": "station.repairSettings",
+                "values": [
+                    {
+                        "ordinal": 0,
+                        "name": "mac",
+                        "kind": "utf8",
+                        "value": "AA:BB:CC:DD:EE:01"
+                    },
+                    {
+                        "ordinal": 0,
+                        "name": "issuesJson",
+                        "kind": "utf8",
+                        "value": "[]"
+                    }
+                ]
+            }
+        },
+        {
+            "advanceMs": 50
+        },
+        {
+            "from": "client",
+            "role": "scripted",
+            "message": {
+                "type": "command.invoke",
+                "verb": "station.repairSettings",
+                "id": 2603,
+                "args": [
+                    {
+                        "ordinal": 0,
+                        "name": "conformanceWrongName",
+                        "kind": "utf8",
+                        "value": "AA:BB:CC:DD:EE:01"
+                    }
+                ]
+            }
+        },
+        {
+            "from": "station",
+            "message": {
+                "accepted": false,
+                "affected": [],
+                "id": 2603,
+                "reason": "The Core could not read this request.",
+                "type": "command.result",
+                "verb": "station.repairSettings"
             }
         },
         {
