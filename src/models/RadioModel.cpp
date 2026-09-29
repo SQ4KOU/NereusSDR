@@ -26306,6 +26306,18 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // And the low-pass rows and 6m/ByPass on RX (savedAlexLpfEdges). Thetis
     // unchecks chkLPFBypass on the boards that hide it, so it is off there
     // whatever was saved (codec::alex::lpfBypassAvailable).
+    // Thetis also unchecks the box (chkLPFBypass.Checked = false, quoted at
+    // codec::alex::lpfBypassAvailable), so once the model is known the Core
+    // saves "False" and every window and the phone show it off; the gate
+    // below stays as the backstop.
+    if (!codec::alex::lpfBypassAvailable(m_hardwareProfile.model)
+        && AppSettings::instance()
+                   .hardwareValue(mac, QString::fromLatin1(alexKeys::kLpfBypass),
+                                  QStringLiteral("False"))
+                   .toString() != QLatin1String("False")) {
+        AppSettings::instance().setHardwareValue(
+            mac, QString::fromLatin1(alexKeys::kLpfBypass), QStringLiteral("False"));
+    }
     const codec::alex::AlexLpfEdges lpfEdges = savedAlexLpfEdges(mac);
     m_alexLpfEdges = lpfEdges;
     const bool lpfBypass = flag(alexKeys::kLpfBypass, "False")
@@ -26410,7 +26422,11 @@ codec::alex::AlexHpfEdges RadioModel::savedAlexHpfEdges(const QString& mac)
 // Thetis reads each row's edges from the Setup spinners at every selection
 // (console.cs:7177-7243 [v2.10.3.15], setAlexLPF). The tab saves them per
 // radio: hardware/<mac>/alex/lpf/<slug>/{start,end}. A value never saved is
-// Thetis's default.
+// Thetis's default. A saved value outside its spinner's range (a hand-edited
+// file, or one saved before the ranges were enforced) is held to the range,
+// and one that is not a finite number reads as the default
+// (codec::alex::clampAlexLpfEdge, setup.designer.cs [v2.10.3.15]): the
+// selection never sees an edge Thetis's spinners could not hold.
 // ---------------------------------------------------------------------------
 codec::alex::AlexLpfEdges RadioModel::savedAlexLpfEdges(const QString& mac)
 {
@@ -26428,12 +26444,14 @@ codec::alex::AlexLpfEdges RadioModel::savedAlexLpfEdges(const QString& mac)
         const double start = settings.hardwareValue(
             mac, base + QLatin1String(alexKeys::kLeafStart), QString()).toString().toDouble(&ok);
         if (ok) {
-            row.startMhz = start;
+            row.startMhz = codec::alex::clampAlexLpfEdge(static_cast<int>(i), /*isEnd=*/false,
+                                                         start, row.startMhz);
         }
         const double end = settings.hardwareValue(
             mac, base + QLatin1String(alexKeys::kLeafEnd), QString()).toString().toDouble(&ok);
         if (ok) {
-            row.endMhz = end;
+            row.endMhz = codec::alex::clampAlexLpfEdge(static_cast<int>(i), /*isEnd=*/true,
+                                                       end, row.endMhz);
         }
     }
     return edges;

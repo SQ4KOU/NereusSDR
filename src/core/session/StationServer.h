@@ -1608,6 +1608,9 @@ private:
     /// otherwise to the writer as settings.reject. True when applied.
     bool applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
                             QString* refusal);
+    /// R-R3-46 / R-R3-49: after a low-pass edge write or removal, stores the
+    /// neighbouring edges the Filters tab's rule moves (no-op for other keys).
+    void applyAlexLpfNeighbourRule(const QString& key);
     void handleSettingsRemove(SessionTransport* transport, const SessionMessage& message);
     // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
     void handlePairStart(SessionTransport* transport, const SessionMessage& message);

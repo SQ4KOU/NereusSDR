@@ -32,6 +32,10 @@
 //                does, written to the Alex0 / Alex1 masks as netInterface.c
 //                SetAlexLPFBits writes them (radioHardwareVersion 10). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The low-pass edges' ranges (setup.designer.cs spinner
+//                Minimum / Maximum) and the neighbour rule (setup.cs
+//                udAlex*LPF*_ValueChanged) shared by the tab and the Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -239,6 +243,11 @@ constexpr std::array<quint8, kAlexHpfRowCount> kRowBits = {
 };
 constexpr quint8 kBypassBits = 0x20;
 
+// Whole hertz. Thetis compares the spinners' decimal values exactly; this
+// compares whole hertz, which agrees for every value the six-decimal spinners
+// can hold. It differs only for a fractional-hertz frequency falling in the
+// 1 Hz gap between two rows' edges (for example 2.5000005 MHz), which rounds
+// into one of the neighbouring rows here where Thetis finds no row.
 qint64 toHz(double mhz) noexcept
 {
     return static_cast<qint64>(std::llround(mhz * 1.0e6));
@@ -479,6 +488,157 @@ bool setAlexLpf(AlexLpfMasks& masks, double freqMhz, bool freqIsTx, bool mox,
         return setAlexLpfBits(masks, selectAlexLpf(freqMhz, edges), freqIsTx, mox);
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// The low-pass edges' ranges and the neighbour rule (see the declarations).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool validLpfRow(int row) noexcept
+{
+    return row >= 0 && row < kAlexLpfRowCount;
+}
+
+double lpfEdgeMin(int row, bool isEnd) noexcept
+{
+    const AlexLpfEdgeLimits& l = kAlexLpfEdgeLimits[static_cast<size_t>(row)];
+    return isEnd ? l.endMin : l.startMin;
+}
+
+double lpfEdgeMax(int row, bool isEnd) noexcept
+{
+    const AlexLpfEdgeLimits& l = kAlexLpfEdgeLimits[static_cast<size_t>(row)];
+    return isEnd ? l.endMax : l.startMax;
+}
+
+double& lpfEdge(AlexLpfRows& rows, int row, bool isEnd) noexcept
+{
+    AlexLpfRow& r = rows[static_cast<size_t>(row)];
+    return isEnd ? r.endMhz : r.startMhz;
+}
+
+double lpfEdge(const AlexLpfRows& rows, int row, bool isEnd) noexcept
+{
+    const AlexLpfRow& r = rows[static_cast<size_t>(row)];
+    return isEnd ? r.endMhz : r.startMhz;
+}
+
+// Thetis's (decimal)0.000001 step, in whole micro-MHz (hertz).
+constexpr qint64 kLpfNeighbourStepHz = 1;
+
+} // namespace
+
+bool alexLpfEdgeAllowed(int row, bool isEnd, double mhz) noexcept
+{
+    if (!validLpfRow(row) || !std::isfinite(mhz)) {
+        return false;
+    }
+    const qint64 hz = toHz(mhz);
+    return hz >= toHz(lpfEdgeMin(row, isEnd)) && hz <= toHz(lpfEdgeMax(row, isEnd));
+}
+
+double clampAlexLpfEdge(int row, bool isEnd, double mhz, double fallback) noexcept
+{
+    if (!validLpfRow(row)) {
+        return mhz;
+    }
+    const double lo = lpfEdgeMin(row, isEnd);
+    const double hi = lpfEdgeMax(row, isEnd);
+    double v = mhz;
+    if (!std::isfinite(v)) {
+        v = std::isfinite(fallback) ? fallback : lo;
+    }
+    if (toHz(v) < toHz(lo)) {
+        return lo;
+    }
+    if (toHz(v) > toHz(hi)) {
+        return hi;
+    }
+    return v;
+}
+
+// From Thetis setup.cs:15888-15994 [v2.10.3.15] (the udAlex*LPFStart / End
+// ValueChanged handlers, quoted at the declaration).
+std::optional<AlexLpfEdgeMove> alexLpfNeighbourMove(const AlexLpfRows& rows,
+                                                    int row, bool isEnd)
+{
+    if (!validLpfRow(row)) {
+        return std::nullopt;
+    }
+    const qint64 value = toHz(lpfEdge(rows, row, isEnd));
+    std::optional<AlexLpfEdgeMove> move;
+    const auto target = [&](int r, bool end, qint64 hz) {
+        move = AlexLpfEdgeMove{r, end, static_cast<double>(hz) / 1.0e6};
+    };
+
+    if (row == 0 && !isEnd) {
+        // if (udAlex160mLPFStart.Value >= udAlex160mLPFEnd.Value + (decimal)0.000001)
+        const qint64 end = toHz(rows[0].endMhz);
+        if (value >= end + kLpfNeighbourStepHz) {
+            target(0, true, value + kLpfNeighbourStepHz);
+        }
+    } else if (row == 0 && isEnd) {
+        // if (udAlex160mLPFEnd.Value <= udAlex160mLPFStart.Value) ...
+        // else if (udAlex160mLPFEnd.Value >= udAlex80mLPFStart.Value)
+        if (value <= toHz(rows[0].startMhz)) {
+            target(0, false, value - kLpfNeighbourStepHz);
+        } else if (value >= toHz(rows[1].startMhz)) {
+            target(1, false, value + kLpfNeighbourStepHz);
+        }
+    } else if (!isEnd) {
+        // if (udAlex<N>LPFStart.Value <= udAlex<prev>LPFEnd.Value)
+        if (value <= toHz(rows[static_cast<size_t>(row - 1)].endMhz)) {
+            target(row - 1, true, value - kLpfNeighbourStepHz);
+        }
+    } else if (row < kAlexLpfRowCount - 1) {
+        // if (udAlex<N>LPFEnd.Value >= udAlex<next>LPFStart.Value)
+        if (value >= toHz(rows[static_cast<size_t>(row + 1)].startMhz)) {
+            target(row + 1, false, value + kLpfNeighbourStepHz);
+        }
+    }
+    // udAlex6mLPFEnd has no handler.
+
+    if (!move) {
+        return std::nullopt;
+    }
+    const double current = lpfEdge(rows, move->row, move->isEnd);
+    move->mhz = clampAlexLpfEdge(move->row, move->isEnd, move->mhz, current);
+    // Setting a spinner to the value it holds fires no ValueChanged.
+    if (toHz(move->mhz) == toHz(current)) {
+        return std::nullopt;
+    }
+    return move;
+}
+
+std::vector<AlexLpfEdgeMove> applyAlexLpfEdgeEdit(AlexLpfRows& rows, int row,
+                                                  bool isEnd, double mhz)
+{
+    std::vector<AlexLpfEdgeMove> moved;
+    if (!validLpfRow(row)) {
+        return moved;
+    }
+    double& edited = lpfEdge(rows, row, isEnd);
+    edited = clampAlexLpfEdge(row, isEnd, mhz, edited);
+
+    // Each moved edge fires its own handler, as Thetis's spinners do. Every
+    // step moves one edge one row outward and the ranges hold it, so the
+    // chain is short; the bound only guards against a loop.
+    constexpr int kMaxSteps = 32;
+    int curRow = row;
+    bool curEnd = isEnd;
+    for (int step = 0; step < kMaxSteps; ++step) {
+        const std::optional<AlexLpfEdgeMove> move = alexLpfNeighbourMove(rows, curRow, curEnd);
+        if (!move) {
+            break;
+        }
+        lpfEdge(rows, move->row, move->isEnd) = move->mhz;
+        moved.push_back(*move);
+        curRow = move->row;
+        curEnd = move->isEnd;
+    }
+    return moved;
 }
 
 // ---------------------------------------------------------------------------

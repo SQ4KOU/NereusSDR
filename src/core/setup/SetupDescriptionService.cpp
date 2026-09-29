@@ -264,8 +264,11 @@ QString alexFilterRowsJson()
 // Core takes them on the air and keeps them for the next selection, as
 // Thetis's spinner handlers do (setup.cs:15888-15994 [v2.10.3.15]). The
 // bypass acts on receive only. Defaults are Thetis's spinner values
-// (codec::alex::AlexLpfEdges::thetisDefaults); the labels and edge boxes
-// are the desktop tab's (AntennaAlexAlex1Tab).
+// (codec::alex::AlexLpfEdges::thetisDefaults); each edge's min / max is its
+// spinner's Minimum / Maximum (codec::alex::kAlexLpfEdgeLimits,
+// setup.designer.cs [v2.10.3.15]), which the Core also enforces on a write
+// (StationServer::alexLpfKeyValueRefusal); the labels and edge boxes are the
+// desktop tab's (AntennaAlexAlex1Tab).
 QString alexLpfRowsJson()
 {
     const codec::alex::AlexLpfEdges defaults = codec::alex::AlexLpfEdges::thetisDefaults();
@@ -276,15 +279,26 @@ QString alexLpfRowsJson()
     for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
         const QString slug = QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[i]);
         const QString label = QString::fromLatin1(kLabels[i]);
-        const std::array<std::pair<const char*, double>, 2> leaves{{
-            {"start", defaults.rows[i].startMhz}, {"end", defaults.rows[i].endMhz}}};
-        for (const auto& [leaf, value] : leaves) {
+        const codec::alex::AlexLpfEdgeLimits& lim = codec::alex::kAlexLpfEdgeLimits[i];
+        struct Leaf {
+            const char* name;
+            double value;
+            double min;
+            double max;
+        };
+        const std::array<Leaf, 2> leaves{{
+            {"start", defaults.rows[i].startMhz, lim.startMin, lim.startMax},
+            {"end", defaults.rows[i].endMhz, lim.endMin, lim.endMax}}};
+        for (const Leaf& leafRow : leaves) {
+            const char* leaf = leafRow.name;
+            const double value = leafRow.value;
             const QString leafName = QString::fromLatin1(leaf);
             const QString word = leafName == QLatin1String("start")
                 ? QStringLiteral("Start") : QStringLiteral("End");
             rows << QString::fromLatin1(
-                R"j({"id":"hardware.alex1Filters.lpf.%1.%2","label":"%3 LPF %4","tooltip":"","kind":"decimal","binding":{"radioSetting":"alex/lpf/%1/%2"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":200,"step":0.001,"decimals":6,"unit":"MHz","default":%5})j")
-                .arg(slug, leafName, label, word, number(value));
+                R"j({"id":"hardware.alex1Filters.lpf.%1.%2","label":"%3 LPF %4","tooltip":"","kind":"decimal","binding":{"radioSetting":"alex/lpf/%1/%2"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10,"transmit":true},"requiresDescriptionVersion":16,"min":%6,"max":%7,"step":0.001,"decimals":6,"unit":"MHz","default":%5})j")
+                .arg(slug, leafName, label, word, number(value),
+                     number(leafRow.min), number(leafRow.max));
         }
     }
     // From Thetis setup.designer.cs:23484-23495 [v2.10.3.15] (chkLPFBypass):

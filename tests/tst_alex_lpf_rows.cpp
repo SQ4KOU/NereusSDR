@@ -32,6 +32,10 @@
 #include <QMetaProperty>
 #include <QSignalSpy>
 
+#include <cmath>
+#include <limits>
+#include <vector>
+
 #include "core/AppSettings.h"
 #include "core/P1RadioConnection.h"
 #include "core/P2RadioConnection.h"
@@ -174,6 +178,20 @@ private slots:
         // Where the defaults differ from the old fixed ladder.
         QTest::newRow("2.0 MHz is 160") << 2.0 << int(k160m);
         QTest::newRow("29.7 MHz is 10") << 29.7 << int(k10m);
+        // Review I2: the transmit low-pass selection changed in these ranges
+        // to match Thetis's spinner defaults (the old fixed ladder chose the
+        // next filter up). Each range's low end, middle and top, and the
+        // band tops 7.300, 14.350, 21.450 and 29.700 MHz.
+        QTest::newRow("2.25 MHz is 160") << 2.25 << int(k160m);
+        QTest::newRow("4.0 MHz is 80") << 4.0 << int(k80m);
+        QTest::newRow("4.5 MHz is 80") << 4.5 << int(k80m);
+        QTest::newRow("7.3 MHz is 40") << 7.3 << int(k40m);
+        QTest::newRow("7.65 MHz is 40") << 7.65 << int(k40m);
+        QTest::newRow("14.35 MHz is 20") << 14.35 << int(k20m);
+        QTest::newRow("15.5 MHz is 20") << 15.5 << int(k20m);
+        QTest::newRow("21.45 MHz is 15") << 21.45 << int(k15m);
+        QTest::newRow("22.5 MHz is 15") << 22.5 << int(k15m);
+        QTest::newRow("32.0 MHz is 10") << 32.0 << int(k10m);
     }
     void selection_eachBandEdge()
     {
@@ -204,6 +222,167 @@ private slots:
         e.rows[4].startMhz = 30.0;  // 15 m (tested last) inside 10 m
         e.rows[4].endMhz = 31.0;
         QCOMPARE(selectAlexLpf(30.5, e), k10m);
+        // Review M2: the rest of the order. 40 m before 80 m.
+        e = AlexLpfEdges::thetisDefaults();
+        e.rows[2].startMhz = 4.0;
+        QCOMPARE(selectAlexLpf(4.5, e), k40m);
+        // 80 m before 160 m.
+        e = AlexLpfEdges::thetisDefaults();
+        e.rows[1].startMhz = 1.8;
+        QCOMPARE(selectAlexLpf(2.0, e), k80m);
+        // 160 m before 6 m.
+        e = AlexLpfEdges::thetisDefaults();
+        e.rows[6].startMhz = 1.0;
+        QCOMPARE(selectAlexLpf(2.0, e), k160m);
+        // 6 m before 10 m.
+        e = AlexLpfEdges::thetisDefaults();
+        e.rows[6].startMhz = 34.0;
+        QCOMPARE(selectAlexLpf(35.0, e), k6m);
+    }
+
+    // ── Review C1: each edge holds to its Thetis spinner's range ─────────
+    // setup.designer.cs [v2.10.3.15], udAlex<band>LPFStart/End Minimum and
+    // Maximum (kAlexLpfEdgeLimits).
+    void limits_areThetisSpinnerRanges()
+    {
+        const double expect[kAlexLpfRowCount][4] = {
+            {0.0, 1.999999, 1.5, 2.5},        {1.8, 2.999999, 3.0, 5.0},
+            {4.0, 6.5, 6.500001, 8.0},        {7.0, 12.0, 12.000001, 16.5},
+            {15.5, 21.0, 23.000001, 25.0},    {24.0, 30.0, 30.000001, 35.6},
+            {34.0, 50.0, 50.000001, 61.44},
+        };
+        for (int i = 0; i < kAlexLpfRowCount; ++i) {
+            const AlexLpfEdgeLimits& l = kAlexLpfEdgeLimits[size_t(i)];
+            QCOMPARE(l.startMin, expect[i][0]);
+            QCOMPARE(l.startMax, expect[i][1]);
+            QCOMPARE(l.endMin, expect[i][2]);
+            QCOMPARE(l.endMax, expect[i][3]);
+            // Every default sits inside its range.
+            const AlexLpfRow d = AlexLpfEdges::thetisDefaults().rows[size_t(i)];
+            QVERIFY(alexLpfEdgeAllowed(i, false, d.startMhz));
+            QVERIFY(alexLpfEdgeAllowed(i, true, d.endMhz));
+        }
+        QVERIFY(alexLpfEdgeAllowed(0, true, 2.5));
+        QVERIFY(alexLpfEdgeAllowed(0, true, 1.5));
+        QVERIFY(!alexLpfEdgeAllowed(0, true, 30.0));
+        QVERIFY(!alexLpfEdgeAllowed(0, true, 1.499999));
+        QVERIFY(!alexLpfEdgeAllowed(0, true, std::nan("")));
+        QVERIFY(!alexLpfEdgeAllowed(0, true, std::numeric_limits<double>::infinity()));
+        QVERIFY(!alexLpfEdgeAllowed(-1, true, 2.0));
+        QVERIFY(!alexLpfEdgeAllowed(kAlexLpfRowCount, true, 2.0));
+        QCOMPARE(clampAlexLpfEdge(0, true, 30.0, 2.5), 2.5);
+        QCOMPARE(clampAlexLpfEdge(0, true, 1.0, 2.5), 1.5);
+        QCOMPARE(clampAlexLpfEdge(0, true, std::nan(""), 2.2), 2.2);
+        QCOMPARE(clampAlexLpfEdge(0, true, std::numeric_limits<double>::infinity(), 2.2), 2.2);
+        QCOMPARE(clampAlexLpfEdge(4, true, 23.0, 24.0), 23.000001);
+        QCOMPARE(clampAlexLpfEdge(6, true, 100.0, 61.44), 61.44);
+    }
+
+    // ── Review C1: 160m End set to 30, then a 25 MHz transmit ────────────
+    // The tab's spinner holds 2.5 MHz, a saved 30 (or a value that is not a
+    // number) reads as a value the spinner could hold, and the transmit
+    // low-pass at 25 MHz stays the 10 m filter.
+    void outOfRangeEdge_neverStoredOrApplied()
+    {
+        ConnectedP2 conn;
+        conn.setBoardForTest(HPSDRHW::Saturn);
+        conn.setTxFrequency(25000000ULL);
+        conn.setReceiverFrequency(2, 7100000ULL);
+        RadioModel model;
+        prepareCore(model, HPSDRHW::Saturn, &conn);
+        const QString endKey = QStringLiteral("alex/lpf/160m/end");
+        auto& settings = AppSettings::instance();
+
+        {
+            AntennaAlexAlex1Tab tab(&model);
+            tab.restoreSettings(kMac);
+            auto* end160 = named<QDoubleSpinBox>(tab, QStringLiteral("alexLpfEnd_160m"));
+            QVERIFY(end160);
+            QCOMPARE(end160->minimum(), 1.5);
+            QCOMPARE(end160->maximum(), 2.5);
+            end160->setValue(30.0);
+            QCOMPARE(end160->value(), 2.5);
+            const QString stored = settings.hardwareValue(kMac, endKey).toString();
+            QVERIFY2(stored.isEmpty() || stored.toDouble() == 2.5, qPrintable(stored));
+        }
+
+        // A saved value the spinner could not hold is not applied.
+        for (const QString& raw : {QStringLiteral("30"), QStringLiteral("nan"),
+                                   QStringLiteral("inf"), QStringLiteral("-inf")}) {
+            settings.setHardwareValue(kMac, endKey, raw);
+            QCOMPARE(RadioModel::savedAlexLpfEdges(kMac).rows[0].endMhz, 2.5);
+            model.applyAlexHpfSwitchSettings();
+            QCOMPARE(conn.alexLpfEdges().rows[0].endMhz, 2.5);
+            QCOMPARE(p2Lpf(conn).alex1, k10m);
+        }
+        settings.setHardwareValue(kMac, endKey, QStringLiteral("1"));
+        QCOMPARE(RadioModel::savedAlexLpfEdges(kMac).rows[0].endMhz, 1.5);
+
+        // The tab shows the value the radio uses.
+        settings.setHardwareValue(kMac, endKey, QStringLiteral("30"));
+        AntennaAlexAlex1Tab tab(&model);
+        tab.restoreSettings(kMac);
+        QCOMPARE(named<QDoubleSpinBox>(tab, QStringLiteral("alexLpfEnd_160m"))->value(), 2.5);
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── Review I1: the neighbour rule, one implementation ────────────────
+    // setup.cs:15888-15994 [v2.10.3.15]: each spinner's handler moves its
+    // neighbour one hertz clear, and the moved spinner's own handler runs.
+    void neighbourRule_cascadesAsThetisSpinnersDo()
+    {
+        AlexLpfRows rows = AlexLpfEdges::thetisDefaults().rows;
+        // 80m Start down to 1.8: the 160m End moves below it.
+        std::vector<AlexLpfEdgeMove> moved = applyAlexLpfEdgeEdit(rows, 1, false, 1.8);
+        QCOMPARE(rows[1].startMhz, 1.8);
+        QCOMPARE(moved.size(), size_t(1));
+        QCOMPARE(moved[0], (AlexLpfEdgeMove{0, true, 1.799999}));
+        QCOMPARE(rows[0].endMhz, 1.799999);
+
+        // 160m Start up to 1.9: the 160m End moves above it, and the moved
+        // End's handler moves the 80m Start above that.
+        moved = applyAlexLpfEdgeEdit(rows, 0, false, 1.9);
+        QCOMPARE(moved.size(), size_t(2));
+        QCOMPARE(moved[0], (AlexLpfEdgeMove{0, true, 1.900001}));
+        QCOMPARE(moved[1], (AlexLpfEdgeMove{1, false, 1.900002}));
+
+        // An edit that clears its neighbours moves nothing.
+        rows = AlexLpfEdges::thetisDefaults().rows;
+        QVERIFY(applyAlexLpfEdgeEdit(rows, 3, true, 16.0).empty());
+        // The 6m End has no handler.
+        QVERIFY(applyAlexLpfEdgeEdit(rows, 6, true, 55.0).empty());
+        // A neighbour held by its own range stops where the range does.
+        rows = AlexLpfEdges::thetisDefaults().rows;
+        moved = applyAlexLpfEdgeEdit(rows, 2, true, 8.0);
+        QVERIFY(moved.empty());
+        QVERIFY(!alexLpfNeighbourMove(rows, 2, true).has_value());
+        // The edited edge is held to its range first.
+        rows = AlexLpfEdges::thetisDefaults().rows;
+        applyAlexLpfEdgeEdit(rows, 0, true, 30.0);
+        QCOMPARE(rows[0].endMhz, 2.5);
+    }
+
+    // ── Review M1 + M3: a G2-class Core with a stored bypass ─────────────
+    // Thetis unchecks 6m/ByPass on the boards that hide it; the Core saves
+    // "False" once it knows the model, and the Alex0 word is the band's.
+    void g2Core_storedBypassClearedAndAlex0Unchanged()
+    {
+        ConnectedP2 conn;
+        conn.setBoardForTest(HPSDRHW::Saturn);
+        conn.setTxFrequency(28400000ULL);
+        conn.setReceiverFrequency(2, 7100000ULL);
+        RadioModel model;
+        prepareCore(model, HPSDRHW::Saturn, &conn);
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        const QString key = QStringLiteral("alex/master/lpfBypass");
+        AppSettings::instance().setHardwareValue(kMac, key, QStringLiteral("True"));
+        model.applyAlexHpfSwitchSettings();
+        const AlexLpfMasks w = p2Lpf(conn);
+        QCOMPARE(w.alex0, k40m);
+        QCOMPARE(w.alex1, k10m);
+        QCOMPARE(AppSettings::instance().hardwareValue(kMac, key).toString(),
+                 QStringLiteral("False"));
+        model.injectConnectionForTest(nullptr);
     }
 
     // ── The mask writes: SetAlexLPFBits ──────────────────────────────────
@@ -373,13 +552,17 @@ private slots:
         bypass->setChecked(false);
         QCOMPARE(p1Lpf(conn), k40m);
 
-        // Thetis's udAlex40mLPFEnd handler moves the 20 m start above it.
+        // Thetis's udAlex20mLPFStart handler moves the 40 m end below it.
+        // (The 40 m end cannot pass 8 MHz, its spinner's maximum.)
         end40->setValue(8.5);
-        QCOMPARE(start20->value(), 8.500001);
+        QCOMPARE(end40->value(), 8.0);
+        start20->setValue(7.5);
+        QCOMPARE(end40->value(), 7.499999);
         QCOMPARE(AppSettings::instance().hardwareValue(
-                     kMac, QStringLiteral("alex/lpf/20m/start")).toString().toDouble(),
-                 8.500001);
-        QCOMPARE(model.alexLpfEdges().rows[3].startMhz, 8.500001);
+                     kMac, QStringLiteral("alex/lpf/40m/end")).toString().toDouble(),
+                 7.499999);
+        QCOMPARE(model.alexLpfEdges().rows[2].endMhz, 7.499999);
+        QCOMPARE(model.alexLpfEdges().rows[3].startMhz, 7.5);
 
         // The indicator is the filter in use.
         QTRY_COMPARE(model.alexLpfBits(), int(k40m));
@@ -389,7 +572,8 @@ private slots:
     // ── A remote window's change reaches the Core ────────────────────────
     void remoteWindowWrite_reachesTheCore()
     {
-        // ANAN-100D on P2: the G2 family forces the bypass off (setup.cs).
+        // ANAN-100D on P2: the bypass is available (not a G2-class board),
+        // so a stored True applies.
         ConnectedP2 conn;
         conn.setBoardForTest(HPSDRHW::Angelia);
         conn.setReceiverFrequency(2, 7100000ULL);

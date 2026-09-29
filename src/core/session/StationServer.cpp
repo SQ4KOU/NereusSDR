@@ -33,6 +33,11 @@
 //                setAlexLPF does (radioHardwareVersion 10), and radio's
 //                alexLpfBits goes to a peer that declared alexLpf 1. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - A low-pass edge outside its spinner's range is refused
+//                (alexLpfKeyValueRefusal), and an accepted edge moves its
+//                neighbours as the Filters tab's rule does
+//                (applyAlexLpfNeighbourRule). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-28: R-R3-49 (lead's ruling): a calibration settings write
 //               outside its control's range (the Watt Meter points and
 //               their class, TX Display Cal, the correction factors, the
@@ -856,6 +861,9 @@
 #include "models/TunerModel.h"
 #include "core/setup/SetupDescriptionService.h"
 #include "core/PaCalProfile.h"
+#include "core/codec/AlexFilterMap.h"
+
+#include <optional>
 
 #include <cmath>
 #include <QJsonDocument>
@@ -1814,6 +1822,84 @@ bool isAlexLpfRowKey(const QString& rawKey)
         }
     }
     return false;
+}
+
+// One low-pass row edge's key: hardware/<mac>/alex/lpf/<slug>/<start|end>.
+struct AlexLpfEdgeKey {
+    QString mac;
+    QStringList prefix;  // the key's parts up to and including "lpf"
+    int row {0};
+    bool isEnd {false};
+};
+
+std::optional<AlexLpfEdgeKey> parseAlexLpfEdgeKey(const QString& rawKey)
+{
+    const QStringList parts = rawKey.split(QLatin1Char('/'));
+    if (parts.size() != 6
+        || parts[0].compare(QLatin1String("hardware"), Qt::CaseInsensitive) != 0
+        || parts[2].compare(QLatin1String("alex"), Qt::CaseInsensitive) != 0
+        || parts[3].compare(QLatin1String("lpf"), Qt::CaseInsensitive) != 0) {
+        return std::nullopt;
+    }
+    AlexLpfEdgeKey out;
+    out.mac = parts[1];
+    out.prefix = parts.mid(0, 4);
+    out.row = -1;
+    for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
+        if (parts[4].compare(QLatin1String(codec::alex::kAlexLpfRowSlugs[i]),
+                             Qt::CaseInsensitive) == 0) {
+            out.row = i;
+        }
+    }
+    if (out.row < 0) {
+        return std::nullopt;
+    }
+    if (parts[5].compare(QLatin1String("start"), Qt::CaseInsensitive) == 0) {
+        out.isEnd = false;
+    } else if (parts[5].compare(QLatin1String("end"), Qt::CaseInsensitive) == 0) {
+        out.isEnd = true;
+    } else {
+        return std::nullopt;
+    }
+    return out;
+}
+
+QString alexLpfEdgeKeyFor(const AlexLpfEdgeKey& base, int row, bool isEnd)
+{
+    QStringList parts = base.prefix;
+    parts << QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[row])
+          << (isEnd ? QStringLiteral("end") : QStringLiteral("start"));
+    return parts.join(QLatin1Char('/'));
+}
+
+// R-R3-46 / R-R3-49 (review C1): the plain refusal for a low-pass edge its
+// spinner could not hold; empty when it can, or when the key is not one.
+// The value is refused whole, never clamped, as the calibration values are.
+// The ranges are the spinners' own (codec::alex::kAlexLpfEdgeLimits,
+// setup.designer.cs [v2.10.3.15]): an edge outside them would send a
+// transmission through a low-pass below its frequency.
+QString alexLpfKeyValueRefusal(const QString& key, const QVariant& value)
+{
+    const std::optional<AlexLpfEdgeKey> edge = parseAlexLpfEdgeKey(key);
+    if (!edge) {
+        return {};
+    }
+    bool ok = false;
+    const double mhz = value.toString().toDouble(&ok);
+    if (ok && codec::alex::alexLpfEdgeAllowed(edge->row, edge->isEnd, mhz)) {
+        return {};
+    }
+    const codec::alex::AlexLpfEdgeLimits& lim =
+        codec::alex::kAlexLpfEdgeLimits[static_cast<size_t>(edge->row)];
+    const double lo = edge->isEnd ? lim.endMin : lim.startMin;
+    const double hi = edge->isEnd ? lim.endMax : lim.startMax;
+    // A band name (160m to 6m), "start" or "end", and the two limits.
+    const QString band = QLatin1String(codec::alex::kAlexLpfRowSlugs[edge->row]);
+    const QString edgeName = edge->isEnd ? QStringLiteral("end") : QStringLiteral("start");
+    const QString lowest = QString::number(lo, 'g', 10);
+    const QString highest = QString::number(hi, 'g', 10);
+    return QStringLiteral("Choose a %1 low-pass %2 from %3 to %4 MHz.")
+        .arg(band, edgeName, lowest, highest);
 }
 
 // Every settings key a receive-only Core refuses as transmit configuration.
@@ -7041,6 +7127,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), range));
         return;
     }
+    // R-R3-46 / R-R3-49 (review C1): a low-pass edge outside its spinner's
+    // range is refused whole, and the Core's value handed back.
+    if (const QString range = alexLpfKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
     // D79 (R-IOS-11, R-R3-49): a band plan this Core does not have is
     // refused, and the Core's value handed back.
     if (const QString plan = bandPlanRefusal(key, message.updates.first().value);
@@ -7065,6 +7161,41 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     }
     // Ruling 7.1a: a change applied at once tells the devices it disturbed.
     tellAppliedNow(applySettingsWrite(transport, message, nullptr));
+}
+
+// R-R3-46 / R-R3-49 (review I1): the Filters tab's neighbour rule, run on
+// the Core for a low-pass edge any window or the phone wrote, with the same
+// code the desktop tab runs (codec::alex::applyAlexLpfEdgeEdit, from Thetis
+// setup.cs:15888-15994 [v2.10.3.15]). The rows are read held to their
+// ranges, as RadioModel::savedAlexLpfEdges reads them; each neighbour moved
+// is stored, which the settings proxy sends to every peer.
+void StationServer::applyAlexLpfNeighbourRule(const QString& key)
+{
+    const std::optional<AlexLpfEdgeKey> edge = parseAlexLpfEdgeKey(key);
+    if (!edge) {
+        return;
+    }
+    codec::alex::AlexLpfRows rows = codec::alex::AlexLpfEdges::thetisDefaults().rows;
+    for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
+        for (const bool isEnd : {false, true}) {
+            double& slot = isEnd ? rows[static_cast<size_t>(i)].endMhz
+                                 : rows[static_cast<size_t>(i)].startMhz;
+            bool ok = false;
+            const double saved =
+                m_settings.value(alexLpfEdgeKeyFor(*edge, i, isEnd)).toString().toDouble(&ok);
+            if (ok) {
+                slot = codec::alex::clampAlexLpfEdge(i, isEnd, saved, slot);
+            }
+        }
+    }
+    const codec::alex::AlexLpfRow& edited = rows[static_cast<size_t>(edge->row)];
+    const double value = edge->isEnd ? edited.endMhz : edited.startMhz;
+    const std::vector<codec::alex::AlexLpfEdgeMove> moved =
+        codec::alex::applyAlexLpfEdgeEdit(rows, edge->row, edge->isEnd, value);
+    for (const codec::alex::AlexLpfEdgeMove& m : moved) {
+        m_settings.setValue(alexLpfEdgeKeyFor(*edge, m.row, m.isEnd),
+                            QString::number(m.mhz, 'f', 6));
+    }
 }
 
 QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
@@ -7165,6 +7296,10 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         }
         return false;
     }
+    // R-R3-46 / R-R3-49 (review I1): a low-pass edge moves its neighbours as
+    // the desktop tab's spinners do, stored here so every window and the
+    // phone see them, before the radio reads the rows.
+    applyAlexLpfNeighbourRule(key);
     // R-R3-21: a DSP > Options RX setting takes effect now, not at the next
     // mode change. R-R3-46: a Hardware Config setting reaches the Core's
     // own controllers (the radio, and their later saves) now too. RadioModel
@@ -7314,6 +7449,9 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
 {
     const QString key = QString::fromUtf8(message.objectKey);
     m_settings.remove(key);
+    // Removing a low-pass edge returns it to Thetis's default, which moves
+    // its neighbours as a write of that value does.
+    applyAlexLpfNeighbourRule(key);
     // R-R3-21: removing a DSP > Options RX setting returns it to its
     // default, which takes effect now as a write does. R-R3-46: so does a
     // Hardware Config setting. R-R3-47: and an accessory setting.

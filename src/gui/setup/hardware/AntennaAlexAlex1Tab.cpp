@@ -565,6 +565,15 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         LpfRowWidgets w;
         w.start = makeFreqSpin(band.startMhz, lpfFormWidget);
         w.end   = makeFreqSpin(band.endMhz,   lpfFormWidget);
+        {
+            // Each edge's own range, the spinner's Minimum / Maximum
+            // (setup.designer.cs [v2.10.3.15], kAlexLpfEdgeLimits).
+            const auto& lim = codec::alex::kAlexLpfEdgeLimits[m_lpfRows.size()];
+            w.start->setRange(lim.startMin, lim.startMax);
+            w.end->setRange(lim.endMin, lim.endMax);
+            w.start->setValue(band.startMhz);
+            w.end->setValue(band.endMhz);
+        }
         // radioHardwareVersion 10: the band edges select the low-pass
         // (RadioModel::savedAlexLpfEdges → RadioConnection::setAlexLpfEdges,
         // as Thetis's setAlexLPF reads udAlex<band>LPFStart/End).
@@ -1006,14 +1015,16 @@ void AntennaAlexAlex1Tab::restoreSettings(const QString& macAddress)
             const double v = settings.hardwareValue(macAddress,
                 QStringLiteral("alex/lpf/%1/start").arg(slug),
                 lpf[i].startMhz).toDouble();
-            m_lpfRows[i].start->setValue(v);
+            m_lpfRows[i].start->setValue(codec::alex::clampAlexLpfEdge(
+                static_cast<int>(i), /*isEnd=*/false, v, lpf[i].startMhz));
         }
         {
             QSignalBlocker b(m_lpfRows[i].end);
             const double v = settings.hardwareValue(macAddress,
                 QStringLiteral("alex/lpf/%1/end").arg(slug),
                 lpf[i].endMhz).toDouble();
-            m_lpfRows[i].end->setValue(v);
+            m_lpfRows[i].end->setValue(codec::alex::clampAlexLpfEdge(
+                static_cast<int>(i), /*isEnd=*/true, v, lpf[i].endMhz));
         }
     }
 
@@ -1122,47 +1133,30 @@ void AntennaAlexAlex1Tab::onLpfSpinChanged(double value, const QString& settings
 //   udAlex<b>LPFStart:  if (Start <= <prev>End) <prev>End = Start - 0.000001;
 //   udAlex<b>LPFEnd:    if (End >= <next>Start) <next>Start = End + 0.000001;
 //   (80, 40, 20, 15 and 10 m ends; udAlex6mLPFEnd has no handler.)
-// Setting the neighbour runs its own handler, which saves it, as Thetis's
-// Value set raises its ValueChanged.
+// The rule itself is codec::alex::alexLpfNeighbourMove, which the Core also
+// runs on a write from any window or the phone. Setting the neighbour runs
+// its own handler, which saves it and takes the next step, as Thetis's Value
+// set raises its ValueChanged.
 void AntennaAlexAlex1Tab::adjustLpfNeighbours(std::size_t row, bool isStart)
 {
-    constexpr double kStep = 0.000001;
-    if (row >= m_lpfRows.size()) {
+    if (row >= m_lpfRows.size()
+        || m_lpfRows.size() != static_cast<std::size_t>(codec::alex::kAlexLpfRowCount)) {
         return;
     }
-    QDoubleSpinBox* start = m_lpfRows[row].start;
-    QDoubleSpinBox* end   = m_lpfRows[row].end;
-    if (!start || !end) {
-        return;
-    }
-    if (row == 0) {
-        if (isStart) {
-            if (start->value() >= end->value() + kStep) {
-                end->setValue(start->value() + kStep);
-            }
+    codec::alex::AlexLpfRows rows{};
+    for (std::size_t i = 0; i < m_lpfRows.size(); ++i) {
+        if (!m_lpfRows[i].start || !m_lpfRows[i].end) {
             return;
         }
-        if (end->value() <= start->value()) {
-            start->setValue(end->value() - kStep);
-        } else if (m_lpfRows.size() > 1 && m_lpfRows[1].start
-                   && end->value() >= m_lpfRows[1].start->value()) {
-            m_lpfRows[1].start->setValue(end->value() + kStep);
-        }
+        rows[i] = {m_lpfRows[i].start->value(), m_lpfRows[i].end->value()};
+    }
+    const std::optional<codec::alex::AlexLpfEdgeMove> move =
+        codec::alex::alexLpfNeighbourMove(rows, static_cast<int>(row), !isStart);
+    if (!move) {
         return;
     }
-    if (isStart) {
-        QDoubleSpinBox* prevEnd = m_lpfRows[row - 1].end;
-        if (prevEnd && start->value() <= prevEnd->value()) {
-            prevEnd->setValue(start->value() - kStep);
-        }
-        return;
-    }
-    if (row + 1 < m_lpfRows.size()) {
-        QDoubleSpinBox* nextStart = m_lpfRows[row + 1].start;
-        if (nextStart && end->value() >= nextStart->value()) {
-            nextStart->setValue(end->value() + kStep);
-        }
-    }
+    const LpfRowWidgets& target = m_lpfRows[static_cast<std::size_t>(move->row)];
+    (move->isEnd ? target.end : target.start)->setValue(move->mhz);
 }
 
 // From Thetis setup.cs:18832-18835 [v2.10.3.15] (chkLPFBypass_CheckedChanged)

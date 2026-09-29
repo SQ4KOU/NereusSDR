@@ -1777,6 +1777,15 @@ private slots:
                      QJsonValue("alex/lpf/" + slugs[i] + "/end"));
             QCOMPARE(start.value("default").toDouble(), defaults.rows[size_t(i)].startMhz);
             QCOMPARE(end.value("default").toDouble(), defaults.rows[size_t(i)].endMhz);
+            // Alex LPF review C1: each edge's range is its Thetis spinner's
+            // (setup.designer.cs [v2.10.3.15], codec::alex::kAlexLpfEdgeLimits),
+            // the one the Core enforces (StationServer alexLpfKeyValueRefusal).
+            const codec::alex::AlexLpfEdgeLimits& lim =
+                codec::alex::kAlexLpfEdgeLimits[size_t(i)];
+            QCOMPARE(start.value("min").toDouble(), lim.startMin);
+            QCOMPARE(start.value("max").toDouble(), lim.startMax);
+            QCOMPARE(end.value("min").toDouble(), lim.endMin);
+            QCOMPARE(end.value("max").toDouble(), lim.endMax);
             QCOMPARE(start.value("gate").toObject().value("min"), QJsonValue(10));
             QCOMPARE(start.value("gate").toObject().value("transmit"), QJsonValue(true));
         }

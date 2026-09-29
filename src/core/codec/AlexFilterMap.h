@@ -32,6 +32,10 @@
 //                does, written to the Alex0 / Alex1 masks as netInterface.c
 //                SetAlexLPFBits writes them (radioHardwareVersion 10). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The low-pass edges' ranges (setup.designer.cs spinner
+//                Minimum / Maximum) and the neighbour rule (setup.cs
+//                udAlex*LPF*_ValueChanged) shared by the tab and the Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -114,6 +118,8 @@
 #include "../HpsdrModel.h"
 
 #include <array>
+#include <optional>
+#include <vector>
 
 namespace NereusSDR::codec::alex {
 
@@ -347,6 +353,77 @@ bool setAlexLpfBits(AlexLpfMasks& masks, quint8 bits, bool isTx, bool isMox) noe
 // once it is running. Returns true when either mask changed.
 bool setAlexLpf(AlexLpfMasks& masks, double freqMhz, bool freqIsTx, bool mox,
                 bool lpfBypass, bool alexPresent, const AlexLpfEdges& edges) noexcept;
+
+// Each low-pass edge's allowed range, the spinners' Minimum / Maximum.
+// From Thetis setup.designer.cs [v2.10.3.15]:
+//   udAlex160mLPFStart 0 (:24872) .. 1.999999 (:24867)
+//   udAlex160mLPFEnd   1.5 (:24842) .. 2.5 (:24837)
+//   udAlex80mLPFStart  1.8 (:24812) .. 2.999999 (:24807)
+//   udAlex80mLPFEnd    3 (:24782) .. 5 (:24777)
+//   udAlex40mLPFStart  4 (:24752) .. 6.5 (:24747)
+//   udAlex40mLPFEnd    6.500001 (:24722) .. 8.0 (:24717)
+//   udAlex20mLPFStart  7 (:24602) .. 12 (:24597)
+//   udAlex20mLPFEnd    12.000001 (:24662) .. 16.5 (:24657)
+//   udAlex15mLPFStart  15.5 (:24632) .. 21 (:24627)
+//   udAlex15mLPFEnd    23.000001 (:24692) .. 25.0 (:24687)
+//   udAlex10mLPFStart  24 (:24513) .. 30 (:24508)
+//   udAlex10mLPFEnd    30.000001 (:24483) .. 35.6 (:24478)
+//   udAlex6mLPFStart   34 (:24572) .. 50 (:24567)
+//   udAlex6mLPFEnd     50.000001 (:24543) .. 61.44 (:24538)
+// A 160 m End of 30 MHz would put a 25 MHz transmission through the 160 m
+// low-pass, so no path may store or apply an edge outside these.
+struct AlexLpfEdgeLimits {
+    double startMin;
+    double startMax;
+    double endMin;
+    double endMax;
+};
+inline constexpr std::array<AlexLpfEdgeLimits, kAlexLpfRowCount> kAlexLpfEdgeLimits = {{
+    {0.0,       1.999999,  1.5,       2.5},    // 160m
+    {1.8,       2.999999,  3.0,       5.0},    // 80m
+    {4.0,       6.5,       6.500001,  8.0},    // 40m
+    {7.0,       12.0,      12.000001, 16.5},   // 20m
+    {15.5,      21.0,      23.000001, 25.0},   // 15m
+    {24.0,      30.0,      30.000001, 35.6},   // 10m
+    {34.0,      50.0,      50.000001, 61.44},  // 6m
+}};
+
+// True when `mhz` is finite and inside the row edge's range (compared in
+// whole micro-MHz, the spinners' six decimals).
+bool alexLpfEdgeAllowed(int row, bool isEnd, double mhz) noexcept;
+
+// `mhz` held to the row edge's range; a non-finite value gives `fallback`
+// (itself held to the range).
+double clampAlexLpfEdge(int row, bool isEnd, double mhz, double fallback) noexcept;
+
+// One edge value an edit moved.
+struct AlexLpfEdgeMove {
+    int row {0};
+    bool isEnd {false};
+    double mhz {0.0};
+    bool operator==(const AlexLpfEdgeMove&) const noexcept = default;
+};
+
+// The Filters tab's neighbour rule for one edited edge: the neighbouring edge
+// it pushes, if any, rounded to six decimals and held to that edge's range.
+// From Thetis setup.cs:15888-15994 [v2.10.3.15]
+//   udAlex160mLPFStart: if (Start >= End + 0.000001) End = Start + 0.000001;
+//   udAlex160mLPFEnd:   if (End <= Start) Start = End - 0.000001;
+//                       else if (End >= 80mStart) 80mStart = End + 0.000001;
+//   udAlex<N>LPFStart (80..6m):  if (Start <= prevEnd) prevEnd = Start - 0.000001;
+//   udAlex<N>LPFEnd (80..10m):   if (End >= nextStart) nextStart = End + 0.000001;
+//   (udAlex6mLPFEnd has no handler.)
+std::optional<AlexLpfEdgeMove> alexLpfNeighbourMove(const AlexLpfRows& rows,
+                                                    int row, bool isEnd);
+
+// Sets one edge in `rows` (held to its range) and runs the neighbour rule to
+// rest, as Thetis's ValueChanged handlers cascade: each moved edge fires its
+// own handler. Returns the neighbours moved, in order (not the edited edge).
+// The Core runs this on every accepted low-pass write, so every window and
+// the phone see the moved neighbours; the desktop tab uses
+// alexLpfNeighbourMove one step at a time through its spin boxes.
+std::vector<AlexLpfEdgeMove> applyAlexLpfEdgeEdit(AlexLpfRows& rows, int row,
+                                                  bool isEnd, double mhz);
 
 // Whether "6m/ByPass on RX" applies on `model`. Thetis hides and unchecks
 // chkLPFBypass on five boards (NereusSDR shows it disabled, with the reason,

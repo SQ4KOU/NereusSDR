@@ -263,6 +263,7 @@ private slots:
     void olderCoreKeepsTheToolAndSwitchesClosedWithItsReason();
     void alexHpfSwitchesFromARemoteWindowOnAndOffTheAir();
     void localAlexHpfSwitchesStayLiveOnTheAir();
+    void alexLpfEdgesFromARemoteWindowKeepRangesAndMoveNeighbours();
     void reasonsArePlain();
 
 private:
@@ -698,6 +699,48 @@ void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
     QTRY_COMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/20m/start"))).toString(),
                  QStringLiteral("10.0"));
     QCOMPARE(rejected.count(), 1);
+}
+
+// Alex LPF review C1 and I1: a remote window's low-pass edge outside its
+// Thetis spinner's range is refused with the range in plain words and never
+// stored or applied; an accepted edge moves its neighbours on the Core
+// (setup.cs:15888-15994 [v2.10.3.15], codec::alex::applyAlexLpfEdgeEdit),
+// stored there so every window and the phone see them.
+void TstRemoteHl2Io::alexLpfEdgesFromARemoteWindowKeepRangesAndMoveNeighbours()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    s.core.model->applyAlexHpfSwitchSettings();
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 2.5);
+
+    // 160m End set to 30: refused, not stored, not applied.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/160m/end")), QStringLiteral("30"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().first().toString(), hw(QStringLiteral("alex/lpf/160m/end")));
+    QVERIFY(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString().isEmpty());
+    QCOMPARE(RadioModel::savedAlexLpfEdges(kMac).rows[0].endMhz, 2.5);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 2.5);
+    // And a value that is not a number.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/10m/end")), QStringLiteral("nan"));
+    QTRY_COMPARE(rejected.count(), 2);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[5].endMhz, 35.6);
+
+    // 40m End up to 8.5 is outside its range (6.500001 to 8) too.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/40m/end")), QStringLiteral("8.5"));
+    QTRY_COMPARE(rejected.count(), 3);
+
+    // 80m Start down to 1.8: taken, and the Core moves the 160m End below
+    // it, which every window sees and the radio uses.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/80m/start")), QStringLiteral("1.8"));
+    QTRY_COMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString(),
+                 QStringLiteral("1.799999"));
+    QTRY_COMPARE(s.proxy.value(hw(QStringLiteral("alex/lpf/160m/end")), {}).toString(),
+                 QStringLiteral("1.799999"));
+    QTRY_COMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 1.799999);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[1].startMhz, 1.8);
+    QCOMPARE(rejected.count(), 3);
 }
 
 void TstRemoteHl2Io::localAlexHpfSwitchesStayLiveOnTheAir()
