@@ -34,6 +34,11 @@
 //                                    releaseBinding for a Core left with no
 //                                    slice. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control fix wave (whole-branch
+//                                    review, Critical 1): releaseBinding
+//                                    unkeys through the unkey gate before
+//                                    the binding ends. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
@@ -350,6 +355,27 @@ void TxSliceArbiter::releaseBinding()
     const int old = m_txBoundSliceId;
     if (old < 0) {
         return;
+    }
+    // Slice control fix wave (whole-branch review, Critical 1): the
+    // binding never ends under a key. Keyed, the radio unkeys through the
+    // gate first, as a handoff does, and the binding ends once it is in
+    // receive (or the gate stopped transmit at once).
+    const bool keyed = m_mox && (m_mox->isMox() || m_mox->state() != MoxState::Rx);
+    if (keyed && m_unkeyGate) {
+        m_unkeyGate->unkey(QStringLiteral("The transmit slice closed."), this,
+                           [this, old](UnkeyOutcome) {
+            // A new binding or a slice on the same id meanwhile: nothing
+            // to end.
+            if (m_txBoundSliceId != old || sliceWithId(old) != nullptr) {
+                return;
+            }
+            m_txBoundSliceId = -1;
+            emit txBoundSliceChanged(old, -1);
+        });
+        return;
+    }
+    if (m_mox && m_mox->isMox()) {
+        m_mox->setMox(false);
     }
     m_txBoundSliceId = -1;
     emit txBoundSliceChanged(old, -1);

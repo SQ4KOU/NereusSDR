@@ -10,6 +10,10 @@
 //                                    arbiter's owner lookup is a transmit
 //                                    access check (setTransmitAccess).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control fix wave: releasing
+//                                    the binding while keyed unkeys
+//                                    through the unkey gate first.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QSignalSpy>
@@ -791,6 +795,66 @@ private slots:
         QVERIFY(!arb.bindForHolder(QByteArrayLiteral("pad"), 1));
         QVERIFY(!arb.requestHandoff(1, QByteArrayLiteral("pad")));
         QVERIFY(slices[0]->isTxSlice());
+    }
+
+    // Slice control fix wave (whole-branch review, Critical 1): the last
+    // slice closes while the radio is keyed. The binding ends only after
+    // the unkey gate saw receive, never with the radio still keyed.
+    void releasing_the_binding_while_keyed_waits_for_the_unkey()
+    {
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMoxController(&mox);
+        QVERIFY(arb.requestHandoff(0));
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        mox.setMox(true);
+        QTRY_COMPARE(mox.state(), MoxState::Tx);
+        QList<std::function<void()>> bounds;
+        UnkeyGate gate(&mox, [&mox]() { mox.setMox(false); }, [](const QString&) {});
+        gate.setScheduler([&bounds](int, QObject*, std::function<void()> fire) {
+            bounds.append(std::move(fire));
+        });
+        arb.setUnkeyGate(&gate);
+        QList<MoxState> stateAtRelease;
+        connect(&arb, &TxSliceArbiter::txBoundSliceChanged, this,
+                [&stateAtRelease, &mox](int, int now) {
+                    if (now == -1) { stateAtRelease.append(mox.state()); }
+                });
+
+        slices.clear();                       // the last slice closed
+        arb.releaseBinding();
+        QVERIFY(!mox.isMox());                // the unkey began at once
+        QTRY_COMPARE(stateAtRelease.size(), 1);
+        QCOMPARE(stateAtRelease.first(), MoxState::Rx);
+        QCOMPARE(arb.txBoundSliceId(), -1);
+    }
+
+    void releasing_the_binding_while_keyed_without_a_gate_unkeys_first()
+    {
+        QVector<SliceModel*> slices;
+        buildSlices(slices, 1);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setMoxController(&mox);
+        QVERIFY(arb.requestHandoff(0));
+        mox.setMox(true);
+        QTRY_COMPARE(mox.state(), MoxState::Tx);
+        QList<bool> moxAtRelease;
+        connect(&arb, &TxSliceArbiter::txBoundSliceChanged, this,
+                [&moxAtRelease, &mox](int, int now) {
+                    if (now == -1) { moxAtRelease.append(mox.isMox()); }
+                });
+
+        slices.clear();
+        arb.releaseBinding();
+        QCOMPARE(moxAtRelease, QList<bool>({false}));
+        QCOMPARE(arb.txBoundSliceId(), -1);
     }
 
 private:

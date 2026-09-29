@@ -24,7 +24,9 @@
 //   stopListening leaves it. Refused from its controller (ruling Q5: the
 //                 controller uses Release). The device's receive choice
 //                 moves to its next joined slice. A slice left with nobody
-//                 on it closes, except the last slice on the Core.
+//                 on it closes, the Core's last included (Task 7); while it
+//                 transmits the close waits and runs once the radio is in
+//                 receive, if still nobody is on it.
 //   takeControl   makes the device its controller, in one mark change: no
 //                 slice is removed or made, its DSP channel and audio
 //                 sources stay. The former controller stays a listener and
@@ -36,9 +38,9 @@
 //   release       the controller only: control is cleared and it leaves.
 //                 The slice stays for its other listeners, with no
 //                 controller (ruling Q9: nobody adopts it; Take control
-//                 does), or closes when nobody else is on it (the last
-//                 slice on the Core stays). Refused while the slice
-//                 transmits whenever it stays. The Core's other close paths
+//                 does), or closes when nobody else is on it (the Core's
+//                 last included, Task 7). Refused while the slice
+//                 transmits, before anything closes or changes. The Core's other close paths
 //                 act as this from a controller others listen with
 //                 (ruling Q6).
 //   selectRx      the device's active receive slice, any joined slice
@@ -75,6 +77,11 @@
 //               listener's own level and mute (setListenLevel, seeded from
 //               the slice's AF, ruling Q4), and the station device's local
 //               listening. AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1)
+//               by J.J. Boyd (KG4VCF): a release is refused while the
+//               slice transmits before any close; the comments name the
+//               last slice's close (Task 7). AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"

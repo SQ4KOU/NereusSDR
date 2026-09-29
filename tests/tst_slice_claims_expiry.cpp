@@ -12,6 +12,10 @@
 //   2026-09-29: created for NereusSDR by J.J. Boyd (KG4VCF), slice control
 //               and shared listening plan Task 8, with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave: a device's last slice expiring
+//               while radio PTT keys it closes only after the radio
+//               unkeys. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 //
 // A real Core over loopback links, with the session registry's clock
@@ -22,6 +26,8 @@
 #include "core/DdcAssignment.h"
 #include "core/ReceiverManager.h"
 #include "core/session/ReceiverPlanner.h"
+#include "core/TxSliceArbiter.h"
+#include "core/MoxController.h"
 
 #include <QSignalSpy>
 
@@ -199,6 +205,58 @@ private slots:
         const int restored = onlySliceOf(core, a);
         QVERIFY(restored >= 0);
         QCOMPARE(core.model->sliceById(restored)->frequency(), 7074000.0);
+    }
+
+    // Slice control fix wave (whole-branch review, Critical 1): the radio's
+    // own PTT keys A's only slice and A's 180 s end. The slice stays while
+    // the radio is keyed; once it unkeys, the slice closes and A's layout
+    // is saved. The transmit binding ends only with the radio unkeyed.
+    void aKeyedLoneSliceClosesOnlyOnceTheRadioUnkeys()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->slices().size(), 1);
+        const int a0 = onlySliceOf(core, a);
+        SliceModel* slice = core.model->sliceById(a0);
+        slice->setDspMode(DSPMode::USB);
+        slice->setFrequency(14200000.0);
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QCOMPARE(arbiter->txBoundSliceId(), a0);
+        MoxController* mox = core.model->moxController();
+        QList<bool> keyedAtUnbind;
+        connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, arbiter,
+                [&keyedAtUnbind, mox](int, int now) {
+                    if (now == -1) {
+                        keyedAtUnbind.append(mox->isMox() || mox->state() != MoxState::Rx);
+                    }
+                });
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+
+        core.now = 0;
+        drop(core, appA, a);
+        core.now = DeviceSessionRegistry::kGraceMs;
+        QCOMPARE(core.sessions().expireAway().size(), 1);
+        QVERIFY(core.model->sliceOwnership()->heldFor(a.key.fingerprint()).isEmpty());
+        QTest::qWait(50);
+        QVERIFY(core.model->sliceById(a0) != nullptr);
+        QVERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), a0);
+        QVERIFY(keyedAtUnbind.isEmpty());
+
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(core.model->slices().isEmpty());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(keyedAtUnbind, QList<bool>({false}));
+        const QList<SavedSlice> saved = DeviceLayoutStore::load(
+            AppSettings::instance(), core.model->currentRadioMac(), a.key.fingerprint());
+        QCOMPARE(saved.size(), 1);
+        QCOMPARE(saved.first().frequencyHz, 14200000.0);
     }
 
     // A drops at t0, returns at t0+170 s, drops again at t0+175 s: the

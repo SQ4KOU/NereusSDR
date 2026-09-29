@@ -34,6 +34,11 @@
 //              longer theirs; pendingHandoffSliceId names the waiting
 //              target, and pendingHandoffChanged announces it. J.J. Boyd
 //              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 Slice control fix wave (whole-branch review, Critical 1):
+//              releaseBinding unkeys through the unkey gate before the
+//              binding ends, so the radio is never left keyed with no
+//              transmit slice. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -175,7 +180,11 @@ public:
     /// slice to transmit on. Unlike syncToSliceList() on an empty list
     /// (which keeps a restored id for the first slice to come), this drops
     /// the binding and any waiting move, and announces the change with a
-    /// new id of -1. Never keys or unkeys.
+    /// new id of -1. Never keys. Keyed, it unkeys first: through the
+    /// unkey gate when one is set, the -1 following once the radio is in
+    /// receive (or the gate stopped transmit at once); without a gate MOX
+    /// drops before the -1. A slice made on the same id, or a new binding,
+    /// while the gate waits leaves the binding as it is then.
     void releaseBinding();
 
 public slots:

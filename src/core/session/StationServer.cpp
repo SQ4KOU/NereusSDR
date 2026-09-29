@@ -681,6 +681,12 @@
 //               word for its kind, or "another device"; the Core only for
 //               nobody or the station device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1):
+//               a slice nobody is on closes only once it stops
+//               transmitting (closeUnclaimedOrDefer, fireDeferredCloses);
+//               slice.release and slice.stopListening on the station's
+//               frozen slice are refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1767,6 +1773,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_txGate.setTransmitHolder(m_transmitHolder.get());
     connect(m_transmitHolder.get(), &TransmitHolder::changed, this,
             &StationServer::onTransmitHolderChanged);
+    // Slice control fix wave (whole-branch review, Critical 1): the station
+    // freeze ends with the holder's key; a close waiting for it may run.
+    connect(m_transmitHolder.get(), &TransmitHolder::changed, this,
+            &StationServer::scheduleDeferredCloses);
     m_connectedDevices->setTransmitProvider([this]() {
         ConnectedDevicesFacade::TransmitState state;
         if (const auto holder = m_transmitHolder->holder()) {
@@ -1939,6 +1949,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             if (m_sliceAccessSet) {
                 m_sliceAccessSet->refresh();
             }
+            // Slice control fix wave (whole-branch review, Critical 1): a
+            // close waiting for the unkey runs once MOX reads off.
+            scheduleDeferredCloses();
             // Task 77 (ruling 8.1): the station device's take (the radio's
             // PTT, the Core's own keys, its VOX) no longer ends with its
             // key: the station holds transmit, unkeyed, until a device
@@ -2918,6 +2931,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (m_sliceAccessSet) {
                     m_sliceAccessSet->refresh();
                 }
+                // Fix wave (whole-branch review, Critical 1): a close
+                // waiting on the pending slice may run now.
+                scheduleDeferredCloses();
             });
             // Ruling 8.10: the holder's choice is remembered for the next
             // time it holds transmit; connectedDevices.transmittingOn.
@@ -8080,7 +8096,11 @@ TxRefusal StationServer::freezeRefusalFor(const SessionMessage& message) const
         return {};
     }
     if (message.kind == SessionMessageKind::CommandInvoke
-        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand")) {
+        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand"
+            // Slice control fix wave (whole-branch review, Critical 1):
+            // leaving the frozen slice could close it under the key.
+            || message.commandVerb == "slice.release"
+            || message.commandVerb == "slice.stopListening")) {
         for (const MirrorUpdate& a : message.arguments) {
             if (a.name == "sliceId") {
                 return stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
@@ -8389,16 +8409,19 @@ void StationServer::releaseDeviceClaims(const QByteArray& deviceId,
     // or with the key it enrolled) adopts them with their tuning. It cannot
     // be recognised, and nothing is saved for it.
     const bool keptForAdoption = token && !anotherDeviceHoldsAPlace(deviceId);
+    // Slice control fix wave (whole-branch review, Critical 1): a slice
+    // still on the air (the radio's own PTT on it) is not closed under the
+    // key; its close waits for the unkey (closeUnclaimedOrDefer).
     for (int sliceId : removed.releasedControl) {
         if (keptForAdoption || !ownership->unclaimed().contains(sliceId)) {
             continue;
         }
-        closeSliceFor(sliceId, saves ? deviceId : QByteArray(), nullptr, /*unclaimed=*/true);
+        closeUnclaimedOrDefer(sliceId, saves ? deviceId : QByteArray(), /*saveLayout=*/true);
         if (!self || !m_radioModel) return;
     }
     for (int sliceId : removed.leftListening) {
         if (ownership->unclaimed().contains(sliceId)) {
-            m_radioModel->closeUnclaimedSlice(sliceId);
+            closeUnclaimedOrDefer(sliceId, QByteArray(), /*saveLayout=*/false);
             if (!self || !m_radioModel) return;
         }
     }
@@ -8655,7 +8678,9 @@ bool StationServer::closeSliceNobodyIsOn(int sliceId)
     // Slice control plan Task 7: a slice nobody is on closes whatever the
     // count; the Core may be left with none.
     if (m_radioModel->sliceOwnership()->unclaimed().contains(sliceId)) {
-        return m_radioModel->closeUnclaimedSlice(sliceId);
+        // Fix wave (whole-branch review, Critical 1): not under a key; the
+        // close waits for the unkey.
+        return closeUnclaimedOrDefer(sliceId, QByteArray(), /*saveLayout=*/false);
     }
     // Its controller's own close (a release with nobody else on it): the
     // last slice stays for the release to hand to nobody first.
@@ -8664,6 +8689,73 @@ bool StationServer::closeSliceNobodyIsOn(int sliceId)
     }
     m_radioModel->removeSlice(sliceId);
     return m_radioModel && m_radioModel->sliceById(sliceId) == nullptr;
+}
+
+bool StationServer::closeUnclaimedOrDefer(int sliceId, const QByteArray& saveFor,
+                                          bool saveLayout)
+{
+    if (m_radioModel.isNull() || m_radioModel->sliceById(sliceId) == nullptr) {
+        return false;
+    }
+    // Slice control fix wave (whole-branch review, Critical 1): a slice on
+    // the air is never closed under the key. Its close is kept for this
+    // incarnation and runs once the radio is in receive, if nobody came
+    // back to it meanwhile.
+    if (sliceTransmitting(sliceId)) {
+        DeferredClose deferred;
+        deferred.incarnation = m_radioModel->sliceOwnership()->incarnation(sliceId);
+        deferred.saveFor = saveFor;
+        deferred.saveLayout = saveLayout;
+        m_deferredCloses.insert(sliceId, deferred);
+        qCInfo(lcStation) << "A slice nobody is on closes once it stops transmitting:" << sliceId;
+        return false;
+    }
+    m_deferredCloses.remove(sliceId);
+    if (saveLayout) {
+        return closeSliceFor(sliceId, saveFor, nullptr, /*unclaimed=*/true);
+    }
+    return m_radioModel->closeUnclaimedSlice(sliceId);
+}
+
+void StationServer::scheduleDeferredCloses()
+{
+    if (m_deferredCloses.isEmpty() || m_deferredClosesQueued) {
+        return;
+    }
+    m_deferredClosesQueued = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_deferredClosesQueued = false;
+        fireDeferredCloses();
+    });
+}
+
+void StationServer::fireDeferredCloses()
+{
+    const QPointer<StationServer> self(this);
+    if (m_radioModel.isNull() || m_deferredCloses.isEmpty()) {
+        return;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    const QList<int> ids = m_deferredCloses.keys();
+    for (int sliceId : ids) {
+        const auto it = m_deferredCloses.constFind(sliceId);
+        if (it == m_deferredCloses.constEnd()) {
+            continue;
+        }
+        const DeferredClose deferred = it.value();
+        // Another slice on the id, or someone on it again: nothing to close.
+        if (m_radioModel->sliceById(sliceId) == nullptr
+            || ownership->incarnation(sliceId) != deferred.incarnation
+            || !ownership->unclaimed().contains(sliceId)) {
+            m_deferredCloses.remove(sliceId);
+            continue;
+        }
+        if (sliceTransmitting(sliceId)) {
+            continue;
+        }
+        closeUnclaimedOrDefer(sliceId, deferred.saveFor, deferred.saveLayout);
+        if (!self || !m_radioModel) return;
+    }
 }
 
 void StationServer::tellControlTaken(int sliceId, const QByteArray& former,

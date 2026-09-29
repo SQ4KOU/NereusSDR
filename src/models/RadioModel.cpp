@@ -604,6 +604,10 @@
 //                change moves only slices this window controls.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave (whole-branch review, Minor 3):
+//                requestTxHandoffToSlice checks the station's access, as
+//                the remote tx.setTxSlice does. NereusSDR-original. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -11310,6 +11314,20 @@ void RadioModel::clearNnrLimit(SliceModel* slice)
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
 {
     if (m_txSliceArbiter == nullptr) { return false; }
+    // Slice control fix wave (whole-branch review, Minor 3): the Core's own
+    // window moves transmit only onto a slice it may carry transmit on, or
+    // one nobody is on (the station's rule, as StationTciController's);
+    // another device's slice, or one the window only listens to, is
+    // refused as the remote verb refuses it.
+    if (m_role == Role::Local && m_sliceOwnership != nullptr
+        && m_sliceOwnership->isLive(sliceId)
+        && !SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership,
+                                             SliceOwnership::stationDevice(), sliceId)
+        && !SliceAccessPolicy::stationMayChangeUnclaimed(*m_sliceOwnership, sliceId)) {
+        emit m_txSliceArbiter->handoffBlocked(sliceId,
+                                              QStringLiteral("That slice is another device's."));
+        return false;
+    }
     if (!m_txSliceArbiter->requestHandoff(sliceId)) {
         return false;
     }

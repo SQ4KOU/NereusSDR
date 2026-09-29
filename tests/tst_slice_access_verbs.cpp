@@ -23,6 +23,11 @@
 //               receive selection leaving transmit alone, slice control
 //               plan Task 11. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control fix wave: a keyed slice is never closed by
+//               stopListening or release (deferred or refused), the
+//               station freeze covers both verbs, and the local transmit
+//               hand-off obeys the same access rule as the remote verb.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -905,9 +910,13 @@ private slots:
         QCOMPARE(core.server->explicitTxSliceFor(a.key.fingerprint()), -1);
 
         // The hosting desktop's own selection is the station device's.
+        // Fix wave (Minor 3): a slice nobody is on, since the window may
+        // not move transmit onto another device's.
         QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), -1);
-        QVERIFY(core.model->requestTxHandoffToSlice(0));
-        QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), 0);
+        const int free = core.model->addSlice();
+        QVERIFY(free >= 0);
+        QVERIFY(core.model->requestTxHandoffToSlice(free));
+        QCOMPARE(core.server->explicitTxSliceFor(SliceOwnership::stationDevice()), free);
     }
 
     // ── Keying on a slice taken from another device (Task 11, ruling Q8) ──
@@ -1350,6 +1359,174 @@ private slots:
         // Core's last slice included.
         QVERIFY(core.model->sliceById(0) == nullptr);
         QVERIFY(core.model->slices().isEmpty());
+    }
+
+    // Slice control fix wave (whole-branch review, Critical 1): while the
+    // radio's own PTT keys a slice (ruling 8.11), a device can neither
+    // release it nor stop listening to it. Before, the release closed the
+    // keyed slice and MOX dropped by list repair.
+    void theRadiosKeyedSliceCannotBeReleasedOrLeft()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appA) && admitted(appB));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QVERIFY(accepted(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})));
+        QCOMPARE(ownership->ownedBy(a.key.fingerprint()).size(), 2);
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        const int keyed = arbiter->txBoundSliceId();
+        QVERIFY(ownership->ownedBy(a.key.fingerprint()).contains(keyed));
+        core.model->sliceById(keyed)->setDspMode(DSPMode::USB);
+        core.model->sliceById(keyed)->setFrequency(14200000.0);
+        QTRY_VERIFY(holds(appB, accessKey(keyed)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, keyed)))));
+
+        MoxController* mox = core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QTRY_VERIFY(holds(appA, accessKey(keyed)));
+
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        QJsonObject r = core.invoke(appA, "slice.release", revisionArgs(seenBy(appA, keyed)));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), onAir);
+        r = core.invoke(appB, "slice.stopListening", refArgs(seenBy(appB, keyed)));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), onAir);
+        QVERIFY(core.model->sliceById(keyed) != nullptr);
+        QCOMPARE(ownership->mark(keyed).owner, a.key.fingerprint());
+        QVERIFY(ownership->isListening(b.key.fingerprint(), keyed));
+        QVERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), keyed);
+
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        r = core.invoke(appA, "slice.release", revisionArgs(seenBy(appA, keyed)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+    }
+
+    // Critical 1: the last one on a keyed slice leaves it. The leave stands;
+    // the slice closes only once the radio is unkeyed, never under the key.
+    void aKeyedSliceLeftByItsLastListenerClosesOnceUnkeyed()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->slices().size(), 1);
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        const int only = ownership->ownedBy(a.key.fingerprint()).first();
+        core.model->sliceById(only)->setDspMode(DSPMode::USB);
+        core.model->sliceById(only)->setFrequency(14200000.0);
+        SliceAccessController* access = core.server->sliceAccessController();
+        const QByteArray& station = SliceOwnership::stationDevice();
+        QVERIFY(access->listen(station, ownership->refOf(only)).accepted);
+        QTRY_VERIFY(holds(appA, accessKey(only)));
+        QJsonObject r = core.invoke(appA, "slice.release", revisionArgs(seenBy(appA, only)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QVERIFY(ownership->mark(only).owner.isEmpty());
+        QCOMPARE(ownership->listenersOf(only), QList<QByteArray>{station});
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QCOMPARE(arbiter->txBoundSliceId(), only);
+        QList<bool> keyedAtUnbind;
+        MoxController* mox = core.model->moxController();
+        connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, arbiter,
+                [&keyedAtUnbind, mox](int, int now) {
+                    if (now == -1) {
+                        keyedAtUnbind.append(mox->isMox() || mox->state() != MoxState::Rx);
+                    }
+                });
+
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const SliceAccessController::Result left =
+            access->stopListening(station, ownership->refOf(only));
+        QVERIFY2(left.accepted, qPrintable(left.reason));
+        QVERIFY(!ownership->isListening(station, only));
+        QTest::qWait(50);
+        QVERIFY(core.model->sliceById(only) != nullptr);
+        QVERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), only);
+
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(core.model->slices().isEmpty());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(keyedAtUnbind, QList<bool>({false}));
+    }
+
+    // Critical 1: a slice someone joins again before the key ends stays.
+    void aDeferredCloseIsDroppedWhenSomeoneComesBack()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        const int only = ownership->ownedBy(a.key.fingerprint()).first();
+        core.model->sliceById(only)->setDspMode(DSPMode::USB);
+        core.model->sliceById(only)->setFrequency(14200000.0);
+        SliceAccessController* access = core.server->sliceAccessController();
+        const QByteArray& station = SliceOwnership::stationDevice();
+        QVERIFY(access->listen(station, ownership->refOf(only)).accepted);
+        QTRY_VERIFY(holds(appA, accessKey(only)));
+        QVERIFY(accepted(core.invoke(appA, "slice.release", revisionArgs(seenBy(appA, only)))));
+        MoxController* mox = core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QVERIFY(access->stopListening(station, ownership->refOf(only)).accepted);
+        QVERIFY(access->listen(station, ownership->refOf(only)).accepted);
+
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTest::qWait(50);
+        QVERIFY(core.model->sliceById(only) != nullptr);
+        QVERIFY(ownership->isListening(station, only));
+    }
+
+    // Minor 3: the Core's own window moves transmit only onto a slice it
+    // controls or one nobody is on, the check the remote tx.setTxSlice
+    // makes. Another device's slice is refused and nothing moves.
+    void theLocalWindowCannotMoveTransmitOntoAnotherDevicesSlice()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QVERIFY(accepted(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})));
+        const QList<int> owned = ownership->ownedBy(a.key.fingerprint());
+        QCOMPARE(owned.size(), 2);
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        const int bound = arbiter->txBoundSliceId();
+        const int other = owned.first() == bound ? owned.last() : owned.first();
+        QSignalSpy selected(core.model.get(), &RadioModel::txSliceSelected);
+
+        QVERIFY(!core.model->requestTxHandoffToSlice(other));
+        QCOMPARE(arbiter->txBoundSliceId(), bound);
+        QCOMPARE(selected.count(), 0);
+
+        // A slice nobody is on is the window's to choose.
+        const int free = core.model->addSlice();
+        QVERIFY(free >= 0);
+        QVERIFY(ownership->unclaimed().contains(free));
+        QVERIFY(core.model->requestTxHandoffToSlice(free));
+        QCOMPARE(arbiter->txBoundSliceId(), free);
     }
 
     // Slice control plan Task 7: zero slices is a valid idle Core. The only

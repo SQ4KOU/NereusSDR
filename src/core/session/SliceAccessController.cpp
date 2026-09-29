@@ -24,6 +24,11 @@
 //               listener's own level and mute, seeded from the slice's AF
 //               (ruling Q4), and the station device's local listening.
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1)
+//               by J.J. Boyd (KG4VCF): a release is refused while the
+//               slice transmits before any close; the comments name the
+//               last slice's close (Task 7). AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -313,6 +318,12 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
     if (!SliceAccessPolicy::mayChange(*own, device, sliceId)) {
         return refused(notControllerReason(letter));
     }
+    // Slice control fix wave (whole-branch review, Critical 1): a release
+    // never closes or hands off a slice on the air. Checked before the
+    // close hook, which would otherwise close the transmitting slice.
+    if (m_hooks.transmitting && m_hooks.transmitting(sliceId)) {
+        return refused(releaseWhileTransmittingReason(letter));
+    }
     Result result;
     result.accepted = true;
     result.affected = keysOf(sliceId);
@@ -323,12 +334,8 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
             return result;
         }
         // The Core's last slice, which a close of a controlled slice leaves
-        // alone: a hand-off to nobody as below, so not while it transmits
-        // (slice control fix wave, Important 1). The close above changed
-        // nothing.
-        if (m_hooks.transmitting && m_hooks.transmitting(sliceId)) {
-            return refused(releaseWhileTransmittingReason(letter));
-        }
+        // alone: a hand-off to nobody as below (not while it transmits,
+        // refused above). The close above changed nothing.
         if (m_hooks.clearTransmitSelection) {
             m_hooks.clearTransmitSelection(device, sliceId);
         }
@@ -339,11 +346,8 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
         closeIfNobodyIsOn(sliceId);
         return result;
     }
-    // Kept for its listeners: a hand-off to nobody, so not while it
-    // transmits.
-    if (m_hooks.transmitting && m_hooks.transmitting(sliceId)) {
-        return refused(releaseWhileTransmittingReason(letter));
-    }
+    // Kept for its listeners: a hand-off to nobody (not while it
+    // transmits, refused above).
     if (m_hooks.clearTransmitSelection) {
         m_hooks.clearTransmitSelection(device, sliceId);
     }

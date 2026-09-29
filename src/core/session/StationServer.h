@@ -449,6 +449,11 @@
 //   2026-09-29: slice control plan Task 17: sliceHolderWords(), who holds
 //               a slice as a refusal names it. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1):
+//               closeUnclaimedOrDefer() and fireDeferredCloses(), a slice
+//               nobody is on closes only once it is not transmitting.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1837,6 +1842,18 @@ private:
     /// Slice control plan Task 4: closes a slice nobody is on (false: the
     /// Core's last slice stays).
     bool closeSliceNobodyIsOn(int sliceId);
+    /// Slice control fix wave (whole-branch review, Critical 1): closes a
+    /// slice nobody is on (saving it for `saveFor` when set and
+    /// `saveLayout`), or, while it transmits (sliceTransmitting), records
+    /// the close for fireDeferredCloses and returns false.
+    bool closeUnclaimedOrDefer(int sliceId, const QByteArray& saveFor, bool saveLayout);
+    /// Runs each deferred close whose slice no longer transmits, if it is
+    /// still the same slice (incarnation) and still nobody is on it; a
+    /// slice someone came back to drops its record.
+    void fireDeferredCloses();
+    /// Queues fireDeferredCloses once on the event loop (MOX, transmit
+    /// holder and pending hand-off changes).
+    void scheduleDeferredCloses();
     /// Slice control plan Task 4: the former controller is told.
     void tellControlTaken(int sliceId, const QByteArray& former, const QByteArray& taker);
     /// Ruling 5.9, slice control plan Task 2: the plain refusal when
@@ -2125,6 +2142,15 @@ private:
     /// Slice control fix wave (Important 4): each device's explicit
     /// transmit choice (explicitTxSliceFor).
     QHash<QByteArray, int> m_explicitTxSlice;
+    /// Slice control fix wave (whole-branch review, Critical 1): closes of
+    /// a slice nobody is on, waiting for it to stop transmitting, by id.
+    struct DeferredClose {
+        quint64 incarnation = 0;
+        QByteArray saveFor;
+        bool saveLayout = false;
+    };
+    QHash<int, DeferredClose> m_deferredCloses;
+    bool m_deferredClosesQueued = false;
     /// The holder epoch the transmit slice was last bound for.
     quint64 m_txSliceBoundEpoch = 0;
     /// Section 7.3's refusal for an older window, naming who a change
