@@ -178,6 +178,14 @@
 //                                    the hand-off and controlTaken words'
 //                                    names and letter are plain inserts.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 5:
+//                                    SliceAccessMirror::listenerReason
+//                                    scanned (the Core's listener words,
+//                                    held back in a remote window);
+//                                    RadioModel forwards it; the link's
+//                                    sliceAccessUnavailableReason and
+//                                    SliceModel's getter are app side.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1246,6 +1254,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("why")}},
         {"src/models/SliceModel.cpp",
          {QStringLiteral("activeWriteReason"), QStringLiteral("applyMirroredValue")}, {}, 5},
+        // Slice control plan Task 5: a remote window's copy of the Core's
+        // listener words (StationServer::listenerChangeReason), shown when
+        // it holds back a change to a slice it only listens to. The slice
+        // letter (A to P) and the controller's name, the operator's own
+        // word (ruling 4.3).
+        {"src/core/session/SliceAccessMirror.cpp", {QStringLiteral("listenerReason")}, {}, 3,
+         {QStringLiteral("letter"), QStringLiteral("owner")}},
         {"src/models/TunerModel.cpp", {QStringLiteral("applyMirroredValue")}, {}, 2},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),
@@ -1366,7 +1381,10 @@ const QList<ReasonSource>& reasonSources()
           // the link's own reason for a request it could not send; and
           // stationOnAirRefusal's reason (onAirReason, scanned here).
           QStringLiteral("unreachable"), QStringLiteral("ioBoardNoAnswerReason()"),
-          QStringLiteral("onAir")}},
+          QStringLiteral("onAir"),
+          // Slice control plan Task 5: a held NNR diagnostics request says
+          // the words SliceAccessMirror::listenerReason made (scanned).
+          QStringLiteral("slice->readOnlyListenerReason()")}},
         // R-R3-49 (parity Task 2): a transmit setting's range, in
         // property.result and setTunePowerForTxBand's command.result. The
         // inserts are the setters' own range numbers.
@@ -1504,6 +1522,11 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own fallback when its Core cannot validate settings"},
         {"src/core/session/IStationLink.h", "modMonitorUnavailableReason",
          "a remote window's own fallback when its Core cannot send modulation readings"},
+        // Slice control plan Task 5.
+        {"src/core/session/IStationLink.h", "sliceAccessUnavailableReason",
+         "a remote window's own reason when its Core cannot share slices"},
+        {"src/models/SliceModel.h", "readOnlyListenerReason",
+         "getter of the words SliceAccessMirror::listenerReason made (scanned)"},
         {"src/core/SettingsHygiene.h", "remoteUnavailableReason",
          "getter for desktop state set by StationClient and read by diagnostics pages"},
         {"src/core/station/StationRadios.h", "waitingReason",

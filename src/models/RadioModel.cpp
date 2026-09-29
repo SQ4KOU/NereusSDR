@@ -565,6 +565,12 @@
 //                device's active receive slice among the slices it has
 //                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8704,6 +8710,10 @@ bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
         return false;
     }
     if (role() == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            if (reason) { *reason = slice->readOnlyListenerReason(); }
+            return false;
+        }
         const auto result = m_station ? m_station->requestNnrDiagnostics(sliceId, testMode, outputMode)
             : IStationLink::CommandOutcome{false, tr("This app is not connected to the Core.")};
         if (reason) { *reason = result.reason; }
@@ -9976,6 +9986,18 @@ QVector<int> RadioModel::allowedStreamSampleRates() const
     return out;
 }
 
+bool RadioModel::holdSliceRequestForListener(int sliceId)
+{
+    // Slice control plan Task 5. The Core refuses these from a listener as
+    // it refuses any change; holding them here keeps the window from
+    // showing a change that never happened.
+    if (m_role != Role::Remote) {
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    return slice != nullptr && slice->holdForListener();
+}
+
 // Codex review round 7, PR #293. See RadioModel.h.
 void RadioModel::applyRestoredSampleRate(SliceModel* slice)
 {
@@ -10065,6 +10087,9 @@ void RadioModel::applySavedSliceSampleRates(const QHash<int, int>& saved,
 bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(QStringLiteral("the C-Tune pin change")));
             return false;
@@ -10087,6 +10112,9 @@ bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceRetuneRejected(sliceId,
                 noStationReason(QStringLiteral("the C-Tune center change")));
@@ -10260,6 +10288,9 @@ void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
     // allocator) is the one worth putting in front of an operator. It
     // comes back through reportStationRetuneRejected().
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action =
             QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000);
         if (m_station == nullptr) {
@@ -11324,6 +11355,11 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // once, as an ordinary new slice does, instead of waiting for
     // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
+    // Slice control plan Task 5: a change held back on a slice a remote
+    // window only listens to is announced once, here, for the window.
+    connect(slice, &SliceModel::listenerWriteHeld, this, [this, slice](const QString& reason) {
+        emit sliceRequestHeldForListener(slice->sliceIndex(), reason);
+    });
     // Most persisted slice signals are wired by wireSliceSignals only once a
     // radio connects. A disconnected station still exposes writable receiver
     // properties, so track their edits while layout persistence is held.
@@ -11916,6 +11952,9 @@ void RadioModel::removeSlice(int sliceId)
     // STATION made. removeSliceWithStationId() is the door the session's
     // own inbound object.destroy comes through.
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action = QStringLiteral("the request to close this slice");
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(action));
@@ -13544,6 +13583,12 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
     if (!slice) {
         // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    // Slice control plan Task 5: a band change on a slice a remote window
+    // only listens to is held back, whichever path would carry it.
+    if (m_role == Role::Remote && holdSliceRequestForListener(slice->sliceIndex())) {
         return;
     }
 

@@ -10,6 +10,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               controlTaken notice and the slice access refusals and holds
+//               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -58,6 +62,14 @@ MultiDeviceController::MultiDeviceController(StationClient* client, QWidget* dia
             &MultiDeviceController::markersChanged);
     connect(m_client, &StationClient::deviceCommandFinished, this,
             &MultiDeviceController::onCommandFinished);
+    // Slice control plan Task 5: a change held back on a slice this window
+    // only listens to says why, as the Core's refusal would.
+    connect(m_client, &StationClient::sliceAccessHeld, this,
+            [this](int, const QString& reason) {
+                if (!reason.isEmpty()) {
+                    emit refusal(reason);
+                }
+            });
 }
 
 MultiDeviceController::~MultiDeviceController()
@@ -198,7 +210,33 @@ void MultiDeviceController::onNoticesChanged()
     if (!m_client) {
         return;
     }
-    const QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
+    QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
+    // Slice control plan Task 5: another device took control of a slice
+    // this window controlled. It is said once, as a refusal toast, and not
+    // kept as a card (it offers no Take it back).
+    QList<qint64> controlTaken;
+    for (auto it = notices.begin(); it != notices.end();) {
+        if (it->prompt.kind == QStringLiteral("controlTaken")) {
+            controlTaken.append(it->prompt.id);
+            if (!it->reason.isEmpty()) {
+                emit refusal(it->reason);
+            }
+            it = notices.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (qint64 id : controlTaken) {
+        if (!m_client) {
+            return;
+        }
+        // Re-enters onNoticesChanged with the notice gone.
+        m_client->remoteDevices()->dismissNotice(id);
+    }
+    if (!m_client) {
+        return;
+    }
+    notices = m_client->remoteDevices()->notices();
     QSet<qint64> live;
     for (const RemotePrompt& notice : notices) {
         live.insert(notice.prompt.id);

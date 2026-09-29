@@ -17,7 +17,12 @@
 //                       sharedSetting / panMove: ConfirmChangeDialog;
 //                       takeReceiver / takeSlice: TakeReceiverDialog;
 //                       each answers confirm.proceed or confirm.cancel
-//   notice              a NoticeCard on the band, Take it back when offered
+//   notice              a NoticeCard on the band, Take it back when offered;
+//                       controlTaken is a refusal toast instead (slice
+//                       control plan Task 5)
+//   slice access        a refused listen, stop listening, take control or
+//                       release, and a change held back on a slice this
+//                       window only listens to, are refusals
 //   markers             foreignMarkers() for each panadapter
 //
 // Nothing here keys the radio: a take never keys (the link document,
@@ -28,6 +33,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               controlTaken notice and the slice access refusals and holds
+//               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -76,7 +85,9 @@ public:
     QList<NoticeCard*> noticeCards() const;
 
 signals:
-    /// A refusal to show the operator (a take, an answer, Take it back).
+    /// A refusal to show the operator (a take, an answer, Take it back; a
+    /// slice access verb, a change held back on a listened slice, another
+    /// device taking control of a slice this window controlled).
     void refusal(const QString& reason);
     /// tx.take was accepted: this window holds transmit.
     void transmitTaken();

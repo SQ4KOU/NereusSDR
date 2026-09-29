@@ -58,6 +58,11 @@
 //                                    follows the Core's band plan, strip
 //                                    and menu check.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
+//                                    plan Task 5: a window whose Core sends
+//                                    no sliceAccessVersion sends no slice
+//                                    access request and tunes as before.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -83,6 +88,7 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -101,6 +107,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
+#include "core/session/SliceAccessMirror.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/MainWindow.h"
 #include "gui/MoxDisplayController.h"
@@ -1599,6 +1606,62 @@ private slots:
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(h.acceptedConnections(), 1);
         QVERIFY(client->isHandshakeComplete());
+    }
+
+    // Slice control plan Task 5: a window whose Core sends no
+    // sliceAccessVersion (this bench window signs in with the token and
+    // never declares sliceAccess) holds no access object, marks none of its
+    // slices read-only, refuses the four slice access requests here without
+    // sending them, and its flag still tunes the Core as before.
+    void aWindowWithoutSliceAccessTunesAsBefore()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        h.startStartupConnection();
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QTRY_VERIFY_WITH_TIMEOUT(client->stationLinkReady(), 10000);
+        QVERIFY(!client->remoteSliceAccessAvailable());
+        QVERIFY(!client->capabilities().sliceAccessEntry);
+        QCOMPARE(client->capabilities().sliceAccessVersion, 0);
+        QVERIFY(client->sliceAccess()->entries().isEmpty());
+        RadioModel* windowModel = h.remoteModel();
+        QTRY_VERIFY(windowModel->sliceById(0) != nullptr);
+        for (SliceModel* slice : windowModel->slices()) {
+            QVERIFY(!slice->isReadOnlyListener());
+        }
+
+        IStationLink* link = client;
+        const QList<IStationLink::CommandOutcome> outcomes{
+            link->requestListen(0, 1), link->requestStopListening(0, 1),
+            link->requestTakeControl(0, 1, 1), link->requestRelease(0, 1, 1)};
+        for (const IStationLink::CommandOutcome& outcome : outcomes) {
+            QVERIFY(!outcome.sent);
+            QCOMPARE(outcome.commandId, quint32(0));
+            QCOMPARE(outcome.reason, IStationLink::sliceAccessUnavailableReason());
+            QVERIFY(OperatorWording::isPlain(outcome.reason));
+        }
+
+        // The flag's wheel reaches the Core.
+        VfoWidget* flag = nullptr;
+        QTRY_VERIFY([&]() {
+            for (VfoWidget* candidate : h.window()->findChildren<VfoWidget*>()) {
+                if (candidate->sliceIndex() == 0) {
+                    flag = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }());
+        SliceModel* coreSlice = h.station().sliceById(0);
+        QVERIFY(coreSlice);
+        const double before = coreSlice->frequency();
+        const QPointF at(flag->width() / 2.0, flag->height() / 2.0);
+        QWheelEvent wheel(at, flag->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(flag, &wheel);
+        QTRY_VERIFY(coreSlice->frequency() != before);
+        QVERIFY(!windowModel->sliceById(0)->isReadOnlyListener());
     }
 };
 

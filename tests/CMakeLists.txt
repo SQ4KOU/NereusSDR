@@ -7924,6 +7924,14 @@ nereus_add_test(tst_station_fifth_device
 nereus_add_test(tst_slice_access_verbs
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Slice control and shared listening plan Task 5: the remote window's side
+# of listening to and taking a slice (SliceAccessMirror, the four verbs, a
+# listened slice held read-only, the refusals and the controlTaken notice
+# as toasts) against a real Core over loopback links. No radio, no RF.
+nereus_add_test(tst_slice_access_client
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_slice_access_client PRIVATE NEREUS_BUILD_TESTS)
 # iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the desktop
 # remote window's screens for several devices on one Core, driven against a
 # real Core over a loopback link with a second device; offscreen renders of

@@ -1274,6 +1274,9 @@ set(CORE_SOURCES
     # who else is on the Core, their slices, and the Core's questions and
     # notices for it.
     src/core/session/RemoteDevicesState.cpp
+    # Slice control and shared listening plan Task 5: a remote window's copy
+    # of the access:<id> objects, which marks a listened slice read-only.
+    src/core/session/SliceAccessMirror.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by

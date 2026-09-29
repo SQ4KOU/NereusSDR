@@ -163,6 +163,12 @@
 //                                    Monitor's availability, source and
 //                                    RESET (txModMonitorVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
+//                                    plan Task 5: remoteSliceAccessAvailable
+//                                    and the listen, stop listening, take
+//                                    control and release requests
+//                                    (sliceAccessVersion 1). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -224,6 +230,27 @@ public:
     virtual bool bandSelectAvailable() const { return false; }
     virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
     { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
+
+    /// Slice control plan Task 5 (sliceAccessVersion 1 at minor 11): the
+    /// Core shares slices between devices with this window. Verbs
+    /// "slice.listen" and "slice.stopListening" (sliceId, incarnation) and
+    /// "slice.takeControl" and "slice.release" (sliceId, incarnation,
+    /// controlRevision), with the values the window was shown in the
+    /// slice's `access:<id>` object. The defaults refuse, for links that
+    /// did not negotiate it.
+    virtual bool remoteSliceAccessAvailable() const { return false; }
+    static QString sliceAccessUnavailableReason()
+    { return QStringLiteral("This Core cannot share slices with this app. Updating the Core may help."); }
+    virtual CommandOutcome requestListen(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestStopListening(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestTakeControl(int /*sliceId*/, quint64 /*incarnation*/,
+                                              quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestRelease(int /*sliceId*/, quint64 /*incarnation*/,
+                                          quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.

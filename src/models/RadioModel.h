@@ -365,6 +365,12 @@
 //                device's active receive slice among the slices it has
 //                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1939,6 +1945,11 @@ public:
     /// on. SliceModel also holds no RadioModel handle by design, and the
     /// rate is a stream-wide transaction rather than a slice property.
     void applyRestoredSampleRate(SliceModel* slice);
+
+    /// Slice control plan Task 5: on a Remote model, true (and announced)
+    /// when slice `sliceId` is one this window only listens to, so a
+    /// request for it is held back instead of sent.
+    bool holdSliceRequestForListener(int sliceId);
 
     /// R-R3-49: each slice's saved per-band sample rate for the band it is
     /// on (SliceModel::savedSampleRateHz), keyed by slice id; slices with
@@ -4901,6 +4912,11 @@ signals:
     /// offset all agree again. `reason` is plain English, ready for a status
     /// bar, and names the frequency the slice stayed on.
     void sliceRetuneRejected(int sliceIndex, const QString& reason);
+    /// Slice control plan Task 5: a remote window held back a change to
+    /// slice `sliceId` (one of its setters, or a slice request) because it
+    /// only listens to that slice; nothing was sent. `reason` is the Core's
+    /// listener words (SliceModel::readOnlyListenerReason()).
+    void sliceRequestHeldForListener(int sliceId, const QString& reason);
     /// Parity Task 21 (R-IOS-18): the Core's radios changed (a remote
     /// window), or the Core refused a radio request.
     void stationRadiosChanged();

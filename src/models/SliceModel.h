@@ -62,6 +62,12 @@
 //   2026-09-27 - R-R3-49: savedSampleRateHz, the rate saved for a band,
 //                read at connect. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control and shared listening plan Task 5: a remote
+//                window's read-only listener mark (isReadOnlyListener), set
+//                by SliceAccessMirror; a setter that would send a change
+//                holds it back with the Core's listener words instead.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -919,6 +925,27 @@ public:
     void setNnrSettingsApplier(NnrSettingsApplier apply) { m_nnrSettingsApplier = std::move(apply); }
     void setNrSelectionApplier(NrSelectionApplier apply) { m_nrSelectionApplier = std::move(apply); }
     bool hasNrSelectionApplier() const { return static_cast<bool>(m_nrSelectionApplier); }
+
+    // ---- Slice control plan Task 5: a listened slice in a remote window ----
+    /// This window listens to the slice and another device (or nobody)
+    /// controls it. Set only by the remote window's SliceAccessMirror; not
+    /// a Q_PROPERTY and never mirrored. While it is set, a setter whose
+    /// change would go to the Core as a write holds it back, changes
+    /// nothing here and emits listenerWriteHeld() with the Core's words.
+    /// setPanKey is the exception: the pan that shows the slice is this
+    /// window's layout, and the window does not send it.
+    bool isReadOnlyListener() const { return m_readOnlyListener; }
+    /// The words a held change carries (empty while not read-only).
+    QString readOnlyListenerReason() const { return m_readOnlyListenerReason; }
+    void setReadOnlyListener(bool readOnly, const QString& reason);
+    /// True while the Core's own state is being applied to this slice (the
+    /// StationClient's inbound guard): that is never held back. Set by the
+    /// remote window's StationClient.
+    using StationApplyProbe = std::function<bool()>;
+    void setStationApplyProbe(StationApplyProbe probe) { m_stationApplyProbe = std::move(probe); }
+    /// For a caller outside the setters (RadioModel's slice requests): the
+    /// same hold, announced the same way. False when nothing is held.
+    bool holdForListener();
     NnrSettings nnrSettings() const { return m_nnrSettings; }
     bool applyNnrSettings(const NnrSettings& requested);
     void resetNnrTuning();
@@ -1408,6 +1435,11 @@ signals:
     // no NR3 model). The active reducer is unchanged; the reason is plain
     // words for the operator.
     void nrSelectionRefused(const QString& reason);
+    // Slice control plan Task 5: isReadOnlyListener() changed.
+    void readOnlyListenerChanged(bool readOnly);
+    // Slice control plan Task 5: a change was held back because this window
+    // only listens to the slice; `reason` is the Core's listener words.
+    void listenerWriteHeld(const QString& reason);
 
     void nr1TapsChanged(int v);
     void nr1DelayChanged(int v);
@@ -1578,6 +1610,20 @@ private:
     NnrDiagnostics m_nnrDiagnostics;
     NnrSettingsApplier m_nnrSettingsApplier;
     NrSelectionApplier m_nrSelectionApplier;
+    // Slice control plan Task 5 (see isReadOnlyListener()).
+    bool m_readOnlyListener{false};
+    QString m_readOnlyListenerReason;
+    StationApplyProbe m_stationApplyProbe;
+    // A setter's check: true (and announced) when `requested` would change
+    // the value on a read-only listener outside the Core's own apply.
+    template <typename T, typename U>
+    bool holdsListenerWrite(const T& current, const U& requested)
+    {
+        if (!m_readOnlyListener || current == requested) {
+            return false;
+        }
+        return holdForListener();
+    }
     QString m_settingsRadioMac;
     QString m_nnrLastError;
     int m_nnrLimit{0};   // R-R3-40 runtime only; see nnrLimit()
