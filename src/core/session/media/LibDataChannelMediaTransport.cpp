@@ -32,10 +32,15 @@
 //               delivers what it collected, so a message that arrives with
 //               the display channel's opening is reported after ready().
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: the opt-in ICE check log (IceDiagnostics, NEREUS_ICE_DIAG):
+//               this peer's candidates, the ones it admits, its states and
+//               its selected pair, redacted. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/CandidateSourceLease.h"
+#include "core/session/IceDiagnostics.h"
 #include <QThread>
 #include "core/session/media/PcmAudioCodec.h"
 
@@ -536,6 +541,24 @@ QString micLineOpusFormatParameters()
     return QStringLiteral("minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000");
 }
 
+namespace {
+
+// A remote candidate, admitted or refused, to the opt-in ICE check log.
+void logMediaRemoteCandidate(const QString& candidate, bool fromOwnedSource, bool admitted)
+{
+    if (!IceDiagnostics::enabled()) {
+        return;
+    }
+    IceDiagnostics::logPath("media", QStringLiteral("remote candidate%1 %2: %3")
+                                         .arg(fromOwnedSource ? QStringLiteral(" (tunnel)")
+                                                              : QString(),
+                                              admitted ? QStringLiteral("admitted")
+                                                       : QStringLiteral("refused"),
+                                              candidate));
+}
+
+} // namespace
+
 struct LibDataChannelMediaTransport::Private {
     QTimer* drainTimer = nullptr;
     std::shared_ptr<CallbackBridge> bridge;
@@ -689,6 +712,10 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                            "oversized local candidate rejected");
                 return;
             }
+            if (IceDiagnostics::enabled()) {
+                IceDiagnostics::logPath("media", QStringLiteral("local candidate %1")
+                                                     .arg(QString::fromStdString(value)));
+            }
             queueEvent(weak, CallbackEvent::Kind::Candidate, value, mid);
         });
         d->peer->onGatheringStateChange([weak](rtc::PeerConnection::GatheringState state) {
@@ -696,7 +723,17 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                 queueEvent(weak, CallbackEvent::Kind::GatheringComplete, std::string());
             }
         });
+        if (IceDiagnostics::enabled()) {
+            d->peer->onIceStateChange([](rtc::PeerConnection::IceState state) {
+                IceDiagnostics::logPath("media", QStringLiteral("ICE state %1")
+                                                     .arg(IceDiagnostics::stateName(state)));
+            });
+        }
         d->peer->onStateChange([weak](rtc::PeerConnection::State state) {
+            if (IceDiagnostics::enabled()) {
+                IceDiagnostics::logPath("media", QStringLiteral("peer state %1")
+                                                     .arg(IceDiagnostics::stateName(state)));
+            }
             if (state == rtc::PeerConnection::State::Failed) {
                 queueEvent(weak, CallbackEvent::Kind::PeerFailed,
                            "media peer connection failed");
@@ -1212,6 +1249,7 @@ bool LibDataChannelMediaTransport::admitCandidate(const QString& candidate,
             // type is used, the far end's relay ones only when this side
             // allows the relay (`relay = deny`: direct or nothing).
             if (!d->ice->acceptsRemoteCandidate(QString::fromUtf8(candidateBytes))) {
+                logMediaRemoteCandidate(candidate, fromOwnedSource, false);
                 return false;
             }
         } else if (d->candidatePolicy == CandidatePolicy::HostOnly
@@ -1219,6 +1257,7 @@ bool LibDataChannelMediaTransport::admitCandidate(const QString& candidate,
             // R3 selects HostOnly. AnyIceType keeps the same transport
             // interface usable by a later approved STUN or relay
             // configuration.
+            logMediaRemoteCandidate(candidate, fromOwnedSource, false);
             return false;
         }
         if (parsed.type() == rtc::Candidate::Type::Relayed) {
@@ -1241,6 +1280,7 @@ bool LibDataChannelMediaTransport::admitCandidate(const QString& candidate,
                     QString::fromStdString(*source.address()), *source.port());
             }
         }
+        logMediaRemoteCandidate(candidate, fromOwnedSource, true);
         d->peer->addRemoteCandidate(std::move(parsed));
         ++d->acceptedCandidates;
         if (ownedEndpoint && !d->ownedShimEndpoints.contains(*ownedEndpoint)) {
@@ -1610,6 +1650,9 @@ void LibDataChannelMediaTransport::drainCallbacks()
         && d->audio && d->audio->isOpen();
     if (nowReady && !d->ready) {
         d->ready = true;
+        if (IceDiagnostics::enabled()) {
+            IceDiagnostics::logSelectedPair("media", *d->peer);
+        }
         emit ready();
         if (!isCurrentGeneration()) {
             return;
