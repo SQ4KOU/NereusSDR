@@ -46,6 +46,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-08-04  J.J. Boyd / KG4VCF  Remote daemon R2 Task 4: station-link
 //                                    seam. AI-assisted transformation via
 //                                    Anthropic Claude Code.
@@ -355,6 +358,14 @@ public:
                                                     bool /*sendInitialState*/)
     { return { false, stationTciServerUnavailableReason() }; }
     virtual CommandOutcome requestDisconnectStationTciClient(const QString& /*id*/)
+    { return { false, stationTciServerUnavailableReason() }; }
+    /// JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the Core
+    /// shares the rest of its TCI server's settings on `stationTci` and
+    /// takes one from this window (`name` a StationTciModel::settingsTable()
+    /// property: a bool, or an int; txChannel 0 Left, 1 Right, 2 Both).
+    virtual bool stationTciSettingsAvailable() const { return false; }
+    virtual CommandOutcome requestStationTciSetting(const QByteArray& /*name*/,
+                                                    const QVariant& /*value*/)
     { return { false, stationTciServerUnavailableReason() }; }
     static QString stationTciServerUnavailableReason()
     { return QStringLiteral("This Core does not let this app change its TCI server's settings or see its apps. Updating the Core may help."); }

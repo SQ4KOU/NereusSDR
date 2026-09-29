@@ -188,6 +188,307 @@
               }
             }
           ]
+        },
+        {
+          "title": "The Core's TCI server settings",
+          "controls": [
+            {
+              "id": "catNetwork.tciServer.core.rateLimitMs",
+              "label": "Rate limit:",
+              "tooltip": "How long to wait between frequency updates sent to each TCI app. Changes made faster than this reach the app as the latest frequency once the time has passed. Off sends every change.",
+              "kind": "integer",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "rateLimitMs"
+                  },
+                  "arguments": {
+                    "rateLimitMs": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              },
+              "min": 0,
+              "max": 1000,
+              "step": 1,
+              "unit": "ms"
+            },
+            {
+              "id": "catNetwork.tciServer.core.cwBecomesCwuAbove10mhz",
+              "label": "CW becomes CWU above 10 MHz",
+              "tooltip": "On bands above 10 MHz, report mode as \"CWU\" instead of \"CW\" or \"CWL\". Required by certain logging apps that follow the ARRL sideband convention.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "cwBecomesCwuAbove10mhz"
+                  },
+                  "arguments": {
+                    "cwBecomesCwuAbove10mhz": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.core.iqSwap",
+              "label": "Swap I/Q channels",
+              "tooltip": "Swap the I and Q samples in the TCI IQ data stream. Enabled by default for compatibility with most TCI IQ consumers.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "iqSwap"
+                  },
+                  "arguments": {
+                    "iqSwap": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.core.alwaysStreamIq",
+              "label": "Always stream IQ",
+              "tooltip": "Stream IQ data to all connected TCI clients continuously, even if no client has explicitly subscribed to the IQ stream. Increases CPU and network load.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "alwaysStreamIq"
+                  },
+                  "arguments": {
+                    "alwaysStreamIq": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.core.audioBlockSamples",
+              "label": "Block size:",
+              "tooltip": "Number of audio samples per TCI audio stream block (100 to 2048). Larger blocks reduce overhead but increase latency.",
+              "kind": "integer",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "audioBlockSamples"
+                  },
+                  "arguments": {
+                    "audioBlockSamples": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              },
+              "min": 100,
+              "max": 2048,
+              "step": 1,
+              "unit": "samples"
+            },
+            {
+              "id": "catNetwork.tciServer.core.txChannel",
+              "label": "TX channel:",
+              "tooltip": "Which audio channel carries the TX audio in the TCI audio stream. \"Both\" sends the same mono signal to both left and right channels.",
+              "kind": "choice",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "txChannel"
+                  },
+                  "arguments": {
+                    "txChannel": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              },
+              "choices": [
+                "Left",
+                "Right",
+                "Both"
+              ]
+            },
+            {
+              "id": "catNetwork.tciServer.core.rxSensorIntervalMs",
+              "label": "RX interval:",
+              "tooltip": "How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients that subscribe to sensors (30 to 1000 ms).",
+              "kind": "integer",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "rxSensorIntervalMs"
+                  },
+                  "arguments": {
+                    "rxSensorIntervalMs": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              },
+              "min": 30,
+              "max": 1000,
+              "step": 1,
+              "unit": "ms"
+            },
+            {
+              "id": "catNetwork.tciServer.core.txSensorIntervalMs",
+              "label": "TX interval:",
+              "tooltip": "How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI clients that subscribe to sensors (30 to 1000 ms).",
+              "kind": "integer",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "txSensorIntervalMs"
+                  },
+                  "arguments": {
+                    "txSensorIntervalMs": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              },
+              "min": 30,
+              "max": 1000,
+              "step": 1,
+              "unit": "ms"
+            },
+            {
+              "id": "catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect",
+              "label": "Forget RX2 VFOB on disconnect",
+              "tooltip": "When a TCI client disconnects, reset RX2 VFOB to its default frequency instead of keeping the last value set by the client.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "forgetRx2VfoBOnDisconnect"
+                  },
+                  "arguments": {
+                    "forgetRx2VfoBOnDisconnect": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.core.useRx1VfoaForRx2Vfoa",
+              "label": "Use RX1 VFOA for RX2 VFOA",
+              "tooltip": "Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. Required by clients that do not maintain independent per-receiver VFO state.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "useRx1VfoaForRx2Vfoa"
+                  },
+                  "arguments": {
+                    "useRx1VfoaForRx2Vfoa": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            },
+            {
+              "id": "catNetwork.tciServer.core.copyRx2VfobToVfoa",
+              "label": "Copy RX2 VFOB to VFOA",
+              "tooltip": "Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. Required by apps that drive split mode via VFOB but read back VFOA.",
+              "kind": "toggle",
+              "binding": {
+                "command": {
+                  "verb": "setStationTciSettings",
+                  "valueProperty": {
+                    "object": "stationTci",
+                    "name": "copyRx2VfobToVfoa"
+                  },
+                  "arguments": {
+                    "copyRx2VfobToVfoa": {
+                      "$controlValue": true
+                    }
+                  }
+                }
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "stationTciSettingsVersion",
+                "min": 1
+              }
+            }
+          ]
         }
       ],
       "coverage": "coreTciOnly"

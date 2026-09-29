@@ -462,6 +462,8 @@ private:
     // Parity Task 23 (stationTciVersion 2): setStationTciOptions and
     // disconnectStationTciClient.
     void handleStationTciServer(const NereusSDR::SessionMessage& invoke);
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
+    void handleSetStationTciSettings(const NereusSDR::SessionMessage& invoke);
     // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
     // records and settings.
     void handleSetTxInterlockPolicy(const NereusSDR::SessionMessage& invoke);

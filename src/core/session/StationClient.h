@@ -1176,6 +1176,10 @@ public:
                                             bool cwluBecomesCw,
                                             bool sendInitialState) override;
     CommandOutcome requestDisconnectStationTciClient(const QString& id) override;
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1).
+    bool stationTciSettingsAvailable() const override;
+    CommandOutcome requestStationTciSetting(const QByteArray& name,
+                                            const QVariant& value) override;
     CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
                                             double swrGateMax) override;
     CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;

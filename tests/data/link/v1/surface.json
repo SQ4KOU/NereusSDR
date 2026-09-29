@@ -441,6 +441,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "stationTciSettingsVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -1227,6 +1232,69 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "disconnectStationTciClient"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "rateLimitMs",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "cwBecomesCwuAbove10mhz",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "iqSwap",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "alwaysStreamIq",
+                    "optional": true
+                },
+                {
+                    "kind": "i64",
+                    "name": "audioBlockSamples",
+                    "optional": true
+                },
+                {
+                    "kind": "i64",
+                    "name": "txChannel",
+                    "optional": true
+                },
+                {
+                    "kind": "i64",
+                    "name": "rxSensorIntervalMs",
+                    "optional": true
+                },
+                {
+                    "kind": "i64",
+                    "name": "txSensorIntervalMs",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "forgetRx2VfoBOnDisconnect",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "useRx1VfoaForRx2Vfoa",
+                    "optional": true
+                },
+                {
+                    "kind": "bool",
+                    "name": "copyRx2VfobToVfoa",
+                    "optional": true
+                }
+            ],
+            "capability": "stationTciSettingsVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setStationTciSettings"
         },
         {
             "arguments": [
@@ -6396,6 +6464,72 @@
                     "kind": "bool",
                     "name": "sendInitialState",
                     "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rateLimitMs",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "cwBecomesCwuAbove10mhz",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "iqSwap",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "alwaysStreamIq",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "audioBlockSamples",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "txChannel",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxSensorIntervalMs",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "txSensorIntervalMs",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "forgetRx2VfoBOnDisconnect",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "useRx1VfoaForRx2Vfoa",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "copyRx2VfobToVfoa",
+                    "ordinal": 19
                 }
             ]
         },

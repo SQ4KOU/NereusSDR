@@ -90,6 +90,10 @@
 //                                    txMonitorAudioVersion, monitor-audio
 //                                    and monitor-audio-context. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The capture declares
+//                                    stationTciSettings (the Core's TCI
+//                                    server settings). AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  iPhone app plan Task 23: the capture
 //                                    declares audioQuality; the audio
 //                                    control's opusBitrate and the main
@@ -549,7 +553,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // so remoteTxVersion is; and vax (iPhone app plan Task 25), so the
     // `vax` object and vaxVersion are; and band2m (R-IOS-26), so
     // band2mVersion is; and audioQuality (iPhone app plan Task 23), so
-    // audioQualityVersion is.
+    // audioQualityVersion is; and stationTciSettings (JJ's ruling of
+    // 2026-09-28), so stationTciSettingsVersion and the rest of
+    // `stationTci`'s settings are.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
@@ -559,7 +565,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
                                   {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1},
-                                  {"audioQuality", 1}})));
+                                  {"audioQuality", 1}, {"stationTciSettings", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -604,6 +610,9 @@ QJsonArray captureCapabilities()
     caps.band2mVersion = 1;
     // iPhone app plan Task 23: sent to a peer that declared audioQuality.
     caps.audioQualityVersion = 1;
+    // JJ's ruling of 2026-09-28: sent to a peer that declared
+    // stationTciSettings.
+    caps.stationTciSettingsVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

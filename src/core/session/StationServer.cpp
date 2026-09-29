@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -4186,6 +4189,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core has no TCI server."), {}));
             break;
         }
+        // JJ's ruling of 2026-09-28: the rest of the TCI server's settings,
+        // for a peer that declared stationTciSettings.
+        if (message.commandVerb == "setStationTciSettings"
+            && !peerGetsStationTciSettings(transport)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the Core's TCI server.")
+                    : QStringLiteral("This Core cannot change its TCI server's settings or "
+                                     "apps from here."), {}));
+            break;
+        }
         // Parity Task 23: the station TCI server's options and apps came
         // with stationTciVersion 2.
         if ((message.commandVerb == "setStationTciOptions"
@@ -7181,6 +7196,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (!fitTxEqCurveToPeer(transport, message)) {
             return;
         }
+        // JJ's ruling of 2026-09-28: the rest of the TCI server's settings
+        // only to a peer that declared stationTciSettings.
+        if (!fitStationTciSettingsToPeer(transport, message)) {
+            return;
+        }
         const auto peer = m_peers.constFind(transport);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
@@ -7344,6 +7364,52 @@ bool StationServer::fitTxEqCurveToPeer(SessionTransport* transport,
             return update.name == kCurve;
         });
         // A delta that carried only the curve is not sent at all.
+        return before == 0 || !message.updates.isEmpty();
+    }
+    default:
+        return true;
+    }
+}
+
+// ── The Core's TCI server settings (JJ's ruling of 2026-09-28) ───────────
+
+bool StationServer::peerGetsStationTciSettings(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && stationTciVersion() >= 2
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("stationTciSettings"), 1);
+}
+
+bool StationServer::fitStationTciSettingsToPeer(SessionTransport* transport,
+                                                SessionMessage& message) const
+{
+    const bool stationTci = message.kind == SessionMessageKind::Schema
+        ? message.className == "StationTciModel"
+        : message.objectKey == "stationTci";
+    if (!stationTci || peerGetsStationTciSettings(transport)) {
+        return true;
+    }
+    const auto isSetting = [](const QByteArray& name) {
+        return StationTciModel::setting(name) != nullptr;
+    };
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        message.fields.removeIf([&](const SessionSchemaField& field) {
+            return isSetting(field.name);
+        });
+        return true;
+    case SessionMessageKind::ObjectCreate:
+        message.updates.removeIf([&](const MirrorUpdate& update) {
+            return isSetting(update.name);
+        });
+        return true;
+    case SessionMessageKind::Delta: {
+        const qsizetype before = message.updates.size();
+        message.updates.removeIf([&](const MirrorUpdate& update) {
+            return isSetting(update.name);
+        });
+        // A delta that carried only these settings is not sent at all.
         return before == 0 || !message.updates.isEmpty();
     }
     default:
@@ -9884,6 +9950,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // bitrate, for a peer that declared audioQuality 1.
             caps.audioQualityVersion = media
                 && peerDeclares(transport, QByteArrayLiteral("audioQuality"), 1) ? 1 : 0;
+            // JJ's ruling of 2026-09-28: the Core's TCI server settings,
+            // for a peer that declared stationTciSettings 1.
+            caps.stationTciSettingsVersion = peerGetsStationTciSettings(transport) ? 1 : 0;
             caps.radioAntennaRowsVersion = peer->features.value(
                     QByteArrayLiteral("radioAntennaRows")) == 1
                 && m_radioModel->role() == RadioModel::Role::Local

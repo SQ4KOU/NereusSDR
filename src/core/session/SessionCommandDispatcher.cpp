@@ -229,6 +229,10 @@
 //               disconnectStationTciClient, refused while the radio is on
 //               the air. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-29: setStationTciSettings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1), refused while the radio is on
+//               the air. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 //   2026-09-27: R-IOS-13 / R-R3-49: txModMonitor.reset in the verb table
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
@@ -256,6 +260,7 @@
 #include "core/session/StationDevicesFacade.h"
 #include "models/BandGrid.h"
 #include "models/RadioModel.h"
+#include "models/StationTciModel.h"
 #include "models/SliceModel.h"
 
 #include <QHash>
@@ -265,6 +270,7 @@
 #include <QThread>
 #include <QVariant>
 
+#include <algorithm>
 #include <limits>
 #include <initializer_list>
 #include <cmath>
@@ -444,6 +450,8 @@ QString notRepresentableReason()
 //   setStationTciOptions, disconnectStationTciClient
 //                          stationTciVersion 2 (requestStationTciOptions,
 //                          requestDisconnectStationTciClient)
+//   setStationTciSettings  stationTciSettingsVersion 1
+//                          (requestStationTciSetting)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
@@ -631,6 +639,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "stationTciVersion", 2, kRadioIdentitySessionProtocolMinor},
         {"disconnectStationTciClient", {arg("id", kUtf8)}, "stationTciVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // JJ's ruling of 2026-09-28: the rest of the Core's TCI server
+        // settings, any of them at once (StationTciModel::settingsTable()).
+        {"setStationTciSettings",
+         {optionalArg("rateLimitMs", kInt), optionalArg("cwBecomesCwuAbove10mhz", kBool),
+          optionalArg("iqSwap", kBool), optionalArg("alwaysStreamIq", kBool),
+          optionalArg("audioBlockSamples", kInt), optionalArg("txChannel", kInt),
+          optionalArg("rxSensorIntervalMs", kInt), optionalArg("txSensorIntervalMs", kInt),
+          optionalArg("forgetRx2VfoBOnDisconnect", kBool),
+          optionalArg("useRx1VfoaForRx2Vfoa", kBool), optionalArg("copyRx2VfobToVfoa", kBool)},
+         "stationTciSettingsVersion", 1, kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
         {"setTxInterlockPolicy",
          {arg("mode", kInt), arg("graceMs", kInt), arg("swrGateEnabled", kBool),
@@ -1161,6 +1179,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setStationTciOptions"
                || invoke.commandVerb == "disconnectStationTciClient") {
         handleStationTciServer(invoke);
+    } else if (invoke.commandVerb == "setStationTciSettings") {
+        handleSetStationTciSettings(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
         handleSetTxInterlockPolicy(invoke);
     } else if (invoke.commandVerb == "setPgxlPowerCap") {
@@ -2882,6 +2902,46 @@ void SessionCommandDispatcher::handleStationTciServer(const SessionMessage& invo
         ? m_radioModel->setStationTciOptionsForStation(expert.toBool(), sunSdr.toBool(),
                                                        cwlu.toBool(), initial.toBool(), &reason)
         : m_radioModel->disconnectStationTciClientForStation(id.toString(), &reason);
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
+}
+
+// JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of the
+// Core's TCI server settings, one or more at once, each of its own kind
+// (a whole number or on/off) and held to its range by the controller.
+// Refused while the Core's radio is on the air; nothing changes then.
+void SessionCommandDispatcher::handleSetStationTciSettings(const SessionMessage& invoke)
+{
+    QVariantMap changes;
+    bool readable = !invoke.arguments.isEmpty();
+    for (const MirrorUpdate& argument : invoke.arguments) {
+        const StationTciModel::Setting* setting = StationTciModel::setting(argument.name);
+        const bool boolKind = setting != nullptr
+            && setting->kind == StationTciModel::Setting::Kind::Bool;
+        if (setting == nullptr || changes.contains(QString::fromUtf8(argument.name))
+            || (boolKind ? argument.value.typeId() != QMetaType::Bool
+                         : argument.kind != MirrorWireKind::Int64)) {
+            readable = false;
+            break;
+        }
+        changes.insert(QString::fromUtf8(argument.name),
+                       boolKind ? QVariant(argument.value.toBool())
+                                : QVariant(int(std::clamp<qlonglong>(
+                                      argument.value.toLongLong(),
+                                      std::numeric_limits<int>::min(),
+                                      std::numeric_limits<int>::max()))));
+    }
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change the Core's TCI server settings was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (m_radioModel->stationOnAirRefusal(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    const bool accepted = m_radioModel->setStationTciSettingsForStation(changes, &reason);
     emitResult(invoke.commandVerb, invoke.commandId, accepted, accepted ? QString() : reason, {});
 }
 

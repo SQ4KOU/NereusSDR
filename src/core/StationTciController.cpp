@@ -14,6 +14,9 @@
 // 2026-09-25: iPhone app Task 73 (R-IOS-02, ruling 5.13): the Core's server
 // changes only the station device's own slices. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-29: JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the
+// rest of the TCI Server page's settings. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
 // 2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49): the apps, their
 // disconnect and the four options. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
@@ -237,6 +240,73 @@ void StationTciController::setOptions(bool emulateExpertSdr3, bool emulateSunSdr
     publish();
 }
 
+bool StationTciController::setSettings(const QVariantMap& changes, QString* reason)
+{
+    // Check every change first, so a request is taken whole or not at all.
+    QList<std::pair<const StationTciModel::Setting*, QString>> writes;
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        const StationTciModel::Setting* setting = StationTciModel::setting(it.key().toUtf8());
+        if (setting == nullptr) {
+            if (reason) {
+                *reason = QStringLiteral("The Core's TCI server has no such setting.");
+            }
+            return false;
+        }
+        QString text;
+        switch (setting->kind) {
+        case StationTciModel::Setting::Kind::Bool:
+            if (it.value().typeId() != QMetaType::Bool) {
+                if (reason) {
+                    *reason = QStringLiteral("That TCI server setting is on or off.");
+                }
+                return false;
+            }
+            text = it.value().toBool() ? QStringLiteral("True") : QStringLiteral("False");
+            break;
+        case StationTciModel::Setting::Kind::Int:
+        case StationTciModel::Setting::Kind::TxChannel: {
+            bool ok = false;
+            const int value = it.value().toInt(&ok);
+            if (!ok || value < setting->min || value > setting->max) {
+                if (reason) {
+                    *reason = QStringLiteral("That value is outside the range the Core's TCI "
+                                             "server allows (%1 to %2).")
+                                  .arg(setting->min).arg(setting->max);
+                }
+                return false;
+            }
+            text = setting->kind == StationTciModel::Setting::Kind::TxChannel
+                ? StationTciModel::txChannelText(value) : QString::number(value);
+            break;
+        }
+        }
+        writes.append({setting, text});
+    }
+    auto& settings = AppSettings::instance();
+    for (const auto& [setting, text] : writes) {
+        settings.setValue(QString::fromLatin1(setting->key), text);
+        qCInfo(lcTci) << "Station TCI server setting" << setting->name << "=" << text;
+    }
+    settings.save();
+#ifdef HAVE_WEBSOCKETS
+    if (m_server) {
+        // As the page does for a window's own server: these two reach the
+        // running server at once; the rest are read when next needed.
+        if (changes.contains(QStringLiteral("rateLimitMs"))) {
+            m_server->setUpdateGapMs(changes.value(QStringLiteral("rateLimitMs")).toInt());
+        }
+        if (changes.contains(QStringLiteral("alwaysStreamIq"))) {
+            m_server->refreshRemoteIqDemand();
+        }
+    }
+#endif
+    if (reason) {
+        reason->clear();
+    }
+    publish();
+    return true;
+}
+
 bool StationTciController::disconnectClient(const QString& id, QString* reason)
 {
 #ifdef HAVE_WEBSOCKETS
@@ -438,6 +508,31 @@ void StationTciController::publish()
     state.emulateSunSdr2Pro = flag("TciEmulateSunSDR2Pro", "True");
     state.cwluBecomesCw = flag("TciCwluBecomesCw", "False");
     state.sendInitialState = flag("TciSendInitialFrequencyStateOnConnect", "True");
+    // JJ's ruling of 2026-09-28: the rest of the page's settings, as the
+    // server and the page read them.
+    for (const StationTciModel::Setting& setting : StationTciModel::settingsTable()) {
+        const QString text = settings.value(QString::fromLatin1(setting.key),
+                                            QString::fromLatin1(setting.fallback)).toString();
+        QVariant value;
+        switch (setting.kind) {
+        case StationTciModel::Setting::Kind::Bool:
+            value = text == QStringLiteral("True");
+            break;
+        case StationTciModel::Setting::Kind::Int: {
+            bool ok = false;
+            const int number = text.toInt(&ok);
+            value = qBound(setting.min, ok ? number : QString::fromLatin1(setting.fallback).toInt(),
+                           setting.max);
+            break;
+        }
+        case StationTciModel::Setting::Kind::TxChannel: {
+            const int index = StationTciModel::txChannelIndex(text);
+            value = index >= 0 ? index : 2;
+            break;
+        }
+        }
+        StationTciModel::setIn(state, setting, value);
+    }
     m_model->setState(state);
 }
 

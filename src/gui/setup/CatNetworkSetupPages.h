@@ -10,6 +10,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QHash>
 #include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
@@ -149,6 +150,11 @@ private:
     QCheckBox* m_coreInitial{nullptr};
     void refreshCoreGroup();
     void sendCoreOptions();
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
+    // the page's settings for the Core's own server, by property name.
+    QHash<QByteArray, QWidget*> m_coreSettings;
+    QHash<QByteArray, QString> m_coreSettingTips;
+    void sendCoreSetting(const QByteArray& name, const QVariant& value);
 
     // Group 2: Compatibility
     QCheckBox*   m_emulateExpertSdr3Check{nullptr};

@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -275,6 +278,13 @@ struct StationCapabilities {
     /// for a peer that declared audioQuality 1 while the Core offers media.
     /// 0 (absent): the device gets the Core's audio_bitrate, as before.
     int audioQualityVersion = 0;
+    /// JJ's ruling of 2026-09-28: 1 means the Core's `stationTci` object
+    /// carries the rest of its TCI server's settings (the eleven
+    /// StationTciModel::settingsTable() properties) and takes
+    /// setStationTciSettings. Optional and last at minor 11, for a peer
+    /// that declared stationTciSettings 1 on a Core at stationTciVersion 2.
+    /// 0 (absent): the peer sees today's `stationTci`.
+    int stationTciSettingsVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

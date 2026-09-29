@@ -942,6 +942,7 @@ change shows as surface drift and as a change to this table.
 | `txEqCurveVersion` | 1 |
 | `band2mVersion` | 1 |
 | `audioQualityVersion` | 1 |
+| `stationTciSettingsVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1083,6 +1084,20 @@ When a feature is off, its version is 0:
   `audio.opusProfiles` (remote media control v1, "Per-device audio
   quality"). A peer sent no entry gets the Core's `audio_bitrate` as
   before.
+- `stationTciSettingsVersion`: optional and appended last, after
+  `audioQualityVersion` (after the last entry before it when that is
+  absent), only at agreed minor 11 for a peer that declared
+  `stationTciSettings` 1 on a Core at `stationTciVersion` 2 (JJ's ruling of
+  2026-09-28). 1: `stationTci` carries the rest of the Core's TCI server
+  settings as read-only properties (`rateLimitMs`,
+  `cwBecomesCwuAbove10mhz`, `iqSwap`, `alwaysStreamIq`,
+  `audioBlockSamples`, `txChannel` 0 Left 1 Right 2 Both,
+  `rxSensorIntervalMs`, `txSensorIntervalMs`,
+  `forgetRx2VfoBOnDisconnect`, `useRx1VfoaForRx2Vfoa`,
+  `copyRx2VfobToVfoa`; ranges in the remote accessory control document),
+  and the Core takes `setStationTciSettings` with any of them. A peer that
+  did not declare the feature is sent neither this entry nor those
+  properties.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1842,7 +1857,8 @@ older window sees only the values it was built for.
 | 86 | `txEqCurveVersion` | `i64` |
 | 87 | `band2mVersion` | `i64` |
 | 88 | `audioQualityVersion` | `i64` |
-| 89 | `coreBuildInfo` | `utf8` |
+| 89 | `stationTciSettingsVersion` | `i64` |
+| 90 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2352,7 +2368,7 @@ An enum property lists the values its domain allows.
 | 7 | `pairingWindowOpen` | `bool` | outbound |  |
 | 8 | `pairingCode` | `utf8` | outbound |  |
 
-**StationTciModel** (9 properties)
+**StationTciModel** (20 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2365,6 +2381,17 @@ An enum property lists the values its domain allows.
 | 6 | `emulateSunSdr2Pro` | `bool` | outbound |  |
 | 7 | `cwluBecomesCw` | `bool` | outbound |  |
 | 8 | `sendInitialState` | `bool` | outbound |  |
+| 9 | `rateLimitMs` | `i64` | outbound |  |
+| 10 | `cwBecomesCwuAbove10mhz` | `bool` | outbound |  |
+| 11 | `iqSwap` | `bool` | outbound |  |
+| 12 | `alwaysStreamIq` | `bool` | outbound |  |
+| 13 | `audioBlockSamples` | `i64` | outbound |  |
+| 14 | `txChannel` | `i64` | outbound |  |
+| 15 | `rxSensorIntervalMs` | `i64` | outbound |  |
+| 16 | `txSensorIntervalMs` | `i64` | outbound |  |
+| 17 | `forgetRx2VfoBOnDisconnect` | `bool` | outbound |  |
+| 18 | `useRx1VfoaForRx2Vfoa` | `bool` | outbound |  |
+| 19 | `copyRx2VfobToVfoa` | `bool` | outbound |  |
 
 **StationVax** (18 properties)
 
@@ -4350,6 +4377,7 @@ refused.
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
 | `setStationTciOptions` | `emulateExpertSdr3` bool, `emulateSunSdr2Pro` bool, `cwluBecomesCw` bool, `sendInitialState` bool | `stationTciVersion` | 2 | 11 |
 | `disconnectStationTciClient` | `id` utf8 | `stationTciVersion` | 2 | 11 |
+| `setStationTciSettings` | `rateLimitMs` i64 (optional), `cwBecomesCwuAbove10mhz` bool (optional), `iqSwap` bool (optional), `alwaysStreamIq` bool (optional), `audioBlockSamples` i64 (optional), `txChannel` i64 (optional), `rxSensorIntervalMs` i64 (optional), `txSensorIntervalMs` i64 (optional), `forgetRx2VfoBOnDisconnect` bool (optional), `useRx1VfoaForRx2Vfoa` bool (optional), `copyRx2VfobToVfoa` bool (optional) | `stationTciSettingsVersion` | 1 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
 | `clearAccessoryFaults` | `device` utf8 | `accessoryDataVersion` | 1 | 11 |

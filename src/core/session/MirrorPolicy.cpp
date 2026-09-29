@@ -139,6 +139,9 @@
 //                 forwardAdcRaw, reflectedAdcRaw and compressionDb Outbound
 //                 (txReadingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - StationTciModel's other eleven settings Outbound
+//                 (stationTciSettingsVersion 1). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - Parity Task 23 (R-R3-48, R-R3-42): StationTciModel's four
 //                 options Outbound (stationTciVersion 2). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -727,6 +730,21 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StationTciModel", "emulateSunSdr2Pro", MirrorDirection::Outbound },
     { "StationTciModel", "cwluBecomesCw", MirrorDirection::Outbound },
     { "StationTciModel", "sendInitialState", MirrorDirection::Outbound },
+    // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
+    // the server's settings, changed only through setStationTciSettings and
+    // sent only to a peer that declared stationTciSettings 1
+    // (StationServer::fitStationTciSettingsToPeer).
+    { "StationTciModel", "rateLimitMs", MirrorDirection::Outbound },
+    { "StationTciModel", "cwBecomesCwuAbove10mhz", MirrorDirection::Outbound },
+    { "StationTciModel", "iqSwap", MirrorDirection::Outbound },
+    { "StationTciModel", "alwaysStreamIq", MirrorDirection::Outbound },
+    { "StationTciModel", "audioBlockSamples", MirrorDirection::Outbound },
+    { "StationTciModel", "txChannel", MirrorDirection::Outbound },
+    { "StationTciModel", "rxSensorIntervalMs", MirrorDirection::Outbound },
+    { "StationTciModel", "txSensorIntervalMs", MirrorDirection::Outbound },
+    { "StationTciModel", "forgetRx2VfoBOnDisconnect", MirrorDirection::Outbound },
+    { "StationTciModel", "useRx1VfoaForRx2Vfoa", MirrorDirection::Outbound },
+    { "StationTciModel", "copyRx2VfobToVfoa", MirrorDirection::Outbound },
 
     // iPhone app plan Task 25 (vaxVersion 1): the station computer's VAX.
     // The slices, device names and transmit slice are the Core's; the

@@ -1127,7 +1127,9 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("forwardW"), QStringLiteral("limitW")}},
         // The port number and the Core's addresses (blockedReason).
         {"src/core/StationTciController.cpp", {}, {}, 1,
-         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))"),
+          // A setting's range (StationTciModel::settingsTable()).
+          QStringLiteral("setting->min"), QStringLiteral("setting->max")},
          {// TciServer's own error text, kept for the Core's log line only.
           QStringLiteral("error"),
           // The unknown-client sentence is scanned in this file.
@@ -1234,6 +1236,7 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),
           QStringLiteral("setStationTciForStation"),
           QStringLiteral("setStationTciOptionsForStation"),
+          QStringLiteral("setStationTciSettingsForStation"),
           QStringLiteral("disconnectStationTciClientForStation"),
           QStringLiteral("setTxInterlockPolicyForStation"),
           QStringLiteral("setPgxlPowerCapForStation"),
@@ -1574,7 +1577,9 @@ const QList<ReasonSource>& propertyTextSources()
         // The station TCI server's error (StationTciModel error), worded by
         // blockedReason. The port number and the Core's addresses.
         {"src/core/StationTciController.cpp", {}, {}, 1,
-         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))")},
+         {QStringLiteral("port"), QStringLiteral("stationAddresses.join(QStringLiteral(\", \"))"),
+          // A setting's range (StationTciModel::settingsTable()).
+          QStringLiteral("setting->min"), QStringLiteral("setting->max")},
          {// TciServer's own error text, kept for the Core's log line only.
           QStringLiteral("error"),
           // The unknown-client sentence is scanned in this file.

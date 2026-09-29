@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
+//               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -374,6 +377,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (audioQualityVersion == 1) {
             updates.append(intEntry("audioQualityVersion", audioQualityVersion));
         }
+        // JJ's ruling of 2026-09-28: the Core's TCI server settings, last,
+        // for a peer that declared stationTciSettings.
+        if (stationTciSettingsVersion == 1) {
+            updates.append(intEntry("stationTciSettingsVersion", stationTciSettingsVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -606,7 +614,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "vaxVersion"
                    || u.name == "txEqCurveVersion"
                    || u.name == "band2mVersion"
-                   || u.name == "audioQualityVersion") {
+                   || u.name == "audioQualityVersion"
+                   || u.name == "stationTciSettingsVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -634,6 +643,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.band2mVersion = version >= 1 ? 1 : 0;
                 } else if (u.name == "audioQualityVersion") {
                     caps.audioQualityVersion = version >= 1 ? 1 : 0;
+                } else if (u.name == "stationTciSettingsVersion") {
+                    caps.stationTciSettingsVersion = version >= 1 ? 1 : 0;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {
