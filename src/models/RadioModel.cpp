@@ -608,6 +608,18 @@
 //   2026-09-29 - HL2 port part 1: rebindIoBoardSlice feeds the HL2 I/O
 //                board poll the TX VFO's mode and frequency. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - G-05 (JJ's ruling 2026-09-28): an operator's release waits
+//                for the connection's transmit I/Q send ring to drain, for
+//                at most the ring's own length (MoxController::
+//                SendRingDrain); stopTransmitNow and a disconnect end any
+//                such wait and start none, and Stop All TX acts during one.
+//                NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Stop All TX and the time-out also act while a release is
+//                still on the air (transmitReleaseInProgress: the TX
+//                channel's drain, the send ring's wait, mox_delay).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1955,6 +1967,26 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // MoxController::kEndOfOverTailMaxMs). The Core's stops never wait for
     // it (stopTransmitNow aborts it).
     m_moxController->setEndOfOverTail([this]() { return startRadeEndOfOverTail(); });
+
+    // G-05 (JJ's ruling 2026-09-28): an operator's release waits for the
+    // connection's transmit I/Q send ring to drain before the hardware is
+    // released, for at most the ring's own length. The Core's stops
+    // (stopTransmitNow's hold: Stop All TX, the time-out, the holder
+    // revoked, the amplifier and SWR stops) and a disconnect release at
+    // once, as does a remote model, which has no ring of its own.
+    {
+        MoxController::SendRingDrain ring;
+        ring.permitted = [this]() {
+            return m_role != Role::Remote && !m_transmitStopHold && !m_refuseEndOfOverTail;
+        };
+        ring.drained = [this]() {
+            return m_connection == nullptr || m_connection->txIqRingDrained();
+        };
+        ring.lengthMs = [this]() {
+            return m_connection != nullptr ? m_connection->txIqRingLengthMs() : -1.0;
+        };
+        m_moxController->setSendRingDrain(std::move(ring));
+    }
     connect(m_moxController, &MoxController::endOfOverTailChanged,
             this, &RadioModel::onEndOfOverTailChanged);
     // Every unkey reaches the TX channel's drain (after a tail, or at once
@@ -6699,6 +6731,12 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::transmitReleaseInProgress() const
+{
+    return m_role != Role::Remote && m_moxController != nullptr
+        && m_moxController->isReleasing();
 }
 
 bool RadioModel::endOfOverTailActive() const
@@ -21263,6 +21301,9 @@ void RadioModel::teardownConnection()
         m_refuseEndOfOverTail = true;
         m_moxController->setMox(false);
         m_moxController->abortEndOfOverTail();
+        // G-05: nor a wait for the send ring (m_refuseEndOfOverTail keeps
+        // this unkey from starting one; this ends one already running).
+        m_moxController->abortSendRingWait();
         m_refuseEndOfOverTail = false;
     }
     if (m_isTuning) {
@@ -21611,6 +21652,8 @@ void RadioModel::teardownConnection()
         m_moxController->setAwaitsTxDrain(false);
         // Nor an end-of-over tail.
         m_moxController->abortEndOfOverTail();
+        // G-05: nor a wait for the send ring.
+        m_moxController->abortSendRingWait();
     }
 
     // Shutdown WDSP (destroys all channels, saves cache)
@@ -22354,6 +22397,9 @@ void RadioModel::stopTransmitNow(const QString& reason)
     // is queued, so the walk goes on to its drain and hardware release.
     if (m_moxController) {
         m_moxController->abortEndOfOverTail();
+        // G-05: nor for the send ring to drain (the hold above keeps a
+        // later unkey from starting that wait; this ends one running).
+        m_moxController->abortSendRingWait();
     }
 
     qCInfo(lcConnection).noquote() << "Transmit stopped at once:" << reason;
@@ -22402,7 +22448,12 @@ void RadioModel::stopAllTx(const QString& message)
     // RADE end-of-over callsigns: the radio is still on the air during an
     // end-of-over tail (MOX is already off), so a stop then stops it too.
     const bool tailOn = endOfOverTailActive();
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn) {
+    // Likewise for the rest of a release that has not yet dropped the
+    // hardware: the TX channel's drain, the send ring's wait (G-05) and
+    // mox_delay. Thetis runs its unkey synchronously, so a StopAllTx can
+    // never land inside it; here it can, and must still stop the radio.
+    const bool releasing = transmitReleaseInProgress();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !tailOn && !releasing) {
         return;
     }
 
@@ -22469,7 +22520,10 @@ void RadioModel::onTxTimeOut(const QString& which, int limitSeconds)
     const bool twoToneOn = m_twoToneController
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight());
-    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+    // NereusSDR: a release still on the air (see stopAllTx) is keyed too;
+    // Thetis's synchronous unkey has no such stretch.
+    const bool releasing = transmitReleaseInProgress();
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn && !releasing) {
         return;
     }
 

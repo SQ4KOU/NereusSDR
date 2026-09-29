@@ -146,6 +146,16 @@
 //                 FreeDV's end-of-over frame before the TX→RX walk).
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 : isReleasing (MOX off, hardware still keyed), so the
+//                 Core's stops act during the TX drain window. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 : G-05 (JJ's ruling 2026-09-28): SendRingDrain,
+//                 setSendRingDrain, abortSendRingWait, kSendRingPollMs (an
+//                 operator's release waits for the transmit I/Q send ring
+//                 to drain, after the TX channel's drain and before
+//                 mox_delay, bounded by the ring's own length).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-25 : Task 33 (R-IOS-03): txDrainRequested, onTxDrained,
 //                 setAwaitsTxDrain and kTxDrainTimeoutMs (the TX→RX walk
 //                 drains before the hardware flip, as Thetis does);
@@ -379,6 +389,11 @@ public:
     // FreeDV bounds the same wait at 2 s for the EOO to queue plus 1 s for
     // the audio to drain (freedv-gui src/ongui.cpp:1479-1523 [@a4ae053]).
     static constexpr int kEndOfOverTailMaxMs = 1000;
+    // G-05: how often the unkey's wait for the send ring looks at it.
+    // NereusSDR-original; the same 1 ms step as WDSP SetChannelState's
+    // drain loop of Sleep(1) (wdsp/channel.c SetChannelState [v2.10.3.15]).
+    // The wait's bound is not a constant: it is the ring's own length.
+    static constexpr int kSendRingPollMs = 1;
 
     // ── Getters ──────────────────────────────────────────────────────────────
     bool     isMox()      const noexcept { return m_mox; }
@@ -563,6 +578,16 @@ public:
     void onEndOfOverTailDone();
     void abortEndOfOverTail();
     bool isEndOfOverTailActive() const noexcept { return m_waitingForEndOfOverTail; }
+    // isReleasing: MOX is off and the TX to RX walk has not yet released the
+    // hardware (an end-of-over tail, the TX channel's drain, the send ring's
+    // wait or mox_delay), so the radio is still on the air. Thetis's unkey
+    // runs this stretch synchronously inside chkMOX_CheckedChanged2, so
+    // nothing can ask about it there; here the walk is timer-driven and the
+    // stops must treat this stretch as transmitting.
+    bool isReleasing() const noexcept
+    {
+        return !m_mox && m_state == MoxState::TxToRxInFlight;
+    }
 
     // ── Task 33: the TX drain in the TX→RX walk ──────────────────────────────
     //
@@ -573,6 +598,32 @@ public:
     // channel) mox_delay starts at once.
     void setAwaitsTxDrain(bool on);
     bool awaitsTxDrain() const noexcept { return m_awaitTxDrain; }
+
+    // ── G-05: the unkey waits for the send ring ──────────────────────────────
+    //
+    // JJ's ruling (2026-09-28): at the end of an over the hardware is not
+    // released while the transmit I/Q send ring still holds audio, and the
+    // wait lasts no longer than the ring's own length, so a stuck link can
+    // never hold the transmitter on longer than the audio the ring can hold.
+    // It runs after the TX channel's drain and before mox_delay, so Thetis's
+    // delays and their order are unchanged (Thetis's mox_delay "allows
+    // in-flight samples to clear"; NereusSDR's send ring can hold more than
+    // that). Only an operator's release waits: never when permitted() says
+    // no (RadioModel: the Core's stops and a disconnect), never under TX
+    // inhibit, the PA trip or receive-only, and abortSendRingWait() (which
+    // those stops call) ends a wait at once. Without drained or lengthMs,
+    // or with a length of zero or less, there is no wait.
+    struct SendRingDrain {
+        std::function<bool()> permitted;   // an operator's release, not a stop
+        std::function<bool()> drained;     // nothing left the sender puts on the wire
+        std::function<double()> lengthMs;  // the ring's own length, the wait's bound
+    };
+    void setSendRingDrain(SendRingDrain drain);
+    void abortSendRingWait();
+    bool isSendRingWaitActive() const noexcept { return m_waitingForSendRing; }
+    // The bound of the wait running now (or of the last one): the ring's
+    // length rounded up to a whole millisecond.
+    int sendRingWaitCeilingMs() const noexcept { return m_sendRingCeilingMs; }
 
     // ── Task 33: StopAllTx's _stop_all_tx latch ──────────────────────────────
     //
@@ -1395,10 +1446,18 @@ private slots:
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
     void onTxDrainTimedOut();     // Task 33: the drain wait's bound
     void onEndOfOverTailTimedOut(); // RADE end-of-over tail's bound
+    void onSendRingPoll();          // G-05: is the send ring empty yet
+    void onSendRingCeiling();       // G-05: the ring's length has passed
 
 private:
     // Task 33: the drain is done (or its wait timed out): start mox_delay.
     void finishTxDrainWait();
+    // G-05: after the TX channel's drain, wait for the send ring when this
+    // release may (true: the wait runs and starts mox_delay when it ends).
+    bool beginSendRingWait();
+    // G-05: the ring drained, its length passed or the wait was aborted:
+    // start mox_delay.
+    void finishSendRingWait();
     // The TX→RX walk from txAboutToEnd on (split out of setMox(false) so an
     // end-of-over tail can run first).
     void beginTxToRxTeardown();
@@ -1690,6 +1749,13 @@ private:
     QTimer m_breakInDelayTimer; // 300 ms — 3M-2 CW QSK; NOT started from any B.3 logic
     QTimer m_txDrainTimeoutTimer; // 100 ms: Task 33, bound on the TX→RX drain wait
     QTimer m_endOfOverTailTimer;  // 1000 ms: bound on an end-of-over tail
+    QTimer m_sendRingPollTimer;     // 1 ms, repeating: G-05, looks at the send ring
+    QTimer m_sendRingCeilingTimer;  // the ring's length: G-05, bound on that wait
+
+    // G-05: the unkey's wait for the send ring.
+    SendRingDrain m_sendRing;
+    bool m_waitingForSendRing{false};
+    int  m_sendRingCeilingMs{0};
 
     // Task 33: the TX→RX walk waits for the TX channel's drain.
     bool m_awaitTxDrain{false};

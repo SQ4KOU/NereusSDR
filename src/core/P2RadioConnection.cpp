@@ -96,6 +96,10 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - G-05: txIqRingDrained and txIqRingLengthMs, so an
+//                operator's unkey waits for the transmit I/Q ring to drain,
+//                for at most its 341 ms length. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2363,6 +2367,20 @@ RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
     st.sendErrors = m_txIqSendErrors.load(std::memory_order_relaxed);
     st.maxRingMs = m_txIqMaxRingPairs.load(std::memory_order_relaxed) * 1000 / 192000;
     return st;
+}
+
+// G-05 (JJ's ruling 2026-09-28): the unkey waits for the ring to drain,
+// bounded by its length. A frame takes whatever is queued once the radio's
+// buffer is low (serviceTxIqSend), so the ring drains to empty; its length
+// is kTxIqRingCapacityFloats / 2 pairs at 192 kHz (341.3 ms).
+bool P2RadioConnection::txIqRingDrained() const
+{
+    return m_txIqRingCount.load(std::memory_order_acquire) < 2;
+}
+
+double P2RadioConnection::txIqRingLengthMs() const
+{
+    return static_cast<double>(kTxIqRingCapacityFloats / 2) * 1000.0 / 192000.0;
 }
 
 double P2RadioConnection::txIqQueuedMs() const

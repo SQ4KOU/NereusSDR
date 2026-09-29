@@ -75,6 +75,15 @@
 //                subframe (console.cs:25781-25945, networkproto1.c:898-906
 //                [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - G-05: txIqRingDrained and txIqRingLengthMs, so an
+//                operator's unkey waits for the transmit I/Q ring to drain,
+//                for at most its 84 ms length. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - G-05 follow-up: the unkey discards what the ring still
+//                holds (a remainder under one zone after a normal release),
+//                as Thetis sends no transmit I/Q while not transmitting
+//                (networkproto1.c:723 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1650,8 +1659,44 @@ void P1RadioConnection::setMox(bool enabled)
         m_txIqPrimePending.store(true, std::memory_order_release);
         // G-07: the full-ring loss count runs per key, as on Protocol 2.
         m_txIqOverflowSamples.store(0, std::memory_order_relaxed);
+    } else {
+        // G-05 follow-up: nothing queued for this key goes out after it.
+        discardTxIqOnUnkey();
     }
     m_mox = enabled;
+}
+
+// ---------------------------------------------------------------------------
+// discardTxIqOnUnkey: G-05 follow-up (2026-09-29).
+//
+// Porting from Thetis ChannelMaster/networkproto1.c:723 [v2.10.3.15]
+// (sendProtocol1Samples), original C logic:
+//   if (!XmitBit) memset(prn->outIQbufp, 0, sizeof(complex) * 126);
+// Thetis never puts the transmit stream's I/Q on the wire while it is not
+// transmitting, so nothing of one over can start the next. fillTxZone sends
+// whole 63-sample zones only, so a remainder under one zone stayed in this
+// ring after an unkey and led the next key. The unkey drops what is queued
+// (after the send ring's wait, only that remainder; after a stop, whatever
+// was left) and the key's cushion, if that key never sent a block.
+//
+// Runs on the connection thread, the ring's consumer: advancing the read
+// position and taking the count down is the consumer's own operation, so
+// the SPSC contract holds. The TX channel's RF gate is shut, and its
+// in-flight sends waited for, before MOX off reaches here
+// (TxChannel::closeRfGateAndWaitForSender), so no producer write follows.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::discardTxIqOnUnkey() noexcept
+{
+    m_txIqPrimePending.store(false, std::memory_order_release);
+    const int queued = m_txIqCount.load(std::memory_order_acquire);
+    if (queued <= 0) {
+        return;
+    }
+    static constexpr int kBufBytes = kTxIqBufSamples * kTxIqBytesPerSample;
+    const int rp = m_txIqReadPos.load(std::memory_order_relaxed);
+    m_txIqReadPos.store((rp + queued * kTxIqBytesPerSample) % kBufBytes,
+                        std::memory_order_relaxed);
+    m_txIqCount.fetch_sub(queued, std::memory_order_relaxed);
 }
 // ---------------------------------------------------------------------------
 // setAntennaRouting — Phase 3P-I-a
@@ -1894,6 +1939,26 @@ RadioConnection::TxSendStats P1RadioConnection::txSendStats() const
     st.overflowOnly = true;
     st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
     return st;
+}
+
+// ---------------------------------------------------------------------------
+// txIqRingDrained / txIqRingLengthMs: G-05 (JJ's ruling 2026-09-28)
+//
+// The unkey waits for the ring to drain, bounded by its length. fillTxZone
+// takes whole 63-sample zones only, so fewer than 63 queued samples are
+// never sent on their own: the ring is drained below one zone. Its length
+// is kTxIqBufSamples at the 48 kHz EP2 wire rate (84 ms).
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::txIqRingDrained() const
+{
+    static constexpr int kSamplesPerZone = 63;   // fillTxZone's zone
+    return m_txIqCount.load(std::memory_order_acquire) < kSamplesPerZone;
+}
+
+double P1RadioConnection::txIqRingLengthMs() const
+{
+    static constexpr double kWireRateHz = 48000.0;
+    return static_cast<double>(kTxIqBufSamples) * 1000.0 / kWireRateHz;
 }
 
 // ---------------------------------------------------------------------------

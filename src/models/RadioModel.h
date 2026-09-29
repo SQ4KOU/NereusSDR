@@ -2637,6 +2637,9 @@ public:
     // frame after an operator's release (MoxController's end-of-over tail).
     // The Core's value; TransmitState sends it as txEnding.
     bool endOfOverTailActive() const;
+    // A release that has not yet dropped the hardware (MoxController::
+    // isReleasing): Stop All TX and the time-out still act during it.
+    bool transmitReleaseInProgress() const;
     // Whether an unkey now may send the RADE end-of-over tail: the Core's
     // own release (not after one of its stops, the RF gate still open), not
     // TUNE or two-tone, and the TX-bound slice in RADE. The tail also needs
@@ -5465,7 +5468,8 @@ private:
     // While a tail runs: the TX slice's dspModeChanged and the arbiter's
     // txBoundSliceChanged, each ending it.
     QMetaObject::Connection m_endOfOverTailModeWatch;
-    // Set around teardownConnection's unkey: a disconnect sends no tail.
+    // Set around teardownConnection's unkey: a disconnect sends no tail,
+    // and does not wait for the send ring (G-05).
     bool m_refuseEndOfOverTail{false};
     QMetaObject::Connection m_endOfOverTailSliceWatch;
 

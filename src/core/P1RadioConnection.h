@@ -273,6 +273,9 @@ public slots:
     // G-07: Protocol 1 keeps only the full-ring loss count
     // (TxSendStats::overflowOnly); the rest of the counters are Protocol 2's.
     TxSendStats txSendStats() const override;
+    // G-05: the unkey's wait for the send ring (RadioConnection).
+    bool txIqRingDrained() const override;
+    double txIqRingLengthMs() const override;
     void setTrxRelay(bool enabled) override;
     // "Disable HF PA": bank 10 C3 bit 7 (and the HL2's C2 bit 3), on the
     // next frame (RadioConnection::setPaDisabled).
@@ -980,6 +983,9 @@ private:
     // Float→int16 + EP2 zone fill helper.
     // Returns true if 63 samples were available and written, false if underrun.
     bool fillTxZone(quint8* zone63) noexcept;
+    // G-05 follow-up: setMox(false) drops whatever is still queued (and an
+    // unused key cushion), so none of it leads the next key.
+    void discardTxIqOnUnkey() noexcept;
 
     // Hardware config from profile
     int     m_txDrive{0};

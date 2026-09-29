@@ -108,6 +108,12 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 : G-05 (JJ's ruling 2026-09-28): an operator's release
+//                 waits for the transmit I/Q send ring to drain after the TX
+//                 channel's drain and before mox_delay, for at most the
+//                 ring's own length; TX inhibit, the PA trip, receive-only
+//                 and the Core's stops never wait. NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 : RADE end-of-over callsigns: an operator's release sends
 //                 the end-of-over tail before the TX→RX walk's phase 1
 //                 (setEndOfOverTail, beginTxToRxTeardown split out of
@@ -221,6 +227,13 @@ MoxController::MoxController(QObject* parent)
     m_breakInDelayTimer.setSingleShot(true);
     m_txDrainTimeoutTimer.setSingleShot(true);
     m_endOfOverTailTimer.setSingleShot(true);
+    // G-05: the poll repeats until the ring drains; the bound is one-shot,
+    // its interval set from the ring's length when a wait starts.
+    m_sendRingPollTimer.setSingleShot(false);
+    m_sendRingPollTimer.setInterval(kSendRingPollMs);
+    m_sendRingPollTimer.setTimerType(Qt::PreciseTimer);
+    m_sendRingCeilingTimer.setSingleShot(true);
+    m_sendRingCeilingTimer.setTimerType(Qt::PreciseTimer);
 
     // Set default intervals from Thetis constants.
     // From Thetis console.cs:19687 — private int rf_delay = 30 [v2.10.3.13]
@@ -249,6 +262,8 @@ MoxController::MoxController(QObject* parent)
     connect(&m_breakInDelayTimer, &QTimer::timeout, this, &MoxController::onBreakInDelayElapsed);
     connect(&m_txDrainTimeoutTimer, &QTimer::timeout, this, &MoxController::onTxDrainTimedOut);
     connect(&m_endOfOverTailTimer, &QTimer::timeout, this, &MoxController::onEndOfOverTailTimedOut);
+    connect(&m_sendRingPollTimer, &QTimer::timeout, this, &MoxController::onSendRingPoll);
+    connect(&m_sendRingCeilingTimer, &QTimer::timeout, this, &MoxController::onSendRingCeiling);
 }
 
 MoxController::~MoxController() = default;
@@ -404,6 +419,92 @@ void MoxController::finishTxDrainWait()
 {
     m_waitingForTxDrain = false;
     m_txDrainTimeoutTimer.stop();
+    // G-05: the send ring drains first, while the hardware is still keyed.
+    if (beginSendRingWait()) {
+        return;
+    }
+    // From Thetis console.cs:29667-29669 [v2.10.3.15]:
+    //   if (mox_delay > 0)
+    //       Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
+    m_keyUpDelayTimer.start();
+}
+
+// ---------------------------------------------------------------------------
+// G-05 (JJ's ruling 2026-09-28): the unkey waits for the send ring.
+// NereusSDR-original. Thetis's outbound buffer releases each frame to its
+// sender as soon as the frame fills (OutBound, ChannelMaster/obbuffs.c:
+// 100-129 [v2.10.3.15]), and its mox_delay of 10 ms "allows in-flight
+// samples to clear" (console.cs:29667-29669 [v2.10.3.15]). NereusSDR's
+// send ring paces frames to the radio and holds up to 84 ms (Protocol 1) or
+// 341 ms (Protocol 2), so an operator's release waits for it to drain
+// before mox_delay, and never longer than its length. The Core's stops, a
+// disconnect, TX inhibit, the PA trip and receive-only release at once.
+// ---------------------------------------------------------------------------
+void MoxController::setSendRingDrain(SendRingDrain drain)
+{
+    m_sendRing = std::move(drain);
+}
+
+bool MoxController::beginSendRingWait()
+{
+    if (!m_sendRing.drained || !m_sendRing.lengthMs) {
+        return false;
+    }
+    if (transmitBlocked()) {
+        return false;   // TX inhibit, the PA trip, receive-only: at once
+    }
+    if (m_sendRing.permitted && !m_sendRing.permitted()) {
+        return false;   // the Core's stops and a disconnect: at once
+    }
+    const double lengthMs = m_sendRing.lengthMs();
+    if (!(lengthMs > 0.0)) {
+        return false;   // no send ring
+    }
+    if (m_sendRing.drained()) {
+        return false;   // nothing queued: no wait
+    }
+    m_sendRingCeilingMs = static_cast<int>(std::ceil(lengthMs));
+    m_waitingForSendRing = true;
+    m_sendRingCeilingTimer.start(m_sendRingCeilingMs);
+    m_sendRingPollTimer.start();
+    return true;
+}
+
+void MoxController::onSendRingPoll()
+{
+    if (!m_waitingForSendRing) {
+        return;
+    }
+    if (m_sendRing.drained && !m_sendRing.drained()) {
+        return;
+    }
+    finishSendRingWait();
+}
+
+void MoxController::onSendRingCeiling()
+{
+    if (!m_waitingForSendRing) {
+        return;
+    }
+    qCInfo(lcDsp) << "MoxController: the transmit send ring did not drain within its length of"
+                  << m_sendRingCeilingMs << "ms; releasing the hardware without the rest";
+    finishSendRingWait();
+}
+
+void MoxController::abortSendRingWait()
+{
+    if (!m_waitingForSendRing) {
+        return;
+    }
+    qCInfo(lcDsp) << "MoxController: transmit stopped; not waiting for the send ring";
+    finishSendRingWait();
+}
+
+void MoxController::finishSendRingWait()
+{
+    m_waitingForSendRing = false;
+    m_sendRingPollTimer.stop();
+    m_sendRingCeilingTimer.stop();
     // From Thetis console.cs:29667-29669 [v2.10.3.15]:
     //   if (mox_delay > 0)
     //       Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
@@ -1265,6 +1366,11 @@ void MoxController::beginTxToRxTeardown()
     }
     emit txDrainRequested();                        // TX→RX phase 2 of 5
     if (!awaitDrain) {
+        // G-05: without a drain to wait for, the send ring's wait (if
+        // any) comes straight after the request.
+        if (beginSendRingWait()) {
+            return;
+        }
         m_keyUpDelayTimer.start();
     }
 }
@@ -1724,8 +1830,10 @@ void MoxController::setTxInhibited(bool on)
         setMox(false);
     }
     // RADE end-of-over callsigns: a block ends a running tail at once too.
+    // G-05: and the send ring's wait.
     if (on) {
         abortEndOfOverTail();
+        abortSendRingWait();
     }
 }
 
@@ -1769,8 +1877,10 @@ void MoxController::setPaTripped(bool on)
         setMox(false);
     }
     // RADE end-of-over callsigns: a block ends a running tail at once too.
+    // G-05: and the send ring's wait.
     if (on) {
         abortEndOfOverTail();
+        abortSendRingWait();
     }
 }
 
@@ -1827,8 +1937,10 @@ void MoxController::setRxOnly(bool on, const QString& reason)
         setMox(false);
     }
     // RADE end-of-over callsigns: a block ends a running tail at once too.
+    // G-05: and the send ring's wait.
     if (on) {
         abortEndOfOverTail();
+        abortSendRingWait();
     }
 }
 
@@ -1927,6 +2039,10 @@ void MoxController::stopAllTimers()
     m_pttOutDelayTimer.stop();
     m_txDrainTimeoutTimer.stop();
     m_waitingForTxDrain = false;
+    // G-05: a new key during the send ring's wait ends the wait.
+    m_sendRingPollTimer.stop();
+    m_sendRingCeilingTimer.stop();
+    m_waitingForSendRing = false;
     // RADE end-of-over callsigns: a new key during a tail ends the tail.
     m_endOfOverTailTimer.stop();
     if (m_waitingForEndOfOverTail) {
