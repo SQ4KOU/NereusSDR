@@ -741,6 +741,19 @@ void TstRemoteHl2Io::alexLpfEdgesFromARemoteWindowKeepRangesAndMoveNeighbours()
     QTRY_COMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 1.799999);
     QCOMPARE(s.core.p1.alexLpfEdges().rows[1].startMhz, 1.8);
     QCOMPARE(rejected.count(), 3);
+
+    // The same edge in another case: the Core recognizes it as the 160m
+    // End but refuses it, so it is stored under no key and moves nothing
+    // (the neighbour rule stores under the lowercase keys only).
+    const QString oddCase = hw(QStringLiteral("Alex/LPF/160M/End"));
+    s.proxy.setValue(oddCase, QStringLiteral("1.7"));
+    QTRY_COMPARE(rejected.count(), 4);
+    QCOMPARE(rejected.last().first().toString(), oddCase);
+    QVERIFY(s.settings.value(oddCase).toString().isEmpty());
+    QCOMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString(),
+             QStringLiteral("1.799999"));
+    QVERIFY(s.settings.value(hw(QStringLiteral("alex/lpf/160m/start"))).toString().isEmpty());
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 1.799999);
 }
 
 void TstRemoteHl2Io::localAlexHpfSwitchesStayLiveOnTheAir()

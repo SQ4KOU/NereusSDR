@@ -740,8 +740,11 @@ const QList<ReasonSource>& reasonSources()
           // watts (calibrationKeyValueRefusal).
           QStringLiteral("spec.maximum"),
           // Review C1: alexLpfKeyValueRefusal's band name (160m to 6m),
-          // "start" or "end", and its two limits in MHz.
-          QStringLiteral("band, edgeName, lowest, highest")},
+          // "start" or "end", and its two limits in MHz ("Choose the %1
+          // low-pass %2 from %3 to %4 MHz."), and the same band and edge
+          // in its refusal of a key written in another case.
+          QStringLiteral("band, edgeName, lowest, highest"),
+          QStringLiteral("band, edgeName")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),

@@ -1827,10 +1827,23 @@ bool isAlexLpfRowKey(const QString& rawKey)
 // One low-pass row edge's key: hardware/<mac>/alex/lpf/<slug>/<start|end>.
 struct AlexLpfEdgeKey {
     QString mac;
-    QStringList prefix;  // the key's parts up to and including "lpf"
+    QStringList prefix;  // "hardware", the MAC as written, "alex", "lpf"
     int row {0};
     bool isEnd {false};
+    // Written as the Core stores it (lowercase "hardware/<mac>/alex/lpf/
+    // <slug>/<start|end>"). The key is recognized whatever its case, so a
+    // write in any other case is refused rather than stored under a key
+    // the radio and the neighbour rule never read.
+    bool canonical {false};
 };
+
+QString alexLpfEdgeKeyFor(const AlexLpfEdgeKey& base, int row, bool isEnd)
+{
+    QStringList parts = base.prefix;
+    parts << QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[row])
+          << (isEnd ? QStringLiteral("end") : QStringLiteral("start"));
+    return parts.join(QLatin1Char('/'));
+}
 
 std::optional<AlexLpfEdgeKey> parseAlexLpfEdgeKey(const QString& rawKey)
 {
@@ -1843,7 +1856,8 @@ std::optional<AlexLpfEdgeKey> parseAlexLpfEdgeKey(const QString& rawKey)
     }
     AlexLpfEdgeKey out;
     out.mac = parts[1];
-    out.prefix = parts.mid(0, 4);
+    out.prefix = QStringList{QStringLiteral("hardware"), parts[1], QStringLiteral("alex"),
+                             QStringLiteral("lpf")};
     out.row = -1;
     for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
         if (parts[4].compare(QLatin1String(codec::alex::kAlexLpfRowSlugs[i]),
@@ -1861,15 +1875,8 @@ std::optional<AlexLpfEdgeKey> parseAlexLpfEdgeKey(const QString& rawKey)
     } else {
         return std::nullopt;
     }
+    out.canonical = rawKey == alexLpfEdgeKeyFor(out, out.row, out.isEnd);
     return out;
-}
-
-QString alexLpfEdgeKeyFor(const AlexLpfEdgeKey& base, int row, bool isEnd)
-{
-    QStringList parts = base.prefix;
-    parts << QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[row])
-          << (isEnd ? QStringLiteral("end") : QStringLiteral("start"));
-    return parts.join(QLatin1Char('/'));
 }
 
 // R-R3-46 / R-R3-49 (review C1): the plain refusal for a low-pass edge its
@@ -1884,6 +1891,15 @@ QString alexLpfKeyValueRefusal(const QString& key, const QVariant& value)
     if (!edge) {
         return {};
     }
+    // A band name (160m to 6m), "start" or "end", and the two limits.
+    const QString band = QLatin1String(codec::alex::kAlexLpfRowSlugs[edge->row]);
+    const QString edgeName = edge->isEnd ? QStringLiteral("end") : QStringLiteral("start");
+    // Review follow-up: a key in another case is refused, never stored.
+    if (!edge->canonical) {
+        return QStringLiteral("This app named the %1 low-pass %2 in a way the Core "
+                              "does not store. Updating the app may help.")
+            .arg(band, edgeName);
+    }
     bool ok = false;
     const double mhz = value.toString().toDouble(&ok);
     if (ok && codec::alex::alexLpfEdgeAllowed(edge->row, edge->isEnd, mhz)) {
@@ -1893,12 +1909,9 @@ QString alexLpfKeyValueRefusal(const QString& key, const QVariant& value)
         codec::alex::kAlexLpfEdgeLimits[static_cast<size_t>(edge->row)];
     const double lo = edge->isEnd ? lim.endMin : lim.startMin;
     const double hi = edge->isEnd ? lim.endMax : lim.startMax;
-    // A band name (160m to 6m), "start" or "end", and the two limits.
-    const QString band = QLatin1String(codec::alex::kAlexLpfRowSlugs[edge->row]);
-    const QString edgeName = edge->isEnd ? QStringLiteral("end") : QStringLiteral("start");
     const QString lowest = QString::number(lo, 'g', 10);
     const QString highest = QString::number(hi, 'g', 10);
-    return QStringLiteral("Choose a %1 low-pass %2 from %3 to %4 MHz.")
+    return QStringLiteral("Choose the %1 low-pass %2 from %3 to %4 MHz.")
         .arg(band, edgeName, lowest, highest);
 }
 
@@ -7172,7 +7185,7 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
 void StationServer::applyAlexLpfNeighbourRule(const QString& key)
 {
     const std::optional<AlexLpfEdgeKey> edge = parseAlexLpfEdgeKey(key);
-    if (!edge) {
+    if (!edge || !edge->canonical) {
         return;
     }
     codec::alex::AlexLpfRows rows = codec::alex::AlexLpfEdges::thetisDefaults().rows;

@@ -310,56 +310,6 @@ void AntennaAlexAlex1Tab::buildHpfColumn(QGroupBox* box,
     boxLayout->addStretch();
 }
 
-// ── buildLpfColumn ────────────────────────────────────────────────────────────
-
-// Builds the LPF band rows (Start | End) inside box.
-// From Thetis tpAlexFilterControl LPF controls (setup.designer.cs:23414-23435) [@501e3f5]
-void AntennaAlexAlex1Tab::buildLpfColumn(QGroupBox* box,
-                                         const std::vector<LpfBandEntry>& bands,
-                                         std::vector<LpfRowWidgets>& rows)
-{
-    auto* formLayout = new QFormLayout();
-    formLayout->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    formLayout->setHorizontalSpacing(6);
-    formLayout->setVerticalSpacing(4);
-
-    rows.clear();
-    rows.reserve(bands.size());
-
-    for (const LpfBandEntry& band : bands) {
-        LpfRowWidgets w;
-        w.start = makeFreqSpin(band.startMhz, box);
-        w.end   = makeFreqSpin(band.endMhz, box);
-
-        auto* rowWidget = new QWidget(box);
-        auto* rowLayout = new QHBoxLayout(rowWidget);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(4);
-        rowLayout->addWidget(w.start);
-        rowLayout->addWidget(w.end);
-
-        formLayout->addRow(tr(band.label), rowWidget);
-
-        const QString slug = QString::fromLatin1(band.slug);
-        const QString startKey = QStringLiteral("alex/lpf/%1/start").arg(slug);
-        const QString endKey   = QStringLiteral("alex/lpf/%1/end").arg(slug);
-
-        connect(w.start, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this, startKey](double v) { onLpfSpinChanged(v, startKey); });
-        connect(w.end, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
-                [this, endKey](double v) { onLpfSpinChanged(v, endKey); });
-
-        rows.push_back(w);
-    }
-
-    auto* boxLayout = qobject_cast<QVBoxLayout*>(box->layout());
-    if (!boxLayout) {
-        boxLayout = new QVBoxLayout(box);
-    }
-    boxLayout->addLayout(formLayout);
-    boxLayout->addStretch();
-}
-
 // ── Constructor ───────────────────────────────────────────────────────────────
 
 AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)

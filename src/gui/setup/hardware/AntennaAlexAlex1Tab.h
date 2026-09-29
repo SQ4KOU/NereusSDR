@@ -268,10 +268,6 @@ private:
                         const std::vector<HpfBandEntry>& bands,
                         std::vector<HpfRowWidgets>& rows);
 
-    void buildLpfColumn(QGroupBox* box,
-                        const std::vector<LpfBandEntry>& bands,
-                        std::vector<LpfRowWidgets>& rows);
-
     static QDoubleSpinBox* makeFreqSpin(double defaultMhz, QWidget* parent);
 
     RadioModel* m_model{nullptr};
