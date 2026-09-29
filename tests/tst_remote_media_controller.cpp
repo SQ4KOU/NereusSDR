@@ -37,6 +37,9 @@
 //               case that hid (both streams silent on a direct path while
 //               the backoff runs). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: new aPlaybackFailureEndsAWaitingRestart: a playback
+//               failure while a restart waits leaves nothing waiting.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QTest>
 #include <QApplication>
 #include <QMetaMethod>
@@ -6801,6 +6804,94 @@ private slots:
         QVERIFY2(afterRetry >= 990 && afterRetry < 3500, qPrintable(QString::number(afterRetry)));
         // Audio and display stayed on the connection they started on.
         QCOMPARE(remoteMedia.mediaConnectionId(), connectionId);
+
+        display.timer.stop();
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A playback failure while an automatic restart waits on its backoff
+    // step ends that restart. The failure disables audio (a new revision),
+    // so the waiting restart could never run; before this fix it stayed
+    // marked waiting until something else asked for audio. The Core sends a
+    // context of its own at the current revision while the restart waits
+    // (today it does so only on a radio change or a new media connection,
+    // each of which the window answers with its own request first), and that
+    // context cannot open this computer's speaker. The failure is lasting, as
+    // any other: no automatic request follows it, and the operator's Retry
+    // plays again once the speaker is back.
+    void aPlaybackFailureEndsAWaitingRestart()
+    {
+        using State = RemoteAudioStatus::State;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        // The Core's display keeps running, so the silence fallback stays
+        // out of it (as in repeatedAudioRestartsBackOff).
+        CoreDisplayKeepAlive display;
+        DaemonMediaController daemonMedia(&h.server, &h.station, nullptr, display.factory());
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        int requests = 0;
+        connect(&h.server, &StationServer::mediaControlReceived, this,
+                [&](const QJsonObject& control) {
+            if (control.value(QStringLiteral("op")) == QLatin1String("audio")
+                && control.value(QStringLiteral("enabled")).toBool()) {
+                ++requests;
+            }
+        });
+        // The last enabled context the Core sent, and the epoch it came on.
+        QJsonObject lastContext;
+        quint32 contextEpoch = 0;
+        connect(&h.client, &StationClient::mediaControlReceived, this,
+                [&](const QJsonObject& payload, quint32 epoch) {
+            if (payload.value(QStringLiteral("op")) == QLatin1String("audio-context")
+                && payload.value(QStringLiteral("enabled")).toBool()) {
+                lastContext = payload;
+                contextEpoch = epoch;
+            }
+        });
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
+        const int before = requests;
+
+        // The Core's audio stops: restarts step through the backoff until
+        // one waits on the 4 s step.
+        display.timer.start();
+        audio.source.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(requests >= before + 2
+                                     && remoteMedia.audioRestartPendingForTest(), 10000);
+        QVERIFY(errors.isEmpty());
+        QVERIFY(!lastContext.isEmpty());
+
+        // While it waits, this computer's speaker goes, and the Core sends a
+        // newer context at the revision the window last asked for.
+        h.remoteBus->setOutputPacingAvailableForTesting(false);
+        QTest::ignoreMessage(QtWarningMsg, kSpeakerOpenFailedLog);
+        const int atContext = requests;
+        QJsonObject context = lastContext;
+        context.insert(QStringLiteral("generation"),
+                       context.value(QStringLiteral("generation")).toDouble() + 1);
+        QVERIFY(h.server.sendMediaControl(context, contextEpoch));
+        QTRY_COMPARE_WITH_TIMEOUT(errors.size(), 1, 2000);
+        QCOMPARE(requests, atContext);
+        QCOMPARE(remoteMedia.audioStatus().state, State::PlaybackProblem);
+        // Nothing is left waiting.
+        QVERIFY(!remoteMedia.audioRestartPendingForTest());
+        // Past the 4 s step no automatic request came: the failure waits for
+        // Retry.
+        QTest::qWait(4500);
+        QCOMPARE(requests, atContext);
+        QVERIFY(!remoteMedia.audioRestartPendingForTest());
+        QCOMPARE(remoteMedia.audioStatus().state, State::PlaybackProblem);
+
+        // The speaker is back and the Core's audio too: Retry plays again.
+        h.remoteBus->setOutputPacingAvailableForTesting(true);
+        audio.source.start();
+        remoteMedia.retryAudio();
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(), 10000);
 
         display.timer.stop();
         audio.stop();

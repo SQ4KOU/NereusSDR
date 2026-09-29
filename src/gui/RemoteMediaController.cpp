@@ -1,5 +1,10 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: a playback failure ends a restart waiting on its backoff
+//               step (it could never run once the failure moved the audio
+//               revision on); a session move keeps a refused fallback
+//               waiting to be retried on the tunnel alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: audioRestartPendingForTest for the direct silence test.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: direct media, the restart backoff across a move: a pending
@@ -1489,6 +1494,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             << QStringLiteral("Remote audio playback failed: %1").arg(reason);
         d->audioEnabled = false;
         d->audio->stop();
+        // A failure is lasting: a restart waiting on its backoff step ends
+        // here (the disable below moves the revision on, so it could never
+        // run), and the next request is the operator's Retry or a change.
+        d->audioRetryPending = false;
+        ++d->audioRetryGeneration;
         const QPointer<RemoteMediaController> self(this);
         if (d->peer && d->peer->isReady()) {
             ++d->audioRevision;
@@ -3257,8 +3267,14 @@ bool RemoteMediaController::replacePending() const
 
 void RemoteMediaController::markReplacePending()
 {
+    // A refused fallback waiting to be retried stays a fallback onto the
+    // tunnel alone: the move changes the session's path, not the direct
+    // pair's silence, and a normal replace could pick that pair again.
+    const bool fallbackWaiting = d->replacePending
+        && d->pendingReplaceKind == ReplaceKind::TunnelFallback;
     d->replacePending = true;
-    d->pendingReplaceKind = ReplaceKind::Normal;
+    d->pendingReplaceKind = fallbackWaiting ? ReplaceKind::TunnelFallback
+                                            : ReplaceKind::Normal;
     d->replaceRearms = 0;
     tryPendingReplace();
 }

@@ -31,6 +31,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: a session move while a refused fallback waits keeps the
+//               retry on the tunnel alone. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: direct media follow-up: a fallback refused while the Core
 //               transmits is retried onto the tunnel alone. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1148,6 +1151,70 @@ private slots:
         QVERIFY(g.core.transports.at(1)->startOptions.ice->hasCandidateSourceFactory());
         for (const QJsonObject& replace : g.replacesSent()) {
             QCOMPARE(replace.size(), 3);
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The session moves while a refused fallback waits for the Core to be
+    // back on receive: the move is followed, and the replace is still a
+    // fallback onto the tunnel alone, so it cannot pick the silent direct
+    // pair again.
+    void aSessionMoveKeepsAWaitingFallbackOnTheTunnelAlone()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        // The session moves while the refused fallback waits.
+        emit g.core.client.pathChanged();
+        QVERIFY(g.gui->replacePending());
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                  RemoteMediaController::kReplaceRetryMs + 5000);
+        QVERIFY(!g.gui->replacePending());
+        // Every connection the window started after the first has the
+        // tunnel's candidate alone, the one that followed the move included.
+        QVERIFY(g.guiTransports.size() >= 3);
+        QVERIFY(g.guiTransports.last());
+        for (int i = 1; i < g.guiTransports.size(); ++i) {
+            if (!g.guiTransports.at(i)) { continue; }
+            const IceConfiguration& ice = *g.guiTransports.at(i)->startOptions.ice;
+            QVERIFY2(ice.onlySourceCandidates(), qPrintable(QString::number(i)));
+            QVERIFY(!ice.stunServer().has_value());
         }
         g.core.client.disconnectFromStation(QStringLiteral("test complete"));
     }
