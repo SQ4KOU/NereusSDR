@@ -46,6 +46,10 @@
 //                 radio's own PTT transmits on shows as in use by the
 //                 radio. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 : Slice control plan Task 14b (ruling U5): on a listened
+//                 flag the AF slider and Mute are this device's own
+//                 volume, labeled "Your volume". J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -599,8 +603,21 @@ public:
     // Builds the right-click menu; contextMenuEvent shows what this adds.
     void populateContextMenu(QMenu& menu);
 
+    // Slice control plan Task 14b (ruling U5): on a listened flag the AF
+    // slider and Mute are this device's own volume and mute for the slice,
+    // labeled "Your volume". They emit listenVolumeRequested and never
+    // write the slice; the slice's AF and mute (setAfGain, setMuted) are
+    // kept and shown again when the flag stops listening. level is 0..100.
+    void setListenVolume(int level, bool muted);
+    int listenVolume() const { return m_listenVolume; }
+    bool listenMuted() const { return m_listenMuted; }
+
     // Test seams for Task 14a.
     QList<QWidget*> heldControlsForTest() const;
+    // Test seams for Task 14b.
+    QSlider* afSliderForTest() const { return m_afGainSlider; }
+    QPushButton* muteButtonForTest() const { return m_muteBtn; }
+    QString afNameForTest() const;
     QRect frequencyAreaForTest() const;
     bool frequencyEditOpen() const;
 
@@ -728,6 +745,9 @@ signals:
     void takeControlRequested(int sliceIndex);
     void releaseRequested(int sliceIndex);
     void stopListeningRequested(int sliceIndex);
+    // Task 14b: "Your volume" or Mute moved on a listened flag. level is
+    // 0..100; MainWindow sends it as this device's listening level.
+    void listenVolumeRequested(int sliceIndex, int level, bool muted);
 
 private slots:
     // Phase 3F Sub-Epic C Task 9: TX badge click slot. Emits
@@ -913,8 +933,18 @@ private:
     QWidget*            m_filterBtnContainer{nullptr};
 
     // --- Audio tab ---
+    QWidget*            m_audioPage{nullptr};
+    QLabel*             m_afNameLabel{nullptr};
     QSlider*            m_afGainSlider{nullptr};
     QLabel*             m_afGainLabel{nullptr};
+    // Task 14b: the slice's AF and mute (from the model) and this device's
+    // own listening volume and mute; the slider and Mute show one pair.
+    int                 m_modelAfGain{50};
+    bool                m_modelMuted{false};
+    int                 m_listenVolume{50};
+    bool                m_listenMuted{false};
+    QString             m_afToolTip;
+    QString             m_muteToolTip;
     QPushButton*        m_agcBtns[5]{};          // Off/Long/Slow/Med/Fast — replaces m_agcCmb
     QSlider*            m_panSlider{nullptr};
     QLabel*             m_panLabel{nullptr};
@@ -999,6 +1029,8 @@ private:
     SliceAccess m_sliceAccess;
     QString     m_accessPending;
     void applySliceAccess();
+    void applyAudioBinding();
+    QList<QWidget*> listeningHeldControls() const;
     void holdForListening(QWidget* control) const;
     void buildFloatingButtons();
     void positionFloatingButtons();

@@ -305,6 +305,9 @@
 //               slice.release, answered on deviceCommandFinished; a change
 //               held back on a listened slice is sliceAccessHeld. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel sends
+//               slice.setListenLevel for a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -374,6 +377,7 @@
 #include <QWebSocket>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -4550,6 +4554,19 @@ StationClient::CommandOutcome StationClient::requestRelease(int sliceId, quint64
                        QStringLiteral("the request to release this slice"));
 }
 
+StationClient::CommandOutcome StationClient::requestListenLevel(int sliceId, quint64 incarnation,
+                                                                double level, bool muted)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestListenLevel(sliceId, incarnation, level, muted);
+    }
+    const double clamped = std::isfinite(level) ? std::clamp(level, 0.0, 1.0) : 0.0;
+    return sendCommand("slice.setListenLevel", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         doubleArgument("level", clamped), boolArgument("muted", muted) },
+                       QStringLiteral("the change to your volume for this slice"));
+}
+
 StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
 {
     return sendCommand(
@@ -6319,12 +6336,14 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
     // Slice control plan Task 5: the four slice access verbs are answered
-    // where the window's several-devices refusals are shown.
+    // where the window's several-devices refusals are shown; Task 14b adds
+    // a listened slice's own volume (slice.setListenLevel).
     if (message.commandVerb == "tx.take" || message.commandVerb == "confirm.proceed"
         || message.commandVerb == "confirm.cancel" || message.commandVerb == "notice.takeBack"
         || message.commandVerb == "session.leave" || message.commandVerb == "slice.listen"
         || message.commandVerb == "slice.stopListening"
-        || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release") {
+        || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release"
+        || message.commandVerb == "slice.setListenLevel") {
         m_pendingCommands.remove(message.commandId);
         emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
                                    message.reason, awaiting);

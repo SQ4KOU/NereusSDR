@@ -368,6 +368,9 @@
 //               requestListen, requestStopListening, requestTakeControl,
 //               requestRelease and sliceAccessHeld. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel
+//               (slice.setListenLevel), a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1135,6 +1138,9 @@ public:
                                       quint64 controlRevision) override;
     CommandOutcome requestRelease(int sliceId, quint64 incarnation,
                                   quint64 controlRevision) override;
+    // Task 14b: this window's own volume and mute for a listened slice.
+    CommandOutcome requestListenLevel(int sliceId, quint64 incarnation, double level,
+                                      bool muted) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;

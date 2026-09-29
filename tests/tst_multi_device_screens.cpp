@@ -24,6 +24,11 @@
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-07,
 //               R-IOS-30), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 14b: the hosting desktop's
+//               "Your volume" on a listened flag sets only its own
+//               listening level; the capture of a listened flag's audio
+//               tab. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -34,9 +39,12 @@
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
+#include <QSlider>
 #include <QLabel>
 #include <QSignalSpy>
 #include <QTreeWidget>
+
+#include <cmath>
 
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
@@ -45,6 +53,8 @@
 #include "core/WdspEngine.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessController.h"
+#include "core/SliceOwnership.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
@@ -493,6 +503,80 @@ private slots:
         QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
     }
 
+    // Slice control plan Task 14b (ruling U5): the hosting desktop listens
+    // to another device's slice. Its flag's "Your volume" and Mute, wired
+    // as MainWindow::setFlagListenVolume wires them, set only the
+    // station's own listening level: the slice's AF and mute, the
+    // controller's audio and the other listener's level are unchanged. The
+    // controller's AF at zero leaves the station's level where it was.
+    void theHostingFlagsYourVolumeIsItsOwnLevel()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const int shared = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        SliceModel* slice = core.model->sliceById(shared);
+        slice->setAfGain(80);
+        SliceAccessController* access = core.server->sliceAccessController();
+        QVERIFY(access != nullptr);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceAccessController::Result joined =
+            access->listen(station, core.model->sliceOwnership()->refOf(shared));
+        QVERIFY2(joined.accepted, qPrintable(joined.reason));
+        const SliceAccessController::ListenLevel bBefore =
+            access->listenLevel(b.key.fingerprint(), shared);
+
+        VfoWidget flag;
+        flag.setSliceIndex(shared);
+        flag.setAfGain(slice->afGain());
+        QObject::connect(&flag, &VfoWidget::afGainChanged, slice, &SliceModel::setAfGain);
+        QObject::connect(&flag, &VfoWidget::muteChanged, slice, &SliceModel::setMuted);
+        QObject::connect(&flag, &VfoWidget::listenVolumeRequested, &flag,
+                         [&core, access, station](int id, int level, bool muted) {
+            access->setListenLevel(station, core.model->sliceOwnership()->refOf(id),
+                                   level / 100.0, muted);
+        });
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by iPad");
+        listened.heldReason = QStringLiteral("iPad controls this slice");
+        const SliceAccessController::ListenLevel seeded = access->listenLevel(station, shared);
+        flag.setListenVolume(static_cast<int>(std::lround(seeded.level * 100.0)), seeded.muted);
+        flag.setSliceAccess(listened);
+        QCOMPARE(flag.afNameForTest(), QStringLiteral("Your volume"));
+        QCOMPARE(flag.afSliderForTest()->value(), 80);
+
+        QSignalSpy af(slice, &SliceModel::afGainChanged);
+        QSignalSpy mute(slice, &SliceModel::mutedChanged);
+        flag.afSliderForTest()->setValue(25);
+        flag.muteButtonForTest()->setChecked(true);
+
+        SliceAccessController::ListenLevel mine = access->listenLevel(station, shared);
+        QVERIFY(qAbs(mine.level - 0.25) < 1e-9);
+        QVERIFY(mine.muted);
+        QCOMPARE(af.count(), 0);
+        QCOMPARE(mute.count(), 0);
+        QCOMPARE(slice->afGain(), 80);
+        QVERIFY(!slice->muted());
+        const SliceAccessController::ListenLevel bAfter =
+            access->listenLevel(b.key.fingerprint(), shared);
+        QCOMPARE(bAfter.level, bBefore.level);
+        QCOMPARE(bAfter.muted, bBefore.muted);
+
+        // The controller turns its AF to zero: the station's level stays.
+        flag.muteButtonForTest()->setChecked(false);
+        slice->setAfGain(0);
+        flag.setAfGain(0);
+        mine = access->listenLevel(station, shared);
+        QVERIFY(qAbs(mine.level - 0.25) < 1e-9);
+        QVERIFY(!mine.muted);
+        QCOMPARE(flag.afSliderForTest()->value(), 25);
+    }
+
     // A window whose last slice another device takes stays connected with
     // an empty band, a card with Take it back, and a pan that offers a take.
     void aWindowThatLosesItsLastSliceStaysConnectedWithAnEmptyBand()
@@ -821,6 +905,28 @@ private slots:
         flagListened.setSliceAccess(listened);
         QVERIFY(flagListened.isListening());
         saveShot(&flagListened, QStringLiteral("flag-listened"));
+        // Task 14b: the listened flag's audio tab, "Your volume" and Mute.
+        VfoWidget flagYourVolume;
+        flagYourVolume.setSliceIndex(1);
+        flagYourVolume.setFrequency(14'230'000.0);
+        flagYourVolume.setListenVolume(60, false);
+        flagYourVolume.setSliceAccess(listened);
+        QPushButton* audioTab = nullptr;
+        for (QPushButton* button : flagYourVolume.findChildren<QPushButton*>()) {
+            if (button->text() == QString::fromUtf8("\xF0\x9F\x94\x8A")) {
+                audioTab = button;
+                break;
+            }
+        }
+        QVERIFY(audioTab != nullptr);
+        audioTab->click();
+        QCOMPARE(flagYourVolume.afNameForTest(), QStringLiteral("Your volume"));
+        QVERIFY(flagYourVolume.afSliderForTest()->isEnabled());
+        QVERIFY(flagYourVolume.muteButtonForTest()->isEnabled());
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.afNameForTest()));
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.afSliderForTest()->toolTip()));
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.muteButtonForTest()->toolTip()));
+        saveShot(&flagYourVolume, QStringLiteral("flag-listened-your-volume"));
         VfoWidget flagOnAir;
         flagOnAir.setSliceIndex(1);
         flagOnAir.setFrequency(14'230'000.0);

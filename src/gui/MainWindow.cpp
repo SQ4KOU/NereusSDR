@@ -362,6 +362,12 @@
 //               control, release, stop listening, select RX and a new slice,
 //               each waiting for the Core's answer. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 14b (ruling U5): a listened
+//               flag's "Your volume" and Mute set this device's own
+//               listening level (SliceAccessController::setListenLevel when
+//               hosting, slice.setListenLevel from a remote window); the
+//               slice's AF and mute are never written from it. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -823,6 +829,7 @@ warren@wpratt.com
 #include <QElapsedTimer>
 #include <QShortcut>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <memory>
@@ -2214,11 +2221,32 @@ void MainWindow::refreshSliceChooser()
         m_sliceChooser->setNoRoomForNewSlice(
             m_radioModel->slices().size() >= m_radioModel->sliceCapForDevices());
     }
+    // Task 14b: the hosting desktop's own listening level changes (set
+    // here, or reset by the Core when a slice is re-made) refresh its flags.
+    if (server && server->sliceAccessController()
+        && m_listenLevelSource != server->sliceAccessController()) {
+        SliceAccessController* levels = server->sliceAccessController();
+        m_listenLevelSource = levels;
+        connect(levels, &SliceAccessController::listenLevelChanged, this,
+                [this](int sliceId, const QByteArray& device) {
+            if (device != SliceOwnership::stationDevice()) { return; }
+            if (VfoWidget* flag = m_vfoWidgetsBySlice.value(sliceId)) {
+                const std::pair<int, bool> volume = listenVolumeFor(sliceId);
+                flag->setListenVolume(volume.first, volume.second);
+            }
+        });
+    }
     // Slice control plan Task 14a: each flag says who controls its slice
     // (Unshared everywhere when the Core does not share slices).
     for (auto it = m_vfoWidgetsBySlice.constBegin(); it != m_vfoWidgetsBySlice.constEnd(); ++it) {
         VfoWidget* flag = it.value();
         if (!flag) { continue; }
+        // Task 14b: the level "Your volume" shows, set before the access so
+        // a flag that starts listening shows it at once.
+        if (shared) {
+            const std::pair<int, bool> volume = listenVolumeFor(it.key());
+            flag->setListenVolume(volume.first, volume.second);
+        }
         VfoWidget::SliceAccess access;
         if (shared) {
             for (const SliceChooser::Row& row : rows) {
@@ -2252,6 +2280,72 @@ void MainWindow::runFlagAccessAction(SliceChooserAction action, int sliceId)
         m_flagRequestSlice = -1;
         if (flag) { flag->setSliceAccessPending(QString()); }
     }
+}
+
+std::pair<int, bool> MainWindow::listenVolumeFor(int sliceId)
+{
+    StationServer* server = desktopHosting() && m_desktopStationController
+        ? m_desktopStationController->server() : nullptr;
+    if (server && server->sliceAccessController()) {
+        const SliceAccessController::ListenLevel level =
+            server->sliceAccessController()->listenLevel(SliceOwnership::stationDevice(),
+                                                         sliceId);
+        return { static_cast<int>(std::lround(std::clamp(level.level, 0.0, 1.0) * 100.0)),
+                 level.muted };
+    }
+    const std::optional<SliceAccessMirror::Entry> entry =
+        m_stationClient && m_stationClient->sliceAccess()
+            ? m_stationClient->sliceAccess()->entry(sliceId) : std::nullopt;
+    if (!entry) {
+        return { 100, false };
+    }
+    auto found = m_remoteListenVolumes.find(sliceId);
+    if (found == m_remoteListenVolumes.end() || found->incarnation != entry->incarnation) {
+        // The Core seeds a new listener's level from the slice's AF.
+        RemoteListenVolume seeded;
+        seeded.incarnation = entry->incarnation;
+        const SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
+        seeded.level = slice ? std::clamp(slice->afGain(), 0, 100) : 100;
+        found = m_remoteListenVolumes.insert(sliceId, seeded);
+    }
+    return { found->level, found->muted };
+}
+
+void MainWindow::setFlagListenVolume(int sliceId, int level, bool muted)
+{
+    // Slice control plan Task 14b (ruling U5): this device's own level and
+    // mute for a slice it listens to. The slice's AF and mute, the
+    // controller's audio and every other listener's audio are untouched.
+    const int clamped = std::clamp(level, 0, 100);
+    StationServer* server = desktopHosting() && m_desktopStationController
+        ? m_desktopStationController->server() : nullptr;
+    if (server && server->sliceAccessController() && m_radioModel) {
+        const SliceAccessController::Result result =
+            server->sliceAccessController()->setListenLevel(
+                SliceOwnership::stationDevice(),
+                m_radioModel->sliceOwnership()->refOf(sliceId), clamped / 100.0, muted);
+        if (!result.accepted) {
+            showToast(result.reason, ToastSeverity::Info, 4000);
+        }
+        return;
+    }
+    if (!m_stationClient || !m_stationClient->sliceAccess()) {
+        return;
+    }
+    const std::optional<SliceAccessMirror::Entry> entry =
+        m_stationClient->sliceAccess()->entry(sliceId);
+    const quint64 incarnation = entry ? entry->incarnation : 0;
+    const IStationLink::CommandOutcome outcome =
+        m_stationClient->requestListenLevel(sliceId, incarnation, clamped / 100.0, muted);
+    if (!outcome.sent) {
+        showToast(outcome.reason, ToastSeverity::Info, 4000);
+        return;
+    }
+    RemoteListenVolume held;
+    held.incarnation = incarnation;
+    held.level = clamped;
+    held.muted = muted;
+    m_remoteListenVolumes.insert(sliceId, held);
 }
 
 void MainWindow::finishSliceChooserRequest(const QByteArray& verb, bool accepted,
@@ -3457,6 +3551,10 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             [this](int idx) { runFlagAccessAction(SliceChooserAction::Release, idx); });
     connect(newFlag, &VfoWidget::stopListeningRequested, this,
             [this](int idx) { runFlagAccessAction(SliceChooserAction::StopListening, idx); });
+    // Task 14b: "Your volume" and Mute on a listened flag set this device's
+    // own listening level, never the slice's AF or mute.
+    connect(newFlag, &VfoWidget::listenVolumeRequested, this,
+            [this](int idx, int level, bool muted) { setFlagListenVolume(idx, level, muted); });
     // Phase 3F (Bug 3): clicking this flag activates its slice so the RX
     // applet, the pan the flag sits on, and every other active-slice surface
     // follow it. Every flag runs through here, Slice A's included, since the

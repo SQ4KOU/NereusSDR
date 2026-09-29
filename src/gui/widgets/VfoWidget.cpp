@@ -111,6 +111,10 @@
 //                 too, the table the Core's catalogue sends (R-IOS-06,
 //                 R-IOS-27); their values are unchanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 14b (ruling U5): on a listened
+//                 flag the AF slider and Mute return as this device's own
+//                 volume and mute ("Your volume"), never the slice's AF.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1239,6 +1243,7 @@ void VfoWidget::buildTabBar()
 void VfoWidget::buildAudioTab()
 {
     auto* audioWidget = new QWidget;
+    m_audioPage = audioWidget;
     auto* audioLayout = new QVBoxLayout(audioWidget);
     audioLayout->setContentsMargins(4, 4, 4, 4);
     audioLayout->setSpacing(4);
@@ -1250,6 +1255,7 @@ void VfoWidget::buildAudioTab()
         label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         label->setFixedWidth(24);
         row->addWidget(label);
+        m_afNameLabel = label;
 
         m_afGainSlider = new QSlider(Qt::Horizontal, audioWidget);
         m_afGainSlider->setRange(ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
@@ -1263,9 +1269,10 @@ void VfoWidget::buildAudioTab()
         // only this slice's received audio (SliceModel::afGain ->
         // RxChannel::setAfGain -> WDSP SetRXAPanelGain1). Your own
         // transmitted audio is set by Mon Vol on the TX applet.
-        m_afGainSlider->setToolTip(QStringLiteral(
+        m_afToolTip = QStringLiteral(
             "How loud you hear this slice's received audio. 0 to 100. "
-            "Your own transmitted audio has its own slider, Mon Vol, on the TX applet."));
+            "Your own transmitted audio has its own slider, Mon Vol, on the TX applet.");
+        m_afGainSlider->setToolTip(m_afToolTip);
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -1276,9 +1283,15 @@ void VfoWidget::buildAudioTab()
 
         connect(m_afGainSlider, &QSlider::valueChanged, this, [this](int val) {
             m_afGainLabel->setText(QString::number(val));
-            if (!m_updatingFromModel) {
-                emit afGainChanged(val);
+            if (m_updatingFromModel) { return; }
+            if (isListening()) {
+                // Task 14b: this device's own volume, never the slice's AF.
+                m_listenVolume = val;
+                emit listenVolumeRequested(m_sliceIndex, val, m_listenMuted);
+                return;
             }
+            m_modelAfGain = val;
+            emit afGainChanged(val);
         });
         audioLayout->addLayout(row);
     }
@@ -1380,7 +1393,8 @@ void VfoWidget::buildAudioTab()
         m_muteBtn->setStyleSheet(vfoDspToggleStyle());
         // From Thetis dsp.cs:393 SetRXAPanelRun [v2.10.3.15]; WDSP
         // patchpanel.c:136 (cites moved from the tooltip, R-R3-17).
-        m_muteBtn->setToolTip(QStringLiteral("Mute the receive audio"));
+        m_muteToolTip = QStringLiteral("Mute the receive audio");
+        m_muteBtn->setToolTip(m_muteToolTip);
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
@@ -1395,9 +1409,15 @@ void VfoWidget::buildAudioTab()
         row->addStretch();
 
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel) {
-                emit muteChanged(on);
+            if (m_updatingFromModel) { return; }
+            if (isListening()) {
+                // Task 14b: mutes this slice on this device only.
+                m_listenMuted = on;
+                emit listenVolumeRequested(m_sliceIndex, m_listenVolume, on);
+                return;
             }
+            m_modelMuted = on;
+            emit muteChanged(on);
         });
         connect(m_binBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel) {
@@ -2427,6 +2447,9 @@ void VfoWidget::setAgcMode(AGCMode mode)
 
 void VfoWidget::setAfGain(int gain)
 {
+    m_modelAfGain = gain;
+    // Task 14b: a listened flag shows this device's own volume instead.
+    if (isListening()) { return; }
     m_updatingFromModel = true;
     m_afGainSlider->setValue(gain);
     m_afGainLabel->setText(QString::number(gain));
@@ -2731,6 +2754,9 @@ void VfoWidget::applyModeVisibility(DSPMode mode)
 
 void VfoWidget::setMuted(bool v)
 {
+    m_modelMuted = v;
+    // Task 14b: a listened flag shows this device's own mute instead.
+    if (isListening()) { return; }
     if (m_muteBtn && m_muteBtn->isChecked() != v) {
         m_updatingFromModel = true;
         m_muteBtn->setChecked(v);
@@ -3850,14 +3876,45 @@ QString VfoWidget::accessLineText() const
 
 QList<QWidget*> VfoWidget::heldControlsForTest() const
 {
+    QList<QWidget*> controls = listeningHeldControls();
+    if (m_txBadge) { controls.append(m_txBadge); }
+    return controls;
+}
+
+QString VfoWidget::afNameForTest() const
+{
+    return m_afNameLabel ? m_afNameLabel->text() : QString();
+}
+
+QList<QWidget*> VfoWidget::listeningHeldControls() const
+{
+    // The shared tuning controls. BYPS is not here: it is the radio's
+    // hardware, gated by setRxBypassPermitted. Task 14b: every tab page is
+    // held but the audio page, where only the AF slider (with its name and
+    // value) and Mute stay live, as this device's own volume and mute.
     QList<QWidget*> controls;
     for (QWidget* control : {static_cast<QWidget*>(m_rxAntBtn),
                              static_cast<QWidget*>(m_txAntBtn),
                              static_cast<QWidget*>(m_freqStack),
-                             static_cast<QWidget*>(m_tabStack),
-                             static_cast<QWidget*>(m_lockBtn),
-                             static_cast<QWidget*>(m_txBadge)}) {
+                             static_cast<QWidget*>(m_lockBtn)}) {
         if (control) { controls.append(control); }
+    }
+    if (!m_tabStack) { return controls; }
+    for (int i = 0; i < m_tabStack->count(); ++i) {
+        QWidget* page = m_tabStack->widget(i);
+        if (page != m_audioPage) {
+            controls.append(page);
+            continue;
+        }
+        const QList<QWidget*> children =
+            page->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        for (QWidget* child : children) {
+            if (child == m_afNameLabel || child == m_afGainSlider
+                || child == m_afGainLabel || child == m_muteBtn) {
+                continue;
+            }
+            controls.append(child);
+        }
     }
     return controls;
 }
@@ -3909,16 +3966,11 @@ void VfoWidget::applySliceAccess()
         m_freqStack->setCurrentIndex(0);
     }
 
-    // The shared tuning controls. BYPS is not here: it is the radio's
-    // hardware, gated by setRxBypassPermitted.
-    for (QWidget* control : {static_cast<QWidget*>(m_rxAntBtn),
-                             static_cast<QWidget*>(m_txAntBtn),
-                             static_cast<QWidget*>(m_freqStack),
-                             static_cast<QWidget*>(m_tabStack),
-                             static_cast<QWidget*>(m_lockBtn)}) {
+    for (QWidget* control : listeningHeldControls()) {
         holdForListening(control);
     }
     updateTransmitControlAvailability();
+    applyAudioBinding();
 
     if (m_accessLine) {
         const QString text = accessLineText();
@@ -3935,6 +3987,50 @@ void VfoWidget::applySliceAccess()
                                          : QStringLiteral("Close slice"));
         positionFloatingButtons();
     }
+}
+
+void VfoWidget::setListenVolume(int level, bool muted)
+{
+    m_listenVolume = std::clamp(level, 0, 100);
+    m_listenMuted = muted;
+    if (isListening()) {
+        applyAudioBinding();
+    }
+}
+
+void VfoWidget::applyAudioBinding()
+{
+    // Task 14b (ruling U5): a listened flag's slider and Mute are this
+    // device's own volume and mute; any other flag's are the slice's AF
+    // and mute, as before.
+    if (!m_afGainSlider || !m_muteBtn) { return; }
+    const bool listening = isListening();
+    const int value = listening ? m_listenVolume : m_modelAfGain;
+    const bool muted = listening ? m_listenMuted : m_modelMuted;
+    const bool wasUpdating = m_updatingFromModel;
+    m_updatingFromModel = true;
+    m_afGainSlider->setValue(value);
+    m_afGainLabel->setText(QString::number(value));
+    m_muteBtn->setChecked(muted);
+    m_updatingFromModel = wasUpdating;
+
+    if (m_afNameLabel) {
+        if (listening) {
+            m_afNameLabel->setText(tr("Your volume"));
+            m_afNameLabel->setMinimumWidth(24);
+            m_afNameLabel->setMaximumWidth(QWIDGETSIZE_MAX);
+        } else {
+            m_afNameLabel->setText(QStringLiteral("AF"));
+            m_afNameLabel->setFixedWidth(24);
+        }
+    }
+    m_afGainSlider->setToolTip(listening
+        ? tr("How loud you hear this slice on this device. 0 to 100. "
+             "The controller and other listeners do not hear the change.")
+        : m_afToolTip);
+    m_muteBtn->setToolTip(listening
+        ? tr("Mute this slice on this device only.")
+        : m_muteToolTip);
 }
 
 SliceModel* VfoWidget::contextMenuSliceForTest() const

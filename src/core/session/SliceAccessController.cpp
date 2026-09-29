@@ -406,7 +406,8 @@ void SliceAccessController::reseedFormerController(int sliceId, const QByteArray
 {
     const SliceOwnership* own = ownership();
     if (own == nullptr || former.isEmpty() || !own->isLive(sliceId)
-        || own->mark(sliceId).owner == former || !own->isListening(former, sliceId)) {
+        || SliceAccessPolicy::mayChange(*own, former, sliceId)
+        || !own->isListening(former, sliceId)) {
         return;
     }
     // Ruling Q4: the former controller keeps hearing the slice at the AF

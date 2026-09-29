@@ -19,6 +19,10 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
 //                                    plan Task 5. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Task 14b: a listened slice's "Your
+//                                    volume" (slice.setListenLevel) sets
+//                                    this device's level only. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -30,6 +34,7 @@
 
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessController.h"
 #include "core/session/SliceAccessMirror.h"
 #include "core/session/StationClient.h"
 #include "core/settings/SettingsProxy.h"
@@ -384,6 +389,62 @@ private slots:
         QVERIFY(!w.remote.sliceById(own)->isReadOnlyListener());
     }
 
+    // Task 14b: a listened flag's "Your volume" sends slice.setListenLevel.
+    // The Core sets this device's own level and mute for the slice; the
+    // controller's level, the slice's AF and mute, and every other
+    // listener's level are unchanged.
+    void yourVolumeSetsOnlyThisDevicesLevel()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appB));
+        const int shared = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        Answers answers(w.client);
+        QTRY_VERIFY(w.access().entry(shared).has_value());
+        IStationLink::CommandOutcome sent =
+            w.client.requestListen(shared, w.access().entry(shared)->incarnation);
+        QVERIFY2(sent.sent, qPrintable(sent.reason));
+        QVERIFY(answers.waitFor(sent.commandId).accepted);
+        QTRY_VERIFY(w.access().listeningHere(shared));
+
+        SliceModel* coreSlice = core.model->sliceById(shared);
+        const int afBefore = coreSlice->afGain();
+        const bool mutedBefore = coreSlice->muted();
+        SliceAccessController* access = core.server->sliceAccessController();
+        QVERIFY(access != nullptr);
+        const SliceAccessController::ListenLevel bBefore =
+            access->listenLevel(b.key.fingerprint(), shared);
+        QSignalSpy af(coreSlice, &SliceModel::afGainChanged);
+        QSignalSpy mute(coreSlice, &SliceModel::mutedChanged);
+
+        sent = w.client.requestListenLevel(shared, w.access().entry(shared)->incarnation,
+                                           0.3, true);
+        QVERIFY2(sent.sent, qPrintable(sent.reason));
+        const Answer answer = answers.waitFor(sent.commandId);
+        QVERIFY2(answer.accepted, qPrintable(answer.reason));
+        QCOMPARE(w.sentVerbs(QStringLiteral("slice.setListenLevel")).size(), 1);
+
+        const SliceAccessController::ListenLevel mine =
+            access->listenLevel(w.key->fingerprint(), shared);
+        QVERIFY(qAbs(mine.level - 0.3) < 1e-9);
+        QVERIFY(mine.muted);
+        const SliceAccessController::ListenLevel bAfter =
+            access->listenLevel(b.key.fingerprint(), shared);
+        QCOMPARE(bAfter.level, bBefore.level);
+        QCOMPARE(bAfter.muted, bBefore.muted);
+        QCOMPARE(coreSlice->afGain(), afBefore);
+        QCOMPARE(coreSlice->muted(), mutedBefore);
+        QCOMPARE(af.count(), 0);
+        QCOMPARE(mute.count(), 0);
+    }
+
     // A refused verb is the Core's refusal, shown once through the
     // window's refusal path: a take with a control revision that changed.
     void aRefusedVerbIsShownOnce()
@@ -472,7 +533,8 @@ private slots:
         QVERIFY(w.access().entries().isEmpty());
         const QList<IStationLink::CommandOutcome> outcomes{
             w.client.requestListen(0, 1), w.client.requestStopListening(0, 1),
-            w.client.requestTakeControl(0, 1, 1), w.client.requestRelease(0, 1, 1)};
+            w.client.requestTakeControl(0, 1, 1), w.client.requestRelease(0, 1, 1),
+            w.client.requestListenLevel(0, 1, 0.5, false)};
         for (const IStationLink::CommandOutcome& outcome : outcomes) {
             QVERIFY(!outcome.sent);
             QCOMPARE(outcome.reason, IStationLink::sliceAccessUnavailableReason());

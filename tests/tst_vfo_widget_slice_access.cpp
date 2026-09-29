@@ -9,12 +9,17 @@
 // disables the shared tuning controls with that reason, never writes the
 // slice, and offers Take control and Stop listening. A flag this window
 // controls says "You control" and offers Release.
+//
+// Task 14b (ruling U5): a listened flag's AF slider and Mute return as
+// "Your volume", bound to this device's own listening level. They never
+// write the slice, and the slice's AF does not move them.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QMenu>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QSlider>
 #include <QWheelEvent>
 #include "core/AppSettings.h"
 #include "gui/widgets/VfoWidget.h"
@@ -290,6 +295,97 @@ private slots:
         QSignalSpy spy(&flag, &VfoWidget::txHandoffRequested);
         flag.simulateTxBadgeClick();
         QCOMPARE(spy.count(), 0);
+    }
+    void listened_flag_offers_your_volume_and_mute()
+    {
+        SliceModel slice(1);
+        VfoWidget flag;
+        flag.setSliceIndex(1);
+        flag.setAfGain(80);
+        wireLikeMainWindow(flag, slice);
+        flag.setSliceAccess(listened());
+        flag.setListenVolume(30, false);
+
+        QSlider* volume = flag.afSliderForTest();
+        QPushButton* mute = flag.muteButtonForTest();
+        QVERIFY(volume && mute);
+        QVERIFY(volume->isEnabled());
+        QVERIFY(mute->isEnabled());
+        QVERIFY(!flag.heldControlsForTest().contains(volume));
+        QVERIFY(!flag.heldControlsForTest().contains(mute));
+        QCOMPARE(flag.afNameForTest(), QStringLiteral("Your volume"));
+        QCOMPARE(volume->value(), 30);
+
+        QSignalSpy sliceAf(&slice, &SliceModel::afGainChanged);
+        QSignalSpy sliceMute(&slice, &SliceModel::mutedChanged);
+        QSignalSpy flagAf(&flag, &VfoWidget::afGainChanged);
+        QSignalSpy flagMute(&flag, &VfoWidget::muteChanged);
+        QSignalSpy mine(&flag, &VfoWidget::listenVolumeRequested);
+
+        volume->setValue(55);
+        mute->setChecked(true);
+
+        QCOMPARE(mine.count(), 2);
+        QCOMPARE(mine.at(0).at(0).toInt(), 1);
+        QCOMPARE(mine.at(0).at(1).toInt(), 55);
+        QCOMPARE(mine.at(0).at(2).toBool(), false);
+        QCOMPARE(mine.at(1).at(1).toInt(), 55);
+        QCOMPARE(mine.at(1).at(2).toBool(), true);
+        QCOMPARE(flagAf.count(), 0);
+        QCOMPARE(flagMute.count(), 0);
+        QCOMPARE(sliceAf.count(), 0);
+        QCOMPARE(sliceMute.count(), 0);
+        QCOMPARE(flag.listenVolume(), 55);
+        QVERIFY(flag.listenMuted());
+    }
+
+    void slice_af_does_not_move_your_volume()
+    {
+        VfoWidget flag;
+        flag.setSliceIndex(1);
+        flag.setSliceAccess(listened());
+        flag.setListenVolume(40, false);
+
+        // The controller turns the slice's AF to zero and mutes it.
+        flag.setAfGain(0);
+        flag.setMuted(true);
+        QCOMPARE(flag.afSliderForTest()->value(), 40);
+        QVERIFY(!flag.muteButtonForTest()->isChecked());
+
+        // Back to controlling: the slice's own AF and mute return.
+        flag.setSliceAccess(controlled());
+        QCOMPARE(flag.afNameForTest(), QStringLiteral("AF"));
+        QCOMPARE(flag.afSliderForTest()->value(), 0);
+        QVERIFY(flag.muteButtonForTest()->isChecked());
+    }
+
+    void listened_flag_holds_the_rest_of_the_audio_page()
+    {
+        VfoWidget flag;
+        flag.setSliceIndex(1);
+        flag.setSliceAccess(listened());
+        const QList<QWidget*> held = flag.heldControlsForTest();
+        // Pan, AGC, squelch and the other tabs stay held.
+        int heldCount = 0;
+        for (QWidget* control : held) {
+            if (!control->isEnabled()) { ++heldCount; }
+        }
+        QCOMPARE(heldCount, held.size());
+        QVERIFY(held.size() > 6);
+    }
+
+    void controlled_flag_af_still_writes_the_slice()
+    {
+        SliceModel slice(1);
+        VfoWidget flag;
+        flag.setSliceIndex(1);
+        wireLikeMainWindow(flag, slice);
+        flag.setSliceAccess(controlled());
+        QSignalSpy mine(&flag, &VfoWidget::listenVolumeRequested);
+        flag.afSliderForTest()->setValue(70);
+        QCOMPARE(slice.afGain(), 70);
+        QCOMPARE(mine.count(), 0);
+        QCOMPARE(flag.afNameForTest(), QStringLiteral("AF"));
     }
 };
 

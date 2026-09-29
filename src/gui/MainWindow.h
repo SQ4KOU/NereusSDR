@@ -50,6 +50,10 @@
 //   2026-09-27 - J.J. Boyd (KG4VCF). iPhone plan Task 22 / parity Task 20:
 //                refreshFreedvReporterAvailability. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 14b: a
+//                listened flag's "Your volume" (setFlagListenVolume,
+//                listenVolumeFor, m_remoteListenVolumes). AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -104,6 +108,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <utility>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -912,6 +917,11 @@ private:
     // chooser's request.
     void runFlagAccessAction(SliceChooserAction action, int sliceId);
     void runSliceChooserAction(SliceChooserAction action, int sliceId);
+    // Slice control plan Task 14b (ruling U5): a listened flag's "Your
+    // volume" and Mute, sent as this device's own listening level
+    // (slice.setListenLevel), and the level a flag shows. level is 0..100.
+    void setFlagListenVolume(int sliceId, int level, bool muted);
+    std::pair<int, bool> listenVolumeFor(int sliceId);
     void finishSliceChooserRequest(const QByteArray& verb, bool accepted,
                                    const QString& reason);
     void onPanTakeTransmitRequested(const QString& panId);
@@ -1561,6 +1571,19 @@ private:
     // Task 14a: the flag whose menu sent the request in flight (-1: none);
     // it shows the wait and then the Core's answer.
     int m_flagRequestSlice{-1};
+    // Task 14b: a remote window's own listening level per listened slice,
+    // for the slice incarnation it was set on. The Core applies it and
+    // does not publish it back, so the window keeps the value it sent,
+    // first seeded from the slice's AF as the Core seeds it.
+    struct RemoteListenVolume {
+        quint64 incarnation{0};
+        int level{100};
+        bool muted{false};
+    };
+    QHash<int, RemoteListenVolume> m_remoteListenVolumes;
+    // Task 14b: the hosting desktop's access controller whose level
+    // changes for this station refresh its flags (connected once).
+    QPointer<QObject> m_listenLevelSource;
 
     // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
     // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5

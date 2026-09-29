@@ -169,6 +169,10 @@
 //                                    control and release requests
 //                                    (sliceAccessVersion 1). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 14b:
+//                                    requestListenLevel, a listened slice's
+//                                    own volume and mute. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -250,6 +254,12 @@ public:
     { return { false, sliceAccessUnavailableReason() }; }
     virtual CommandOutcome requestRelease(int /*sliceId*/, quint64 /*incarnation*/,
                                           quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    /// Slice control plan Task 14b: "slice.setListenLevel" (sliceId,
+    /// incarnation, level 0..1, muted), this window's own volume and mute
+    /// for a slice it listens to (the flag's "Your volume").
+    virtual CommandOutcome requestListenLevel(int /*sliceId*/, quint64 /*incarnation*/,
+                                              double /*level*/, bool /*muted*/)
     { return { false, sliceAccessUnavailableReason() }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
