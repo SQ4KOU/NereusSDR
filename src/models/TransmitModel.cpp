@@ -284,6 +284,11 @@
 //                 when unchanged; clearTuneTxBand() forgets it at a
 //                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: an out-of-range per-band FM TX
+//                 offset set keeps the previous value (console.cs:20896
+//                 [v2.10.3.15]); the load still falls back to the band's
+//                 default. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -384,11 +389,16 @@ static double defaultFmTxOffsetMhz(Band band)
 // The per-band store keeps only what udFMOffset can hold (0..50 MHz, the
 // FMTXOffsetMHz setter's check, console.cs:20891-20902 [v2.10.3.15]:
 //   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
-// ); anything else, NaN and infinities included, is the band's default.
+// ). NaN and infinities are outside it. A set outside it keeps the value it
+// had (the setter's return); a bad stored value loads as the band's default.
+static bool fmTxOffsetInRange(double mhz)
+{
+    return std::isfinite(mhz) && mhz >= 0.0 && mhz <= 50.0;
+}
+
 static double validFmTxOffsetMhz(Band band, double mhz)
 {
-    return (std::isfinite(mhz) && mhz >= 0.0 && mhz <= 50.0)
-        ? mhz : defaultFmTxOffsetMhz(band);
+    return fmTxOffsetInRange(mhz) ? mhz : defaultFmTxOffsetMhz(band);
 }
 
 TransmitModel::TransmitModel(QObject* parent)
@@ -1405,7 +1415,12 @@ void TransmitModel::setFmTxOffsetForBandMhz(Band band, double mhz)
     if (idx < 0 || idx >= kBandCount) {
         return;
     }
-    mhz = validFmTxOffsetMhz(band, mhz);
+    // From Thetis console.cs:20896 [v2.10.3.15]: out of range keeps the
+    // previous value.
+    //   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
+    if (!fmTxOffsetInRange(mhz)) {
+        return;
+    }
     m_fmTxOffsetByBandMhz[static_cast<std::size_t>(idx)] = mhz;
     if (!m_persistMac.isEmpty()) {
         AppSettings::instance().setValue(

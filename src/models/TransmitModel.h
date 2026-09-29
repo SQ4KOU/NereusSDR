@@ -547,7 +547,8 @@ public:
     void   setFmTxOffsetMhz(double mhz);
     /// FM TX offset (MHz) stored for a band.
     double fmTxOffsetForBandMhz(Band band) const;
-    /// Store a band's FM TX offset (MHz).
+    /// Store a band's FM TX offset (MHz). A value outside 0..50 MHz keeps
+    /// the band's previous value.
     void   setFmTxOffsetForBandMhz(Band band, double mhz);
 
     // ── ATT-on-TX-on-power-change safety properties (#167 Phase 3A) ──────

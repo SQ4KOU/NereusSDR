@@ -1140,8 +1140,10 @@ private slots:
 
     // The per-band FM TX offset store takes only what udFMOffset can hold
     // (0..50 MHz, the FMTXOffsetMHz setter's check at console.cs:20891-20902
-    // [v2.10.3.15], //MW0LGE_21k9); anything else, from a caller or a hand-edited settings
-    // file, falls back to the band's default (console.cs:1833-1841).
+    // [v2.10.3.15], //MW0LGE_21k9). A set outside that keeps the value it
+    // had, as the setter's return does; NaN and infinities are outside it.
+    // A hand-edited settings file's bad value loads as the band's default
+    // (console.cs:1833-1841).
     void fmTxOffsetStore_keepsOnlyValidOffsets()
     {
         const double inf = std::numeric_limits<double>::infinity();
@@ -1150,13 +1152,15 @@ private slots:
         tx.setFmTxOffsetForBandMhz(Band::Band20m, 25.0);
         QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band20m), 25.0);
         tx.setFmTxOffsetForBandMhz(Band::Band20m, nan);
-        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band20m), 0.1);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band20m), 25.0);
+        tx.setFmTxOffsetForBandMhz(Band::Band6m, 3.0);
         tx.setFmTxOffsetForBandMhz(Band::Band6m, inf);
-        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band6m), 1.0);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band6m), 3.0);
+        tx.setFmTxOffsetForBandMhz(Band::Band40m, 7.0);
         tx.setFmTxOffsetForBandMhz(Band::Band40m, -1e300);
-        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 0.1);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 7.0);
         tx.setFmTxOffsetForBandMhz(Band::Band40m, 50.5);
-        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 0.1);
+        QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 7.0);
         tx.setFmTxOffsetForBandMhz(Band::Band40m, 50.0);
         QCOMPARE(tx.fmTxOffsetForBandMhz(Band::Band40m), 50.0);
 
