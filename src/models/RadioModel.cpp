@@ -25001,7 +25001,10 @@ void RadioModel::flushRemoteHardwareApply()
 // ---------------------------------------------------------------------------
 void RadioModel::applyAlexHpfSwitchSettings()
 {
-    // The 6 m LNA gain offset reads the LNA and bypass switches.
+    // The 6 m LNA gain offset reads the LNA and bypass switches, and the
+    // Alex HPF and BPF1 6 m rows' bypass (savedAlexHpfEdges' keys below), so
+    // a row change reaches the meters and the spectrum at once, not at the
+    // next band change.
     refreshRxMeterOffset();
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
@@ -25041,14 +25044,8 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // sent for the chains are the same as before.
     // Task 14 follow-up 2: the three keyed switches as well, for the bypass
     // they put on the wire while keyed.
-    // The rows decide each chain's selection there too.
-    //
-    // MERGE NOTE (codex/hw-parity-a, e89505bf2): that branch's 6 m LNA gain
-    // offset reads the Alex HPF and BPF1 6 m rows' bypass from these same
-    // saved keys. When both branches meet, call refreshRxMeterOffset() here
-    // whenever edgesChanged, so the meters and the spectrum take a 6 m row
-    // bypass change at once rather than at the next band change. The
-    // function does not exist on this branch's base (a67633ddb).
+    // The rows decide each chain's selection there too. (The 6 m LNA gain
+    // offset they also decide is refreshed at the top.)
     if (edgesChanged || bypass != m_alexHpfBypassSwitch
         || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
         || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch

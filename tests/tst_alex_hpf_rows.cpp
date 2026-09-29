@@ -27,14 +27,17 @@
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
+#include <QSignalSpy>
 
 #include "core/AppSettings.h"
 #include "core/P1RadioConnection.h"
 #include "core/P2RadioConnection.h"
 #include "core/RadioDiscovery.h"
+#include "core/StepAttenuatorController.h"
 #include "core/codec/AlexFilterMap.h"
 #include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
 #include "gui/setup/hardware/AntennaAlexAlex2Tab.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -95,6 +98,22 @@ void prepareCore(RadioModel& model, HPSDRHW board, RadioConnection* conn)
     model.setLastRadioInfoForTest(info);
     model.setConnectionStateForTest(ConnectionState::Connected);
     model.injectConnectionForTest(conn);
+}
+
+// A Core running the given radio on 6 m, for the 6 m LNA gain offset.
+void prepareSixMeterCore(RadioModel& model, StepAttenuatorController& att,
+                         HPSDRModel radio, RadioConnection* conn)
+{
+    model.setHpsdrModelForTest(radio);
+    RadioInfo info;
+    info.macAddress = kMac;
+    info.boardType = boardForModel(radio);
+    model.setLastRadioInfoForTest(info);
+    model.setConnectionStateForTest(ConnectionState::Connected);
+    model.injectConnectionForTest(conn);
+    att.setTickTimerEnabled(false);
+    model.setStepAttController(&att);
+    att.setBand(Band::Band6m);
 }
 
 template <typename T>
@@ -279,6 +298,67 @@ private slots:
         QVERIFY(conn.alexHpfEdges().alex2Bypass);
 
         core.injectConnectionForTest(nullptr);
+    }
+
+    // ── A 6 m row's bypass reaches the receive calibration at once ───────
+    // The 6 m LNA gain offset reads the 6 m rows' bypass (the Alex HPF row
+    // on the ANAN-100D, the BPF1 row on the G2; tst_rx_6m_lna_offset has the
+    // groups). A row change re-selects the high-pass at once, so the meters
+    // and the spectrum take the offset at once too, not at the next band
+    // change: rxMeterOffsetChanged is announced from the tab and from a
+    // remote window's write reaching the Core.
+    void sixMeterRowBypass_refreshesTheReceiveCalibration()
+    {
+        {
+            ConnectedP1 conn;
+            conn.setBoardForTest(HPSDRHW::Angelia);
+            StepAttenuatorController att;
+            RadioModel model;
+            prepareSixMeterCore(model, att, HPSDRModel::ANAN100D, &conn);
+            AntennaAlexAlex1Tab tab(&model);
+            tab.restoreSettings(kMac);
+            model.applyAlexHpfSwitchSettings();
+            QCOMPARE(model.rx6mGainOffsetDb(), -13.0);
+
+            QSignalSpy spy(&model, &RadioModel::rxMeterOffsetChanged);
+            auto* bypass = named<QCheckBox>(tab, QStringLiteral("alexHpfBypass_6mBP"));
+            QVERIFY(bypass);
+            bypass->setChecked(true);
+            QCOMPARE(spy.size(), 1);
+            QCOMPARE(model.rx6mGainOffsetDb(), 0.0);
+            QCOMPARE(spy.last().at(0).toDouble(), model.rxMeterOffsetDb());
+            bypass->setChecked(false);
+            QCOMPARE(spy.size(), 2);
+            QCOMPARE(spy.last().at(0).toDouble(), model.rxMeterOffsetDb());
+
+            model.setStepAttController(nullptr);
+            model.injectConnectionForTest(nullptr);
+        }
+        AppSettings::instance().clearHardwareValues(kMac);
+        {
+            ConnectedP2 conn;
+            conn.setBoardForTest(HPSDRHW::Saturn);
+            StepAttenuatorController att;
+            RadioModel core;
+            prepareSixMeterCore(core, att, HPSDRModel::ANAN_G2, &conn);
+            core.applyAlexHpfSwitchSettings();
+            QCOMPARE(core.rx6mGainOffsetDb(), -13.0);
+            QStringList reloads;
+            core.setHardwareApplyObserverForTest(
+                [&reloads](const QString& name) { reloads << name; });
+
+            QSignalSpy spy(&core, &RadioModel::rxMeterOffsetChanged);
+            const QString key = QStringLiteral("hardware/%1/alex/bpf1/6mBP/enabled").arg(kMac);
+            AppSettings::instance().setValue(key, QStringLiteral("True"));
+            core.scheduleRemoteHardwareApply(key);
+            QTRY_COMPARE(reloads, QStringList{QStringLiteral("alex")});
+            QCOMPARE(spy.size(), 1);
+            QCOMPARE(core.rx6mGainOffsetDb(), 0.0);
+            QCOMPARE(spy.last().at(0).toDouble(), core.rxMeterOffsetDb());
+
+            core.setStepAttController(nullptr);
+            core.injectConnectionForTest(nullptr);
+        }
     }
 
     // ── A remote window whose Core cannot take them: disabled, with why ──
