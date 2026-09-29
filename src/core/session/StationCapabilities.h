@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: capability
 //                                    descriptor. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -266,6 +269,12 @@ struct StationCapabilities {
     /// sends 2 m as GEN and the per-band lists without it, and a window
     /// sends neither band 27 nor a 2 m list entry.
     int band2mVersion = 0;
+    /// iPhone app plan Task 23 (R-IOS-09): 1 means the device may ask for
+    /// its own Opus bitrate (`opusBitrate` in the audio control, one of the
+    /// catalogue's `audio.opusProfiles`). Optional and last at minor 11,
+    /// for a peer that declared audioQuality 1 while the Core offers media.
+    /// 0 (absent): the device gets the Core's audio_bitrate, as before.
+    int audioQualityVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

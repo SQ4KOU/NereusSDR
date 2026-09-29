@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: capability
 //                                    descriptor codec. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -366,6 +369,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (band2mVersion == 1) {
             updates.append(intEntry("band2mVersion", band2mVersion));
         }
+        // iPhone app plan Task 23 (R-IOS-09): a device's own Opus bitrate,
+        // last, for a peer that declared audioQuality.
+        if (audioQualityVersion == 1) {
+            updates.append(intEntry("audioQualityVersion", audioQualityVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -597,7 +605,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "radioAntennaRowsVersion"
                    || u.name == "vaxVersion"
                    || u.name == "txEqCurveVersion"
-                   || u.name == "band2mVersion") {
+                   || u.name == "band2mVersion"
+                   || u.name == "audioQualityVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -623,6 +632,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.txEqCurveVersion = version;
                 } else if (u.name == "band2mVersion") {
                     caps.band2mVersion = version >= 1 ? 1 : 0;
+                } else if (u.name == "audioQualityVersion") {
+                    caps.audioQualityVersion = version >= 1 ? 1 : 0;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

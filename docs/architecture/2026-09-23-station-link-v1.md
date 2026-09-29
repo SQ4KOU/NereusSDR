@@ -941,6 +941,7 @@ change shows as surface drift and as a change to this table.
 | `vaxVersion` | 1 |
 | `txEqCurveVersion` | 1 |
 | `band2mVersion` | 1 |
+| `audioQualityVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1074,6 +1075,14 @@ When a feature is off, its version is 0:
   `2m` and the per-band antenna lists with 15 entries, and takes band 27
   in `slice.selectBand`, `setAlexRxAntenna`, `setAlexTxAntenna` and their
   `ForRadio` forms. A peer sent no entry sees 2 m as GEN.
+- `audioQualityVersion`: optional and appended last, after
+  `band2mVersion` (after the last entry before it when that is absent),
+  only at agreed minor 11 for a peer that declared `audioQuality` 1 while
+  the Core offers media (iPhone app plan Task 23). 1: the device's `audio`
+  control may carry `opusBitrate`, one of the catalogue's
+  `audio.opusProfiles` (remote media control v1, "Per-device audio
+  quality"). A peer sent no entry gets the Core's `audio_bitrate` as
+  before.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1832,7 +1841,8 @@ older window sees only the values it was built for.
 | 85 | `vaxVersion` | `i64` |
 | 86 | `txEqCurveVersion` | `i64` |
 | 87 | `band2mVersion` | `i64` |
-| 88 | `coreBuildInfo` | `utf8` |
+| 88 | `audioQualityVersion` | `i64` |
+| 89 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -3679,7 +3689,7 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
 | `tools` | `[{id, label, where, offered}]`: the desktop's Tools menu in its order, `where` `station` (works at the Core) or `both`; MIDI Mapping and Macro Buttons are not listed |
 | `radioItems` | `[{id, label, offered}]`: Manage Radios, Antenna Setup, Transverters and Protocol Info, in the desktop's Radio-menu order |
-| `audio` | `{}` (filled in a later revision) |
+| `audio` | `{opusProfiles: [{bitrate, bandwidthHz}]}`: the Opus profiles the station has measured, in order (24000 bit/s with 8000 Hz, 48000 bit/s with 20000 Hz); a device told `audioQualityVersion` 1 asks for one as its `opusBitrate` (remote media control v1, "Per-device audio quality") |
 
 `meters`:
 
@@ -5066,7 +5076,7 @@ Client to station:
 
 | Operation (`op`) | Capability | Fields always present | Fields present with | Object-valued fields |
 | --- | --- | --- | --- | --- |
-| `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
+| `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `opusBitrate` with audioProfileVersion, audioQualityVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
 | `clarity-retune` | `displayExtrasVersion` | `connectionId`, `endpointId`, `op` | none | none |
 | `clock-probe` | `audioClockVersion` | `connectionId`, `id`, `op`, `t0` | none | none |
@@ -5086,7 +5096,7 @@ Station to client:
 | Operation (`op`) | Capability | Fields always present | Fields present with | Object-valued fields |
 | --- | --- | --- | --- | --- |
 | `allocation-result` | `remoteDisplayBudgetVersion` | `accepted`, `acceptedRevision`, `applicationBytesPerSecond`, `budgetGeneration`, `connectionId`, `endpointId`, `messagesPerSecond`, `op`, `reason`, `revision`, `spectrumSampleUnitsPerSecond` | none | none |
-| `audio-context` | `remoteMediaVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `revision`, `ssrc` | `encoder` with enabled=true, remoteAudioStatusVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion; `profileRefusal` with audioProfileVersion, profile=opus, profileRefused, remoteAudioStatusVersion; `reason` with enabled=false, remoteAudioStatusVersion | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
+| `audio-context` | `remoteMediaVersion` | `connectionId`, `enabled`, `firstSequence`, `firstTimestamp`, `generation`, `op`, `revision`, `ssrc` | `encoder` with enabled=true, remoteAudioStatusVersion; `opusBitrateRefusal` with audioProfileVersion, audioQualityVersion, opusBitrateRefused, profile=opus, remoteAudioStatusVersion; `profile` with audioProfileVersion, remoteAudioStatusVersion; `profileRefusal` with audioProfileVersion, profile=opus, profileRefused, remoteAudioStatusVersion; `reason` with enabled=false, remoteAudioStatusVersion | `encoder`: {audioBandwidthHz, channels, codec, frameSamples, sampleRate, targetBitrate} or {bitsPerSample, channels, codec, frameSamples, payloadType, sampleRate} |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
 | `clock-echo` | `audioClockVersion` | `capturedNs`, `connectionId`, `generation`, `id`, `op`, `rtpTimestamp`, `t0`, `t1`, `t2` | none | none |
 | `context` | `remoteMediaVersion` | `centreHz`, `connectionId`, `contextGeneration`, `endpointId`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `revision`, `sampleRateHz`, `sourceCentreHz`, `sourceStream`, `spanHz`, `traceSamples`, `waterfallSamples`, `wideCentreHz`, `wideSamples`, `wideSpanHz` | `grantedFftSize` with spectrumGrantVersion; `grantedPixels` with spectrumGrantVersion; `grantedTier` with spectrumGrantVersion; `limit` with spectrumGrantVersion; `requestedPixels` with spectrumGrantVersion; `wideband` with remoteWidebandDisplayVersion | `wideband`: {active, adcRateHz, available, filterChainIndex, geometryRateBasis, highHz, levelReference, lowHz, physicalAdcIndex, sourceGeneration, version} or {active, available, version} |

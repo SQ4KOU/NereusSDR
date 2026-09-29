@@ -1141,6 +1141,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("modelOwnedSettingsRefusal(key)")}},
         {"src/core/settings/SettingsScope.cpp", {QStringLiteral("modelOwnedSettingsRefusal")},
          {}, 5},
+        // iPhone app plan Task 23: the audio context's opusBitrateRefusal.
+        {"src/core/session/media/RemoteAudioContext.cpp",
+         {QStringLiteral("opusBitrateNotOfferedReason")}, {}, 1},
         // The display refusals and retirements (rejected, allocation-result).
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
@@ -1150,6 +1153,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
           QStringLiteral("m_headphones.profileRefusal"), QStringLiteral("m_audioProfileRefusal"),
+          // iPhone app plan Task 23: a refused opusBitrate's words, scanned
+          // in RemoteAudioContext.cpp's entry.
+          QStringLiteral("opusBitrateNotOfferedReason()"),
+          QStringLiteral("m_audioBitrateRefusal"),
           // Codes, not reasons (section 17): receiver audio off and
           // profile refusal codes, spectrum limit reasons, retire reasons.
           QStringLiteral("headphonesBlockedBy().value_or(RemoteAudioOffReason::RadioOffline)"),

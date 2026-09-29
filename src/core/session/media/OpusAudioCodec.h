@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QVector>
 
+#include <array>
 #include <memory>
 #include <optional>
 
@@ -30,6 +31,32 @@ struct OpusAudioCodecConfig {
     // decision 2026-09-26); 24 kbit/s wideband stays accepted.
     int bitrate {48'000};
 };
+
+/// iPhone app plan Task 23 (R-IOS-09, R-R3-23): the Opus profiles the
+/// station has measured, and so offers a device, in the order of the
+/// catalogue's `audio.opusProfiles`. Each row is a run of
+/// docs/architecture/2026-09-20-remote-daemon-r3-verification/
+/// opus-profile-probe.txt (the R-R3-23 product profile against the pinned
+/// Opus): 24000 bit/s forced WIDEBAND (1103, sound to 8 kHz), 48000 bit/s
+/// forced FULLBAND (1105, sound to 20 kHz), every packet's TOC bandwidth
+/// as forced. A device's `opusBitrate` must be one of these.
+struct OpusMeasuredProfile {
+    int bitrate {0};
+    int bandwidthHz {0};
+};
+inline constexpr std::array<OpusMeasuredProfile, 2> kOpusMeasuredProfiles{{
+    {24'000, 8'000},   // opus-profile-probe.txt: bitrate=24000 forced_bandwidth=1103
+    {48'000, 20'000},  // opus-profile-probe.txt: bitrate=48000 forced_bandwidth=1105
+}};
+constexpr bool isMeasuredOpusBitrate(int bitrate)
+{
+    for (const OpusMeasuredProfile& profile : kOpusMeasuredProfiles) {
+        if (profile.bitrate == bitrate) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /// The coded audio bandwidth the encoder forces for a supported target
 /// bitrate, as an Opus OPUS_BANDWIDTH_* value: 24000 bit/s codes wideband

@@ -90,6 +90,11 @@
 //                                    txMonitorAudioVersion, monitor-audio
 //                                    and monitor-audio-context. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  iPhone app plan Task 23: the capture
+//                                    declares audioQuality; the audio
+//                                    control's opusBitrate and the main
+//                                    context's opusBitrateRefusal.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: the capture
 //                                    declares txEqCurve, so
 //                                    txEqCurveVersion and transmit's
@@ -543,7 +548,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // sessionHolderVersion are too; and remoteTx (iPhone app plan Task 34),
     // so remoteTxVersion is; and vax (iPhone app plan Task 25), so the
     // `vax` object and vaxVersion are; and band2m (R-IOS-26), so
-    // band2mVersion is.
+    // band2mVersion is; and audioQuality (iPhone app plan Task 23), so
+    // audioQualityVersion is.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
         {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1},
@@ -552,7 +558,8 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1}})));
+                                  {"vax", 1}, {"txEqCurve", 1}, {"band2m", 1},
+                                  {"audioQuality", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -595,6 +602,8 @@ QJsonArray captureCapabilities()
     caps.txEqCurveVersion = 1;
     // R-IOS-26 / R-R3-49: sent to a peer that declared band2m.
     caps.band2mVersion = 1;
+    // iPhone app plan Task 23: sent to a peer that declared audioQuality.
+    caps.audioQualityVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -1141,12 +1150,16 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("clarity-retune"),
                declaredOp(extras, peer + QStringList{QStringLiteral("endpointId")}));
     // DaemonMediaController.cpp handleAudio: profile only from a GUI that
-    // negotiated the audio detail and the Core's audio profiles.
+    // negotiated the audio detail and the Core's audio profiles; and
+    // (iPhone app plan Task 23) opusBitrate, beside profile, only from a
+    // device told audioQualityVersion.
     ops.insert(QStringLiteral("audio"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("revision"),
                                                      QStringLiteral("enabled")},
                           {{QStringLiteral("profile"), {QStringLiteral("remoteAudioStatusVersion"),
-                                                        QStringLiteral("audioProfileVersion")}}}));
+                                                        QStringLiteral("audioProfileVersion")}},
+                           {QStringLiteral("opusBitrate"), {QStringLiteral("audioQualityVersion"),
+                                                            QStringLiteral("audioProfileVersion")}}}));
     // DaemonMediaController.cpp handleReceiverAudio / handleHeadphonesAudio /
     // handleClockProbe.
     ops.insert(QStringLiteral("iq-stream"),
@@ -1267,6 +1280,17 @@ QJsonObject audioContextShapes()
         shapes.append({tags[i] + QStringList{QStringLiteral("remoteAudioStatusVersion"),
                                              QStringLiteral("audioProfileVersion")},
                        encodeRemoteAudioContext(states[i], true, true)});
+        // iPhone app plan Task 23: a device's refused opusBitrate, in the
+        // main context's profile shape only.
+        if (opus) {
+            RemoteAudioContextMessage refused = states[i];
+            refused.opusBitrateRefusal = opusBitrateNotOfferedReason();
+            shapes.append({tags[i] + QStringList{QStringLiteral("remoteAudioStatusVersion"),
+                                                 QStringLiteral("audioProfileVersion"),
+                                                 QStringLiteral("audioQualityVersion"),
+                                                 QStringLiteral("opusBitrateRefused")},
+                           encodeRemoteAudioContext(refused, true, true)});
+        }
     }
     return describeShapes(kMedia, shapes);
 }

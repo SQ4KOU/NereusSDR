@@ -4,6 +4,9 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-28: R-IOS-18: the display shift applies normalise only with
 //               the endpoint's Average, Sample or RMS trace detector.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -2965,9 +2968,20 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
     if (hasProfile) {
         requestedProfile = remoteAudioProfileFromWire(control.value(QStringLiteral("profile")));
     }
-    if (!(hasProfile ? exactKeys(control, {"op", "connectionId", "revision", "enabled",
-                                           "profile"})
-                     : exactKeys(control, {"op", "connectionId", "revision", "enabled"}))
+    // iPhone app plan Task 23 (audioQualityVersion 1): `opusBitrate`, a
+    // whole number, only beside `profile` and only from a device the Core
+    // told it may ask.
+    const bool hasBitrate = control.contains(QStringLiteral("opusBitrate"));
+    int requestedBitrate = 0;
+    // The shape is checked without it, as the display extras are.
+    QJsonObject shape = control;
+    shape.remove(QStringLiteral("opusBitrate"));
+    if (!(hasProfile ? exactKeys(shape, {"op", "connectionId", "revision", "enabled",
+                                         "profile"})
+                     : exactKeys(shape, {"op", "connectionId", "revision", "enabled"}))
+        || (hasBitrate && (!hasProfile || !m_server || !m_server->audioQualityAvailable(m_epoch)
+                           || !exactInt(control.value(QStringLiteral("opusBitrate")), 0,
+                                        std::numeric_limits<int>::max(), requestedBitrate)))
         || (hasProfile && (!requestedProfile || !m_server
                            || !m_server->remoteAudioStatusAvailable(m_epoch)))
         || !m_peer
@@ -2984,6 +2998,17 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
     if (hasProfile) {
         m_audioProfileNegotiated = true;
         m_audioRequestedProfile = *requestedProfile;
+    }
+    // iPhone app plan Task 23: a bitrate in the measured table becomes this
+    // device's; any other is refused with its reason, and the running one
+    // stays. A request without one keeps the device's earlier choice.
+    m_audioBitrateRefusal.clear();
+    if (hasBitrate) {
+        if (isMeasuredOpusBitrate(requestedBitrate)) {
+            m_audioRequestedBitrate = requestedBitrate;
+        } else {
+            m_audioBitrateRefusal = opusBitrateNotOfferedReason();
+        }
     }
     // An accepted control is a fresh audio context even if it leaves actual
     // capture unavailable pending peer readiness or station reconnect.
@@ -5561,10 +5586,17 @@ void DaemonMediaController::reconcileAudio()
     // Capture is stopped above, so queued audio of the old profile is gone
     // and a new profile starts at the next capture block (R-R3-23).
     admitAudioProfile();
+    // iPhone app plan Task 23: a device's own bitrate switches the encoder
+    // here, at the next capture block (capture is stopped above), with the
+    // sequence and timestamp carried on.
+    if (m_audioSender && m_audioSenderBitrate != audioStreamBitrate()) {
+        m_audioSender.reset();
+    }
     if (shouldRun) {
         if (!m_audioSender) {
             OpusAudioCodecConfig codecConfig;
-            codecConfig.bitrate = m_audioTargetBitrate;
+            codecConfig.bitrate = audioStreamBitrate();
+            m_audioSenderBitrate = codecConfig.bitrate;
             m_audioSender = std::make_unique<DaemonAudioSender>(
                 m_radioModel->audioEngine(), codecConfig);
             // R-R3-35: capture times on the clock clock-echo reports. The
@@ -5687,6 +5719,8 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
     }
     message.profile = m_audioActiveProfile;
     message.profileRefusal = m_audioProfileRefusal;
+    // iPhone app plan Task 23: why this device's bitrate was not taken.
+    message.opusBitrateRefusal = m_audioBitrateRefusal;
     // A minor-7 peer gets exactly the eight keys it has always parsed, and a
     // GUI that never sent `profile` exactly the minor-8 shape.
     sendControl(encodeRemoteAudioContext(message, detailNegotiated, profileNegotiated));
@@ -5777,6 +5811,9 @@ void DaemonMediaController::resetAudioSession()
     m_audioRequestedProfile = RemoteAudioProfile::Opus;
     m_audioActiveProfile = RemoteAudioProfile::Opus;
     m_audioProfileRefusal.reset();
+    // iPhone app plan Task 23: a new peer starts at the Core's bitrate.
+    m_audioRequestedBitrate = 0;
+    m_audioBitrateRefusal.clear();
     // A different MediaPeer has a different SSRC identity, so it may start
     // a new RTP timeline. Existing peers always retain the saved values.
     m_audioNextSequence = 1;

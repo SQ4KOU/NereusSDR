@@ -7,6 +7,9 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-27: iPhone app plan Task 29 (R-IOS-16): the media `replace`
 //               operation: a second peer beside the current one, audio on
 //               both across the move, displays on a keyframe, the old one
@@ -302,6 +305,13 @@ public:
     /// context's encoder object reports it, so a window never assumes it.
     static constexpr int kReceiverAudioOpusBitrate = 48'000;
     int audioTargetBitrate() const noexcept { return m_audioTargetBitrate; }
+    /// iPhone app plan Task 23: the Opus bitrate the main audio stream is
+    /// coded at for this device: its own `opusBitrate` when it asked for a
+    /// measured one, else audioTargetBitrate().
+    int audioStreamBitrate() const noexcept
+    {
+        return m_audioRequestedBitrate > 0 ? m_audioRequestedBitrate : m_audioTargetBitrate;
+    }
     /// R-R3-23: whether a GUI may switch audio to the lossless profile
     /// (nereusd.conf audio_lossless; default allow). With false a request
     /// is refused as lossless-not-allowed and Opus keeps running, and no
@@ -734,6 +744,13 @@ private:
     RemoteAudioProfile m_audioRequestedProfile{RemoteAudioProfile::Opus};
     RemoteAudioProfile m_audioActiveProfile{RemoteAudioProfile::Opus};
     std::optional<RemoteAudioProfileRefusal> m_audioProfileRefusal;
+    // iPhone app plan Task 23 (audioQualityVersion 1), per media peer (so
+    // per device): the Opus bitrate this device asked for (0: none, the
+    // Core's audio_bitrate), the bitrate the running sender was built with,
+    // and why the latest request's bitrate was not taken.
+    int m_audioRequestedBitrate{0};
+    int m_audioSenderBitrate{0};
+    QString m_audioBitrateRefusal;
     // R-R3-43 receiver audio, per media peer. Requests are honoured only
     // when the GUI declared receiverAudioVersion at start (the offer then
     // declares the receiver stream ids). Entries outlive their streams so a

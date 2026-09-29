@@ -109,7 +109,16 @@ struct RemoteAudioContextMessage {
     std::optional<RemoteAudioProfile> profile;
     std::optional<PcmEncoderProfile> losslessEncoder;
     std::optional<RemoteAudioProfileRefusal> profileRefusal;
+    // iPhone app plan Task 23 (audioQualityVersion 1), the main context
+    // only: why the device's `opusBitrate` was not taken, in plain words
+    // (empty when it was, or none was asked for). The running encoder,
+    // which `encoder` reports, stays as it was.
+    QString opusBitrateRefusal;
 };
+
+/// iPhone app plan Task 23: the plain reason an `opusBitrate` outside the
+/// catalogue's `audio.opusProfiles` gets.
+QString opusBitrateNotOfferedReason();
 
 // detailNegotiated=false: exactly today's eight keys (op, connectionId,
 // revision, generation, enabled, ssrc, firstSequence, firstTimestamp) with

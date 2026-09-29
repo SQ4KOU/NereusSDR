@@ -529,7 +529,13 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
                                       QStringLiteral("Transverters"),
                                       QStringLiteral("Protocol Info")}));
 
-    QCOMPARE(catalog.value(QStringLiteral("audio")).toObject(), QJsonObject{});
+    // iPhone app plan Task 23: the station's measured Opus table.
+    QCOMPARE(catalog.value(QStringLiteral("audio")).toObject(),
+             (QJsonObject{{QStringLiteral("opusProfiles"),
+                           QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 24000},
+                                                  {QStringLiteral("bandwidthHz"), 8000}},
+                                      QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                                  {QStringLiteral("bandwidthHz"), 20000}}}}}));
 }
 
 // The keys of two objects whose values differ.
@@ -757,6 +763,28 @@ private slots:
         }
         QCOMPARE(distinct.size(), 5);
         QCOMPARE(colours.at(4).toString(), QStringLiteral("#FFA000"));
+    }
+
+    // iPhone app plan Task 23 (R-IOS-09): `audio.opusProfiles` is the
+    // station's measured Opus table, in its order; a profile taken out of
+    // the table is gone from the catalogue.
+    void theAudioKeyListsTheMeasuredOpusProfiles()
+    {
+        BandPlanManager plans;
+        plans.loadPlans();
+        StationCatalog::Inputs inputs =
+            inputsFor(HPSDRModel::ANAN_G2, ProtocolVersion::Protocol2, plans);
+        QJsonObject audio = StationCatalog::build(inputs).value(QStringLiteral("audio")).toObject();
+        QCOMPARE(audio.value(QStringLiteral("opusProfiles")).toArray(),
+                 (QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 24000},
+                                         {QStringLiteral("bandwidthHz"), 8000}},
+                             QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                         {QStringLiteral("bandwidthHz"), 20000}}}));
+        inputs.opusProfiles.removeFirst();
+        audio = StationCatalog::build(inputs).value(QStringLiteral("audio")).toObject();
+        QCOMPARE(audio.value(QStringLiteral("opusProfiles")).toArray(),
+                 (QJsonArray{QJsonObject{{QStringLiteral("bitrate"), 48000},
+                                         {QStringLiteral("bandwidthHz"), 20000}}}));
     }
 
     // The two fixtures hold the desktop's own values for their radio.

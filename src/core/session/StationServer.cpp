@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
+//               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // 2026-09-27: Confirm existing paired devices through the full code exchange.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated Settings Hygiene
@@ -8613,6 +8616,17 @@ bool StationServer::displayExtrasAvailable(quint64 epoch) const
         && displayExtrasVersion() >= 1;
 }
 
+bool StationServer::audioQualityAvailable(quint64 epoch) const
+{
+    // iPhone app plan Task 23: told only to a minor-11 peer that declared
+    // audioQuality 1 (StationCapabilities::audioQualityVersion).
+    SessionTransport* transport = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(transport);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("audioQuality"), 1);
+}
+
 bool StationServer::remoteTxAvailableForMedia(quint64 epoch) const
 {
     SessionTransport* transport = mediaSessionFor(epoch);
@@ -9866,6 +9880,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-26 / R-R3-49: 2 m as its own band, for a peer that
             // declared band2m (any other is sent none, and sees 2 m as GEN).
             caps.band2mVersion = peerKnows2m(transport) ? 1 : 0;
+            // iPhone app plan Task 23 (R-IOS-09): the device's own Opus
+            // bitrate, for a peer that declared audioQuality 1.
+            caps.audioQualityVersion = media
+                && peerDeclares(transport, QByteArrayLiteral("audioQuality"), 1) ? 1 : 0;
             caps.radioAntennaRowsVersion = peer->features.value(
                     QByteArrayLiteral("radioAntennaRows")) == 1
                 && m_radioModel->role() == RadioModel::Role::Local

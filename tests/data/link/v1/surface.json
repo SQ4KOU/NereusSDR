@@ -436,6 +436,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "audioQualityVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -2563,6 +2568,13 @@
                         "enabled=true",
                         "remoteAudioStatusVersion"
                     ],
+                    "opusBitrateRefusal": [
+                        "audioProfileVersion",
+                        "audioQualityVersion",
+                        "opusBitrateRefused",
+                        "profile=opus",
+                        "remoteAudioStatusVersion"
+                    ],
                     "profile": [
                         "audioProfileVersion",
                         "remoteAudioStatusVersion"
@@ -2856,6 +2868,10 @@
             "audio": {
                 "capability": "remoteMediaVersion",
                 "conditional": {
+                    "opusBitrate": [
+                        "audioProfileVersion",
+                        "audioQualityVersion"
+                    ],
                     "profile": [
                         "audioProfileVersion",
                         "remoteAudioStatusVersion"

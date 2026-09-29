@@ -50,6 +50,10 @@
 //               `noiseReduction` key (R-IOS-06, R-IOS-27). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: iPhone app plan Task 23 (R-IOS-09): the `audio` key's
+//               opusProfiles, from the measured table. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-28: iPhone app plan Task 25 (D41): the tools' and Radio
 //               items' `offered` follow the radio and the Core (Inputs'
 //               stationTciServer and vaxDevices, the board, the unbuilt
@@ -60,6 +64,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
+#include "core/session/media/OpusAudioCodec.h"
 #include "models/BandPlan.h"
 #include "models/FilterPresetStore.h"
 
@@ -120,6 +125,11 @@ public:
         /// hosts; a headless Core publishes none, R-R3-44), so the VAX
         /// Audio tool is offered.
         bool vaxDevices = false;
+        /// iPhone app plan Task 23 (R-IOS-09): the Opus profiles the
+        /// catalogue's `audio.opusProfiles` lists, the station's measured
+        /// table (kOpusMeasuredProfiles) unless a test removes one.
+        QList<OpusMeasuredProfile> opusProfiles{kOpusMeasuredProfiles.cbegin(),
+                                                kOpusMeasuredProfiles.cend()};
     };
 
     explicit StationCatalog(QObject* parent = nullptr);
