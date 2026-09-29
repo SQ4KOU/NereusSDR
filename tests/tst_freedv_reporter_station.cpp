@@ -41,12 +41,16 @@
 //   2026-09-28: each station's band on its record (R-IOS-26,
 //               stationFreedvVersion 2). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: a remote window's VFO flag follows the Core's RADE sync,
+//               SNR and offset (radeStatus 1). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
 #include <QAbstractItemModel>
 #include <QCheckBox>
+#include <QLabel>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -58,6 +62,7 @@
 #include <QWebSocketServer>
 
 #include "core/AppSettings.h"
+#include "core/FreeDVRadeReporterBridge.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/FreeDVStation.h"
 #include "core/SpotSourceHost.h"
@@ -72,6 +77,7 @@
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/FreeDVReporterDialog.h"
 #include "gui/SpotHubDialog.h"
+#include "gui/widgets/VfoWidget.h"
 #include "models/Band.h"
 #include "models/FreeDVStationModel.h"
 #include "models/RadioModel.h"
@@ -193,6 +199,17 @@ std::unique_ptr<RadioModel> makeCore()
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
     return model;
+}
+
+// A remote window's VFO flag for a slice.
+VfoWidget* remoteFlag(MainWindow& window, int sliceId)
+{
+    for (VfoWidget* flag : window.findChildren<VfoWidget*>()) {
+        if (flag->sliceIndex() == sliceId) {
+            return flag;
+        }
+    }
+    return nullptr;
 }
 
 QJsonObject station(const QString& sid, const QString& call, const QString& grid)
@@ -680,6 +697,65 @@ private slots:
         // "Hide my station" from the window is the Core's.
         hide->setChecked(true);
         QTRY_VERIFY(h.station().spotSourceHost()->freedvReporterHidden());
+    }
+
+    // A remote window's VFO flag shows the Core's RADE status as a local
+    // window's does: the lock and SNR, the offset after the SNR (kept when
+    // only the SNR changes, since the Core sends a value only when it
+    // moves), and the hollow circle when the decoder loses sync. The
+    // window never reports to FreeDV Reporter itself; the Core does.
+    void aRemoteFlagFollowsTheCoresRadeStatus()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        SliceModel* coreSlice = h.station().sliceById(0);
+        QVERIFY(coreSlice != nullptr);
+        coreSlice->setDspMode(DSPMode::RADE_U);
+
+        QAction* connect = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Connect"));
+        QVERIFY(connect && connect->isEnabled());
+        connect->trigger();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
+        QTRY_VERIFY(h.remoteModel()->sliceById(0) != nullptr);
+        QTRY_COMPARE(h.remoteModel()->sliceById(0)->dspMode(), DSPMode::RADE_U);
+        VfoWidget* flag = nullptr;
+        QTRY_VERIFY((flag = remoteFlag(*h.window(), 0)) != nullptr);
+        QLabel* label = flag->snrLabelForTest();
+        QVERIFY(label != nullptr);
+
+        coreSlice->setRadeSynced(true);
+        coreSlice->setSnrDb(12.0);
+        coreSlice->setRadeFreqOffsetHz(25.0);
+        QTRY_VERIFY2(label->text().contains(QStringLiteral("12dB +25Hz")),
+                     qPrintable(label->text()));
+        QVERIFY(label->text().contains(QStringLiteral("●")));
+
+        // Only the SNR moves: the offset stays on the flag.
+        coreSlice->setSnrDb(9.0);
+        QTRY_VERIFY2(label->text().contains(QStringLiteral("9dB +25Hz")),
+                     qPrintable(label->text()));
+
+        // A new offset alone replaces the old one.
+        coreSlice->setRadeFreqOffsetHz(-40.0);
+        QTRY_VERIFY2(label->text().contains(QStringLiteral("9dB -40Hz")),
+                     qPrintable(label->text()));
+
+        // Loss of sync.
+        coreSlice->setRadeSynced(false);
+        QTRY_VERIFY2(label->text().contains(QStringLiteral("○"))
+                         && label->text().endsWith(QStringLiteral(" ---")),
+                     qPrintable(label->text()));
+
+        // The lock comes back at the same SNR and offset: the Core sends
+        // only the sync, and the flag shows the lock with both again.
+        coreSlice->setRadeSynced(true);
+        QTRY_VERIFY2(label->text().contains(QStringLiteral("9dB -40Hz")),
+                     qPrintable(label->text()));
+        QVERIFY(label->text().contains(QStringLiteral("●")));
+
+        FreeDVRadeReporterBridge* windowReporter = h.remoteModel()->radeReporterBridgeForTest();
+        QVERIFY(windowReporter != nullptr);
+        QVERIFY(!windowReporter->syncedForTest());
     }
 
 private:

@@ -14,6 +14,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - A remote window's RADE status comes from the Core through
+//                 its slices (radeStatus 1): each slice's radeSynced,
+//                 radeFreqOffsetHz and snrDb reach radeSyncChanged,
+//                 radeFreqOffsetChanged and radeSnrChanged, so the VFO flag
+//                 and the RADE applet show them as a local window's do. The
+//                 window does not report to FreeDV Reporter; the Core does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - RADE status on the slice: wireRadeChannel sets the slice's
 //                 radeSynced and radeFreqOffsetHz from its channel, and
 //                 clears radeSynced when the channel goes. A closed
@@ -3266,12 +3273,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_radeReporterBridge = std::make_unique<FreeDVRadeReporterBridge>(
         m_freeDvReporter.get(), m_pskReporter.get(), this);
     m_radeReporterBridge->setReportingEnabled(true);
-    connect(this, &RadioModel::radeSyncChanged,
-            m_radeReporterBridge.get(),
-            &FreeDVRadeReporterBridge::onRadeSyncChanged);
-    connect(this, &RadioModel::radeSnrChanged,
-            m_radeReporterBridge.get(),
-            &FreeDVRadeReporterBridge::onRadeSnrChanged);
+    // A remote window's RADE status is the Core's, and the Core reports
+    // it; the window reporting the same reception again would count it
+    // twice.
+    if (m_role == Role::Local) {
+        connect(this, &RadioModel::radeSyncChanged,
+                m_radeReporterBridge.get(),
+                &FreeDVRadeReporterBridge::onRadeSyncChanged);
+        connect(this, &RadioModel::radeSnrChanged,
+                m_radeReporterBridge.get(),
+                &FreeDVRadeReporterBridge::onRadeSnrChanged);
+    }
     if (m_moxController) {
         connect(m_moxController, &MoxController::moxStateChanged,
                 m_radeReporterBridge.get(),
@@ -11884,6 +11896,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // mirrored both ways; the Core saves and restores it, so a remote
         // window writes nothing of its own.
         slice->setOutputRoutePersisted(false);
+        // A remote window runs no RADE decoder. The Core's sync, offset and
+        // SNR arrive on the slice (radeStatus 1) and leave here as the same
+        // signals a local decoder's wiring emits, so the VFO flag and the
+        // RADE applet follow them unchanged. The Core sends a value only
+        // when it moves, where a local decoder repeats the offset on every
+        // tick; the flag keeps the last offset for that reason.
+        connect(slice, &SliceModel::radeSyncedChanged, this, [this, slice](bool synced) {
+            emit radeSyncChanged(slice->sliceIndex(), synced);
+        });
+        connect(slice, &SliceModel::radeFreqOffsetHzChanged, this, [this, slice](double hz) {
+            emit radeFreqOffsetChanged(slice->sliceIndex(), static_cast<float>(hz));
+        });
+        connect(slice, &SliceModel::snrDbChanged, this, [this, slice](double db) {
+            emit radeSnrChanged(slice->sliceIndex(), static_cast<float>(db));
+        });
     }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct
@@ -13309,6 +13336,11 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
 
 bool RadioModel::radeSynced(int sliceId) const
 {
+    if (m_role == Role::Remote) {
+        // The Core's value, mirrored onto the slice (radeStatus 1).
+        const SliceModel* slice = sliceById(sliceId);
+        return slice != nullptr && slice->radeSynced();
+    }
     return m_radeSyncedSlices.value(sliceId, false);
 }
 

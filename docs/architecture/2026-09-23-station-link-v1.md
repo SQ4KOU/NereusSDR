@@ -815,8 +815,11 @@ RADE decoder's sync and frequency offset as the desktop's VFO flag does
 (section 7.1, "The RADE status"). A peer that declares it at minor 11 is
 sent `radeStatusVersion` (section 6.3) and each slice's `radeSynced` and
 `radeFreqOffsetHz`; a peer that does not sees exactly the wire it was
-built for, with none of them. The station does not declare it, and the
-desktop's remote window does not yet.
+built for, with none of them. The station does not declare it. The
+desktop's remote window declares it too: its VFO flag and RADE applet show
+the Core's sync, SNR and offset as a local window's do, and it keeps the
+last offset for each fresh SNR, since the Core sends the offset only when
+it moves.
 
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that

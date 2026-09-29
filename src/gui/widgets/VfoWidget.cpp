@@ -111,6 +111,10 @@
 //                 too, the table the Core's catalogue sends (R-IOS-06,
 //                 R-IOS-27); their values are unchanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The RADE row keeps the decoder's last frequency offset and
+//                 re-appends it to each fresh SNR, since a remote window's
+//                 Core sends the offset only when it moves. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -968,6 +972,7 @@ void VfoWidget::setRadeActive(bool on)
             m_lastRadeCallsign.clear();
             m_lastRadeSnrDb = std::numeric_limits<float>::quiet_NaN();
             m_lastRadeSynced = false;
+            m_lastRadeFreqOffsetHz = std::numeric_limits<float>::quiet_NaN();
             return;
         }
     }
@@ -1046,6 +1051,9 @@ void VfoWidget::setRadeSnrLabel(float snrDb)
         QString("%1 <font color='%2'>●</font> %3dB")
             .arg(prefix, color)
             .arg(static_cast<int>(snrDb)));
+    if (!std::isnan(m_lastRadeFreqOffsetHz)) {
+        setRadeFreqOffset(m_lastRadeFreqOffsetHz);
+    }
 }
 
 // From AetherSDR VfoWidget.cpp:3434-3445 [@0cd4559] — setRadeFreqOffset.
@@ -1054,6 +1062,7 @@ void VfoWidget::setRadeSnrLabel(float snrDb)
 // setRadeFreqOffset() appends the offset.
 void VfoWidget::setRadeFreqOffset(float hz)
 {
+    m_lastRadeFreqOffsetHz = hz;
     if (!m_radeActive || !m_snrLabel) {
         return;
     }

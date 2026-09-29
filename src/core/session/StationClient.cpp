@@ -315,6 +315,10 @@
 //   2026-09-29 - R-IOS-13 / R-R3-49: the txEqCurve a window did not
 //                declare is not counted as schema skew. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The hello declares radeStatus 1 and each slice takes the
+//                Core's radeSynced and radeFreqOffsetHz, so the window's VFO
+//                flag shows RADE sync and offset. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -686,6 +690,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // board, from the Core's own list (stationRadios' models, radioModels 1),
     // never a guess from the model alone.
     m_declaredFeatures.insert(QByteArrayLiteral("radioModels"), 1);
+    // The VFO flag's RADE row shows the Core's decoder sync and frequency
+    // offset (radeStatusVersion 1), as a local window's flag does.
+    m_declaredFeatures.insert(QByteArrayLiteral("radeStatus"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -4140,6 +4147,17 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     }
     if (propertyName == "txSlice") {
         slice->setTxSlice(native.toBool());
+        return true;
+    }
+    // radeStatusVersion 1: the Core's RADE decoder sync and offset. Read
+    // only on the wire (no WRITE), set here as the Core reported them; the
+    // window's RadioModel carries them to the VFO flag and the RADE applet.
+    if (propertyName == "radeSynced") {
+        slice->setRadeSynced(native.toBool());
+        return true;
+    }
+    if (propertyName == "radeFreqOffsetHz") {
+        slice->setRadeFreqOffsetHz(native.toDouble());
         return true;
     }
     if (propertyName == "band") {
