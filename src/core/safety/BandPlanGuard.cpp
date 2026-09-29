@@ -672,8 +672,9 @@ static bool isUs60mModeAllowed(DSPMode mode) noexcept
            mode == DSPMode::DIGU;     // console.cs:29423
 }
 
-// Addendum G-42 item 4: the region as General Options names it (the
-// comboFRSRegion list above), for a refusal the operator reads.
+// Addendum G-42 item 4: the region as the operator knows it, for a refusal
+// the operator reads: General Options' names (the comboFRSRegion list
+// above), with the three IARU regions spelled out.
 QString regionWords(Region region)
 {
     switch (region) {
@@ -697,9 +698,10 @@ QString regionWords(Region region)
     case Region::Netherlands:   return QStringLiteral("Netherlands");
     case Region::France:        return QStringLiteral("France");
     case Region::Russia:        return QStringLiteral("Russia");
-    case Region::Region1:       return QStringLiteral("Region1");
-    case Region::Region2:       return QStringLiteral("Region2");
-    case Region::Region3:       return QStringLiteral("Region3");
+    // The combo keeps Thetis's Region1-3; a sentence names the IARU region.
+    case Region::Region1:       return QStringLiteral("IARU Region 1");
+    case Region::Region2:       return QStringLiteral("IARU Region 2");
+    case Region::Region3:       return QStringLiteral("IARU Region 3");
     case Region::Germany:       return QStringLiteral("Germany");
     }
     return QStringLiteral("your region");

@@ -308,6 +308,15 @@ void TestBandPlanGuardModeAllowList::refusalsSayWhatIsWrong_data()
     QTest::newRow("europe-carrier") << qint64(7'250'000) << int(DSPMode::USB)
         << int(Band::Band40m) << 0 << 0 << false << int(Region::Europe)
         << QStringLiteral("7.250000 MHz is outside the transmit bands for your region (Europe).");
+    // The three IARU regions in operator words, not the settings' Region1-3.
+    QTest::newRow("iaru-region-1") << qint64(7'250'000) << int(DSPMode::USB)
+        << int(Band::Band40m) << 0 << 0 << false << int(Region::Region1)
+        << QStringLiteral("7.250000 MHz is outside the transmit bands for your region "
+                          "(IARU Region 1).");
+    QTest::newRow("iaru-region-3") << qint64(7'350'000) << int(DSPMode::USB)
+        << int(Band::Band40m) << 0 << 0 << false << int(Region::Region3)
+        << QStringLiteral("7.350000 MHz is outside the transmit bands for your region "
+                          "(IARU Region 3).");
     QTest::newRow("us-60m-mode") << qint64(5'357'000) << int(DSPMode::AM)
         << int(Band::Band60m) << -2900 << 2900 << false << int(Region::UnitedStates)
         << QStringLiteral("AM is not allowed on 60 m in the United States.");
