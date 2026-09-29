@@ -53,7 +53,8 @@ ConnectableRadioModel::~ConnectableRadioModel()
 std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     int timeoutMs, NereusSDR::RadioModel::Role role,
     std::function<void(NereusSDR::RadioModel&)> beforeConnect,
-    NereusSDR::HPSDRHW board)
+    NereusSDR::HPSDRHW board,
+    bool stream)
 {
     // ConnectableRadioModel's constructor is private (see the header), so
     // std::make_unique can't reach it from outside the class; new + wrap
@@ -61,7 +62,18 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     std::unique_ptr<ConnectableRadioModel> harness(new ConnectableRadioModel());
 
     harness->m_fake = std::make_unique<P1FakeRadio>();
+    if (!stream) {
+        harness->m_fake->setAutoStreamEnabled(false);
+        harness->m_keepAlive = std::make_unique<QTimer>();
+        harness->m_keepAlive->setInterval(500);
+        P1FakeRadio* const fake = harness->m_fake.get();
+        QObject::connect(harness->m_keepAlive.get(), &QTimer::timeout,
+                         [fake]() { fake->sendEp6Frames(1); });
+    }
     harness->m_fake->start();
+    if (harness->m_keepAlive) {
+        harness->m_keepAlive->start();
+    }
 
     // Mirrors tst_p1_loopback_connection.cpp's makeInfo() -- see
     // task-2-controller-notes.md "Wiring the fake". Built the same way

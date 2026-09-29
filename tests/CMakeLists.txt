@@ -242,11 +242,15 @@ function(nereus_add_test name)
     # (OpenChannel) plans the same way, and did so from nothing:
     # tst_wdsp_channel_shutdown spent 104 s of its 120 s in its first case
     # under load, tst_receiver_dsp_load_frames 31 s at rest in initTestCase.
+    # Load findings 4: a test that builds a TxAnalyzer plans its display's
+    # FFTs the same way (SetAnalyzer's FFTW_PATIENT plans, TxAnalyzer.cpp):
+    # tst_remote_tx_display_settings spent 4.8 s of its 9 s at rest there,
+    # and passed its 120 s limit at load 342.
     if(TARGET nereus_test_fftw_wisdom)
         set(_wisdom_scan "${_extra_sources}")
         file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp" _wisdom_text)
         string(APPEND _wisdom_scan "${_wisdom_text}")
-        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel|OpenChannel\\(")
+        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel|OpenChannel\\(|TxAnalyzer")
             target_sources(${name} PRIVATE $<TARGET_OBJECTS:nereus_test_fftw_wisdom>)
         endif()
     endif()
@@ -7656,10 +7660,13 @@ target_compile_definitions(tst_unbuilt_features PRIVATE NEREUS_BUILD_TESTS)
 # limit in a suite run at load 50 to 110. markingOneFeatureBuiltShowsItsSurfacesOnly
 # (a window per listed feature, about two thirds of the time) runs its rows
 # as tst_unbuilt_features_each1 to _each3, every third feature each, the
-# rest as tst_unbuilt_features (the test's main()).
+# rest as tst_unbuilt_features (the test's main()). Load findings 4:
+# the rest passed 120 s above load 330, so emptiedSetupPageIsNotShownOrFound
+# (every Setup page) runs as tst_unbuilt_features_setup and four cases that
+# build windows as _windows1 and _windows2 (the limit is not raised).
 if(TEST tst_unbuilt_features)
     nereus_split_test(tst_unbuilt_features ENV NEREUS_UNBUILT_FEATURES_GROUP
-        GROUPS each1 each2 each3)
+        GROUPS each1 each2 each3 setup windows1 windows2)
 endif()
 # R3 unfinished controls, Task 3 (R-R3-49, R-R3-21): the container function
 # and band buttons act on the container's own slice; the ones with nothing

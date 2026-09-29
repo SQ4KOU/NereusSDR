@@ -554,6 +554,7 @@ private slots:
         logRun("frame-like", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
+        int uncorroboratedStepBacks = 0;
         for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
@@ -567,19 +568,25 @@ private slots:
                 QVERIFY2(s.load < kFrameMaxLoad,
                          qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3)")
                                         .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)));
+                // About 60% of a core of work, under the governor's line: a
+                // step-back here is the Rock 5C symptom.
+                QVERIFY2(!s.steppedBack,
+                         qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, "
+                                                   "worker CPU %3)")
+                                        .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
+            } else if (s.steppedBack) {
+                // Load findings 4: as in the uniform case below, the
+                // machine held the worker off its core; the governor judges
+                // wall share by JJ's ruling.
+                ++uncorroboratedStepBacks;
             }
-            // About 60% of a core of work, under the governor's line: a
-            // step-back here is the Rock 5C symptom.
-            QVERIFY2(!s.steppedBack,
-                     qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, worker CPU %3)")
-                                    .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
         }
         QVERIFY2(corroboratedIntervals >= kMinCorroborated,
                  qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
                                            "worker's CPU")
                                 .arg(corroboratedIntervals).arg(run.samples.size())
                                 .arg(kFrameCpuTolerance)));
-        QCOMPARE(run.stepBacks, 0);
+        QCOMPARE(run.stepBacks, uncorroboratedStepBacks);
     }
 
     // Uniform loads read as before: close to the worker's busy and CPU share.
@@ -593,6 +600,7 @@ private slots:
         logRun("uniform-900us", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
         int corroboratedIntervals = 0;
+        int uncorroboratedStepBacks = 0;
         for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
@@ -604,18 +612,30 @@ private slots:
                 QVERIFY2(std::abs(s.load - s.cpuShare) <= tolerance,
                          qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
                                         .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
+                // About 70% of a core of work, under the governor's line.
+                QVERIFY2(!s.steppedBack,
+                         qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, "
+                                                   "worker CPU %3)")
+                                        .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
+            } else if (s.steppedBack) {
+                // Load findings 4: the machine, not the DSP, held the
+                // worker off its core for this interval (its busy share of
+                // wall time well over its CPU share), and the governor
+                // judges wall share by JJ's ruling (2026-09-28), so a
+                // step-back here is the governor doing its job.
+                ++uncorroboratedStepBacks;
             }
-            // About 70% of a core of work, under the governor's line.
-            QVERIFY2(!s.steppedBack,
-                     qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, worker CPU %3)")
-                                    .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
+        }
+        if (uncorroboratedStepBacks > 0) {
+            qInfo("%d step-backs in intervals the machine, not the DSP, saturated",
+                  uncorroboratedStepBacks);
         }
         QVERIFY2(corroboratedIntervals >= kMinCorroborated,
                  qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
                                            "worker's CPU")
                                 .arg(corroboratedIntervals).arg(run.samples.size())
                                 .arg(kUniformCpuTolerance)));
-        QCOMPARE(run.stepBacks, 0);
+        QCOMPARE(run.stepBacks, uncorroboratedStepBacks);
     }
 
     // A worker that really cannot keep up still reads as overloaded, and

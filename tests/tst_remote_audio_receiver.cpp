@@ -1530,14 +1530,41 @@ private slots:
                 receiver.submit(losslessLevelPacket(first + i, kSsrc, 0.25f));
             }
         };
+        // Load findings 4: this thread paces the packets on the wall clock,
+        // and a starved thread sends some after their interval was
+        // concealed (decoded 23, late 2, at load 206 to 299): the sink then
+        // plays those intervals as silence and counts the packets late,
+        // as it should. The case is about the quiet and the resume, so it
+        // waits for every packet to be handled, played or late.
+        const auto handled = [&receiver]() {
+            const RemoteAudioReceiverTelemetry t = receiver.telemetry();
+            return t.decodedPackets + t.latePackets;
+        };
         sendRun(0, 25);
-        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().decodedPackets >= 25, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(handled() >= 25, 2000);
+        const quint64 decodedFirst = receiver.telemetry().decodedPackets;
+        QVERIFY(decodedFirst > 0);
 
         // Quiet: silence, then nothing.
         QTest::qWait(900);
         const qsizetype idle = collected.count();
-        const quint64 concealed = receiver.telemetry().concealedPackets;
-        QVERIFY2(concealed >= 50 && concealed <= 160, qPrintable(QString::number(concealed)));
+        const RemoteAudioReceiverTelemetry quiet = receiver.telemetry();
+        const quint64 concealed = quiet.concealedPackets;
+        // The sink conceals on the Core's timeline until 500 ms after the
+        // last packet, then idles at its first wake past that point.
+        // Load findings 4: a wake that comes late past it idles at once,
+        // so the silence handed over ends early (42 intervals at load 35
+        // to 60): what the app hears then is less silence, never a restart
+        // or audio. The lower bound (200 ms of silence) holds for a worker
+        // that kept waking; the upper bound always.
+        const QString evidence = QStringLiteral("concealed %1, worker's longest wake gap %2 ms")
+                                     .arg(concealed).arg(quiet.maxWorkerWakeGapMs, 0, 'f', 1);
+        QVERIFY2(concealed <= 160, qPrintable(evidence));
+        if (quiet.maxWorkerWakeGapMs < 200.0) {
+            QVERIFY2(concealed >= 50, qPrintable(evidence));
+        } else {
+            qInfo().noquote() << "silence lower bound not applied:" << evidence;
+        }
         QTest::qWait(400);
         QCOMPARE(collected.count(), idle);
         QCOMPARE(receiver.telemetry().concealedPackets, concealed);
@@ -1549,16 +1576,27 @@ private slots:
         }
 
         // The Core sends again, well past the reorder window.
+        const quint64 handledFirst = handled();
         sendRun(2000, 25);
-        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().decodedPackets >= 50
-                                 || !restarts.isEmpty(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(handled() >= handledFirst + 25 || !restarts.isEmpty(), 2000);
         QCOMPARE(restarts.count(), 0);
         QCOMPARE(errors.count(), 0);
+        // The stream resumes where it is: each of the 25 intervals once, the
+        // packet's audio, or silence for one this thread sent too late.
+        const quint64 decodedSecond = receiver.telemetry().decodedPackets - decodedFirst;
+        QVERIFY(decodedSecond > 0);
         const QList<QVector<float>> blocks = collected.snapshot();
         QVERIFY(blocks.size() >= idle + 25);
+        quint64 played = 0;
         for (qsizetype block = idle; block < idle + 25; ++block) {
-            QVERIFY(std::abs(blocks.at(block).constFirst() - 0.25f) < 1.0f / 16384.0f);
+            const float level = blocks.at(block).constFirst();
+            if (std::abs(level - 0.25f) < 1.0f / 16384.0f) {
+                ++played;
+            } else {
+                QCOMPARE(level, 0.0f);
+            }
         }
+        QCOMPARE(played, decodedSecond);
         receiver.stop();
     }
 

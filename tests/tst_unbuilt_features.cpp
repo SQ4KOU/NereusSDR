@@ -1502,6 +1502,19 @@ int main(int argc, char** argv)
         groups[i % kEachEntries].entries.append(
             QStringLiteral("markingOneFeatureBuiltShowsItsSurfacesOnly:") + list.at(i).key);
     }
+    // Load findings 4: the rest passed 120 s above load 330 (148 s of it
+    // at load 360 to 900: emptiedSetupPageIsNotShownOrFound, which builds
+    // every Setup page, 34 s, and four cases that build windows 101 s), so
+    // those run as entries of their own: tst_unbuilt_features_setup,
+    // _windows1 and _windows2.
+    groups.append({QStringLiteral("setup"),
+                   {QStringLiteral("emptiedSetupPageIsNotShownOrFound")}});
+    groups.append({QStringLiteral("windows1"),
+                   {QStringLiteral("removedControlsAppearInNoWindow"),
+                    QStringLiteral("savedValuesOfHiddenControlsSurviveAStartAndASave")}});
+    groups.append({QStringLiteral("windows2"),
+                   {QStringLiteral("savedValuesOfRemovedControlsSurviveAStartAndASave"),
+                    QStringLiteral("noUnbuiltSurfaceShowsInLocalOrRemoteWindows")}});
     const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
         test.metaObject(), app.arguments(), "NEREUS_UNBUILT_FEATURES_GROUP", groups);
     return arguments ? QTest::qExec(&test, *arguments) : 1;
