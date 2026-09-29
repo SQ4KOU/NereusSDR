@@ -613,6 +613,23 @@ Band to selection, as the log prints it (hex), from
 
 ---
 
+## Session 10 (2026-09-29): the unkey waits for the send ring
+
+An operator's release now waits for the transmit audio already queued in the
+send ring to reach the radio before the hardware unkeys, so the end of an over
+is not cut off. The wait is bounded by the ring's own length: 84 ms on
+Protocol 1 and 342 ms on Protocol 2 (65536 sample pairs at 192 kHz is
+341.3 ms, rounded up). The Core's own stops (Stop All TX, a revoked device,
+the amplifier stops) and a disconnect release at once and never wait. The
+342 ms ceiling is covered by `tst_unkey_send_ring_drain`; no radio has shown
+it yet.
+
+| # | Action | Expect |
+|---|---|---|
+| 36 | **Protocol 2 unkey ceiling.** Into a dummy load at low power, talk on SSB and release MOX mid-word. Then repeat with the network loaded (a large copy over the same link) so the ring holds a backlog. Then key again and press Stop All TX mid-word. | The release keeps transmitting for at most 342 ms past the normal release, and the last syllable goes out. If the ring has not drained by then the log reads `the transmit send ring did not drain within its length of 342 ms`, and the radio is unkeyed at that point regardless. Stop All TX unkeys at once: the log reads `transmit stopped; not waiting for the send ring` or shows no wait at all, and never the 342 ms line. A release held past 342 ms is a defect. |
+
+---
+
 ## Next
 
 Data-plane completion is tracked as Sub-Epic I. See
