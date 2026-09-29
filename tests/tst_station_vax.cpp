@@ -87,7 +87,7 @@ struct Device {
             features.insert("deviceAuth", 1);
         }
         server->acceptTransport(station);
-        QTest::qWaitFor([this]() { return !app->received().isEmpty(); }, 5000);
+        QVERIFY(QTest::qWaitFor([this]() { return !app->received().isEmpty(); }, 5000));
         app->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("VAX phone"),
             {kSessionProtocolMajor}, features)));
@@ -183,7 +183,9 @@ struct Device {
             QByteArrayLiteral("vax"), {MirrorUpdate{1, name, kind, value}}, writeId)));
         SessionPropertyResult found;
         found.reason = QStringLiteral("no property.result arrived");
-        QTest::qWaitFor([&]() {
+        // QVERIFY's check without its bare return (this returns a value);
+        // the timeout also stays in found.reason for the caller.
+        const bool arrived = QTest::qWaitFor([&]() {
             for (const SessionMessage& message : messages()) {
                 if (message.kind == SessionMessageKind::PropertyResult
                     && message.writeId == writeId && !message.propertyResults.isEmpty()) {
@@ -193,6 +195,7 @@ struct Device {
             }
             return false;
         }, 3000);
+        QTest::qVerify(arrived, "arrived", "", __FILE__, __LINE__);
         return found;
     }
     SessionMessage invoke(const QByteArray& verb, const QList<MirrorUpdate>& arguments)
@@ -201,7 +204,8 @@ struct Device {
         app->sendText(SessionMessages::encode(SessionMessages::commandInvoke(verb, id, arguments)));
         SessionMessage found;
         found.reason = QStringLiteral("no command.result arrived");
-        QTest::qWaitFor([&]() {
+        // As write() does.
+        const bool arrived = QTest::qWaitFor([&]() {
             for (const SessionMessage& message : messages()) {
                 if (message.kind == SessionMessageKind::CommandResult
                     && message.commandId == id) {
@@ -211,6 +215,7 @@ struct Device {
             }
             return false;
         }, 3000);
+        QTest::qVerify(arrived, "arrived", "", __FILE__, __LINE__);
         return found;
     }
     // Every vaxLevels record this device received, oldest first.
