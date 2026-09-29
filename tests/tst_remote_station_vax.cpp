@@ -38,6 +38,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/applets/VaxApplet.h"
+#include "gui/StyleConstants.h"
 #include "gui/styles/AppTheme.h"
 #include "gui/widgets/MeterSlider.h"
 #include "models/RadioModel.h"
@@ -285,6 +286,61 @@ private slots:
         applet.show();
         QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
         QVERIFY(!applet.stationLevelsWanted());
+    }
+
+    // A level slider that cannot act looks disabled: the style guide's
+    // disabled trio, as the dark page style's disabled QSlider rules use it
+    // (groove kDisabledBg, fill kDisabledBorder, thumb kDisabledText), and
+    // no accent colour anywhere. Both TX rows in a window that may not
+    // transmit draw that way.
+    void aDisabledLevelSliderLooksDisabled()
+    {
+        MeterSlider slider;
+        slider.resize(200, slider.height());
+        slider.setGain(0.5f);
+        const auto pixel = [&slider](double at) {
+            const QImage image = slider.grab().toImage();
+            return image.pixelColor(static_cast<int>(image.width() * at), image.height() / 2)
+                .name();
+        };
+        QCOMPARE(pixel(0.75), QStringLiteral("#0a0a18"));
+        QCOMPARE(slider.cursor().shape(), Qt::PointingHandCursor);
+
+        slider.setEnabled(false);
+        QCOMPARE(pixel(0.75), QString::fromLatin1(Style::kDisabledBg));
+        QCOMPARE(pixel(0.25), QString::fromLatin1(Style::kDisabledBorder));
+        const QImage image = slider.grab().toImage();
+        const QColor accent(0x00, 0xb4, 0xd8);
+        bool thumbDisabled = false;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                QVERIFY2(c.rgb() != accent.rgb(), "an accent pixel on a disabled slider");
+                thumbDisabled = thumbDisabled || c.name() == QLatin1String(Style::kDisabledText);
+            }
+        }
+        QVERIFY(thumbDisabled);
+        QCOMPARE(slider.cursor().shape(), Qt::ArrowCursor);
+
+        slider.setEnabled(true);
+        QCOMPARE(pixel(0.75), QStringLiteral("#0a0a18"));
+
+        // The applet: this computer's TX row and the Station computer's.
+        Session s(m_securityDir.path(), this);
+        QVERIFY(s.connect());
+        QTRY_VERIFY(s.client->stationVaxHeld());
+        AudioEngine ownAudio;
+        VaxApplet applet(&s.window, &ownAudio);
+        wire(applet, *s.client);
+        applet.setStationTransmitPermitted(false, s.client->capabilities().txRefusalReason);
+        int disabled = 0;
+        for (MeterSlider* meter : applet.findChildren<MeterSlider*>()) {
+            if (!meter->isEnabled()) {
+                ++disabled;
+                QVERIFY(!meter->toolTip().isEmpty());
+            }
+        }
+        QCOMPARE(disabled, 2);
     }
 
     // Offscreen renders for the report: NEREUS_VAX_RENDER_DIR names where.
