@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: Slice colours E to H from AetherSDR's theme seed, so a
+//               fifth slice no longer repeats slice A's colour. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: Match NR2/NR4 controls and defaults to Thetis v2.10.3.15.
 //               J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //               (R-IOS-06, R-IOS-27).
@@ -709,14 +712,21 @@ inline constexpr std::array<NrSlotControls, 7> kNoiseReductionSlots{{
 
 // ── Slice colours ─────────────────────────────────────────────────────────
 
-// The slice badge colours, slice A first, as 0xRRGGBB. A slice past the
-// last one takes the first colour (VfoWidget::sliceColor).
-// From AetherSDR SliceColors.h
-inline constexpr std::array<std::uint32_t, 4> kSliceColours{
+// The slice badge colours, slice A first, as 0xRRGGBB, one for each of
+// slices A to H. A slice past the last one takes the first colour
+// (VfoWidget::sliceColor).
+// From AetherSDR SliceColors.h (A to D)
+// From AetherSDR src/core/ThemeSeedGenerated.cpp:92-95 [@1e0718ad] (E to H:
+// color.slice.e .. color.slice.h)
+inline constexpr std::array<std::uint32_t, 8> kSliceColours{
     0x00d4ffu,  // cyan
     0xff40ffu,  // magenta
     0x40ff40u,  // green
     0xffff00u,  // yellow
+    0xffa000u,  // orange
+    0x00e0c0u,  // teal
+    0xff6080u,  // pink
+    0xb080ffu,  // lavender
 };
 
 /// The colour of slice `index` (0 is slice A), as 0xRRGGBB.
