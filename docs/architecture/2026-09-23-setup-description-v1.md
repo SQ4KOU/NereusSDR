@@ -1,4 +1,4 @@
-# Setup description versions 1–18
+# Setup description versions 1–19
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,14 +165,15 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 18. PA has a version-14 ceiling (version 13
+future declaration at version 19. PA has a version-14 ceiling (version 13
 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
 for V17, version 16 for V16, version 13
 for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
-V4–V6 and version-7 projection for V7–V11. DSP, Transmit, Audio,
-Diagnostics and CAT & Network are version 15 to a V15 or later peer (see
-Version 15); Transmit is version 13 to a V13 or V14 peer and version 3 to
+V4–V6 and version-7 projection for V7–V11. DSP is version 19 to a V19 or
+later peer (see Version 19) and version 15 to a V15 to V18 peer; Transmit,
+Audio, Diagnostics and CAT & Network are version 15 to a V15 or later peer
+(see Version 15); Transmit is version 13 to a V13 or V14 peer and version 3 to
 a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
 Audio, Diagnostics and CAT & Network are version 3 to a V3 to V14 peer.
 General and Test retain version 3.
@@ -793,8 +794,8 @@ slot without all three keys; the catalogue follows every change.
 
 Not described in DSP, with the reason: the NR3 and NNR model files (Models…
 opens a manager that adds and saves files; the phone's own), the per-band CFC
-editor (it edits `cfcParaEqData` through a curve and band editor; the phone
-needs a verb such as TX EQ's `txEq.setCurve` for CFC), the Options warning
+editor (described in version 19 as `dsp.cfc.bands`; a V15 to V18 peer keeps
+this coverage text), the Options warning
 marks (worked out from the combos, not settings), the hidden unbuilt CW
 keyer, CW timing, APF bandwidth and gain, SAM, AM squelch tail, FM deviation
 and FM transmit, and the static notes.
@@ -968,6 +969,68 @@ rows, closed with the old reason, in place of the version 18 rows; the six other
 are unchanged. Its frequency row stays `kind:"integer"` and closed, so it
 can show a value such as "24.576" set from the desktop or a version 18
 peer, but never write one. No new wire field or verb is defined.
+
+Version 19 describes DSP > CFC's per-band editor, the desktop's Configure
+CFC bands… button (R-R3-49). DSP's root is version 19; the one new row is
+the last control of the CFC page's CFC section, after Post-EQ Gain, and is
+accepted only as the exact object in `resources/setup/dsp.json`
+(`validateDspV19Control`):
+
+- `id` `dsp.cfc.bands`, `label` "Configure CFC bands…", `kind` `table`,
+  `applies` `live`, `requiresDescriptionVersion` 19.
+- `binding` `{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}}`:
+  the value is `transmit`'s read-only `cfcProfile` (the link document's
+  "The CFC band editor"), and a change is sent whole with `cfc.setProfile`
+  and that value's `revision` as `expectedRevision`. The Core refuses a
+  stale revision, and the phone shows the refusal reason and the new value.
+- `gate` `{"capability":"transmitSettingsVersion","min":15}`, with no
+  off-air rule: Thetis's CFC dialog applies a change on the air
+  (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check), and the Core
+  takes `cfc.setProfile` on the air from a session permitted to change
+  transmit settings (`transmitSettingsVersion` 13 and later), as the
+  desktop does. Below `transmitSettingsVersion` 15 the row shows disabled
+  with the Core's reason.
+- `bandCounts` `[5,10,18]`: the band counts the editor offers (the
+  desktop's 5-band, 10-band and 18-band). Changing the count respreads the
+  bands evenly between Low and High, as the desktop's editor does.
+- `minSpanHz` 1000: High must be at least 1000 Hz above Low.
+- `fields`, the profile's own values, in order: `minHz` "Low" and `maxHz`
+  "High" (decimal, 0..20000, step 1, no decimals, " Hz"), `parametric` "Use
+  Q Factors" (toggle), `precompDb` "Pre-Comp" (decimal, 0..16, step 0.1,
+  one decimal, " dB") and `postEqGainDb` "Post-EQ" (decimal, -24..24,
+  step 0.1, one decimal, " dB").
+- `columns`, one row per band: `frequencyHz` "Freq" (0..20000, step 1, no
+  decimals, " Hz"), `compressionDb` "Comp" (0..16, step 0.1, one decimal,
+  " dB"), `compressionQ` "Comp Q" (0.2..20, step 0.01, two decimals),
+  `postEqGainDb` "Gain" (-24..24, step 0.1, one decimal, " dB") and
+  `postEqQ` "EQ Q" (0.2..20, step 0.01, two decimals). The Q columns apply
+  only while Use Q Factors is on.
+
+The ranges are `CfcProfile`'s, each from Thetis frmCFCConfig.Designer.cs
+[v2.10.3.15] (`udCFC_low` and `udCFC_high`, `nudCFC_precomp`,
+`nudCFC_posteqgain`, `nudCFC_f`, `nudCFC_c`, `nudCFC_cq`, `nudCFC_gain` and
+`nudCFC_q`; see `CfcProfile.h`), and so are the steps and decimals, with the
+1000 Hz spread from frmCFCConfig.cs:120-140.
+The first band sits on Low and the last on High; the Core keeps them there.
+
+The CFC section's other rows and AGC/ALC's TX Leveler and TX ALC rows
+(`dsp.agcAlc.txLevelerOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+`txAlcMaxGain`, `txAlcDecay`; `dsp.cfc.phaseRotatorEnabled`,
+`phaseRotatorFreqHz`, `phaseRotatorStages`, `phaseReverseEnabled`,
+`cfcEnabled`, `cfcPostEqEnabled`, `cfcPrecompDb`, `cfcPostEqGainDb`,
+`cessbOn`) lose their off-air rule at every description version, for the
+same reason: their gate is `{"capability":"transmitSettingsVersion","min":4}`
+and the Core refuses one that carries `offAir`. The description is always
+served by the Core that applies the edit. With a radio that Core reports
+transmitSettingsVersion 15 and takes these settings on the air; without one it
+reports 0, which fails the `min` and disables the rows anyway.
+
+DSP's category coverage becomes "partial: the NR3 and NNR model files are
+not described" and the CFC page carries no coverage (`coverageV19`). A V15
+to V18 peer receives DSP at version 15 without the row, with version 15's
+coverage text. A new transmit property (`cfcProfile`, ordinal 88), a new
+verb (`cfc.setProfile`) and `transmitSettingsVersion` 15 are defined in the
+link document; this version adds no other wire field.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

@@ -382,6 +382,13 @@
 //                                    settings only a permitted device may
 //                                    change. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  requestCfcProfile
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setTransmitSettingsVersionForTest:
+//                                    a window of a current Core that
+//                                    answers as an older one.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -878,6 +885,12 @@ public:
     {
         m_declaredFeatures.insert(name, version);
     }
+    /// Test seam: the transmitSettingsVersion this window heard, as an
+    /// older Core would have sent it. After the handshake.
+    void setTransmitSettingsVersionForTest(int version)
+    {
+        m_capabilities.transmitSettingsVersion = version;
+    }
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
@@ -1227,6 +1240,10 @@ public:
     CommandOutcome requestTxProfileSave(const QString& name) override;
     CommandOutcome requestTxProfileDelete(const QString& name) override;
     CommandOutcome requestRadeResetVocoder() override;
+    // transmitSettingsVersion 15: see IStationLink. Sent only to a Core at
+    // transmitSettingsVersion 15.
+    CommandOutcome requestCfcProfile(const QString& profileJson,
+                                     const QString& expectedRevision) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

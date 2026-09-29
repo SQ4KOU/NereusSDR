@@ -314,8 +314,9 @@ void TstRemotePaPages::paKeysAreOnTheOffAirListAtVersion6()
     // 7 since parity Task 7 (PureSignal arming), 8 since parity Task 13
     // (Hardware Config's OC transmit pins and transmit calibration); 6 is
     // within it.
-    // 14 since the Core owns Prevent transmitting on a different band.
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
+    // 14 since the Core owns Prevent transmitting on a different band, 15
+    // since a remote window edits the CFC bands.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 15);
     QVERIFY(s.client->transmitSettingsAvailable(6));
 }
 

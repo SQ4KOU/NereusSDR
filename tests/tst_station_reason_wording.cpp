@@ -177,6 +177,9 @@
 //                                    This Core page's two device reasons
 //                                    named on the app side. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  cfc.setProfile's refusals scanned
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  JJ's rule: a reason that says "yet"
 //                                    fails (it promises a future).
 //                                    AI-assisted via Anthropic Claude Code.
@@ -1428,6 +1431,10 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/ParaEqCurve.cpp", {QStringLiteral("txEqPointsFromCurveJson")}, {}, 7, {},
          // refuse(why): each literal handed to it is scanned here.
          {QStringLiteral("why")}},
+        // R-R3-49 (transmitSettingsVersion 15): cfc.setProfile's refusals.
+        {"src/core/CfcProfile.cpp", {QStringLiteral("fromPublishedJson")}, {}, 10, {},
+         // refuse(why) and the shared notUnderstood: each literal is scanned here.
+         {QStringLiteral("why"), QStringLiteral("notUnderstood")}},
         {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
          {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
           QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),

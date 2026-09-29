@@ -275,6 +275,10 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (transmitSettingsVersion 15): cfcProfile,
+//                 refreshed from every CFC change (refreshCfcProfile).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -373,6 +377,20 @@ TransmitModel::TransmitModel(QObject* parent)
     // R-IOS-13 / R-R3-49: txEqCurve for the empty blob a new model starts
     // with (the flat curve Thetis applies in its place).
     m_txEqCurve = ParaEqCurve::txEqCurveJson(m_txEqParaEqData);
+
+    // R-R3-49 (transmitSettingsVersion 15): cfcProfile follows every CFC
+    // value, once a profile restore has put them all back.
+    refreshCfcProfile();
+    for (auto signal : {&TransmitModel::cfcParaEqDataChanged,
+                        &TransmitModel::cfcEqFreqJsonChanged,
+                        &TransmitModel::cfcCompressionJsonChanged,
+                        &TransmitModel::cfcPostEqBandGainJsonChanged}) {
+        connect(this, signal, this, [this](const QString&) { refreshCfcProfile(); });
+    }
+    connect(this, &TransmitModel::cfcPrecompDbChanged, this, [this](int) { refreshCfcProfile(); });
+    connect(this, &TransmitModel::cfcPostEqGainDbChanged, this, [this](int) { refreshCfcProfile(); });
+    connect(this, &TransmitModel::cfcProfileRestored, this, &TransmitModel::refreshCfcProfile);
+    connect(this, &TransmitModel::cfcSettingsReloaded, this, &TransmitModel::refreshCfcProfile);
 
     // Initialise per-band normal-mode power to 50W (#167 Phase 3A).
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
@@ -3752,6 +3770,24 @@ void TransmitModel::setCfcParaEqData(const QString& data)
     // Nested writes notify only when the outer projection has released its
     // guard, so DSP and mirrors see the final curve once.
     if (!nestedProjection) { emit cfcParaEqDataChanged(m_cfcParaEqData); }
+}
+
+// NereusSDR-original (R-R3-49, transmitSettingsVersion 15): what the CFC
+// dialog shows, published. The paired blob is authoritative when the Core
+// reads it (setCfcParaEqData); otherwise the ten-band values.
+void TransmitModel::refreshCfcProfile()
+{
+    if (cfcProfileMutationInProgress()) { return; }
+    CfcProfile::Profile paired;
+    const QString profile = CfcProfile::decode(m_cfcParaEqData, paired)
+        ? CfcProfile::publishedJson(paired, QStringLiteral("saved"))
+        : CfcProfile::publishedJson(
+              CfcProfile::legacyProfile(m_cfcEqFreqHz, m_cfcCompressionDb, m_cfcPostEqBandGainDb,
+                                        m_cfcPrecompDb, m_cfcPostEqGainDb),
+              QStringLiteral("legacy"));
+    if (profile == m_cfcProfile) { return; }
+    m_cfcProfile = profile;
+    emit cfcProfileChanged(m_cfcProfile);
 }
 
 void TransmitModel::endCfcProfileRestore() noexcept

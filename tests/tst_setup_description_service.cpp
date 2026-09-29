@@ -1575,6 +1575,132 @@ private slots:
         QCOMPARE(projectedCategory(service.hardware(), 99), current);
     }
 
+    // Version 19 (R-R3-49): DSP > CFC's band editor, bound to transmit's
+    // cfcProfile and applied with cfc.setProfile (transmitSettingsVersion
+    // 15). The CFC page is complete to a version 19 peer; versions 15 to
+    // 18 see version 15's category unchanged.
+    void dspV19DescribesCfcBands()
+    {
+        SetupDescriptionService service;
+        const QJsonObject current = projectedCategory(service.dsp(), 19);
+        QCOMPARE(current.value("version"), QJsonValue(19));
+        QCOMPARE(current.value("coverage"),
+                 QJsonValue("partial: the NR3 and NNR model files are not described"));
+        const QJsonObject cfc = pageById(current, "dsp.cfc");
+        QVERIFY(!cfc.contains("coverage"));
+        const QJsonArray sections = cfc.value("sections").toArray();
+        QJsonObject cfcSection;
+        for (const QJsonValue& raw : sections) {
+            if (raw.toObject().value("title") == QJsonValue("CFC")) { cfcSection = raw.toObject(); }
+        }
+        const QJsonArray rows = cfcSection.value("controls").toArray();
+        QVERIFY(!rows.isEmpty());
+        const QJsonObject row = rows.last().toObject();
+        QCOMPARE(row.value("id"), QJsonValue("dsp.cfc.bands"));
+        QCOMPARE(row.value("kind"), QJsonValue("table"));
+        QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(19));
+        QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"cfcProfile", QJsonObject{
+            {"object", "transmit"}, {"name", "cfcProfile"}, {"command", "cfc.setProfile"}}}}));
+        // No off-air rule: Thetis's frmCFCConfig applies a change on the air
+        // (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check), and a Core
+        // at transmitSettingsVersion 13 or later takes it on the air from a
+        // session permitted to change transmit settings.
+        QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 15}}));
+        QVERIFY(!row.value("gate").toObject().contains("offAir"));
+        QCOMPARE(row.value("bandCounts"), QJsonValue(QJsonArray{5, 10, 18}));
+        QCOMPARE(row.value("minSpanHz"), QJsonValue(1000));
+        // The ranges CfcProfile::fromPublishedJson takes, in its keys.
+        const auto range = [](const QJsonArray& list, const QString& id) {
+            for (const QJsonValue& raw : list) {
+                const QJsonObject o = raw.toObject();
+                if (o.value("id") == QJsonValue(id)) {
+                    return QList<double>{o.value("min").toDouble(-1e9), o.value("max").toDouble(-1e9),
+                                         o.value("step").toDouble(-1e9)};
+                }
+            }
+            return QList<double>{};
+        };
+        const QJsonArray fields = row.value("fields").toArray();
+        QCOMPARE(range(fields, "minHz"), (QList<double>{0, 20000, 1}));
+        QCOMPARE(range(fields, "maxHz"), (QList<double>{0, 20000, 1}));
+        QCOMPARE(range(fields, "precompDb"), (QList<double>{0, 16, 0.1}));
+        QCOMPARE(range(fields, "postEqGainDb"), (QList<double>{-24, 24, 0.1}));
+        QStringList fieldIds;
+        for (const QJsonValue& f : fields) { fieldIds << f.toObject().value("id").toString(); }
+        QCOMPARE(fieldIds, (QStringList{"minHz", "maxHz", "parametric", "precompDb",
+                                        "postEqGainDb"}));
+        const QJsonArray columns = row.value("columns").toArray();
+        QStringList columnIds;
+        for (const QJsonValue& c : columns) { columnIds << c.toObject().value("id").toString(); }
+        QCOMPARE(columnIds, (QStringList{"frequencyHz", "compressionDb", "compressionQ",
+                                         "postEqGainDb", "postEqQ"}));
+        QCOMPARE(range(columns, "frequencyHz"), (QList<double>{0, 20000, 1}));
+        QCOMPARE(range(columns, "compressionDb"), (QList<double>{0, 16, 0.1}));
+        QCOMPARE(range(columns, "compressionQ"), (QList<double>{0.2, 20, 0.01}));
+        QCOMPARE(range(columns, "postEqGainDb"), (QList<double>{-24, 24, 0.1}));
+        QCOMPARE(range(columns, "postEqQ"), (QList<double>{0.2, 20, 0.01}));
+
+        // The resource row is closed.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("dsp"), 19);
+        QCOMPARE(resource.size(), 1);
+        QVERIFY(SetupDescriptionService::validateDspV19Control(resource.first()));
+        QCOMPARE(resource.first(), row);
+        for (const QJsonObject& changed : mutationsOf(row)) {
+            QVERIFY2(!SetupDescriptionService::validateDspV19Control(changed),
+                     qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+        }
+
+        // Versions 15 to 18 see version 15's category, without the row.
+        const QJsonObject v15 = projectedCategory(service.dsp(), 15);
+        QCOMPARE(v15.value("version"), QJsonValue(15));
+        QCOMPARE(v15.value("coverage"), QJsonValue(
+            "partial: the NR3 and NNR model files and the per-band CFC editor are not described"));
+        QCOMPARE(pageById(v15, "dsp.cfc").value("coverage"),
+                 QJsonValue("partial: the per-band CFC editor is not described"));
+        QVERIFY(controlById(v15, "dsp.cfc.bands").isEmpty());
+        QCOMPARE(controlCount(v15, 0), controlCount(current, 0) - 1);
+        QCOMPARE(projectedCategory(service.dsp(), 16), v15);
+        QCOMPARE(projectedCategory(service.dsp(), 17), v15);
+        QCOMPARE(projectedCategory(service.dsp(), 18), v15);
+        QCOMPARE(projectedCategory(service.dsp(), 20), current);
+    }
+
+    // The TX Leveler, TX ALC, Phase Rotator, CFC and CESSB rows carry no
+    // off-air rule: the Core serving this description takes transmit
+    // settings on the air (transmitSettingsVersion 13 or later) from a
+    // session permitted to change them, as the desktop does.
+    void dspTransmitProcessingRowsCarryNoOffAirRule()
+    {
+        SetupDescriptionService service;
+        const QStringList ids{
+            "dsp.agcAlc.txLevelerOn", "dsp.agcAlc.txLevelerMaxGain",
+            "dsp.agcAlc.txLevelerDecay", "dsp.agcAlc.txAlcMaxGain", "dsp.agcAlc.txAlcDecay",
+            "dsp.cfc.phaseRotatorEnabled", "dsp.cfc.phaseRotatorFreqHz",
+            "dsp.cfc.phaseRotatorStages", "dsp.cfc.phaseReverseEnabled", "dsp.cfc.cfcEnabled",
+            "dsp.cfc.cfcPostEqEnabled", "dsp.cfc.cfcPrecompDb", "dsp.cfc.cfcPostEqGainDb",
+            "dsp.cfc.cessbOn"};
+        for (const int version : {3, 15, 19}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : ids) {
+                const QJsonObject row = controlById(dsp, id);
+                QVERIFY2(!row.isEmpty(), qPrintable(QStringLiteral("%1 at %2").arg(id).arg(version)));
+                QCOMPARE(row.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "transmitSettingsVersion"}, {"min", 4}}));
+                QVERIFY(SetupDescriptionService::validateActiveSlicePropertyBinding(row));
+                // The off-air rule is refused: the row is closed without it.
+                QJsonObject offAir = row;
+                QJsonObject gate = row.value("gate").toObject();
+                gate.insert("offAir", true);
+                offAir.insert("gate", gate);
+                QVERIFY2(!SetupDescriptionService::validateActiveSlicePropertyBinding(offAir),
+                         qPrintable(id));
+            }
+        }
+        QVERIFY(!controlById(projectedCategory(service.dsp(), 19), "dsp.cfc.bands")
+                     .value("gate").toObject().contains("offAir"));
+    }
+
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
     // Core applies on and off the air (transmitSettingsVersion 11), in its
     // own PA Control section after External TX Inhibit, as the desktop page
@@ -2015,9 +2141,10 @@ private slots:
         for (const QString& id : {QStringLiteral("general"), QStringLiteral("test"),
                                   QStringLiteral("catNetwork"), QStringLiteral("dsp")}) {
             const QJsonObject category = service.category(id);
-            // Version 15 carries DSP and CAT & Network rows.
+            // Version 15 carries DSP and CAT & Network rows; 19, CFC's band editor.
             QCOMPARE(category.value(QStringLiteral("version")).toInt(),
-                     id == QLatin1String("dsp") || id == QLatin1String("catNetwork") ? 15 : 1);
+                     id == QLatin1String("dsp") ? 19
+                         : id == QLatin1String("catNetwork") ? 15 : 1);
             QCOMPARE(category.value(QStringLiteral("category")).toObject()
                          .value(QStringLiteral("id")).toString(), id);
             QVERIFY(!category.value(QStringLiteral("pages")).toArray().isEmpty());
@@ -2642,8 +2769,10 @@ private slots:
                      .value(QStringLiteral("sections")).toArray()) {
                 for (const QJsonValue& rawControl : rawSection.toObject()
                          .value(QStringLiteral("controls")).toArray()) {
-                    // Version 15 rows: dspV15DescribesTheRestOfDsp...
-                    if (rawControl.toObject().value("requiresDescriptionVersion") == QJsonValue(15)) {
+                    // Version 15 rows: dspV15DescribesTheRestOfDsp...; version 19's
+                    // band editor: dspV19DescribesCfcBands.
+                    if (rawControl.toObject().value("requiresDescriptionVersion") == QJsonValue(15)
+                        || rawControl.toObject().value("requiresDescriptionVersion") == QJsonValue(19)) {
                         continue;
                     }
                     if (rawControl.toObject().value("kind") == QJsonValue("table")) {
@@ -2918,7 +3047,8 @@ private slots:
                 QCOMPARE(panel.value("pages").toArray().size(), expected >= 15 ? 3 : 1);
             }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
-            QCOMPARE(category.value("version").toInt(), expected >= 15 ? 15 : qMin(expected, 3));
+            QCOMPARE(category.value("version").toInt(),
+                     expected >= 19 ? 19 : expected >= 15 ? 15 : qMin(expected, 3));
             QCOMPARE(category.value("pages").toArray().size(), expected >= 15 ? 10 : 9);
             bool hasTable = false;
             bool hasAdd = false;
@@ -2965,7 +3095,8 @@ private slots:
         check(16, kSessionProtocolMinor, 16);
         check(17, kSessionProtocolMinor, 17);
         check(18, kSessionProtocolMinor, 18);
-        check(19, kSessionProtocolMinor, 18);
+        check(19, kSessionProtocolMinor, 19);
+        check(20, kSessionProtocolMinor, 19);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

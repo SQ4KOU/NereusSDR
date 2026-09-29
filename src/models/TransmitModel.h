@@ -279,6 +279,12 @@
 //                 Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (transmitSettingsVersion 15): cfcProfile, the
+//                 read-only CFC band editor the Core derives from
+//                 cfcParaEqData or the ten-band values (CfcProfile::
+//                 publishedJson), declared last. Sent only to a peer that
+//                 declared cfcProfile. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -1324,6 +1330,12 @@ public:
     // WRITE: nothing sets it but the blob. Declared last so every earlier
     // property keeps its wire ordinal.
     Q_PROPERTY(QString txEqCurve READ txEqCurve NOTIFY txEqCurveChanged)
+    // R-R3-49 (transmitSettingsVersion 15): the CFC band editor as a
+    // documented, read-only value (the station link document, "The CFC
+    // band editor"), derived from cfcParaEqData or, where that holds no
+    // curve the Core reads, the ten-band values. cfc.setProfile changes it.
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString cfcProfile READ cfcProfile NOTIFY cfcProfileChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -1979,6 +1991,11 @@ public:
     /// or "unavailable" (a value the Core cannot read). Follows every
     /// change of txEqParaEqData.
     const QString& txEqCurve() const noexcept { return m_txEqCurve; }
+    /// The CFC band editor, as CfcProfile::publishedJson gives it: "state"
+    /// "saved" (cfcParaEqData) or "legacy" (the ten-band values), with a
+    /// "revision" cfc.setProfile checks. Follows every CFC change once a
+    /// profile restore has finished.
+    const QString& cfcProfile() const noexcept { return m_cfcProfile; }
 
     // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
     //
@@ -2160,6 +2177,7 @@ signals:
     /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
     void txEqParaEqDataChanged(const QString& data);
     void txEqCurveChanged(const QString& curve);
+    void cfcProfileChanged(const QString& profile);
     // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
     // (emitted beside the per-band signals).
     void txEqUseLegacyChanged(bool on);
@@ -2819,6 +2837,8 @@ private:
     // ships empty until the ucParametricEq dialog populates it).
     QString m_txEqParaEqData;
     QString m_txEqCurve;   // derived from m_txEqParaEqData
+    QString m_cfcProfile;  // derived from the CFC values (refreshCfcProfile)
+    void refreshCfcProfile();
     bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────

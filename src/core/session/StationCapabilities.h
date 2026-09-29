@@ -202,6 +202,9 @@
 //   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
 //                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - kTransmitSettingsCfcProfileVersion (15): the CFC band
+//                editor published and cfc.setProfile. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -229,6 +232,14 @@ inline constexpr int kTransmitSettingsOnAirVersion = 13;
 /// a window shows the Core's value and changes it with transmit permission,
 /// off the air. Against an older Core the box is disabled with the reason.
 inline constexpr int kTransmitSettingsDifferentBandVersion = 14;
+
+/// From this transmitSettingsVersion the Core publishes the CFC dialog's
+/// band editor (transmit's cfcProfile, to a peer that declared cfcProfile 1)
+/// and takes cfc.setProfile: every band's frequency, compression, post-EQ
+/// gain and Q, the range, the pre-compression and the post-EQ gain, applied
+/// at once against the revision the app last saw. Against an older Core a
+/// window keeps writing the CFC properties one by one.
+inline constexpr int kTransmitSettingsCfcProfileVersion = 15;
 
 /// Optional identity of the Core executable, never radio firmware identity.
 struct CoreBuildInfo {

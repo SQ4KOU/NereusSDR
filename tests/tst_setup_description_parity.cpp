@@ -198,6 +198,12 @@ void compareControl(QWidget& page, const QJsonObject& control)
                                                            : options.at(i).toObject().value("label").toString());
             }
         }
+    } else if (kind == "table" && id == "dsp.cfc.bands") {
+        // Version 19: the band editor is the desktop's Configure CFC bands
+        // button, which opens the same editor (TxCfcDialog).
+        auto* button = qobject_cast<QAbstractButton*>(object);
+        QVERIFY2(button != nullptr, qPrintable(id));
+        QCOMPARE(button->text(), control.value("label").toString());
     } else if (kind == "table" && id == "dsp.filterPresets.presets") {
         // Version 15: the Filter Presets table's columns, in the desktop's order.
         auto* table = qobject_cast<QTableWidget*>(object);

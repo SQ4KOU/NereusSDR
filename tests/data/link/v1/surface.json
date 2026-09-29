@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 14
+            "value": 15
         },
         {
             "kind": "i64",
@@ -1043,6 +1043,24 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "txEq.resetCurve"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "profileJson",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "expectedRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 15,
+            "minMinor": 11,
+            "verb": "cfc.setProfile"
         },
         {
             "arguments": [
@@ -7614,6 +7632,12 @@
                     "kind": "utf8",
                     "name": "txEqCurve",
                     "ordinal": 87
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "cfcProfile",
+                    "ordinal": 88
                 }
             ]
         },

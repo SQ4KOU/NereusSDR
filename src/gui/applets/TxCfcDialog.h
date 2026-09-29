@@ -46,6 +46,13 @@
 //                 dialog is shown (setStationBarChart,
 //                 applyStationCompression), or says why it cannot. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Setup publication (CFC band editor): a remote window
+//                 sends the whole band table as the Core's cfc.setProfile
+//                 command (setStationProfileSender, onStationCommandFinished),
+//                 one at a time with the newest edit held, and shows a
+//                 refusal under the controls. An older Core keeps the
+//                 property write. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -198,6 +205,34 @@ public:
     // them); empty hides the note.
     void setBarChartUnavailable(const QString& reason);
     QLabel* barChartReasonLabel() const { return m_barChartReasonLabel; }
+
+    // Setup publication (CFC band editor): a remote window's route to the
+    // Core's cfc.setProfile command. With both hooks set and available()
+    // true, an edit sends the whole table (CfcProfile::publishedJson) with
+    // the revision the window last saw, instead of writing cfcParaEqData.
+    // One command is out at a time; later edits wait as the newest one.
+    // available() false (an older Core) keeps the property write.
+    struct StationProfileSend {
+        bool sent = false;
+        QString reason;
+        quint32 commandId = 0;
+    };
+    using StationProfileAvailable = std::function<bool()>;
+    using StationProfileSender =
+        std::function<StationProfileSend(const QString& profileJson,
+                                         const QString& expectedRevision)>;
+    void setStationProfileSender(StationProfileAvailable available,
+                                 StationProfileSender send);
+    // RadioModel::stationCommandFinished; only this dialog's command counts.
+    void onStationCommandFinished(quint32 commandId, bool accepted,
+                                  const QString& reason);
+    // RadioModel::stationLinkStateChanged. A lost link takes the answer to
+    // this dialog's command with it: the change waiting on it and any edit
+    // held behind it are dropped, and the dialog follows the Core's values
+    // again.
+    void onStationLinkChanged(bool ready);
+    // Why the Core did not take the last change; hidden when it did.
+    QLabel* profileReasonLabel() const { return m_profileReasonLabel; }
 
     // ── Widget accessors for tests ────────────────────────────────────────
 
@@ -378,6 +413,16 @@ private:
     // Parity Task 33: a remote window's bar chart source and its note.
     std::function<void(bool)> m_stationBarChart;
     QLabel*         m_barChartReasonLabel = nullptr;
+    // Setup publication (CFC band editor): the remote command route.
+    void sendPendingStationProfile();
+    void clearStationProfileInFlight();
+    void showProfileReason(const QString& reason);
+    StationProfileAvailable m_stationProfileAvailable;
+    StationProfileSender    m_stationProfileSend;
+    quint32         m_profileCommandId = 0;   // 0: none out
+    bool            m_profilePending   = false;
+    QString         m_pendingProfileJson;
+    QLabel*         m_profileReasonLabel = nullptr;
 
     // Scratch storage for a single tick of WDSP CFC display data.
     // Sized to TxChannel::kCfcDisplayBinCount (1025) lazily on first tick.

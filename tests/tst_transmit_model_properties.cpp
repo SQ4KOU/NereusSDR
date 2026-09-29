@@ -393,8 +393,8 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 14);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 15);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 15);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->transmitSettingsAvailable(8));
@@ -411,7 +411,9 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
     // 14 since Prevent TX'ing on a different band became the Core's
     // setting (PreventTxOnDifferentBandToRx).
     QVERIFY(s.client->transmitSettingsAvailable(14));
-    QVERIFY(!s.client->transmitSettingsAvailable(15));
+    // 15 since a remote window edits the CFC bands (cfcProfile).
+    QVERIFY(s.client->transmitSettingsAvailable(15));
+    QVERIFY(!s.client->transmitSettingsAvailable(16));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in

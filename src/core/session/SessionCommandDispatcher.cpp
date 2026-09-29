@@ -259,6 +259,10 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
 //                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29: transmitSettingsVersion 15: cfc.setProfile, applied by the
+//               station server as its cfcParaEqData write
+//               (CfcProfileAccess). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -625,6 +629,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"txEq.setCurve", {arg("curveJson", kUtf8)}, "txEqCurveVersion", 2,
          kRadioIdentitySessionProtocolMinor},
         {"txEq.resetCurve", {}, "txEqCurveVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The CFC dialog's band editor from an app, applied at once against
+        // the revision it last saw (transmitSettingsVersion 15).
+        {"cfc.setProfile", {arg("profileJson", kUtf8), arg("expectedRevision", kUtf8)},
+         "transmitSettingsVersion", 15, kRadioIdentitySessionProtocolMinor},
         // Setup > PA > PA Gain's profiles and table, as the local page
         // changes them (R-R3-49, R-IOS-18; paProfileVersion 1).
         {"paProfile.select", {arg("name", kUtf8)}, "paProfileVersion", 1,
@@ -1278,6 +1286,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRadeResetVocoder(invoke);
     } else if (invoke.commandVerb == "txEq.setCurve" || invoke.commandVerb == "txEq.resetCurve") {
         handleTxEqCurve(invoke);
+    } else if (invoke.commandVerb == "cfc.setProfile") {
+        handleCfcProfile(invoke);
     } else if (invoke.commandVerb == "paProfile.select" || invoke.commandVerb == "paProfile.new"
                || invoke.commandVerb == "paProfile.copy" || invoke.commandVerb == "paProfile.delete"
                || invoke.commandVerb == "paProfile.reset"
@@ -3515,6 +3525,22 @@ void SessionCommandDispatcher::handleTxEqCurve(const SessionMessage& invoke)
     }
     emitResult(invoke.commandVerb, invoke.commandId, false,
                QStringLiteral("This Core cannot change the TX EQ curve from here. "
+                              "Updating the Core may help."),
+               {});
+}
+
+// transmitSettingsVersion 15: the CFC dialog's band editor from an app. The
+// write is the asking connection's, under every rule a cfcParaEqData write
+// from it meets, so the station server applies it (CfcProfileAccess).
+// Without one (a dispatcher on its own) there is nothing to apply it
+// through.
+void SessionCommandDispatcher::handleCfcProfile(const SessionMessage& invoke)
+{
+    if (m_cfcProfileAccess && m_cfcProfileAccess(invoke)) {
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false,
+               QStringLiteral("This Core cannot change the CFC settings from here. "
                               "Updating the Core may help."),
                {});
 }
