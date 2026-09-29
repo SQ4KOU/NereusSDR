@@ -90,6 +90,11 @@
 //                                    txMonitorAudioVersion, monitor-audio
 //                                    and monitor-audio-context. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: the capture
+//                                    declares txEqCurve, so
+//                                    txEqCurveVersion and transmit's
+//                                    txEqCurve are captured. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -542,7 +547,7 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"settingsHygiene", 1}, {"coreBuildInfo", 1},
                                   {"settingsBackup", 1},
                                   {"setupDescription", 1}, {"miniDisplay", 1},
-                                  {"radioAntennaRows", 1}})));
+                                  {"radioAntennaRows", 1}, {"txEqCurve", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -579,6 +584,8 @@ QJsonArray captureCapabilities()
     caps.setupDescriptionVersion = 1;
     caps.miniDisplayVersion = 1;
     caps.radioAntennaRowsVersion = 1;
+    // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
+    caps.txEqCurveVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

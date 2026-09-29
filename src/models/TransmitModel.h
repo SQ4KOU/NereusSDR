@@ -267,6 +267,12 @@
 //   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
 //                 voxEnabled is a Q_PROPERTY, mirrored both ways. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurve, the read-only curve the
+//                 Core derives from txEqParaEqData (ParaEqCurve::
+//                 txEqCurveJson), declared last. Sent only to a peer that
+//                 declared txEqCurve (txEqCurveVersion 1). NereusSDR-
+//                 original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 #pragma once
 
@@ -1296,6 +1302,12 @@ public:
     // property keeps its wire ordinal. Still never persisted: VOX always
     // starts off.
     Q_PROPERTY(bool voxEnabled READ voxEnabled WRITE setVoxEnabled NOTIFY voxEnabledChanged)
+    // R-IOS-13 / R-R3-49: the TX EQ parametric curve as a documented,
+    // read-only value (the station link document, "The TX EQ curve"),
+    // derived from txEqParaEqData, which stays as Thetis saves it. No
+    // WRITE: nothing sets it but the blob. Declared last so every earlier
+    // property keeps its wire ordinal.
+    Q_PROPERTY(QString txEqCurve READ txEqCurve NOTIFY txEqCurveChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -1946,6 +1958,11 @@ public:
     /// Phase 3M-3a-ii follow-up Batch 6 — mirrors cfcParaEqData()
     /// (3M-3a-ii Batch 2) for the TX EQ slot in TXProfile.
     const QString& txEqParaEqData() const noexcept { return m_txEqParaEqData; }
+    /// The curve txEqParaEqData holds, as ParaEqCurve::txEqCurveJson gives
+    /// it: compact JSON with "state" "saved", "default" (an empty value)
+    /// or "unavailable" (a value the Core cannot read). Follows every
+    /// change of txEqParaEqData.
+    const QString& txEqCurve() const noexcept { return m_txEqCurve; }
 
     // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
     //
@@ -2126,6 +2143,7 @@ signals:
     void txEqWintypeChanged(int wintype);
     /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
     void txEqParaEqDataChanged(const QString& data);
+    void txEqCurveChanged(const QString& curve);
     // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
     // (emitted beside the per-band signals).
     void txEqUseLegacyChanged(bool on);
@@ -2782,6 +2800,7 @@ private:
     // Empty by default (no Thetis database.cs default — TXProfile column
     // ships empty until the ucParametricEq dialog populates it).
     QString m_txEqParaEqData;
+    QString m_txEqCurve;   // derived from m_txEqParaEqData
     bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────

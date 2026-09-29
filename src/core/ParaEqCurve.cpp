@@ -4,7 +4,7 @@
 //
 // Ported from Thetis source:
 //   Project Files/Source/Console/ucParametricEq.cs (the response curve,
-//   PointsFromJson and GetDefaults) and
+//   PointsFromJson, GetDefaults and enforceOrdering) and
 //   Project Files/Source/Console/eqform.cs (the TX EQ panel's widget
 //   limits, ParaEQTXData's setter, sendTXDspUpdate and setTXEQProfile),
 //   original licences from Thetis source are included below.
@@ -31,6 +31,13 @@
 //                 The ten-point sampling, the widget-load port and the
 //                 point ordering it needed are gone. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: the panel's point ordering
+//                 (ucParametricEq enforceOrdering with the TX panel's
+//                 reorder and 5 Hz spacing) and txEqCurveJson, the
+//                 NereusSDR-owned, read-only form of the saved curve the
+//                 Core sends as transmit.txEqCurve (station link document,
+//                 "The TX EQ curve"). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -126,6 +133,7 @@ mw0lge@grange-lane.co.uk
 #include <QJsonParseError>
 #include <QJsonValue>
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 
@@ -273,6 +281,113 @@ TxEqPoints txEqPointsFromParaEqData(const QString& paraEqData)
         points = defaultTxEqPoints();
     }
     return points;
+}
+
+// From Thetis ucParametricEq.cs:3223-3312 [v2.10.3.15] (enforceOrdering,
+// enforce_spacing_all true), with the TX panel's _allow_point_reorder and
+// _min_point_spacing_hz (eqform.cs:946, 966). The panel's BandId is the
+// point's saved position here, so a tie in frequency keeps the saved order.
+TxEqPoints txEqDisplayPoints(const TxEqPoints& points)
+{
+    TxEqPoints r = points;
+    const std::size_t count = std::min({r.f.size(), r.g.size(), r.q.size()});
+    //   if (_points.Count == 0) return;
+    if (count == 0) { return r; }
+
+    struct Point { double f; double g; double q; std::size_t bandId; };
+    std::vector<Point> p;
+    p.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        p.push_back(Point{r.f[i], r.g[i], r.q[i], i});
+    }
+
+    //   if (_allow_point_reorder && _points.Count > 1) _points.Sort(...)
+    //     by FrequencyHz, then BandId
+    if (p.size() > 1) {
+        std::sort(p.begin(), p.end(), [](const Point& a, const Point& b) {
+            if (a.f != b.f) { return a.f < b.f; }
+            return a.bandId < b.bandId;
+        });
+    }
+
+    const double minHz = r.minHz;
+    const double maxHz = r.maxHz;
+    for (Point& pt : p) {
+        pt.f = clamp(pt.f, minHz, maxHz);
+    }
+    if (!p.empty()) { p.front().f = minHz; }
+    if (p.size() > 1) { p.back().f = maxHz; }
+
+    //   if (!enforce_spacing_all) return;   (the panel always passes true)
+    if (p.size() >= 3) {
+        const int n = static_cast<int>(p.size());
+        double spacing = kTxEqMinPointSpacingHz;
+        const double maxSpacing = (maxHz - minHz) / static_cast<double>(n - 1);
+        if (spacing > maxSpacing) { spacing = maxSpacing; }
+        if (spacing < 0.0) { spacing = 0.0; }
+
+        for (int i = 1; i < n - 1; ++i) {
+            const double minF = minHz + (spacing * i);
+            double maxF = maxHz - (spacing * (n - 1 - i));
+            if (maxF < minF) { maxF = minF; }
+            p[static_cast<std::size_t>(i)].f = clamp(p[static_cast<std::size_t>(i)].f, minF, maxF);
+        }
+        for (int i = 1; i < n - 1; ++i) {
+            const double wantMin = p[static_cast<std::size_t>(i - 1)].f + spacing;
+            if (p[static_cast<std::size_t>(i)].f < wantMin) { p[static_cast<std::size_t>(i)].f = wantMin; }
+        }
+        for (int i = n - 2; i >= 1; --i) {
+            const double wantMax = p[static_cast<std::size_t>(i + 1)].f - spacing;
+            if (p[static_cast<std::size_t>(i)].f > wantMax) { p[static_cast<std::size_t>(i)].f = wantMax; }
+        }
+        p.front().f = minHz;
+        p.back().f = maxHz;
+    }
+
+    r.f.resize(p.size());
+    r.g.resize(p.size());
+    r.q.resize(p.size());
+    for (std::size_t i = 0; i < p.size(); ++i) {
+        r.f[i] = p[i].f;
+        r.g[i] = p[i].g;
+        r.q[i] = p[i].q;
+    }
+    return r;
+}
+
+// NereusSDR-original: the read-only curve on the link (R-IOS-13, R-R3-49).
+// The points are what the TX EQ panel draws for this value: the saved
+// curve read as Thetis's transmit path reads it (loadTxEqPoints), or
+// GetDefaults' flat curve for an empty value, then ordered as the panel
+// orders them. A value that is not empty and holds no curve Thetis would
+// load says so rather than showing the flat curve the Core falls back to.
+QString txEqCurveJson(const QString& paraEqData)
+{
+    QJsonObject root;
+    TxEqPoints points;
+    if (paraEqData.isEmpty()) {
+        points = defaultTxEqPoints();
+        root.insert(QStringLiteral("state"), QStringLiteral("default"));
+    } else if (loadTxEqPoints(paraEqData, points)) {
+        root.insert(QStringLiteral("state"), QStringLiteral("saved"));
+    } else {
+        root.insert(QStringLiteral("state"), QStringLiteral("unavailable"));
+        return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    }
+
+    const TxEqPoints shown = txEqDisplayPoints(points);
+    root.insert(QStringLiteral("parametric"), shown.parametricEq);
+    root.insert(QStringLiteral("preampDb"), shown.preampDb);
+    root.insert(QStringLiteral("minHz"), shown.minHz);
+    root.insert(QStringLiteral("maxHz"), shown.maxHz);
+    QJsonArray list;
+    for (std::size_t i = 0; i < shown.f.size(); ++i) {
+        list.append(QJsonObject{{QStringLiteral("frequencyHz"), shown.f[i]},
+                                {QStringLiteral("gainDb"), shown.g[i]},
+                                {QStringLiteral("q"), shown.q[i]}});
+    }
+    root.insert(QStringLiteral("points"), list);
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
 // From Thetis eqform.cs:3041-3072 [v2.10.3.15] (sendTXDspUpdate):

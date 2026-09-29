@@ -142,6 +142,9 @@
 //   2026-09-27 - Parity Task 23 (R-R3-48, R-R3-42): StationTciModel's four
 //                 options Outbound (stationTciVersion 2). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: TransmitModel txEqCurve Outbound
+//                 (txEqCurveVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -511,6 +514,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // VOX. A write is the permitted sessions' only (the station transmit
     // gate), and the Core turns VOX off at every change of holder.
     { "TransmitModel", "voxEnabled", MirrorDirection::Bidirectional },
+    // R-IOS-13 / R-R3-49 (txEqCurveVersion 1): the TX EQ curve the Core
+    // derives from txEqParaEqData, read-only; only to a peer that declared
+    // txEqCurve (StationServer::fitTxEqCurveToPeer).
+    { "TransmitModel", "txEqCurve", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },

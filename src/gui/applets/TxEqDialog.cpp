@@ -89,6 +89,13 @@
 //                 ParaEqCurve); a remote window's settings gate greys the
 //                 controls with the reason. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-13 / R-R3-49: a blank or unreadable
+//                 txEqParaEqData shows Thetis's GetDefaults curve (the
+//                 one the Core applies) instead of keeping the panel's
+//                 previous points, and a load sets the band count,
+//                 low/high and Use Q Factors controls as setParaEQData
+//                 does (eqform.cs:3312-3368 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -135,6 +142,7 @@
 #include "TxEqDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/ParaEqCurve.h"
 #include "core/ParaEqEnvelope.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/ParametricEqWidget.h"
@@ -1358,32 +1366,82 @@ void TxEqDialog::syncParametricFromModel()
 {
     if (!m_radio || !m_parametricWidget || m_updatingFromModel) { return; }
     const QString blob = m_radio->transmitModel().txEqParaEqData();
-    if (blob.isEmpty()) { return; }
 
     // From Thetis eqform.cs:3269-3271 + Common.cs:1764-1790
     // [v2.10.3.13] — Decompress_gzip(value) before loading points.
     QString json;
-    const std::optional<QString> decoded = ParaEqEnvelope::decode(blob);
-    if (decoded.has_value()) {
-        json = *decoded;
-    } else if (blob.trimmed().startsWith(QLatin1Char('{'))) {
-        // Compatibility for profiles saved by pre-fix PR #159 builds that
-        // briefly stored raw JSON before the Thetis envelope was wired here.
-        json = blob;
-    } else {
-        return;
+    if (!blob.isEmpty()) {
+        const std::optional<QString> decoded = ParaEqEnvelope::decode(blob);
+        if (decoded.has_value()) {
+            json = *decoded;
+        } else if (blob.trimmed().startsWith(QLatin1Char('{'))) {
+            // Compatibility for profiles saved by pre-fix PR #159 builds that
+            // briefly stored raw JSON before the Thetis envelope was wired here.
+            json = blob;
+        }
     }
 
     m_updatingFromModel = true;
-    bool loaded = false;
     {
         QSignalBlocker b(m_parametricWidget);
-        loaded = m_parametricWidget->loadFromJson(json);
+        const bool loaded = !json.isEmpty() && m_parametricWidget->loadFromJson(json);
+        if (!loaded) {
+            // R-IOS-13 / R-R3-49: a blank or broken value shows the flat
+            // curve the Core applies in its place, as Thetis's panel does.
+            // From Thetis eqform.cs:3312-3315 [v2.10.3.15] (ParaEQTXData's
+            // setter: GetDefaults when PointsFromJson fails) and
+            // eqform.cs:3344-3349 [v2.10.3.15] (setParaEQData's TX branch).
+            const ParaEqCurve::TxEqPoints d = ParaEqCurve::defaultTxEqPoints();
+            m_parametricWidget->setParametricEq(d.parametricEq);
+            m_parametricWidget->setBandCount(d.bandCount);
+            m_parametricWidget->setGlobalGainDb(d.preampDb);
+            m_parametricWidget->setFrequencyMinHz(d.minHz);
+            m_parametricWidget->setFrequencyMaxHz(d.maxHz);
+            m_parametricWidget->setPointsData(QVector<double>(d.f.begin(), d.f.end()),
+                                              QVector<double>(d.g.begin(), d.g.end()),
+                                              QVector<double>(d.q.begin(), d.q.end()));
+        }
     }
-    if (loaded) {
-        updateEditRowFromSelection();
-    }
+    syncParametricControlsFromWidget();
+    updateEditRowFromSelection();
     m_updatingFromModel = false;
+}
+
+// From Thetis eqform.cs:3352-3368 [v2.10.3.15] (setParaEQData, after the
+// points): the band count buttons (18 and 10 by count, 5 otherwise), the
+// low and high limits, Use Q Factors and the selected band's maximum, set
+// with their handlers detached. R-IOS-13 / R-R3-49: a curve loaded from
+// the model moved the panel's range and band count without them.
+void TxEqDialog::syncParametricControlsFromWidget()
+{
+    if (!m_parametricWidget) { return; }
+    const int count = m_parametricWidget->bandCount();
+    if (m_bandCountGroup) {
+        QSignalBlocker bg(m_bandCountGroup);
+        QRadioButton* radio = count == 10 ? m_paraBands10Radio
+                            : count == 18 ? m_paraBands18Radio
+                                          : m_paraBands5Radio;
+        if (radio) {
+            QSignalBlocker br(radio);
+            radio->setChecked(true);
+        }
+    }
+    if (m_paraLowSpin) {
+        QSignalBlocker b(m_paraLowSpin);
+        m_paraLowSpin->setValue(static_cast<int>(m_parametricWidget->frequencyMinHz()));
+    }
+    if (m_paraHighSpin) {
+        QSignalBlocker b(m_paraHighSpin);
+        m_paraHighSpin->setValue(static_cast<int>(m_parametricWidget->frequencyMaxHz()));
+    }
+    if (m_paraUseQFactorsChk) {
+        QSignalBlocker b(m_paraUseQFactorsChk);
+        m_paraUseQFactorsChk->setChecked(m_parametricWidget->parametricEq());
+    }
+    if (m_paraSelectedBandSpin) {
+        QSignalBlocker b(m_paraSelectedBandSpin);
+        m_paraSelectedBandSpin->setMaximum(count);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

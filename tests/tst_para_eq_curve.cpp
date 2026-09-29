@@ -25,6 +25,10 @@
 //                                    place of the ten-point sampling it
 //                                    pinned before. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  R-IOS-13 / R-R3-49: txEqCurveJson,
+//                                    the read-only curve on the link, and
+//                                    TransmitModel's txEqCurve. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -33,10 +37,15 @@
 #include <QJsonObject>
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 #include "core/ParaEqCurve.h"
 #include "core/ParaEqEnvelope.h"
+#include "models/TransmitModel.h"
+
+#include <QSignalSpy>
+#include <QVector>
 
 using namespace NereusSDR;
 
@@ -94,6 +103,15 @@ private slots:
     void qFactorsOffSendsNoQ();
     void blankOrBrokenValueSendsThetisDefaults();
     void earlyBuildRawJsonReadsTheSame();
+
+    // R-IOS-13 / R-R3-49: transmit.txEqCurve, the read-only curve on the
+    // link (the station link document, "The TX EQ curve").
+    void curveOfAnEmptyValueIsThetisDefaults();
+    void curveOfASavedValueIsTheWorkedExample();
+    void workedExampleResponse();
+    void curveOrdersPointsAsThePanelDraws();
+    void curveOfAnUnreadableValueIsUnavailable();
+    void transmitModelCurveFollowsTheBlob();
 };
 
 // setTXEQProfile: preamp 3, gains {-12,-12,-12,-1,1,4,9,12,-10,-10},
@@ -194,6 +212,157 @@ void TestParaEqCurve::earlyBuildRawJsonReadsTheSame()
     compare(raw.f, {0, 0, 1000, 2000}, "F");
     compare(raw.g, {2, -6, 3, 1}, "G");
     compare(raw.q, {0, 2, 2, 2}, "Q");
+}
+
+// ── R-IOS-13 / R-R3-49: the read-only curve on the link ────────────────
+// The expected strings are the wire bytes (compact JSON; QJsonObject
+// writes keys in sorted order, and the link document says key order is
+// not significant). The points are what Thetis's panel draws: PointsFromJson
+// as above, then ucParametricEq.cs:3223-3312 enforceOrdering(true) with the
+// TX panel's reorder on and 5 Hz spacing (eqform.cs:946, 966).
+
+// An empty value: GetDefaults' flat curve (ucParametricEq.cs:1107-1131),
+// ten points at (i / 9) x 4000 Hz, Q 4, which the Core applies in its place.
+void TestParaEqCurve::curveOfAnEmptyValueIsThetisDefaults()
+{
+    QString want = QStringLiteral(
+        "{\"maxHz\":4000,\"minHz\":0,\"parametric\":true,\"points\":[");
+    for (int i = 0; i < 10; ++i) {
+        const double f = 0.0 + (static_cast<double>(i) / 9.0) * 4000.0;
+        if (i > 0) { want += QLatin1Char(','); }
+        want += QStringLiteral("{\"frequencyHz\":%1,\"gainDb\":0,\"q\":4}")
+                    .arg(QString::fromUtf8(QJsonDocument(QJsonArray{f}).toJson(
+                        QJsonDocument::Compact)).mid(1).chopped(1));
+    }
+    want += QStringLiteral("],\"preampDb\":0,\"state\":\"default\"}");
+    QCOMPARE(ParaEqCurve::txEqCurveJson(QString()), want);
+    // Point i sits at (i / 9) x 4000 Hz, as GetDefaults works it: point 1
+    // is 444.4444444444444 on the wire (the double, printed shortest).
+    QVERIFY2(want.contains(QStringLiteral("\"frequencyHz\":444.4444444444444,")), qPrintable(want));
+}
+
+// The link document's worked example: a five-point curve saved by the
+// panel (gzip, base64url), read back as saved.
+void TestParaEqCurve::curveOfASavedValueIsTheWorkedExample()
+{
+    const QString blob = ParaEqEnvelope::encode(curveJson(5, true, -2.5, 50.0, 3000.0, {
+        {50, -6, 1.5}, {300, 3, 2}, {1200, -1.5, 4}, {2400, 4, 3}, {3000, 0, 1}}));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(blob),
+             QStringLiteral("{\"maxHz\":3000,\"minHz\":50,\"parametric\":true,\"points\":["
+                            "{\"frequencyHz\":50,\"gainDb\":-6,\"q\":1.5},"
+                            "{\"frequencyHz\":300,\"gainDb\":3,\"q\":2},"
+                            "{\"frequencyHz\":1200,\"gainDb\":-1.5,\"q\":4},"
+                            "{\"frequencyHz\":2400,\"gainDb\":4,\"q\":3},"
+                            "{\"frequencyHz\":3000,\"gainDb\":0,\"q\":1}],"
+                            "\"preampDb\":-2.5,\"state\":\"saved\"}"));
+    // A value rounded as PointsFromJson rounds it (G to 0.1 dB, F to
+    // 0.001 Hz, Q to 0.01) reads rounded; an out-of-range gain clamps.
+    const QString rounded = ParaEqEnvelope::encode(curveJson(3, false, 30.0, 0.0, 1000.0, {
+        {0, 1.26, 0.123}, {500.0004, -30, 7.777}, {1000, 0.05, 25}}));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(rounded),
+             QStringLiteral("{\"maxHz\":1000,\"minHz\":0,\"parametric\":false,\"points\":["
+                            "{\"frequencyHz\":0,\"gainDb\":1.3,\"q\":0.2},"
+                            "{\"frequencyHz\":500,\"gainDb\":-24,\"q\":7.78},"
+                            "{\"frequencyHz\":1000,\"gainDb\":0,\"q\":20}],"
+                            "\"preampDb\":24,\"state\":\"saved\"}"));
+}
+
+// The example's drawn line, from ucParametricEq.cs:2694-2748 (the response)
+// and :2358-2359 (plus the preamp): the values the link document quotes.
+void TestParaEqCurve::workedExampleResponse()
+{
+    struct P { double frequencyHz; double gainDb; double q; };
+    const QVector<P> points{{50, -6, 1.5}, {300, 3, 2}, {1200, -1.5, 4}, {2400, 4, 3}, {3000, 0, 1}};
+    const auto drawn = [&](double hz) {
+        return ParaEqCurve::responseDb(points, true, 50.0, 3000.0, ParaEqCurve::kTxEqQMin,
+                                       ParaEqCurve::kTxEqQMax, hz) + (-2.5);
+    };
+    QCOMPARE(std::round(drawn(50) * 100.0) / 100.0, -7.04);
+    QCOMPARE(std::round(drawn(300) * 100.0) / 100.0, -3.51);
+    QCOMPARE(std::round(drawn(1200) * 100.0) / 100.0, -4.0);
+    QCOMPARE(std::round(drawn(2400) * 100.0) / 100.0, 1.5);
+    QCOMPARE(std::round(drawn(3000) * 100.0) / 100.0, -2.5);
+}
+
+// Out of order, and closer than 5 Hz: sorted by frequency, then spaced.
+// {0, 600, 598, 1000} -> {0, 598, 603, 1000}: 603 = 598 + 5. A tie keeps
+// the saved order: {0, 500 (g 1), 500 (g 2), 1000} -> the second at 505.
+void TestParaEqCurve::curveOrdersPointsAsThePanelDraws()
+{
+    const QString unsorted = ParaEqEnvelope::encode(curveJson(4, true, 0.0, 0.0, 1000.0, {
+        {0, 1, 1}, {600, 2, 2}, {598, 3, 3}, {1000, 4, 4}}));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(unsorted),
+             QStringLiteral("{\"maxHz\":1000,\"minHz\":0,\"parametric\":true,\"points\":["
+                            "{\"frequencyHz\":0,\"gainDb\":1,\"q\":1},"
+                            "{\"frequencyHz\":598,\"gainDb\":3,\"q\":3},"
+                            "{\"frequencyHz\":603,\"gainDb\":2,\"q\":2},"
+                            "{\"frequencyHz\":1000,\"gainDb\":4,\"q\":4}],"
+                            "\"preampDb\":0,\"state\":\"saved\"}"));
+    const QString tie = ParaEqEnvelope::encode(curveJson(4, true, 0.0, 0.0, 1000.0, {
+        {0, 0, 1}, {500, 1, 1}, {500, 2, 1}, {1000, 0, 1}}));
+    QCOMPARE(ParaEqCurve::txEqCurveJson(tie),
+             QStringLiteral("{\"maxHz\":1000,\"minHz\":0,\"parametric\":true,\"points\":["
+                            "{\"frequencyHz\":0,\"gainDb\":0,\"q\":1},"
+                            "{\"frequencyHz\":500,\"gainDb\":1,\"q\":1},"
+                            "{\"frequencyHz\":505,\"gainDb\":2,\"q\":1},"
+                            "{\"frequencyHz\":1000,\"gainDb\":0,\"q\":1}],"
+                            "\"preampDb\":0,\"state\":\"saved\"}"));
+    // The Core still sends WDSP the saved order (sendTXDspUpdate); the
+    // panel's order is only what is drawn.
+    const ParaEqCurve::TxEqProfile p = fromSaved(curveJson(4, true, 0.0, 0.0, 1000.0, {
+        {0, 1, 1}, {600, 2, 2}, {598, 3, 3}, {1000, 4, 4}}));
+    compare(p.f, {0, 0, 600, 598, 1000}, "F");
+}
+
+// A value that is not empty and holds no curve Thetis would load: the
+// curve says so, and never crashes or claims the flat default.
+void TestParaEqCurve::curveOfAnUnreadableValueIsUnavailable()
+{
+    const QString broken[] = {
+        QStringLiteral("not a curve"),
+        QStringLiteral("   "),
+        QStringLiteral("{"),
+        ParaEqEnvelope::encode(QStringLiteral("not json")),
+        ParaEqEnvelope::encode(QStringLiteral("[1,2,3]")),
+        ParaEqEnvelope::encode(QStringLiteral("{\"points\":[{\"frequency_hz\":1}]}")),
+        ParaEqEnvelope::encode(QStringLiteral("{\"frequency_max_hz\":10,\"points\":[1,2]}")),
+        ParaEqEnvelope::encode(curveJson(4, true, 0, 0, 1000, {{0, 1, 1}, {500, 1, 1}, {1000, 1, 1}})),
+        ParaEqEnvelope::encode(curveJson(2, true, 0, 1000, 1000, {{0, 1, 1}, {1000, 1, 1}})),
+        // A valid envelope cut short.
+        ParaEqEnvelope::encode(curveJson(2, true, 0, 0, 1000, {{0, 1, 1}, {1000, 1, 1}})).left(20),
+    };
+    for (const QString& value : broken) {
+        QCOMPARE(ParaEqCurve::txEqCurveJson(value), QStringLiteral("{\"state\":\"unavailable\"}"));
+    }
+}
+
+// TransmitModel's txEqCurve follows txEqParaEqData: the flat default from
+// construction, one change per new curve, none when a new value holds the
+// same curve.
+void TestParaEqCurve::transmitModelCurveFollowsTheBlob()
+{
+    TransmitModel tx;
+    QCOMPARE(tx.txEqCurve(), ParaEqCurve::txEqCurveJson(QString()));
+    QSignalSpy spy(&tx, &TransmitModel::txEqCurveChanged);
+
+    const QString json = curveJson(3, true, 1.0, 0.0, 2000.0, {{0, -6, 2}, {1000, 3, 2}, {2000, 1, 2}});
+    tx.setTxEqParaEqData(ParaEqEnvelope::encode(json));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(tx.txEqCurve(), ParaEqCurve::txEqCurveJson(ParaEqEnvelope::encode(json)));
+    QCOMPARE(spy.at(0).at(0).toString(), tx.txEqCurve());
+
+    // The same curve as raw JSON (an early build's value): the blob
+    // changes, the curve does not.
+    tx.setTxEqParaEqData(json);
+    QCOMPARE(spy.count(), 1);
+
+    tx.setTxEqParaEqData(QStringLiteral("not a curve"));
+    QCOMPARE(spy.count(), 2);
+    QCOMPARE(tx.txEqCurve(), QStringLiteral("{\"state\":\"unavailable\"}"));
+
+    tx.setTxEqParaEqData(QString());
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(tx.txEqCurve(), ParaEqCurve::txEqCurveJson(QString()));
 }
 
 QTEST_MAIN(TestParaEqCurve)

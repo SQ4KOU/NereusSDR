@@ -768,6 +768,14 @@ The desktop's remote window declares it (desktop remote transmit): its
 MOX, TUNE, two-tone, microphone, VOX and TCI programs transmit through the
 Core, and its transmit meters read `txState`.
 
+**`txEqCurve` 1** (R-IOS-13, R-R3-49): the client reads the TX EQ
+parametric curve in the form section 7.1 documents ("The TX EQ curve"). A
+peer that declares it at minor 11 is sent `txEqCurveVersion` (section 6.3)
+and `transmit`'s `txEqCurve`; a peer that does not sees exactly the wire it
+was built for, with neither. The station does not declare it. The
+desktop's remote window does not declare it either: its TX EQ dialog reads
+`txEqParaEqData` itself.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -897,6 +905,7 @@ change shows as surface drift and as a change to this table.
 | `miniDisplayVersion` | 1 |
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
+| `txEqCurveVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1002,6 +1011,17 @@ When a feature is off, its version is 0:
   `setAlexTxAntennaForRadio` (section 9.1). Missing, malformed and unknown
   versions are unusable. Older peers receive byte-for-byte the previous
   capability shape and keep the existing one-band verbs.
+- `txEqCurveVersion` (R-IOS-13, R-R3-49): optional, sent only at agreed
+  minor 11 to a peer whose hello declared `txEqCurve` 1, while the Core
+  has a radio model, after `radioAntennaRowsVersion` (after
+  `accessoryTxVersion` when that is absent) and before `coreBuildInfo`.
+  At 1, `transmit` carries `txEqCurve`, the TX EQ dialog's parametric
+  curve as read-only JSON (section 7.1, "The TX EQ curve"). The Core
+  derives it from `txEqParaEqData`, which stays as it is. There is no
+  write: the curve is changed at the Core. A peer that did not declare
+  the feature is sent neither this entry nor the property. An app on a
+  Core that sends no entry shows the curve disabled with "This Core does
+  not send the TX EQ curve. Updating the Core may help."
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1547,7 +1567,8 @@ The display budget entries (`displayApplicationBytesPerSecond`,
 usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
 11, and `sessionHolderVersion`, last, only for a peer that declared
-`sessionHolder` (section 6.1); `remoteTxVersion` and the three
+`sessionHolder` (section 6.1); `txEqCurveVersion` only for a peer that
+declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
 `txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
@@ -1720,7 +1741,8 @@ older window sees only the values it was built for.
 | 82 | `miniDisplayVersion` | `i64` |
 | 83 | `accessoryTxVersion` | `i64` |
 | 84 | `radioAntennaRowsVersion` | `i64` |
-| 85 | `coreBuildInfo` | `utf8` |
+| 85 | `txEqCurveVersion` | `i64` |
+| 86 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2267,7 +2289,7 @@ An enum property lists the values its domain allows.
 | 16 | `attOnTxValue` | `i64` | bidirectional |  |
 | 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (86 properties)
+**TransmitModel** (87 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2357,6 +2379,7 @@ An enum property lists the values its domain allows.
 | 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
+| 86 | `txEqCurve` | `utf8` | outbound |  |
 
 **TransmitState** (37 properties)
 
@@ -2818,6 +2841,11 @@ Notes on the keys:
   takes them from a peer offered `transmitSettingsVersion` while its radio
   is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
   sets the radio's TX attenuator; it keys nothing.
+- **`transmit`'s `txEqCurve`** (R-IOS-13, R-R3-49; `txEqCurveVersion`
+  1). Outbound, `utf8`, declared last in `TransmitModel`: the parametric
+  curve of the TX EQ dialog, read from `txEqParaEqData` into a documented
+  form, below ("The TX EQ curve"). Sent only to a peer that declared
+  `txEqCurve` 1.
 - **Whose each slice is** (iPhone app plan Task 73; the several-devices
   design, rulings 5.1 to 5.6). With several devices on one Core every
   slice has an owner: the device that made it, the device that adopted it
@@ -2873,6 +2901,130 @@ Notes on the keys:
   capability value gates them: an older client ignores the unknown
   properties (section 7.1's schema carries them), and a newer client
   reads the absence itself.
+
+#### The TX EQ curve (`txEqCurve`)
+
+R-IOS-13, R-R3-49; `txEqCurveVersion` 1. `txEqParaEqData` holds the TX EQ
+dialog's parametric curve as Thetis saves it: gzip, then base64url, of
+Thetis's own JSON. `transmit`'s `txEqCurve` is the same curve in a form
+NereusSDR owns and documents here, so an app draws it without gzip or
+Thetis's JSON. The Core derives it from `txEqParaEqData` every time that
+changes (`ParaEqCurve::txEqCurveJson`, `ParaEqCurve.cpp`) and sends it in
+the same delta. The writer of `txEqParaEqData` gets the new curve in the
+side-effect `delta` that follows its `property.result`.
+
+- **Read-only.** `txEqCurve` is outbound. A write to it is refused as any
+  outbound property is ("The Core sets this itself; it cannot be changed
+  from here."). Version 1 has no write path. The curve is changed at the
+  Core, or by writing `txEqParaEqData`.
+- **Who gets it.** Only a peer at agreed minor 11 whose hello declared
+  `txEqCurve` 1. Its `TransmitModel` schema, its `transmit` snapshot and
+  its deltas carry the field. Every other peer's carry none of it, and a
+  delta that would carry only the curve is not sent to them.
+- **What it is.** One JSON object, compact. Key order is not significant.
+  The Core writes the keys in sorted order. A reader ignores a key it does
+  not know.
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `state` | string | `saved`, `default` or `unavailable` | What `txEqParaEqData` holds (below). Always present. An app treats a value it does not know as `unavailable` |
+| `parametric` | boolean | | The dialog's Use Q Factors. True: each point is a bell of width `q`. False: straight lines between the points, and `q` is unused |
+| `preampDb` | number | dB, -24 to 24, in 0.1 dB steps | The curve's preamp (Thetis's global gain), added to the whole curve |
+| `minHz` | number | Hz, finite, below `maxHz` | The curve's low end. The dialog's Low offers 0 to 20000 Hz |
+| `maxHz` | number | Hz, finite, above `minHz` | The curve's high end. The dialog's High offers 0 to 20000 Hz |
+| `points` | array | 2 to 256 points | The curve's points, in the order below. The dialog offers 5, 10 and 18 bands |
+
+Each point:
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `frequencyHz` | number | Hz, `minHz` to `maxHz`, in 0.001 Hz steps (a point moved for spacing may fall between) | The point's centre |
+| `gainDb` | number | dB, -24 to 24, in 0.1 dB steps | The point's gain |
+| `q` | number | 0.2 to 20, in 0.01 steps | The bell's Q (used when `parametric` is true) |
+
+- **`state`.**
+  - `saved`: `txEqParaEqData` holds a curve, shown as the dialog shows it.
+  - `default`: `txEqParaEqData` is empty, as every factory TX profile
+    saves it. The keys hold the flat curve the Core applies in its place,
+    Thetis's defaults: ten points from 0 to 4000 Hz, point `i` (0 to 9) at
+    (`i` / 9) × 4000 Hz as a double (444.4444444444444 for point 1), each
+    0 dB with Q 4, `parametric` true, `preampDb` 0. The desktop dialog
+    shows the same.
+  - `unavailable`: `txEqParaEqData` holds a value the Core cannot read as
+    a curve. The object is `{"state":"unavailable"}` and nothing else. The
+    Core applies the flat default curve in its place, as Thetis does, and
+    the desktop dialog shows it. An app shows the curve as unavailable,
+    not as that default, since the saved value is not what the operator
+    chose. A write of such a value is refused (section 7.1, `transmit` at
+    `transmitSettingsVersion` 4), so it arises only from a value saved at
+    the Core.
+- **How a saved curve is read.** As Thetis's transmit path reads it
+  (`PointsFromJson`): each value clamped to the ranges above, the
+  frequency rounded to 0.001 Hz, the gain and the preamp to 0.1 dB and Q to
+  0.01, with round half to even. The first point is moved to `minHz`, the
+  last to `maxHz`.
+- **Ordering.** The points are in the order the dialog draws them
+  (Thetis's panel ordering, with the TX panel's settings):
+  1. Sorted by `frequencyHz`, lowest first. Two points at the same
+     frequency keep their saved order.
+  2. Each point clamped into `minHz` to `maxHz`, then the first point set
+     to `minHz` and the last to `maxHz`.
+  3. With three points or more, the points between are kept a spacing
+     `s` apart: `s` is 5 Hz, or (`maxHz` - `minHz`) / (count - 1) when
+     that is smaller. Point `i` (1 to count - 2) is first clamped into
+     `minHz` + `s` × `i` to `maxHz` - `s` × (count - 1 - `i`). Then,
+     lowest first, a point closer than `s` above the one before it moves
+     up to it plus `s`. Then, highest first, a point closer than `s` below
+     the one after it moves down to it minus `s`. Last, the first and last
+     are set to `minHz` and `maxHz` again.
+
+  An app draws the points as sent and never reorders them. The Core hands
+  WDSP the saved order without the spacing. For every curve the dialog or
+  Thetis saved, the two are the same.
+- **Drawing it.** The dialog's line at frequency `f`, from `minHz` to
+  `maxHz` on a -24 to 24 dB scale, is the response at `f` plus
+  `preampDb`:
+  - `parametric` false: at or below the first point, its `gainDb`; at or
+    above the last, its `gainDb`; between two neighbouring points, a
+    straight line between their gains.
+  - `parametric` true: the sum over the points of
+    `gainDb` × exp(-0.5 × ((`f` - `frequencyHz`) / σ)²), where
+    σ = `w` / 2.3548200450309493 and `w` = (`maxHz` - `minHz`) / (`q` × 3),
+    never less than (`maxHz` - `minHz`) / 6000.
+- **Whether it is on the air.** The curve is the dialog's parametric
+  panel whatever the other settings say. It reaches the transmitter when
+  `txEqEnabled` is true and `txEqUseLegacy` is false. With `txEqUseLegacy`
+  true the ten-band legacy EQ (`txEqPreamp`, `txEqBandsJson`,
+  `txEqFreqsJson`) reaches it instead.
+
+**Worked example.** A five-band curve saved by the dialog, Use Q Factors
+on. `txEqParaEqData` is gzip, then base64url, of this JSON:
+
+```json
+{"band_count":5,"frequency_max_hz":3000,"frequency_min_hz":50,
+ "global_gain_db":-2.5,"parametric_eq":true,
+ "points":[{"frequency_hz":50,"gain_db":-6,"q":1.5},
+           {"frequency_hz":300,"gain_db":3,"q":2},
+           {"frequency_hz":1200,"gain_db":-1.5,"q":4},
+           {"frequency_hz":2400,"gain_db":4,"q":3},
+           {"frequency_hz":3000,"gain_db":0,"q":1}]}
+```
+
+`txEqCurve` is (one line on the wire, wrapped here):
+
+```json
+{"maxHz":3000,"minHz":50,"parametric":true,"points":[
+ {"frequencyHz":50,"gainDb":-6,"q":1.5},{"frequencyHz":300,"gainDb":3,"q":2},
+ {"frequencyHz":1200,"gainDb":-1.5,"q":4},{"frequencyHz":2400,"gainDb":4,"q":3},
+ {"frequencyHz":3000,"gainDb":0,"q":1}],"preampDb":-2.5,"state":"saved"}
+```
+
+The line the dialog draws, to 0.01 dB: -7.04 dB at 50 Hz, -3.51 dB at
+300 Hz, -4.00 dB at 1200 Hz, 1.50 dB at 2400 Hz and -2.50 dB at 3000 Hz.
+At 2400 Hz the one point's bell gives its 4 dB, and the preamp takes 2.5
+dB off. `tst_para_eq_curve` holds these values. The same points saved out
+of order, for example 600 Hz before 598 Hz, come back sorted with the
+second moved to 603 Hz.
 
 ### 7.2 Deltas
 
@@ -5669,6 +5821,7 @@ same on every machine.
 | `path-join-unknown-ticket` | A new connection's `hello` followed by `path.join` with a ticket no session holds gets `session.end` "The Core did not move the connection here.", `code` `protocolError`, `retryable` false, then the close. A move itself needs two connections, which a fixture does not script; `tst_session_transport_switch` holds the station and the desktop to it |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
+| `tx-eq-curve` | `txEqCurveVersion` 1 (the client declares `txEqCurve` 1): the capability after `accessoryTxVersion`, `txEqCurve` last in the `TransmitModel` schema and, in the `transmit` snapshot, the flat default curve (`state` `default`) for the static station's empty `txEqParaEqData`; a write of the worked example's `txEqParaEqData` (section 7.1, "The TX EQ curve") taken, then the side-effect `delta` carrying its `txEqCurve` (`state` `saved`); a write to `txEqCurve` refused as outbound, the curve unchanged |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |

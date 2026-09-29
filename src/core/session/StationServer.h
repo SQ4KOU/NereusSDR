@@ -418,6 +418,10 @@
 //               Monitor's record streams (ModMonitorPublisher) and
 //               txModMonitor.reset. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-28: R-IOS-13 / R-R3-49: peerGetsTxEqCurve() and
+//               fitTxEqCurveToPeer(): transmit's txEqCurve and
+//               txEqCurveVersion only to a peer that declared txEqCurve.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1594,6 +1598,13 @@ private:
     /// iPhone app Task 71: sessionHolderVersion 1 reached `transport`
     /// (minor 11 and the feature declared).
     bool peerHasSessionHolderVersion(SessionTransport* transport) const;
+    /// R-IOS-13 / R-R3-49: txEqCurveVersion 1 reaches `transport` (minor
+    /// 11, a radio model, and txEqCurve 1 declared in its hello).
+    bool peerGetsTxEqCurve(SessionTransport* transport) const;
+    /// Takes transmit's txEqCurve out of a schema, object.create or delta
+    /// for a peer that does not get it, so an older app sees today's wire.
+    /// False when a delta has nothing left worth sending.
+    bool fitTxEqCurveToPeer(SessionTransport* transport, SessionMessage& message) const;
     /// A command, property write or settings write from `transport`'s
     /// device (never a heartbeat).
     void noteActivity(SessionTransport* transport);
