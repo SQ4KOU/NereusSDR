@@ -1551,7 +1551,10 @@ QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HP
     }
     if (rest.compare(QLatin1String("cal/using10M"), Qt::CaseInsensitive) == 0
         || rest.compare(QLatin1String("cal/logVoltsAmps"), Qt::CaseInsensitive) == 0) {
-        return text == QLatin1String("True") || text == QLatin1String("False")
+        // The Calibration tab's own copies (paCalibration/cal/) hold a
+        // stored bool, which the settings proxy sends as "true"/"false".
+        return text.compare(QLatin1String("True"), Qt::CaseInsensitive) == 0
+                || text.compare(QLatin1String("False"), Qt::CaseInsensitive) == 0
             ? QString() : QStringLiteral("The Core expected this box to be on or off.");
     }
     return {};

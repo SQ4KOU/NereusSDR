@@ -302,6 +302,10 @@ private slots:
             {"cal/freqFactor", "65.5", "2.5", "Choose a correction factor from 0 to 65."},
             {"cal/freqFactor10M", "-0.1", "0.9999999", "Choose a correction factor from 0 to 65."},
             {"cal/using10M", "yes", "True", "The Core expected this box to be on or off."},
+            // The Calibration tab's own copies hold a stored bool, which
+            // reaches the Core as "true" or "false".
+            {"paCalibration/cal/using10M", "on", "true", "The Core expected this box to be on or off."},
+            {"paCalibration/cal/logVoltsAmps", "1", "false", "The Core expected this box to be on or off."},
             {"cal/rx1_6mLna", "26", "13", "Choose a 6 m LNA offset from 0 to 25 dB."},
             {"cal/rx2_6mLna", "-1", "0", "Choose a 6 m LNA offset from 0 to 25 dB."},
             {"cal/paSens", "0", "120", "Choose an amp sensitivity from 0.001 to 5000."},
