@@ -95,6 +95,19 @@ public:
     void showResult(const QString& words);
     bool isPending() const { return m_pending; }
     QString message() const;
+    /// A request sent to the Core: `verb` names the answer that finishes
+    /// it; `success` is shown when it is accepted.
+    void beginRequest(const QByteArray& verb, const QString& waitingWords,
+                      const QString& success);
+    /// The Core's answer for `verb`: shown, and true, only when it is the
+    /// request in flight.
+    bool finishRequest(const QByteArray& verb, bool accepted, const QString& reason);
+    QByteArray requestInFlight() const { return m_requestVerb; }
+    /// The link to the Core dropped: a waiting request will not be
+    /// answered, so it is cleared and says so.
+    void linkLost();
+    /// Opened again: a wait with no request in flight is cleared.
+    void reopened();
 
     // ---- Builders (MainWindow; tests) ----
     /// A remote window: its own and listened slices from `model`, every
@@ -133,6 +146,8 @@ private:
     int m_selected = -1;
     bool m_full = false;
     bool m_pending = false;
+    QByteArray m_requestVerb;
+    QString m_requestSuccess;
     QVBoxLayout* m_list = nullptr;
     QWidget* m_detail = nullptr;
     QLabel* m_selectedLabel = nullptr;

@@ -2130,6 +2130,8 @@ void MainWindow::openSliceChooser()
                 [this]() { runSliceChooserAction(SliceChooserAction::NewSlice, -1); });
     }
     refreshSliceChooser();
+    // A wait left from a request that is no longer in flight is cleared.
+    m_sliceChooser->reopened();
     m_sliceChooser->adjustSize();
     // Above the picker, inside the window.
     QWidget* picker = m_rxDashboard->chooserButton();
@@ -2170,20 +2172,19 @@ void MainWindow::refreshSliceChooser()
     }
 }
 
-void MainWindow::finishSliceChooserRequest(bool accepted, const QString& reason)
+void MainWindow::finishSliceChooserRequest(const QByteArray& verb, bool accepted,
+                                           const QString& reason)
 {
-    const QString words = accepted ? m_sliceChooserSuccess : reason;
-    m_sliceChooserVerb.clear();
-    m_sliceChooserSuccess.clear();
-    refreshSliceChooser();
-    if (m_sliceChooser) {
-        m_sliceChooser->showResult(words);
+    if (!m_sliceChooser || m_sliceChooser->requestInFlight() != verb) {
+        return;
     }
+    refreshSliceChooser();
+    m_sliceChooser->finishRequest(verb, accepted, reason);
 }
 
 void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
 {
-    if (!m_radioModel || !m_sliceChooser || !m_sliceChooserVerb.isEmpty()) {
+    if (!m_radioModel || !m_sliceChooser || !m_sliceChooser->requestInFlight().isEmpty()) {
         return;
     }
     const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
@@ -2198,9 +2199,9 @@ void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
         return;
     }
     if (action == SliceChooserAction::NewSlice) {
-        m_sliceChooserVerb = QByteArrayLiteral("addSlice");
-        m_sliceChooserSuccess = tr("A new slice is ready.");
-        m_sliceChooser->setPending(tr("Asking the Core for a new slice…"));
+        m_sliceChooser->beginRequest(QByteArrayLiteral("addSlice"),
+                                     tr("Asking the Core for a new slice…"),
+                                     tr("A new slice is ready."));
         if (m_panStack) {
             m_radioModel->addSliceOnPan(m_panStack->activePanId());
         } else {
@@ -2244,9 +2245,8 @@ void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
         case SliceChooserAction::StopListening: result = access->stopListening(self, ref); break;
         default: break;
         }
-        m_sliceChooserSuccess = success;
-        m_sliceChooserVerb = QByteArrayLiteral("hosting");
-        finishSliceChooserRequest(result.accepted, result.reason);
+        refreshSliceChooser();
+        m_sliceChooser->showResult(result.accepted ? success : result.reason);
         refreshForeignMarkers();
         refreshDesktopStationState();
         return;
@@ -2266,35 +2266,35 @@ void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
         m_stationClient->sliceAccess() ? m_stationClient->sliceAccess()->entry(sliceId)
                                        : std::nullopt;
     IStationLink::CommandOutcome outcome;
+    QByteArray verb;
     const quint64 incarnation = entry ? entry->incarnation : 0;
     const quint64 revision = entry ? entry->controlRevision : 0;
     switch (action) {
     case SliceChooserAction::Listen:
-        m_sliceChooserVerb = QByteArrayLiteral("slice.listen");
+        verb = QByteArrayLiteral("slice.listen");
         outcome = m_stationClient->requestListen(sliceId, incarnation);
         break;
     case SliceChooserAction::TakeControl:
-        m_sliceChooserVerb = QByteArrayLiteral("slice.takeControl");
+        verb = QByteArrayLiteral("slice.takeControl");
         outcome = m_stationClient->requestTakeControl(sliceId, incarnation, revision);
         break;
     case SliceChooserAction::Release:
-        m_sliceChooserVerb = QByteArrayLiteral("slice.release");
+        verb = QByteArrayLiteral("slice.release");
         outcome = m_stationClient->requestRelease(sliceId, incarnation, revision);
         break;
     case SliceChooserAction::StopListening:
-        m_sliceChooserVerb = QByteArrayLiteral("slice.stopListening");
+        verb = QByteArrayLiteral("slice.stopListening");
         outcome = m_stationClient->requestStopListening(sliceId, incarnation);
         break;
     default:
         break;
     }
     if (!outcome.sent) {
-        m_sliceChooserSuccess.clear();
-        finishSliceChooserRequest(false, outcome.reason);
+        refreshSliceChooser();
+        m_sliceChooser->showResult(outcome.reason);
         return;
     }
-    m_sliceChooserSuccess = success;
-    m_sliceChooser->setPending(tr("Asking the Core…"));
+    m_sliceChooser->beginRequest(verb, tr("Asking the Core…"), success);
 }
 
 void MainWindow::refreshTakeReceiverOffer()
@@ -2463,10 +2463,14 @@ void MainWindow::ensureRemoteSession()
         connect(m_stationClient, &StationClient::deviceCommandFinished, this,
                 [this](const QByteArray& verb, quint32, bool accepted, const QString& reason,
                        bool) {
-                    if (!m_sliceChooserVerb.isEmpty() && verb == m_sliceChooserVerb) {
-                        finishSliceChooserRequest(accepted, reason);
-                    }
+                    finishSliceChooserRequest(verb, accepted, reason);
                 });
+        // A request still waiting when the link drops is not answered.
+        connect(m_stationClient, &StationClient::sessionEnded, this, [this](const QString&) {
+            if (m_sliceChooser) {
+                m_sliceChooser->linkLost();
+            }
+        });
         if (SliceAccessMirror* access = m_stationClient->sliceAccess()) {
             connect(access, &SliceAccessMirror::changed, this,
                     [this](int) { refreshSliceChooser(); });
@@ -6072,14 +6076,10 @@ void MainWindow::buildUI()
         }
     });
     connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int) {
-        if (m_sliceChooserVerb == "addSlice") {
-            finishSliceChooserRequest(true, QString());
-        }
+        finishSliceChooserRequest(QByteArrayLiteral("addSlice"), true, QString());
     });
     connect(m_radioModel, &RadioModel::sliceAddRejected, this, [this](const QString& reason) {
-        if (m_sliceChooserVerb == "addSlice") {
-            finishSliceChooserRequest(false, reason);
-        }
+        finishSliceChooserRequest(QByteArrayLiteral("addSlice"), false, reason);
     });
     connect(m_radioModel, &RadioModel::sliceRemoved, this, [this](int) { refreshSliceChooser(); });
     if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {

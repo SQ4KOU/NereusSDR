@@ -219,6 +219,62 @@ private slots:
         QVERIFY(action(chooser, QStringLiteral("Listen in"))->isEnabled());
     }
 
+    // A request carries its verb; only the matching answer finishes it.
+    void aRequestIsFinishedOnlyByItsOwnAnswer()
+    {
+        SliceChooser chooser;
+        chooser.setInventory({row(0, Controller::OtherDevice, QStringLiteral("Jo's iPhone"))});
+        chooser.beginRequest(QByteArrayLiteral("slice.listen"), QStringLiteral("Asking the Core…"),
+                             QStringLiteral("Listening to slice A."));
+        QCOMPARE(chooser.requestInFlight(), QByteArrayLiteral("slice.listen"));
+        QVERIFY(chooser.isPending());
+        QVERIFY(!chooser.finishRequest(QByteArrayLiteral("slice.release"), true, QString()));
+        QVERIFY(chooser.isPending());
+        QVERIFY(chooser.finishRequest(QByteArrayLiteral("slice.listen"), true, QString()));
+        QVERIFY(!chooser.isPending());
+        QVERIFY(chooser.requestInFlight().isEmpty());
+        QCOMPARE(chooser.message(), QStringLiteral("Listening to slice A."));
+    }
+
+    // The link drops while a request waits: the chooser is not left stuck.
+    void aDroppedLinkClearsTheWaitingRequest()
+    {
+        SliceChooser chooser;
+        chooser.setInventory({row(0, Controller::OtherDevice, QStringLiteral("Jo's iPhone"))});
+        chooser.beginRequest(QByteArrayLiteral("slice.takeControl"),
+                             QStringLiteral("Asking the Core…"), QStringLiteral("You control it."));
+        chooser.linkLost();
+        QVERIFY(!chooser.isPending());
+        QVERIFY(chooser.requestInFlight().isEmpty());
+        QCOMPARE(chooser.message(), QStringLiteral("The Core did not answer"));
+        QVERIFY(action(chooser, QStringLiteral("Listen in"))->isEnabled());
+        QVERIFY(chooser.findChild<QPushButton*>(QStringLiteral("sliceChooserNewSlice"))->isEnabled());
+        // A late answer for the dropped request changes nothing.
+        QVERIFY(!chooser.finishRequest(QByteArrayLiteral("slice.takeControl"), true, QString()));
+        QCOMPARE(chooser.message(), QStringLiteral("The Core did not answer"));
+        // Nothing waiting: a dropped link leaves the last answer alone.
+        chooser.showResult(QStringLiteral("You released slice A."));
+        chooser.linkLost();
+        QCOMPARE(chooser.message(), QStringLiteral("You released slice A."));
+    }
+
+    // Reopened while it shows waiting but no request is in flight.
+    void reopeningClearsAWaitWithNoRequest()
+    {
+        SliceChooser chooser;
+        chooser.setInventory({row(0, Controller::OtherDevice, QStringLiteral("Jo's iPhone"))});
+        chooser.setPending(QStringLiteral("Asking the Core…"));
+        chooser.reopened();
+        QVERIFY(!chooser.isPending());
+        QCOMPARE(chooser.message(), QStringLiteral("The Core did not answer"));
+        // A request still in flight keeps waiting through a reopen.
+        chooser.beginRequest(QByteArrayLiteral("slice.listen"), QStringLiteral("Asking the Core…"),
+                             QStringLiteral("Listening to slice A."));
+        chooser.reopened();
+        QVERIFY(chooser.isPending());
+        QCOMPARE(chooser.message(), QStringLiteral("Asking the Core…"));
+    }
+
     // No slice: honest words, and New slice.
     void anEmptyWindowOffersNewSlice()
     {

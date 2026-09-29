@@ -196,6 +196,43 @@ QString SliceChooser::message() const
     return m_message->text();
 }
 
+void SliceChooser::beginRequest(const QByteArray& verb, const QString& waitingWords,
+                                const QString& success)
+{
+    m_requestVerb = verb;
+    m_requestSuccess = success;
+    setPending(waitingWords);
+}
+
+bool SliceChooser::finishRequest(const QByteArray& verb, bool accepted, const QString& reason)
+{
+    if (m_requestVerb.isEmpty() || verb != m_requestVerb) {
+        return false;
+    }
+    const QString words = accepted ? m_requestSuccess : reason;
+    m_requestVerb.clear();
+    m_requestSuccess.clear();
+    showResult(words);
+    return true;
+}
+
+void SliceChooser::linkLost()
+{
+    if (!m_pending && m_requestVerb.isEmpty()) {
+        return;
+    }
+    m_requestVerb.clear();
+    m_requestSuccess.clear();
+    showResult(tr("The Core did not answer"));
+}
+
+void SliceChooser::reopened()
+{
+    if (m_pending && m_requestVerb.isEmpty()) {
+        showResult(tr("The Core did not answer"));
+    }
+}
+
 QString SliceChooser::ownerWords(const Row& row) const
 {
     switch (row.controller) {

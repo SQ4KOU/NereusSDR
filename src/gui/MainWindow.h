@@ -908,7 +908,8 @@ private:
     void openSliceChooser();
     void refreshSliceChooser();
     void runSliceChooserAction(SliceChooserAction action, int sliceId);
-    void finishSliceChooserRequest(bool accepted, const QString& reason);
+    void finishSliceChooserRequest(const QByteArray& verb, bool accepted,
+                                   const QString& reason);
     void onPanTakeTransmitRequested(const QString& panId);
     void buildUI();
     void buildMenuBar();
@@ -1544,8 +1545,6 @@ private:
     // Slice control plan Task 13: the chooser (a popup), the request it
     // waits on (the verb, or "addSlice"), and the words for its success.
     QPointer<SliceChooser> m_sliceChooser;
-    QByteArray m_sliceChooserVerb;
-    QString m_sliceChooserSuccess;
 
     // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
     // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5
