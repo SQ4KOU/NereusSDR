@@ -352,6 +352,9 @@ public:
     // R-IOS-13, R-R3-42: the send path's counters since the last key.
     TxSendStats txSendStats() const override;
     double txIqQueuedMs() const override;
+    // G-05: the unkey's wait for the send ring (RadioConnection).
+    bool txIqRingDrained() const override;
+    double txIqRingLengthMs() const override;
 
     // What a transmit I/Q frame sink did with a frame: sent it; refused it
     // for now (a full socket buffer: keep it and retry next pass); or failed

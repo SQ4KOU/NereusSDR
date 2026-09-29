@@ -644,6 +644,15 @@ public:
     /// in ms of the radio's time; negative when this connection does not
     /// know. Any thread; lock-free.
     virtual double txIqQueuedMs() const { return -1.0; }
+    /// G-05 (2026-09-29): true when the transmit I/Q send ring holds nothing
+    /// more the sender will put on the wire, so an unkey can release the
+    /// hardware without cutting off queued audio. A connection without a
+    /// send ring has nothing queued. Any thread; lock-free.
+    virtual bool txIqRingDrained() const { return true; }
+    /// G-05: the send ring's own length, in ms of the radio's time: the most
+    /// audio it can hold, and so the longest an unkey waits for it to
+    /// drain. Zero or negative when this connection has no send ring.
+    virtual double txIqRingLengthMs() const { return -1.0; }
 
 public slots:
 

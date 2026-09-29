@@ -61,6 +61,10 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - G-05: txIqRingDrained and txIqRingLengthMs, so an
+//                operator's unkey waits for the transmit I/Q ring to drain,
+//                for at most its 84 ms length. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1825,6 +1829,26 @@ RadioConnection::TxSendStats P1RadioConnection::txSendStats() const
     st.overflowOnly = true;
     st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
     return st;
+}
+
+// ---------------------------------------------------------------------------
+// txIqRingDrained / txIqRingLengthMs: G-05 (JJ's ruling 2026-09-28)
+//
+// The unkey waits for the ring to drain, bounded by its length. fillTxZone
+// takes whole 63-sample zones only, so fewer than 63 queued samples are
+// never sent on their own: the ring is drained below one zone. Its length
+// is kTxIqBufSamples at the 48 kHz EP2 wire rate (84 ms).
+// ---------------------------------------------------------------------------
+bool P1RadioConnection::txIqRingDrained() const
+{
+    static constexpr int kSamplesPerZone = 63;   // fillTxZone's zone
+    return m_txIqCount.load(std::memory_order_acquire) < kSamplesPerZone;
+}
+
+double P1RadioConnection::txIqRingLengthMs() const
+{
+    static constexpr double kWireRateHz = 48000.0;
+    return static_cast<double>(kTxIqBufSamples) * 1000.0 / kWireRateHz;
 }
 
 // ---------------------------------------------------------------------------

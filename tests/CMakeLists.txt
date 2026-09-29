@@ -6370,6 +6370,15 @@ nereus_add_test(tst_rade_text_codec)
 nereus_add_test(tst_rade_end_of_over_tail)
 target_compile_definitions(tst_rade_end_of_over_tail PRIVATE NEREUS_BUILD_TESTS)
 
+# tst_unkey_send_ring_drain (G-05): the transmit safety boundary around the
+# unkey's wait for the send ring. An operator's release holds the hardware
+# keyed, after the TX channel's drain and before mox_delay, until the
+# transmit I/Q send ring has drained, for at most the ring's own length (P1
+# 84 ms, P2 341 ms). TX inhibit, the PA trip, receive-only, Stop All TX and
+# a disconnect never wait, and end a wait already running.
+nereus_add_test(tst_unkey_send_ring_drain)
+target_compile_definitions(tst_unkey_send_ring_drain PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
 # Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
 # must satisfy when Phase J creates a RadeChannel per slice:
