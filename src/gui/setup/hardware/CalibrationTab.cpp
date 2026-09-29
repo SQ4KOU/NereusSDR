@@ -47,6 +47,9 @@
 //                 -100..100 dB (was -50..50) and carries its Setup
 //                 description id (R-IOS-18). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (lead's ruling): the correction factors take
+//                 Thetis's 0..65 (was 0..2). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -321,7 +324,11 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     auto* hpsdrForm  = new QFormLayout(hpsdrGroup);
 
     // Source: setup.cs:5137-5144 udHPSDRFreqCorrectFactor -- default 1.0, 9 decimal places [@501e3f5]
-    m_freqFactorSpin = makeSpinBox(0.0, 2.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    // Lead's ruling (R-R3-49): Thetis's range, 0 to 65 (was 0 to 2).
+    // From Thetis setup.designer.cs:11983 [v2.10.3.15] udHPSDRFreqCorrectFactor
+    //   Maximum = 65; Minimum = 0
+    m_freqFactorSpin = makeSpinBox(0.0, 65.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    m_freqFactorSpin->setObjectName(QStringLiteral("freqCorrectionFactorSpin"));
     m_freqFactorSpin->setToolTip(
         tr("HPSDR frequency correction factor applied to NCO phase-word.\n"
            "Default 1.0 = no correction. Set via auto-calibration or manually."));
@@ -342,7 +349,10 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     hpsdrForm->addRow(m_use10MhzCheck);
 
     // Source: setup.cs:22704 udHPSDRFreqCorrectFactor10MHz -- default 1.0 [@501e3f5]
-    m_freqFactor10MSpin = makeSpinBox(0.0, 2.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    // From Thetis setup.designer.cs:11928 [v2.10.3.15] udHPSDRFreqCorrectFactor10MHz
+    //   Maximum = 65; Minimum = 0
+    m_freqFactor10MSpin = makeSpinBox(0.0, 65.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    m_freqFactor10MSpin->setObjectName(QStringLiteral("freqCorrectionFactor10MSpin"));
     m_freqFactor10MSpin->setToolTip(
         tr("Correction factor used when external 10 MHz reference is selected."));
     m_freqFactor10MSpin->setEnabled(false); // enabled only when m_use10MhzCheck is checked

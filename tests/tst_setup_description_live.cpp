@@ -179,8 +179,9 @@ private slots:
             {"paCalibration/boardClass", "2", "1", "The Core expected this radio's power calibration table."},
             {"cal/txDisplayOffset", "100.5", "-99.5", "Choose a TX display offset from -100 to 100 dB."},
             {"paCalibration/cal/txDisplayOffset", "-101", "5", "Choose a TX display offset from -100 to 100 dB."},
-            {"cal/freqFactor", "2.5", "1.0000001", "Choose a correction factor from 0 to 2."},
-            {"cal/freqFactor10M", "-0.1", "0.9999999", "Choose a correction factor from 0 to 2."},
+            // Thetis's boxes hold 0 to 65 (lead's ruling: Thetis's range).
+            {"cal/freqFactor", "65.5", "2.5", "Choose a correction factor from 0 to 65."},
+            {"cal/freqFactor10M", "-0.1", "0.9999999", "Choose a correction factor from 0 to 65."},
             {"cal/using10M", "yes", "True", "The Core expected this box to be on or off."},
             {"cal/rx1_6mLna", "26", "13", "Choose a 6 m LNA offset from 0 to 25 dB."},
             {"cal/rx2_6mLna", "-1", "0", "Choose a 6 m LNA offset from 0 to 25 dB."},

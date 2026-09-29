@@ -17,6 +17,9 @@
 //               whole with the range in plain words
 //               (calibrationKeyValueRefusal). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: R-R3-49 (lead's ruling): the correction factors are
+//               refused outside Thetis's 0..65. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -1471,8 +1474,9 @@ QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
 //     ud6mLNAGainOffset Maximum = 25, Minimum = 0 (ud6mRx2LNAGainOffset :12054)
 //   Volts/Amps:      From Thetis setup.designer.cs:11789 [v2.10.3.15]
 //     udAmpSens Maximum = 5000, Minimum = 0.001; :11819 udAmpVoff 0 to 5000
-//   Correction factors: the Calibration tab's 0 to 2 (Thetis's boxes allow
-//     up to 65, setup.designer.cs:11983 [v2.10.3.15]; the tab's range stands).
+//   Correction factors: From Thetis setup.designer.cs:11983 [v2.10.3.15]
+//     udHPSDRFreqCorrectFactor Maximum = 65, Minimum = 0 (the 10 MHz box
+//     :11928, the same; lead's ruling: Thetis's range).
 // The Calibration tab also keeps its own copies under paCalibration/cal/.
 QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HPSDRModel model)
 {
@@ -1513,8 +1517,8 @@ QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HP
     }
     if (rest.compare(QLatin1String("cal/freqFactor"), Qt::CaseInsensitive) == 0
         || rest.compare(QLatin1String("cal/freqFactor10M"), Qt::CaseInsensitive) == 0) {
-        return within(0.0, 2.0) ? QString()
-                                : QStringLiteral("Choose a correction factor from 0 to 2.");
+        return within(0.0, 65.0) ? QString()
+                                 : QStringLiteral("Choose a correction factor from 0 to 65.");
     }
     if (rest.compare(QLatin1String("cal/rx1_6mLna"), Qt::CaseInsensitive) == 0
         || rest.compare(QLatin1String("cal/rx2_6mLna"), Qt::CaseInsensitive) == 0) {

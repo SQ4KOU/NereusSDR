@@ -32,6 +32,7 @@ private slots:
     void controllerToUi_freqFactor();
     void uiToController_rx1LnaOffset();
     void sixMeterLnaSpinsTakeThetisRangeAndRx2IsDisabled();
+    void correctionFactorSpinsTakeThetisRange();
 };
 
 void TstCalibrationTab::construction_doesNotCrash()
@@ -113,6 +114,21 @@ void TstCalibrationTab::sixMeterLnaSpinsTakeThetisRangeAndRx2IsDisabled()
         QVERIFY(rx1->isEnabled());
         QVERIFY(!rx2->isEnabled());
         QVERIFY(!rx2->toolTip().isEmpty());
+    }
+}
+
+// Lead's ruling (R-R3-49): the correction factors take Thetis's range.
+// From Thetis setup.designer.cs:11983 [v2.10.3.15] udHPSDRFreqCorrectFactor
+//   Maximum = 65; Minimum = 0 (udHPSDRFreqCorrectFactor10MHz :11928, the same)
+void TstCalibrationTab::correctionFactorSpinsTakeThetisRange()
+{
+    NereusSDR::RadioModel model;
+    NereusSDR::CalibrationTab tab(&model);
+    for (const char* name : {"freqCorrectionFactorSpin", "freqCorrectionFactor10MSpin"}) {
+        auto* spin = tab.findChild<QDoubleSpinBox*>(QLatin1String(name));
+        QVERIFY2(spin != nullptr, name);
+        QCOMPARE(spin->minimum(), 0.0);
+        QCOMPARE(spin->maximum(), 65.0);
     }
 }
 
