@@ -667,11 +667,12 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 continue;
             }
             // Version 13: the Alex-1 Filters tab shows its Saturn BPF1 Bands
-            // only on the boards AntennaAlexTab::populate names (Saturn,
-            // Saturn MkII and the ANAN-G2E's HermesC10).
+            // only on boards whose preselector is the BPF1 bank, as
+            // AntennaAlexTab::populate does (OrionMKII for the ANAN-7000DLE /
+            // 8000DLE, Saturn, Saturn MkII and the ANAN-G2E's HermesC10).
+            // From Thetis console.cs:6827-6837 [v2.10.3.15] //N1GP G2E added (HermesC10) //DK1HLM
             if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))
-                && caps.board != HPSDRHW::Saturn && caps.board != HPSDRHW::SaturnMKII
-                && caps.board != HPSDRHW::HermesC10) {
+                && !codec::alex::usesBpf1Preselector(caps.board)) {
                 QJsonObject page = pages.at(p).toObject();
                 QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
                 for (int s = 0; s < sections.size(); ++s) {

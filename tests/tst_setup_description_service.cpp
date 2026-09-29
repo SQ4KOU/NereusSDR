@@ -1465,6 +1465,17 @@ private slots:
         QCOMPARE(pageById(g2e, "hardware.alex1Filters").value("sections").toArray().size(), 2);
         QCOMPARE(pageById(g2e, "hardware.alex2Filters").isEmpty(),
                  !BoardCapsTable::forBoard(HPSDRHW::HermesC10).hasAlex2);
+        // The ANAN-7000DLE and 8000DLE (OrionMKII) drive the BPF1 bank
+        // (Thetis console.cs:6827-6837 [v2.10.3.15]), so they show it too.
+        for (const HPSDRModel dle : {HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D}) {
+            service.setRadioContext(BoardCapsTable::forBoard(boardForModel(dle)), dle, info);
+            const QJsonArray dleSections = pageById(projectedCategory(service.hardware(), 13),
+                                                    "hardware.alex1Filters")
+                .value("sections").toArray();
+            QCOMPARE(dleSections.size(), 2);
+            QCOMPARE(dleSections.at(1).toObject().value("title"),
+                     QJsonValue("Saturn BPF1 Bands"));
+        }
         // The HL2 has neither page.
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
                                 HPSDRModel::HERMESLITE, info);

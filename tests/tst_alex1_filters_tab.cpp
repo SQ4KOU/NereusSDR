@@ -2,7 +2,11 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 
+#include "core/BoardCapabilities.h"
+#include "core/HpsdrModel.h"
+#include "core/RadioDiscovery.h"
 #include "gui/setup/hardware/AntennaAlexAlex1Tab.h"
+#include "gui/setup/hardware/AntennaAlexTab.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -76,6 +80,35 @@ private slots:
         // and calls updateBoardCapabilities(isSaturn=true).
         tab.updateBoardCapabilities(true);
         QVERIFY(tab.isSaturnBpf1Visible());
+    }
+
+    // The ANAN-7000DLE and 8000DLE (OrionMKII) drive the BPF1 bank too, so
+    // AntennaAlexTab::populate shows its rows on both.
+    // From Thetis console.cs:6827-6837 [v2.10.3.15]: setAlex1HPF sends
+    // OrionMKII, Saturn and HermesC10 to setBPF1ForOrionIISaturn
+    // (//N1GP G2E added (HermesC10) //DK1HLM); setup.cs
+    // 20208-20209 and 20260-20261 [v2.10.3.15] show panelBPFControl on the
+    // 7000D and 8000D.
+    void dleBoards_populateShowsBpf1Column()
+    {
+        for (const HPSDRModel dle : {HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D}) {
+            RadioModel model;
+            AntennaAlexTab tab(&model);
+            RadioInfo info;
+            info.boardType = boardForModel(dle);
+            QCOMPARE(info.boardType, HPSDRHW::OrionMKII);
+            tab.populate(info, BoardCapsTable::forBoard(info.boardType));
+            auto* alex1 = tab.findChild<AntennaAlexAlex1Tab*>();
+            QVERIFY(alex1);
+            QVERIFY(alex1->isSaturnBpf1Visible());
+        }
+        // A board on the high-pass ladder keeps the rows hidden.
+        RadioModel model;
+        AntennaAlexTab tab(&model);
+        RadioInfo info;
+        info.boardType = HPSDRHW::Orion;
+        tab.populate(info, BoardCapsTable::forBoard(info.boardType));
+        QVERIFY(!tab.findChild<AntennaAlexAlex1Tab*>()->isSaturnBpf1Visible());
     }
 
     // restoreSettings with empty MAC is a no-op (no crash).

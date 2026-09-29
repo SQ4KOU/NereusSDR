@@ -36,6 +36,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the five switches above the rows carry
 //                their Setup description ids (version 13). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The BPF1 column shows on the ANAN-7000DLE / 8000DLE too
+//                (comments only here; the gate is in AntennaAlexTab).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -598,8 +601,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
 
     // ── Column 3: Saturn BPF1 Bands ───────────────────────────────────────────
     // Source: spec §7; same band-edge shape as Alex HPF.
-    // Gated on Saturn / SaturnMKII board — hide for all other boards.
-    // Note: Thetis shows BPF1 always; NereusSDR gates on capability per spec.
+    // Shown only on boards whose preselector is the BPF1 bank
+    // (codec::alex::usesBpf1Preselector: OrionMKII, Saturn, SaturnMKII,
+    // HermesC10); AntennaAlexTab::populate sets it.
     m_bpf1Group = new QGroupBox(tr("Saturn BPF1 Bands"), content);
     auto* bpf1VBox = new QVBoxLayout(m_bpf1Group);
     bpf1VBox->setContentsMargins(8, 8, 8, 8);
@@ -841,9 +845,9 @@ void AntennaAlexAlex1Tab::setLedLit(QFrame* led, bool lit)
 
 // ── updateBoardCapabilities ───────────────────────────────────────────────────
 
-// Shows/hides the Saturn BPF1 column based on the connected board.
-// Gate: Saturn (ANAN-G2 / G2-1K) or SaturnMKII only.
-// From Thetis spec §7 — "spin from Thetis", Thetis shows always; we gate on capability.
+// Shows/hides the BPF1 column based on the connected board.
+// Gate: codec::alex::usesBpf1Preselector (OrionMKII, Saturn, SaturnMKII,
+// HermesC10), decided in AntennaAlexTab::populate.
 void AntennaAlexAlex1Tab::updateBoardCapabilities(bool isSaturnBoard)
 {
     m_bpf1Group->setVisible(isSaturnBoard);

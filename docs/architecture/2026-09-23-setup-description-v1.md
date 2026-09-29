@@ -527,8 +527,9 @@ radio is on the air, and for a rate outside the list.
 Two pages follow Antenna / ALEX, both `where:"station"` and partial:
 Alex-1 Filters (`hardware.alex1Filters`, on every board with ALEX filters)
 and Alex-2 Filters (`hardware.alex2Filters`, only where the board has
-Alex-2). Alex-1 Filters has Alex HPF Bands and, on Saturn, Saturn MkII and
-the ANAN-G2E only (the desktop's own gate), Saturn BPF1 Bands; Alex-2
+Alex-2). Alex-1 Filters has Alex HPF Bands and, only on boards whose
+receive preselector is the BPF1 bank (the ANAN-7000DLE and 8000DLE, Saturn,
+Saturn MkII and the ANAN-G2E, the desktop's own gate), Saturn BPF1 Bands; Alex-2
 Filters has Alex-2 HPF Bands, whose first row is ByPass / 55 MHz BPF
 (master) (`hardware.alex2Filters.bypass55MhzBpf`, `radioSetting`
 `alex2/master/bypass55MhzBpf`). Each bank has six rows in the desktop's
