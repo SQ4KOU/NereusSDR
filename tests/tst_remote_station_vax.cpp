@@ -230,9 +230,25 @@ private slots:
         QVERIFY(OperatorWording::isPlain(reason));
         // A write that got past the control is still refused by the Core.
         s.coreAudio()->setVaxTxGain(1.0f);
+        QTRY_COMPARE(s.client->stationVax()->txGain(), 1.0);
+        QSignalSpy refused(s.client.get(), &StationClient::propertyWriteCompleted);
         s.client->stationVax()->setTxGain(0.2);
-        QTest::qWait(200);
+        const auto txGainResult = [&refused]() -> const QList<QVariant>* {
+            for (const QList<QVariant>& args : refused) {
+                if (args.at(0).toByteArray() == QByteArrayLiteral("vax")
+                    && args.at(1).toByteArray() == QByteArrayLiteral("txGain")) {
+                    return &args;
+                }
+            }
+            return nullptr;
+        };
+        QTRY_VERIFY(txGainResult() != nullptr);
+        QVERIFY(!txGainResult()->at(3).toBool());
         QCOMPARE(s.coreAudio()->vaxTxGain(), 1.0f);
+        // The refusal itself carries the Core's value: the copy and the row
+        // snap back at once, without waiting for the Core to send it again.
+        QCOMPARE(s.client->stationVax()->txGain(), 1.0);
+        QCOMPARE(applet.stationTxMeterForTest()->gain(), 1.0f);
 
         applet.setStationTransmitPermitted(true, QString());
         QVERIFY(applet.stationTxMeterForTest()->isEnabled());
@@ -291,7 +307,7 @@ private slots:
     // A level slider that cannot act looks disabled: the style guide's
     // disabled trio, as the dark page style's disabled QSlider rules use it
     // (groove kDisabledBg, fill kDisabledBorder, thumb kDisabledText), and
-    // no accent colour anywhere. Both TX rows in a window that may not
+    // no accent color anywhere. Both TX rows in a window that may not
     // transmit draw that way.
     void aDisabledLevelSliderLooksDisabled()
     {
