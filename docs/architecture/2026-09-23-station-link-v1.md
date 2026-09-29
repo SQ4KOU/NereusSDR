@@ -3199,7 +3199,7 @@ none, and any number of listeners; the controller is always one of them.
 A device sees and hears every slice it has joined and changes only the
 one it controls: a write or a slice verb from a listener is refused with
 "Slice <letter> is controlled by <name>. Take control to change it."
-("Nobody controls Slice <letter>. Take control to change it." with no
+("Nobody controls slice <letter>. Take control to change it." with no
 controller). A session with the feature receives `slice:<id>` for every
 slice it has joined and `marker:<id>` for every other; a join or a leave
 swaps them as a change of owner does (section 7.1). The `access:<id>`

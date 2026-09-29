@@ -169,7 +169,7 @@ QString SliceAccessMirror::listenerReason(int sliceId) const
     const auto it = m_entries.constFind(sliceId);
     const QString controller = it != m_entries.cend() ? it->controllerDeviceId : QString();
     if (controller.isEmpty()) {
-        return QStringLiteral("Nobody controls Slice %1. Take control to change it.").arg(letter);
+        return QStringLiteral("Nobody controls slice %1. Take control to change it.").arg(letter);
     }
     QString owner;
     if (controller != QLatin1String(kStationDevice) && m_devices) {

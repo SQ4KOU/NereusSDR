@@ -7442,7 +7442,7 @@ QString StationServer::listenerChangeReason(int sliceId) const
     if (m_radioModel) {
         const QByteArray controller = m_radioModel->sliceOwnership()->mark(sliceId).owner;
         if (controller.isEmpty()) {
-            return QStringLiteral("Nobody controls Slice %1. Take control to change it.")
+            return QStringLiteral("Nobody controls slice %1. Take control to change it.")
                 .arg(letter);
         }
         if (const auto words = m_connectedDevices->describe(controller)) {

@@ -1034,6 +1034,14 @@ private slots:
         QTRY_COMPARE(ownership->mark(fresh).owner, b.key.fingerprint());
         QVERIFY(ownership->mark(0).owner.isEmpty());
         QCOMPARE(ownership->listenersOf(0), QList<QByteArray>{b.key.fingerprint()});
+        // Its changes are refused while nobody controls it, in words that
+        // name the slice as every other refusal does.
+        const QJsonObject change = core.invoke(appB, "nnr.resetTuning", {int64("sliceId", 0)});
+        QVERIFY(!accepted(change));
+        const QString nobody =
+            QStringLiteral("Nobody controls slice A. Take control to change it.");
+        QVERIFY(OperatorWording::isPlain(nobody));
+        QCOMPARE(reasonOf(change), nobody);
 
         // It can take it, with the revision it saw.
         QTRY_VERIFY(seenBy(appB, 0).revision == static_cast<qint64>(ownership->controlRevision(0)));

@@ -369,7 +369,7 @@ private slots:
         // Nobody controls it now; the words say so.
         QVERIFY(w.remote.sliceById(shared)->isReadOnlyListener());
         QCOMPARE(w.remote.sliceById(shared)->readOnlyListenerReason(),
-                 QStringLiteral("Nobody controls Slice %1. Take control to change it.").arg(letter));
+                 QStringLiteral("Nobody controls slice %1. Take control to change it.").arg(letter));
         first.emplace(w.access(), shared);
         sent = w.client.requestStopListening(shared, w.access().entry(shared)->incarnation);
         QVERIFY2(sent.sent, qPrintable(sent.reason));
