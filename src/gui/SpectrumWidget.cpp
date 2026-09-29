@@ -8,6 +8,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 J.J. Boyd / KG4VCF : a remote window's waterfall AGC and
+//                 NF-AGC colour against the Core's levels (display extras)
+//                 when the Core offers them. AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-28 J.J. Boyd / KG4VCF : the grid's noise-floor tracking follows
 //                 the pan's own display noise floor every 500 ms, as Thetis
 //                 tmrAutoAGC does, so it works with Clarity off and in a
@@ -2936,8 +2940,29 @@ void SpectrumWidget::setWfAgcEnabled(bool on)
     if (m_wfAgcEnabled == on) { return; }
     m_wfAgcEnabled = on;
     m_wfLevels.resetAgc();
+    m_coreWfLevels.reset(); // the Core's levels were for the other mode
     scheduleSettingsSave();
     update();
+}
+
+void SpectrumWidget::setCoreWaterfallLevelsAvailable(bool available)
+{
+    if (m_coreWfLevelsAvailable == available) { return; }
+    m_coreWfLevelsAvailable = available;
+    // Levels from an earlier Core, or from before, never carry over.
+    m_coreWfLevels.reset();
+    m_wfLevels.resetAgc();
+}
+
+void SpectrumWidget::setCoreWaterfallLevels(float lowDbm, float highDbm)
+{
+    if (!std::isfinite(lowDbm) || !std::isfinite(highDbm)) { return; }
+    m_coreWfLevels = std::make_pair(lowDbm, highDbm);
+    if (coreWaterfallLevelsInUse() && !m_moxOverlay) {
+        m_wfActiveLowThreshold = lowDbm;
+        m_wfActiveHighThreshold = highDbm;
+        update();
+    }
 }
 
 void SpectrumWidget::setClarityActive(bool on)
@@ -2950,6 +2975,7 @@ void SpectrumWidget::setWaterfallNFAGCEnabled(bool on)
 {
     if (m_wfNfAgcEnabled == on) { return; }
     m_wfNfAgcEnabled = on;
+    m_coreWfLevels.reset(); // the Core's levels were for the other mode
     scheduleSettingsSave();
 }
 
@@ -6411,6 +6437,15 @@ void SpectrumWidget::composeWaterfallActiveThresholds(const QVector<float>& wfPi
     // dbmToRgb does not read the active mirror while m_moxOverlay is set,
     // so nothing downstream needs the values this would have written.
     if (m_moxOverlay) { return; }
+
+    // A remote window's AGC and NF-AGC colour against the Core's levels
+    // (setCoreWaterfallLevelsAvailable): the stored levels until the first
+    // arrive, and the local follower does not run.
+    if (coreWaterfallLevelsInUse()) {
+        m_wfActiveLowThreshold = m_coreWfLevels ? m_coreWfLevels->first : m_wfLowThreshold;
+        m_wfActiveHighThreshold = m_coreWfLevels ? m_coreWfLevels->second : m_wfHighThreshold;
+        return;
+    }
 
     // The composition itself (the Thetis display.cs:6575 [v2.10.3.13] seed,
     // the Phase 3G-9c AGC follower and the Task 2.8 NF-AGC) moved to

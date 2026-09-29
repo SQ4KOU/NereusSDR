@@ -67,6 +67,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsScope.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -2840,6 +2841,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1200, 800);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -2978,6 +2985,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1200, 800);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -3114,6 +3127,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1200, 800);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -3277,6 +3296,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1200, 800);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -3366,6 +3391,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1600, 900);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -3534,6 +3565,12 @@ private slots:
             applet->spectrumWidget()->setWfUpdatePeriodMs(20);
         }
         stack.resize(1600, 900);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         stack.setActivePan(QStringLiteral("pan-0"));
@@ -3983,6 +4020,12 @@ private slots:
             station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
         widget->setWfUpdatePeriodMs(20);
         stack.resize(1200, 600);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         QPointer<DisplayTransport> sinkMedia;
@@ -4111,6 +4154,12 @@ private slots:
         widget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
         widget->setWfUpdatePeriodMs(20);
         stack.resize(600, 400);
+        // Budget mechanics: fixed waterfall levels, so no pan asks the
+        // Core for its waterfall AGC levels, which the Core charges on top
+        // of the frames (coreWaterfallAgcAsksNothingAsItSettles).
+        for (PanadapterApplet* pan : stack.allApplets()) {
+            pan->spectrumWidget()->setWfAgcEnabled(false);
+        }
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
         QPointer<DisplayTransport> media;
@@ -5233,8 +5282,8 @@ private slots:
         remote.setFftEngine(nullptr);
     }
 
-    // Parity Task 17 follow-up (R-R3-01, R-R3-04): with waterfall AGC or
-    // Clarity the waterfall is coloured by the levels they set at run time,
+    // Parity Task 17 follow-up (R-R3-01, R-R3-04): with Clarity the
+    // waterfall is coloured by the levels it sets at run time,
     // so the dBm window holds those levels (with headroom), not the stored
     // ones: no colour clips at the window's edge and a remote pan colours as
     // a local one does. The levels move a little every line; the window
@@ -5337,50 +5386,188 @@ private slots:
         QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -130.0);
         QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
 
-        // Waterfall AGC works on the values the pan receives, which the
-        // Core clamps to the window: with nothing below it (no noise at all)
-        // its low level sits a margin under the edge wherever the edge is.
-        // The window goes no lower than 60 dB under the pan's floor or the
-        // stored low level (-110 here), so it does not walk down to -400.
+        // Back to the stored levels: the window is the pan and those levels.
+        // (Waterfall AGC's levels come from a Core that offers display
+        // extras, as this one does: coreWaterfallAgcAsksNothingAsItSettles.)
         widget->setClarityActive(false);
-        widget->setWfAgcEnabled(true);
-        widget->composeWaterfallActiveThresholds(QVector<float>(64, -300.0f));
-        QCOMPARE(widget->wfActiveLowThreshold(), -312.0f);
         settle();
         QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
         asked = lastControl(controls, QStringLiteral("subscribe"));
-        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -170.0);
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -110.0);
         QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
-        // Held there, however long nothing arrives below it.
-        for (int line = 0; line < 20; ++line) {
-            widget->composeWaterfallActiveThresholds(QVector<float>(64, -170.0f));
-        }
-        settle();
-        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
 
-        // The levels AGC sets from a line with a noise floor and a signal
-        // (12 dB past its lowest and highest values) are what the window
-        // holds, with headroom.
-        widget->setWfAgcEnabled(false);
-        widget->setWfAgcEnabled(true); // primes the AGC afresh
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // JJ's ruling of 2026-09-28: a remote pan's waterfall AGC and NF-AGC use
+    // the levels the Core computes (display extras `waterfallLevels`), as the
+    // phone does. The subscribe asks for them; the waterfall colours against
+    // the stored levels until the first arrive and then against the Core's;
+    // the local follower does not run, so AGC settling asks the Core nothing
+    // and never blanks the pan with a new request.
+    void coreWaterfallAgcAsksNothingAsItSettles()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("20"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setDispNormalize(false);
+        widget->setWfUseSpectrumMinMax(false);
+        widget->setClarityActive(false);
+        widget->setWaterfallNFAGCEnabled(false);
+        widget->setWfAgcEnabled(true);
+        widget->setDbmRange(-100.0f, -60.0f);
+        widget->setWfLowThreshold(-110.0f);
+        widget->setWfHighThreshold(-70.0f);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        qint64 now = 1'000;
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&now] { return now; });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QVERIFY(client.capabilities().displayExtrasVersion >= 1);
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // The subscribe asks the Core for the AGC's levels, and its window
+        // is the pan's and the stored levels', as with manual levels.
+        QJsonObject asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("waterfallLevels")).toObject(),
+                 (QJsonObject{{QStringLiteral("mode"), QStringLiteral("agc")},
+                              {QStringLiteral("lowDbm"), -110.0},
+                              {QStringLiteral("highDbm"), -70.0},
+                              {QStringLiteral("offsetDb"), 0}}));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -110.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+        QVERIFY(widget->coreWaterfallLevelsInUse());
+
+        const auto settle = [&] {
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+            now += 60; // past a frame period (50 ms at 20 frames a second)
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        };
+
+        // Lines arrive as the AGC would settle on them (nothing below the
+        // window, then a floor and a signal): the local follower does not
+        // run, the stored levels colour the waterfall until the Core's
+        // arrive, and nothing is asked.
+        widget->composeWaterfallActiveThresholds(QVector<float>(64, -300.0f));
+        QCOMPARE(widget->wfActiveLowThreshold(), -110.0f);
+        QCOMPARE(widget->wfActiveHighThreshold(), -70.0f);
+        settle();
         QVector<float> line(64, -125.0f);
         line[10] = -20.0f;
+        for (int i = 0; i < 20; ++i) {
+            widget->composeWaterfallActiveThresholds(line);
+        }
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // The Core's levels arrive beside a frame: the waterfall takes them,
+        // and as they move, nothing is asked either.
+        const quint32 id = quint32(asked.value(QStringLiteral("endpointId")).toDouble());
+        QJsonObject context{
+            {QStringLiteral("op"), QStringLiteral("context")},
+            {QStringLiteral("connectionId"), asked.value(QStringLiteral("connectionId"))},
+            {QStringLiteral("endpointId"), double(id)},
+            {QStringLiteral("revision"), asked.value(QStringLiteral("revision"))},
+            {QStringLiteral("contextGeneration"), 1}, {QStringLiteral("sourceStream"), 0},
+            {QStringLiteral("sourceCentreHz"), 14225000}, {QStringLiteral("sampleRateHz"), 192000},
+            {QStringLiteral("centreHz"), 14225023.4375}, {QStringLiteral("spanHz"), 24046.875},
+            {QStringLiteral("wideCentreHz"), 0}, {QStringLiteral("wideSpanHz"), 0},
+            {QStringLiteral("traceSamples"), 128}, {QStringLiteral("waterfallSamples"), 128},
+            {QStringLiteral("wideSamples"), 0}, {QStringLiteral("minDbm"), -110},
+            {QStringLiteral("maxDbm"), -60}, {QStringLiteral("fps"), 20},
+            {QStringLiteral("framesPerLine"), 1},
+            {QStringLiteral("wideband"), WidebandDisplayContext{}.toJson()},
+            {QStringLiteral("grantedFftSize"), 4096}, {QStringLiteral("grantedTier"), QStringLiteral("wide")},
+            {QStringLiteral("requestedPixels"), 128}, {QStringLiteral("grantedPixels"), 128},
+            {QStringLiteral("limit"), QStringLiteral("none")}};
+        QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
+        const DisplayCodecContext codec{id, 1, -110.0f, -60.0f, 128, 128, 0};
+        const auto deliverLevels = [&](float low, float high, quint32 sequence) {
+            DisplayExtrasFrame extras;
+            extras.endpointId = id;
+            extras.contextGeneration = 1;
+            extras.encoderSequence = sequence;
+            extras.waterfallLevelsDbm = std::make_pair(low, high);
+            const QByteArray datagram = encodeDisplayExtras(extras, codec);
+            QVERIFY(!datagram.isEmpty());
+            media->deliver(datagram);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(
+            [&] {
+                deliverLevels(-137.0f, -8.0f, 1);
+                return widget->wfActiveLowThreshold() == -137.0f;
+            }(), 5000);
+        QCOMPARE(widget->wfActiveHighThreshold(), -8.0f);
         widget->composeWaterfallActiveThresholds(line);
         QCOMPARE(widget->wfActiveLowThreshold(), -137.0f);
         QCOMPARE(widget->wfActiveHighThreshold(), -8.0f);
+        deliverLevels(-135.5f, -11.0f, 2);
+        QCOMPARE(widget->wfActiveLowThreshold(), -135.5f);
         settle();
-        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 5);
-        asked = lastControl(controls, QStringLiteral("subscribe"));
-        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -147.0);
-        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), 2.0);
+        deliverLevels(-180.0f, 20.0f, 3);
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
 
-        // Back to the stored levels: the window is the pan and those levels.
+        // NF-AGC asks for its own levels once; the AGC's are not kept.
         widget->setWfAgcEnabled(false);
+        widget->setWaterfallNFAGCEnabled(true);
+        widget->setWaterfallAGCOffsetDb(6);
         settle();
-        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 6);
+        QTRY_VERIFY(countControl(controls, QStringLiteral("subscribe")) >= 2);
         asked = lastControl(controls, QStringLiteral("subscribe"));
+        const QJsonObject levels = asked.value(QStringLiteral("waterfallLevels")).toObject();
+        QCOMPARE(levels.value(QStringLiteral("mode")).toString(), QStringLiteral("noiseFloorAgc"));
+        QCOMPARE(levels.value(QStringLiteral("offsetDb")).toInt(), 6);
         QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -110.0);
-        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+        widget->composeWaterfallActiveThresholds(line);
+        QCOMPARE(widget->wfActiveLowThreshold(), -110.0f);
+
+        // Manual levels ask for none.
+        widget->setWaterfallNFAGCEnabled(false);
+        settle();
+        QTRY_VERIFY(!lastControl(controls, QStringLiteral("subscribe"))
+                         .contains(QStringLiteral("waterfallLevels")));
 
         client.disconnectFromStation(QStringLiteral("test complete"));
     }

@@ -1,5 +1,10 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: JJ's ruling of 2026-09-28: waterfall AGC and NF-AGC use the
+//               Core's display-extras levels, as the phone does, so the dBm
+//               window no longer follows them (no new request as AGC
+//               settles). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-28: R-IOS-18: the dBm window follows the pan's normalise only
 //               when it applies (SpectrumWidget::normalizeActive: Average,
 //               Sample or RMS). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -407,6 +412,9 @@ struct RequestInputs {
     std::optional<DbmWindow> txDbmWindow;
     // Parity Task 31: display duplex, for a Core told txDisplayVersion 3.
     bool duplex = false;
+    // JJ's ruling of 2026-09-28: the Core offers display extras, so a pan's
+    // waterfall AGC or NF-AGC asks it for its levels (`waterfallLevels`).
+    bool coreWaterfallLevels = false;
 };
 
 // Parity Task 17 follow-up (R-R3-01, R-R3-04): the headroom a waterfall
@@ -428,8 +436,15 @@ constexpr double kRuntimeLowLevelReachDb = 60.0;
 
 // Whether the pan's waterfall levels are set at run time rather than the
 // stored low and high levels (SpectrumWidget::composeWaterfallActiveThresholds).
+// A pan whose AGC levels come from the Core (coreWaterfallLevelsInUse) is
+// coloured against levels the Core computed before it clamped the rows, so
+// its window is the stored levels', as with manual levels: AGC settling
+// asks the Core nothing.
 bool runtimeWaterfallLevels(const SpectrumWidget* widget)
 {
+    if (widget->coreWaterfallLevelsInUse()) {
+        return false;
+    }
     return widget->clarityActive() || widget->wfAgcEnabled()
         || widget->waterfallNFAGCEnabled();
 }
@@ -593,6 +608,19 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
         // Parity Task 17 (R-R3-01): spectrumGrantVersion 2.
         request.insert(QStringLiteral("decimation"), *inputs.decimation);
     }
+    if (inputs.coreWaterfallLevels && widget->coreWaterfallLevelsInUse()) {
+        // JJ's ruling of 2026-09-28 (display extras v1, `waterfallLevels`):
+        // the Core runs the pan's waterfall AGC (the desktop's follower,
+        // 12 dB outside each line's lowest and highest values) or NF-AGC
+        // (the line's floor plus the offset, 60 dB above it) and sends the
+        // levels beside each frame.
+        request.insert(QStringLiteral("waterfallLevels"), QJsonObject{
+            {QStringLiteral("mode"), widget->wfAgcEnabled() ? QStringLiteral("agc")
+                                                            : QStringLiteral("noiseFloorAgc")},
+            {QStringLiteral("lowDbm"), double(widget->wfLowThreshold())},
+            {QStringLiteral("highDbm"), double(widget->wfHighThreshold())},
+            {QStringLiteral("offsetDb"), widget->waterfallAGCOffsetDb()}});
+    }
     if (inputs.txDbmWindow) {
         // Parity Task 28 (R-R3-49, A11): txDisplayVersion 1.
         request.insert(QStringLiteral("txMinDbm"), inputs.txDbmWindow->minDbm);
@@ -715,10 +743,10 @@ QString allocationIdentity(const DisplayBudgetLimits& limits,
         .arg(ps3Enabled)
         .arg(retainedPs3ExceedsCap);
     for (const RemoteDisplayIntent& intent : intents) {
-        key += QStringLiteral("|%1:%2:%3:%4:%5:%6:%7")
+        key += QStringLiteral("|%1:%2:%3:%4:%5:%6:%7:%8")
             .arg(intent.panId).arg(intent.pixels).arg(intent.fps)
             .arg(intent.includeWidePlane).arg(intent.waterfallPeriodMs)
-            .arg(intent.active).arg(int(intent.kind));
+            .arg(intent.active).arg(int(intent.kind)).arg(int(intent.extrasSections));
     }
     return key;
 }
@@ -902,7 +930,15 @@ struct RemoteMediaController::Private {
             inputs.txDbmWindow = transmitDbmWindow(widget);
         }
         inputs.duplex = displayDuplexNegotiated && displayDuplex;
+        inputs.coreWaterfallLevels = coreWaterfallLevelsAvailable();
         return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
+    }
+
+    /// JJ's ruling of 2026-09-28: the Core computes a pan's waterfall AGC
+    /// levels when it offers display extras.
+    bool coreWaterfallLevelsAvailable() const
+    {
+        return client && client->capabilities().displayExtrasVersion >= 1;
     }
 
     QJsonObject requestMini(SliceModel* slice) const
@@ -979,6 +1015,7 @@ struct RemoteMediaController::Private {
             SpectrumWidget* widget = applet ? applet->spectrumWidget() : nullptr;
             SliceModel* slice = widget ? model->sliceById(applet->activeSliceIndex()) : nullptr;
             if (!slice) { continue; }
+            widget->setCoreWaterfallLevelsAvailable(coreWaterfallLevelsAvailable());
             const int size = plannedFftSize(widget, slice);
             if (size <= 0) { continue; }
             seen.insert(widget);
@@ -3958,6 +3995,10 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         intent.pixels = original.value(QStringLiteral("pixels")).toInt();
         intent.fps = original.value(QStringLiteral("fps")).toInt();
         intent.includeWidePlane = original.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0;
+        // JJ's ruling of 2026-09-28: the Core's waterfall levels are
+        // charged too.
+        intent.extrasSections = original.contains(QStringLiteral("waterfallLevels"))
+            ? kDisplayExtrasWaterfallLevels : 0;
         intent.waterfallPeriodMs = qBound(1, widget->wfUpdatePeriodMs(), 65'535);
         intent.active = intent.panId == d->stack->activePanId();
         desired.append({intent.panId, widget, slice, std::move(original), intent});
@@ -4079,8 +4120,9 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     {
         QList<DisplayBudgetCharge> wantedCharges;
         for (const RemoteDisplayIntent& intent : intents) {
-            if (const auto cost = spectrumDisplayCost(intent.pixels, intent.fps,
-                                                      intent.includeWidePlane)) {
+            if (const auto cost = displayCostWithExtras(intent.pixels, intent.fps,
+                                                        intent.includeWidePlane,
+                                                        intent.extrasSections)) {
                 wantedCharges.append(cost->charge);
             }
         }
@@ -4098,6 +4140,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             const RemoteDisplayIntent& is = intents.at(i);
             sameDisplays = was.panId == is.panId && was.fps == is.fps
                 && was.includeWidePlane == is.includeWidePlane
+                && was.extrasSections == is.extrasSections
                 && was.kind == is.kind;
             widthsMoved = widthsMoved || was.pixels != is.pixels;
         }
@@ -5771,6 +5814,10 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         }
         return;
     }
+    if (packet.startsWith("NSDX")) {
+        receiveDisplayExtras(packet);
+        return;
+    }
     // Route only the documented v1 prefix. The decoder validates the complete
     // envelope and bounds before any plane can reach the renderer.
     if (packet.size() < 42 || packet.size() > DisplayCodecEncoder::kMaxEncodedBytes
@@ -5853,6 +5900,26 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         reconcileClockProbe();
         presentDueDisplay();
     }
+}
+
+// JJ's ruling of 2026-09-28: the Core's display extras for a pan (display
+// extras v1, section 3). Only the waterfall levels are used here: a pan whose
+// waterfall AGC or NF-AGC the Core runs takes the levels the Core sent for
+// its latest line. A datagram for no accepted pan, an older context or
+// another shape is dropped, as a stale frame is.
+void RemoteMediaController::receiveDisplayExtras(const QByteArray& packet)
+{
+    if (packet.size() < int(kDisplayExtrasHeaderBytes)) { return; }
+    const quint32 id = qFromBigEndian<quint32>(packet.constData() + 8);
+    auto it = d->bindings.find(id);
+    if (it == d->bindings.end() || !it->second.accepted || it->second.isMini()
+        || !it->second.widget || it->second.transmit) { return; }
+    auto& binding = it->second;
+    const DisplayExtrasDecodeResult decoded = decodeDisplayExtras(packet, binding.context.codec);
+    if (!decoded.accepted || !decoded.frame.waterfallLevelsDbm) { return; }
+    if (d->transmittingPans.contains(binding.panId)) { return; }
+    binding.widget->setCoreWaterfallLevels(decoded.frame.waterfallLevelsDbm->first,
+                                           decoded.frame.waterfallLevelsDbm->second);
 }
 
 RemoteDisplayTelemetry RemoteMediaController::displayTelemetry() const

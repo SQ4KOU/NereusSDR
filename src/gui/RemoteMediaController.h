@@ -521,6 +521,7 @@ private:
     void finishCentreRequest(int sliceId, quint64 streamEpoch, bool accepted);
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);
+    void receiveDisplayExtras(const QByteArray& packet);
     void reportDisplayDrops();
     void requestKeyframe(quint32 endpointId);
     void requestAudio();

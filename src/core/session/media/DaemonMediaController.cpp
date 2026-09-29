@@ -346,19 +346,8 @@ std::optional<SpectrumDisplayCost> endpointDisplayCost(int pixels, int fps,
                                                        bool includeWidePlane,
                                                        quint8 extrasSections)
 {
-    std::optional<SpectrumDisplayCost> cost =
-        spectrumDisplayCost(pixels, fps, includeWidePlane);
-    if (!cost || extrasSections == 0) {
-        return cost;
-    }
-    const quint64 frames = static_cast<quint64>(fps);
-    cost->charge.applicationBytesPerSecond +=
-        static_cast<quint64>(displayExtrasWorstCaseBytes(extrasSections, pixels)) * frames;
-    cost->charge.messagesPerSecond += static_cast<quint32>(fps);
-    if ((extrasSections & kDisplayExtrasPeakHold) != 0) {
-        cost->charge.spectrumSampleUnitsPerSecond += static_cast<quint64>(pixels) * frames;
-    }
-    return cost;
+    // Shared with a window's planner (displayCostWithExtras).
+    return displayCostWithExtras(pixels, fps, includeWidePlane, extrasSections);
 }
 
 // Parity Task 28: an endpoint's place among the transmit display's viewers,

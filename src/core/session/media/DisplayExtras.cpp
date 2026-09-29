@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  displayCostWithExtras, shared with a
+//                                    remote window's planner. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Created for iPhone app Task 20.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
@@ -350,6 +353,25 @@ quint8 DisplayExtrasFrame::sections() const
     if (waterfallLevelsDbm) { sections |= kDisplayExtrasWaterfallLevels; }
     if (noiseFloorFastAttack) { sections |= kDisplayExtrasNoiseFloorState; }
     return sections;
+}
+
+std::optional<SpectrumDisplayCost> displayCostWithExtras(int pixels, int fps,
+                                                         bool includeWidePlane,
+                                                         quint8 sections)
+{
+    std::optional<SpectrumDisplayCost> cost =
+        spectrumDisplayCost(pixels, fps, includeWidePlane);
+    if (!cost || sections == 0) {
+        return cost;
+    }
+    const quint64 frames = static_cast<quint64>(fps);
+    cost->charge.applicationBytesPerSecond +=
+        static_cast<quint64>(displayExtrasWorstCaseBytes(sections, pixels)) * frames;
+    cost->charge.messagesPerSecond += static_cast<quint32>(fps);
+    if ((sections & kDisplayExtrasPeakHold) != 0) {
+        cost->charge.spectrumSampleUnitsPerSecond += static_cast<quint64>(pixels) * frames;
+    }
+    return cost;
 }
 
 quint32 displayExtrasWorstCaseBytes(quint8 sections, int traceSamples)

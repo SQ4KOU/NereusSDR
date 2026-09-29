@@ -26,6 +26,10 @@ struct RemoteDisplayIntent {
     int waterfallPeriodMs = 0;
     bool active = false;
     Kind kind = Kind::Pan;
+    /// The display extras sections the request asks for (kDisplayExtras*
+    /// bits; a remote window asks only for the waterfall levels), which the
+    /// Core charges on top of the frames (displayCostWithExtras).
+    quint8 extrasSections = 0;
 };
 
 struct RemoteDisplayQuality {

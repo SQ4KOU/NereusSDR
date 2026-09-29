@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 : setCoreWaterfallLevelsAvailable / setCoreWaterfallLevels, a
+//                 remote window's waterfall AGC levels from the Core. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -758,6 +761,25 @@ public:
     // user fields. Mirrors the Thetis local-variable composition at
     // display.cs:6575-6594 [v2.10.3.13].
     void composeWaterfallActiveThresholds(const QVector<float>& wfPixelsDbm);
+
+    // JJ's ruling of 2026-09-28: a remote window's waterfall AGC and NF-AGC
+    // use the Core's levels (display extras, the same the phone draws with),
+    // not a follower of their own run on rows the Core has already clamped
+    // to the dBm window. RemoteMediaController turns this on for a Core that
+    // offers display extras. While on, and AGC or NF-AGC is the mode (not
+    // Clarity), the waterfall colours against the last levels the Core sent
+    // (the stored levels until the first arrive) and the local follower
+    // does not run.
+    void setCoreWaterfallLevelsAvailable(bool available);
+    bool coreWaterfallLevelsAvailable() const { return m_coreWfLevelsAvailable; }
+    /// The Core's levels are the ones in use now.
+    bool coreWaterfallLevelsInUse() const
+    {
+        return m_coreWfLevelsAvailable && !m_clarityActive
+            && (m_wfAgcEnabled || m_wfNfAgcEnabled);
+    }
+    /// The Core's levels for the latest waterfall line (NSDX section 0x08).
+    void setCoreWaterfallLevels(float lowDbm, float highDbm);
     // NF-AGC: auto-track waterfall thresholds to noise floor + offset.
     void setWaterfallNFAGCEnabled(bool on);
     bool waterfallNFAGCEnabled() const { return m_wfNfAgcEnabled; }
@@ -2723,6 +2745,9 @@ private:
     // ---- Phase 3G-8 commit 4: waterfall renderer state ----
 
     bool  m_wfAgcEnabled{true};
+    // The Core's waterfall AGC levels (setCoreWaterfallLevelsAvailable).
+    bool  m_coreWfLevelsAvailable{false};
+    std::optional<std::pair<float, float>> m_coreWfLevels;
     bool  m_clarityActive{false};     // Phase 3G-9c: suppresses legacy AGC when Clarity drives thresholds
     // NF-AGC: Task 2.8 — auto-track thresholds to noise floor + offset.
     bool  m_wfNfAgcEnabled{false};

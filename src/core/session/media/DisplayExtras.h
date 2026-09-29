@@ -14,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  displayCostWithExtras, shared with a
+//                                    remote window's planner. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Created for iPhone app Task 20.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
@@ -29,6 +32,7 @@
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/spectrum/ActivePeakHoldTrace.h"
 #include "core/spectrum/DisplayFollowers.h"
@@ -165,6 +169,15 @@ struct DisplayExtrasFrame {
 /// The largest datagram these sections can make for a trace of
 /// `traceSamples` samples.
 quint32 displayExtrasWorstCaseBytes(quint8 sections, int traceSamples);
+
+/// The display budget charge of an endpoint of `pixels` at `fps` that asks
+/// for the extras `sections` (kDisplayExtras* bits): spectrumDisplayCost's,
+/// plus, for any section, one message a frame and at most
+/// displayExtrasWorstCaseBytes a frame, and the peak hold row's samples a
+/// frame. The Core charges this; a window plans with the same number.
+std::optional<SpectrumDisplayCost> displayCostWithExtras(int pixels, int fps,
+                                                         bool includeWidePlane,
+                                                         quint8 sections);
 
 /// Encodes a frame for the endpoint context it belongs to: the peak hold
 /// row is quantised on that context's interval. Empty when the frame has no
