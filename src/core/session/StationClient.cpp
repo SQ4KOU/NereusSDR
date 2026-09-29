@@ -298,6 +298,9 @@
 //               read and answered (answerHeld), the takenOver end's name,
 //               id and time kept for the stop panel and Take it back. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25: the Core's device verbs for the
+//               This Core page (requestDeviceAdmin). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
@@ -5190,6 +5193,37 @@ void StationClient::handleSettingsHygieneResult(const SessionMessage& message)
     emit commandResult(message.commandId, message.accepted, message.reason);
     if (!self) { return; }
     if (matchingValidation && dirty) { refreshSettingsHygiene(); }
+}
+
+bool StationClient::deviceAdminAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.deviceAdminVersion >= 1 && signedInWithDeviceKey();
+}
+
+bool StationClient::pairingAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.pairingVersion >= 1 && signedInWithDeviceKey();
+}
+
+StationClient::CommandOutcome StationClient::requestDeviceAdmin(const QByteArray& verb,
+                                                                const QString& id)
+{
+    const bool pairing = verb == "pairing.open" || verb == "pairing.close";
+    if (pairing ? !pairingAvailable() : !deviceAdminAvailable()) {
+        if (!stationLinkReady()) {
+            return {false, QStringLiteral("Not connected to the Core, so the request was not "
+                                          "sent.")};
+        }
+        return {false, signedInWithDeviceKey() ? deviceAdminUnavailableReason()
+                                               : pairedDeviceAdminReason()};
+    }
+    QList<MirrorUpdate> arguments;
+    if (verb == "devices.revoke") {
+        arguments.append(stringArgument("id", id));
+    }
+    return sendCommand(verb, -1, arguments, QStringLiteral("the device request"));
 }
 
 StationClient::CommandOutcome StationClient::requestStationRadio(const QByteArray& verb,

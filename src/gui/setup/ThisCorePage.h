@@ -39,6 +39,7 @@ class QComboBox;
 class QLabel;
 class QPushButton;
 class QTreeWidget;
+class QVBoxLayout;
 
 namespace NereusSDR {
 
@@ -72,6 +73,16 @@ public:
     QLabel* statusLabel() const { return m_status; }
     /// Task 78: who is connected to the Core now.
     ConnectedDevicesList* connectedList() const { return m_connectedList; }
+    /// iPhone app plan Task 25: the Core's paired devices and its key.
+    QWidget* pairedRows() const { return m_pairedRows; }
+    QPushButton* addDeviceButton() const { return m_addDevice; }
+    QLabel* pairingCodeLabel() const { return m_pairingCode; }
+    QLabel* coreNameLabel() const { return m_coreName; }
+    QLabel* keyBackupLabel() const { return m_keyBackup; }
+    QPushButton* keyBackupButton() const { return m_keyBackupDone; }
+    QLabel* devicesStatusLabel() const { return m_devicesStatus; }
+    /// Why the device controls are disabled now, empty when they are not.
+    QString devicesUnavailableReason() const;
 
 private:
     void rebuildList();
@@ -79,6 +90,8 @@ private:
     QString selectedMac() const;
     bool selectedIsCoresRadio() const;
     void send(const QByteArray& verb, const QString& mac, int model = 0);
+    void rebuildDevices();
+    void sendDeviceAdmin(const QByteArray& verb, const QString& id = QString());
 
     RadioModel* m_radioModel = nullptr;
     QTreeWidget* m_list = nullptr;
@@ -88,6 +101,17 @@ private:
     QPushButton* m_forgetButton = nullptr;
     QLabel* m_status = nullptr;
     ConnectedDevicesList* m_connectedList = nullptr;
+    QWidget* m_pairedRows = nullptr;
+    QVBoxLayout* m_pairedLayout = nullptr;
+    QPushButton* m_addDevice = nullptr;
+    QLabel* m_pairingCode = nullptr;
+    QLabel* m_pairingInstruction = nullptr;
+    QLabel* m_coreName = nullptr;
+    QLabel* m_keyBackup = nullptr;
+    QPushButton* m_keyBackupDone = nullptr;
+    QLabel* m_devicesStatus = nullptr;
+    /// The device request whose answer the page shows (0 for none).
+    quint32 m_devicesCommandId = 0;
     bool m_stationAvailable = true;
     QString m_stationReason;
     bool m_fillingModels = false;

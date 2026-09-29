@@ -11,8 +11,10 @@
 // declared `sessionHolder` 1 (the link document, sections 7.1 and 7.5):
 //
 //   connectedDevices   who holds a place now (listJson), the device limit
-//   devices            the paired devices (listJson only; nothing else of
-//                      that object is kept here, its pairing code least)
+//   devices            the paired devices (listJson) and the Core's own
+//                      facts a This Core page shows (label, key backup,
+//                      pairing window and its code). The code is a secret:
+//                      kept for the page to show, never logged
 //   marker:<id>        another device's slice, read only
 //   confirm.request    the Core's one open question for this window
 //   notice             what another device did, or this window's own state
@@ -32,7 +34,9 @@
 //               R-IOS-30), with AI-assisted implementation via Anthropic
 //               Claude Code.
 //   2026-09-28: session.held (the fifth-device choice, iPhone app plan
-//               Task 78 item 7, G-53) and a slice's frequency. J.J. Boyd
+//               Task 78 item 7, G-53) and a slice's frequency; the devices
+//               object's Core facts (iPhone app plan Task 25's This Core
+//               page). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -88,7 +92,26 @@ struct RemotePairedDevice {
     QString shortName;
     QString kind;
     QString lastSeen;
+    /// ISO 8601 UTC, "" when the Core does not say.
+    QString pairedAt;
     bool connected = false;
+};
+
+/// The `devices` object's facts about the Core itself (StationDevicesFacade;
+/// iPhone app plan Task 25, the This Core page).
+struct RemoteCoreDevicesInfo {
+    /// False until the Core sent the object.
+    bool received = false;
+    QString stationLabel;
+    bool claimed = false;
+    bool tokenActive = false;
+    bool keyBackupAcknowledged = false;
+    /// Where the Core's key file is, on the Core's computer.
+    QString keyPath;
+    bool pairingWindowOpen = false;
+    /// Sent only to a window signed in with this computer's key; "" to any
+    /// other. Never logged.
+    QString pairingCode;
 };
 
 /// A `marker:<id>`: another device's slice, as the Core sends it.
@@ -197,6 +220,7 @@ public:
     void setSelfDeviceId(const QString& id) { m_selfDeviceId = id; }
     QString selfDeviceId() const { return m_selfDeviceId; }
     QList<RemotePairedDevice> pairedDevices() const { return m_paired; }
+    RemoteCoreDevicesInfo coreInfo() const { return m_coreInfo; }
 
     /// session.held arrived (it replaces any list still shown).
     void setHeld(const RemoteHeldList& held);
@@ -223,6 +247,8 @@ signals:
     void markersChanged();
     void connectedDevicesChanged();
     void pairedDevicesChanged();
+    /// coreInfo() changed.
+    void coreInfoChanged();
     void questionChanged();
     /// session.held arrived, or its question closed.
     void heldChanged();
@@ -234,6 +260,7 @@ private:
     QMap<int, RemoteSliceMarker> m_markers;
     QList<RemoteConnectedDevice> m_connected;
     QList<RemotePairedDevice> m_paired;
+    RemoteCoreDevicesInfo m_coreInfo;
     int m_deviceLimit = 0;
     QString m_selfDeviceId;
     std::optional<RemotePrompt> m_question;

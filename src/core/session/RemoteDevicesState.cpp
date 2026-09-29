@@ -95,13 +95,39 @@ void RemoteDevicesState::applyObject(const QByteArray& objectKey,
         return;
     }
     if (objectKey == kDevicesKey) {
-        // Only the list. The object also carries the pairing code, which
-        // this window neither keeps nor shows here.
+        // The list, and the Core's own facts for the This Core page. The
+        // pairing code is kept for the page to show and never logged.
+        bool infoChanged = !m_coreInfo.received;
+        m_coreInfo.received = true;
         for (const MirrorUpdate& u : updates) {
             if (u.name == "listJson") {
                 m_paired = parsePairedList(u.value.toString());
                 emit pairedDevicesChanged();
+            } else if (u.name == "stationLabel") {
+                m_coreInfo.stationLabel = u.value.toString();
+                infoChanged = true;
+            } else if (u.name == "claimed") {
+                m_coreInfo.claimed = u.value.toBool();
+                infoChanged = true;
+            } else if (u.name == "tokenActive") {
+                m_coreInfo.tokenActive = u.value.toBool();
+                infoChanged = true;
+            } else if (u.name == "keyBackupAcknowledged") {
+                m_coreInfo.keyBackupAcknowledged = u.value.toBool();
+                infoChanged = true;
+            } else if (u.name == "keyPath") {
+                m_coreInfo.keyPath = u.value.toString();
+                infoChanged = true;
+            } else if (u.name == "pairingWindowOpen") {
+                m_coreInfo.pairingWindowOpen = u.value.toBool();
+                infoChanged = true;
+            } else if (u.name == "pairingCode") {
+                m_coreInfo.pairingCode = u.value.toString();
+                infoChanged = true;
             }
+        }
+        if (infoChanged) {
+            emit coreInfoChanged();
         }
         return;
     }
@@ -241,6 +267,7 @@ void RemoteDevicesState::clear()
     const bool hadMarkers = !m_markers.isEmpty();
     const bool hadConnected = !m_connected.isEmpty() || m_deviceLimit != 0;
     const bool hadPaired = !m_paired.isEmpty();
+    const bool hadCoreInfo = m_coreInfo.received;
     const bool hadQuestion = m_question.has_value();
     const bool hadHeld = m_held.has_value();
     // Notices stay: what another device did is still worth reading after
@@ -248,12 +275,14 @@ void RemoteDevicesState::clear()
     m_markers.clear();
     m_connected.clear();
     m_paired.clear();
+    m_coreInfo = RemoteCoreDevicesInfo{};
     m_deviceLimit = 0;
     m_question.reset();
     m_held.reset();
     if (hadMarkers) { emit markersChanged(); }
     if (hadConnected) { emit connectedDevicesChanged(); }
     if (hadPaired) { emit pairedDevicesChanged(); }
+    if (hadCoreInfo) { emit coreInfoChanged(); }
     if (hadQuestion) { emit questionChanged(); }
     if (hadHeld) { emit heldChanged(); }
 }
@@ -356,6 +385,7 @@ QList<RemotePairedDevice> RemoteDevicesState::parsePairedList(const QString& lis
         d.shortName = o.value(QStringLiteral("shortName")).toString();
         d.kind = o.value(QStringLiteral("kind")).toString();
         d.lastSeen = o.value(QStringLiteral("lastSeen")).toString();
+        d.pairedAt = o.value(QStringLiteral("pairedAt")).toString();
         d.connected = o.value(QStringLiteral("connected")).toBool();
         out.append(d);
     }

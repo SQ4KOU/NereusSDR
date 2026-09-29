@@ -27,6 +27,9 @@
 //   2026-09-28: the fifth-device choice and the named takeover on the stop
 //               panel (Task 78 items 3 and 7, G-53). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: This Core manages the Core's devices (iPhone app plan Task
+//               25). J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -60,6 +63,8 @@
 #include "gui/multidevice/NoticeCard.h"
 #include "gui/multidevice/ReplaceDeviceDialog.h"
 #include "gui/RemoteConnectionController.h"
+#include "gui/setup/ThisCorePage.h"
+#include "core/session/StationDevicesFacade.h"
 #include "gui/multidevice/TakeReceiverDialog.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/widgets/SpectrumStatusOverlay.h"
@@ -830,6 +835,74 @@ private slots:
         dialog->replaceButton()->click();
         QTRY_VERIFY(w.client.isHandshakeComplete());
         QCOMPARE(endOf(app).value(QStringLiteral("code")).toString(), QStringLiteral("takenOver"));
+    }
+
+    // iPhone app plan Task 25: a remote window's This Core page lists the
+    // Core's paired devices, revokes one, opens pairing and shows its code,
+    // and records the key backup, through the Core's own verbs.
+    void theThisCorePageManagesTheCoresDevices()
+    {
+        Core core;
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        Device phone(QStringLiteral("Jo's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        core.pair(phone);
+        LoopbackTransport* app = core.signIn(phone);
+        QVERIFY(admitted(app));
+        ThisCorePage page(&w.remote);
+        page.resize(760, 900);
+        QVERIFY(!page.addDeviceButton()->isEnabled());
+        QVERIFY(OperatorWording::isPlain(page.devicesUnavailableReason()));
+        QVERIFY(w.connectTo(core));
+        page.setStationSettingsAvailable(true, QString());
+        QTRY_VERIFY(w.client.deviceAdminAvailable());
+        QTRY_COMPARE(page.pairedRows()->findChildren<QPushButton*>(
+                         QStringLiteral("thisCoreRevoke")).size(), 2);
+        QVERIFY(page.devicesUnavailableReason().isEmpty());
+        QPushButton* ownRevoke = nullptr;
+        QPushButton* phoneRevoke = nullptr;
+        for (QPushButton* b : page.pairedRows()->findChildren<QPushButton*>(
+                 QStringLiteral("thisCoreRevoke"))) {
+            if (b->property("deviceId").toString() == w.id()) { ownRevoke = b; }
+            if (b->property("deviceId").toString() == phone.id()) { phoneRevoke = b; }
+        }
+        QVERIFY(ownRevoke != nullptr && phoneRevoke != nullptr);
+        QVERIFY(!ownRevoke->isEnabled());
+        QVERIFY(OperatorWording::isPlain(ownRevoke->toolTip()));
+        QVERIFY(phoneRevoke->isEnabled());
+        QCOMPARE(page.coreNameLabel()->text(), QStringLiteral("No Core name"));
+        QVERIFY(!page.keyBackupButton()->isHidden());
+        saveShot(&page, QStringLiteral("this-core-devices"), false);
+
+        // Add a device: the Core opens pairing and the page shows its code.
+        page.addDeviceButton()->click();
+        QTRY_VERIFY(!page.pairingCodeLabel()->isHidden());
+        QVERIFY(page.pairingCodeLabel()->text().startsWith(QStringLiteral("Pairing code: ")));
+        QVERIFY(page.pairingCodeLabel()->text().size() > QStringLiteral("Pairing code: ").size());
+        QVERIFY(!page.addDeviceButton()->isEnabled());
+        saveShot(&page, QStringLiteral("this-core-pairing-code"), false);
+
+        // Revoke: the Core drops the phone and it leaves the list. The rows
+        // were rebuilt when the pairing window opened, so find it again.
+        phoneRevoke = nullptr;
+        for (QPushButton* b : page.pairedRows()->findChildren<QPushButton*>(
+                 QStringLiteral("thisCoreRevoke"))) {
+            if (b->property("deviceId").toString() == phone.id()) { phoneRevoke = b; }
+        }
+        QVERIFY(phoneRevoke != nullptr);
+        phoneRevoke->click();
+        QTRY_VERIFY(!app->isOpen());
+        QVERIFY(!core.server->deviceStore()->find(phone.key.fingerprint()));
+        QTRY_COMPARE(page.pairedRows()->findChildren<QPushButton*>(
+                         QStringLiteral("thisCoreRevoke")).size(), 1);
+        QVERIFY(page.devicesStatusLabel()->text().isEmpty());
+
+        // The key backup, recorded on the Core.
+        QVERIFY(page.keyBackupButton()->isEnabled());
+        page.keyBackupButton()->click();
+        QTRY_COMPARE(page.keyBackupLabel()->text(), QStringLiteral("The Core's key is backed up."));
+        QVERIFY(core.server->devicesFacade()->keyBackupAcknowledged());
+        QVERIFY(page.keyBackupButton()->isHidden());
     }
 
     // The fifth-device list's words: the desktop that runs the Core is shown

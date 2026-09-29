@@ -368,6 +368,10 @@
 //               the takenOver end's name, id and time kept in
 //               StationEndReport. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-28: iPhone app plan Task 25: deviceAdminAvailable(),
+//               pairingAvailable() and requestDeviceAdmin() for the This
+//               Core page. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1301,6 +1305,14 @@ public:
     /// says this token sign-in did (follow-up N1).
     void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
 #endif
+    /// iPhone app plan Task 25: minor 11, deviceAdminVersion (or
+    /// pairingVersion) at least 1, and this session signed in with this
+    /// computer's own key.
+    bool deviceAdminAvailable() const override;
+    bool pairingAvailable() const override;
+    /// Verbs devices.revoke (`id`), station.acknowledgeKeyBackup,
+    /// pairing.open and pairing.close.
+    CommandOutcome requestDeviceAdmin(const QByteArray& verb, const QString& id) override;
     /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
     /// station.setRadioModel and station.forgetRadio.
     CommandOutcome requestStationRadio(const QByteArray& verb, const QString& mac,
