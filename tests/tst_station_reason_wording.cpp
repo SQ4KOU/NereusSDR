@@ -169,6 +169,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
 //                                    unknown band plan refusal forwards.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Addendum G-42: the Extended transmit
+//                                    setting's refusal forwards.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -791,6 +794,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("TxRefusals::appCannotTransmit()"),
           QStringLiteral("refusal.text"),
           QStringLiteral("decision.refusal.text"),
+          // Addendum G-42: the Extended transmit setting's refusal, which
+          // returns the transmit gate's sentence (TxRefusal.cpp), the
+          // on-air sentence (RadioModel::onAirReason) or its own literal
+          // words in StationServer.cpp, each scanned.
+          QStringLiteral("transmitGateSettingRefusal(transport, key, &value)"),
+          QStringLiteral("transmitGateSettingRefusal(transport, key, nullptr)"),
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
