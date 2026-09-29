@@ -35,6 +35,10 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -283,6 +287,15 @@ public slots:
     // board. From mi0bot Console/setup.cs:13376-13390 [@c26a8a4].
     void setHl2BandVolts(bool on);
     void setHl2PsSync(bool on);
+
+    // HL2 only: the TX buffer latency (ms, 0..70) and PTT hang (ms, 0..30)
+    // bank 17 carries (C4 and C3). Stored; the next round of the banks sends
+    // them, as mi0bot's SetTxLatency / SetPttHang only store the value.
+    // From mi0bot Console/setup.cs:21236-21248 [@c26a8a4]:
+    //   // MI0BOT: Controls the hardware tx buffer in the HL2
+    //   // MI0BOT: Controls the hardware PTT hang in the HL2
+    void setHl2TxLatency(int ms);
+    void setHl2PttHang(int ms);
 
     // Set the P1-only per-DDC ADC routing word (Thetis `P1_adc_cntrl`).
     //
@@ -766,6 +779,11 @@ private:
     // (setHl2BandVolts / setHl2PsSync), off until the saved options arrive.
     bool    m_hl2BandVolts{false};
     bool    m_hl2PsSync{false};
+    // HL2 bank 17: TX buffer latency and PTT hang, mi0bot's create_rnet
+    // defaults (netInterface.c:1709-1710 [@c26a8a4]) until the saved
+    // values arrive.
+    int     m_hl2TxLatencyMs{20};
+    int     m_hl2PttHangMs{12};
     // The radio is run as a Hermes Lite 2 (HPSDRModel::HERMESLITE).
     bool    isHl2() const;
     bool    m_rxPreamp[3]{};

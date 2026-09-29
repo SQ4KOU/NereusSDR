@@ -61,6 +61,10 @@
 //                default), as mi0bot setup.cs:2843-2848 and 13376-13390
 //                [@c26a8a4] do; other boards keep Thetis's dither and random
 //                on. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 1: the HL2 TX buffer latency and PTT hang
+//                (bank 17) are the saved HL2 options, as mi0bot
+//                setup.cs:21236-21248 [@c26a8a4] sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1436,6 +1440,16 @@ void P1RadioConnection::setHl2PsSync(bool on)
         }
         m_forceBank0Next = true;
     }
+}
+
+void P1RadioConnection::setHl2TxLatency(int ms)
+{
+    m_hl2TxLatencyMs = ms;
+}
+
+void P1RadioConnection::setHl2PttHang(int ms)
+{
+    m_hl2PttHangMs = ms;
 }
 
 void P1RadioConnection::setPreamp(bool enabled)
@@ -2971,15 +2985,21 @@ CodecContext P1RadioConnection::buildCodecContext() const
     for (int i = 0; i < 3; ++i) { ctx.rxPreamp[i]   = m_rxPreamp[i]; }
     for (int i = 0; i < 3; ++i) { ctx.dither[i]     = m_dither[i]; }
     for (int i = 0; i < 3; ++i) { ctx.random[i]     = m_random[i]; }
-    // HL2-only fields.  ptt_hang and tx_latency MUST be the mi0bot HL2
-    // defaults (12 and 20) — without them the HL2 firmware drops the PTT
+    // HL2-only fields.  ptt_hang and tx_latency start at the mi0bot HL2
+    // defaults (12 and 20); without them the HL2 firmware drops the PTT
     // immediately on any TX-buffer underrun and the T/R relay flutters.
     // Source: mi0bot ChannelMaster/netInterface.c:1713-1714 [v2.10.3.14-beta1]
     //   prn->tx[i].tx_latency = 20;  // MI0BOT: HL2
     //   prn->tx[i].ptt_hang   = 12;  // MI0BOT: HL2
+    // The HL2 Options page's saved values replace them, as mi0bot's
+    // udTxBufferLat / udPTTHang handlers do (setup.cs:21236-21248 [@c26a8a4]):
+    //   // MI0BOT: Controls the hardware tx buffer in the HL2
+    //   NetworkIO.SetTxLatency((int)udTxBufferLat.Value);
+    //   // MI0BOT: Controls the hardware PTT hang in the HL2
+    //   NetworkIO.SetPttHang((int)udPTTHang.Value);
     if (m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
-        ctx.hl2PttHang   = 12;   // 5-bit field (bank 17 C3): 12 frames hang
-        ctx.hl2TxLatency = 20;   // 7-bit field (bank 17 C4): 20 sample latency
+        ctx.hl2PttHang   = m_hl2PttHangMs;    // 5-bit field (bank 17 C3), ms
+        ctx.hl2TxLatency = m_hl2TxLatencyMs;  // 7-bit field (bank 17 C4), ms
     }
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P1 wire byte.
