@@ -783,6 +783,13 @@ was built for, with neither. The station does not declare it. The
 desktop's remote window does not declare it either: its TX EQ dialog reads
 `txEqParaEqData` itself.
 
+**`paProfiles` 1** (R-R3-49, R-IOS-18): the client reads and changes the
+Core's PA Gain profiles. A peer that declares it at minor 11 is sent
+`paProfileVersion` (section 6.3) and the read-only `paProfiles` object, and
+the Core takes its `paProfile.*` verbs; a peer that does not sees none of
+them. The desktop's remote window does not declare it: its PA Gain page
+reads and writes the profile settings through the settings proxy.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -914,6 +921,7 @@ change shows as surface drift and as a change to this table.
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
 | `txEqCurveVersion` | 1 |
+| `paProfileVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1039,6 +1047,22 @@ When a feature is off, its version is 0:
   the feature is sent neither this entry nor the property. An app on a
   Core that sends no entry shows the curve disabled with "This Core does
   not send the TX EQ curve. Updating the Core may help."
+- `paProfileVersion` (R-R3-49, R-IOS-18): optional, sent only at agreed
+  minor 11 to a peer whose hello declared `paProfiles` 1, while the Core
+  has its own PA profile bank, after `txEqCurveVersion` and before
+  `coreBuildInfo`. At 1 the Core sends `paProfiles` (read-only):
+  `json`, the PA Gain page's profiles (`names`, the ones its combo lists;
+  `active`; `factory`; `bands`, the active profile's 14 rows in Band order,
+  each `{band, gain, adjust[9], maxPower, useMax}` at one decimal place),
+  and `revision`, moving by one each time `json` changes. It takes
+  `paProfile.select {name}`, `.new {name}`, `.copy {name}`, `.delete
+  {name}`, `.reset {}`, `.setGain {band, value}`, `.setAdjust {band, step,
+  value}`, `.setMaxPower {band, value}` and `.setUseMax {band, on}`, each as
+  the desktop's page does it (Setup description version 14 gives the
+  ranges and words). Each is refused while the radio is on the air, with
+  the reason the Core gives the desktop's own PA profile writes on a
+  receive-only Core or to a device that may not transmit, and for a value
+  outside its range. None keys the radio.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1621,7 +1645,8 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 11, and `sessionHolderVersion`, last, only for a peer that declared
 `sessionHolder` (section 6.1); `vaxVersion` only for a peer that declared
 `vax` (section 6.1); `txEqCurveVersion` only for a peer that
-declared `txEqCurve` (section 6.1); `remoteTxVersion` and the three
+declared `txEqCurve` (section 6.1); `paProfileVersion` only for a peer that
+declared `paProfiles` (section 6.1); `remoteTxVersion` and the three
 `txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
@@ -1796,7 +1821,8 @@ older window sees only the values it was built for.
 | 84 | `radioAntennaRowsVersion` | `i64` |
 | 85 | `vaxVersion` | `i64` |
 | 86 | `txEqCurveVersion` | `i64` |
-| 87 | `coreBuildInfo` | `utf8` |
+| 87 | `paProfileVersion` | `i64` |
+| 88 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -1975,6 +2001,13 @@ An enum property lists the values its domain allows.
 | 1 | `revision` | `i64` | outbound |  |
 | 2 | `globalEnabled` | `bool` | bidirectional |  |
 | 3 | `autoIncrease` | `bool` | bidirectional |  |
+
+**PaProfilesFacade** (2 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `json` | `utf8` | outbound |  |
+| 1 | `revision` | `i64` | outbound |  |
 
 **PanadapterModel** (4 properties)
 
@@ -2564,6 +2597,7 @@ destroyed during the session.
 | `txState` | `TransmitState` |
 | `vax` | `StationVax` |
 | `catalog` | `StationCatalog` |
+| `paProfiles` | `PaProfilesFacade` |
 | `setup` | `SetupDescription` |
 | `spotSources` | `SpotSourceHost` |
 | `pan:<i>` | `PanadapterModel` |
@@ -4282,6 +4316,15 @@ refused.
 | `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
+| `paProfile.select` | `name` utf8 | `paProfileVersion` | 1 | 11 |
+| `paProfile.new` | `name` utf8 | `paProfileVersion` | 1 | 11 |
+| `paProfile.copy` | `name` utf8 | `paProfileVersion` | 1 | 11 |
+| `paProfile.delete` | `name` utf8 | `paProfileVersion` | 1 | 11 |
+| `paProfile.reset` | none | `paProfileVersion` | 1 | 11 |
+| `paProfile.setGain` | `band` i64, `value` f64 | `paProfileVersion` | 1 | 11 |
+| `paProfile.setAdjust` | `band` i64, `step` i64, `value` f64 | `paProfileVersion` | 1 | 11 |
+| `paProfile.setMaxPower` | `band` i64, `value` f64 | `paProfileVersion` | 1 | 11 |
+| `paProfile.setUseMax` | `band` i64, `on` bool | `paProfileVersion` | 1 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |

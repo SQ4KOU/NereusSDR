@@ -188,6 +188,9 @@
 //                                    worker thread) and
 //                                    support.setLogCategories.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
+//                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -504,6 +507,7 @@ private:
     // save and delete through the Core's MicProfileManager, and
     // rade.resetVocoder on the Core's RADE channel.
     void handleTxProfile(const NereusSDR::SessionMessage& invoke);
+    void handlePaProfile(const NereusSDR::SessionMessage& invoke);
     void handleRadeResetVocoder(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only

@@ -162,6 +162,9 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: txEqCurveVersion, the read-only TX
 //                EQ curve on `transmit`. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
+//                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -247,6 +250,13 @@ struct StationCapabilities {
     /// txEqCurve 1, after radioAntennaRowsVersion; that peer alone gets the
     /// property. 0 (absent): the peer sees today's wire.
     int txEqCurveVersion = 0;
+    /// R-R3-49 / R-IOS-18: 1 means the Core sends its PA Gain profiles on
+    /// the read-only `paProfiles` object and takes the paProfile verbs
+    /// (select, new, copy, delete, reset, setGain, setAdjust, setMaxPower,
+    /// setUseMax), each gated as the Core gates the desktop's own PA profile
+    /// writes. Only for a peer at minor 11 that declared paProfiles 1, after
+    /// txEqCurveVersion.
+    int paProfileVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows

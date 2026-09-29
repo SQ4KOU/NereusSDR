@@ -4,6 +4,9 @@
 #include "core/AppSettings.h"
 #include "core/PaTelemetryScaling.h"
 #include "core/PaCalProfile.h"
+#include "core/PaProfileManager.h"
+#include "core/PaProfile.h"
+#include "models/Band.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -138,6 +141,122 @@ private slots:
     // R-R3-49 (lead's ruling): the Core refuses a calibration write whole
     // when the value is outside the control's range, says the range in plain
     // words, and hands back its own value; an in-range write is taken.
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): a paired phone that declares
+    // paProfiles reads the Core's PA Gain profiles on the `paProfiles` object
+    // and changes them with the paProfile verbs, as the local PA Gain page
+    // does, through the gates the desktop's own profile writes meet: off the
+    // air on a receive-only Core; not at all for a peer that did not declare
+    // the feature.
+    void pairedPaProfileVerbsChangeTheCoresBankOffTheAirOnly()
+    {
+        Core core;
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        core.model->setReceiveOnlyStationPolicy(true);
+        const QString factory = bank->activeProfileName();
+        QVERIFY(!factory.isEmpty());
+
+        Device phone(QStringLiteral("PA profile iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("No PA profile iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        core.pair(older);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("paProfiles", 1);
+        auto* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("paProfileVersion")),
+                 std::optional<qint64>(1));
+        const auto mirror = [app]() {
+            return QJsonDocument::fromJson(latest(app->received(), QStringLiteral("paProfiles"),
+                                                  QStringLiteral("json")).toString().toUtf8())
+                .object();
+        };
+        QTRY_COMPARE(mirror().value("active"), QJsonValue(factory));
+        QCOMPARE(mirror().value("bands").toArray().size(), 14);
+        QCOMPARE(mirror().value("bands").toArray().first().toObject().value("band"),
+                 QJsonValue("160m"));
+        QVERIFY(mirror().value("names").toArray().contains(QJsonValue(factory)));
+
+        const auto ok = [&core, app](const QByteArray& verb, const QList<MirrorUpdate>& args) {
+            const QJsonObject result = core.invoke(app, verb, args);
+            return result.value("accepted").toBool()
+                ? QString() : result.value("reason").toString(QStringLiteral("(no answer)"));
+        };
+        const auto name = [](const QString& n) {
+            return MirrorUpdate{0, "name", MirrorWireKind::Utf8, n};
+        };
+        const auto band = [](int b) { return MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(b)}; };
+        const auto value = [](double v) { return MirrorUpdate{0, "value", MirrorWireKind::Float64, v}; };
+
+        QCOMPARE(ok("paProfile.new", {name("Contest")}), QString());
+        QCOMPARE(bank->activeProfileName(), QStringLiteral("Contest"));
+        QTRY_COMPARE(mirror().value("active"), QJsonValue("Contest"));
+        QCOMPARE(ok("paProfile.new", {name("Default mine")}),
+                 QStringLiteral("Profile names starting with \"Default\" are reserved for factory "
+                                "entries. Choose a different name."));
+        QCOMPARE(ok("paProfile.new", {name("contest")}),
+                 QStringLiteral("A profile named \"contest\" already exists. Choose a different name."));
+        // 20 m is Band 5.
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(47.54)}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.5f);
+        QTRY_COMPARE(mirror().value("bands").toArray().at(5).toObject().value("gain").toDouble(),
+                     47.5);
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(30.0)}),
+                 QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        QCOMPARE(ok("paProfile.setAdjust",
+                    {band(5), MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(8)},
+                     value(-1.2)}), QString());
+        QCOMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 8), -1.2f);
+        QCOMPARE(ok("paProfile.setAdjust",
+                    {band(5), MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(8)},
+                     value(10.5)}), QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        QCOMPARE(ok("paProfile.setMaxPower", {band(5), value(80.0)}), QString());
+        QCOMPARE(ok("paProfile.setUseMax", {band(5), MirrorUpdate{0, "on", MirrorWireKind::Bool, true}}),
+                 QString());
+        QVERIFY(bank->activeProfile()->getMaxPowerUse(Band::Band20m));
+        QCOMPARE(ok("paProfile.setMaxPower", {band(5), value(1500.5)}),
+                 QStringLiteral("Choose a max power from 0 to 1500 W."));
+        QCOMPARE(ok("paProfile.copy", {name("Contest 2")}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.5f);
+        QCOMPARE(ok("paProfile.delete", {name("Contest 2")}), QString());
+        // Thetis selects the radio's Default profile after a delete.
+        QCOMPARE(bank->activeProfileName(), factory);
+        QCOMPARE(ok("paProfile.select", {name("Contest")}), QString());
+        QCOMPARE(ok("paProfile.reset", {}), QString());
+        QCOMPARE(bank->activeProfile()->getMaxPowerUse(Band::Band20m), false);
+        QCOMPARE(ok("paProfile.select", {name("Nothing")}),
+                 QStringLiteral("There is no PA profile called Nothing."));
+
+        // On the air, a receive-only Core takes none of them.
+        const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
+        allowTransmit(core);
+        core.model->setReceiveOnlyStationPolicy(true);
+        MoxController* mox = core.model->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical test state, no radio transport
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(48.0)}),
+                 QStringLiteral("The radio is on the air. Try again when it stops."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // A peer that did not declare the feature sees nothing and changes
+        // nothing.
+        auto* old = core.signIn(older, kHolder);
+        QVERIFY(admitted(old));
+        QCOMPARE(capability(old->received(), QStringLiteral("paProfileVersion")),
+                 std::optional<qint64>());
+        QVERIFY(latest(old->received(), QStringLiteral("paProfiles"), QStringLiteral("json"))
+                    .isNull());
+        const QJsonObject refused = core.invoke(old, "paProfile.select", {name(factory)});
+        QVERIFY(!refused.value("accepted").toBool(true));
+        QVERIFY(!refused.value("reason").toString().isEmpty());
+    }
+
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()
     {
         Core core;

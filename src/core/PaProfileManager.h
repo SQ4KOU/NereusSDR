@@ -31,6 +31,9 @@
 //   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 6):
 //                 reloadFromSettings() and profileDataChanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: profileSaved, bankLoaded and defaultProfileName,
+//                 for the Core's paProfiles mirror and verbs. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -227,6 +230,10 @@ public:
     /// factory names) are left untouched.
     void regenerateFactoryDefaults(HPSDRModel connectedModel);
 
+    /// R-R3-49: the factory profile's name for `model`, "Default - <enum
+    /// name>" (Thetis setup.cs:23309, "Default - " + model.ToString()).
+    static QString defaultProfileName(HPSDRModel model);
+
 signals:
     /// Emitted when the profile-list membership changes (a profile was
     /// added or deleted). Plain overwrites do NOT emit this — only set
@@ -240,6 +247,13 @@ signals:
     /// Emitted by reloadFromSettings() when a profile's stored values
     /// changed (another window, or the Core, saved it).
     void profileDataChanged();
+
+    /// R-R3-49: saveProfile() stored `name`'s values (a new profile or an
+    /// overwrite). The Core's `paProfiles` mirror follows it.
+    void profileSaved(const QString& name);
+
+    /// R-R3-49: load() finished (a radio's bank is in memory).
+    void bankLoaded();
 
 private:
     /// Read the profile-name manifest from AppSettings. Empty list means

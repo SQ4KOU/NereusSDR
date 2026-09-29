@@ -567,6 +567,11 @@
 //   2026-09-28 - R-R3-49 (found bug): the Protocol 1 connection gets the
 //                 calibration controller too, for the frequency correction.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: PA Gain's profiles for a remote client
+//                 (paProfileActionForStation; the page's ids, plain tooltips,
+//                 the adjust tooltip's stray %, and the Default profile found
+//                 by its real name after a delete). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -5304,6 +5309,151 @@ bool RadioModel::deleteTxProfileForStation(const QString& name, QString* reason)
         return false;
     }
     return true;
+}
+
+bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QString* reason)
+{
+    const auto fail = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    PaProfileManager* const bank = m_paProfileManager;
+    if (m_role != Role::Local || bank == nullptr || bank->activeProfile() == nullptr) {
+        return fail(QStringLiteral("The Core has no PA profiles for a radio."));
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    const HPSDRModel model = m_hardwareProfile.model;
+    const QString active = bank->activeProfileName();
+    // PaGainByBandPage::validateProfileName, the local page's rules and
+    // words (Thetis validatePAProfileName, setup.cs:23032-23053
+    // [v2.10.3.15]: no "Default" prefix, no name already there).
+    const auto nameRefusal = [bank](const QString& name) -> QString {
+        if (name.isEmpty()) {
+            return QStringLiteral("Give the PA profile a name.");
+        }
+        if (name.startsWith(QStringLiteral("Default"), Qt::CaseInsensitive)) {
+            return QStringLiteral("Profile names starting with \"Default\" are reserved for "
+                                  "factory entries. Choose a different name.");
+        }
+        if (bank->profileNames().contains(name, Qt::CaseInsensitive)) {
+            return QStringLiteral("A profile named \"%1\" already exists. Choose a different "
+                                  "name.").arg(name);
+        }
+        return {};
+    };
+    // The page's spin boxes, which hold one decimal place:
+    //   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
+    //          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
+    //   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
+    //   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
+    //          one decimal (setup.designer.cs:47541)
+    const double rounded = std::round(request.value * 10.0) / 10.0;
+    const bool finite = std::isfinite(request.value);
+    const bool bandOk = request.band >= 0 && request.band < PaProfile::kBandCount;
+    const Band band = static_cast<Band>(bandOk ? request.band : 0);
+
+    switch (request.action) {
+    case PaProfileAction::Select: {
+        // The page's combo: the profiles Thetis's filter shows.
+        if (!bank->userVisibleProfileNames(model, active).contains(request.name)) {
+            return fail(QStringLiteral("There is no PA profile called %1.").arg(request.name));
+        }
+        return bank->setActiveProfile(request.name)
+            || fail(QStringLiteral("The Core did not change the PA profile."));
+    }
+    case PaProfileAction::New:
+    case PaProfileAction::Copy: {
+        const QString name = request.name.trimmed();
+        if (!nameRefusal(name).isEmpty()) {
+            return fail(nameRefusal(name));
+        }
+        // From Thetis setup.cs:23072-23084 [v2.10.3.15] btnNewPAProfile_Click
+        //   PAProfile p = new PAProfile(sProfileName, HardwareSpecific.Model/*HPSDRModel.FIRST*/, false); // set the initial values based on current model, all we can do
+        // From Thetis setup.cs:23055-23070 [v2.10.3.15] btnCopyPAProfile_Click
+        //   PAProfile newP = new PAProfile(sProfileName, HPSDRModel.FIRST, false); // we dont really want it associated with a model
+        //   newP.CopySettings(curP);
+        PaProfile profile(name, request.action == PaProfileAction::New ? model : HPSDRModel::FIRST,
+                          /*isFactoryDefault=*/false);
+        if (request.action == PaProfileAction::Copy) {
+            profile.copySettings(*bank->activeProfile());
+        }
+        if (!bank->saveProfile(name, profile) || !bank->setActiveProfile(name)) {
+            return fail(QStringLiteral("The Core did not save the PA profile."));
+        }
+        return true;
+    }
+    case PaProfileAction::Delete: {
+        if (!bank->userVisibleProfileNames(model, active).contains(request.name)) {
+            return fail(QStringLiteral("There is no PA profile called %1.").arg(request.name));
+        }
+        if (bank->profileNames().size() <= 1) {
+            return fail(QStringLiteral("It is not possible to delete the last remaining PA profile."));
+        }
+        if (!bank->deleteProfile(request.name)) {
+            return fail(QStringLiteral("The Core did not delete the PA profile."));
+        }
+        // From Thetis setup.cs:23086-23113 [v2.10.3.15] btnDeletePAProfile_Click:
+        // the first listed profile starting with "Default" is selected,
+        // which the combo's filter makes this radio's own Default profile.
+        const QStringList left = bank->userVisibleProfileNames(model, bank->activeProfileName());
+        const QString fallback = PaProfileManager::defaultProfileName(model);
+        if (bank->profileNames().contains(fallback)) {
+            bank->setActiveProfile(fallback);
+        } else if (!left.isEmpty() && !left.contains(bank->activeProfileName())) {
+            bank->setActiveProfile(left.first());
+        }
+        return true;
+    }
+    case PaProfileAction::Reset: {
+        // From Thetis setup.cs:23249-23270 [v2.10.3.15] btnResetPAProfile_Click
+        //   p.ResetGainDefaultsForModel(p.Model);
+        PaProfile reset = *bank->activeProfile();
+        reset.resetGainDefaultsForModel(reset.model());
+        return bank->saveProfile(active, reset)
+            || fail(QStringLiteral("The Core did not reset the PA profile."));
+    }
+    case PaProfileAction::SetGain:
+    case PaProfileAction::SetAdjust:
+    case PaProfileAction::SetMaxPower:
+    case PaProfileAction::SetUseMax:
+        break;
+    }
+    if (!bandOk) {
+        return fail(QStringLiteral("Choose a band from 160 m to XVTR."));
+    }
+    PaProfile edited = *bank->activeProfile();
+    switch (request.action) {
+    case PaProfileAction::SetGain:
+        if (!finite || rounded < 38.8 || rounded > 100.0) {
+            return fail(QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        }
+        edited.setGainForBand(band, static_cast<float>(rounded));
+        break;
+    case PaProfileAction::SetAdjust:
+        if (request.step < 0 || request.step >= PaProfile::kDriveSteps) {
+            return fail(QStringLiteral("Choose a drive step from 10% to 90%."));
+        }
+        if (!finite || rounded < -10.0 || rounded > 10.0) {
+            return fail(QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        }
+        edited.setAdjust(band, request.step, static_cast<float>(rounded));
+        break;
+    case PaProfileAction::SetMaxPower:
+        if (!finite || rounded < 0.0 || rounded > 1500.0) {
+            return fail(QStringLiteral("Choose a max power from 0 to 1500 W."));
+        }
+        edited.setMaxPower(band, static_cast<float>(rounded));
+        break;
+    case PaProfileAction::SetUseMax:
+        edited.setMaxPowerUse(band, request.on);
+        break;
+    default:
+        break;
+    }
+    return bank->saveProfile(active, edited)
+        || fail(QStringLiteral("The Core did not save the PA profile."));
 }
 
 bool RadioModel::resetRadeVocoderForStation(QString* reason)

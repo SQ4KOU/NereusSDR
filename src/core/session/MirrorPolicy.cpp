@@ -155,6 +155,9 @@
 //   2026-09-28 - R-IOS-13 / R-R3-49: TransmitModel txEqCurve Outbound
 //                 (txEqCurveVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: paProfileVersion and the read-only
+//                 paProfiles object (PaProfilesFacade). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -870,6 +873,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // only with the Core's presets, band plans and radio.
     { "StationCatalog", "json", MirrorDirection::Outbound },
     { "StationCatalog", "revision", MirrorDirection::Outbound },
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the Core's PA Gain profiles,
+    // read-only; the paProfile verbs change them.
+    { "PaProfilesFacade", "json", MirrorDirection::Outbound },
+    { "PaProfilesFacade", "revision", MirrorDirection::Outbound },
 
     // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core's
     // spot sources, read-only. They change only through spots.connect,

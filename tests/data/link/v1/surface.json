@@ -431,6 +431,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "paProfileVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -967,6 +972,143 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "rade.resetVocoder"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.select"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.new"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.copy"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.delete"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.reset"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "value",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.setGain"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "step",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "value",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.setAdjust"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "value",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.setMaxPower"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "paProfileVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "paProfile.setUseMax"
         },
         {
             "arguments": [
@@ -4446,6 +4588,22 @@
                 }
             ]
         },
+        "PaProfilesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "json",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                }
+            ]
+        },
         "PanadapterModel": {
             "properties": [
                 {
@@ -7631,6 +7789,10 @@
         {
             "class": "StationCatalog",
             "key": "catalog"
+        },
+        {
+            "class": "PaProfilesFacade",
+            "key": "paProfiles"
         },
         {
             "class": "SetupDescription",

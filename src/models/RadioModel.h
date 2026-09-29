@@ -361,6 +361,11 @@
 //                Core's readings (stationModMonitorSnapshot).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: PA Gain's profiles for a remote client
+//                 (paProfileActionForStation; the page's ids, plain tooltips,
+//                 the adjust tooltip's stray %, and the Default profile found
+//                 by its real name after a delete). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3286,6 +3291,24 @@ public:
     bool selectTxProfileForStation(const QString& name, QString* reason);
     bool saveTxProfileForStation(const QString& name, QString* reason);
     bool deleteTxProfileForStation(const QString& name, QString* reason);
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain page's profile
+    // actions and edits, for a paProfile verb, through the Core's own
+    // PaProfileManager as the local page uses it. Each is refused, changing
+    // nothing, while the radio is on the air, for a value outside the
+    // page's own control, and for a name the rules refuse. None keys the
+    // radio. The Core's `paProfiles` object follows the bank.
+    enum class PaProfileAction {
+        Select, New, Copy, Delete, Reset, SetGain, SetAdjust, SetMaxPower, SetUseMax
+    };
+    struct PaProfileRequest {
+        PaProfileAction action = PaProfileAction::Select;
+        QString name;
+        int band = -1;     // Band 0 (160m) .. 13 (XVTR)
+        int step = -1;     // drive step 0 (10%) .. 8 (90%)
+        double value = 0.0;
+        bool on = false;
+    };
+    bool paProfileActionForStation(const PaProfileRequest& request, QString* reason);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.

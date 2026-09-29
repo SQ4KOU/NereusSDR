@@ -233,6 +233,9 @@
 //               (txModMonitorVersion 1), answered by the station server
 //               beside the record streams. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
+//                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -584,6 +587,25 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"txProfile.delete", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
          kRadioIdentitySessionProtocolMinor},
         {"rade.resetVocoder", {}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        // Setup > PA > PA Gain's profiles and table, as the local page
+        // changes them (R-R3-49, R-IOS-18; paProfileVersion 1).
+        {"paProfile.select", {arg("name", kUtf8)}, "paProfileVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"paProfile.new", {arg("name", kUtf8)}, "paProfileVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"paProfile.copy", {arg("name", kUtf8)}, "paProfileVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"paProfile.delete", {arg("name", kUtf8)}, "paProfileVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"paProfile.reset", {}, "paProfileVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"paProfile.setGain", {arg("band", kInt), arg("value", kDouble)}, "paProfileVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"paProfile.setAdjust", {arg("band", kInt), arg("step", kInt), arg("value", kDouble)},
+         "paProfileVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"paProfile.setMaxPower", {arg("band", kInt), arg("value", kDouble)},
+         "paProfileVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"paProfile.setUseMax", {arg("band", kInt), arg("on", kBool)}, "paProfileVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
@@ -1193,6 +1215,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleTxProfile(invoke);
     } else if (invoke.commandVerb == "rade.resetVocoder") {
         handleRadeResetVocoder(invoke);
+    } else if (invoke.commandVerb == "paProfile.select" || invoke.commandVerb == "paProfile.new"
+               || invoke.commandVerb == "paProfile.copy" || invoke.commandVerb == "paProfile.delete"
+               || invoke.commandVerb == "paProfile.reset"
+               || invoke.commandVerb == "paProfile.setGain"
+               || invoke.commandVerb == "paProfile.setAdjust"
+               || invoke.commandVerb == "paProfile.setMaxPower"
+               || invoke.commandVerb == "paProfile.setUseMax") {
+        handlePaProfile(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -3340,6 +3370,69 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
     if (!done) {
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not change the transmit profile.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 / R-IOS-18 (paProfileVersion 1): PA Gain's profiles and table,
+// through the Core's own PaProfileManager as the local page uses it
+// (RadioModel::paProfileActionForStation). StationServer has already
+// applied the gates the desktop's own PA profile writes meet. Keys nothing.
+void SessionCommandDispatcher::handlePaProfile(const SessionMessage& invoke)
+{
+    using Action = RadioModel::PaProfileAction;
+    const QByteArray& verb = invoke.commandVerb;
+    RadioModel::PaProfileRequest request;
+    bool understood = false;
+    int band = -1;
+    int step = -1;
+    const auto bandOk = [&]() {
+        return hasWireKind(invoke.arguments, "band", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "band", &band) == ArgumentStatus::Ok;
+    };
+    const auto valueOk = [&]() {
+        return findFiniteDoubleArgument(invoke.arguments, "value", &request.value);
+    };
+    if (verb == "paProfile.select" || verb == "paProfile.new" || verb == "paProfile.copy"
+        || verb == "paProfile.delete") {
+        request.action = verb == "paProfile.select" ? Action::Select
+            : verb == "paProfile.new" ? Action::New
+            : verb == "paProfile.copy" ? Action::Copy : Action::Delete;
+        understood = hasExactlyArguments(invoke.arguments, { "name" })
+            && findUtf8Argument(invoke.arguments, "name", &request.name);
+    } else if (verb == "paProfile.reset") {
+        request.action = Action::Reset;
+        understood = hasExactlyArguments(invoke.arguments, {});
+    } else if (verb == "paProfile.setGain" || verb == "paProfile.setMaxPower") {
+        request.action = verb == "paProfile.setGain" ? Action::SetGain : Action::SetMaxPower;
+        understood = hasExactlyArguments(invoke.arguments, { "band", "value" }) && bandOk()
+            && valueOk();
+    } else if (verb == "paProfile.setAdjust") {
+        request.action = Action::SetAdjust;
+        understood = hasExactlyArguments(invoke.arguments, { "band", "step", "value" })
+            && bandOk() && hasWireKind(invoke.arguments, "step", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "step", &step) == ArgumentStatus::Ok
+            && valueOk();
+    } else if (verb == "paProfile.setUseMax") {
+        request.action = Action::SetUseMax;
+        QVariant on;
+        understood = hasExactlyArguments(invoke.arguments, { "band", "on" }) && bandOk()
+            && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
+        request.on = on.toBool();
+    }
+    if (!understood) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request for the PA profile was not understood."), {});
+        return;
+    }
+    request.band = band;
+    request.step = step;
+    QString reason;
+    if (!m_radioModel->paProfileActionForStation(request, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the PA profile.")
                                     : reason, {});
         return;
     }

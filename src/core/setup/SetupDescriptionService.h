@@ -41,6 +41,8 @@ public:
     /// Version 13 (R-R3-49): the resource form of a PA or Hardware Config
     /// row, exactly as published; false for any other object.
     static bool validatePaV13Control(const QJsonObject& control);
+    /// Version 14: PA Gain's profile rows (paProfileVersion 1).
+    static bool validatePaV14Control(const QJsonObject& control);
     static bool validateHardwareV13Control(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);

@@ -1,4 +1,4 @@
-# Setup description versions 1–13
+# Setup description versions 1–14
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -148,9 +148,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 13. Hardware and PA have a version-13
-ceiling, with their prior version-6 and version-5 projections for V6–V12 and
-V5–V12; Display a version-12 ceiling, and Appearance a version-12
+future declaration at version 14. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-13 ceiling (version 6
+for V6–V12); Display a version-12 ceiling, and Appearance a version-12
 ceiling with its prior version-4 projection for V4–V6 and version-7
 projection for V7–V11; the other categories on this source retain
 version 3.
@@ -517,6 +517,54 @@ bar); OC Outputs; the rest of Calibration (frequency and level calibration,
 HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or
 capability value is defined.
+
+Version 14 describes PA Gain's profiles (R-R3-49, R-IOS-18). The page
+`pa.gain` now carries, on every radio with a PA, a Profile section (the
+profile choice, New, Copy, Delete, Reset Defaults) and a PA Gain by Band
+(dB) section with one table; the ANAN-G2E's bypass box stays last and is
+still the G2E's only. Every new row has `requiresDescriptionVersion:14`,
+the gate `{"capability":"paProfileVersion","min":1,"offAir":true}`, and is
+accepted only as the exact closed object in `resources/setup/pa.json`.
+V13 and older keep their projections (PA Gain appears there only on the
+G2E, with the bypass box alone).
+
+The data is the Core's read-only `paProfiles` object (link document,
+paProfileVersion 1): `json` holds `names` (the profiles the desktop's combo
+lists: this radio's factory profile and every user profile), `active`,
+`factory` and `bands`, the active profile's 14 rows in Band order, each
+`{band, gain, adjust[9], maxPower, useMax}` at one decimal place. The
+closed bindings are:
+
+- `{"paProfile":"active"}` on the `choice`: its options are `names`, its
+  value `active`; a pick sends `paProfile.select {name}`.
+- `{"paProfile":"new"}`, `"copy"`, `"delete"`, `"reset"` on the buttons.
+  New and Copy carry `prompt` `{title, label, default}` (Copy's default is
+  `"%1 (copy)"`, `%1` the active profile's name); the renderer asks for a
+  name and sends `paProfile.new {name}` or `paProfile.copy {name}`. Delete
+  and Reset Defaults carry the desktop's `confirm` (`%1` the active name)
+  and send `paProfile.delete {name: active}` or `paProfile.reset {}` on
+  Yes.
+- `{"paProfileGrid":{"object":"paProfiles"}}` on the `table`: `rows` are
+  the 14 bands (`band` 0..13 and label), `columns` the Gain (dB) column
+  (38.8..100 dB), the nine drive-step adjusts (`driveStep` 0..8, labels
+  10%..90%, -10..10 dB), Max W (0..1500 W), each a decimal of step 0.1 and
+  one decimal place, and Use Max (a toggle). A column's `tooltip` has `%1`
+  for the row's band. A cell edit sends `paProfile.setGain {band, value}`,
+  `paProfile.setAdjust {band, step, value}`, `paProfile.setMaxPower {band,
+  value}` or `paProfile.setUseMax {band, on}`.
+
+The Core does what the desktop's page does: select (only a listed
+profile), New (a profile seeded from this radio's factory row; names must
+not start with "Default" or repeat one there), Copy (the active profile's
+values under a new name), Delete (never the last one; the radio's factory
+profile is then selected, as Thetis does), Reset Defaults (the active
+profile's factory values for its model), and the cell edits, each rounded
+to one decimal place and refused whole outside its column's range. Every
+verb is refused while the radio is on the air, and meets the gates the
+Core gives the desktop's own PA profile writes: a receive-only Core takes
+it from a peer offered transmit settings, and with remote transmit
+allowed only from a device that may transmit. A peer must declare
+`paProfiles:1` to get the object, the capability and the verbs.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

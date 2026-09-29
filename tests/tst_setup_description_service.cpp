@@ -1007,7 +1007,12 @@ private slots:
             }());
             QVERIFY(!QJsonDocument(older).toJson().contains("pa.wattMeter"));
         }
-        QCOMPARE(projectedCategory(service.pa(), 14), pa);
+        // Version 14 adds only PA Gain's profile rows (paV14 test).
+        QCOMPARE([&] {
+            QJsonObject v13 = withoutRowsOf(projectedCategory(service.pa(), 14), 14);
+            v13.insert("version", 13);
+            return v13;
+        }(), pa);
 
         // Each class has its own points; an unknown model has none, so the
         // page keeps only its two local controls.
@@ -1035,6 +1040,75 @@ private slots:
         QCOMPARE(unknown.value("sections").toArray().size(), 1);
         QCOMPARE(unknown.value("sections").toArray().first().toObject().value("title"),
                  QJsonValue("PA Values"));
+    }
+
+    // Version 14 (R-R3-49, R-IOS-18): PA Gain's profile choice, New, Copy,
+    // Delete and Reset Defaults, and the per-band table, bound to the
+    // Core's `paProfiles` object and the paProfile verbs; on every radio
+    // with a PA, the bypass box still the ANAN-G2E's only.
+    void paV14PublishesPaGainProfiles()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QJsonObject pa = projectedCategory(service.pa(), 14);
+        QCOMPARE(pa.value("version"), QJsonValue(14));
+        const QJsonObject gain = pageById(pa, "pa.gain");
+        const QJsonArray sections = gain.value("sections").toArray();
+        QCOMPARE(sections.size(), 2);   // no bypass box on the G2
+        QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Profile"));
+        QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("PA Gain by Band (dB)"));
+        QStringList ids;
+        for (const QJsonValue& row : rowsOf(gain)) {
+            const QJsonObject control = row.toObject();
+            ids << control.value("id").toString();
+            QCOMPARE(control.value("gate"), QJsonValue(QJsonObject{
+                {"capability", "paProfileVersion"}, {"min", 1}, {"offAir", true}}));
+            QVERIFY(SetupDescriptionService::validatePaV14Control(control));
+        }
+        QCOMPARE(ids, (QStringList{"pa.gain.profile", "pa.gain.new", "pa.gain.copy",
+                                   "pa.gain.delete", "pa.gain.reset", "pa.gain.table"}));
+        const QJsonObject table = rowsOf(gain).last().toObject();
+        QCOMPARE(table.value("binding"), QJsonValue(QJsonObject{
+            {"paProfileGrid", QJsonObject{{"object", "paProfiles"}}}}));
+        QCOMPARE(table.value("rows").toArray().size(), 14);
+        QCOMPARE(table.value("rows").toArray().last().toObject().value("label"), QJsonValue("XVTR"));
+        const QJsonArray columns = table.value("columns").toArray();
+        QCOMPARE(columns.size(), 12);
+        QCOMPARE(columns.first().toObject().value("min"), QJsonValue(38.8));
+        QCOMPARE(columns.at(9).toObject().value("label"), QJsonValue("90%"));
+        QCOMPARE(columns.at(9).toObject().value("driveStep"), QJsonValue(8));
+        QCOMPARE(columns.at(10).toObject().value("max"), QJsonValue(1500));
+        QCOMPARE(columns.last().toObject().value("kind"), QJsonValue("toggle"));
+        QCOMPARE(rowsOf(gain).at(3).toObject().value("confirm"), QJsonValue("Delete profile \"%1\"?"));
+        QCOMPARE(rowsOf(gain).at(2).toObject().value("prompt").toObject().value("default"),
+                 QJsonValue("%1 (copy)"));
+
+        const QList<QJsonObject> rows = resourceRows(QStringLiteral("pa"), 14);
+        QCOMPARE(rows.size(), 6);
+        for (const QJsonObject& row : rows) {
+            QVERIFY(!SetupDescriptionService::validatePaV13Control(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validatePaV14Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+
+        // Version 13 and older: no profile rows, and no PA Gain page on the G2.
+        for (int version = 1; version <= 13; ++version) {
+            QVERIFY(pageById(projectedCategory(service.pa(), version), "pa.gain").isEmpty());
+        }
+        // The G2E keeps its bypass box, last, after the profile rows.
+        RadioModel g2e;
+        g2e.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        service.setRadioContext(g2e.boardCapabilities(), g2e.hardwareProfile().model);
+        const QJsonArray g2eRows = rowsOf(pageById(projectedCategory(service.pa(), 14), "pa.gain"));
+        QCOMPARE(g2eRows.size(), 7);
+        QCOMPARE(g2eRows.last().toObject().value("id"), QJsonValue("pa.gain.bypassPaSettings"));
+        const QJsonArray g2eV13 = rowsOf(pageById(projectedCategory(service.pa(), 13), "pa.gain"));
+        QCOMPARE(g2eV13.size(), 1);
+        QCOMPARE(g2eV13.first().toObject().value("id"), QJsonValue("pa.gain.bypassPaSettings"));
     }
 
     // Version 13: Hardware Config's Radio Info (the Core's radio, as the
@@ -1928,7 +2002,7 @@ private slots:
             QVERIFY(!pa.isEmpty());
             const QJsonObject paObject = QJsonDocument::fromJson(pa.toUtf8()).object();
             QCOMPARE(paObject.value("version").toInt(),
-                     expected >= 13 ? 13 : qMin(expected, 5));
+                     expected >= 14 ? 14 : expected >= 13 ? 13 : qMin(expected, 5));
             QCOMPARE(paObject.value("pages").toArray().size(), expected >= 13 ? 3 : 2);
             for (const QJsonValue& page : paObject.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
@@ -1993,7 +2067,8 @@ private slots:
         check(11, kSessionProtocolMinor, 11);
         check(12, kSessionProtocolMinor, 12);
         check(13, kSessionProtocolMinor, 13);
-        check(14, kSessionProtocolMinor, 13);
+        check(14, kSessionProtocolMinor, 14);
+        check(15, kSessionProtocolMinor, 14);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

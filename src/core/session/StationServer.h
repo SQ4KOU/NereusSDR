@@ -488,6 +488,7 @@ class SettingsProxyServer;
 class StateMirror;
 class StationOpeningGate;
 class StationCatalog;
+class PaProfilesFacade;
 class SetupDescription;
 using SetupDescriptionService = SetupDescription;
 class StationRadios;
@@ -1620,6 +1621,15 @@ private:
     /// R-IOS-13 / R-R3-49: txEqCurveVersion 1 reaches `transport` (minor
     /// 11, a radio model, and txEqCurve 1 declared in its hello).
     bool peerGetsTxEqCurve(SessionTransport* transport) const;
+    /// R-R3-49 / R-IOS-18: paProfileVersion 1 reaches `transport` (minor 11,
+    /// a Core with its own PA profile bank, and paProfiles 1 declared).
+    bool peerGetsPaProfiles(SessionTransport* transport) const;
+    /// The refusal a PA profile change from `transport` meets, the one the
+    /// settings path gives the desktop's own hardware/<mac>/pa/... writes
+    /// (receive-only refusal unless transmit settings were offered; the
+    /// station transmit decision with remote transmit allowed); empty when
+    /// it may. The radio's on-air rule is RadioModel's.
+    QString paProfileRefusal(SessionTransport* transport) const;
     /// Takes transmit's txEqCurve out of a schema, object.create or delta
     /// for a peer that does not get it, so an older app sees today's wire.
     /// False when a delta has nothing left worth sending.
@@ -2104,6 +2114,8 @@ private:
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
+    // R-R3-49 / R-IOS-18: the Core's PA Gain profiles (`paProfiles`).
+    std::unique_ptr<PaProfilesFacade> m_paProfiles;
     std::unique_ptr<SetupDescriptionService> m_setupDescription;
     // Parity Task 19 (R-IOS-25): the record streams by name, the id of the
     // last console line, and the send that follows a change.

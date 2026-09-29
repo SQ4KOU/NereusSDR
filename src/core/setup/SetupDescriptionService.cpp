@@ -144,6 +144,26 @@ QHash<QString, QJsonObject> controlsById(const char* json)
     return controls;
 }
 
+// PA version 14 (R-R3-49, R-IOS-18): PA Gain's profile choice, its four
+// buttons and the per-band table, bound to the Core's `paProfiles` object
+// and the paProfile verbs (paProfileVersion 1). Closed as the version 12
+// rows are.
+constexpr char kPaV14Controls[] =
+    R"json([)json"
+    R"json({"id":"pa.gain.profile","label":"PA profile","tooltip":"Active PA gain profile. Its per-band PA gain keeps the drive right for this radio's power amplifier, so a high-gain amplifier is not overdriven.","kind":"choice","binding":{"paProfile":"active"},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14},)json"
+    R"json({"id":"pa.gain.new","label":"New","tooltip":"Create a new empty profile seeded from the connected radio's factory PA gain row.","kind":"button","binding":{"paProfile":"new"},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"prompt":{"title":"New PA Profile","label":"Profile name:","default":""}},)json"
+    R"json({"id":"pa.gain.copy","label":"Copy","tooltip":"Duplicate the active profile under a new name.","kind":"button","binding":{"paProfile":"copy"},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"prompt":{"title":"Copy PA Profile","label":"New profile name:","default":"%1 (copy)"}},)json"
+    R"json({"id":"pa.gain.delete","label":"Delete","tooltip":"Delete the active profile.  The last remaining profile cannot be deleted.","kind":"button","binding":{"paProfile":"delete"},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"confirm":"Delete profile \"%1\"?"},)json"
+    R"json({"id":"pa.gain.reset","label":"Reset Defaults","tooltip":"Re-seed the active profile from the canonical factory PA gain row for its model.  Drive-step adjusts and max-power columns are cleared.","kind":"button","binding":{"paProfile":"reset"},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"confirm":"Reset the active profile to factory defaults?"},)json"
+    R"json({"id":"pa.gain.table","label":"PA Gain by Band (dB)","tooltip":"","kind":"table","binding":{"paProfileGrid":{"object":"paProfiles"}},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"rows":[{"band":0,"label":"160m"},{"band":1,"label":"80m"},{"band":2,"label":"60m"},{"band":3,"label":"40m"},{"band":4,"label":"30m"},{"band":5,"label":"20m"},{"band":6,"label":"17m"},{"band":7,"label":"15m"},{"band":8,"label":"12m"},{"band":9,"label":"10m"},{"band":10,"label":"6m"},{"band":11,"label":"GEN"},{"band":12,"label":"WWV"},{"band":13,"label":"XVTR"}],"columns":[{"id":"gain","label":"Gain (dB)","field":"gain","kind":"decimal","min":38.8,"max":100,"step":0.1,"decimals":1,"tooltip":"PA gain for %1 in dB. The Core subtracts it from the power you ask for to set the drive."},{"id":"adjust1","label":"10%","field":"adjust","driveStep":0,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 10% drive for %1."},{"id":"adjust2","label":"20%","field":"adjust","driveStep":1,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 20% drive for %1."},{"id":"adjust3","label":"30%","field":"adjust","driveStep":2,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 30% drive for %1."},{"id":"adjust4","label":"40%","field":"adjust","driveStep":3,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 40% drive for %1."},{"id":"adjust5","label":"50%","field":"adjust","driveStep":4,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 50% drive for %1."},{"id":"adjust6","label":"60%","field":"adjust","driveStep":5,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 60% drive for %1."},{"id":"adjust7","label":"70%","field":"adjust","driveStep":6,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 70% drive for %1."},{"id":"adjust8","label":"80%","field":"adjust","driveStep":7,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 80% drive for %1."},{"id":"adjust9","label":"90%","field":"adjust","driveStep":8,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 90% drive for %1."},{"id":"maxPower","label":"Max W","field":"maxPower","kind":"decimal","min":0,"max":1500,"step":0.1,"decimals":1,"tooltip":"Per-band max-power ceiling in watts for %1."},{"id":"useMax","label":"Use Max","field":"useMax","kind":"toggle","tooltip":"Apply the per-band max-power ceiling on %1."}]})json"
+    R"json(])json";
+
+const QHash<QString, QJsonObject>& paV14Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kPaV14Controls);
+    return table;
+}
+
 const QHash<QString, QJsonObject>& paV13Controls()
 {
     static const QHash<QString, QJsonObject> table = controlsById(kPaV13Controls);
@@ -376,7 +396,7 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
-              && root.value(QStringLiteral("version")) == QJsonValue(13))
+              && root.value(QStringLiteral("version")) == QJsonValue(14))
          && !(id == QLatin1String("hardware")
               && root.value(QStringLiteral("version")) == QJsonValue(13)))
         || root.value(QStringLiteral("category")).toObject()
@@ -452,12 +472,17 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                 && !((id == QLatin1String("pa")
                                       || id == QLatin1String("hardware"))
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(13)))))
+                                         == QJsonValue(13))
+                                && !(id == QLatin1String("pa")
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(14)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
                              || (id == QLatin1String("hardware")
-                                 && SetupDescription::validateAntennaRowsTable(control))))
+                                 && SetupDescription::validateAntennaRowsTable(control))
+                             || (id == QLatin1String("pa")
+                                 && SetupDescription::validatePaV14Control(control))))
                     || (control.value(QStringLiteral("kind")) != QJsonValue(QStringLiteral("table"))
                         && (control.value(QStringLiteral("binding")).toObject().contains(QStringLiteral("table"))
                             || control.value(QStringLiteral("binding")).toObject()
@@ -495,7 +520,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
                         && !SetupDescription::validatePaTelemetryReadoutBinding(control)
                         && !SetupDescription::validatePaBypassBinding(control)
-                        && !SetupDescription::validatePaV13Control(control))
+                        && !SetupDescription::validatePaV13Control(control)
+                        && !SetupDescription::validatePaV14Control(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (id == QLatin1String("appearance")
@@ -536,14 +562,35 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
     if (id == QLatin1String("pa") && (!caps.hasPaProfile || caps.isRxOnlySku)) {
         return {};
     }
+    // PA Gain's bypass box is the ANAN-G2E's only; version 14's profile
+    // rows are on every radio with a PA. A page left with no rows goes.
     if (id == QLatin1String("pa") && !caps.showsBypassPaSettingsUi) {
         QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
         for (int p = 0; p < pages.size(); ++p) {
-            if (pages.at(p).toObject().value(QStringLiteral("id"))
-                == QJsonValue(QStringLiteral("pa.gain"))) {
-                pages.removeAt(p);
-                break;
+            QJsonObject page = pages.at(p).toObject();
+            if (page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.gain"))) {
+                continue;
             }
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int k = 0; k < controls.size(); ++k) {
+                    if (controls.at(k).toObject().value(QStringLiteral("id"))
+                        == QJsonValue(QStringLiteral("pa.gain.bypassPaSettings"))) {
+                        controls.removeAt(k--);
+                    }
+                }
+                if (controls.isEmpty()) { sections.removeAt(s--); continue; }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            if (sections.isEmpty()) {
+                pages.removeAt(p--);
+                continue;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
         }
         root.insert(QStringLiteral("pages"), pages);
     }
@@ -1570,6 +1617,12 @@ bool SetupDescription::validatePaV13Control(const QJsonObject& control)
     return row != paV13Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validatePaV14Control(const QJsonObject& control)
+{
+    const auto row = paV14Controls().constFind(control.value(QStringLiteral("id")).toString());
+    return row != paV14Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
 {
     const auto row = hardwareV13Controls().constFind(
@@ -2045,7 +2098,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
     const int ceiling = categoryId == QLatin1String("hardware") ? 13
-        : categoryId == QLatin1String("pa") ? 13
+        : categoryId == QLatin1String("pa") ? 14
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
     // Appearance changed at 4, 7 and 12: versions 7-11 all see version 7.
@@ -2061,6 +2114,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? qMin(version, 6)
                         : categoryId == QLatin1String("pa") && version < 13
                             ? qMin(version, 5) : qMin(version, ceiling));
+    // PA changed at 5, 13 and 14; hardware at 6 and 13.
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(

@@ -45,6 +45,8 @@
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QGroupBox>
+#include <QPushButton>
+#include <QGridLayout>
 #include <QHostAddress>
 #include <QFormLayout>
 #include <QLabel>
@@ -805,6 +807,72 @@ private slots:
             }
         }
         QCOMPARE(compared, 15);
+    }
+
+    // Version 14 (R-R3-49, R-IOS-18): PA Gain's profile rows match the page.
+    void describedV14PaGainRowsMatchNativePage()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        PaGainByBandPage page(&model);
+        page.applyCapabilityVisibility(model.boardCapabilities());
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        QJsonObject gain;
+        for (const QJsonValue& p : projectedCategory(service.pa(), 14).value("pages").toArray()) {
+            if (p.toObject().value("id") == QJsonValue("pa.gain")) { gain = p.toObject(); }
+        }
+        QVERIFY(!gain.isEmpty());
+        const QJsonArray rows = controls(QJsonObject{{"pages", QJsonArray{gain}}});
+        QCOMPARE(rows.size(), 6);
+        auto* combo = qobject_cast<QComboBox*>(bySetupId(page, "pa.gain.profile"));
+        QVERIFY(combo == page.profileComboForTest());
+        QCOMPARE(combo->accessibleName(), rows.at(0).toObject().value("label").toString());
+        QCOMPARE(combo->toolTip(), rows.at(0).toObject().value("tooltip").toString());
+        for (int i = 1; i <= 4; ++i) {
+            const QJsonObject row = rows.at(i).toObject();
+            auto* button = qobject_cast<QPushButton*>(bySetupId(page, row.value("id").toString()));
+            QVERIFY2(button != nullptr, qPrintable(row.value("id").toString()));
+            QCOMPARE(button->text(), row.value("label").toString());
+            QCOMPARE(button->toolTip(), row.value("tooltip").toString());
+        }
+        QVERIFY(page.newButtonForTest() == bySetupId(page, "pa.gain.new"));
+        const QJsonObject table = rows.at(5).toObject();
+        auto* group = qobject_cast<QGroupBox*>(bySetupId(page, "pa.gain.table"));
+        QVERIFY(group != nullptr);
+        QCOMPARE(group->title(), table.value("label").toString());
+        // The grid's header row, then one row per band.
+        auto* grid = qobject_cast<QGridLayout*>(group->layout());
+        QVERIFY(grid != nullptr);
+        const QJsonArray columns = table.value("columns").toArray();
+        for (int c = 0; c < columns.size(); ++c) {
+            auto* header = qobject_cast<QLabel*>(grid->itemAtPosition(0, c + 1)->widget());
+            QVERIFY(header != nullptr);
+            QCOMPARE(header->text(), columns.at(c).toObject().value("label").toString());
+        }
+        const QJsonArray bands = table.value("rows").toArray();
+        for (int b = 0; b < bands.size(); ++b) {
+            const Band band = static_cast<Band>(bands.at(b).toObject().value("band").toInt());
+            const QString label = bands.at(b).toObject().value("label").toString();
+            QCOMPARE(label, bandLabel(band));
+            for (int c = 0; c < columns.size(); ++c) {
+                const QJsonObject column = columns.at(c).toObject();
+                const QString field = column.value("field").toString();
+                QWidget* widget = field == "gain" ? static_cast<QWidget*>(page.gainSpinForTest(band))
+                    : field == "adjust" ? static_cast<QWidget*>(page.adjustSpinForTest(
+                          band, column.value("driveStep").toInt()))
+                    : field == "maxPower" ? static_cast<QWidget*>(page.maxPowerSpinForTest(band))
+                                          : static_cast<QWidget*>(page.useMaxPowerCheckForTest(band));
+                QVERIFY(widget != nullptr);
+                QCOMPARE(widget->toolTip(), column.value("tooltip").toString().arg(label));
+                if (auto* spin = qobject_cast<QDoubleSpinBox*>(widget)) {
+                    QCOMPARE(spin->minimum(), column.value("min").toDouble());
+                    QCOMPARE(spin->maximum(), column.value("max").toDouble());
+                    QCOMPARE(spin->singleStep(), column.value("step").toDouble());
+                    QCOMPARE(spin->decimals(), column.value("decimals").toInt());
+                }
+            }
+        }
     }
 
     // Version 13: Radio Info, TX Display Cal and the N2ADR switch match

@@ -137,6 +137,11 @@
 //                 page, as Thetis's chkPAValues does (found bug: nothing read
 //                 it). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: PA Gain's profiles for a remote client
+//                 (paProfileActionForStation; the page's ids, plain tooltips,
+//                 the adjust tooltip's stray %, and the Default profile found
+//                 by its real name after a delete). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -447,15 +452,20 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
 
     m_profileCombo = new QComboBox(this);
     m_profileCombo->setMinimumWidth(220);
+    // R-R3-49: plain words (it named the audio-volume scalar).
     m_profileCombo->setToolTip(QStringLiteral(
-        "Active PA gain profile.  Per-band PA gain compensation drives the "
-        "audio-volume scalar that prevents over-power on high-gain finals."));
+        "Active PA gain profile. Its per-band PA gain keeps the drive right for "
+        "this radio's power amplifier, so a high-gain amplifier is not overdriven."));
+    m_profileCombo->setAccessibleName(QStringLiteral("PA profile"));
+    // R-IOS-18: the Setup description's ids for the profile row.
+    m_profileCombo->setProperty("nereusSetupId", "pa.gain.profile");
     toolbar->addWidget(m_profileCombo, 1);
 
     constexpr int kLifecycleButtonWidth = 110;  // wide enough for "Reset Defaults"
 
     m_btnNew = new QPushButton(QStringLiteral("New"), this);
     m_btnNew->setMinimumWidth(kLifecycleButtonWidth);
+    m_btnNew->setProperty("nereusSetupId", "pa.gain.new");
     m_btnNew->setToolTip(QStringLiteral(
         "Create a new empty profile seeded from the connected radio's "
         "factory PA gain row."));
@@ -463,12 +473,14 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
 
     m_btnCopy = new QPushButton(QStringLiteral("Copy"), this);
     m_btnCopy->setMinimumWidth(kLifecycleButtonWidth);
+    m_btnCopy->setProperty("nereusSetupId", "pa.gain.copy");
     m_btnCopy->setToolTip(QStringLiteral(
         "Duplicate the active profile under a new name."));
     toolbar->addWidget(m_btnCopy);
 
     m_btnDelete = new QPushButton(QStringLiteral("Delete"), this);
     m_btnDelete->setMinimumWidth(kLifecycleButtonWidth);
+    m_btnDelete->setProperty("nereusSetupId", "pa.gain.delete");
     m_btnDelete->setToolTip(QStringLiteral(
         "Delete the active profile.  The last remaining profile cannot be "
         "deleted."));
@@ -476,6 +488,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
 
     m_btnReset = new QPushButton(QStringLiteral("Reset Defaults"), this);
     m_btnReset->setMinimumWidth(kLifecycleButtonWidth);
+    m_btnReset->setProperty("nereusSetupId", "pa.gain.reset");
     m_btnReset->setToolTip(QStringLiteral(
         "Re-seed the active profile from the canonical factory PA gain row "
         "for its model.  Drive-step adjusts and max-power columns are "
@@ -533,6 +546,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // ── Main grid: PA Gain by Band (dB) ──────────────────────────────────
     // 14 bands x (band label + gain + 9 adjusts + max-power + use-max)
     m_gainByBandGroup = new QGroupBox(QStringLiteral("PA Gain by Band (dB)"), this);
+    m_gainByBandGroup->setProperty("nereusSetupId", "pa.gain.table");
     auto* gainGroup = m_gainByBandGroup;
     auto* grid = new QGridLayout(gainGroup);
     grid->setHorizontalSpacing(4);
@@ -596,10 +610,11 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         // (`Maximum = 100`, `Minimum = 38.8`) and 24 sibling sites match.
         m_gainSpins[n] = buildSpin(38.8, 100.0, 0.1, 1, gainGroup);
         m_gainSpins[n]->setFixedWidth(kGainSpinWidth);
+        // R-R3-49: plain words (it named the audio-volume scalar and the
+        // TX FIFO the scalar drives).
         m_gainSpins[n]->setToolTip(QStringLiteral(
-            "PA gain compensation for %1 in dB.  Subtracted from the "
-            "target dBm to compute the audio-volume scalar that drives "
-            "the radio's TX FIFO.").arg(bandLabel(band)));
+            "PA gain for %1 in dB. The Core subtracts it from the power you "
+            "ask for to set the drive.").arg(bandLabel(band)));
         grid->addWidget(m_gainSpins[n], row, kColGain);
         wireGainSpin(m_gainSpins[n], band);
 
@@ -612,7 +627,7 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
             auto* spin = buildSpin(-10.0, 10.0, 0.1, 1, gainGroup);
             spin->setFixedWidth(kAdjustSpinWidth);
             spin->setToolTip(QStringLiteral(
-                "Per-step adjust at %1%% drive for %2.")
+                "Per-step adjust at %1% drive for %2.")  // R-R3-49: showed "10%%"
                 .arg((step + 1) * 10).arg(bandLabel(band)));
             m_adjustSpins[n][step] = spin;
             grid->addWidget(spin, row, kAdjustColumnFirst + step);
@@ -1322,8 +1337,10 @@ void PaGainByBandPage::onDeleteProfile()
     // Mirrors Thetis btnDeletePAProfile_Click at setup.cs:23015-23024 [v2.10.3.13]:
     // after delete, select Default - <connectedModel> if available, else first
     // remaining profile.
-    const QString defaultName = QStringLiteral("Default - %1")
-        .arg(QString::fromUtf8(displayName(m_connectedModel)));
+    // R-R3-49 (found bug): the factory profile is named after the model's
+    // enum name ("Default - ANAN_G2"), not its display name, so this never
+    // found it and fell back to the first profile.
+    const QString defaultName = PaProfileManager::defaultProfileName(m_connectedModel);
     QString nextActive;
     if (m_paProfileManager->profileNames().contains(defaultName)) {
         nextActive = defaultName;

@@ -95,6 +95,10 @@
 //                                    txEqCurveVersion and transmit's
 //                                    txEqCurve are captured. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-49 / R-IOS-18: and paProfiles, so
+//                                    paProfileVersion and the `paProfiles`
+//                                    object are captured. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -140,6 +144,7 @@
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/PaProfilesFacade.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
@@ -551,7 +556,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"setupDescription", 1}, {"miniDisplay", 1},
                                   {"radioAntennaRows", 1},
                                   // iPhone app plan Task 25: the `vax` object.
-                                  {"vax", 1}, {"txEqCurve", 1}})));
+                                  {"vax", 1}, {"txEqCurve", 1},
+                                  // R-R3-49 / R-IOS-18: the `paProfiles` object.
+                                  {"paProfiles", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -592,6 +599,8 @@ QJsonArray captureCapabilities()
     caps.vaxEntry = true;
     // R-IOS-13 / R-R3-49: sent to a peer that declared txEqCurve.
     caps.txEqCurveVersion = 1;
+    // R-R3-49 / R-IOS-18: sent to a peer that declared paProfiles.
+    caps.paProfileVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -1670,7 +1679,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
             &TransmitState::staticMetaObject,
-            &StationVax::staticMetaObject};
+            &StationVax::staticMetaObject,
+            &PaProfilesFacade::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

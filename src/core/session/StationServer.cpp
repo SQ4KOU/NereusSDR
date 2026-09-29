@@ -20,6 +20,10 @@
 //   2026-09-29: R-R3-49 (lead's ruling): the correction factors are
 //               refused outside Thetis's 0..65. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: R-R3-49 / R-IOS-18: paProfileVersion 1, the paProfiles
+//               object and the paProfile verbs (peerGetsPaProfiles,
+//               paProfileRefusal), and Setup description version 14.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -718,6 +722,8 @@
 #include "core/session/StationOpeningGate.h"
 #include "core/session/StateMirror.h"
 #include "core/session/StationCatalog.h"
+#include "core/session/PaProfilesFacade.h"
+#include "core/PaProfileManager.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsBackupTransfer.h"
@@ -1042,6 +1048,16 @@ bool isSetupDescriptionMessage(const SessionMessage& message)
     return message.objectKey == kSetupDescriptionKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "SetupDescription");
+}
+
+// R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain profiles.
+constexpr const char* kPaProfilesKey = "paProfiles";
+
+bool isPaProfilesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kPaProfilesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "PaProfilesFacade");
 }
 
 bool isCatalogMessage(const SessionMessage& message)
@@ -2179,6 +2195,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 19 (R-IOS-06): the catalogue follows the Core's radio,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
+    // R-R3-49 / R-IOS-18: the Core's PA Gain profiles follow its bank.
+    m_paProfiles = std::make_unique<PaProfilesFacade>();
+    if (radioModel != nullptr && radioModel->role() != RadioModel::Role::Remote) {
+        const QPointer<RadioModel> model(radioModel);
+        m_paProfiles->bind(radioModel->paProfileManager(), [model]() {
+            return model ? model->hardwareProfile().model : HPSDRModel::FIRST;
+        });
+        connect(radioModel, &RadioModel::currentRadioChanged, m_paProfiles.get(),
+                [this](const NereusSDR::RadioInfo&) { m_paProfiles->refresh(); });
+    }
     m_catalog->bind(radioModel);
     m_setupDescription = std::make_unique<SetupDescriptionService>();
     if (radioModel != nullptr) {
@@ -4404,6 +4430,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 TxRefusals::appCannotTransmit().text, {}));
             break;
         }
+        // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA profile verbs, to a
+        // peer that declared paProfiles, gated as the desktop's own PA
+        // profile writes are.
+        if (message.commandVerb.startsWith("paProfile.")) {
+            QString refusal;
+            if (it->agreedMinor < kRadioIdentitySessionProtocolMinor) {
+                refusal = QStringLiteral("Update this app to change PA profiles on this Core.");
+            } else if (!peerGetsPaProfiles(transport)) {
+                refusal = QStringLiteral("This app cannot change the Core's PA profiles.");
+            } else {
+                refusal = paProfileRefusal(transport);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
+        }
         if (message.commandVerb == "tx.twoTonePreset"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || !peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1)
@@ -6006,6 +6050,10 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain profiles, only
+    // to a peer that declared paProfiles (sendToPeer).
+    m_paProfiles->refresh();
+    m_mirror->watch(QByteArray(kPaProfilesKey), m_paProfiles.get());
     m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
                                         m_radioModel->hardwareProfile().model,
                                         m_radioModel->currentRadioInfo());
@@ -7294,6 +7342,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
                 || vaxVersion() < 1)) {
             return;
         }
+        // R-R3-49 / R-IOS-18: nor the PA Gain profiles to a peer that did
+        // not declare paProfiles.
+        if (isPaProfilesMessage(message) && !peerGetsPaProfiles(transport)) {
+            return;
+        }
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
@@ -7308,7 +7361,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 13);
+            const int version = qMin(declared, 14);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -7350,6 +7403,35 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
 }
 
 // ── The read-only TX EQ curve (R-IOS-13, R-R3-49) ───────────────────────
+
+bool StationServer::peerGetsPaProfiles(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && m_radioModel->role() != RadioModel::Role::Remote
+        && m_radioModel->paProfileManager() != nullptr
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("paProfiles"), 1);
+}
+
+QString StationServer::paProfileRefusal(SessionTransport* transport) const
+{
+    if (m_radioModel.isNull()) {
+        return QStringLiteral("This Core cannot change its PA profiles.");
+    }
+    const QString key = QStringLiteral("hardware/%1/pa/profile/active")
+                            .arg(m_radioModel->currentRadioMac());
+    if (receiveOnlyRefusesKey(transport, key)) {
+        return QString::fromLatin1(kReceiveOnlyTransmitReason);
+    }
+    if (!m_radioModel->receiveOnlyStationPolicy()) {
+        const TxDecision decision = txDecisionFor(transport);
+        if (!decision.permitted) {
+            return decision.refusal.text;
+        }
+    }
+    return {};
+}
 
 bool StationServer::peerGetsTxEqCurve(SessionTransport* transport) const
 {
@@ -9906,6 +9988,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-IOS-13 / R-R3-49: transmit's read-only txEqCurve, to a peer
             // that declared txEqCurve 1.
             caps.txEqCurveVersion = peerGetsTxEqCurve(transport) ? 1 : 0;
+            // R-R3-49 / R-IOS-18: the PA Gain profiles, to a peer that
+            // declared paProfiles 1.
+            caps.paProfileVersion = peerGetsPaProfiles(transport) ? 1 : 0;
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
@@ -9918,7 +10003,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 13) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 14) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
