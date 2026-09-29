@@ -8805,6 +8805,15 @@ QString RadioModel::hfPaSwitchUnavailableReason()
 //     From mi0bot Console/setup.cs:21732-21756 [@c26a8a4]:
 //       // MI0BOT: Support for HL2 Cl2 clock output
 //       // MI0BOT: Support for HL2 10MHz clock input
+void RadioModel::connectHl2OptionsToConnection()
+{
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        applyHl2Options();
+        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
+                [this]() { applyHl2Options(); });
+    }
+}
+
 void RadioModel::applyHl2Options()
 {
     auto* p1 = qobject_cast<P1RadioConnection*>(m_connection);
@@ -16733,11 +16742,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // loaded above, before the connection thread starts; later changes
     // follow on that thread (applyHl2Options). changed() also fires when a
     // remote window's edit reloads them on the Core (reload "hl2").
-    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
-        applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
-    }
+    connectHl2OptionsToConnection();
     // The HL2 I/O board's poll writes the TX VFO's mode and frequency.
     rebindIoBoardSlice();
 

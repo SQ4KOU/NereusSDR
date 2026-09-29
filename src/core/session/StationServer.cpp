@@ -46,6 +46,10 @@
 //               txInhibitReason only to a peer that declared
 //               txInhibitReason 1 (fitPeerOnlyProperties). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: HL2 clock options: radioHardwareVersion 10 (the Core
+//               sends Enable CL2, CL2 frequency and External 10 MHz to its
+//               radio) and Setup description version 17. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -7691,7 +7695,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 16);
+            const int version = qMin(declared, 17);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -10557,7 +10561,13 @@ int StationServer::radioHardwareVersion() const
     // 9 (parity ruling C4): the radio's sample rate from a window
     // (setRadioSampleRate), every receiver and the radio's own rate, as a
     // local window's Radio Info change; for a paired device, off the air.
-    return m_radioModel->ioBoardFacade()->isBound() ? 9 : 2;
+    // 10: the HL2 clock options (hardware/<mac>/hl2/cl2Enable, cl2FreqMHz
+    // and ext10MHz) reach this Core's radio through the "hl2" reload
+    // (RadioModel::applyHl2Options -> P1RadioConnection::setHl2Clock), on
+    // and off the air, as mi0bot's handlers write the clock chip with no
+    // MOX check (mi0bot setup.cs:21732-21756 [@c26a8a4]). A Core below 10
+    // stores them without sending them, so a window keeps the rows closed.
+    return m_radioModel->ioBoardFacade()->isBound() ? 10 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
@@ -10693,7 +10703,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 16) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 17) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

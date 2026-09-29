@@ -967,7 +967,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 9 |
+| `radioHardwareVersion` | 10 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -1133,6 +1133,16 @@ When a feature is off, its version is 0:
   of its receivers' `requestSliceSampleRate`, as before, and says so on
   the rate box ("This Core changes the sample rate of this window's
   receivers only. Updating the Core may help.").
+  10 sends HL2 Options' Enable CL2, CL2 frequency (1 to 200 MHz) and
+  External 10 MHz to the Core's Hermes Lite 2 when a window saves them
+  (`hardware/<mac>/hl2/cl2Enable`, `cl2FreqMHz`, `ext10MHz`, section 8),
+  on and off the air, as mi0bot's handlers do with no MOX check; the Core
+  sends the options that are on again when its radio connects. No command
+  or property is added. A station no longer sends 9; 10 serves every
+  earlier version's command and property. A window of a station at 9 or
+  lower shows the three rows disabled with "This Core cannot change its
+  radio's clock settings for this app. Updating the Core may help.", since
+  that Core stores them without sending them.
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with

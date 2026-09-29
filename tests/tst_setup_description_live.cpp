@@ -50,7 +50,7 @@ private slots:
         };
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
-            {16, 16, 16}, {99, 16, 16}, {15, 15, 13}};
+            {17, 17, 17}, {99, 17, 17}, {16, 16, 16}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             Device phone(QStringLiteral("HL2 V%1 iPhone").arg(declared), QStringLiteral("phone"));
             core.pair(phone);
@@ -64,12 +64,18 @@ private slots:
                 QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
             QCOMPARE(hardware.value("version"), QJsonValue(received));
             const QJsonArray rows = hl2OptionsOf(hardware).value("controls").toArray();
-            QCOMPARE(rows.size(), received == 16 ? 9 : 0);
-            if (received == 16) {
+            QCOMPARE(rows.size(), received >= 16 ? 9 : 0);
+            if (received >= 16) {
                 const QJsonObject swap = rows.last().toObject();
                 QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
                 QCOMPARE(swap.value("availability").toObject().value("enabled"),
                          QJsonValue(false));
+                // The clock rows are open from version 17; a version 16
+                // phone keeps them closed.
+                const QJsonObject cl2 = rows.at(2).toObject();
+                QCOMPARE(cl2.value("id"), QJsonValue("hardware.hl2Io.cl2Enable"));
+                QCOMPARE(cl2.contains("availability"), received == 16);
+                QCOMPARE(rows.at(3).toObject().contains("enabledWhen"), received == 17);
             }
         }
     }

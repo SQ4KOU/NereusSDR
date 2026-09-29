@@ -973,10 +973,12 @@ private slots:
         QCOMPARE(compared, 11);
     }
 
-    // Version 16: the HL2 Options rows match the desktop's HL2 Options tab:
-    // its group, row label, range and unit, default, and whether the box is
-    // enabled. A disabled box's tooltip is the row's availability reason.
-    void describedV16Hl2OptionsMatchNativeTab()
+    // Version 16, with version 17's clock rows: the HL2 Options rows match
+    // the desktop's HL2 Options tab: its group, row label, range and unit,
+    // default, and whether the box is enabled. A disabled box's tooltip is
+    // the row's availability reason. A row enabled only while another row
+    // holds a value (enabledWhen) is enabled on the desktop exactly then.
+    void describedV17Hl2OptionsMatchNativeTab()
     {
         AppSettings::instance().clear();
         RadioModel model;
@@ -985,7 +987,8 @@ private slots:
         SetupDescriptionService service;
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model,
                                 RadioInfo{});
-        const QJsonObject hardware = projectedCategory(service.hardware(), 16);
+        const QJsonObject hardware = projectedCategory(service.hardware(), 17);
+        QCOMPARE(hardware.value("version"), QJsonValue(17));
         QJsonObject page;
         for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
             if (rawPage.toObject().value("id") == QJsonValue("hardware.hl2Io")) {
@@ -1005,7 +1008,28 @@ private slots:
                 QVERIFY2(group != nullptr, qPrintable(id));
                 QCOMPARE(group->title(), section.value("title").toString());
                 const QJsonObject availability = control.value("availability").toObject();
-                if (availability.isEmpty()) {
+                const QJsonObject enabledWhen = control.value("enabledWhen").toObject();
+                if (availability.isEmpty() && !enabledWhen.isEmpty()) {
+                    // The row named by the dependency, by its binding.
+                    QWidget* source = nullptr;
+                    for (const QJsonValue& other : section.value("controls").toArray()) {
+                        if (other.toObject().value("binding").toObject().value("radioSetting")
+                            == enabledWhen.value("radioSetting")) {
+                            source = qobject_cast<QWidget*>(
+                                bySetupId(tab, other.toObject().value("id").toString()));
+                        }
+                    }
+                    auto* sourceBox = qobject_cast<QCheckBox*>(source);
+                    QVERIFY2(sourceBox != nullptr, qPrintable(id));
+                    QCOMPARE(enabledWhen.value("oneOf"), QJsonValue(QJsonArray{true}));
+                    QVERIFY2(!sourceBox->isChecked(), qPrintable(id));
+                    QVERIFY2(!widget->isEnabled(), qPrintable(id));
+                    sourceBox->setChecked(true);
+                    QVERIFY2(widget->isEnabled(), qPrintable(id));
+                    sourceBox->setChecked(false);
+                    QVERIFY2(!widget->isEnabled(), qPrintable(id));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                } else if (availability.isEmpty()) {
                     QVERIFY2(widget->isEnabled(), qPrintable(id));
                     QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
                 } else {

@@ -437,6 +437,7 @@ private slots:
     void hardwareWritesForAnotherRadioAreRefused();
     void coreAppliesHardwareConfigWritesLive();
     void receiveOnlyCoreRefusesTransmitHardwareKeys();
+    void coreAppliesHl2ClockWritesLive();
     void ioBoardProbeIsAskedOfTheCore();
     void windowBandAntennaEditKeepsTheCoresNewerBands();
     void windowTxBandAntennaEditKeepsTheCoresNewerBands();
@@ -6292,7 +6293,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
     // R-R3-21); 7 since parity Task 14; 8 with the Alex Filters tabs'
     // receive filter rows; 9 with setRadioSampleRate (parity ruling C4).
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 9);
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 10);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -6756,6 +6757,61 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
     QVERIFY(reloads.isEmpty());
 }
 
+void TstStationSession::coreAppliesHl2ClockWritesLive()
+{
+    // HL2 clock options (radioHardwareVersion 10). Enable CL2, the CL2
+    // frequency and External 10 MHz from a window reach the Core's HL2
+    // options through the "hl2" reload, which sends them to its radio
+    // (RadioModel::applyHl2Options -> P1RadioConnection::setHl2Clock, whose
+    // bytes tst_p1_hl2_clock checks). They are not transmit keys, so a
+    // receive-only Core takes them, as mi0bot's handlers carry no MOX check
+    // (setup.cs:21732-21756 [@c26a8a4]). A frequency outside 1..200 MHz is
+    // clamped when the Core loads it.
+    AppSettings& settings = AppSettings::instance();
+    settings.clearHardwareValues(kHardwareMac);
+    const auto cleanSettings = qScopeGuard([&settings] {
+        settings.clearHardwareValues(kHardwareMac);
+    });
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(s.core->receiveOnlyStationPolicy());
+    QStringList reloads;
+    s.core->setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+    QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    const Hl2OptionsModel& hl2 = s.core->hl2Options();
+    QVERIFY(!hl2.cl2Enabled());
+    QCOMPARE(hl2.cl2FreqMHz(), 116);
+    QVERIFY(!hl2.ext10MHz());
+    const auto hw = [](const char* rest) {
+        return QStringLiteral("hardware/%1/%2").arg(kHardwareMac, QLatin1String(rest));
+    };
+
+    s.proxy->setValue(hw("hl2/cl2Enable"), QStringLiteral("True"));
+    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("25"));
+    s.proxy->setValue(hw("hl2/ext10MHz"), QStringLiteral("True"));
+    QTRY_VERIFY(hl2.ext10MHz());
+    QTRY_COMPARE(hl2.cl2FreqMHz(), 25);
+    QVERIFY(hl2.cl2Enabled());
+    QVERIFY(!reloads.isEmpty());
+    for (const QString& name : reloads) {
+        QCOMPARE(name, QStringLiteral("hl2"));
+    }
+    QCOMPARE(settings.value(hw("hl2/cl2FreqMHz")).toString(), QStringLiteral("25"));
+
+    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("500"));
+    QTRY_COMPARE(hl2.cl2FreqMHz(), 200);
+    s.proxy->setValue(hw("hl2/cl2FreqMHz"), QStringLiteral("0"));
+    QTRY_COMPARE(hl2.cl2FreqMHz(), 1);
+
+    s.proxy->setValue(hw("hl2/cl2Enable"), QStringLiteral("False"));
+    s.proxy->setValue(hw("hl2/ext10MHz"), QStringLiteral("False"));
+    QTRY_VERIFY(!hl2.ext10MHz());
+    QVERIFY(!hl2.cl2Enabled());
+    QCOMPARE(rejected.count(), 0);
+}
+
 void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
 {
     // R-R3-46 / R-R3-21 (transmit safety). The Core's hardware apply step
@@ -6926,7 +6982,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -6976,7 +7032,7 @@ void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.client->remoteTransmitAntennasAvailable());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
@@ -7071,7 +7127,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
@@ -7340,7 +7396,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 
@@ -7452,7 +7508,7 @@ void TstStationSession::hardwareConfigRateGoesToEveryReceiver()
     if (QTest::currentTestFailed()) { return; }
     QTRY_COMPARE(s.window->slices().size(), 3);
     QTRY_COMPARE(s.window->currentRadioInfo().macAddress, kHardwareMac);
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 10);
     QVERIFY(s.window->radioSampleRateReachesEveryReceiver());
     s.window->alexAntennaFacade()->setWindowAvailability(true, {});
 

@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 9
+            "value": 10
         },
         {
             "kind": "i64",

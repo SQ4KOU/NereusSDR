@@ -6,6 +6,7 @@
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QCheckBox>
+#include <QSpinBox>
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
@@ -108,6 +109,49 @@ private slots:
         QCOMPARE(reader.cl2FreqMHz(), 50);
     }
 
+    // The three clock options persist per MAC, and a stored frequency
+    // outside mi0bot's 1..200 MHz is clamped when loaded.
+    void clock_options_persist_per_mac_and_clamp_on_load()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:fd");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+        {
+            Hl2OptionsModel writer;
+            writer.setMacAddress(mac);
+            writer.load();
+            writer.setCl2Enabled(true);
+            writer.setCl2FreqMHz(10);
+            writer.setExt10MHz(true);
+        }
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("hl2/cl2Enable")).toString(),
+                 QStringLiteral("True"));
+        QCOMPARE(s.hardwareValue(mac, QStringLiteral("hl2/ext10MHz")).toString(),
+                 QStringLiteral("True"));
+        Hl2OptionsModel reader;
+        reader.setMacAddress(mac);
+        reader.load();
+        QVERIFY(reader.cl2Enabled());
+        QCOMPARE(reader.cl2FreqMHz(), 10);
+        QVERIFY(reader.ext10MHz());
+
+        // Another radio keeps its own (default) options.
+        Hl2OptionsModel other;
+        other.setMacAddress(QStringLiteral("aa:bb:cc:dd:ee:fc"));
+        other.load();
+        QVERIFY(!other.cl2Enabled());
+        QCOMPARE(other.cl2FreqMHz(), Hl2OptionsModel::kDefaultCl2FreqMHz);
+        QVERIFY(!other.ext10MHz());
+
+        s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), 999);
+        reader.load();
+        QCOMPARE(reader.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMaxMHz);
+        s.setHardwareValue(mac, QStringLiteral("hl2/cl2FreqMHz"), -4);
+        reader.load();
+        QCOMPARE(reader.cl2FreqMHz(), Hl2OptionsModel::kCl2FreqMinMHz);
+        s.clearHardwareValues(mac);
+    }
+
     void save_writes_only_changed_keys()
     {
         // R-R3-46. Every setter saves. In a remote window those writes go
@@ -162,39 +206,97 @@ private slots:
         QCOMPARE(tab.txLatencyMsForTest(), 33);
     }
 
-    // Four options are stored but never reach the radio: Swap audio
-    // channels (NereusSDR sends the radio no audio of its own over P1, so
-    // there is nothing to swap), Enable CL2, CL2 frequency and External
-    // 10 MHz (the HL2 clock settings are not sent). Each shows disabled
-    // with a plain reason, never enabled as if it worked. The five that do
-    // reach the radio stay enabled. The same tab is the remote window's.
+    // Swap audio channels is stored but never reaches the radio
+    // (NereusSDR sends the radio no audio of its own over P1, so there is
+    // nothing to swap): it shows disabled with a plain reason. The eight
+    // that do reach the radio are enabled, the clock options among them,
+    // except that CL2 frequency follows Enable CL2 (mi0bot ControlCl2 sets
+    // udCl2Freq.Enabled = enable, setup.cs:21694-21729 [@c26a8a4]). The
+    // same tab is the remote window's.
     void stored_only_options_show_disabled_with_a_reason()
     {
         RadioModel model;
         Hl2OptionsTab tab(&model);
-        const QStringList storedOnly{
-            QStringLiteral("hl2SwapAudioChannels"), QStringLiteral("hl2Cl2Enable"),
-            QStringLiteral("hl2Cl2Freq"), QStringLiteral("hl2Ext10MHz")};
-        for (const QString& name : storedOnly) {
-            auto* w = tab.findChild<QWidget*>(name);
-            QVERIFY2(w != nullptr, qPrintable(name));
-            QVERIFY2(!w->isEnabled(), qPrintable(name));
-            QVERIFY2(!w->toolTip().isEmpty(), qPrintable(name));
-        }
-        QCOMPARE(tab.findChild<QWidget*>(QStringLiteral("hl2SwapAudioChannels"))->toolTip(),
+        auto* swap = tab.findChild<QWidget*>(QStringLiteral("hl2SwapAudioChannels"));
+        QVERIFY(swap != nullptr);
+        QVERIFY(!swap->isEnabled());
+        QCOMPARE(swap->toolTip(),
                  QStringLiteral("NereusSDR does not send the radio audio of its own, "
                                 "so there is nothing to swap."));
-        QCOMPARE(tab.findChild<QWidget*>(QStringLiteral("hl2Ext10MHz"))->toolTip(),
-                 QStringLiteral("NereusSDR does not change the radio's clock settings."));
         const QStringList live{
             QStringLiteral("hl2TxBufferLatency"), QStringLiteral("hl2PttHang"),
             QStringLiteral("hl2DisconnectReset"), QStringLiteral("hl2DisablePsSync"),
-            QStringLiteral("hl2BandVolts")};
+            QStringLiteral("hl2BandVolts"), QStringLiteral("hl2Cl2Enable"),
+            QStringLiteral("hl2Ext10MHz")};
         for (const QString& name : live) {
             auto* w = tab.findChild<QWidget*>(name);
             QVERIFY2(w != nullptr, qPrintable(name));
             QVERIFY2(w->isEnabled(), qPrintable(name));
         }
+    }
+
+    // The clock options carry mi0bot's tooltips (setup.designer.cs:11158,
+    // 11174, 11187 [@c26a8a4]), and a tick reaches the model, which the
+    // Core sends to the radio. CL2 frequency is enabled only while
+    // Enable CL2 is on, whichever side changes it.
+    void clock_options_are_enabled_and_frequency_follows_cl2()
+    {
+        RadioModel model;
+        Hl2OptionsTab tab(&model);
+        auto* cl2 = tab.findChild<QCheckBox*>(QStringLiteral("hl2Cl2Enable"));
+        auto* freq = tab.findChild<QSpinBox*>(QStringLiteral("hl2Cl2Freq"));
+        auto* ext = tab.findChild<QCheckBox*>(QStringLiteral("hl2Ext10MHz"));
+        QVERIFY(cl2 != nullptr && freq != nullptr && ext != nullptr);
+        QCOMPARE(cl2->toolTip(), QStringLiteral("Enable frequency output on CL2"));
+        QCOMPARE(freq->toolTip(), QStringLiteral("Output frequency on CL2 output"));
+        QCOMPARE(ext->toolTip(), QStringLiteral("Enable external 10 MHz input on CL1"));
+        QCOMPARE(freq->minimum(), 1);
+        QCOMPARE(freq->maximum(), 200);
+        QCOMPARE(freq->value(), 116);
+
+        QVERIFY(!freq->isEnabled());
+        cl2->setChecked(true);
+        QVERIFY(model.hl2Options().cl2Enabled());
+        QVERIFY(freq->isEnabled());
+        freq->setValue(50);
+        QCOMPARE(model.hl2Options().cl2FreqMHz(), 50);
+        cl2->setChecked(false);
+        QVERIFY(!model.hl2Options().cl2Enabled());
+        QVERIFY(!freq->isEnabled());
+
+        // A change that arrives through the model (a remote window's edit
+        // reloaded on the Core, or a restore) moves the gate too.
+        model.hl2OptionsMutable().setCl2Enabled(true);
+        QVERIFY(cl2->isChecked());
+        QVERIFY(freq->isEnabled());
+
+        ext->setChecked(true);
+        QVERIFY(model.hl2Options().ext10MHz());
+    }
+
+    // A remote window of a Core that stores the clock options without
+    // sending them shows all three disabled with that Core's reason; the
+    // frequency box stays disabled even with CL2 on. Back on a Core that
+    // sends them, each shows its own tooltip again.
+    void clock_options_follow_the_cores_offer()
+    {
+        RadioModel model;
+        Hl2OptionsTab tab(&model);
+        model.hl2OptionsMutable().setCl2Enabled(true);
+        const QString reason = QStringLiteral("This Core cannot change its radio's clock settings.");
+        tab.setClockControlAvailable(false, reason);
+        for (const char* name : {"hl2Cl2Enable", "hl2Cl2Freq", "hl2Ext10MHz"}) {
+            auto* w = tab.findChild<QWidget*>(QLatin1String(name));
+            QVERIFY2(w != nullptr, name);
+            QVERIFY2(!w->isEnabled(), name);
+            QCOMPARE(w->toolTip(), reason);
+        }
+        tab.setClockControlAvailable(true, reason);
+        QVERIFY(tab.findChild<QWidget*>(QStringLiteral("hl2Cl2Enable"))->isEnabled());
+        QVERIFY(tab.findChild<QWidget*>(QStringLiteral("hl2Cl2Freq"))->isEnabled());
+        QVERIFY(tab.findChild<QWidget*>(QStringLiteral("hl2Ext10MHz"))->isEnabled());
+        QCOMPARE(tab.findChild<QWidget*>(QStringLiteral("hl2Cl2Freq"))->toolTip(),
+                 QStringLiteral("Output frequency on CL2 output"));
     }
 
     // The power-supply sync option reads as what a tick does: it turns the

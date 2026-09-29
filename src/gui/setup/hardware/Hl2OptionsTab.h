@@ -27,13 +27,12 @@
 //      — output strip (8 LEDs, click-to-toggle when chkI2CEnable) + input
 //        strip (6 LEDs, read-only)
 //
-// Five of the groupbox-1 options reach the radio (Band Volts, Disable
+// Eight of the groupbox-1 options reach the radio (Band Volts, Disable
 // power supply sync, TX buffer latency, PTT hang, Reset on Ethernet
-// disconnect; RadioModel::applyHl2Options). The other four are stored
-// per-MAC but not sent: Swap audio channels (NereusSDR sends the radio no
-// audio of its own over P1) and the clock options Enable CL2, CL2
-// frequency and External 10 MHz. Those four show disabled with a plain
-// reason.
+// disconnect, and the clock options Enable CL2, CL2 frequency and External
+// 10 MHz; RadioModel::applyHl2Options). Swap audio channels is stored
+// per-MAC but not sent (NereusSDR sends the radio no audio of its own over
+// P1), so it shows disabled with a plain reason.
 //
 // Bus 0 surface in I2C Control is **also** deferred per design §4 —
 // today only bus 1 is wired in NereusSDR's I2cTxn path.  Rendered as a
@@ -60,6 +59,10 @@
 //                External 10 MHz are stored but not sent to the radio, so
 //                they show disabled with a plain reason; the "wire emission"
 //                warnings are gone (five options reach the radio).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 clock options: Enable CL2, CL2 frequency and External
+//                10 MHz reach the radio and are enabled; a remote window
+//                needs a Core that sends them (setClockControlAvailable).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
@@ -143,6 +146,12 @@ public:
     // tool and Pin Control are disabled with the reason, never hidden.
     void setIoBoardControlAvailable(bool available, const QString& reason);
 
+    // HL2 clock options: whether this window's changes to Enable CL2, CL2
+    // frequency and External 10 MHz reach the radio (always locally; in a
+    // remote window, a Core at radioHardwareVersion 10), with the reason
+    // when they do not. The rows are disabled with the reason, never hidden.
+    void setClockControlAvailable(bool available, const QString& reason);
+
 #ifdef NEREUS_BUILD_TESTS
     bool   transmitTimingsEnabledForTest() const;
     // Test seams — read the underlying state without depending on the
@@ -201,6 +210,8 @@ private:
     // R-R3-46 (parity Task 14): the tool's enables from the two check
     // boxes, the Core's offer and the on-air rule.
     void applyIoGates();
+    // The clock rows' enables from the Core's offer and Enable CL2.
+    void applyClockGates();
     void showI2cStatus(const QString& text);
 
     RadioModel*       m_model{nullptr};
@@ -236,6 +247,8 @@ private:
     QLabel*      m_i2cStatusLabel{nullptr};
     bool         m_ioAvailable{true};
     QString      m_ioUnavailableReason;
+    bool         m_clockAvailable{true};
+    QString      m_clockUnavailableReason;
 
     // I/O Pin State — two LED strips + Pin Control gate.
     OcLedStripWidget* m_outputStrip{nullptr}; // 8 LEDs (interactive when chkI2CEnable)

@@ -46,6 +46,8 @@ public:
     static bool validateHardwareV13Control(const QJsonObject& control);
     /// Version 16: HL2 I/O's Hermes Lite Options rows, exactly as published.
     static bool validateHardwareV16Control(const QJsonObject& control);
+    /// Version 17: HL2 Options' clock rows, exactly as published.
+    static bool validateHardwareV17Control(const QJsonObject& control);
     static bool validateTransmitV13Control(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);

@@ -165,9 +165,9 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 16. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-16 ceiling (version 13
-for V13–V15, version 6 for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
+future declaration at version 17. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-17 ceiling (version 16
+for V16, version 13 for V13–V15, version 6 for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
 the Power page's earlier coverage text); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11; the other categories on this
@@ -660,6 +660,22 @@ so there is nothing to swap."). A board without the HL2 I/O board has no
 `hardware.hl2Io` page, so none of these rows. V13–V15 peers receive Hardware
 at version 13 without the section. No new wire field, verb or capability
 value is defined.
+
+Version 17 opens the three clock rows, which the Core now sends to a
+Hermes Lite 2 (radioHardwareVersion 10). The integrator renumbers it if
+trunk's own next version lands first. `hardware.hl2Io.cl2Enable`,
+`hardware.hl2Io.cl2Freq` and `hardware.hl2Io.ext10MHz` carry
+`requiresDescriptionVersion:17`, no `availability`, and the tooltips "Enable
+frequency output on CL2", "Output frequency on CL2 output" and "Enable
+external 10 MHz input on CL1". Labels, bindings, ranges, defaults and the
+gate are unchanged. The frequency row also carries one closed dependency,
+`"enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]}`: the row is
+enabled only while the row of this description bound to `hl2/cl2Enable`
+holds on, as the desktop disables the frequency box while Enable CL2 is off.
+Hardware accepts `enabledWhen` only on that exact row. A peer declaring
+V16 receives Hardware at version 16 with the three version 16 rows, closed
+with the old reason, in place of the version 17 rows; the six other rows
+are unchanged. No new wire field or verb is defined.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

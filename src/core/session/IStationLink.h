@@ -143,6 +143,9 @@
 //                                    radio (stationRadiosVersion 1),
 //                                    requestStationRadio.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  HL2 clock options: hl2ClockUnavailableReason
+//                                    (radioHardwareVersion 10).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
 //                                    spot sources (recordStreamVersion 1),
 //                                    requestSpotSource.
@@ -553,6 +556,10 @@ public:
     // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
     static QString alexHpfRowsUnavailableReason()
     { return QStringLiteral("This Core cannot change these filter rows for this app. Updating the Core may help."); }
+    // radioHardwareVersion 10: HL2 Options' Enable CL2, CL2 frequency and
+    // External 10 MHz, which the Core sends to its radio.
+    static QString hl2ClockUnavailableReason()
+    { return QStringLiteral("This Core cannot change its radio's clock settings for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.

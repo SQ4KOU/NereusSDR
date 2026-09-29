@@ -38,6 +38,9 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Options' Enable CL2, CL2 frequency and External 10 MHz
+//                follow radioHardwareVersion 10 in a remote window.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -432,6 +435,14 @@ void HardwarePage::applyTransmitHardwareGates()
         m_antennaAlexTab->setHpfRowsAvailable(
             !m_remote || (link != nullptr && link->radioHardwareAvailable(8)),
             IStationLink::alexHpfRowsUnavailableReason());
+    }
+    // radioHardwareVersion 10: HL2 Options' clock options (Enable CL2, CL2
+    // frequency, External 10 MHz), which the Core sends to its radio. No
+    // on-air rule: mi0bot's handlers have no MOX check.
+    if (m_hl2OptionsTab) {
+        m_hl2OptionsTab->setClockControlAvailable(
+            !m_remote || (link != nullptr && link->radioHardwareAvailable(10)),
+            IStationLink::hl2ClockUnavailableReason());
     }
 }
 
