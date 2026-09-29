@@ -1,5 +1,10 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: direct media, the restart backoff across a move: a pending
+//               audio restart is fenced by its own generation, not by the
+//               connection id, so a restart waiting when media moves to
+//               the tunnel still asks for audio on the new connection.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: direct media follow-up: a fallback the Core refuses while
 //               it transmits stays a fallback onto the tunnel alone when
 //               it is retried. J.J. Boyd (KG4VCF), AI-assisted via
@@ -1211,6 +1216,11 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    // Direct media: the pending restart's fence. Bumped wherever the
+    // pending flag is cleared outside the restart itself, so a stale
+    // restart does nothing; a media move leaves it alone, so a restart
+    // waiting across the move still runs on the new connection.
+    quint64 audioRetryGeneration = 0;
     // R-R3-21: repeated restarts wait 1, 2, 4 s, reset by a healthy 10 s.
     RemoteAudioRestartBackoff audioRestartBackoff;
     // R-R3-23. The operator's choice, stored on this computer. Whether this
@@ -1512,12 +1522,13 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         d->audioRestarting = true;
         if (!d->audioRetryPending) {
             d->audioRetryPending = true;
-            const QString connection = d->connectionId;
+            const quint64 generation = d->audioRetryGeneration;
             const quint32 revision = d->audioRevision;
             const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
                                                                      d->lastAudioRequestMs));
-            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, connection, revision] {
-                if (connection != d->connectionId || revision != d->audioRevision) { return; }
+            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, generation, revision] {
+                if (generation != d->audioRetryGeneration
+                    || revision != d->audioRevision) { return; }
                 d->audioRetryPending = false;
                 requestAudio();
             });
@@ -2753,6 +2764,7 @@ void RemoteMediaController::stop()
     d->audio->stop();
     d->audioEnabled = false;
     d->audioRetryPending = false;
+    ++d->audioRetryGeneration;
     d->audioRestartBackoff.reset();
     d->headphonesRestartBackoff.reset();
     d->audioRevision = 0;
@@ -4989,6 +5001,7 @@ void RemoteMediaController::requestAudio()
     d->audio->stop();
     d->audioEnabled = false;
     d->audioRetryPending = false;
+    ++d->audioRetryGeneration;
     // Every request follows a mute, speaker, radio or retry change (or the
     // media link becoming ready), each of which the status reflects.
     if (!d->peer || !d->peer->isReady() || !d->model || !d->client

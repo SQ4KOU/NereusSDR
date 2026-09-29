@@ -29,6 +29,14 @@
 //               takes its reference trace once the trace holds across new
 //               frames, not at the first frame. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: direct media: repeatedAudioRestartsBackOff keeps the
+//               Core's display running through the audio outage, as the
+//               Core does, so it measures the restart backoff and not the
+//               direct path's silence fallback; new
+//               directSilenceFallsBackOnceWhileAudioRestartsBackOff for the
+//               case that hid (both streams silent on a direct path while
+//               the backoff runs). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 #include <QTest>
 #include <QApplication>
 #include <QMetaMethod>
@@ -38,6 +46,8 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QElapsedTimer>
+#include <QPointer>
+#include <QtEndian>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QFile>
@@ -82,6 +92,7 @@
 #include "core/FFTEngine.h"
 #include "core/StepAttenuatorController.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/PathRacer.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
@@ -408,6 +419,36 @@ struct PacedRemoteAudio {
     {
         source.stop();
         speaker.stop();
+    }
+};
+
+// Direct media: the Core's display stream, as it runs in production while
+// audio is out. The harness has no panadapter on the Core, so this sends a
+// display packet for an endpoint the window never bound (dropped after it
+// counts as media) every 100 ms on each of the Core's media connections.
+struct CoreDisplayKeepAlive {
+    QList<QPointer<LibDataChannelMediaTransport>> transports;
+    QTimer timer;
+
+    CoreDisplayKeepAlive()
+    {
+        timer.setInterval(100);
+        QObject::connect(&timer, &QTimer::timeout, &timer, [this] {
+            QByteArray packet(42, '\0');
+            packet.replace(0, 4, QByteArrayLiteral("NSDC"));
+            qToBigEndian<quint32>(0xFFFFFFFFu, packet.data() + 8);
+            for (const QPointer<LibDataChannelMediaTransport>& link : std::as_const(transports)) {
+                if (link && link->isReady()) { link->sendDisplay(packet); }
+            }
+        });
+    }
+    MediaPeer::TransportFactory factory()
+    {
+        return [this](QObject* parent) -> IMediaTransport* {
+            auto* link = new LibDataChannelMediaTransport(parent);
+            transports << link;
+            return link;
+        };
     }
 };
 
@@ -6708,7 +6749,12 @@ private slots:
         using State = RemoteAudioStatus::State;
         Test::RemoteAudioSessionHarness h;
         RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
-        DaemonMediaController daemonMedia(&h.server, &h.station);
+        // The Core's display keeps running through the audio outage, as it
+        // does in production, so the direct path is not silent and this
+        // measures the restart backoff alone (the silence fallback has its
+        // own test below).
+        CoreDisplayKeepAlive display;
+        DaemonMediaController daemonMedia(&h.server, &h.station, nullptr, display.factory());
         QElapsedTimer clock;
         clock.start();
         QList<qint64> requestMs;
@@ -6725,8 +6771,10 @@ private slots:
                                   h.mediaStage(remoteMedia).constData(),
                                   h.kMediaConnectionWaitMs);
         const qsizetype before = requestMs.size();
+        const QString connectionId = remoteMedia.mediaConnectionId();
 
-        // The Core has nothing to send from here on.
+        // The Core has no audio to send from here on; its display goes on.
+        display.timer.start();
         audio.source.stop();
         QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= before + 4, 15000);
         QList<qint64> waits;
@@ -6751,6 +6799,113 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= beforeRetry + 2, 5000);
         const qint64 afterRetry = requestMs.at(beforeRetry + 1) - requestMs.at(beforeRetry);
         QVERIFY2(afterRetry >= 990 && afterRetry < 3500, qPrintable(QString::number(afterRetry)));
+        // Audio and display stayed on the connection they started on.
+        QCOMPARE(remoteMedia.mediaConnectionId(), connectionId);
+
+        display.timer.stop();
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Direct media: the case the harness hid. On a direct path the Core's
+    // audio and display both go silent while control stays up, and the
+    // window's audio restart backoff is running. The silence fallback moves
+    // media to the tunnel once; the restart waiting at the move still asks
+    // for audio on the new connection at its backoff step (no storm, no
+    // restart lost); nothing moves back to a direct path within a silence
+    // window of the move, and the direct-only schedule starts again from
+    // its first step. The Core's audio comes back once media is on the
+    // tunnel, so the window plays again only if that waiting restart ran.
+    void directSilenceFallsBackOnceWhileAudioRestartsBackOff()
+    {
+        using State = RemoteAudioStatus::State;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QElapsedTimer clock;
+        clock.start();
+        QList<qint64> requestMs;
+        QList<qint64> fallbackMs;
+        QList<qint64> directMs;
+        connect(&h.server, &StationServer::mediaControlReceived, this,
+                [&](const QJsonObject& control) {
+            const QString op = control.value(QStringLiteral("op")).toString();
+            if (op == QLatin1String("audio") && control.value(QStringLiteral("enabled")).toBool()) {
+                requestMs << clock.elapsed();
+            } else if (op == QLatin1String("replace")) {
+                (control.contains(QStringLiteral("mediaDirectVersion")) ? directMs : fallbackMs)
+                    << clock.elapsed();
+            }
+        });
+        QSignalSpy recoveries(&remoteMedia, &RemoteMediaController::recoveryRequested);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QVERIFY(h.client.mediaDirectAvailable());
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
+        QVERIFY(!h.client.mediaTunnelInUse());
+        const QString directId = remoteMedia.mediaConnectionId();
+        const qsizetype before = requestMs.size();
+
+        // The move, seen once it has finished: the Core's audio returns
+        // from here, on the tunnel.
+        qint64 movedMs = -1;
+        State stateAtMove = State::NotConnected;
+        connect(&remoteMedia, &RemoteMediaController::networkPathChanged, &remoteMedia, [&] {
+            if (movedMs < 0 && remoteMedia.mediaConnectionId() != directId) {
+                movedMs = clock.elapsed();
+                stateAtMove = remoteMedia.audioStatus().state;
+                audio.source.start();
+            }
+        }, Qt::QueuedConnection);
+
+        // Audio and display both stop; control stays up.
+        audio.source.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(movedMs >= 0, 15000);
+        const qsizetype atMove = requestMs.size();
+        // The waiting restart ran on the new connection and the window
+        // plays again.
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(), 10000);
+        // Hold to a silence window after the move before judging it.
+        const qint64 windowEnd = movedMs + RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        if (clock.elapsed() < windowEnd) { QTest::qWait(int(windowEnd - clock.elapsed())); }
+
+        QStringList parts;
+        for (qsizetype i = before; i < requestMs.size(); ++i) {
+            parts << QString::number(requestMs.at(i));
+        }
+        const QString evidence = QStringLiteral(
+            "audio requests at %1 ms; fallback at %2; direct at %3; moved at %4 ms (%5)")
+            .arg(parts.join(QStringLiteral(", ")),
+                 fallbackMs.isEmpty() ? QStringLiteral("none")
+                                      : QString::number(fallbackMs.first()),
+                 directMs.isEmpty() ? QStringLiteral("none") : QString::number(directMs.first()))
+            .arg(movedMs)
+            .arg(stateAtMove == State::Reconnecting ? QStringLiteral("a restart was waiting")
+                                                    : QStringLiteral("no restart waiting"));
+        qInfo().noquote() << evidence;
+
+        // The fallback ran once, to the tunnel.
+        QVERIFY2(fallbackMs.size() == 1, qPrintable(evidence));
+        QVERIFY(remoteMedia.mediaConnectionId() != directId);
+        QTRY_VERIFY_WITH_TIMEOUT(h.client.mediaTunnelInUse(), 2000);
+        // Nothing moved back to a direct path within a window of the move.
+        for (qint64 at : std::as_const(directMs)) {
+            QVERIFY2(at >= windowEnd, qPrintable(evidence));
+        }
+        // The direct-only schedule starts again at its first step.
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(),
+                                  PathRacer::kUpgradeRetryMs[0], 2000);
+        // The restarts went on after the move, each at least the first
+        // backoff step after the one before: no storm.
+        QVERIFY2(requestMs.size() > atMove, qPrintable(evidence));
+        for (qsizetype i = before + 1; i < requestMs.size(); ++i) {
+            QVERIFY2(requestMs.at(i) - requestMs.at(i - 1) >= 990, qPrintable(evidence));
+        }
+        // Audio came back on the tunnel: no recovery was needed.
+        QCOMPARE(recoveries.count(), 0);
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
