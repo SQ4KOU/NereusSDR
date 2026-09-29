@@ -28,6 +28,20 @@
 // 2026-09-28: Parity ruling C4: radioHardwareVersion 9, setRadioSampleRate
 // for a paired device, off the air. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+//   2026-09-28: R-R3-49 (lead's ruling): a calibration settings write
+//               outside its control's range (the Watt Meter points and
+//               their class, TX Display Cal, the correction factors, the
+//               10 MHz box, the 6 m LNA offsets, Volts/Amps) is refused
+//               whole with the range in plain words
+//               (calibrationKeyValueRefusal). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: R-R3-49 (lead's ruling): the correction factors are
+//               refused outside Thetis's 0..65. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: R-R3-49 / R-IOS-18: paProfileVersion 1, the paProfiles
+//               object and the paProfile verbs (peerGetsPaProfiles,
+//               paProfileRefusal), and Setup description version 14.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -710,6 +724,10 @@
 //               coreAddressesVersion 1, only to a device signed in with its
 //               own key that declared coreAddresses (peerGetsCoreAddresses).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: R-R3-49 / R-IOS-18: Setup description version 13 (PA and
+//               Hardware Config); the description also carries the Core's
+//               radio for Radio Info. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -777,6 +795,8 @@
 #include "core/session/StationOpeningGate.h"
 #include "core/session/StateMirror.h"
 #include "core/session/StationCatalog.h"
+#include "core/session/PaProfilesFacade.h"
+#include "core/PaProfileManager.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/CoreAddresses.h"
 #include "core/settings/SettingsProxyServer.h"
@@ -808,7 +828,9 @@
 #include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
 #include "core/setup/SetupDescriptionService.h"
+#include "core/PaCalProfile.h"
 
+#include <cmath>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <array>
@@ -1100,6 +1122,16 @@ bool isSetupDescriptionMessage(const SessionMessage& message)
     return message.objectKey == kSetupDescriptionKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "SetupDescription");
+}
+
+// R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain profiles.
+constexpr const char* kPaProfilesKey = "paProfiles";
+
+bool isPaProfilesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kPaProfilesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "PaProfilesFacade");
 }
 
 bool isCatalogMessage(const SessionMessage& message)
@@ -1568,6 +1600,89 @@ QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
     return text == QLatin1String("True") || text == QLatin1String("False")
         ? QString()
         : QStringLiteral("The Core expected this box to be on or off.");
+}
+
+// R-R3-49 (lead's ruling, PA and Hardware Config publication): the plain
+// refusal for a calibration value its Setup control cannot hold; empty when
+// it can, or when the key is not one of these. The value is refused whole,
+// never clamped, as the TX EQ band arrays are. The ranges are the controls'
+// own, Thetis's where the control carries them:
+//   Watt Meter points: paCalPointSpec (setup.designer.cs ud{10|100|200}PA{N}W
+//     [v2.10.3.15]) for the Core's radio's class; its boardClass is that class.
+//   TX Display Cal:  From Thetis setup.designer.cs:11870 [v2.10.3.15]
+//     udTXDisplayCalOffset Maximum = 100, Minimum = -100
+//   6 m LNA offsets: From Thetis setup.designer.cs:12096 [v2.10.3.15]
+//     ud6mLNAGainOffset Maximum = 25, Minimum = 0 (ud6mRx2LNAGainOffset :12054)
+//   Volts/Amps:      From Thetis setup.designer.cs:11789 [v2.10.3.15]
+//     udAmpSens Maximum = 5000, Minimum = 0.001; :11819 udAmpVoff 0 to 5000
+//   Correction factors: From Thetis setup.designer.cs:11983 [v2.10.3.15]
+//     udHPSDRFreqCorrectFactor Maximum = 65, Minimum = 0 (the 10 MHz box
+//     :11928, the same; lead's ruling: Thetis's range).
+// The Calibration tab also keeps its own copies under paCalibration/cal/.
+QString calibrationKeyValueRefusal(const QString& key, const QVariant& value, HPSDRModel model)
+{
+    const QStringList parts = key.split(QLatin1Char('/'));
+    if (parts.size() < 4 || parts[0].compare(QLatin1String("hardware"), Qt::CaseInsensitive) != 0) {
+        return {};
+    }
+    QString rest = parts.mid(2).join(QLatin1Char('/'));
+    if (rest.startsWith(QLatin1String("paCalibration/cal/"), Qt::CaseInsensitive)) {
+        rest = QStringLiteral("cal/") + rest.mid(QStringLiteral("paCalibration/cal/").size());
+    }
+    const QString text = value.toString();
+    bool ok = false;
+    const double number = text.toDouble(&ok);
+    const bool finite = ok && std::isfinite(number);
+    const auto within = [&](double lo, double hi) { return finite && number >= lo && number <= hi; };
+    if (rest.startsWith(QLatin1String("paCalibration/calPoint"), Qt::CaseInsensitive)) {
+        bool pointOk = false;
+        const int point = rest.mid(QStringLiteral("paCalibration/calPoint").size()).toInt(&pointOk);
+        const PaCalPointSpec spec = paCalPointSpec(paCalBoardClassFor(model), point);
+        if (!pointOk || spec.maximum <= 0.0) {
+            return QStringLiteral("This radio has no power meter calibration.");
+        }
+        return within(0.0, spec.maximum)
+            ? QString()
+            : QStringLiteral("Choose a calibration point from 0 to %1 W.").arg(spec.maximum);
+    }
+    if (rest.compare(QLatin1String("paCalibration/boardClass"), Qt::CaseInsensitive) == 0) {
+        const PaCalBoardClass boardClass = paCalBoardClassFor(model);
+        return boardClass != PaCalBoardClass::None
+                && text == QString::number(static_cast<int>(boardClass))
+            ? QString()
+            : QStringLiteral("The Core expected this radio's power calibration table.");
+    }
+    if (rest.compare(QLatin1String("cal/txDisplayOffset"), Qt::CaseInsensitive) == 0) {
+        return within(-100.0, 100.0)
+            ? QString() : QStringLiteral("Choose a TX display offset from -100 to 100 dB.");
+    }
+    if (rest.compare(QLatin1String("cal/freqFactor"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/freqFactor10M"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 65.0) ? QString()
+                                 : QStringLiteral("Choose a correction factor from 0 to 65.");
+    }
+    if (rest.compare(QLatin1String("cal/rx1_6mLna"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/rx2_6mLna"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 25.0) ? QString()
+                                 : QStringLiteral("Choose a 6 m LNA offset from 0 to 25 dB.");
+    }
+    if (rest.compare(QLatin1String("cal/paSens"), Qt::CaseInsensitive) == 0) {
+        return within(0.001, 5000.0)
+            ? QString() : QStringLiteral("Choose an amp sensitivity from 0.001 to 5000.");
+    }
+    if (rest.compare(QLatin1String("cal/paOffset"), Qt::CaseInsensitive) == 0) {
+        return within(0.0, 5000.0)
+            ? QString() : QStringLiteral("Choose an amp voltage offset from 0 to 5000.");
+    }
+    if (rest.compare(QLatin1String("cal/using10M"), Qt::CaseInsensitive) == 0
+        || rest.compare(QLatin1String("cal/logVoltsAmps"), Qt::CaseInsensitive) == 0) {
+        // The Calibration tab's own copies (paCalibration/cal/) hold a
+        // stored bool, which the settings proxy sends as "true"/"false".
+        return text.compare(QLatin1String("True"), Qt::CaseInsensitive) == 0
+                || text.compare(QLatin1String("False"), Qt::CaseInsensitive) == 0
+            ? QString() : QStringLiteral("The Core expected this box to be on or off.");
+    }
+    return {};
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -2265,16 +2380,28 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 19 (R-IOS-06): the catalogue follows the Core's radio,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
+    // R-R3-49 / R-IOS-18: the Core's PA Gain profiles follow its bank.
+    m_paProfiles = std::make_unique<PaProfilesFacade>();
+    if (radioModel != nullptr && radioModel->role() != RadioModel::Role::Remote) {
+        const QPointer<RadioModel> model(radioModel);
+        m_paProfiles->bind(radioModel->paProfileManager(), [model]() {
+            return model ? model->hardwareProfile().model : HPSDRModel::FIRST;
+        });
+        connect(radioModel, &RadioModel::currentRadioChanged, m_paProfiles.get(),
+                [this](const NereusSDR::RadioInfo&) { m_paProfiles->refresh(); });
+    }
     m_catalog->bind(radioModel);
     m_setupDescription = std::make_unique<SetupDescriptionService>();
     if (radioModel != nullptr) {
         m_setupDescription->setRadioContext(radioModel->boardCapabilities(),
-                                            radioModel->hardwareProfile().model);
+                                            radioModel->hardwareProfile().model,
+                                            radioModel->currentRadioInfo());
         connect(radioModel, &RadioModel::currentRadioChanged, this,
                 [this](const NereusSDR::RadioInfo&) {
                     if (m_radioModel && m_setupDescription) {
                         m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
-                                                            m_radioModel->hardwareProfile().model);
+                                                            m_radioModel->hardwareProfile().model,
+                                                            m_radioModel->currentRadioInfo());
                     }
                 });
     }
@@ -4556,6 +4683,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 TxRefusals::appCannotTransmit().text, {}));
             break;
         }
+        // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA profile verbs, to a
+        // peer that declared paProfiles, gated as the desktop's own PA
+        // profile writes are.
+        if (message.commandVerb.startsWith("paProfile.")) {
+            QString refusal;
+            if (it->agreedMinor < kRadioIdentitySessionProtocolMinor) {
+                refusal = QStringLiteral("Update this app to change PA profiles on this Core.");
+            } else if (!peerGetsPaProfiles(transport)) {
+                refusal = QStringLiteral("This app cannot change the Core's PA profiles.");
+            } else {
+                refusal = paProfileRefusal(transport);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
+        }
         if (message.commandVerb == "tx.twoTonePreset"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || !peerDeclares(transport, QByteArrayLiteral("setupDescription"), 1)
@@ -6183,8 +6328,13 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain profiles, only
+    // to a peer that declared paProfiles (sendToPeer).
+    m_paProfiles->refresh();
+    m_mirror->watch(QByteArray(kPaProfilesKey), m_paProfiles.get());
     m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
-                                        m_radioModel->hardwareProfile().model);
+                                        m_radioModel->hardwareProfile().model,
+                                        m_radioModel->currentRadioInfo());
     m_mirror->watch(QByteArray(kSetupDescriptionKey), m_setupDescription.get());
     // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
     // only to a peer at minor 11 (sendToPeer).
@@ -6787,6 +6937,18 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     // R-R3-49 (parity Task 5): a Power page key the page's own control
     // could not have written is refused, and the Core's value handed back.
     if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
+    // R-R3-49 (lead's ruling): a calibration value outside its control's
+    // range is refused whole, and the Core's value handed back.
+    if (const QString range = calibrationKeyValueRefusal(
+            key, message.updates.first().value,
+            m_radioModel ? m_radioModel->hardwareProfile().model : HPSDRModel::FIRST);
         !range.isEmpty()) {
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
@@ -7504,6 +7666,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
                 || vaxVersion() < 1)) {
             return;
         }
+        // R-R3-49 / R-IOS-18: nor the PA Gain profiles to a peer that did
+        // not declare paProfiles.
+        if (isPaProfilesMessage(message) && !peerGetsPaProfiles(transport)) {
+            return;
+        }
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
@@ -7518,7 +7685,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 12);
+            const int version = qMin(declared, 14);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -7560,6 +7727,35 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
 }
 
 // ── The read-only TX EQ curve (R-IOS-13, R-R3-49) ───────────────────────
+
+bool StationServer::peerGetsPaProfiles(SessionTransport* transport) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && m_radioModel->role() != RadioModel::Role::Remote
+        && m_radioModel->paProfileManager() != nullptr
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("paProfiles"), 1);
+}
+
+QString StationServer::paProfileRefusal(SessionTransport* transport) const
+{
+    if (m_radioModel.isNull()) {
+        return QStringLiteral("This Core cannot change its PA profiles.");
+    }
+    const QString key = QStringLiteral("hardware/%1/pa/profile/active")
+                            .arg(m_radioModel->currentRadioMac());
+    if (receiveOnlyRefusesKey(transport, key)) {
+        return QString::fromLatin1(kReceiveOnlyTransmitReason);
+    }
+    if (!m_radioModel->receiveOnlyStationPolicy()) {
+        const TxDecision decision = txDecisionFor(transport);
+        if (!decision.permitted) {
+            return decision.refusal.text;
+        }
+    }
+    return {};
+}
 
 bool StationServer::peerGetsTxEqCurve(SessionTransport* transport) const
 {
@@ -10476,6 +10672,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // R-R3-46 / R-R3-11: stepAtt's other-ADC attenuator, to a peer
             // that declared adcAttenuators 1.
             caps.adcAttenuatorVersion = peerGetsAdcAttenuators(transport) ? 1 : 0;
+            // R-R3-49 / R-IOS-18: the PA Gain profiles, to a peer that
+            // declared paProfiles 1.
+            caps.paProfileVersion = peerGetsPaProfiles(transport) ? 1 : 0;
             // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
             caps.remoteTgxlControlVersion = tgxlControlVersion();
             // iPhone app Task 12 (R-IOS-08): device sign-in by key, last.
@@ -10488,7 +10687,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 12) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 14) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

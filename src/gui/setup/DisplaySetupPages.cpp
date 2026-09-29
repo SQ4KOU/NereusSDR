@@ -51,6 +51,9 @@
 //                dB Min show the Core's value as it arrives in a remote
 //                window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-29 - R-IOS-18: 3D Floor says what it does (how far below the
+//                 noise floor the 3D surface starts; kept per band).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3465,6 +3468,14 @@ void Display3DSetupPage::buildUI()
         m_floorSlider = row.slider;
         m_floorSlider->setObjectName(QStringLiteral("setup3DFloorSlider"));
         m_floorSlider->setProperty("nereusSetupId", "display.threeD.floor");
+        // The surface starts at the pan's noise floor less this depth
+        // (SpectrumWidget::dssFloorDbm), and each band keeps its own value
+        // (PanadapterModel::dss3DFloorDepthForBand).
+        const QString floorTip = QStringLiteral(
+            "How far below the noise floor the surface starts. "
+            "Each band keeps its own value.");
+        m_floorSlider->setToolTip(floorTip);
+        row.spin->setToolTip(floorTip);
         connect(m_floorSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_updatingFromModel || !m_spectrumWidget) { return; }
             m_spectrumWidget->setDssFloorDepth(v);

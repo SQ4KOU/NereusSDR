@@ -3,6 +3,10 @@
 
 #include "core/AppSettings.h"
 #include "core/PaTelemetryScaling.h"
+#include "core/PaCalProfile.h"
+#include "core/PaProfileManager.h"
+#include "core/PaProfile.h"
+#include "models/Band.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -22,6 +26,356 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
+    // Config's new rows while a version 12 phone keeps its projection, and
+    // the described radio settings reach the Core through the gates the
+    // desktop's own writes go through: the Watt Meter's points off the air
+    // only, TX Display Cal on the air too.
+    void pairedV13PaAndHardwareWritesUseTheCoresSettingsGates()
+    {
+        Core core;
+        const RadioInfo info = core.model->currentRadioInfo();
+        core.model->setReceiveOnlyStationPolicy(true);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model,
+                                                         info);
+        Device current(QStringLiteral("PA V13 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("PA V12 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v13Features = kHolder;
+        v13Features.insert("setupDescription", 13);
+        auto* v13 = core.signIn(current, v13Features);
+        QVERIFY(admitted(v13));
+        QCOMPARE(capability(v13->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(13));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(v13->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(pa.value("version"), QJsonValue(13));
+        const QJsonObject hardware = QJsonDocument::fromJson(latest(v13->received(),
+            QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+        QCOMPARE(hardware.value("version"), QJsonValue(13));
+        QJsonObject board;
+        QJsonObject offset;
+        for (const QJsonValue& page : hardware.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value("id") == QJsonValue("hardware.radioInfo.board")) { board = control; }
+                    if (control.value("id") == QJsonValue("hardware.calibration.txDisplayOffset")) {
+                        offset = control;
+                    }
+                }
+            }
+        }
+        QCOMPARE(board.value("value"), QJsonValue("Bench HL2"));
+        QVERIFY(!offset.isEmpty());
+        QJsonObject point;
+        for (const QJsonValue& page : pa.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    if (raw.toObject().value("id") == QJsonValue("pa.wattMeter.calPoint3")) {
+                        point = raw.toObject();
+                    }
+                }
+            }
+        }
+        QCOMPARE(point.value("label"), QJsonValue("3 W"));
+        QCOMPARE(point.value("boardClass"), QJsonValue(int(PaCalBoardClass::Anan10)));
+
+        QHash<QByteArray, int> v12Features = kHolder;
+        v12Features.insert("setupDescription", 12);
+        auto* v12 = core.signIn(older, v12Features);
+        QVERIFY(admitted(v12));
+        const QJsonObject oldPa = QJsonDocument::fromJson(latest(v12->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(oldPa.value("version"), QJsonValue(5));
+        QVERIFY(!QJsonDocument(oldPa).toJson().contains("pa.wattMeter"));
+        // The HL2 has no ALEX filters: no Hardware category before 13.
+        QVERIFY(latest(v12->received(), QStringLiteral("setup"),
+                       QStringLiteral("hardware")).toString().isEmpty());
+
+        // The key a phone writes: hardware/<the Core's radio>/<radioSetting>.
+        const auto keyOf = [&info](const QJsonObject& control) {
+            return QStringLiteral("hardware/%1/%2").arg(info.macAddress,
+                control.value("binding").toObject().value("radioSetting").toString());
+        };
+        const auto rejectReason = [v13](const QString& key) {
+            QString reason;
+            for (const QByteArray& wire : v13->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QString pointKey = keyOf(point);
+        const QString offsetKey = keyOf(offset);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            pointKey, QStringLiteral("3.4"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(pointKey).toString(), QStringLiteral("3.4"));
+
+        allowTransmit(core);
+        core.model->setReceiveOnlyStationPolicy(true);
+        MoxController* mox = core.model->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical test state, no radio transport
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        // Remote parity on the air (transmitSettingsVersion 13): the local
+        // Watt Meter page changes a point while transmitting, so the Core
+        // takes it.
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            pointKey, QStringLiteral("5"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(pointKey).toString(), QStringLiteral("5"));
+        QVERIFY(rejectReason(pointKey).isEmpty());
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            offsetKey, QStringLiteral("-2.5"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(offsetKey).toString(), QStringLiteral("-2.5"));
+        QVERIFY(rejectReason(offsetKey).isEmpty());
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(!core.model->tune());
+    }
+
+    // Version 13 (R-R3-46, R-R3-49): a paired phone reads Disable HF PA,
+    // the Alex receive filter rows and the whole radio's sample rate from
+    // the running Core, and an Alex row it edits reaches the Core's
+    // settings; a version 12 phone sees none of them.
+    void pairedV13ReadsHfPaAlexRowsAndSampleRate()
+    {
+        Core core;
+        const RadioInfo info = core.model->currentRadioInfo();
+        // An ANAN-G2 Core: both Alex filter pages. The Core reads its
+        // radio's context again for each peer's snapshot.
+        core.model->setBoardForTest(HPSDRHW::Saturn);
+        core.model->setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(core.model->boardCapabilities().board, HPSDRHW::Saturn);
+        Device current(QStringLiteral("Filters V13 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Filters V12 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v13Features = kHolder;
+        v13Features.insert("setupDescription", 13);
+        auto* v13 = core.signIn(current, v13Features);
+        QVERIFY(admitted(v13));
+        const QString transmit = latest(v13->received(), QStringLiteral("setup"),
+                                        QStringLiteral("transmit")).toString();
+        QVERIFY(transmit.contains(QStringLiteral("transmit.power.DisableHfPa")));
+        QCOMPARE(QJsonDocument::fromJson(transmit.toUtf8()).object().value("version"),
+                 QJsonValue(13));
+        const QString hardware = latest(v13->received(), QStringLiteral("setup"),
+                                        QStringLiteral("hardware")).toString();
+        QVERIFY(hardware.contains(QStringLiteral("hardware.alex1Filters.bpf1.6mBP.bypass")));
+        QVERIFY(hardware.contains(QStringLiteral("hardware.alex2Filters.bypass55MhzBpf")));
+        QVERIFY(hardware.contains(QStringLiteral("hardware.radioInfo.sampleRate")));
+
+        QHash<QByteArray, int> v12Features = kHolder;
+        v12Features.insert("setupDescription", 12);
+        auto* v12 = core.signIn(older, v12Features);
+        QVERIFY(admitted(v12));
+        const QString oldTransmit = latest(v12->received(), QStringLiteral("setup"),
+                                           QStringLiteral("transmit")).toString();
+        QVERIFY(!oldTransmit.isEmpty());
+        QVERIFY(!oldTransmit.contains(QStringLiteral("DisableHfPa")));
+        const QString oldHardware = latest(v12->received(), QStringLiteral("setup"),
+                                           QStringLiteral("hardware")).toString();
+        QVERIFY(!oldHardware.contains(QStringLiteral("alex1Filters")));
+        QVERIFY(!oldHardware.contains(QStringLiteral("sampleRate")));
+
+        // The Start box of the 1.5 MHz high-pass row, written as the phone
+        // writes it: hardware/<the Core's radio>/<radioSetting>.
+        const QString key = QStringLiteral("hardware/%1/alex/hpf/1_5MHz/start")
+            .arg(info.macAddress);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("1.9"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("1.9"));
+    }
+
+    // R-R3-49 (lead's ruling): the Core refuses a calibration write whole
+    // when the value is outside the control's range, says the range in plain
+    // words, and hands back its own value; an in-range write is taken.
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): a paired phone that declares
+    // paProfiles reads the Core's PA Gain profiles on the `paProfiles` object
+    // and changes them with the paProfile verbs, as the local PA Gain page
+    // does, through the gates the desktop's own profile writes meet: off the
+    // air on a receive-only Core; not at all for a peer that did not declare
+    // the feature.
+    void pairedPaProfileVerbsChangeTheCoresBankOffTheAirOnly()
+    {
+        Core core;
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        core.model->setReceiveOnlyStationPolicy(true);
+        const QString factory = bank->activeProfileName();
+        QVERIFY(!factory.isEmpty());
+
+        Device phone(QStringLiteral("PA profile iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("No PA profile iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        core.pair(older);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("paProfiles", 1);
+        auto* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        QCOMPARE(capability(app->received(), QStringLiteral("paProfileVersion")),
+                 std::optional<qint64>(1));
+        const auto mirror = [app]() {
+            return QJsonDocument::fromJson(latest(app->received(), QStringLiteral("paProfiles"),
+                                                  QStringLiteral("json")).toString().toUtf8())
+                .object();
+        };
+        QTRY_COMPARE(mirror().value("active"), QJsonValue(factory));
+        QCOMPARE(mirror().value("bands").toArray().size(), 14);
+        QCOMPARE(mirror().value("bands").toArray().first().toObject().value("band"),
+                 QJsonValue("160m"));
+        QVERIFY(mirror().value("names").toArray().contains(QJsonValue(factory)));
+
+        const auto ok = [&core, app](const QByteArray& verb, const QList<MirrorUpdate>& args) {
+            const QJsonObject result = core.invoke(app, verb, args);
+            return result.value("accepted").toBool()
+                ? QString() : result.value("reason").toString(QStringLiteral("(no answer)"));
+        };
+        const auto name = [](const QString& n) {
+            return MirrorUpdate{0, "name", MirrorWireKind::Utf8, n};
+        };
+        const auto band = [](int b) { return MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(b)}; };
+        const auto value = [](double v) { return MirrorUpdate{0, "value", MirrorWireKind::Float64, v}; };
+
+        QCOMPARE(ok("paProfile.new", {name("Contest")}), QString());
+        QCOMPARE(bank->activeProfileName(), QStringLiteral("Contest"));
+        QTRY_COMPARE(mirror().value("active"), QJsonValue("Contest"));
+        QCOMPARE(ok("paProfile.new", {name("Default mine")}),
+                 QStringLiteral("Profile names starting with \"Default\" are reserved for factory "
+                                "entries. Choose a different name."));
+        QCOMPARE(ok("paProfile.new", {name("contest")}),
+                 QStringLiteral("A profile named \"contest\" already exists. Choose a different name."));
+        // 20 m is Band 5.
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(47.54)}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.5f);
+        QTRY_COMPARE(mirror().value("bands").toArray().at(5).toObject().value("gain").toDouble(),
+                     47.5);
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(30.0)}),
+                 QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        QCOMPARE(ok("paProfile.setAdjust",
+                    {band(5), MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(8)},
+                     value(-1.2)}), QString());
+        QCOMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 8), -1.2f);
+        QCOMPARE(ok("paProfile.setAdjust",
+                    {band(5), MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(8)},
+                     value(10.5)}), QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        QCOMPARE(ok("paProfile.setMaxPower", {band(5), value(80.0)}), QString());
+        QCOMPARE(ok("paProfile.setUseMax", {band(5), MirrorUpdate{0, "on", MirrorWireKind::Bool, true}}),
+                 QString());
+        QVERIFY(bank->activeProfile()->getMaxPowerUse(Band::Band20m));
+        QCOMPARE(ok("paProfile.setMaxPower", {band(5), value(1500.5)}),
+                 QStringLiteral("Choose a max power from 0 to 1500 W."));
+        QCOMPARE(ok("paProfile.copy", {name("Contest 2")}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.5f);
+        QCOMPARE(ok("paProfile.delete", {name("Contest 2")}), QString());
+        // Thetis selects the radio's Default profile after a delete.
+        QCOMPARE(bank->activeProfileName(), factory);
+        QCOMPARE(ok("paProfile.select", {name("Contest")}), QString());
+        QCOMPARE(ok("paProfile.reset", {}), QString());
+        QCOMPARE(bank->activeProfile()->getMaxPowerUse(Band::Band20m), false);
+        QCOMPARE(ok("paProfile.select", {name("Nothing")}),
+                 QStringLiteral("There is no PA profile called Nothing."));
+
+        // On the air, a receive-only Core takes none of them.
+        const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
+        allowTransmit(core);
+        core.model->setReceiveOnlyStationPolicy(true);
+        MoxController* mox = core.model->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical test state, no radio transport
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(ok("paProfile.setGain", {band(5), value(48.0)}),
+                 QStringLiteral("The radio is on the air. Try again when it stops."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+
+        // A peer that did not declare the feature sees nothing and changes
+        // nothing.
+        auto* old = core.signIn(older, kHolder);
+        QVERIFY(admitted(old));
+        QCOMPARE(capability(old->received(), QStringLiteral("paProfileVersion")),
+                 std::optional<qint64>());
+        QVERIFY(latest(old->received(), QStringLiteral("paProfiles"), QStringLiteral("json"))
+                    .isNull());
+        const QJsonObject refused = core.invoke(old, "paProfile.select", {name(factory)});
+        QVERIFY(!refused.value("accepted").toBool(true));
+        QVERIFY(!refused.value("reason").toString().isEmpty());
+    }
+
+    void calibrationWritesOutsideTheirRangeAreRefusedWhole()
+    {
+        Core core;
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        core.model->setReceiveOnlyStationPolicy(true);
+        Device phone(QStringLiteral("Calibration range iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        QHash<QByteArray, int> features = kHolder;
+        features.insert("setupDescription", 13);
+        auto* app = core.signIn(phone, features);
+        QVERIFY(admitted(app));
+        const auto key = [&mac](const QString& rest) {
+            return QStringLiteral("hardware/%1/%2").arg(mac, rest);
+        };
+        const auto rejectReason = [app](const QString& k) {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == k) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const auto write = [app](const QString& k, const QString& value) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::settingsWrite(k, value, QStringLiteral("phone"))));
+        };
+        struct Case { QString rest; QString bad; QString good; QString reason; };
+        // The Core's radio is an HL2: the ANAN-10 class table (point 3 up
+        // to 10 W, point 10 up to 12 W).
+        const QList<Case> cases{
+            {"paCalibration/calPoint3", "10.5", "9.5", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/calPoint10", "12.5", "11.9", "Choose a calibration point from 0 to 12 W."},
+            {"paCalibration/calPoint1", "-1", "0.5", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/calPoint2", "plenty", "2", "Choose a calibration point from 0 to 10 W."},
+            {"paCalibration/boardClass", "2", "1", "The Core expected this radio's power calibration table."},
+            {"cal/txDisplayOffset", "100.5", "-99.5", "Choose a TX display offset from -100 to 100 dB."},
+            {"paCalibration/cal/txDisplayOffset", "-101", "5", "Choose a TX display offset from -100 to 100 dB."},
+            // Thetis's boxes hold 0 to 65 (lead's ruling: Thetis's range).
+            {"cal/freqFactor", "65.5", "2.5", "Choose a correction factor from 0 to 65."},
+            {"cal/freqFactor10M", "-0.1", "0.9999999", "Choose a correction factor from 0 to 65."},
+            {"cal/using10M", "yes", "True", "The Core expected this box to be on or off."},
+            // The Calibration tab's own copies hold a stored bool, which
+            // reaches the Core as "true" or "false".
+            {"paCalibration/cal/using10M", "on", "true", "The Core expected this box to be on or off."},
+            {"paCalibration/cal/logVoltsAmps", "1", "false", "The Core expected this box to be on or off."},
+            {"cal/rx1_6mLna", "26", "13", "Choose a 6 m LNA offset from 0 to 25 dB."},
+            {"cal/rx2_6mLna", "-1", "0", "Choose a 6 m LNA offset from 0 to 25 dB."},
+            {"cal/paSens", "0", "120", "Choose an amp sensitivity from 0.001 to 5000."},
+            {"cal/paOffset", "5001", "360", "Choose an amp voltage offset from 0 to 5000."},
+        };
+        for (const Case& c : cases) {
+            write(key(c.rest), c.bad);
+            QTRY_COMPARE_WITH_TIMEOUT(rejectReason(key(c.rest)), c.reason, 5000);
+            QVERIFY2(core.settings->value(key(c.rest)).toString() != c.bad, qPrintable(c.rest));
+            write(key(c.rest), c.good);
+            QTRY_COMPARE_WITH_TIMEOUT(core.settings->value(key(c.rest)).toString(), c.good, 5000);
+        }
+    }
+
     void pairedV12PublishesTheRestOfDisplayAndKeepsV11Projection()
     {
         Core core;
@@ -307,8 +661,11 @@ private slots:
         info.boardType = HPSDRHW::Hermes;
         core.model->setLastRadioInfoForTest(info);
         core.model->setConnectionStateForTest(ConnectionState::Disconnected);
+        // As StationServer does: the context carries the Core's radio, which
+        // version 13's Radio Info describes (the same radio when it connects).
         core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
-                                                         core.model->hardwareProfile().model);
+                                                         core.model->hardwareProfile().model,
+                                                         core.model->currentRadioInfo());
         const quint32 unchangedDescriptionRevision = core.server->setupDescription()->revision();
         const QString unchangedDescription = core.server->setupDescription()->hardware();
         QVERIFY(!unchangedDescription.isEmpty());
@@ -1102,7 +1459,9 @@ private slots:
         QVERIFY(core.server->setupDescription()->revision() > capturedRevision);
         QTRY_VERIFY(latest(app->received(), QStringLiteral("setup"),
                            QStringLiteral("hardware")).toString().isEmpty());
-        QVERIFY(core.server->setupDescription()->category(QStringLiteral("hardware")).isEmpty());
+        // Version 13's Radio Info and Calibration stay; Antenna / ALEX goes.
+        QVERIFY(!core.server->setupDescription()->hardware()
+                     .contains(QStringLiteral("hardware.antennaAlex")));
         const QJsonObject stale = write(rx, false);
         QVERIFY(!stale.value("accepted").toBool(true));
         QVERIFY(!stale.value("reason").toString().isEmpty());

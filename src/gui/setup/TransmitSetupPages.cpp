@@ -200,6 +200,9 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: Disable HF PA carries its Setup
+//                description id (version 13). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -1032,6 +1035,7 @@ void PowerPage::buildHfPaGroup()
     // chkHFTRRelay — From Thetis setup.designer.cs:5780-5791 [v2.10.3.13]
     m_chkHFTRRelay = new QCheckBox(tr("Disable HF PA"), group);
     m_chkHFTRRelay->setObjectName(QStringLiteral("chkHFTRRelay"));
+    m_chkHFTRRelay->setProperty("nereusSetupId", "transmit.power.DisableHfPa");
     // From Thetis setup.designer.cs:5789 [v2.10.3.13]
     m_chkHFTRRelay->setToolTip(tr("Disables HF PA."));
     m_chkHFTRRelay->setChecked(

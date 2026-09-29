@@ -180,6 +180,10 @@
 //   2026-09-26 - Parity Task 21 (R-IOS-18): Setup > This Core in a remote
 //                window (Change radio). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): Watt Meter > Show PA Values page
+//                shows or hides the PA Values page, as Thetis's chkPAValues
+//                does; nothing read the setting before. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1454,6 +1458,11 @@ void SetupDialog::buildTree()
                         m_paValuesPage->resetPaValues();
                     }
                 });
+        // R-R3-49 (found bug): Show PA Values page shows or hides the PA
+        // Values page at once, as Thetis's chkPAValues shows or hides its
+        // panel (setup.cs:16381-16385 [v2.10.3.15]).
+        connect(m_paWattMeterPage, &PaWattMeterPage::showPaValuesPageChanged,
+                this, [this](bool) { applyShowPaValuesPage(); });
         return m_paWattMeterPage;
     });
 
@@ -1466,6 +1475,8 @@ void SetupDialog::buildTree()
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.
     m_paValuesEntry = m_paValuesItem->data(0, Qt::UserRole).toInt();
+    // R-R3-49: the Watt Meter's Show PA Values page, as saved.
+    applyShowPaValuesPage();
     // Task 16 fix wave (I1): tpPowerAmplifier.Enabled = !RXOnly
     // (setup.cs:6500 [v2.10.3.15]). Checkpoint join: the PA pages are no
     // longer transmit pages (parity Task 6), so the gate reaches them as
@@ -1925,6 +1936,18 @@ void SetupDialog::onCurrentRadioChanged(const RadioInfo& /*info*/)
     applyPaVisibility(m_model->boardCapabilities());
 }
 
+void SetupDialog::applyShowPaValuesPage()
+{
+    // The Watt Meter's "Show PA Values page" (display/showPaValuesPage,
+    // default True, the page's own reading of it).
+    if (m_paValuesItem) {
+        m_paValuesItem->setHidden(
+            AppSettings::instance().value(QStringLiteral("display/showPaValuesPage"),
+                                          QStringLiteral("True")).toString()
+            != QStringLiteral("True"));
+    }
+}
+
 void SetupDialog::applyPaVisibility(const BoardCapabilities& caps)
 {
     // Task 16 fix wave 2 (Important 2): the operator's rule (2026-09-25) is
@@ -1943,6 +1966,9 @@ void SetupDialog::applyPaVisibility(const BoardCapabilities& caps)
             item->setHidden(false);
         }
     }
+    // R-R3-49: except PA Values, which the operator hides with Watt Meter >
+    // Show PA Values page (applyShowPaValuesPage).
+    applyShowPaValuesPage();
     for (QTreeWidgetItem* leaf : {m_paGainItem, m_paWattMeterItem, m_paValuesItem}) {
         const int index = leaf ? leaf->data(0, Qt::UserRole).toInt() : -1;
         if (index >= 0 && index < static_cast<int>(m_pages.size())) {

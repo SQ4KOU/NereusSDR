@@ -389,6 +389,16 @@
 //   2026-09-29 - HL2 port part 1: rebindIoBoardSlice feeds the HL2 I/O
 //                board poll the TX VFO's mode and frequency. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: PA Gain's profiles for a remote client
+//                 (paProfileActionForStation; the page's ids, plain tooltips,
+//                 the adjust tooltip's stray %, and the Default profile found
+//                 by its real name after a delete). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -523,6 +533,8 @@
 #include <mutex>   // R-R3-39 RxWorkerTarget
 #include <optional>
 #include <vector>
+
+namespace NereusSDR { class VoltsAmpsLog; }
 
 namespace NereusSDR {
 
@@ -3420,6 +3432,24 @@ public:
                                  bool takenOnAir = false);
     bool deleteTxProfileForStation(const QString& name, QString* reason,
                                    bool takenOnAir = false);
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the PA Gain page's profile
+    // actions and edits, for a paProfile verb, through the Core's own
+    // PaProfileManager as the local page uses it. Each is refused, changing
+    // nothing, while the radio is on the air, for a value outside the
+    // page's own control, and for a name the rules refuse. None keys the
+    // radio. The Core's `paProfiles` object follows the bank.
+    enum class PaProfileAction {
+        Select, New, Copy, Delete, Reset, SetGain, SetAdjust, SetMaxPower, SetUseMax
+    };
+    struct PaProfileRequest {
+        PaProfileAction action = PaProfileAction::Select;
+        QString name;
+        int band = -1;     // Band 0 (160m) .. 13 (XVTR)
+        int step = -1;     // drive step 0 (10%) .. 8 (90%)
+        double value = 0.0;
+        bool on = false;
+    };
+    bool paProfileActionForStation(const PaProfileRequest& request, QString* reason);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.
@@ -4077,6 +4107,8 @@ public:
     // the existing on*ForTest pattern (setConnectionStateForTest /
     // onConnectedForTest / setLastBandForTest).  Production code reaches
     // the same handler via the lambda installed in wireConnectionSignals.
+    // R-R3-49: Calibration's Volts/Amps log, to point it at a test file.
+    VoltsAmpsLog* voltsAmpsLogForTest() const { return m_voltsAmpsLog; }
     void handlePaTelemetryForTest(quint16 fwdRaw, quint16 revRaw,
                                   quint16 exciterRaw, quint16 userAdc0Raw,
                                   quint16 userAdc1Raw, quint16 supplyRaw) {
@@ -6523,6 +6555,8 @@ private:
     // MAC and load() are called on connect. Backs CalibrationTab UI and
     // P2RadioConnection::hzToPhaseWord(). Phase 3P-G.
     CalibrationController m_calController;
+    // R-R3-49: Calibration's Volts/Amps log (parented to this).
+    VoltsAmpsLog* m_voltsAmpsLog{nullptr};
 
     // Slices and panadapters (client-managed)
     QList<SliceModel*> m_slices;

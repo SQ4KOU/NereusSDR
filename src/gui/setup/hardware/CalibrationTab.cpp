@@ -43,6 +43,18 @@
 //   2026-09-28 - 6 m LNA spins take Thetis's 0..25 dB, step 1 and 13 dB;
 //                 Rx2's is disabled with its reason. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): TX Display Cal holds Thetis's
+//                 -100..100 dB (was -50..50) and carries its Setup
+//                 description id (R-IOS-18). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (lead's ruling): the correction factors take
+//                 Thetis's 0..65 (was 0..2). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -316,7 +328,11 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     auto* hpsdrForm  = new QFormLayout(hpsdrGroup);
 
     // Source: setup.cs:5137-5144 udHPSDRFreqCorrectFactor -- default 1.0, 9 decimal places [@501e3f5]
-    m_freqFactorSpin = makeSpinBox(0.0, 2.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    // Lead's ruling (R-R3-49): Thetis's range, 0 to 65 (was 0 to 2).
+    // From Thetis setup.designer.cs:11983 [v2.10.3.15] udHPSDRFreqCorrectFactor
+    //   Maximum = 65; Minimum = 0
+    m_freqFactorSpin = makeSpinBox(0.0, 65.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    m_freqFactorSpin->setObjectName(QStringLiteral("freqCorrectionFactorSpin"));
     m_freqFactorSpin->setToolTip(
         tr("HPSDR frequency correction factor applied to NCO phase-word.\n"
            "Default 1.0 = no correction. Set via auto-calibration or manually."));
@@ -337,7 +353,10 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     hpsdrForm->addRow(m_use10MhzCheck);
 
     // Source: setup.cs:22704 udHPSDRFreqCorrectFactor10MHz -- default 1.0 [@501e3f5]
-    m_freqFactor10MSpin = makeSpinBox(0.0, 2.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    // From Thetis setup.designer.cs:11928 [v2.10.3.15] udHPSDRFreqCorrectFactor10MHz
+    //   Maximum = 65; Minimum = 0
+    m_freqFactor10MSpin = makeSpinBox(0.0, 65.0, 1.0, 0.000000001, 9, hpsdrGroup);
+    m_freqFactor10MSpin->setObjectName(QStringLiteral("freqCorrectionFactor10MSpin"));
     m_freqFactor10MSpin->setToolTip(
         tr("Correction factor used when external 10 MHz reference is selected."));
     m_freqFactor10MSpin->setEnabled(false); // enabled only when m_use10MhzCheck is checked
@@ -362,7 +381,12 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     auto* txDisplayForm  = new QFormLayout(txDisplayGroup);
 
     // Source: setup.cs:14325-14328 udTXDisplayCalOffset -> Display.TXDisplayCalOffset [@501e3f5]
-    m_txDisplayOffsetSpin = makeSpinBox(-50.0, 50.0, 0.0, 0.1, 1, txDisplayGroup);
+    // R-R3-49 (found bug): the range was -50..50; Thetis's box holds
+    // -100..100 in 0.1 dB steps, one decimal:
+    // From Thetis setup.designer.cs:11863 [v2.10.3.15] udTXDisplayCalOffset
+    //   DecimalPlaces = 1; Increment = 0.1; Maximum = 100; Minimum = -100
+    m_txDisplayOffsetSpin = makeSpinBox(-100.0, 100.0, 0.0, 0.1, 1, txDisplayGroup);
+    m_txDisplayOffsetSpin->setProperty("nereusSetupId", "hardware.calibration.txDisplayOffset");
     m_txDisplayOffsetSpin->setSuffix(tr(" dB"));
     m_txDisplayOffsetSpin->setToolTip(
         tr("TX display calibration offset in dB. Applied to TX spectrum display."));
@@ -421,6 +445,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Upstream inline attribution preserved verbatim (console.cs:27453):
     //   chkVFOBLock.Enabled = false; //[2.10.3.7]MW0LGE
     m_logVoltsAmpsCheck = new QCheckBox(tr("Log Volts/Amps to VALog.txt"), vaCalGroup);
+    m_logVoltsAmpsCheck->setObjectName(QStringLiteral("logVoltsAmpsCheck"));
     vaCalForm->addRow(m_logVoltsAmpsCheck);
 
     mainLayout->addWidget(vaCalGroup);
@@ -546,8 +571,21 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     });
     connect(m_logVoltsAmpsCheck, &QCheckBox::toggled, this, [this](bool checked) {
         // Source: console.cs:27460-27463 chkLogVoltsAmps_CheckedChanged -> console.LogVA [@501e3f5]
+        // R-R3-49 (found bug): nothing read the box. The station's
+        // controller now logs (RadioModel's VoltsAmpsLog); a remote
+        // window's change reaches the Core as the stored key.
+        if (!m_updatingFromModel && m_calCtrl) {
+            m_calCtrl->setLogVoltsAmps(checked);
+        }
         emit settingChanged(QStringLiteral("cal/logVoltsAmps"), checked);
     });
+    if (m_calCtrl) {
+        // The log turns itself off after an hour; the box follows.
+        connect(m_calCtrl, &CalibrationController::logVoltsAmpsChanged, this, [this](bool on) {
+            QSignalBlocker blocker(m_logVoltsAmpsCheck);
+            m_logVoltsAmpsCheck->setChecked(on);
+        });
+    }
 
     // Sync from controller if already available
     if (m_calCtrl) {
@@ -611,6 +649,12 @@ void CalibrationTab::syncFromController()
     {
         QSignalBlocker sb8(m_ampVoffSpin);
         m_ampVoffSpin->setValue(m_calCtrl->paCurrentOffset());
+    }
+
+    {
+        // R-R3-49: the Volts/Amps log box, as stored.
+        QSignalBlocker sb9(m_logVoltsAmpsCheck);
+        m_logVoltsAmpsCheck->setChecked(m_calCtrl->logVoltsAmps());
     }
 
     m_updatingFromModel = false;

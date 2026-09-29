@@ -30,6 +30,14 @@
 //                 requestRadioSampleRate); on an older Core, each of its
 //                 receivers, with the reason on the rate box. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-IOS-18: the identity text and the support
+//                 info come from radioInfoFacts, which the Core's Setup
+//                 description publishes too; each readout and the copy
+//                 button carry their description ids. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the sample rate box carries its
+//                 Setup description id (version 13). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -84,6 +92,7 @@
 #include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
+#include "core/RadioInfoFacts.h"
 #include "core/SampleRateCatalog.h"
 #include "core/session/IStationLink.h"
 #include "gui/ComboStyle.h"
@@ -128,6 +137,14 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
                         m_maxRxLabel, m_firmwareLabel, m_macLabel, m_ipLabel}) {
         lbl->setTextInteractionFlags(Qt::TextSelectableByMouse);
     }
+    // R-IOS-18: the Setup description's ids for these readouts.
+    m_boardLabel->setProperty("nereusSetupId", "hardware.radioInfo.board");
+    m_protocolLabel->setProperty("nereusSetupId", "hardware.radioInfo.protocol");
+    m_adcCountLabel->setProperty("nereusSetupId", "hardware.radioInfo.adcCount");
+    m_maxRxLabel->setProperty("nereusSetupId", "hardware.radioInfo.maxRx");
+    m_firmwareLabel->setProperty("nereusSetupId", "hardware.radioInfo.firmware");
+    m_macLabel->setProperty("nereusSetupId", "hardware.radioInfo.mac");
+    m_ipLabel->setProperty("nereusSetupId", "hardware.radioInfo.ip");
 
     form->addRow(tr("Board:"),      m_boardLabel);
     form->addRow(tr("Protocol:"),   m_protocolLabel);
@@ -150,6 +167,7 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     applyComboStyle(m_sampleRateRx1Combo);
     m_sampleRateRx1Combo->setMinimumWidth(120);
     m_sampleRateRx1Combo->setMaximumWidth(160);
+    m_sampleRateRx1Combo->setProperty("nereusSetupId", "hardware.radioInfo.sampleRate");
 
     // Active RX count widget removed from UI 2026-05-08 — non-functional in
     // single-RX builds (capped at 1, disabled until a radio is connected).
@@ -212,6 +230,7 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     // Left-aligned page-level action.  setSizePolicy(Maximum, Fixed) prevents
     // QVBoxLayout from stretching the button to the dialog's full width.
     m_copySupportInfoButton = new QPushButton(tr("Copy Support Info to Clipboard"), this);
+    m_copySupportInfoButton->setProperty("nereusSetupId", "hardware.radioInfo.copySupportInfo");
     m_copySupportInfoButton->setToolTip(
         tr("Copies board identity and firmware version to the clipboard for bug reports."));
     m_copySupportInfoButton->setFixedHeight(Style::kButtonH);
@@ -237,24 +256,20 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
 
 void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps)
 {
-    // Fill read-only identity labels
-    m_boardLabel->setText(info.name.isEmpty()
-        ? QString::fromLatin1(caps.displayName)
-        : info.name);
-    m_protocolLabel->setText(
-        info.protocol == ProtocolVersion::Protocol2
-            ? QStringLiteral("Protocol 2")
-            : QStringLiteral("Protocol 1"));
-    m_adcCountLabel->setText(QString::number(caps.adcCount));
-    m_maxRxLabel->setText(QString::number(caps.maxReceivers));
-    m_firmwareLabel->setText(
-        info.firmwareVersion > 0
-            ? QString::number(info.firmwareVersion)
-            : QStringLiteral("—"));
-    m_macLabel->setText(info.macAddress.isEmpty() ? QStringLiteral("—") : info.macAddress);
-    m_ipLabel->setText(info.address.isNull()
-        ? QStringLiteral("—")
-        : info.address.toString());
+    HPSDRModel model = HPSDRModel::HERMES;
+    if (m_model) {
+        model = m_model->hardwareProfile().model;
+    }
+    // Fill read-only identity labels. R-R3-49 / R-IOS-18: the same text the
+    // Core's Setup description publishes (radioInfoFacts).
+    const RadioInfoFacts facts = radioInfoFacts(info, caps, model);
+    m_boardLabel->setText(facts.board);
+    m_protocolLabel->setText(facts.protocol);
+    m_adcCountLabel->setText(facts.adcCount);
+    m_maxRxLabel->setText(facts.maxRx);
+    m_firmwareLabel->setText(facts.firmware);
+    m_macLabel->setText(facts.mac);
+    m_ipLabel->setText(facts.ip);
 
     // Parity ruling C4: a remote window on an older Core changes only its
     // own receivers' rate; the rate box says so.
@@ -267,10 +282,6 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
     // Thetis setup.cs:847-852 filtering (per-protocol list ∩ caps.sampleRates,
     // with the RedPitaya extra-384k exception). Default selection is 192000
     // per setup.cs:866; if absent, first allowed entry.
-    HPSDRModel model = HPSDRModel::HERMES;
-    if (m_model) {
-        model = m_model->hardwareProfile().model;
-    }
     const auto allowed = allowedSampleRates(info.protocol, caps, model);
     const int fallbackRate = defaultSampleRate(info.protocol, caps, model);
     {
@@ -304,28 +315,9 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         m_anan8000DleVoltsAmpsToggle->setVisible(is8000D);
     }
 
-    // Build clipboard text for Copy Support Info button
-    m_currentInfo = QStringLiteral(
-        "Board: %1\n"
-        "Protocol: %2\n"
-        "ADC count: %3\n"
-        "Max RX: %4\n"
-        "Firmware: %5\n"
-        "MAC: %6\n"
-        "IP: %7\n"
-        "Max sample rate: %8 Hz\n")
-        .arg(m_boardLabel->text())
-        .arg(m_protocolLabel->text())
-        .arg(caps.adcCount)
-        .arg(caps.maxReceivers)
-        .arg(m_firmwareLabel->text())
-        .arg(m_macLabel->text())
-        .arg(m_ipLabel->text())
-        // Plan Task 5: the top rate for the protocol the radio is running
-        // (the last entry of the list the combo was just built from), not
-        // the row's top, which spans both protocols on boards that run
-        // either.
-        .arg(allowed.empty() ? 0 : allowed.back());
+    // Build clipboard text for Copy Support Info button (the facts' own
+    // text, which the Setup description's copy action carries too).
+    m_currentInfo = facts.supportText();
 }
 
 // ── private slots ─────────────────────────────────────────────────────────────

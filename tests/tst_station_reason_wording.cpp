@@ -735,7 +735,10 @@ const QList<ReasonSource>& reasonSources()
           // DeviceStore validates the replacement device's own name; the
           // takeover sentence uses describe(selection.deviceId) or the
           // registry's saved selection.name, both operator labels.
-          QStringLiteral("takerName")},
+          QStringLiteral("takerName"),
+          // R-R3-49: a Watt Meter calibration point's maximum, a number of
+          // watts (calibrationKeyValueRefusal).
+          QStringLiteral("spec.maximum")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -791,6 +794,9 @@ const QList<ReasonSource>& reasonSources()
           // Fix wave I3: a slice's settings key; ownedElsewhereReason's
           // words, scanned here.
           QStringLiteral("sliceSettingsRefusal(transport, key)"),
+          // R-R3-49 / R-IOS-18: the PA profile verbs' gate, its literals
+          // scanned here (and kReceiveOnlyTransmitReason's).
+          QStringLiteral("paProfileRefusal(transport)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
@@ -1311,6 +1317,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("saveTxProfileForStation"),
           QStringLiteral("deleteTxProfileForStation"),
           QStringLiteral("resetRadeVocoderForStation"),
+          // R-R3-49 / R-IOS-18: the paProfile verbs.
+          QStringLiteral("paProfileActionForStation"),
           QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
@@ -1352,6 +1360,8 @@ const QList<ReasonSource>& reasonSources()
          // (parity Task 3): name, the transmit profile's own name.
          {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap"),
           QStringLiteral("name"),
+          // R-R3-49 / R-IOS-18: a PA profile's own name.
+          QStringLiteral("request.name"),
           // onBandButtonClicked: the band's own label ("40m").
           QStringLiteral("bandLabel(band)")},
          {// The refuse lambdas' parameter (literals of these functions),
@@ -1359,6 +1369,9 @@ const QList<ReasonSource>& reasonSources()
           // refusals, constants of this file checked in
           // notchConstantsArePlain below.
           QStringLiteral("text"), QStringLiteral("result.reason"),
+          // R-R3-49 / R-IOS-18: paProfileActionForStation's name check, its
+          // literals in that function.
+          QStringLiteral("nameRefusal(name)"),
           QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
           QStringLiteral("kNotchListBusyReason"),
           // R-R3-49 (parity Task 1): onAirReason, a function of this file
@@ -1542,6 +1555,11 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         // R-IOS-18 (parity Task 21): the Core's radio.
         {"src/core/session/IStationLink.h", "stationRadiosUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // iPhone app plan Task 25 (This Core page): the Core's paired devices.
+        {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "pairedDeviceAdminReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "settingsHygieneUnavailableReason",
          "a remote window's own fallback when its Core cannot validate settings"},

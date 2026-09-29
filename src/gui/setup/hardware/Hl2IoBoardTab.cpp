@@ -43,6 +43,9 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-IOS-18: the N2ADR switch carries its Setup description
+//                 id. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -438,6 +441,7 @@ void Hl2IoBoardTab::buildConfigAndRegisterRow(QVBoxLayout* outer)
     // N2ADR Filter enable — ports mi0bot setup.cs chkHERCULES [@c26a8a4]
     // chkHERCULES: "Enable N2ADR Filter board" toggle in setup.cs:20234-20238
     m_n2adrFilter = new QCheckBox(tr("Enable N2ADR Filter board"), configGroup);
+    m_n2adrFilter->setProperty("nereusSetupId", "hardware.hl2Io.n2adrFilter");
     configLayout->addWidget(m_n2adrFilter);
 
     auto* noteLabel = new QLabel(

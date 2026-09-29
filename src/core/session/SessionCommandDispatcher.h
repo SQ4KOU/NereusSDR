@@ -197,6 +197,9 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  refusedForTheHolder (ruling 7.7).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
+//                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -531,6 +534,7 @@ private:
     // Ruling 7.7: refuses `verb` with the holder's name when the requester
     // does not hold transmit and another device does. True when it answered.
     bool refusedForTheHolder(const QByteArray& verb, quint32 commandId);
+    void handlePaProfile(const NereusSDR::SessionMessage& invoke);
     void handleRadeResetVocoder(const NereusSDR::SessionMessage& invoke);
     // R-IOS-13 / R-R3-49 (txEqCurveVersion 2): txEq.setCurve and
     // txEq.resetCurve, through TxEqCurveAccess.

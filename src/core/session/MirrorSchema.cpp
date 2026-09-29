@@ -57,6 +57,8 @@
 //   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): StationVax mirrored
 //                 (vaxVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: PaProfilesFacade mirrored (read-only).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -144,6 +146,9 @@ const char* const kMirroredClasses[] = {
     // iPhone app plan Task 25 (R-IOS-18, vaxVersion 1): the VAX channels of
     // the computer the Core runs on.
     "NereusSDR::StationVax",
+    // R-R3-49 / R-IOS-18 (paProfileVersion 1): the Core's PA Gain profiles,
+    // read-only; the paProfile verbs change them.
+    "NereusSDR::PaProfilesFacade",
 };
 
 // Per-property exclusions, as (class, property).

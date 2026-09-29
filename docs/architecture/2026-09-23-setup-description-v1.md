@@ -1,4 +1,4 @@
-# Setup description versions 1–12
+# Setup description versions 1–14
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,11 +165,13 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 12. Hardware has a version-6 ceiling, PA a
-version-5 ceiling, Display a version-12 ceiling, and Appearance a version-12
-ceiling with its prior version-4 projection for V4–V6 and version-7
-projection for V7–V11; the other categories on this source retain
-version 3.
+future declaration at version 14. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-13 ceiling (version 6
+for V6–V12); Transmit a version-13 ceiling (version 3 for V3–V12, with
+the Power page's earlier coverage text); Display a version-12 ceiling, and
+Appearance a version-12 ceiling with its prior version-4 projection for
+V4–V6 and version-7 projection for V7–V11; the other categories on this
+source retain version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -430,6 +432,202 @@ gradient editor kind), the Waterfall Low Level Color (unbuilt) and the
 Multimeter peak hold, text hold, averaging window, digital delay and history
 enable (unbuilt). Derived readouts (bin width, delay, effective rewind) and
 the cross-links are not controls.
+
+Version 13 describes the rest of Setup > PA's Watt Meter and PA Values
+pages, three built Hardware Config tabs, the Alex-1 and Alex-2 Filters tabs'
+receive rows, Radio Info's sample rate and Transmit > Power's Disable HF PA
+(R-R3-46, R-R3-49, R-IOS-18). Every new row
+has `requiresDescriptionVersion:13` and the Core accepts it only as the exact
+closed object its resource carries; V1–V12 projections keep their versions,
+page lists and controls (PA V5–V12: version 5, two pages on the ANAN-G2E, one
+elsewhere; Hardware V6–V12: version 6, Antenna / ALEX only, and no Hardware
+category at all on a board without ALEX filters).
+
+PA pages, in the desktop's order: PA Gain (unchanged), Watt Meter
+(`pa.wattMeter`, new, `where:"mixed"`, every control described), PA Values.
+The Watt Meter's PA Forward Power Calibration section has the board class's
+ten points (`pa.wattMeter.calPoint1` to `calPoint10`), then a PA Values
+section with Show PA Values page and Reset PA Values. PA Values gains PA
+Temperature after PA Current, ADC Overload after REV Voltage, and a Reset
+section with Reset Peak/Min.
+
+A calibration point is `kind:"decimal"` with the closed binding
+`{"radioSetting":"paCalibration/calPoint<N>"}`. The Core projects each for
+its radio's model: the label is the point's factory value (`"10 W"`), which is
+also its `default`; `min` 0, the point's own `max` (Thetis's box for that
+point: ANAN-10 class and the HL2 10 W except 11 and 12 W for points 9 and 10,
+ANAN-100 class 100 W except 110 and 120 W, ANAN-8000 class 100, 100, 100,
+120, 140, 200, 200, 200, 220 and 240 W), `step` 0.1, `decimals` 1, `unit`
+`W`, and `boardClass` (1 ANAN-10, 2 ANAN-100, 3 ANAN-8000). A model without a
+class removes the ten points. The gate is `transmitSettingsVersion:6` plus
+`offAir:true`, the desktop's own gate for this table.
+
+`binding.radioSetting` is new in version 13: a key under the connected
+radio. The renderer reads and writes `hardware/<MAC>/<radioSetting>` through
+the current session's settings proxy, where `<MAC>` is the canonical MAC of
+the Core's connected radio in the current session (the MAC antenna rows and
+Settings Validation use). A missing, stale or other-radio MAC disables the
+control; the Core refuses another radio's key. Values are the stored strings
+(decimals as numbers written with `.`, toggles with their `valueEncoding`).
+A point reads as its stored `calPoint<N>` while
+`hardware/<MAC>/paCalibration/boardClass` reads as the row's `boardClass`,
+and as its `default` while that key is absent or `0`; another class disables
+the point with a plain reason (the table was saved for another model). An
+edit first writes `boardClass` when it is absent or `0`, then the point. The
+Core applies the table at once, and while the radio transmits it refuses the
+write and hands back its value (the settings proxy's off-air rule for these
+keys, as for the desktop's). A value outside the row's range, a
+non-number, or a `boardClass` other than the Core's radio's is refused whole
+with the range in plain words (for example "Choose a calibration point from
+0 to 10 W."), and the Core hands back its value; nothing is clamped.
+
+`pa.values.paTemperature` is a readout of the optional station telemetry
+`{"telemetry":{"object":"radio","name":"paTemperatureCelsius"}}`, one decimal,
+`unit` `°C`, gate `stationTelemetryVersion:4`, with the closed field
+`"temperatureUnit":"PaTempUnit"`: the renderer shows it in the viewer's own
+PA temperature unit (the desktop's C/F toggle, `PaTempUnit` `C` or `F`,
+default `C`), converting °F = °C × 9 / 5 + 32. `pa.values.adcOverload` has the
+closed binding `{"adcOverload":{"object":"stepAtt"}}` and gate
+`radioHardwareVersion:1`: it reads the `stepAtt` mirror's `overloadAdc0` and
+`overloadAdc1` (0 none, 1 or 2 overloaded) and shows `Yes (ADC 0)` while ADC 0
+is overloaded, else `Yes (ADC 1)` while ADC 1 is, else `No`, as a remote
+desktop window does; a missing or stale object is unavailable. It has no
+`decimals`.
+
+Reset Peak/Min (`pa.values.resetPeakMin`) and Reset PA Values
+(`pa.wattMeter.resetPaValues`) are the one phone action `resetPaValues`.
+While a version 13 renderer shows PA Values it tracks, from the first change
+after the page opens, the running peak and minimum of Forward (calibrated),
+Reflected, SWR, PA Current, PA Temperature and DC Voltage, and shows a row as
+the desktop does: the value, then `  (P <peak> / M <minimum>)` at the row's
+decimals once the two differ (temperature in the viewer's unit). The action
+restarts each tracker at its current value. It is the viewer's own and
+reaches no other device. Show PA Values page (`pa.wattMeter.showPaValues`)
+is a phone toggle, `binding.phone` `display/showPaValuesPage`, default true:
+off hides the PA Values page from the viewer's own Setup, as the desktop
+hides its PA Values page.
+
+Hardware Config pages, in the desktop's order: Radio Info
+(`hardware.radioInfo`, new, `where:"mixed"`, partial), Antenna / ALEX
+(unchanged, only with ALEX filters), Calibration (`hardware.calibration`,
+new, partial) and HL2 I/O (`hardware.hl2Io`, new, partial, only on the HL2's
+I/O board). Radio Info's Board Identity section has seven readouts with the
+closed binding `{"radioInfo":<field>}` (`board`, `protocol`, `adcCount`,
+`maxRx`, `firmware`, `mac`, `ip`) and a `value` the Core fills with the
+desktop tab's exact text for its current radio (a dash, U+2014, for a value
+the radio has not reported); the description changes, and its revision
+advances, when the Core's radio does. Its Support section has Copy Support
+Info to Clipboard, phone action `copySupportInfo`, whose `copyText` the Core
+fills with the tab's exact clipboard text; the action copies it on the
+viewer's own device. Calibration's TX Display Cal section has Offset
+(`hardware.calibration.txDisplayOffset`, `radioSetting` `cal/txDisplayOffset`,
+-100 to 100 dB, step 0.1, one decimal, default 0), gate
+`transmitSettingsVersion:8` and no off-air gate: the Core takes it on the air
+too, as Thetis changes it while transmitting. HL2 I/O's Configuration section
+has Enable N2ADR Filter board (`hardware.hl2Io.n2adrFilter`, `radioSetting`
+`hl2IoBoard/n2adrFilter`, `True`/`False`, default true), gate
+`transmitSettingsVersion:8`; the Core applies its whole preset once the
+radio is back on receive.
+
+Radio Info gains an Operating Parameters section between Board Identity and
+Support with Sample rate (`hardware.radioInfo.sampleRate`, `kind:"choice"`).
+Its binding is the command `setRadioSampleRate {rateHz: $controlValue}`
+with `valueProperty` `slice:active`'s `sampleRateHz`, gate
+`radioHardwareVersion:9` plus `offAir:true`: the whole radio's rate, every
+receiver at once, as the desktop's box changes it. The Core fills `options`
+with the rates the desktop's box lists for its radio (`value` the rate in
+hertz, `label` its digits); with none it adds `availability` disabled with
+"The radio is not connected, so its sample rate cannot change." The Core
+refuses the verb from a device signed in with the pairing token, while the
+radio is on the air, and for a rate outside the list.
+
+Two pages follow Antenna / ALEX, both `where:"station"` and partial:
+Alex-1 Filters (`hardware.alex1Filters`, on every board with ALEX filters)
+and Alex-2 Filters (`hardware.alex2Filters`, only where the board has
+Alex-2). Alex-1 Filters has Alex HPF Bands and, on Saturn, Saturn MkII and
+the ANAN-G2E only (the desktop's own gate), Saturn BPF1 Bands; Alex-2
+Filters has Alex-2 HPF Bands, whose first row is ByPass / 55 MHz BPF
+(master) (`hardware.alex2Filters.bypass55MhzBpf`, `radioSetting`
+`alex2/master/bypass55MhzBpf`). Each bank has six rows in the desktop's
+order, each row three controls with ids `<page>.<bank>.<slug>.bypass`,
+`.start` and `.end` (bank `hpf` or `bpf1`; slugs `1_5MHz`, `6_5MHz`,
+`9_5MHz`, `13MHz`, `20MHz`, `6mBP`), labelled with the desktop's row label
+and Bypass, Start or End, and bound to `radioSetting`
+`<prefix>/<slug>/enabled|start|end` (prefix `alex/hpf`, `alex/bpf1` or
+`alex2/hpf`). Bypass boxes are `True`/`False` toggles, default false; the
+edges are decimals from 0 to 200 MHz, step 0.001, six decimals, unit `MHz`,
+defaulting to Thetis's spinner values. Every row has the gate
+`radioHardwareVersion:8` and no off-air rule: the Core applies a change to
+its radio at once, on or off the air, as Thetis's setters do.
+
+Transmit > Power gains a PA Control section last with Disable HF PA
+(`transmit.power.DisableHfPa`, `setting` `DisableHfPa`, `True`/`False`,
+default false, gate `transmitSettingsVersion:11` plus `transmit:true` and
+no off-air rule: the Core applies it on and off the air, as Thetis does).
+On the Hermes and the Atlas/Metis kit, which have no such switch, the row
+carries `availability` disabled with "This radio cannot switch off its HF
+PA from here."
+
+Not described, with the reason: PA Gain's profile choice, New, Copy, Delete,
+Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
+bank is serialized per profile and no closed profile state or command exists
+on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
+auto-calibration sweep (it keys the radio from the desktop's own window);
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
+Alex-1 Filters tab's five switches above its rows (HPF Bypass, on TX and
+on PureSignal feedback, and the two 6 m LNA boxes) and both tabs' LPF edges (the LPF edges stay hidden on the desktop too); OC Outputs; the rest of Calibration (frequency and level calibration,
+6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
+HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
+bandwidth monitor views, probe and reset). No new wire field, verb or
+capability value is defined.
+
+Version 14 describes PA Gain's profiles (R-R3-49, R-IOS-18). The page
+`pa.gain` now carries, on every radio with a PA, a Profile section (the
+profile choice, New, Copy, Delete, Reset Defaults) and a PA Gain by Band
+(dB) section with one table; the ANAN-G2E's bypass box stays last and is
+still the G2E's only. Every new row has `requiresDescriptionVersion:14`,
+the gate `{"capability":"paProfileVersion","min":1,"offAir":true}`, and is
+accepted only as the exact closed object in `resources/setup/pa.json`.
+V13 and older keep their projections (PA Gain appears there only on the
+G2E, with the bypass box alone).
+
+The data is the Core's read-only `paProfiles` object (link document,
+paProfileVersion 1): `json` holds `names` (the profiles the desktop's combo
+lists: this radio's factory profile and every user profile), `active`,
+`factory` and `bands`, the active profile's 14 rows in Band order, each
+`{band, gain, adjust[9], maxPower, useMax}` at one decimal place. The
+closed bindings are:
+
+- `{"paProfile":"active"}` on the `choice`: its options are `names`, its
+  value `active`; a pick sends `paProfile.select {name}`.
+- `{"paProfile":"new"}`, `"copy"`, `"delete"`, `"reset"` on the buttons.
+  New and Copy carry `prompt` `{title, label, default}` (Copy's default is
+  `"%1 (copy)"`, `%1` the active profile's name); the renderer asks for a
+  name and sends `paProfile.new {name}` or `paProfile.copy {name}`. Delete
+  and Reset Defaults carry the desktop's `confirm` (`%1` the active name)
+  and send `paProfile.delete {name: active}` or `paProfile.reset {}` on
+  Yes.
+- `{"paProfileGrid":{"object":"paProfiles"}}` on the `table`: `rows` are
+  the 14 bands (`band` 0..13 and label), `columns` the Gain (dB) column
+  (38.8..100 dB), the nine drive-step adjusts (`driveStep` 0..8, labels
+  10%..90%, -10..10 dB), Max W (0..1500 W), each a decimal of step 0.1 and
+  one decimal place, and Use Max (a toggle). A column's `tooltip` has `%1`
+  for the row's band. A cell edit sends `paProfile.setGain {band, value}`,
+  `paProfile.setAdjust {band, step, value}`, `paProfile.setMaxPower {band,
+  value}` or `paProfile.setUseMax {band, on}`.
+
+The Core does what the desktop's page does: select (only a listed
+profile), New (a profile seeded from this radio's factory row; names must
+not start with "Default" or repeat one there), Copy (the active profile's
+values under a new name), Delete (never the last one; the radio's factory
+profile is then selected, as Thetis does), Reset Defaults (the active
+profile's factory values for its model), and the cell edits, each rounded
+to one decimal place and refused whole outside its column's range. Every
+verb is refused while the radio is on the air, and meets the gates the
+Core gives the desktop's own PA profile writes: a receive-only Core takes
+it from a peer offered transmit settings, and with remote transmit
+allowed only from a device that may transmit. A peer must declare
+`paProfiles:1` to get the object, the capability and the verbs.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

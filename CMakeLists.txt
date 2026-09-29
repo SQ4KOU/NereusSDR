@@ -952,6 +952,10 @@ set(CORE_SOURCES
     src/core/spectrum/WidebandSpectrumCache.cpp
     src/core/AudioDeviceConfig.cpp
     src/core/SampleRateCatalog.cpp
+    # R-R3-49 / R-IOS-18: Radio Info's text, for the tab and the Setup description.
+    src/core/RadioInfoFacts.cpp
+    # R-R3-49: Calibration's Volts/Amps log (Thetis console.cs LogVA).
+    src/core/VoltsAmpsLog.cpp
     src/core/SkuUiProfile.cpp
     src/core/HardwareProfile.cpp
     src/core/LogCategories.cpp
@@ -1420,6 +1424,8 @@ list(APPEND CORE_SOURCES
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
     src/core/session/BandLinkFit.cpp
+    # R-R3-49 / R-IOS-18: the Core's PA Gain profiles for a phone.
+    src/core/session/PaProfilesFacade.cpp
     # iPhone app Task 25 (D41): the unbuilt features list the catalogue's
     # tools read (the desktop's hide helpers stay in src/gui).
     src/core/UnbuiltFeatureList.cpp

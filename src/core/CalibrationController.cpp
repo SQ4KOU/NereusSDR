@@ -34,6 +34,11 @@
 //   2026-09-28 - 6 m LNA gain offsets default to Thetis's 13 dB where
 //                 nothing is stored. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (found bug): Log Volts/Amps to VALog.txt works:
+//                 the controller reads the box (logVoltsAmps), the station's
+//                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
+//                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -466,6 +471,8 @@ void CalibrationController::load()
     m_txDisplayOffsetDb      = s.value(base + QStringLiteral("txDisplayOffset"), QStringLiteral("0.0")).toDouble();
     applyLoadedVoltCalibration(s.value(base + QStringLiteral("paSens")).toString(),
                                s.value(base + QStringLiteral("paOffset")).toString());
+    // R-R3-49: the Volts/Amps log box.
+    readLogVoltsAmps();
 
     // PA forward-power cal profile under hardware/<mac>/paCalibration/.
     // Source: Thetis console.cs:6691-6724 CalibratedPAPower [v2.10.3.13] —
@@ -502,9 +509,26 @@ void CalibrationController::load()
     }
 }
 
+void CalibrationController::setLogVoltsAmps(bool on)
+{
+    if (m_logVoltsAmps == on) { return; }
+    m_logVoltsAmps = on;
+    emit logVoltsAmpsChanged(on);
+}
+
+void CalibrationController::readLogVoltsAmps()
+{
+    const QString stored = AppSettings::instance()
+        .value(QStringLiteral("hardware/%1/paCalibration/cal/logVoltsAmps").arg(m_mac),
+               QStringLiteral("False")).toString();
+    setLogVoltsAmps(stored.compare(QLatin1String("True"), Qt::CaseInsensitive) == 0);
+}
+
 void CalibrationController::loadTransmitCalibration()
 {
     if (m_mac.isEmpty()) { return; }
+    // R-R3-49: the Volts/Amps log box, taken on the air as Thetis takes it.
+    readLogVoltsAmps();
 
     // The same keys and defaults load() reads, through the setters, so a
     // change announces itself (changed()).

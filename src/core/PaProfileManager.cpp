@@ -17,6 +17,9 @@
 //                 after a window's change and for a remote window.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: profileSaved, bankLoaded and defaultProfileName,
+//                 for the Core's paProfiles mirror and verbs. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -317,6 +320,7 @@ void PaProfileManager::load(HPSDRModel connectedModel)
     if (!resolved.isEmpty()) {
         writeActiveKey(resolved);
     }
+    emit bankLoaded();
 }
 
 // R-R3-46 / R-R3-49 (remote-window parity Task 6). NereusSDR-original: a
@@ -495,7 +499,13 @@ bool PaProfileManager::saveProfile(const QString& rawName, const PaProfile& prof
         writeManifest(names);
         emit profileListChanged();
     }
+    emit profileSaved(name);
     return true;
+}
+
+QString PaProfileManager::defaultProfileName(HPSDRModel model)
+{
+    return defaultProfileNameForModel(model);
 }
 
 bool PaProfileManager::deleteProfile(const QString& name)
