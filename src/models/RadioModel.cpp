@@ -6558,20 +6558,6 @@ bool RadioModel::endOfOverTailActive() const
 }
 
 // ---------------------------------------------------------------------------
-// RADE end-of-over callsigns: the tail. NereusSDR-original sequencing of
-// FreeDV's end of an over: once the operator lets go, the EOO frame (with
-// the callsign rade_text encodes) and 200 ms of silence go out, then PTT
-// drops (freedv-gui src/ongui.cpp:1479-1523 and
-// src/pipeline/TxRxThread.cpp:808-847 [@a4ae053]; RadeChannel::
-// queueEndOfOver carries the RADETransmitStep port).
-//
-// Only an operator's release: never after the Core's stops (the hold
-// stopTransmitNow sets, or a closed RF gate), never for TUNE or two-tone,
-// and only while the transmitter runs RADE on the TX-bound slice. The tail
-// keys nothing: MOX is already off when this runs, the hardware simply
-// stays keyed until the TX worker has taken the queued audio.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // wireTxWorkerRade: the TX worker's RADE connections, made where the worker is
 // created (and by installTxWorkerForTest).
 //
@@ -6619,6 +6605,20 @@ void RadioModel::installTxWorkerForTest(std::unique_ptr<TxWorkerThread> worker)
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// RADE end-of-over callsigns: the tail. NereusSDR-original sequencing of
+// FreeDV's end of an over: once the operator lets go, the EOO frame (with
+// the callsign rade_text encodes) and 200 ms of silence go out, then PTT
+// drops (freedv-gui src/ongui.cpp:1479-1523 and
+// src/pipeline/TxRxThread.cpp:808-847 [@a4ae053]; RadeChannel::
+// queueEndOfOver carries the RADETransmitStep port).
+//
+// Only an operator's release: never after the Core's stops (the hold
+// stopTransmitNow sets, or a closed RF gate), never for TUNE or two-tone,
+// and only while the transmitter runs RADE on the TX-bound slice. The tail
+// keys nothing: MOX is already off when this runs, the hardware simply
+// stays keyed until the TX worker has taken the queued audio.
+// ---------------------------------------------------------------------------
 bool RadioModel::radeEndOfOverTailPermitted() const
 {
     if (m_role == Role::Remote || m_transmitStopHold || m_refuseEndOfOverTail) {
