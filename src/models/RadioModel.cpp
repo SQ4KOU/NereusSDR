@@ -640,6 +640,10 @@
 //                 TX inhibit holds, as Thetis's TXInhibit setter does
 //                 (console.cs:15341-15363 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 port part 2: applyAlexAntennaForBand hands an HL2's
+//                 I/O board its aerial values (AlexController
+//                 hl2IoBoardAerials; mi0bot Alex.cs:445-446 [@c26a8a4]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -19769,6 +19773,23 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
 
     AntennaRouting r;
     r.tx = isTx;  // Carried through for P2 MOX-aware wire reapply (3M-1 will consult).
+
+    // HL2 port part 2: the I/O board aerial values. mi0bot's
+    // UpdateAlexAntSelection ends in c.SetIOBoardAerialPorts(...) on a
+    // HERMESLITE (Alex.cs:445-446 [@c26a8a4]); AlexController composes the
+    // two bytes and the I/O board poll writes them (REG_RF_INPUTS,
+    // REG_ANTENNA). NereusSDR divergence: mi0bot runs this under
+    // alex_ant_ctrl_enabled, which it defaults on; an HL2 has no Alex
+    // board here (caps.hasAlex false), so the Alex wire below stays
+    // zeroed while the I/O board still gets its aerials.
+    if (caps.hasIoBoardHl2 && m_role == Role::Local) {
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+            const Band rxBand = isTx ? band : m_keptRxAntennaBand.value_or(band);
+            const AlexController::IoBoardAerials a =
+                m_alexController.hl2IoBoardAerials(band, rxBand, isTx);
+            QMetaObject::invokeMethod(p1, [p1, a]() { p1->setIoBoardAerials(a.mode, a.ports); });
+        }
+    }
 
     // From Thetis Alex.cs:312-317 [@501e3f5].
     // "if (!alex_enabled) { NetworkIO.SetAntBits(0, 0, 0, 0, false); return; }"

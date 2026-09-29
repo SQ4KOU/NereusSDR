@@ -2753,6 +2753,13 @@ target_compile_definitions(tst_tx_inhibit_input PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_hl2_io_board_fault fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_hl2_io_board_fault PRIVATE NEREUS_BUILD_TESTS)
 
+# HL2 port part 2: the I/O board aerial values. mi0bot Alex.cs
+# UpdateAlexAntSelection's HERMESLITE branches and console.cs
+# SetIOBoardAerialPorts compose REG_RF_INPUTS and REG_ANTENNA from the
+# antenna selection; RadioModel hands them to the I/O board poll.
+nereus_add_test(tst_hl2_io_board_aerials)
+target_compile_definitions(tst_hl2_io_board_aerials PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Task 16 (receiver and transmit gaps plan): receive only stops every key ──
 # Thetis console.RXOnly (console.cs:15312-15334 [v2.10.3.15]), PollPTT's
 # _rx_only gate (25470), chkMOX_CheckedChanged2's refusal (29378) and Setup's

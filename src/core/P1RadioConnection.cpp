@@ -3742,8 +3742,9 @@ int P1RadioConnection::ccMaxBank() const
 // arrives from RadioModel (setIoBoardTxState) rather than being read from
 // the VFOs each step. RADE modes are not Thetis DSPMode values and are not
 // written. The fault reaction (TX inhibit) lives in RadioModel, which hands
-// each REG_FAULT read to TxInhibitMonitor. Not here yet: the aerial values
-// from the antenna selection, the LED strip and the auto-tune protocol.
+// each REG_FAULT read to TxInhibitMonitor. The aerial values arrive from
+// RadioModel::applyAlexAntennaForBand (setIoBoardAerials), composed by
+// AlexController::hl2IoBoardAerials. Not here yet: the auto-tune protocol.
 // ---------------------------------------------------------------------------
 void P1RadioConnection::setIoBoardTxState(int dspMode, qint64 frequencyHz)
 {
