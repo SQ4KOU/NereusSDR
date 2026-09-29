@@ -41,6 +41,8 @@
 //                 [@c26a8a4]; it showed bytes a second / 1e6 labelled as
 //                 megabits. The bars fill at 10 Mbit/s. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -192,6 +194,7 @@ mw0lge@grange-lane.co.uk
 #include "core/P1RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/accessories/N2adrPreset.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -747,13 +750,10 @@ QString Hl2IoBoardTab::ocKeyedTextForTest() const
 void Hl2IoBoardTab::updateOcIndicator(quint8 ocByte, int bandIdx, bool mox)
 {
     m_ocShownByte = int(ocByte);
-    static constexpr const char* kBandLabels[] = {
-        "160m", "80m", "60m", "40m", "30m", "20m", "17m",
-        "15m", "12m", "10m", "6m", "GEN", "WWV", "XVTR"
-    };
+    // bandIdx is a Band number (2 m is 27, R-IOS-26).
     if (m_ocBandLabel) {
-        const QString name = (bandIdx >= 0 && bandIdx < int(sizeof(kBandLabels)/sizeof(*kBandLabels)))
-                             ? QString::fromLatin1(kBandLabels[bandIdx])
+        const QString name = (bandIdx >= 0 && bandIdx < int(Band::Count))
+                             ? bandLabel(static_cast<Band>(bandIdx))
                              : QString::number(bandIdx);
         m_ocBandLabel->setText(QStringLiteral("band=%1").arg(name));
     }

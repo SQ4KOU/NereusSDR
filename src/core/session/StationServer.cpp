@@ -618,9 +618,12 @@
 //               txModMonitor.reset, and a window's ModMon/FbStream applied
 //               to the Core's feedback analyzer. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
+#include "core/session/BandLinkFit.h"
 
 #include "core/TxSliceArbiter.h"
 #include "core/session/DataChannelTransport.h"
@@ -1420,7 +1423,32 @@ bool sameJsonObject(const QVariant& a, const QVariant& b)
 {
     const QJsonDocument left = QJsonDocument::fromJson(a.toString().toUtf8());
     const QJsonDocument right = QJsonDocument::fromJson(b.toString().toUtf8());
-    return left.isObject() && right.isObject() && left == right;
+    if (!left.isObject() || !right.isObject()) {
+        return false;
+    }
+    // R-IOS-26 / R-R3-49: a per-band watts map written without "2m" (a
+    // peer built before 2 m, or one writing the 14 it knows) keeps 2 m's
+    // value; the Core's map then matches it without its "2m" key.
+    QJsonObject kept = left.object();
+    if (!right.object().contains(QLatin1String("2m"))) {
+        kept.remove(QLatin1String("2m"));
+    }
+    return kept == right.object();
+}
+
+// R-IOS-26 / R-R3-49: a per-band antenna list written with the 14 entries
+// of a peer built before 2 m keeps 2 m's entry (AlexAntennaFacade::decode);
+// the Core's 15-entry list then matches it without its last entry.
+bool sameAntennaListWithout2m(const QVariant& actual, const QVariant& written)
+{
+    QStringList kept = actual.toString().split(QLatin1Char(','));
+    const QStringList sent = written.toString().split(QLatin1Char(','));
+    if (kept.size() != BandLinkFit::kListEntriesWithout2m + 1
+        || sent.size() != BandLinkFit::kListEntriesWithout2m) {
+        return false;
+    }
+    kept.removeLast();
+    return kept == sent;
 }
 
 // R-R3-46 / R-R3-49 (parity Task 14, radioHardwareVersion 7): the Alex
@@ -2976,6 +3004,20 @@ bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& featu
         return false;
     }
     return it->features.value(feature) >= minVersion;
+}
+
+bool StationServer::peerKnows2m(SessionTransport* peer) const
+{
+    const auto it = m_peers.constFind(peerKey(peer));
+    return it != m_peers.constEnd() && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(peer, QByteArray(BandLinkFit::kFeature), 1);
+}
+
+QByteArray StationServer::encodeFor(SessionTransport* transport,
+                                    const SessionMessage& message) const
+{
+    const QByteArray wire = SessionMessages::encode(message);
+    return peerKnows2m(transport) ? wire : BandLinkFit::forPeerWithout2m(wire);
 }
 
 quint16 StationServer::serverPort() const
@@ -6337,8 +6379,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         result.reason = refusals.value(update.name);
         const bool sameMap = message.objectKey == QByteArray(kTransmitKey) && result.hasValue
             && sameJsonObject(result.value.value, update.value);
+        const bool sameList = alexWrite && result.hasValue
+            && sameAntennaListWithout2m(result.value.value, update.value);
         if (result.reason.isEmpty()
-            && (!result.hasValue || (result.value.value != update.value && !sameMap))) {
+            && (!result.hasValue
+                || (result.value.value != update.value && !sameMap && !sameList))) {
             // R-R3-46: the attenuator says in plain words why it kept
             // another value (its range, what this radio offers).
             if (stepAttWrite && !m_radioModel.isNull()) {
@@ -6918,7 +6963,7 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
     if (transport == nullptr) {
         return;
     }
-    transport->sendText(SessionMessages::encode(message));
+    transport->sendText(encodeFor(transport, message));
 }
 
 bool StationServer::peerSeesPairingCode(SessionTransport* transport) const
@@ -7125,7 +7170,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
                         update.value.toString(), version, antennaRowsAvailable);
                 }
             }
-            transport->sendText(SessionMessages::encode(fitted));
+            transport->sendText(encodeFor(transport, fitted));
             return;
         }
         // Parity Task 19: nor the spot sources to an older app.
@@ -7136,18 +7181,18 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
-                transport->sendText(SessionMessages::encode(message));
+                transport->sendText(encodeFor(transport, message));
             }
             return;
         }
         SessionMessage fitted = message;
         if (fitNnrLimitToPeer(fitted, minor)) {
-            transport->sendText(SessionMessages::encode(fitted));
+            transport->sendText(encodeFor(transport, fitted));
         }
         return;
     }
     default:
-        transport->sendText(SessionMessages::encode(message));
+        transport->sendText(encodeFor(transport, message));
         return;
     }
 }
@@ -9649,6 +9694,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // A radio-bound row needs the complete existing antenna path,
             // an Alex board, and an exactly named connected radio.
             const QString currentMac = m_radioModel->currentRadioMac();
+            // R-IOS-26 / R-R3-49: 2 m as its own band, for a peer that
+            // declared band2m (any other is sent none, and sees 2 m as GEN).
+            caps.band2mVersion = peerKnows2m(transport) ? 1 : 0;
             caps.radioAntennaRowsVersion = peer->features.value(
                     QByteArrayLiteral("radioAntennaRows")) == 1
                 && m_radioModel->role() == RadioModel::Role::Local

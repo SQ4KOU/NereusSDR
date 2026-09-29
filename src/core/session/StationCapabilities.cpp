@@ -112,6 +112,8 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, after
 //                relayAllowed. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -346,6 +348,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (radioAntennaRowsVersion == 1) {
             updates.append(intEntry("radioAntennaRowsVersion", radioAntennaRowsVersion));
         }
+        // R-IOS-26 / R-R3-49: 2 m, last, for a peer that declared band2m.
+        if (band2mVersion == 1) {
+            updates.append(intEntry("band2mVersion", band2mVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -574,7 +580,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "txReadingsVersion"
                    || u.name == "remoteIqVersion"
                    || u.name == "miniDisplayVersion"
-                   || u.name == "radioAntennaRowsVersion") {
+                   || u.name == "radioAntennaRowsVersion"
+                   || u.name == "band2mVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -593,6 +600,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.accessoryTxVersion = version;
                 } else if (u.name == "radioAntennaRowsVersion") {
                     caps.radioAntennaRowsVersion = version == 1 ? 1 : 0;
+                } else if (u.name == "band2mVersion") {
+                    caps.band2mVersion = version >= 1 ? 1 : 0;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

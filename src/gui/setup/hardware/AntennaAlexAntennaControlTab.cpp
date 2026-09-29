@@ -32,6 +32,8 @@
 //   2026-09-28 - Named native table groups, headers, rows and cells for
 //                 closed version-6 Setup description parity. J.J. Boyd
 //                 (KG4VCF), AI-assisted via OpenAI Codex.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -125,6 +127,19 @@
 #include <QVBoxLayout>
 
 namespace NereusSDR {
+
+namespace {
+// The rows, top to bottom: 160m .. 6m, 2m, GEN, WWV, XVTR. 2 m keeps its
+// own antennas, as in Thetis (Alex.cs:56-58, B160M .. B2M [v2.10.3.15];
+// setup.cs:13679 ProcessAlexAntCheckBox(sender, Band.B2M)), and sits after
+// 6 m as Thetis orders its bands (R-IOS-26). The button arrays are indexed
+// by the per-band state slot (Band.h).
+constexpr std::array<Band, kPerBandStateCount> kRowOrder{
+    Band::Band160m, Band::Band80m, Band::Band60m, Band::Band40m, Band::Band30m,
+    Band::Band20m,  Band::Band17m, Band::Band15m, Band::Band12m, Band::Band10m,
+    Band::Band6m,   Band::Band2m,  Band::GEN,     Band::WWV,     Band::XVTR,
+};
+} // namespace
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -293,14 +308,14 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
     layout->addLayout(hdrRow);
 
     // Band rows
-    for (int b = 0; b < kBandCount; ++b) {
-        auto band = static_cast<Band>(b);
+    for (const Band band : kRowOrder) {
+        const int b = perBandStateSlot(band);
         auto* rowLayout = new QHBoxLayout();
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(4);
 
         auto* bandLbl = new QLabel(bandLabel(band), grp);
-        bandLbl->setProperty("nereusAntennaBand", b);
+        bandLbl->setProperty("nereusAntennaBand", static_cast<int>(band));
         bandLbl->setProperty("nereusAntennaRowLabel", true);
         bandLbl->setFixedWidth(48);
         rowLayout->addWidget(bandLbl);
@@ -312,7 +327,7 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
 
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
-            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaBand", static_cast<int>(band));
             rb->setProperty("nereusAntennaColumn", QStringLiteral("tx%1").arg(a + 1));
             rb->setChecked((a + 1) == currentAnt);
             rb->setToolTip(tr("TX Ant %1 for %2").arg(a + 1).arg(bandLabel(band)));
@@ -327,7 +342,7 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
                     // Parity Task 12: the Core applies it; the row shows
                     // what the Core keeps.
                     m_remoteAlex->setTxAnt(band, antNum);
-                    syncTxRow(static_cast<int>(band));
+                    syncTxRow(perBandStateSlot(band));
                     return;
                 }
                 m_alex->setTxAnt(band, antNum);
@@ -407,14 +422,14 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
     layout->addLayout(hdrRow2);
 
     // Band rows
-    for (int b = 0; b < kBandCount; ++b) {
-        auto band = static_cast<Band>(b);
+    for (const Band band : kRowOrder) {
+        const int b = perBandStateSlot(band);
         auto* rowLayout = new QHBoxLayout();
         rowLayout->setContentsMargins(0, 0, 0, 0);
         rowLayout->setSpacing(4);
 
         auto* bandLbl = new QLabel(bandLabel(band), grp);
-        bandLbl->setProperty("nereusAntennaBand", b);
+        bandLbl->setProperty("nereusAntennaBand", static_cast<int>(band));
         bandLbl->setProperty("nereusAntennaRowLabel", true);
         bandLbl->setFixedWidth(48);
         rowLayout->addWidget(bandLbl);
@@ -425,7 +440,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         const int currentRx1 = rxAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
-            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaBand", static_cast<int>(band));
             rb->setProperty("nereusAntennaColumn", QStringLiteral("rx%1").arg(a + 1));
             rb->setChecked((a + 1) == currentRx1);
             rb->setToolTip(tr("RX1 Ant %1 for %2").arg(a + 1).arg(bandLabel(band)));
@@ -439,7 +454,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
                     // R-R3-46: the Core applies it; the row shows what the
                     // Core keeps (or keeps its value when the edit is refused).
                     m_remoteAlex->setRxAnt(band, antNum);
-                    syncRxRow(static_cast<int>(band));
+                    syncRxRow(perBandStateSlot(band));
                     return;
                 }
                 m_alex->setRxAnt(band, antNum);
@@ -458,7 +473,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
         const int currentRxOnly = rxOnlyAntOf(band);  // 1-based
         for (int a = 0; a < 3; ++a) {
             auto* rb = new QRadioButton(grp);
-            rb->setProperty("nereusAntennaBand", b);
+            rb->setProperty("nereusAntennaBand", static_cast<int>(band));
             rb->setProperty("nereusAntennaColumn", QStringLiteral("rxOnly%1").arg(a + 1));
             rb->setChecked((a + 1) == currentRxOnly);
             // Tooltip will be set by applySkuProfile() with SKU-specific label.
@@ -470,7 +485,7 @@ void AntennaAlexAntennaControlTab::buildRxGrid(QBoxLayout* outerLayout)
                 if (!checked) { return; }
                 if (m_remoteAlex) {
                     m_remoteAlex->setRxOnlyAnt(band, antNum);
-                    syncRxRow(static_cast<int>(band));
+                    syncRxRow(perBandStateSlot(band));
                     return;
                 }
                 m_alex->setRxOnlyAnt(band, antNum);
@@ -495,7 +510,7 @@ AlexController& AntennaAlexAntennaControlTab::controller()
 
 void AntennaAlexAntennaControlTab::onAntennaChanged(Band band)
 {
-    const int row = static_cast<int>(band);
+    const int row = perBandStateSlot(band);
     if (row < 0 || row >= kBandCount) { return; }
     syncTxRow(row);
     syncRxRow(row);
@@ -519,7 +534,7 @@ void AntennaAlexAntennaControlTab::onBlockTxChanged()
 
 void AntennaAlexAntennaControlTab::syncTxRow(int row)
 {
-    auto band = static_cast<Band>(row);
+    auto band = bandFromPerBandStateSlot(row);
     const int currentAnt = txAntOf(band);  // 1-based
     for (int a = 0; a < 3; ++a) {
         if (auto* rb = m_txButtons[row][a]) {
@@ -531,7 +546,7 @@ void AntennaAlexAntennaControlTab::syncTxRow(int row)
 
 void AntennaAlexAntennaControlTab::syncRxRow(int row)
 {
-    auto band = static_cast<Band>(row);
+    auto band = bandFromPerBandStateSlot(row);
     const int currentRx1     = rxAntOf(band);
     const int currentRxOnly  = rxOnlyAntOf(band);
     for (int a = 0; a < 3; ++a) {
@@ -764,7 +779,7 @@ void AntennaAlexAntennaControlTab::applySkuProfile()
 
     // RX-only radio-button tooltips — re-bind to SKU label.
     for (int b = 0; b < kBandCount; ++b) {
-        const auto band = static_cast<Band>(b);
+        const auto band = bandFromPerBandStateSlot(b);
         for (int a = 0; a < 3; ++a) {
             if (auto* rb = m_rxOnlyButtons[b][a]) {
                 rb->setToolTip(tr("RX-only %1 for %2")
@@ -900,21 +915,21 @@ void AntennaAlexAntennaControlTab::applyTransmitEditAvailability()
 #ifdef NEREUS_BUILD_TESTS
 QRadioButton* AntennaAlexAntennaControlTab::rxButtonForTest(Band band, int ant) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
         ? m_rx1Buttons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
 }
 
 QRadioButton* AntennaAlexAntennaControlTab::rxOnlyButtonForTest(Band band, int ant) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
         ? m_rxOnlyButtons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
 }
 
 QRadioButton* AntennaAlexAntennaControlTab::txButtonForTest(Band band, int ant) const
 {
-    const int b = static_cast<int>(band);
+    const int b = perBandStateSlot(band);
     return (b >= 0 && b < kBandCount && ant >= 1 && ant <= 3)
         ? m_txButtons[static_cast<std::size_t>(b)][static_cast<std::size_t>(ant - 1)] : nullptr;
 }

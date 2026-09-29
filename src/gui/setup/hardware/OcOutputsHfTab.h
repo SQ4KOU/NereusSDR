@@ -26,6 +26,8 @@
 //   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
 //                 pins, pin actions and resets follow their own gates.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/setup.designer.cs header (lines 1-50) ===
@@ -92,6 +94,8 @@
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
+
+#include "models/Band.h"
 
 #include <QList>
 #include <QWidget>
@@ -190,8 +194,9 @@ private:
     QCheckBox* m_pennyExtCtrl{nullptr};
     QCheckBox* m_allowHotSwitching{nullptr};
 
-    // RX / TX matrix grids: [bandIdx][pinIdx 0-6]
-    static constexpr int kBandCount = 14;
+    // RX / TX matrix grids: [per-band state slot][pinIdx 0-6] (Band.h:
+    // 160m .. XVTR at their numbers, 2 m at 14)
+    static constexpr int kBandCount = kPerBandStateCount;
     static constexpr int kPinCount  = 7;
 
     std::array<std::array<QCheckBox*, kPinCount>, kBandCount> m_rxPins{};

@@ -347,6 +347,8 @@
 //                compression meters; the remote Max Bin source moved to
 //                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -9066,6 +9068,9 @@ void MainWindow::buildMenuBar()
             { "12m",              Band::Band12m  },
             { "10m",              Band::Band10m  },
             { "6m",               Band::Band6m   },
+            // R-IOS-26: 2 m is its own band, after 6 m in Thetis's HF band
+            // group (MeterManager.cs GetBandGroupFromBand [v2.10.3.15]).
+            { "2m",               Band::Band2m   },
         };
         for (const auto& entry : hfBands) {
             const Band band = entry.band;

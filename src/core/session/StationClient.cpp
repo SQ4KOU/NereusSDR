@@ -294,10 +294,13 @@
 //               txAmModulationFeedback stream while shown, again after each
 //               snapshot, and sends txModMonitor.reset. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SystemProxy.h"
 #include "core/session/StationClient.h"
+#include "core/session/BandLinkFit.h"
 #include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
@@ -657,6 +660,8 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_declaredFeatures.insert(QByteArrayLiteral("coreBuildInfo"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("settingsBackup"), 1);
     m_declaredFeatures.insert(QByteArrayLiteral("radioAntennaRows"), 1);
+    // R-IOS-26 / R-R3-49: this window knows 2 m as its own band (Band 27).
+    m_declaredFeatures.insert(QByteArray(BandLinkFit::kFeature), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -1662,6 +1667,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
     m_capabilities.radioAntennaRowsVersion = 0;
+    m_capabilities.band2mVersion = 0;
     m_capabilities.coreBuildInfo.reset();
     m_capabilities.displayBudget.reset();
     m_capabilities.displayBudgetReason.reset();
@@ -1866,6 +1872,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_capabilities.coreBuildInfo.reset();
     m_signedInWithDeviceKey = false;
     m_capabilities.radioAntennaRowsVersion = 0;
+    m_capabilities.band2mVersion = 0;
     m_enrolledDeviceKey = false;
     m_hygieneValidateId = 0;
     m_hygieneValidateMac.clear();
@@ -4424,6 +4431,9 @@ StationClient::CommandOutcome StationClient::requestSelectBand(int sliceId, int 
     if (!bandSelectAvailable()) {
         return IStationLink::requestSelectBand(sliceId, band);
     }
+    if (band == static_cast<int>(Band::Band2m) && !station2mAvailable()) {
+        return {false, station2mUnavailableReason()};
+    }
     return sendCommand("slice.selectBand", sliceId,
                        { intArgument("sliceId", sliceId), intArgument("band", band) },
                        QStringLiteral("the band change"));
@@ -4570,6 +4580,9 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
     if (!remoteHardwareConfigAvailable() || m_capabilities.radioHardwareVersion < 3) {
         return {false, hardwareConfigUnavailableReason()};
     }
+    if (band == Band::Band2m && !station2mAvailable()) {
+        return {false, station2mUnavailableReason()};
+    }
     const bool radioBound = m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.radioAntennaRowsVersion == 1;
     const QString mac = m_radioModel ? m_radioModel->currentRadioMac() : QString();
@@ -4591,6 +4604,9 @@ StationClient::CommandOutcome StationClient::requestAlexTxAntenna(Band band, int
 {
     if (!remoteTransmitAntennasAvailable()) {
         return {false, transmitAntennasUnavailableReason()};
+    }
+    if (band == Band::Band2m && !station2mAvailable()) {
+        return {false, station2mUnavailableReason()};
     }
     const bool radioBound = m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.radioAntennaRowsVersion == 1;
@@ -6508,7 +6524,26 @@ void StationClient::send(const SessionMessage& message)
     if (m_transport == nullptr) {
         return;
     }
-    m_transport->sendText(SessionMessages::encode(message));
+    // R-IOS-26 / R-R3-49: a Core without 2 m reads the per-band lists and
+    // maps without their 2 m entry.
+    const QByteArray wire = SessionMessages::encode(message);
+    m_transport->sendText(station2mAvailable() ? wire : BandLinkFit::forStationWithout2m(wire));
+}
+
+bool StationClient::station2mAvailable() const
+{
+    return m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.band2mVersion >= 1;
+}
+
+QString StationClient::band2mUnavailableReason() const
+{
+    return station2mAvailable() ? QString() : station2mUnavailableReason();
+}
+
+QString StationClient::station2mUnavailableReason()
+{
+    return QStringLiteral("This Core does not have the 2 m band yet. Updating the Core adds it.");
 }
 
 bool StationClient::remoteCtunAvailable() const

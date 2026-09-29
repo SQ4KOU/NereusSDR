@@ -56,6 +56,8 @@
 //                                    (setTxBandEditSender, the Core's
 //                                    setTxAntForBand). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "models/Band.h"
@@ -109,8 +111,10 @@ public:
     /// plain reason, when not sent.
     using TxBandEditSender = std::function<bool(Band band, int antenna, QString* reason)>;
 
-    /// The bands AlexController keeps antennas for (160 m .. XVTR).
-    static constexpr int kBandCount = static_cast<int>(Band::SwlFirst);
+    /// The bands AlexController keeps antennas for (160 m .. XVTR, then
+    /// 2 m): the per-band state slots (Band.h). The lists hold one entry
+    /// per slot, in slot order.
+    static constexpr int kBandCount = kPerBandStateCount;
 
     explicit AlexAntennaFacade(QObject* parent = nullptr);
     ~AlexAntennaFacade() override;
@@ -278,7 +282,8 @@ private:
     static Values defaults();
     static QString encode(const BandList& list);
     /// Parse `text` into `out`, clamping each band to [lo, hi]. False when
-    /// the text is not 14 whole numbers. `clamped` is set when a value was
+    /// the text is not 15 whole numbers (or 14, without 2 m, which then
+    /// keeps the value `out` held). `clamped` is set when a value was
     /// moved into range.
     static bool decode(const QString& text, int lo, int hi, BandList* out, bool* clamped);
 

@@ -418,6 +418,8 @@
 //               Monitor's record streams (ModMonitorPublisher) and
 //               txModMonitor.reset. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -687,6 +689,13 @@ public:
     /// (device authentication, pairing, the takeover question, Setup
     /// descriptions) is asked here. An older app declares nothing.
     bool peerDeclares(SessionTransport* peer, const QByteArray& feature, int minVersion) const;
+    /// R-IOS-26 / R-R3-49: the peer knows 2 m as its own band (band2m 1 in
+    /// its hello, at minor 11), so it is sent Band 27 and the per-band
+    /// lists with 2 m. Any other peer sees 2 m as GEN (BandLinkFit.h).
+    bool peerKnows2m(SessionTransport* peer) const;
+    /// The encoded `message` for `transport`: fitted by BandLinkFit for a
+    /// peer that does not know 2 m.
+    QByteArray encodeFor(SessionTransport* transport, const SessionMessage& message) const;
 
     /// The pairing token of a Core upgraded from before paired devices,
     /// until it is retired; empty on a new Core (iPhone app Task 12: none

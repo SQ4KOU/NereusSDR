@@ -33,6 +33,8 @@
 //                 the radio being on the air; the pin actions follow the
 //                 gate alone. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -112,11 +114,20 @@ static const char* kActionLabels[7] = {
 };
 
 // Returns true if the band should be greyed out (GEN/WWV have no OC sense)
-static bool bandIsGrey(int bandIdx)
+static bool bandIsGrey(Band b)
 {
-    auto b = static_cast<Band>(bandIdx);
     return b == Band::GEN || b == Band::WWV;
 }
+
+// The rows, top to bottom: 160m .. 6m, 2m, GEN, WWV, XVTR. 2 m has OC
+// outputs of its own, as in Thetis (setup.cs:13087-13105 [v2.10.3.15],
+// setBandABitMask(Band.B2M, ...)), and sits after 6 m as Thetis orders its
+// bands (R-IOS-26). The matrices are indexed by the per-band state slot.
+static constexpr std::array<Band, kPerBandStateCount> kRowOrder{
+    Band::Band160m, Band::Band80m, Band::Band60m, Band::Band40m, Band::Band30m,
+    Band::Band20m,  Band::Band17m, Band::Band15m, Band::Band12m, Band::Band10m,
+    Band::Band6m,   Band::Band2m,  Band::GEN,     Band::WWV,     Band::XVTR,
+};
 
 // ── Constructor ──────────────────────────────────────────────────────────────
 
@@ -488,9 +499,9 @@ void OcOutputsHfTab::buildMatrixGrid(QGroupBox* group, bool tx)
     // One row per band
     auto& dest = tx ? m_txPins : m_rxPins;
 
-    for (int bi = 0; bi < kBandCount; ++bi) {
-        auto band = static_cast<Band>(bi);
-        bool grey = bandIsGrey(bi);
+    for (const Band band : kRowOrder) {
+        const int bi = perBandStateSlot(band);
+        bool grey = bandIsGrey(band);
 
         auto* bandRow = new QHBoxLayout();
         bandRow->setSpacing(0);
@@ -514,10 +525,10 @@ void OcOutputsHfTab::buildMatrixGrid(QGroupBox* group, bool tx)
 
             // Capture band/pin/tx for the lambda (by value)
             connect(cb, &QCheckBox::toggled, this,
-                    [this, bi, pin, tx](bool checked) {
+                    [this, band, pin, tx](bool checked) {
                         if (m_syncing) { return; }
                         if (m_ocMatrix) {
-                            m_ocMatrix->setPin(static_cast<Band>(bi), pin, tx, checked);
+                            m_ocMatrix->setPin(band, pin, tx, checked);
                         }
                     });
 
@@ -545,7 +556,7 @@ void OcOutputsHfTab::syncFromMatrix()
 
     // Sync RX / TX matrices
     for (int bi = 0; bi < kBandCount; ++bi) {
-        auto band = static_cast<Band>(bi);
+        auto band = bandFromPerBandStateSlot(bi);
         for (int pin = 0; pin < kPinCount; ++pin) {
             if (m_rxPins[bi][pin]) {
                 m_rxPins[bi][pin]->setChecked(m_ocMatrix->pinEnabled(band, pin, false));

@@ -65,6 +65,8 @@
 //                 reports gridVisibleChanged (it changed only its own label)
 //                 and takes the pan's state through setGridVisible. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -401,7 +403,8 @@ void SpectrumOverlayPanel::buildBandFlyout()
     // 4-column grid layout:
     // Row 0: 160, 80, 60, 40
     // Row 1: 30, 20, 17, 15
-    // Row 2: 12, 10, 6, WWV
+    // Row 2: 12, 10, 6, 2
+    // Row 3: WWV
     static constexpr int kCols = 4;
     for (int i = 0; i < kBandGridCount; ++i) {
         int row = i / kCols;

@@ -677,7 +677,7 @@ private slots:
             QCOMPARE(group->toolTip(), table.value("tooltip").toString());
             const QJsonArray columns = table.value("columns").toArray();
             const QJsonArray rows = table.value("rows").toArray();
-            QCOMPARE(rows.size(), 14);
+            QCOMPARE(rows.size(), kPerBandStateCount);
             QStringList describedColumns;
             for (const QJsonValue& rawColumn : columns) {
                 describedColumns << rawColumn.toObject().value("id").toString();
@@ -719,8 +719,12 @@ private slots:
                 QCOMPARE(matches.size(), 1);
                 QCOMPARE(matches.first()->text(), header.value("label").toString());
             }
-            for (int band = 0; band < rows.size(); ++band) {
-                const QJsonObject row = rows.at(band).toObject();
+            // One row per antenna-list entry, in list order: 160m .. XVTR,
+            // then 2 m (band 27, R-IOS-26).
+            QCOMPARE(rows.size(), kPerBandStateCount);
+            for (int slot = 0; slot < rows.size(); ++slot) {
+                const QJsonObject row = rows.at(slot).toObject();
+                const int band = static_cast<int>(bandFromPerBandStateSlot(slot));
                 QCOMPARE(row.value("band"), QJsonValue(band));
                 QList<QLabel*> labels;
                 for (QLabel* label : group->findChildren<QLabel*>()) {
@@ -761,7 +765,8 @@ private slots:
         auto* rxGroup = qobject_cast<QGroupBox*>(bySetupId(page,
             QStringLiteral("hardware.antenna.rxRows")));
         QVERIFY(rxGroup != nullptr);
-        for (int band = 0; band < 14; ++band) {
+        for (const Band b : kPerBandStateBands) {
+            const int band = static_cast<int>(b);
             int selected = 0;
             for (QRadioButton* button : rxGroup->findChildren<QRadioButton*>()) {
                 if (button->property("nereusAntennaBand").toInt() == band

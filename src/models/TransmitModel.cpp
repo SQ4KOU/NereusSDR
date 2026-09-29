@@ -269,6 +269,8 @@
 //                 header below complete the GPL attribution.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -304,7 +306,11 @@ namespace {
 // (Band::SwlFirst..SwlLast) for HL2 N2ADR Filter pin assignments — but TX
 // tune power is HF amateur only.  SWL bands inherit the closest ham-band
 // value implicitly (no separate per-SWL persistence).
-constexpr int kBandCount = static_cast<int>(Band::SwlFirst);  // 14
+//
+// 2 m (R-IOS-26, R-R3-49) keeps its own value, as Thetis's arrays sized by
+// (int)Band.LAST do for B2M: the arrays hold the per-band state slots
+// (Band.h, perBandStateSlot), 2 m at slot 14.
+constexpr int kBandCount = kPerBandStateCount;  // 15
 } // namespace
 
 QString vaxSlotToString(VaxSlot s)
@@ -647,7 +653,7 @@ void TransmitModel::setUserDigOut(int dig)
 
 int TransmitModel::tunePowerForBand(Band band) const
 {
-    const int idx = static_cast<int>(band);
+    const int idx = perBandStateSlot(band);
     if (idx < 0 || idx >= kBandCount) {
         return 50;  // safe fallback for out-of-range band
     }
@@ -667,7 +673,7 @@ void TransmitModel::setTunePowerForBand(Band band, int watts)
     //   HERMESLITE: [0, 99]  (mi0bot Tune slider scale, 33 sub-steps;
     //     mi0bot console.cs:47616-47666 [v2.10.3.13-beta2])
     //   others:     [0, 100] (canonical Thetis 0-100 watts target)
-    const int idx = static_cast<int>(band);
+    const int idx = perBandStateSlot(band);
     if (idx < 0 || idx >= kBandCount) {
         return;
     }
@@ -847,45 +853,48 @@ bool tenValuesInRange(const QString& json, int lo, int hi)
 }
 
 // R-R3-49 (parity Task 5): the link's per-band watts, a JSON object keyed by
-// bandKeyName for the 14 bands 160m .. XVTR. NereusSDR-original.
-constexpr int kLinkBandCount = static_cast<int>(Band::SwlFirst);  // 14
+// bandKeyName for the 15 bands 160m .. XVTR and 2m. NereusSDR-original.
+// A peer built before 2 m (R-IOS-26) reads and writes the 14 without "2m"
+// (BandLinkFit.h); a map without "2m" keeps 2 m's value.
+constexpr int kLinkBandCount = kPerBandStateCount;  // 15
 
 QString bandWattsJson(const std::function<int(Band)>& value)
 {
     QJsonObject object;
-    for (int i = 0; i < kLinkBandCount; ++i) {
-        const Band band = static_cast<Band>(i);
+    for (const Band band : kPerBandStateBands) {
         object.insert(bandKeyName(band), value(band));
     }
     return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
 }
 
-// The 14 bands' watts in `json`, or false when it is not a JSON object
-// holding exactly the 14 band keys, each a whole number from lo to hi. The
-// whole map, like the ten-value arrays: a window always sends every band.
+// The bands' watts in `json`, or false when it is not a JSON object
+// holding exactly the 15 band keys (or the 14 without "2m", from a peer
+// built before 2 m), each a whole number from lo to hi. The whole map,
+// like the ten-value arrays: a window always sends every band it knows.
 bool bandWattsFromJson(const QString& json, int lo, int hi,
                        std::vector<std::pair<Band, int>>& out)
 {
     const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
     if (!doc.isObject()) { return false; }
     const QJsonObject object = doc.object();
-    if (object.size() != kLinkBandCount) { return false; }
+    const bool without2m = !object.contains(bandKeyName(Band::Band2m));
+    if (object.size() != (without2m ? kLinkBandCount - 1 : kLinkBandCount)) { return false; }
     out.clear();
     for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
-        int found = -1;
-        for (int i = 0; i < kLinkBandCount; ++i) {
-            if (bandKeyName(static_cast<Band>(i)) == it.key()) {
-                found = i;
+        Band found = Band::Count;
+        for (const Band band : kPerBandStateBands) {
+            if (bandKeyName(band) == it.key()) {
+                found = band;
                 break;
             }
         }
-        if (found < 0 || !it.value().isDouble()) { return false; }
+        if (found == Band::Count || !it.value().isDouble()) { return false; }
         const double d = it.value().toDouble();
         if (!std::isfinite(d) || d != std::floor(d)
             || d < static_cast<double>(lo) || d > static_cast<double>(hi)) {
             return false;
         }
-        out.emplace_back(static_cast<Band>(found), static_cast<int>(d));
+        out.emplace_back(found, static_cast<int>(d));
     }
     return true;
 }
@@ -1117,11 +1126,11 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
             return {};
         }
         if (!tune) {
-            return QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.");
+            return QStringLiteral("Choose a power from 0 to 100 W for each band.");
         }
         return m_hpsdrModel == HPSDRModel::HERMESLITE
-            ? QStringLiteral("Choose a tune power from 0 to %1 for each of the 14 bands.").arg(hi)
-            : QStringLiteral("Choose a tune power from 0 to %1 W for each of the 14 bands.").arg(hi);
+            ? QStringLiteral("Choose a tune power from 0 to %1 for each band.").arg(hi)
+            : QStringLiteral("Choose a tune power from 0 to %1 W for each band.").arg(hi);
     }
     // The DEXP / VOX page's timings and filter, each with its setter's own
     // clamp range (setup.Designer.cs, cited at each constant).
@@ -1197,7 +1206,7 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
 
 int TransmitModel::powerForBand(Band band) const
 {
-    const int idx = static_cast<int>(band);
+    const int idx = perBandStateSlot(band);
     if (idx < 0 || idx >= kBandCount) {
         return 100;  // safe fallback for out-of-range band
     }
@@ -1213,7 +1222,7 @@ void TransmitModel::setPowerForBand(Band band, int watts)
     // back into m_powerByBand[band] via setPower side-effect (matches
     // Thetis console.cs:46676 [v2.10.3.13] power_by_band[(int)_tx_band] =
     // new_pwr).
-    const int idx = static_cast<int>(band);
+    const int idx = perBandStateSlot(band);
     if (idx < 0 || idx >= kBandCount) {
         return;
     }
@@ -1811,7 +1820,9 @@ void TransmitModel::load()
     // setHpsdrModel(m_hardwareProfile.model) before invoking load().
     const int hi = (m_hpsdrModel == HPSDRModel::HERMESLITE) ? 99 : 100;
     for (int i = 0; i < kBandCount; ++i) {
-        const QString key = prefix + QString::number(i);
+        // Keyed by the band's number (2 m is 27), as before for 0-13.
+        const QString key =
+            prefix + QString::number(static_cast<int>(bandFromPerBandStateSlot(i)));
         const int v = s.value(key, QStringLiteral("50")).toInt();
         m_tunePowerByBand[static_cast<std::size_t>(i)] = std::clamp(v, 0, hi);
     }
@@ -1840,7 +1851,7 @@ void TransmitModel::save()
     const QString prefix =
         QStringLiteral("hardware/%1/tunePowerByBand/").arg(m_mac);
     for (int i = 0; i < kBandCount; ++i) {
-        s.setValue(prefix + QString::number(i),
+        s.setValue(prefix + QString::number(static_cast<int>(bandFromPerBandStateSlot(i))),
                    QString::number(m_tunePowerByBand[static_cast<std::size_t>(i)]));
     }
 }
@@ -2268,7 +2279,7 @@ void TransmitModel::loadFromSettings(const QString& mac)
         const QString powerPfx =
             QStringLiteral("hardware/%1/powerByBand/").arg(mac);
         for (int i = 0; i < kBandCount; ++i) {
-            const Band band = static_cast<Band>(i);
+            const Band band = bandFromPerBandStateSlot(i);
             const QString key = powerPfx + bandKeyName(band);
             const int v = s.value(key, QStringLiteral("50")).toInt();
             // Direct assignment (bypass setPowerForBand) — load is the
@@ -2494,7 +2505,7 @@ void TransmitModel::persistToSettings(const QString& mac) const
         const QString powerPfx =
             QStringLiteral("hardware/%1/powerByBand/").arg(mac);
         for (int i = 0; i < kBandCount; ++i) {
-            const Band band = static_cast<Band>(i);
+            const Band band = bandFromPerBandStateSlot(i);
             s.setValue(powerPfx + bandKeyName(band),
                        QString::number(
                            m_powerByBand[static_cast<std::size_t>(i)]));

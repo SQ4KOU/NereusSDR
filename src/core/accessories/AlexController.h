@@ -32,6 +32,8 @@
 //                feedback, Disable 6m LNA on TX), reported while they put
 //                the bypass on the wire. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -244,7 +246,12 @@ private:
     // SWL slice you tune to.  Iteration stops at the SWL boundary
     // (Band::SwlFirst == 14) to preserve existing per-band-array
     // semantics + signal emission counts.
-    static constexpr int kBandCount = int(Band::SwlFirst);  // 14
+    //
+    // 2 m (R-IOS-26, R-R3-49) has its own antennas, as in Thetis, whose
+    // TxAnt/RxAnt/RxOnlyAnt hold 12 bands, B160M .. B2M (Alex.cs:56-58,
+    // idx = (int)band - (int)Band.B160M [v2.10.3.15]). The arrays hold the
+    // per-band state slots (Band.h): 2 m is slot 14.
+    static constexpr int kBandCount = kPerBandStateCount;  // 15
 
     std::array<int, kBandCount> m_txAnt{};      // TxAnt[12] in Thetis
     std::array<int, kBandCount> m_rxAnt{};      // RxAnt[12] in Thetis

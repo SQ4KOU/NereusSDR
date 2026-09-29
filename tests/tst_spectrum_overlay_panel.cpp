@@ -370,13 +370,14 @@ private slots:
     }
 
     // The BAND flyout as it was drawn before its table moved to
-    // models/BandGrid.h: twelve buttons, four to a row, each emitting the
-    // name, frequency and mode it always did.
+    // models/BandGrid.h: four to a row, each emitting the name, frequency
+    // and mode it always did, and 2 m after 6 m (R-IOS-26), which puts WWV
+    // on a fourth row: thirteen buttons.
     void bandFlyoutDrawsAsBefore() {
         PanelHarness h;
         QGridLayout* grid = nullptr;
         for (QGridLayout* candidate : h.host.findChildren<QGridLayout*>()) {
-            if (candidate->count() == 12) {
+            if (candidate->count() == 13) {
                 grid = candidate;
             }
         }
@@ -392,10 +393,11 @@ private slots:
             {"30", "30m", 10.1e6, "DIGU"},   {"20", "20m", 14.0e6, "USB"},
             {"17", "17m", 18.068e6, "USB"},  {"15", "15m", 21.0e6, "USB"},
             {"12", "12m", 24.89e6, "USB"},   {"10", "10m", 28.0e6, "USB"},
-            {"6", "6m", 50.0e6, "USB"},      {"WWV", "WWV", 10.0e6, "AM"},
+            {"6", "6m", 50.0e6, "USB"},      {"2", "2m", 144.2e6, "USB"},
+            {"WWV", "WWV", 10.0e6, "AM"},
         };
         QSignalSpy selected(h.panel, &SpectrumOverlayPanel::bandSelected);
-        for (int i = 0; i < 12; ++i) {
+        for (int i = 0; i < 13; ++i) {
             QLayoutItem* item = grid->itemAtPosition(i / 4, i % 4);
             QVERIFY(item);
             auto* button = qobject_cast<QPushButton*>(item->widget());

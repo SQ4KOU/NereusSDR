@@ -1223,6 +1223,10 @@ nereus_add_test(tst_board_capability_flag_wiring)
 
 # ── Issue #118: band-button auto-mode ────────────────────────────────────
 nereus_add_test(tst_band_from_name)
+# 2 m is its own band (JJ's ruling 2026-09-28; R-IOS-26, R-R3-49).
+nereus_add_test(tst_band_2m)
+nereus_add_test(tst_band_2m_stores)
+nereus_add_test(tst_band_link_fit EXTRA_LABELS session)
 nereus_add_test(tst_slice_has_settings_for)
 nereus_add_test(tst_band_defaults)
 nereus_add_test(tst_radio_model_band_click)

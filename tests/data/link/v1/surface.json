@@ -421,6 +421,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "band2mVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -5129,7 +5134,8 @@
                         23,
                         24,
                         25,
-                        26
+                        26,
+                        27
                     ],
                     "kind": "enum",
                     "name": "band",
@@ -5292,7 +5298,8 @@
                         23,
                         24,
                         25,
-                        26
+                        26,
+                        27
                     ],
                     "kind": "enum",
                     "name": "band",
