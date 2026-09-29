@@ -18,10 +18,10 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
-//   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
-//                                    (transmitSettingsVersion 11): Save and
-//                                    Delete are taken keyed. AI-assisted via
-//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Save and Delete are the holder's while
+//                                    transmit is held (ruling 7.7); the
+//                                    Core's own key holds it here.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -418,16 +418,16 @@ void TstTxProfileSelect::saveRefusals()
     QVERIFY(!result.accepted);
     QCOMPARE(result.reason, QStringLiteral("Give the transmit profile a name."));
 
-    // Remote parity on the air (transmitSettingsVersion 11): Save works
-    // keyed, as the local page's Save does.
+    // The Core's own key holds transmit: Save is the holder's (ruling 7.7).
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
     result = s.invoke("txProfile.save", {nameArg(QStringLiteral("On Air"))});
-    QVERIFY2(result.accepted, qPrintable(result.reason));
+    QVERIFY(!result.accepted);
+    QCOMPARE(result.reason, kOnAir);
     s.unkeyCore();
     QTRY_VERIFY(!s.core->moxController()->isMox());
-    QCOMPARE(s.coreProfiles().profileNames().size(), count + 1);
-    QVERIFY(!storedField(QStringLiteral("On Air"), QStringLiteral("MicGain")).isEmpty());
+    QCOMPARE(s.coreProfiles().profileNames().size(), count);
+    QVERIFY(storedField(QStringLiteral("On Air"), QStringLiteral("MicGain")).isEmpty());
 }
 
 void TstTxProfileSelect::deleteRemovesTheProfile()
@@ -464,12 +464,13 @@ void TstTxProfileSelect::deleteRefusals()
     QVERIFY(!result.accepted);
     QCOMPARE(result.reason, QStringLiteral("There is no transmit profile called Nope."));
 
-    // Remote parity on the air (version 11): Delete works keyed too.
+    // The Core's own key holds transmit: Delete is the holder's (ruling 7.7).
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
     result = s.invoke("txProfile.delete", {nameArg(QStringLiteral("AM"))});
-    QVERIFY2(result.accepted, qPrintable(result.reason));
-    QVERIFY(!s.coreProfiles().profileNames().contains(QStringLiteral("AM")));
+    QVERIFY(!result.accepted);
+    QCOMPARE(result.reason, kOnAir);
+    QVERIFY(s.coreProfiles().profileNames().contains(QStringLiteral("AM")));
     s.unkeyCore();
     QTRY_VERIFY(!s.core->moxController()->isMox());
 

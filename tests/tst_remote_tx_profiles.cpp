@@ -16,8 +16,8 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
 //                                    (transmitSettingsVersion 11): the
-//                                    microphone settings and Reset vocoder
-//                                    are taken keyed. AI-assisted via
+//                                    microphone settings are taken keyed;
+//                                    Reset vocoder is the holder's. AI-assisted via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -412,14 +412,14 @@ void TstRemoteTxProfiles::radeResetVocoderRefusals()
     RadeChannel* const channel =
         s.core->wdspEngine()->createRadeChannel(coreSlice->sliceIndex());
     QVERIFY(channel);
-    // Remote parity on the air (transmitSettingsVersion 11): the local
-    // applet's Reset vocoder works keyed, so the Core takes it keyed.
+    // The Core's own key holds transmit: the reset is the holder's (ruling
+    // 7.7), so this window's waits.
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->isMox());
-    const qsizetype toasts = toast.count();
     rade.resetVocoderButtonForTest()->click();
-    QTRY_COMPARE(channel->resetTxCountForTest(), 1);
-    QCOMPARE(toast.count(), toasts);
+    QTRY_VERIFY(toast.count() >= 2);
+    QCOMPARE(toast.last().at(0).toString(), kOnAir);
+    QCOMPARE(channel->resetTxCountForTest(), 0);
     s.unkeyCore();
 
     // An argument the verb does not take.
@@ -440,7 +440,7 @@ void TstRemoteTxProfiles::radeResetVocoderRefusals()
         }
         return false;
     }());
-    QCOMPARE(channel->resetTxCountForTest(), 1);   // the one taken on the air above
+    QCOMPARE(channel->resetTxCountForTest(), 0);
     s.core->wdspEngine()->destroyRadeChannel(coreSlice->sliceIndex());
 }
 

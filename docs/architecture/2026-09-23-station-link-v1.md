@@ -4851,7 +4851,9 @@ These command groups need a sentence beyond the table:
   receive-only Core takes it. Below `transmitSettingsVersion` 11 it is
   refused while the radio is on the air ("The radio is on the air. Try
   again when it stops."); at 11 it is taken on the air from a peer that may
-  change the transmit settings, as the local slider moves keyed. It is
+  change the transmit settings, as the local slider moves keyed. Like
+  `txProfile.select` it is the holder's while transmit is held (ruling
+  7.7): from another device it is refused with the holder's words. It is
   refused outside the
   tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
   tune power from 0 to 99." on a Hermes Lite 2), and when not understood
@@ -4874,7 +4876,10 @@ These command groups need a sentence beyond the table:
   Below `transmitSettingsVersion` 11 each is refused while the radio is on
   the air ("The radio is on the air. Try again when it stops."); at 11 each
   is taken on the air from a peer that may change the transmit settings, as
-  the local profile combo and Reset vocoder work keyed. The other refusals: "There is no
+  the local profile combo and Reset vocoder work keyed. Each is the
+  holder's while transmit is held (ruling 7.7): from a device that does not
+  hold it, while another does (the Core's own key included), it is refused
+  with the holder's words. The other refusals: "There is no
   transmit profile called <name>." (select and delete), "Give the transmit
   profile a name." (save with a blank name), "The Core has no radio to
   keep transmit profiles for." (save before the Core has a radio), "It is

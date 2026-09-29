@@ -195,7 +195,7 @@ private slots:
     void keyingSetStaysRefusedOnAndOffTheAir();
     void settingAppliedOffTheAirAndReturnsToTheWindow();
     void settingTakenWhileOnTheAir();
-    void settingVerbsTakenWhileOnTheAir();
+    void settingVerbsAreTheStationKeysWhileItHoldsTransmit();
     void onAirRefusalIsTheTgxlRefusal();
     void dspOptionsTxKeyTakenOffTheAirAndApplied();
     void dspOptionsTxKeyTakenOnTheAirAndAppliedAtTheUnkey();
@@ -528,9 +528,11 @@ void TstTransmitSettingsGate::settingTakenWhileOnTheAir()
     }
 }
 
-// The TX applet's Tune Power slider and the TX profile combo change while
-// a local window transmits, so their commands are taken on the air too.
-void TstTransmitSettingsGate::settingVerbsTakenWhileOnTheAir()
+// The Tune Power command and TX profile save and delete are the
+// transmitter's own settings: while the Core's own key holds transmit they
+// are the holder's (ruling 7.7), refused with the station's words. The
+// holder's own change is taken on the air (tst_on_air_refusals).
+void TstTransmitSettingsGate::settingVerbsAreTheStationKeysWhileItHoldsTransmit()
 {
     Session s(m_securityDir.path(), this);
     s.core->scopeTxProfiles(QStringLiteral("AA:BB:CC:DD:EE:01"));
@@ -539,23 +541,20 @@ void TstTransmitSettingsGate::settingVerbsTakenWhileOnTheAir()
     mox->setMoxCheck({});
     mox->setMox(true);
     QTRY_VERIFY(mox->state() == MoxState::Tx);
-    // (txProfile.select is also the holder's while transmit is held,
-    // ruling 7.7: with the Core's own MOX keyed it is refused by that rule,
-    // not the air, and is left out here.)
 
     const SessionMessage tune = s.invoke(
         QByteArrayLiteral("setTunePowerForTxBand"),
         {MirrorUpdate{0, "watts", MirrorWireKind::Int64, QVariant(qlonglong(3))}});
-    QVERIFY2(tune.accepted, qPrintable(tune.reason));
+    QCOMPARE(tune.reason, kOnAir);
     const SessionMessage save = s.invoke(
         QByteArrayLiteral("txProfile.save"),
         {MirrorUpdate{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("On air"))}});
-    QVERIFY2(save.accepted, qPrintable(save.reason));
-    QVERIFY(s.core->micProfileManager()->profileNames().contains(QStringLiteral("On air")));
+    QCOMPARE(save.reason, kOnAir);
+    QVERIFY(!s.core->micProfileManager()->profileNames().contains(QStringLiteral("On air")));
     const SessionMessage remove = s.invoke(
         QByteArrayLiteral("txProfile.delete"),
-        {MirrorUpdate{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("On air"))}});
-    QVERIFY2(remove.accepted, qPrintable(remove.reason));
+        {MirrorUpdate{0, "name", MirrorWireKind::Utf8, QVariant(QStringLiteral("Default"))}});
+    QCOMPARE(remove.reason, kOnAir);
     mox->setMox(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
 }

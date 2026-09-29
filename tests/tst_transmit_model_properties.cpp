@@ -40,8 +40,8 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
 //                                    (transmitSettingsVersion 11): the
-//                                    applets' settings and Tune Power are
-//                                    taken on the air. AI-assisted via
+//                                    applets' settings are taken on the
+//                                    air; Tune Power is the holder's. AI-assisted via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -709,10 +709,13 @@ void TstTransmitModelProperties::eachSettingIsTakenOnTheAir()
     windowTx.setTxAlcDecay(decay);
     QTRY_COMPARE(coreTx.txAlcDecay(), decay);
 
-    // And the Tune Power command.
-    const SessionMessage taken = s.invoke("setTunePowerForTxBand", {intArg("watts", 11)});
-    QVERIFY2(taken.accepted, qPrintable(taken.reason));
-    QCOMPARE(coreTx.tunePowerForTxBand(), 11);
+    // The Tune Power command is the transmitter's own setting: while the
+    // Core's own key holds transmit it is the holder's (ruling 7.7).
+    const int band = coreTx.tunePowerForTxBand();
+    const SessionMessage refused = s.invoke("setTunePowerForTxBand", {intArg("watts", 11)});
+    QVERIFY(!refused.accepted);
+    QCOMPARE(refused.reason, kOnAir);
+    QCOMPARE(coreTx.tunePowerForTxBand(), band);
 
     s.unkeyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Rx);
@@ -870,13 +873,13 @@ void TstTransmitModelProperties::coreBandChangeMovesTheTunePowerSlider()
     QTRY_COMPARE(s.window.transmitModel().tunePowerForTxBand(), 31);
     QCOMPARE(slider->value(), 31);
 
-    // On the air the Core takes it too (transmitSettingsVersion 11), as the
-    // local slider moves while transmitting.
+    // While the Core's own key holds transmit the command is the holder's
+    // (ruling 7.7); the slider goes back to the Core's value.
     s.keyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Tx);
     slider->setValue(12);
-    QTRY_COMPARE(coreTx.tunePowerForBand(Band::Band40m), 12);
-    QCOMPARE(slider->value(), 12);
+    QTRY_COMPARE(slider->value(), 31);
+    QCOMPARE(coreTx.tunePowerForBand(Band::Band40m), 31);
     s.unkeyCore();
     QTRY_VERIFY(s.core->moxController()->state() == MoxState::Rx);
 }

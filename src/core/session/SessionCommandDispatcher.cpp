@@ -242,6 +242,11 @@
 //               tx.twoTonePreset are taken on the air from a peer that may
 //               change the transmit settings. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: setTunePowerForTxBand, txProfile.save / delete and
+//               rade.resetVocoder are the holder's while transmit is held
+//               (refusedForTheHolder, ruling 7.7), as txProfile.select was.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -1286,6 +1291,23 @@ void SessionCommandDispatcher::emitRefusal(const QByteArray& verb, quint32 comma
         verb, commandId, false, refusal.text, {},
         {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refusal.code)},
          {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refusal.fix)}}));
+}
+
+bool SessionCommandDispatcher::refusedForTheHolder(const QByteArray& verb, quint32 commandId)
+{
+    // Ruling 7.7 (iPhone app plan Task 77): a change to the transmitter's
+    // own settings from a device that does not hold transmit, while another
+    // does, is refused with the holder's name (the Core's rule,
+    // TransmitAccess::transmitter). True when it answered.
+    if (!m_transmitAccess.transmitter) {
+        return false;
+    }
+    const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
+    if (refusal.isEmpty()) {
+        return false;
+    }
+    emitRefusal(verb, commandId, refusal);
+    return true;
 }
 
 bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
@@ -3319,6 +3341,11 @@ void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& in
                    QStringLiteral("The request to change the tune power was not understood."), {});
         return;
     }
+    // Ruling 7.7: the transmitter's own settings are the holder's while
+    // transmit is held (as txProfile.select), on the air or not.
+    if (refusedForTheHolder(verb, invoke.commandId)) {
+        return;
+    }
     QString reason;
     if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason, m_transmitSettingsOnAir)) {
         emitResult(verb, invoke.commandId, false,
@@ -3345,14 +3372,10 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
                    QStringLiteral("The request for the transmit profile was not understood."), {});
         return;
     }
-    // iPhone app plan Task 77 (ruling 7.7): selecting a transmit profile
-    // is the holder's while transmit is held.
-    if (verb == "txProfile.select" && m_transmitAccess.transmitter) {
-        if (const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
-            !refusal.isEmpty()) {
-            emitRefusal(verb, invoke.commandId, refusal);
-            return;
-        }
+    // iPhone app plan Task 77 (ruling 7.7): selecting, saving or deleting a
+    // transmit profile is the holder's while transmit is held.
+    if (refusedForTheHolder(verb, invoke.commandId)) {
+        return;
     }
     QString reason;
     bool done = false;
@@ -3395,6 +3418,10 @@ void SessionCommandDispatcher::handleRadeResetVocoder(const SessionMessage& invo
     if (!hasExactlyArguments(invoke.arguments, {})) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The request to reset the RADE vocoder was not understood."), {});
+        return;
+    }
+    // Ruling 7.7: the holder's while transmit is held.
+    if (refusedForTheHolder(invoke.commandVerb, invoke.commandId)) {
         return;
     }
     QString reason;
