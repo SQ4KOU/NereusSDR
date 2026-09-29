@@ -887,6 +887,20 @@ private:
     // the next connect even when it is off.
     bool    m_hl2Ext10Incomplete{false};
     bool    m_hl2Cl2Incomplete{false};
+    // A list whose writes all went into the I2C queue, not yet known to
+    // have reached the radio: `leavesAt` is the queue's enqueued count
+    // after its last write, and `left` is set by the first ep6 frame that
+    // finds that write gone from the queue. The next ep6 frame after that
+    // clears the option's incomplete flag; a disconnect or a lost link
+    // before then sets it (hl2ClockMarkUnconfirmed), so frames that sat
+    // in the queue, or went out while the radio had stopped answering,
+    // are sent again at the next connect. One entry per kind.
+    struct Hl2ClockSent {
+        Hl2ClockKind kind{Hl2ClockKind::Cl2};
+        quint64 leavesAt{0};
+        bool left{false};
+    };
+    std::vector<Hl2ClockSent> m_hl2ClockUnconfirmed;
     // The first ep6 frame promotes Connecting to Connected; the HL2 clock
     // options that are on go to the radio then.
     void enterDataFlowing();
@@ -896,6 +910,8 @@ private:
     void hl2ClockListDone(const Hl2ClockSequence& seq);
     void hl2ClockListDropped(const Hl2ClockSequence& seq);
     void hl2ClockPump();
+    void hl2ClockConfirmSent();
+    void hl2ClockMarkUnconfirmed();
 
     // mi0bot prn->i2c.delay: subframes until the next I2C frame may go
     // (composeSubframe).
@@ -1249,6 +1265,10 @@ public:
         return n;
     }
     int hl2Cl2FreqKHzForTest() const { return m_hl2Cl2FreqKHz; }
+    // What an ep6 frame does for the clock lists (hl2ClockConfirmSent),
+    // and what a lost link does (the watchdog's LinkLost branch).
+    void hl2ClockEp6ForTest() { hl2ClockConfirmSent(); }
+    void hl2ClockLinkLostForTest() { hl2ClockMarkUnconfirmed(); }
     bool hl2ClockIncompleteForTest(bool ext10) const
     {
         return ext10 ? m_hl2Ext10Incomplete : m_hl2Cl2Incomplete;

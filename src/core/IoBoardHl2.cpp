@@ -204,6 +204,11 @@ quint64 IoBoardHl2::i2cDequeuedCount() const
     return m_i2cDequeuePos.load(std::memory_order_acquire);
 }
 
+quint64 IoBoardHl2::i2cEnqueuedCount() const
+{
+    return m_i2cEnqueuePos.load(std::memory_order_acquire);
+}
+
 bool IoBoardHl2::i2cQueueIsEmpty() const { return i2cQueueDepth() == 0; }
 bool IoBoardHl2::i2cQueueIsFull() const  { return i2cQueueDepth() >= kMaxI2cQueue; }
 

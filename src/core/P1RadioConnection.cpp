@@ -951,10 +951,14 @@ void P1RadioConnection::disconnect()
     if (m_ioBoardPollTimer) {
         m_ioBoardPollTimer->stop();
     }
-    // Clock chip writes not yet queued are dropped; the next connect sends
-    // the options that are on, and those whose lists did not finish
-    // (hl2ClockOnDataFlowing).
+    // Clock chip writes not yet queued are dropped, and lists queued but
+    // not known to have reached the radio count as not finished; the next
+    // connect sends the options that are on, and those whose lists did not
+    // finish (hl2ClockOnDataFlowing). The shared I2C queue is left as it
+    // is: the I/O board poll and the manual I2C tool write to it too, and
+    // a clock write it still holds is sent again anyway.
     hl2ClockDropPending();
+    hl2ClockMarkUnconfirmed();
     if (m_ep2PacerTimer) {
         m_ep2PacerTimer->stop();
     }
@@ -1657,6 +1661,7 @@ void P1RadioConnection::hl2ClockOnDataFlowing()
         return;
     }
     hl2ClockDropPending();
+    hl2ClockMarkUnconfirmed();
     const bool sendExt = m_hl2Ext10MHz || m_hl2Ext10Incomplete;  // MI0BOT: HL2 external 10 MHz input
     const bool sendCl2 = m_hl2Cl2Enable || m_hl2Cl2Incomplete    // MI0BOT: HL2 CL2 clock output
                          || (sendExt && m_hl2Ext10Incomplete);
@@ -1677,13 +1682,20 @@ void P1RadioConnection::hl2ClockDropPending()
     }
 }
 
+// Every write of the list is in the I2C queue. The option's incomplete
+// flag is left as it is until an ep6 frame shows the list went out
+// (hl2ClockConfirmSent).
 void P1RadioConnection::hl2ClockListDone(const Hl2ClockSequence& seq)
 {
-    if (seq.kind == Hl2ClockKind::Ext10) {
-        m_hl2Ext10Incomplete = false;
-    } else {
-        m_hl2Cl2Incomplete = false;
+    const quint64 leavesAt = m_ioBoard ? m_ioBoard->i2cEnqueuedCount() : 0;
+    for (Hl2ClockSent& sent : m_hl2ClockUnconfirmed) {
+        if (sent.kind == seq.kind) {
+            sent.leavesAt = leavesAt;
+            sent.left = false;
+            return;
+        }
     }
+    m_hl2ClockUnconfirmed.push_back(Hl2ClockSent{seq.kind, leavesAt, false});
 }
 
 void P1RadioConnection::hl2ClockListDropped(const Hl2ClockSequence& seq)
@@ -1693,6 +1705,56 @@ void P1RadioConnection::hl2ClockListDropped(const Hl2ClockSequence& seq)
     } else {
         m_hl2Cl2Incomplete = true;
     }
+    // An earlier list of this kind waiting for its ep6 frame must not
+    // clear the flag this list set.
+    for (auto it = m_hl2ClockUnconfirmed.begin(); it != m_hl2ClockUnconfirmed.end(); ++it) {
+        if (it->kind == seq.kind) {
+            m_hl2ClockUnconfirmed.erase(it);
+            break;
+        }
+    }
+}
+
+// Called for every ep6 frame once the link is Connected. A list's last
+// write that has left the I2C queue went out in an ep2 frame; the radio
+// still answering one frame later is taken as that frame having reached
+// it, and the option's list counts as finished.
+void P1RadioConnection::hl2ClockConfirmSent()
+{
+    if (m_hl2ClockUnconfirmed.empty()) {
+        return;
+    }
+    const quint64 dequeued = m_ioBoard ? m_ioBoard->i2cDequeuedCount() : 0;
+    for (auto it = m_hl2ClockUnconfirmed.begin(); it != m_hl2ClockUnconfirmed.end();) {
+        if (it->left) {
+            if (it->kind == Hl2ClockKind::Ext10) {
+                m_hl2Ext10Incomplete = false;
+            } else {
+                m_hl2Cl2Incomplete = false;
+            }
+            it = m_hl2ClockUnconfirmed.erase(it);
+            continue;
+        }
+        if (dequeued >= it->leavesAt) {
+            it->left = true;
+        }
+        ++it;
+    }
+}
+
+// The link went down (disconnect, or the watchdog's LinkLost) before
+// these lists were known to reach the radio: they go again at the next
+// connect.
+void P1RadioConnection::hl2ClockMarkUnconfirmed()
+{
+    for (const Hl2ClockSent& sent : m_hl2ClockUnconfirmed) {
+        if (sent.kind == Hl2ClockKind::Ext10) {
+            m_hl2Ext10Incomplete = true;
+        } else {
+            m_hl2Cl2Incomplete = true;
+        }
+    }
+    m_hl2ClockUnconfirmed.clear();
 }
 
 // Queues the lists a change needs. A list already started stays at the
@@ -1704,11 +1766,10 @@ void P1RadioConnection::hl2ClockListDropped(const Hl2ClockSequence& seq)
 // mi0bot's handler calls ControlCl2 after it.
 void P1RadioConnection::hl2ClockRequest(bool ext10, bool cl2)
 {
-    Hl2ClockSequence* started = nullptr;
-    if (!m_hl2ClockPending.empty() && m_hl2ClockPending.front().next > 0) {
-        started = &m_hl2ClockPending.front();
-    }
-    const std::size_t keep = started ? 1 : 0;
+    // The started list, when there is one, is element 0 and stays there;
+    // it is read by index because the push_backs below can move it.
+    const bool hasStarted = !m_hl2ClockPending.empty() && m_hl2ClockPending.front().next > 0;
+    const std::size_t keep = hasStarted ? 1 : 0;
     for (std::size_t i = keep; i < m_hl2ClockPending.size(); ++i) {
         if (m_hl2ClockPending[i].kind == Hl2ClockKind::Ext10) {
             ext10 = true;
@@ -1717,13 +1778,12 @@ void P1RadioConnection::hl2ClockRequest(bool ext10, bool cl2)
         }
     }
     m_hl2ClockPending.resize(keep);
-    started = keep ? &m_hl2ClockPending.front() : nullptr;
 
     const quint64 dequeued = m_ioBoard ? m_ioBoard->i2cDequeuedCount() : 0;
     bool extQueued = false;
     if (ext10) {
-        if (!(started && started->kind == Hl2ClockKind::Ext10
-              && started->extOn == m_hl2Ext10MHz)) {
+        if (!(hasStarted && m_hl2ClockPending[0].kind == Hl2ClockKind::Ext10
+              && m_hl2ClockPending[0].extOn == m_hl2Ext10MHz)) {
             Hl2ClockSequence seq;
             seq.kind = Hl2ClockKind::Ext10;
             seq.extOn = m_hl2Ext10MHz;
@@ -1736,8 +1796,9 @@ void P1RadioConnection::hl2ClockRequest(bool ext10, bool cl2)
     if (cl2) {
         ClockWrites writes = m_hl2Cl2Enable ? hl2Cl2Writes(m_hl2Ext10MHz, m_hl2Cl2FreqKHz)
                                             : kHl2ClockCl2Off;
-        const bool startedSendsIt = !extQueued && started
-            && started->kind == Hl2ClockKind::Cl2 && started->writes == writes;
+        const bool startedSendsIt = !extQueued && hasStarted
+            && m_hl2ClockPending[0].kind == Hl2ClockKind::Cl2
+            && m_hl2ClockPending[0].writes == writes;
         if (!startedSendsIt) {
             Hl2ClockSequence seq;
             seq.kind = Hl2ClockKind::Cl2;
@@ -1747,7 +1808,7 @@ void P1RadioConnection::hl2ClockRequest(bool ext10, bool cl2)
         }
     }
     // A started list keeps its retry timer; otherwise start sending now.
-    if (!started || !(m_hl2ClockRetryTimer && m_hl2ClockRetryTimer->isActive())) {
+    if (!hasStarted || !(m_hl2ClockRetryTimer && m_hl2ClockRetryTimer->isActive())) {
         hl2ClockPump();
     }
 }
@@ -3617,6 +3678,12 @@ void P1RadioConnection::onReadyRead()
                 }
             }
 
+            // HL2 clock lists queued before this frame count as sent once
+            // the radio answers after their last write left the queue.
+            if (cs == ConnectionState::Connected) {
+                hl2ClockConfirmSent();
+            }
+
             // Phase 3P-E Task 3: record ep6 ingress bytes for bandwidth monitor.
             // Source: mi0bot bandwidth_monitor.c:74-78 bandwidth_monitor_in() [@c26a8a4]
             if (m_bwMonitor) { m_bwMonitor->recordEp6Bytes(data.size()); }
@@ -3741,6 +3808,9 @@ void P1RadioConnection::onWatchdogTick()
         // Phase 3Q-1: ConnectionState::Error removed from the 5-value enum.
         // Watchdog timeout (was Connected, frames stopped) → LinkLost.
         setState(ConnectionState::LinkLost);
+        // HL2 clock lists queued in the silence, or not yet answered, go
+        // again when the link comes back (hl2ClockOnDataFlowing).
+        hl2ClockMarkUnconfirmed();
         emit errorOccurred(RadioConnectionError::NoDataTimeout,
                            QStringLiteral("Radio stopped responding"));
 

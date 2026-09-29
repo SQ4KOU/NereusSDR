@@ -125,6 +125,14 @@ private:
         return writes;
     }
 
+    // Two ep6 frames: the first finds the lists' last writes gone from the
+    // queue, the second shows the radio still answering after them.
+    static void radioAnswers(P1RadioConnection& conn)
+    {
+        conn.hl2ClockEp6ForTest();
+        conn.hl2ClockEp6ForTest();
+    }
+
     static void fillQueue(IoBoardHl2& io)
     {
         IoBoardHl2::I2cTxn filler;
@@ -551,11 +559,103 @@ private slots:
         }
         conn.simulateDataFlowingForTest();
         QCOMPARE(drainClockWrites(io), concat(k10MhzDisable, kCl2Off));
+        // Out of the queue, but not finished until the radio answers.
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
+        radioAnswers(conn);
         QVERIFY(!conn.hl2ClockIncompleteForTest(true));
         QVERIFY(!conn.hl2ClockIncompleteForTest(false));
         // Finished: the connect after that sends nothing for options off.
+        conn.disconnect();
         conn.simulateDataFlowingForTest();
         QCOMPARE(drainClockWrites(io), Writes{});
+    }
+
+    // A list whose writes all went into the queue but never left it before
+    // the disconnect is sent again at the next connect.
+    void queuedListResentAfterDisconnect()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(false, true, 116000);
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);   // all 10 writes queued
+        conn.hl2ClockEp6ForTest();                     // still in the queue
+        conn.hl2ClockEp6ForTest();
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+        conn.setHl2Clock(false, false, 116000);       // off, queued behind it
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        conn.disconnect();
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        // The frames the disconnect left in the queue go first, then the
+        // off list again, as the connect wants CL2 off.
+        const Writes stale = drainClockWrites(io);
+        QCOMPARE(stale, concat(cl2(0x00, 0xB0, 0x01, 0x05, 0x4B, 0xE0), kCl2Off));
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), kCl2Off);
+        radioAnswers(conn);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+    }
+
+    // A list that left the queue while the radio had stopped answering
+    // (the watchdog's silence) is sent again when the link comes back.
+    void listSentInSilenceResentAfterLinkLost()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(true, false, 116000);
+        QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, kCl2Off));
+        // No ep6 frame after the writes left: the link is declared lost.
+        conn.hl2ClockLinkLostForTest();
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, kCl2Off));
+        // One ep6 frame that finds the writes gone is not enough; a lost
+        // link then still sends them again.
+        conn.hl2ClockEp6ForTest();
+        conn.hl2ClockLinkLostForTest();
+        QVERIFY(conn.hl2ClockIncompleteForTest(true));
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), concat(k10MhzEnable, kCl2Off));
+        radioAnswers(conn);
+        QVERIFY(!conn.hl2ClockIncompleteForTest(true));
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+        // Answered: a lost link now leaves nothing to send but the option
+        // that is on.
+        conn.hl2ClockLinkLostForTest();
+        QVERIFY(!conn.hl2ClockIncompleteForTest(false));
+        conn.simulateDataFlowingForTest();
+        QCOMPARE(drainClockWrites(io), k10MhzEnable);
+    }
+
+    // A later list of the same kind that is dropped keeps its flag, even
+    // when an earlier list of that kind is answered afterwards.
+    void droppedListNotClearedByEarlierAnswer()
+    {
+        P1RadioConnection conn;
+        IoBoardHl2 io;
+        setUpHl2(conn, io);
+        conn.simulateDataFlowingForTest();
+        conn.setHl2Clock(false, true, 116000);        // queued whole
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        QCOMPARE(drainClockWrites(io).size(), std::size_t(10));   // and gone
+        fillQueue(io);
+        conn.setHl2Clock(false, true, 24576);         // attempt 1, no room
+        for (int i = 0; i < 48; ++i) {
+            conn.hl2ClockPumpForTest();
+        }
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("clock chip I2C writes timed out")));
+        conn.hl2ClockPumpForTest();                    // attempt 50: dropped
+        QCOMPARE(conn.hl2ClockPendingForTest(), 0);
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
+        radioAnswers(conn);
+        QVERIFY(conn.hl2ClockIncompleteForTest(false));
     }
 
     // The I/O board poll waits while clock writes are pending, as mi0bot

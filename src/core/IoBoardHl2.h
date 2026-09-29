@@ -255,6 +255,10 @@ public:
     // writer that finds the queue full reads it to tell a queue that is
     // draining from one that has stopped.
     quint64 i2cDequeuedCount() const;
+    // How many transactions have gone into the queue since it was made. A
+    // writer reads it after its last write: once i2cDequeuedCount() reaches
+    // it, that write has left the queue.
+    quint64 i2cEnqueuedCount() const;
 
     // ── Pending-read FIFO ──
     // Mi0bot tracks one in-flight read at a time (IoBoardHl2.cs:142-143

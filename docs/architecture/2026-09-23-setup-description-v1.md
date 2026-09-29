@@ -643,7 +643,8 @@ transmit hardware settings. In the desktop's order:
 - `hardware.hl2Io.txLatency`, TX buffer latency, integer 0..70 ms, default 20.
 - `hardware.hl2Io.pttHang`, PTT hang, integer 0..30 ms, default 12.
 - `hardware.hl2Io.cl2Enable`, Enable CL2, toggle, default off.
-- `hardware.hl2Io.cl2Freq`, CL2 frequency, integer 1..200 MHz, default 116.
+- `hardware.hl2Io.cl2Freq`, CL2 frequency, integer 1..200 MHz, default 116
+  at version 16; decimal, step 0.1, 3 decimals from version 17 (below).
 - `hardware.hl2Io.ext10MHz`, External 10 MHz reference, toggle, default off.
 - `hardware.hl2Io.disconnectReset`, Reset on Ethernet disconnect, toggle.
 - `hardware.hl2Io.psSync`, Disable power supply sync, toggle.
@@ -667,15 +668,20 @@ trunk's own next version lands first. `hardware.hl2Io.cl2Enable`,
 `hardware.hl2Io.cl2Freq` and `hardware.hl2Io.ext10MHz` carry
 `requiresDescriptionVersion:17`, no `availability`, and the tooltips "Enable
 frequency output on CL2", "Output frequency on CL2 output" and "Enable
-external 10 MHz input on CL1". Labels, bindings, ranges, defaults and the
-gate are unchanged. The frequency row also carries one closed dependency,
+external 10 MHz input on CL1". The frequency row becomes `kind:"decimal"`,
+1..200 MHz, `step` 0.1, `decimals` 3, as the desktop's box holds three
+decimal places; its value is the stored text, such as "116" or "24.576".
+Labels, bindings, the other ranges, defaults and the gate are unchanged. The
+frequency row also carries one closed dependency,
 `"enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]}`: the row is
 enabled only while the row of this description bound to `hl2/cl2Enable`
 holds on, as the desktop disables the frequency box while Enable CL2 is off.
 Hardware accepts `enabledWhen` only on that exact row. A peer declaring
 V16 receives Hardware at version 16 with the three version 16 rows, closed
 with the old reason, in place of the version 17 rows; the six other rows
-are unchanged. No new wire field or verb is defined.
+are unchanged. Its frequency row stays `kind:"integer"` and closed, so it
+can show a value such as "24.576" set from the desktop or a version 17
+peer, but never write one. No new wire field or verb is defined.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
