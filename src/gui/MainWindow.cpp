@@ -392,6 +392,12 @@
 //               moves this window's RX (bottom bar, flag focus) without
 //               moving the active or transmit slice. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 15 fix round 1: the container
+//               slice buttons refuse a slice this window listens to with
+//               the RX applet's reason (sliceChangeRefusal, both window
+//               kinds); the hosting select fallback reaches a listened slice
+//               as its RX (setActiveRxFor). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1650,25 +1656,67 @@ bool MainWindow::sliceShownInWindow(int sliceId) const
     return false;
 }
 
-void MainWindow::refreshRxAppletSlices()
+StationServer* MainWindow::sliceAccessServer() const
 {
-    if (!m_rxApplet || !m_radioModel) { return; }
-    // Who controls each slice, as the chooser and the flags say it.
-    QList<SliceChooser::Row> rows;
-    StationServer* server = desktopHosting() && m_desktopStationController
+    return desktopHosting() && m_desktopStationController
         ? m_desktopStationController->server() : nullptr;
+}
+
+StationClient* MainWindow::sliceAccessClient() const
+{
     const bool remoteShared = !desktopHosting() && m_stationClient
         && m_stationClient->remoteDevices() && m_stationClient->remoteSliceAccessAvailable();
-    if (server) {
-        rows = SliceChooser::rowsForHostingDesktop(*m_radioModel, *server);
-    } else if (remoteShared) {
-        rows = SliceChooser::rowsForRemoteWindow(*m_radioModel, m_stationClient->sliceAccess(),
-                                                 *m_stationClient->remoteDevices());
-    }
+    return remoteShared ? m_stationClient : nullptr;
+}
+
+namespace {
+
+// Who controls each slice, as the chooser and the flags say it.
+QHash<int, VfoWidget::SliceAccess> windowSliceAccess(const QList<SliceChooser::Row>& rows)
+{
     QHash<int, VfoWidget::SliceAccess> access;
     for (const SliceChooser::Row& row : rows) {
         access.insert(row.sliceId, SliceChooser::flagAccessFor(row));
     }
+    return access;
+}
+
+QList<SliceChooser::Row> windowSliceRows(RadioModel& model, StationServer* server,
+                                         StationClient* client)
+{
+    if (server) { return SliceChooser::rowsForHostingDesktop(model, *server); }
+    if (client) {
+        return SliceChooser::rowsForRemoteWindow(model, client->sliceAccess(),
+                                                 *client->remoteDevices());
+    }
+    return {};
+}
+
+} // namespace
+
+QString MainWindow::sliceChangeRefusal(int sliceId) const
+{
+    if (!m_radioModel) { return QString(); }
+    // The RX applet's rule: a slice this window listens to (another device,
+    // the Core's own window or nobody controls it) is held with that reason.
+    const QList<SliceChooser::Row> rows =
+        windowSliceRows(*m_radioModel, sliceAccessServer(), sliceAccessClient());
+    for (const SliceChooser::Row& row : rows) {
+        if (row.sliceId != sliceId) { continue; }
+        const VfoWidget::SliceAccess access = SliceChooser::flagAccessFor(row);
+        return access.state == VfoWidget::SliceAccess::State::Listening
+            ? access.heldReason : QString();
+    }
+    return QString();
+}
+
+void MainWindow::refreshRxAppletSlices()
+{
+    if (!m_rxApplet || !m_radioModel) { return; }
+    const bool remoteShared = sliceAccessClient() != nullptr;
+    const QList<SliceChooser::Row> rows =
+        windowSliceRows(*m_radioModel, sliceAccessServer(), sliceAccessClient());
+    const QHash<int, VfoWidget::SliceAccess> access = windowSliceAccess(rows);
     // Ruling U7: a tab for each slice this window controls, and for each
     // slice it listens to that it shows.
     QVector<SliceModel*> tabs;
@@ -2557,6 +2605,11 @@ void MainWindow::wireHostingSlices()
     });
 }
 
+void MainWindow::dropHostingSliceActionsForTest()
+{
+    m_hostingSlices.reset();
+}
+
 bool MainWindow::selectSliceForWindow(int sliceId)
 {
     if (!m_radioModel) { return false; }
@@ -2571,9 +2624,19 @@ bool MainWindow::selectSliceForWindow(int sliceId)
         disconnect(answer);
         return accepted;
     }
-    return desktopHosting()
-        ? m_radioModel->setActiveSliceByIdFor(SliceOwnership::stationDevice(), sliceId)
-        : m_radioModel->setActiveSliceById(sliceId);
+    if (desktopHosting()) {
+        // Slice control plan Task 15 fix round 1: the station device's
+        // select as the hosting path runs it (SliceAccessController::
+        // selectRx): any live slice it listens to becomes its RX, and one
+        // it may change also its active slice.
+        SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        if (!ownership || !ownership->isLive(sliceId)
+            || !ownership->isListening(SliceOwnership::stationDevice(), sliceId)) {
+            return false;
+        }
+        return m_radioModel->setActiveRxFor(SliceOwnership::stationDevice(), sliceId);
+    }
+    return m_radioModel->setActiveSliceById(sliceId);
 }
 
 void MainWindow::addSliceForWindow(const QString& panId)
@@ -2964,8 +3027,13 @@ void MainWindow::ensureRemoteSession()
             }
         });
         if (SliceAccessMirror* access = m_stationClient->sliceAccess()) {
+            // Slice control plan Task 15 fix round 1: a container's slice
+            // buttons follow the change of control, as the flag and tabs do.
             connect(access, &SliceAccessMirror::changed, this,
-                    [this](int) { refreshSliceChooser(); });
+                    [this](int) {
+                refreshSliceChooser();
+                refreshContainerControls();
+            });
         }
         if (RemoteDevicesState* devices = m_stationClient->remoteDevices()) {
             connect(devices, &RemoteDevicesState::markersChanged, this,
@@ -6302,6 +6370,9 @@ void MainWindow::buildUI()
             }
         };
         hooks.desktopHosting = [this] { return desktopHosting(); };
+        // Slice control plan Task 15 fix round 1: a slice this window
+        // listens to refuses the slice buttons with the RX applet's reason.
+        hooks.sliceRefusal = [this](int sliceId) { return sliceChangeRefusal(sliceId); };
         hooks.desktopMoxOn = [this] {
             return desktopOwnsTransmit() && m_radioModel->moxController()
                 && m_radioModel->moxController()->isMox();

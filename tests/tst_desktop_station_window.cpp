@@ -8,7 +8,9 @@
 #include "core/safety/TransmitHolder.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
+#include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
+#include "gui/meters/MeterWidget.h"
 #include "gui/meters/OtherButtonItem.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
@@ -730,6 +732,135 @@ private slots:
         QCOMPARE(applet->slice(), a);
         QVERIFY(!applet->isListening());
         QCOMPARE(dashboard->slice(), a);
+        controller.stop();
+    }
+
+    // Slice control plan Task 15 fix round 1: a container set to a slice
+    // this window listens to refuses Mute (and the other slice buttons)
+    // with the RX applet's reason, naming the device that controls it.
+    void hostContainerOnAListenedSliceRefusesMute()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(a && b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        DeviceSessionRegistry::Entry phone;
+        phone.deviceId = QByteArrayLiteral("phone-device-id-for-rx-applet-01");
+        phone.kind = DeviceSessionRegistry::Kind::Paired;
+        phone.name = QStringLiteral("Living room iPhone");
+        phone.shortName = QStringLiteral("iPhone");
+        phone.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(phone, &phoneSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        auto* manager = window.findChild<ContainerManager*>();
+        QVERIFY(manager);
+        ContainerWidget* container =
+            manager->createContainer(bId + 1, DockMode::Floating);  // slice B
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+
+        // The button follows the change of control with no other refresh.
+        using Id = OtherButtonItem::ButtonId;
+        QVERIFY(buttons->isButtonAvailable(Id::Mute));
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        ownership->setOwner(bId, phone.deviceId);
+        QVERIFY(ownership->isListening(station, bId));
+        const bool mutedBefore = b->muted();
+        QSignalSpy muted(b, &SliceModel::mutedChanged);
+        QVERIFY(!buttons->isButtonAvailable(Id::Mute));
+        const QString reason = buttons->buttonUnavailableReason(buttons->indexOf(Id::Mute));
+        QCOMPARE(reason, QStringLiteral("Living room iPhone controls this slice"));
+        emit container->otherButtonClicked(int(Id::Mute));
+        QCOMPARE(b->muted(), mutedBefore);
+        QCOMPARE(muted.count(), 0);
+
+        ownership->setOwner(bId, station);
+        QVERIFY(buttons->isButtonAvailable(Id::Mute));
+        controller.stop();
+    }
+
+    // Slice control plan Task 15 fix round 1: without the hosting slice
+    // requests (the fallback path), a tab click still reaches a listened
+    // slice as this window's RX without moving its active slice, and
+    // reaches the slice it controls.
+    void hostTabFallbackReachesAListenedSlice()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        SliceModel* a = model->sliceById(aId);
+        SliceModel* b = model->sliceById(bId);
+        QVERIFY(a && b);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        DeviceSessionRegistry::Entry phone;
+        phone.deviceId = QByteArrayLiteral("phone-device-id-for-rx-applet-01");
+        phone.kind = DeviceSessionRegistry::Kind::Paired;
+        phone.name = QStringLiteral("Living room iPhone");
+        phone.shortName = QStringLiteral("iPhone");
+        phone.deviceKind = QStringLiteral("phone");
+        QCOMPARE(server->deviceSessions()->admit(phone, &phoneSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        ownership->setOwner(bId, phone.deviceId);
+        QVERIFY(ownership->isListening(station, bId));
+
+        window.dropHostingSliceActionsForTest();
+        RxApplet* applet = window.findChild<RxApplet*>();
+        QVERIFY(applet);
+        QToolButton* tabA = sliceTabFor(*applet, QLatin1Char('A'));
+        QToolButton* tabB = sliceTabFor(*applet, QLatin1Char('B'));
+        QVERIFY(tabA && tabB);
+        const int activeBefore = ownership->activeFor(station);
+        QCOMPARE(activeBefore, aId);
+
+        tabB->click();
+        QCOMPARE(ownership->activeRxFor(station), bId);
+        QCOMPARE(ownership->activeFor(station), activeBefore);
+        QCOMPARE(applet->slice(), b);
+        QVERIFY(applet->isListening());
+
+        tabA->click();
+        QCOMPARE(ownership->activeRxFor(station), aId);
+        QCOMPARE(ownership->activeFor(station), aId);
+        QCOMPARE(applet->slice(), a);
+        QVERIFY(!applet->isListening());
         controller.stop();
     }
 

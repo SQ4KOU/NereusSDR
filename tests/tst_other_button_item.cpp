@@ -39,6 +39,11 @@
 //                                    setting through the dispatcher's
 //                                    hooks. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 15 fix round
+//                                    1: a slice another device controls
+//                                    refuses the slice buttons with the
+//                                    window's reason. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -425,6 +430,47 @@ private slots:
         QVERIFY(!modes.isButtonAvailable(0));
         f.dispatcher->applySliceAvailability(&modes, kSliceA);
         QVERIFY(modes.isButtonAvailable(0));
+    }
+
+    // Slice control plan Task 15 fix round 1: a slice another device
+    // controls refuses every slice button with the window's reason (the
+    // one the RX applet shows), in a remote window as in a hosting one.
+    // Mute on that slice changes nothing.
+    void aSliceAnotherDeviceControlsRefusesItsButtons()
+    {
+        Fixture f;
+        const QString held = QStringLiteral("iPad controls this slice");
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.sliceRefusal = [&held](int sliceId) {
+            return sliceId == 0 ? held : QString();
+        };
+        hooks.spectrumFor = [&f](SliceModel* s) -> SpectrumWidget* {
+            return s == f.a ? &f.spectrumA : (s == f.b ? &f.spectrumB : nullptr);
+        };
+        ContainerButtonDispatcher dispatcher(&f.model, std::move(hooks));
+
+        const bool mutedBefore = f.a->muted();
+        QSignalSpy muted(f.a, &SliceModel::mutedChanged);
+        QVERIFY(dispatcher.sliceFor(kSliceA) == nullptr);
+        OtherButtonItem item;
+        dispatcher.apply(&item, kSliceA);
+        for (Id id : {Id::Anf, Id::Snb, Id::Mute, Id::Bin, Id::PeakHold, Id::Ctun}) {
+            QVERIFY(!item.isButtonAvailable(id));
+            QCOMPARE(item.buttonUnavailableReason(item.indexOf(id)), held);
+            QCOMPARE(dispatcher.click(id, kSliceA), held);
+        }
+        QCOMPARE(f.a->muted(), mutedBefore);
+        QCOMPARE(muted.count(), 0);
+        QVERIFY(!f.a->anfEnabled());
+        QCOMPARE(dispatcher.clickBand(uiIndexFromBand(Band::Band40m), kSliceA), held);
+        QCOMPARE(bandFromFrequency(f.a->frequency()), Band::Band20m);
+        ModeButtonItem modes;
+        dispatcher.applySliceAvailability(&modes, kSliceA);
+        QVERIFY(!modes.isButtonAvailable(0));
+
+        // Slice B, which this window controls, still mutes.
+        QVERIFY(dispatcher.click(Id::Mute, kSliceB).isEmpty());
+        QVERIFY(f.b->muted());
     }
 
     // ── Transmit and global buttons ─────────────────────────────────────

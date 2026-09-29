@@ -39,6 +39,11 @@
 //               controller's release checks name mayChange. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 15 fix round 1: the hosting
+//               desktop's policy site is stationControlsSlice, which
+//               desktopSliceAllowed calls (moved in Task 11). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -768,7 +773,11 @@ private slots:
             {"src/core/TciServer.cpp", "TciServer::desktopSliceForReceiver", policy},
             {"src/gui/containers/ContainerButtonDispatcher.cpp", "ContainerButtonDispatcher::sliceFor",
              policy},
-            {"src/gui/MainWindow.cpp", "MainWindow::desktopSliceAllowed", policy},
+            // Slice control plan Task 11 moved the hosting desktop's check
+            // into stationControlsSlice; desktopSliceAllowed goes through it.
+            {"src/gui/MainWindow.cpp", "MainWindow::stationControlsSlice", policy},
+            {"src/gui/MainWindow.cpp", "MainWindow::desktopSliceAllowed",
+             {QStringLiteral("stationControlsSlice(")}},
             {"src/gui/MainWindow.cpp", "MainWindow::refreshDesktopStationState",
              {QStringLiteral("desktopSliceAllowed(")}},
         };

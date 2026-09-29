@@ -57,6 +57,11 @@
 //   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 15:
 //                windowRxSlice, refreshRxAppletSlices, sliceShownInWindow.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 15 fix round
+//                1: sliceAccessServer, sliceAccessClient,
+//                sliceChangeRefusal (the container buttons' refusal),
+//                dropHostingSliceActionsForTest.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 10: the
 //                hosting desktop's slice requests run as the station device
 //                (m_hostingSlices, hostingSlices(), selectSliceForWindow,
@@ -273,6 +278,9 @@ public:
     void refreshDesktopStationState();
     FftEnginePool* fftEnginePoolForTest() const { return m_fftEnginePool; }
     int miniProducerCountForTest() const { return int(m_miniProducers.size()); }
+    // Slice control plan Task 15 fix round 1: drops the hosting slice
+    // requests so a test reaches selectSliceForWindow's fallback path.
+    void dropHostingSliceActionsForTest();
 
     // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
     // before main() by tests/TestSandboxInit.cpp), false in the app. A test
@@ -1214,6 +1222,14 @@ private:
     // controls it; the applet binds windowRxSlice() with its access.
     void refreshRxAppletSlices();
     bool sliceShownInWindow(int sliceId) const;
+    // Slice control plan Task 15 fix round 1: the server this window hosts
+    // and the Core link it shares slices over (each null when it does not),
+    // from which the chooser, the flags and the RX applet say who controls
+    // each slice; and why this window may not change a slice, as the RX
+    // applet says it (empty when it may). The container buttons ask it.
+    class StationServer* sliceAccessServer() const;
+    class StationClient* sliceAccessClient() const;
+    QString sliceChangeRefusal(int sliceId) const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
     void requestDesktopTransmit(bool tune, bool on);
