@@ -34,7 +34,7 @@ void KeyboardShortcutsPage::buildUI()
 
     // Table placeholder
     m_shortcutTableLabel = new QLabel(
-        QStringLiteral("The shortcut list is not built yet"), group);
+        QStringLiteral("The shortcut list is not available in NereusSDR"), group);
     m_shortcutTableLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_shortcutTableLabel->setAlignment(Qt::AlignCenter);
     m_shortcutTableLabel->setMinimumHeight(180);

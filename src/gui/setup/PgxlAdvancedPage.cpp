@@ -329,7 +329,7 @@ void PgxlAdvancedPage::updateOperateButton()
     m_operateBtn->setToolTip(!connected ? tr("The Power Genius is not connected.")
                              : onAir ? RadioModel::onAirReason()
                              : tuning ? RadioModel::tunerTuningReason()
-                             : unconfirmed ? tr("The amplifier has not reported operate yet. Put it in standby.")
+                             : unconfirmed ? tr("The amplifier has not reported operate. Put it in standby.")
                              : faulted ? tr("The amplifier reports a fault. Put it in standby.")
                              : operating ? tr("Put the Power Genius in standby.")
                                          : tr("Put the Power Genius in operate."));

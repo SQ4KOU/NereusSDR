@@ -620,10 +620,10 @@ QString RemoteTelemetryController::detailText() const
             .arg(remoteAudioDelayText(*delay.estimate));
         const QString delivery = remoteAudioDeliveryText(*delay.estimate);
         text << (delivery.isEmpty()
-            ? tr("Delivery delay: not measured yet.")
+            ? tr("Delivery delay: not measured.")
             : tr("Delivery delay: %1, from the Core's audio to this computer's player, before the speaker queue.").arg(delivery));
     } else {
-        text << tr("Audio delay: not measured yet. It needs audio playing and answers from the Core.");
+        text << tr("Audio delay: not measured. It needs audio playing and answers from the Core.");
     }
     // Fix wave M1: "discarded before playback" is the connect-time backlog
     // trimmed before anything was heard; the receiver keeps it out of
@@ -643,20 +643,20 @@ QString RemoteTelemetryController::detailText() const
     // U+00A0 between each number and its unit keeps them on one line.
     text << (p.arrivalJitterMs
         ? tr("Arrival jitter: %1\u00A0ms, measured on this computer.").arg(qRound(*p.arrivalJitterMs))
-        : tr("Arrival jitter: not measured yet."));
+        : tr("Arrival jitter: not measured."));
     text << (p.expectedPackets > 0
         ? tr("Missing packets: %1 of %2, sequence numbers never received.")
               .arg(p.missingPackets).arg(p.expectedPackets)
-        : tr("Missing packets: none received yet."));
+        : tr("Missing packets: none received."));
     text << tr("Gaps filled: %1, concealed 40\u00A0ms intervals.").arg(p.concealedPackets);
     text << (p.speakerQueuedMs
         ? tr("Speaker buffer: %1\u00A0ms, audio queued for this computer's speaker, not total delay.")
               .arg(qRound(*p.speakerQueuedMs))
-        : tr("Speaker buffer: not measured yet."));
+        : tr("Speaker buffer: not measured."));
     text << (p.reorderQueuedMs
         ? tr("Reorder buffer: %1\u00A0ms on this computer, packets held so that late arrivals play in order.")
               .arg(qRound(*p.reorderQueuedMs))
-        : tr("Reorder buffer: not measured yet."));
+        : tr("Reorder buffer: not measured."));
     // R-R3-21: the adaptive hold behind the reorder buffer.
     if (p.jitterHoldMs) {
         text << tr("Network buffer: %1\u00A0ms on this computer, how long arriving audio waits for late packets; it deepens after late packets and eases back when the link is steady.")
@@ -672,7 +672,7 @@ QString RemoteTelemetryController::detailText() const
     text << (p.driftRatio
         ? tr("Clock drift: %1\u00A0parts per million, the rate correction this computer applies to match the Core's audio clock.")
               .arg(qRound((*p.driftRatio - 1.0) * 1'000'000.0))
-        : tr("Clock drift: not measured yet."));
+        : tr("Clock drift: not measured."));
     text << tr("Sent does not prove delivered. Gaps filled and drops before encoding are events, not a packet-loss percentage.");
     return text.join(QLatin1Char('\n'));
 }

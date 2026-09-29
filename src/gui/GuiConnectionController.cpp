@@ -393,7 +393,7 @@ ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint
         row.state = tr("Saved, ready to connect");
     } else if (oneClickPairs(advertised)) {
         // iPhone app Task 18: an unclaimed Core pairs with one click.
-        row.state = tr("Not paired yet");
+        row.state = tr("Not paired");
         row.pairable = true;
         row.connectable = false;
     } else if (takesNewDevices(advertised)) {
@@ -423,7 +423,7 @@ QString GuiConnectionController::lanCoreNextStep(const StationLanAnnouncement& a
     // iPhone app Task 18: what to do next depends on whether the Core takes
     // new devices.
     if (oneClickPairs(advertised)) {
-        return tr("No device has paired with this Core yet. Select Pair to pair this computer with it.");
+        return tr("No device has paired with this Core. Select Pair to pair this computer with it.");
     }
     if (takesNewDevices(advertised)) {
         return tr("This Core pairs with its code. Select Pair and type the code the Core shows.");
@@ -432,7 +432,7 @@ QString GuiConnectionController::lanCoreNextStep(const StationLanAnnouncement& a
         // Part C follow-up (R-IOS-08): the branch lanCoreRow() gives
         // "Pairing is closed on the Core". Unclaimed, its pairing closed
         // after too many wrong codes, and only the Core's console reopens it.
-        return tr("No device has paired with this Core yet. Its pairing closed after too many wrong codes. Run nereusd pairing open on the Core's computer to open it again.");
+        return tr("No device has paired with this Core. Its pairing closed after too many wrong codes. Run nereusd pairing open on the Core's computer to open it again.");
     }
     if (advertised.schema >= kStationLanAnnouncementSchema2) {
         return tr("This Core is paired with other devices. Open pairing on the Core, or on a device paired with it, then add it by code.");
@@ -694,7 +694,7 @@ void GuiConnectionController::showDetails(const QString& key)
             if (key == QStringLiteral("lan:") + endpoint.key()) {
                 const auto& advertised = endpoint.announcement;
                 const QString next = lanCoreNextStep(advertised);
-                m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\n%4")
+                m_selector->setNotice(tr("Core seen on this network, not verified: %1\nAddress: %2\nRadio MAC: %3\n%4")
                     .arg(advertised.displayName(), endpointText(endpoint.url()),
                          advertised.radioMac, next));
                 return;

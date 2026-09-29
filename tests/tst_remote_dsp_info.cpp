@@ -346,7 +346,7 @@ private slots:
             return nullptr;
         }();
         QVERIFY(label);
-        QCOMPARE(label->text(), QStringLiteral("Time to last change: none yet"));
+        QCOMPARE(label->text(), QStringLiteral("Time to last change: none"));
 
         emit core->dspChangeMeasured(37);
         QCOMPARE(core->dspOptionsLastApplyMs(), 37);

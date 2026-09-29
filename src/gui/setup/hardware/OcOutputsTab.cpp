@@ -142,7 +142,7 @@ OcOutputsTab::OcOutputsTab(RadioModel* model, QWidget* parent)
     {
         auto* vhfLayout = new QVBoxLayout(m_vhfTab);
         auto* placeholder = new QLabel(
-            tr("Open collector outputs for transverter bands are not built yet."), m_vhfTab);
+            tr("Open collector outputs for transverter bands are not available in NereusSDR."), m_vhfTab);
         placeholder->setAlignment(Qt::AlignCenter);
         placeholder->setStyleSheet(QStringLiteral(
             "color: rgba(255,255,255,0.5); font-style: italic;"));

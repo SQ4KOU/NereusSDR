@@ -668,7 +668,7 @@ void TstRemotePaPages::newReasonsArePlain()
              QStringLiteral("Unavailable"), QStringLiteral("From the Core"),
              QStringLiteral("PA Status, from the Core"),
              QStringLiteral("This Core does not send this reading. Updating the Core may help."),
-             QStringLiteral("Not measured yet"),
+             QStringLiteral("Not measured"),
              QStringLiteral("Expected a boolean TX inhibit observation.")}) {
         QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
     }

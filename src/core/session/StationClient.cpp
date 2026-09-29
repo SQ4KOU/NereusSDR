@@ -6657,7 +6657,7 @@ QString StationClient::band2mUnavailableReason() const
 
 QString StationClient::station2mUnavailableReason()
 {
-    return QStringLiteral("This Core does not have the 2 m band yet. Updating the Core adds it.");
+    return QStringLiteral("This Core does not have the 2 m band. Updating the Core adds it.");
 }
 
 bool StationClient::remoteCtunAvailable() const

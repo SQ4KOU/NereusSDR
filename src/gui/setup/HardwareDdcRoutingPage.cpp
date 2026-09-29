@@ -61,7 +61,7 @@ HardwareDdcRoutingPage::HardwareDdcRoutingPage(RadioModel* model, QWidget* paren
         QStringLiteral("NereusSDR picks the radio receiver (DDC) for each slice "
                        "from its band and sample rate. The choices below are "
                        "saved for each radio, but they do not change which "
-                       "receiver or ADC serves a slice yet."),
+                       "receiver or ADC serves a slice."),
         group);
     intro->setWordWrap(true);
     if (groupLayout) {

@@ -686,7 +686,7 @@ void DspOptionsPage::buildUI()
     // Task 4.6 subscribes to RadioModel::dspChangeMeasured(qint64).
     // Placeholder text shown until the first rebuild occurs.
     // =========================================================================
-    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none yet"), this);
+    m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none"), this);
     m_timeToLastChangeLabel->setStyleSheet(QStringLiteral("color: #888;"));
 
     // Follows RadioModel::dspOptionsLastApplyMs: the elapsed milliseconds

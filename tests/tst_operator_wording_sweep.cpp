@@ -1092,20 +1092,20 @@ private slots:
         } sites[] = {
             {"src/core/safety/BandPlanGuard.cpp", true,
              {"coming in Phase", "RX/TX band mismatch \u2014"},
-             {"CW transmit is not available yet", "FM transmit is not available yet",
-              "DRM transmit is not available yet",
+             {"CW transmit is not available", "FM transmit is not available",
+              "DRM transmit is not available",
               "RX/TX band mismatch: cross-band TX disabled"}},
             {"src/gui/applets/TxApplet.cpp", true,
              {"coming in Phase"},
-             {"CW transmit is not available yet", "FM transmit is not available yet",
-              "DRM transmit is not available yet"}},
+             {"CW transmit is not available", "FM transmit is not available",
+              "DRM transmit is not available"}},
             {"src/gui/MainWindow.cpp", false,
              {"Phase 3F closeout:", "AntennaSwitchToast surface",
               "TxBoundConfirmDialog surface", "conflict-detection state machine ships"},
              {"Show the antenna switch notice to see how it looks. No antenna changes, "
-              "and antennas do not switch on their own yet.",
+              "and antennas do not switch on their own.",
               "Show the question asked before the transmit antenna moves, to see how it "
-              "looks. No antenna changes, and adding a slice does not ask it yet."}},
+              "looks. No antenna changes, and adding a slice does not ask it."}},
             {"src/gui/setup/hardware/AntennaAlexAntennaControlTab.cpp", true,
              {"TxBoundConfirmDialog before", "toast on RX-only switch", "refuse add-slice"},
              {"Auto - resolve it when safe, and show a notice when only a receive antenna "
@@ -1124,7 +1124,7 @@ private slots:
              {"design spec", "reserved for future phase"}, {}},
             {"src/gui/diagnostics/DiagnosticsPhaseHPages.cpp", true,
              {"QT_LOGGING_TO_CONSOLE", "follow-up phase"},
-             {"The 60 s history graph is not shown yet.",
+             {"The 60 s history graph is not available.",
               "Connect a radio to export its settings."}},
             // Fix wave item 2: the VFO flag's tooltips carried Thetis and
             // WDSP file cites and WDSP function names; the cites are
@@ -1248,7 +1248,7 @@ private slots:
               "\u26a0  Disabled. Enable it to route audio"}},
             {"src/gui/setup/DspOptionsPage.cpp",
              {"Sets the internal buffer size. Larger values give sharper filters but add latency.",
-              "Time to last change: none yet"}},
+              "Time to last change: none"}},
             {"src/gui/setup/hardware/OcOutputsHfTab.cpp",
              {"OC pin %1: shows the last OC byte sent to the radio"}},
             {"src/models/RadioModel.cpp",
@@ -1716,6 +1716,77 @@ private slots:
         QVERIFY2(reasons > 0, "no description reasons read");
         failures.removeDuplicates();
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QLatin1Char('\n'))));
+    }
+
+    // Floor rule (operator, 2026-09-29): no user-visible string says "yet",
+    // anywhere. Every literal a user can read in the sources (log lines
+    // left out), every sentence and short line the reason table shows, and
+    // every Setup description field. The reason table's left column is wire
+    // text an older Core sends; it is checked by what it is shown as.
+    void noUserVisibleStringSaysYet()
+    {
+        static const QRegularExpression promise(QStringLiteral("\\byet\\b"),
+                                                QRegularExpression::CaseInsensitiveOption);
+        QStringList failures;
+
+        // The reason table, as shown.
+        QStringList reasons = OperatorReasonText::knownReasons();
+        reasons += OperatorReasonText::tableKeys();
+        int shownReasons = 0;
+        for (const QString& reason : std::as_const(reasons)) {
+            QStringList shown{OperatorReasonText::forDisplay(reason)};
+            shown += OperatorReasonText::shortFormsForDisplay(reason);
+            shown += OperatorReasonText::panNextStep(reason);
+            for (const QString& text : std::as_const(shown)) {
+                ++shownReasons;
+                if (promise.match(text).hasMatch()) {
+                    failures << QStringLiteral("reason table: %1 -> %2").arg(reason, text);
+                }
+            }
+        }
+        QVERIFY2(shownReasons > 300, qPrintable(QString::number(shownReasons)));
+
+        // Every literal a user can read in the sources.
+        int literals = 0;
+        QDirIterator it(sourcePath("src"), {QStringLiteral("*.cpp"), QStringLiteral("*.h"),
+                                            QStringLiteral("*.mm")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString path = it.next();
+            if (path.endsWith(QLatin1String("/OperatorReasonText.cpp"))) {
+                continue;  // Its left column is wire text; its words are checked above.
+            }
+            if (path.endsWith(QLatin1String("/NyiOverlay.cpp"))) {
+                // The placeholder marker tst_no_placeholder_marks must find; its one
+                // user, the Diversity applet, is never built into a window.
+                continue;
+            }
+            const QString file = QDir(QStringLiteral(NEREUS_SOURCE_DIR)).relativeFilePath(path);
+            for (const QString& text : userVisibleLiterals(path)) {
+                ++literals;
+                if (promise.match(text).hasMatch()) {
+                    failures << QStringLiteral("%1: %2").arg(file, text);
+                }
+            }
+        }
+        QVERIFY2(literals > 20000, qPrintable(QString::number(literals)));
+
+        // Every Setup description field, from the resources and the service.
+        const QList<QPair<QString, QString>> described = allSetupDescriptionText();
+        QVERIFY2(described.size() > 2000, qPrintable(QString::number(described.size())));
+        for (const auto& [where, text] : described) {
+            if (promise.match(text).hasMatch()) {
+                failures << QStringLiteral("%1: %2").arg(where, text);
+            }
+        }
+
+        failures.removeDuplicates();
+        // QtTest cuts a long message short; each failure gets its own line.
+        for (const QString& failure : std::as_const(failures)) {
+            qWarning().noquote() << failure;
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(QString::number(failures.size())
+                                                + QStringLiteral(" strings say \"yet\"")));
     }
 
     void desktopTooltipsAndTextNameNoInternals()

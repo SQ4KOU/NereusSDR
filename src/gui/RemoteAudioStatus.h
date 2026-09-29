@@ -152,8 +152,8 @@ RemoteReceiverAudioNote remoteReceiverAudioNote(const RemoteAudioStatus& status,
 /// the audio quality and its reason (only when the Core offers the choice
 /// or Lossless was chosen, so an older Core's section reads as before),
 /// codec, output, then four measurement lines (arrival jitter, missing
-/// packets, gaps filled, speaker buffer) each showing "not measured yet" (or
-/// "none received yet" for missing packets) until playback has a value. The
+/// packets, gaps filled, speaker buffer) each showing "not measured" (or
+/// "none received" for missing packets) until playback has a value. The
 /// four measurement lines are omitted together when status.state is
 /// NotConnected, MutedHere or RadioOffline. Numbers are integers; jitter and
 /// the speaker buffer are rounded.
@@ -174,7 +174,7 @@ QString remoteAudioDelayText(const AudioDelayEstimate& estimate);
 /// empty when not measured.
 QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate);
 /// With delay.measurable and a health section, a line "Audio delay: ..."
-/// (or "Audio delay: not measured yet") follows the speaker buffer line.
+/// (or "Audio delay: not measured") follows the speaker buffer line.
 /// R-R3-43: then, for each of status.receivers, a line "Receiver B for
 /// apps: ..." with its state (and the quality it runs, or why it stopped),
 /// and while it is receiving a line with its measured arrival jitter,

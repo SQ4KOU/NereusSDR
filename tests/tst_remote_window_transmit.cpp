@@ -625,7 +625,7 @@ private slots:
         QVERIFY(!window.mox->isEnabled());
         QVERIFY(!window.container.stateOf(ContainerButtonDispatcher::Id::Mox, 0).available);
         QCOMPARE(window.container.stateOf(ContainerButtonDispatcher::Id::Mox, 0).reason,
-                 QStringLiteral("Remote transmit controls are not available from this Core yet."));
+                 QStringLiteral("Remote transmit controls are not available from this Core."));
         // Even reached around the disabled button, the press stays here.
         QSignalSpy rejected(h.remote.moxController(), &MoxController::moxRejected);
         h.remote.setMoxFromButton(true);
@@ -708,8 +708,8 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(refusedCodes.count(), 1, 5000);
         QCOMPARE(refusedCodes.first().at(1).toString(), QStringLiteral("micNotReady"));
         QCOMPARE(refusedCodes.first().at(0).toString(),   // fix wave M4
-                 QStringLiteral("No sound has reached the Core from this device's microphone "
-                                "yet. Wait a moment and try again."));
+                 QStringLiteral("No sound has reached the Core from this device's microphone. "
+                                "Wait a moment and try again."));
         QVERIFY(!h.station.moxController()->isMox());
         QVERIFY(!remoteMedia.micUplinkRunning());
         h.client.disconnectFromStation(QStringLiteral("test complete"));

@@ -3471,7 +3471,7 @@ void RemotePeripheralsTest::remoteWindowSwitchesTheTunerThroughTheCore()
     QVERIFY(tuner.listen());
     TunerApplet applet(&window, window.tunerModel());
     const QString transmitReason =
-        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        QStringLiteral("Remote transmit controls are not available from this Core.");
     applet.setTransmitPermitted(false, transmitReason);   // do not key in this fixture
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
 
@@ -3622,7 +3622,7 @@ void RemotePeripheralsTest::olderCoreLeavesTheTunerSwitchesGreyed()
     model.attachStation(&link);
     TunerApplet applet(&model, model.tunerModel());
     const QString transmitReason =
-        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        QStringLiteral("Remote transmit controls are not available from this Core.");
     applet.setTransmitPermitted(false, transmitReason);
     for (int port = 1; port <= 3; ++port) {
         QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
@@ -3652,7 +3652,7 @@ void RemotePeripheralsTest::operateFromStandbyIsOneRequestOnACoreThatAppliesItWh
         model.attachStation(&link);
         TunerApplet applet(&model, model.tunerModel());
         applet.setTransmitPermitted(
-            false, QStringLiteral("Remote transmit controls are not available from this Core yet."));
+            false, QStringLiteral("Remote transmit controls are not available from this Core."));
         model.reportStationLinkStateChanged();
         QVERIFY(applet.operateButtonForTesting()->isEnabled());
         QVERIFY(!model.tunerModel()->isOperate());
@@ -3701,7 +3701,7 @@ void RemotePeripheralsTest::remoteWindowMovesTheTunerRelaysThroughTheCore()
     QVERIFY(tuner.listen());
     TunerApplet applet(&window, window.tunerModel());
     const QString transmitReason =
-        QStringLiteral("Remote transmit controls are not available from this Core yet.");
+        QStringLiteral("Remote transmit controls are not available from this Core.");
     applet.setTransmitPermitted(false, transmitReason);   // as MainWindow does
     QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
 
@@ -3956,7 +3956,7 @@ void RemotePeripheralsTest::remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore(
     QVERIFY(tuner.listen());
     TunerApplet applet(&window, window.tunerModel(), nullptr, window.tuneMemoryStore());
     applet.setTransmitPermitted(
-        false, QStringLiteral("Remote transmit controls are not available from this Core yet."));
+        false, QStringLiteral("Remote transmit controls are not available from this Core."));
     cw.connect(this);
     QTRY_VERIFY(cw.client.tgxlFullControlAvailable());
     window.reportStationLinkStateChanged();

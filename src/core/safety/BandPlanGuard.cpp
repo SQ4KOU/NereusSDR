@@ -845,13 +845,13 @@ BandPlanGuard::checkMoxAllowed(Region region, std::int64_t freqHz,
             // DRM has its own sentence, so a DRM refusal names DRM.
             case DSPMode::CWL:
             case DSPMode::CWU:
-                reason = QStringLiteral("CW transmit is not available yet");
+                reason = QStringLiteral("CW transmit is not available");
                 break;
             case DSPMode::FM:
-                reason = QStringLiteral("FM transmit is not available yet");
+                reason = QStringLiteral("FM transmit is not available");
                 break;
             case DSPMode::DRM:
-                reason = QStringLiteral("DRM transmit is not available yet");
+                reason = QStringLiteral("DRM transmit is not available");
                 break;
             default:
                 reason = QStringLiteral("Mode not supported for TX");

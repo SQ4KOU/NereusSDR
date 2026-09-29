@@ -1297,7 +1297,7 @@ void CatMidiControlPage::buildUI()
 
     // Mapping table placeholder label
     m_mappingLabel = new QLabel(
-        QStringLiteral("The MIDI mapping table is not built yet"), group);
+        QStringLiteral("The MIDI mapping table is not available in NereusSDR"), group);
     m_mappingLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_mappingLabel->setAlignment(Qt::AlignCenter);
     m_mappingLabel->setMinimumHeight(80);

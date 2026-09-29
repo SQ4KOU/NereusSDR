@@ -1839,7 +1839,7 @@ private slots:
             QVERIFY2(!wordingProblemIn(QString::fromUtf8(old)).isEmpty(), old);
         }
         for (const char* plain :
-             {"PureSignal cannot be run from a remote window yet.",
+             {"PureSignal cannot be run from a remote window.",
               "The Core could not read this request.",
               "Update this app to set up the Power Genius on this Core.",
               "Choose an SWR protection limit from %1 to %2.",

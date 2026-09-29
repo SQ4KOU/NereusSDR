@@ -384,7 +384,7 @@ QByteArray SupportBundle::buildCoreBundle(const Inputs& inputs)
     QJsonObject telemetry = inputs.telemetry;
     if (telemetry.isEmpty()) {
         telemetry.insert(QStringLiteral("note"),
-                         QStringLiteral("The Core had measured no telemetry yet."));
+                         QStringLiteral("The Core had measured no telemetry."));
     }
     zip.add(QStringLiteral("telemetry.json"),
             QJsonDocument(sanitizedJsonValue(telemetry, inputs.knownSecrets).toObject())

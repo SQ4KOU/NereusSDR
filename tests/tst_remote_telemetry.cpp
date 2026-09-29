@@ -124,13 +124,13 @@ private slots:
         QVERIFY(controller.bannerText().contains(QStringLiteral("Radio ↓12.5 ↑0.1 Mbps")));
         QVERIFY(controller.bannerText().contains(QStringLiteral("Core RTT 83 ms")));
         // R-R3-23 Task 4: unmeasured wording before any packet/health values.
-        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: not measured yet.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: none received yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: not measured.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: none received.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: not measured yet.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: not measured.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: not measured.")));
         // R-R3-07: drift is absent until the receiver measures it.
-        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured.")));
 
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
@@ -226,7 +226,7 @@ private slots:
         now += 1000;
         playback.driftRatio.reset();
         controller.sampleNow();
-        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured.")));
 
         client.disconnectFromStation(QStringLiteral("operator disconnect"));
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
@@ -934,7 +934,7 @@ private slots:
     }
 
     // R-R3-35: the measured audio delay. A Core that cannot measure it keeps
-    // today's sentence; one that can says "not measured yet" until a figure
+    // today's sentence; one that can says "not measured" until a figure
     // exists, then shows the delay with its accuracy and the delivery delay
     // separately. Echoes stopping and a reconnect both leave gaps in the
     // history, and the periodic diagnostics line carries the figures.
@@ -981,7 +981,7 @@ private slots:
         controller.sampleNow();
         QVERIFY(!controller.detailText().contains(olderCoreLine));
         QVERIFY(controller.detailText().contains(QStringLiteral(
-            "Audio delay: not measured yet. It needs audio playing and answers from the Core.")));
+            "Audio delay: not measured. It needs audio playing and answers from the Core.")));
 
         // Measured: the delay with its accuracy, the device not counted, and
         // delivery on its own line.
@@ -1014,7 +1014,7 @@ private slots:
         delay.estimate.reset();
         now += 1000;
         controller.sampleNow();
-        QVERIFY(controller.detailText().contains(QStringLiteral("Audio delay: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Audio delay: not measured.")));
         delay.estimate = AudioDelayEstimate{90.0, 0.5, true, 60.0, 0.5};
         now += 1000;
         controller.sampleNow();

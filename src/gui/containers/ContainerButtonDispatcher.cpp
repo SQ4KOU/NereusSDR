@@ -182,7 +182,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
                                                            : QString();
     if (remoteReason.isEmpty()) {
         remoteReason = m_hooks.remoteTransmitReason.isEmpty()
-            ? QStringLiteral("Remote transmit controls are not available from this Core yet.")
+            ? QStringLiteral("Remote transmit controls are not available from this Core.")
             : m_hooks.remoteTransmitReason;
     }
 
@@ -280,7 +280,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::Mnf:
         st.on = m_model->notchModel() && m_model->notchModel()->globalEnabled();
         if (!m_model->notchModel()) {
-            unavailable(QStringLiteral("Notches are not ready yet."));
+            unavailable(QStringLiteral("Notches are not ready."));
         }
         break;
     case Id::PeakHold:
@@ -316,7 +316,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         const QString reason = m_hooks.displayDuplexReason ? m_hooks.displayDuplexReason()
                                                            : QString();
         if (!m_hooks.setDisplayDuplex) {
-            unavailable(QStringLiteral("This button does nothing yet."));
+            unavailable(QStringLiteral("This button does nothing at the moment."));
         } else if (!reason.isEmpty()) {
             unavailable(reason);
         }
@@ -332,7 +332,7 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         break;
     default:
         // Hidden until its feature is built (OtherButtonItem).
-        unavailable(QStringLiteral("This button does nothing yet."));
+        unavailable(QStringLiteral("This button does nothing at the moment."));
         break;
     }
     return st;

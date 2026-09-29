@@ -951,6 +951,22 @@ private slots:
         }
     }
 
+    // The stream channels setting is built (codex/tci-settings-real): the
+    // Channels control on Setup > Audio > TCI is shown and usable, in a local
+    // window and a remote one.
+    void builtTciStreamChannelsControlIsUsable()
+    {
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            Hosts hosts(sessions, remote);
+            QWidget* page = hosts.page(QStringLiteral("TCI"));
+            QVERIFY2(page != nullptr, remote ? "remote" : "local");
+            QVERIFY2(usableShown(page, QStringLiteral("tciStreamChannelsCombo")),
+                     remote ? "remote" : "local");
+        }
+        QVERIFY(sessions.replace({}, false));
+    }
+
     // Nothing on the list shows, in a local window or a remote one.
     void noUnbuiltSurfaceShowsInLocalOrRemoteWindows()
     {

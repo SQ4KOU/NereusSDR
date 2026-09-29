@@ -492,10 +492,10 @@ private slots:
             "Audio quality: Lossless\n"
             "Audio format: Lossless stereo, 16-bit, 1536\u00A0kbit/s, 4\u00A0ms packets\n"
             "Output: System default (selected)\n"
-            "Arrival jitter: not measured yet\n"
-            "Missing packets: none received yet\n"
+            "Arrival jitter: not measured\n"
+            "Missing packets: none received\n"
             "Gaps filled: 0\n"
-            "Speaker buffer: not measured yet"));
+            "Speaker buffer: not measured"));
 
         // Refused by the Core's own setting: Opus runs, and it says why.
         status.runningProfile = RemoteAudioProfile::Opus;
@@ -707,8 +707,8 @@ private slots:
         delay.measurable = true;
         const QString steady = formatRemoteAudioDetails(status, playback, delay);
         QVERIFY(steady.contains(QStringLiteral(
-            "Speaker buffer: not measured yet\nNetwork buffer: 80\u00A0ms on this computer\n"
-            "Audio delay: not measured yet")));
+            "Speaker buffer: not measured\nNetwork buffer: 80\u00A0ms on this computer\n"
+            "Audio delay: not measured")));
         playback.jitterHoldMs = 372.4;
         const QString deepened = formatRemoteAudioDetails(status, playback);
         QVERIFY(deepened.contains(QStringLiteral(
@@ -738,7 +738,7 @@ private slots:
         RemoteAudioDelayReport delay;
         delay.measurable = true;
         QCOMPARE(formatRemoteAudioDetails(status, playback, delay),
-                 today + QStringLiteral("\nAudio delay: not measured yet"));
+                 today + QStringLiteral("\nAudio delay: not measured"));
         delay.estimate = AudioDelayEstimate{85.4, 0.4, false, 60.0, 0.4};
         QCOMPARE(formatRemoteAudioDetails(status, playback, delay),
                  today + QStringLiteral("\nAudio delay: 85\u00A0ms \u00B1 1\u00A0ms, "
@@ -1139,7 +1139,7 @@ private slots:
                 "Output: System default (selected)"));
         }
 
-        // Unmeasured values: "not measured yet" / "none received yet", and
+        // Unmeasured values: "not measured" / "none received", and
         // a Core that negotiated detail but has no encoder in the current
         // (disabled) context reads "Audio is off".
         {
@@ -1152,10 +1152,10 @@ private slots:
                 "Remote audio: Waiting for audio from Core\n"
                 "Audio format: Audio is off\n"
                 "Output: System default (selected)\n"
-                "Arrival jitter: not measured yet\n"
-                "Missing packets: none received yet\n"
+                "Arrival jitter: not measured\n"
+                "Missing packets: none received\n"
                 "Gaps filled: 0\n"
-                "Speaker buffer: not measured yet"));
+                "Speaker buffer: not measured"));
         }
 
         // NotConnected and RadioOffline also omit health, like MutedHere.
