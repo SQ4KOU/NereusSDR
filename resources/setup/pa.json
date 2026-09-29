@@ -1,12 +1,37 @@
 {
-  "version": 5,
+  "version": 13,
   "category": {"id": "pa", "title": "PA", "where": "station", "coverage": "partial"},
-  "pages": [{
+  "pages": [
+  {
     "id": "pa.gain", "title": "PA Gain", "where": "station", "coverage": "partial",
-    "sections": [{"title": "PA Gain", "controls": [
-      {"id": "pa.gain.bypassPaSettings", "label": "Bypass ANAN PA Settings", "tooltip": "Bypass the board-specific PA calibration table (BP PA). When checked, the generic Hermes gain row is used instead of the ANAN-G2E factory row. Useful if you have not yet calibrated PA gain for this radio.", "kind": "toggle", "binding": {"property": {"object": "transmit", "name": "paSettingsBypass"}}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}}
-    ]}]
-  }, {
+    "sections": [
+      {"title": "PA Gain", "controls": [
+        {"id": "pa.gain.bypassPaSettings", "label": "Bypass ANAN PA Settings", "tooltip": "Bypass the board-specific PA calibration table (BP PA). When checked, the generic Hermes gain row is used instead of the ANAN-G2E factory row. Useful if you have not yet calibrated PA gain for this radio.", "kind": "toggle", "binding": {"property": {"object": "transmit", "name": "paSettingsBypass"}}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}}
+      ]}
+    ]
+  },
+  {
+    "id": "pa.wattMeter", "title": "Watt Meter", "where": "mixed",
+    "sections": [
+      {"title": "PA Forward Power Calibration", "controls": [
+        {"id": "pa.wattMeter.calPoint1", "label": "Point 1", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint1"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint2", "label": "Point 2", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint2"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint3", "label": "Point 3", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint3"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint4", "label": "Point 4", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint4"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint5", "label": "Point 5", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint5"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint6", "label": "Point 6", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint6"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint7", "label": "Point 7", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint7"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint8", "label": "Point 8", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint8"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint9", "label": "Point 9", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint9"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"},
+        {"id": "pa.wattMeter.calPoint10", "label": "Point 10", "tooltip": "", "kind": "decimal", "binding": {"radioSetting": "paCalibration/calPoint10"}, "applies": "live", "gate": {"capability": "transmitSettingsVersion", "min": 6, "offAir": true}, "requiresDescriptionVersion": 13, "rangeSource": "board.paCalibration", "unit": "W"}
+      ]},
+      {"title": "PA Values", "controls": [
+        {"id": "pa.wattMeter.showPaValues", "label": "Show PA Values page", "tooltip": "Toggle visibility of the PA Values page in Setup navigation.", "kind": "toggle", "binding": {"phone": "display/showPaValuesPage"}, "applies": "live", "requiresDescriptionVersion": 13, "default": true},
+        {"id": "pa.wattMeter.resetPaValues", "label": "Reset PA Values", "tooltip": "Reset peak/min tracking on the PA Values page.", "kind": "button", "binding": {"phone": "resetPaValues"}, "applies": "live", "requiresDescriptionVersion": 13}
+      ]}
+    ]
+  },
+  {
     "id": "pa.values", "title": "PA Values", "where": "station", "coverage": "partial",
     "sections": [
       {"title": "Power", "controls": [
@@ -18,14 +43,20 @@
       ]},
       {"title": "PA Telemetry", "controls": [
         {"id": "pa.values.paCurrent", "label": "PA Current:", "tooltip": "", "kind": "readout", "binding": {"telemetry": {"object": "radio", "name": "paCurrentAmps"}}, "applies": "live", "gate": {"capability": "stationTelemetryVersion", "min": 4}, "requiresDescriptionVersion": 5, "decimals": 2, "unit": "A"},
+        {"id": "pa.values.paTemperature", "label": "PA Temperature:", "tooltip": "", "kind": "readout", "binding": {"telemetry": {"object": "radio", "name": "paTemperatureCelsius"}}, "applies": "live", "gate": {"capability": "stationTelemetryVersion", "min": 4}, "requiresDescriptionVersion": 13, "decimals": 1, "unit": "°C", "temperatureUnit": "PaTempUnit"},
         {"id": "pa.values.dcVoltage", "label": "DC Voltage:", "tooltip": "", "kind": "readout", "binding": {"telemetry": {"object": "radio", "name": "supplyVolts"}}, "applies": "live", "gate": {"capability": "stationTelemetryVersion", "min": 4}, "requiresDescriptionVersion": 5, "decimals": 1, "unit": "V"},
         {"id": "pa.values.forwardVoltage", "label": "FWD Voltage:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "forwardAdcVolts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 2}, "decimals": 2, "unit": "V"},
-        {"id": "pa.values.reflectedVoltage", "label": "REV Voltage:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedAdcVolts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 2}, "decimals": 2, "unit": "V"}
+        {"id": "pa.values.reflectedVoltage", "label": "REV Voltage:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedAdcVolts"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 2}, "decimals": 2, "unit": "V"},
+        {"id": "pa.values.adcOverload", "label": "ADC Overload:", "tooltip": "", "kind": "readout", "binding": {"adcOverload": {"object": "stepAtt"}}, "applies": "live", "gate": {"capability": "radioHardwareVersion", "min": 1}, "requiresDescriptionVersion": 13}
       ]},
       {"title": "Raw ADC Values", "controls": [
         {"id": "pa.values.forwardAdc", "label": "FWD ADC:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "forwardAdcRaw"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 0, "unit": ""},
         {"id": "pa.values.reflectedAdc", "label": "REV ADC:", "tooltip": "", "kind": "readout", "binding": {"property": {"object": "txState", "name": "reflectedAdcRaw"}}, "applies": "live", "gate": {"capability": "txReadingsVersion", "min": 1}, "decimals": 0, "unit": ""}
+      ]},
+      {"title": "Reset", "controls": [
+        {"id": "pa.values.resetPeakMin", "label": "Reset Peak/Min", "tooltip": "Reset running peak/min trackers to current values.", "kind": "button", "binding": {"phone": "resetPaValues"}, "applies": "live", "requiresDescriptionVersion": 13}
       ]}
     ]
-  }]
+  }
+  ]
 }

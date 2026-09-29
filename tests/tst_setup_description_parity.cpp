@@ -21,6 +21,11 @@
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/TxProfileSetupPage.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
+#include "gui/setup/hardware/CalibrationTab.h"
+#include "gui/setup/hardware/Hl2IoBoardTab.h"
+#include "gui/setup/hardware/RadioInfoTab.h"
+#include "core/PaCalProfile.h"
+#include "core/RadioDiscovery.h"
 #include "gui/setup/PaSetupPages.h"
 #include "gui/widgets/MetricLabel.h"
 #include "gui/setup/TestTwoTonePage.h"
@@ -40,6 +45,7 @@
 #include <QDoubleSpinBox>
 #include <QLineEdit>
 #include <QGroupBox>
+#include <QHostAddress>
 #include <QFormLayout>
 #include <QLabel>
 #include <QRadioButton>
@@ -640,7 +646,8 @@ private slots:
         page.applyCapabilityVisibility(g2e.boardCapabilities());
         SetupDescriptionService service;
         service.setRadioContext(g2e.boardCapabilities(), g2e.hardwareProfile().model);
-        const QJsonArray pages = service.category(QStringLiteral("pa")).value("pages").toArray();
+        // Version 13 added the Watt Meter page; this reads version 12's.
+        const QJsonArray pages = projectedCategory(service.pa(), 12).value("pages").toArray();
         QCOMPARE(pages.size(), 2);
         const QJsonObject gain = pages.first().toObject();
         QCOMPARE(gain.value("id"), QJsonValue("pa.gain"));
@@ -664,7 +671,7 @@ private slots:
         PaGainByBandPage otherPage(&other);
         otherPage.applyCapabilityVisibility(other.boardCapabilities());
         service.setRadioContext(other.boardCapabilities(), other.hardwareProfile().model);
-        QCOMPARE(service.category(QStringLiteral("pa")).value("pages").toArray().size(), 1);
+        QCOMPARE(projectedCategory(service.pa(), 12).value("pages").toArray().size(), 1);
         QVERIFY(otherPage.bypassPaSettingsCheckForTest()->isHidden());
     }
 
@@ -675,7 +682,8 @@ private slots:
         PaValuesPage page(&model);
         SetupDescriptionService service;
         service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
-        const QJsonObject pa = service.category(QStringLiteral("pa"));
+        // Version 12's rows; describedV13PaRowsMatchNativePages has 13's.
+        const QJsonObject pa = projectedCategory(service.pa(), 12);
         QVERIFY(!pa.isEmpty());
         const QJsonArray sections = pa.value("pages").toArray().first().toObject()
             .value("sections").toArray();
@@ -725,6 +733,154 @@ private slots:
         QCOMPARE(raw.size(), 2);
         model.transmitModel().setPower(37);
         QCOMPARE(page.driveTextForTest(), QStringLiteral("37 W"));
+    }
+
+    // Version 13 (R-R3-49, R-IOS-18): the PA rows match the Watt Meter and
+    // PA Values pages widget for widget.
+    void describedV13PaRowsMatchNativePages()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        // As the Core seeds a radio's table on connect (RadioModel), so the
+        // page builds the board class's ten points.
+        model.calibrationControllerMutable().setPaCalProfile(
+            PaCalProfile::defaults(paCalBoardClassFor(HPSDRModel::ANAN_G2)));
+        PaWattMeterPage watt(&model);
+        watt.applyCapabilityVisibility(model.boardCapabilities());
+        PaValuesPage values(&model);
+        values.applyCapabilityVisibility(model.boardCapabilities());
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        const QJsonObject pa = projectedCategory(service.pa(), 13);
+        int compared = 0;
+        for (const QJsonValue& rawPage : pa.value("pages").toArray()) {
+            const QJsonObject page = rawPage.toObject();
+            QWidget& nativePage = page.value("id") == QJsonValue("pa.wattMeter")
+                ? static_cast<QWidget&>(watt) : static_cast<QWidget&>(values);
+            for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+                const QJsonObject section = rawSection.toObject();
+                for (const QJsonValue& raw : section.value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value("requiresDescriptionVersion") != QJsonValue(13)) {
+                        continue;
+                    }
+                    const QString id = control.value("id").toString();
+                    auto* widget = qobject_cast<QWidget*>(bySetupId(nativePage, id));
+                    QVERIFY2(widget != nullptr, qPrintable(id + " has no desktop widget"));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                    const QString kind = control.value("kind").toString();
+                    if (kind == "button" || kind == "toggle") {
+                        auto* button = qobject_cast<QAbstractButton*>(widget);
+                        QVERIFY2(button != nullptr, qPrintable(id));
+                        QCOMPARE(button->text(), control.value("label").toString());
+                        // The page's own controls sit outside any group.
+                        QVERIFY(qobject_cast<QGroupBox*>(widget->parentWidget()) == nullptr);
+                        if (kind == "toggle") {
+                            QCOMPARE(button->isChecked(), control.value("default").toBool());
+                        }
+                    } else {
+                        auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
+                        QVERIFY2(group != nullptr, qPrintable(id));
+                        QCOMPARE(group->title(), section.value("title").toString());
+                        auto* form = qobject_cast<QFormLayout*>(group->layout());
+                        QVERIFY(form != nullptr);
+                        auto* label = qobject_cast<QLabel*>(form->labelForField(widget));
+                        QVERIFY2(label != nullptr, qPrintable(id));
+                        QCOMPARE(label->text(), control.value("label").toString());
+                        if (kind == "decimal") {
+                            auto* spin = qobject_cast<QDoubleSpinBox*>(widget);
+                            QVERIFY2(spin != nullptr, qPrintable(id));
+                            QCOMPARE(spin->minimum(), control.value("min").toDouble());
+                            QCOMPARE(spin->maximum(), control.value("max").toDouble());
+                            QCOMPARE(spin->singleStep(), control.value("step").toDouble());
+                            QCOMPARE(spin->decimals(), control.value("decimals").toInt());
+                            QCOMPARE(spin->value(), control.value("default").toDouble());
+                            QCOMPARE(spin->suffix(), QStringLiteral(" ") + control.value("unit").toString());
+                        } else {
+                            QVERIFY2(qobject_cast<MetricLabel*>(widget) != nullptr, qPrintable(id));
+                        }
+                    }
+                    ++compared;
+                }
+            }
+        }
+        QCOMPARE(compared, 15);
+    }
+
+    // Version 13: Radio Info, TX Display Cal and the N2ADR switch match
+    // their Hardware Config tabs.
+    void describedV13HardwareRowsMatchNativeTabs()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::HERMESLITE);
+        RadioInfo info;
+        info.name = QStringLiteral("Bench HL2");
+        info.macAddress = QStringLiteral("00:1C:C0:A2:56:78");
+        info.address = QHostAddress(QStringLiteral("10.0.0.123"));
+        info.firmwareVersion = 73;
+        RadioInfoTab radioInfo(&model);
+        radioInfo.populate(info, model.boardCapabilities());
+        CalibrationTab calibration(&model);
+        Hl2IoBoardTab hl2(&model);
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model, info);
+        const QJsonObject hardware = projectedCategory(service.hardware(), 13);
+        int compared = 0;
+        for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
+            const QJsonObject page = rawPage.toObject();
+            QWidget* tab = page.value("id") == QJsonValue("hardware.radioInfo")
+                ? static_cast<QWidget*>(&radioInfo)
+                : page.value("id") == QJsonValue("hardware.calibration")
+                    ? static_cast<QWidget*>(&calibration) : static_cast<QWidget*>(&hl2);
+            for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+                const QJsonObject section = rawSection.toObject();
+                for (const QJsonValue& raw : section.value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    const QString id = control.value("id").toString();
+                    auto* widget = qobject_cast<QWidget*>(bySetupId(*tab, id));
+                    QVERIFY2(widget != nullptr, qPrintable(id + " has no desktop widget"));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                    const QString kind = control.value("kind").toString();
+                    if (kind == "readout") {
+                        auto* value = qobject_cast<QLabel*>(widget);
+                        QVERIFY2(value != nullptr, qPrintable(id));
+                        QCOMPARE(value->text(), control.value("value").toString());
+                    }
+                    if (kind == "button" || kind == "toggle") {
+                        auto* button = qobject_cast<QAbstractButton*>(widget);
+                        QVERIFY2(button != nullptr, qPrintable(id));
+                        QCOMPARE(button->text(), control.value("label").toString());
+                        if (id == QLatin1String("hardware.hl2Io.n2adrFilter")) {
+                            auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
+                            QVERIFY(group != nullptr);
+                            QCOMPARE(group->title(), section.value("title").toString());
+                        }
+                        ++compared;
+                        continue;
+                    }
+                    auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
+                    QVERIFY2(group != nullptr, qPrintable(id));
+                    QCOMPARE(group->title(), section.value("title").toString());
+                    auto* form = qobject_cast<QFormLayout*>(group->layout());
+                    QVERIFY(form != nullptr);
+                    auto* label = qobject_cast<QLabel*>(form->labelForField(widget));
+                    QVERIFY2(label != nullptr, qPrintable(id));
+                    QCOMPARE(label->text(), control.value("label").toString());
+                    if (kind == "decimal") {
+                        auto* spin = qobject_cast<QDoubleSpinBox*>(widget);
+                        QVERIFY2(spin != nullptr, qPrintable(id));
+                        QCOMPARE(spin->minimum(), control.value("min").toDouble());
+                        QCOMPARE(spin->maximum(), control.value("max").toDouble());
+                        QCOMPARE(spin->singleStep(), control.value("step").toDouble());
+                        QCOMPARE(spin->decimals(), control.value("decimals").toInt());
+                        QCOMPARE(spin->value(), control.value("default").toDouble());
+                    }
+                    ++compared;
+                }
+            }
+        }
+        // Radio Info's seven and its copy button, TX Display Cal, N2ADR.
+        QCOMPARE(compared, 10);
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()
@@ -824,7 +980,8 @@ private slots:
         AntennaAlexAntennaControlTab page(&radio);
         SetupDescriptionService service;
         service.setRadioContext(radio.boardCapabilities(), sku);
-        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        // Version 12's projection: version 13 added pages around Antenna / ALEX.
+        const QJsonObject hardware = projectedCategory(service.hardware(), 12);
         if (!radio.boardCapabilities().hasAlexFilters) {
             QVERIFY(hardware.isEmpty());
             return;
@@ -965,7 +1122,7 @@ private slots:
         service.setRadioContext(radio.boardCapabilities(), HPSDRModel::ANAN100);
         QVERIFY(service.revision() > before);
         QVERIFY(service.hardware() != oldDescription);
-        const QJsonArray described = controls(service.category(QStringLiteral("hardware")));
+        const QJsonArray described = controls(projectedCategory(service.hardware(), 12));
         const QJsonObject rx = described.last().toObject();
         QVERIFY(SetupDescriptionService::validateAntennaRowsTable(rx, HPSDRModel::ANAN100));
         auto* group = qobject_cast<QGroupBox*>(bySetupId(page,

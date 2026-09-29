@@ -117,6 +117,13 @@
 //                 RadioModel::paReadings() (the Core's in a remote window),
 //                 unavailable when absent. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-IOS-18: PA Values' temperature, ADC overload
+//                 and Reset Peak/Min, and the Watt Meter's Show PA Values
+//                 page and Reset PA Values carry their Setup description
+//                 ids; Show PA Values page now shows or hides the PA Values
+//                 page, as Thetis's chkPAValues does (found bug: nothing read
+//                 it). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -638,6 +645,10 @@ signals:
     /// From Thetis btnResetPAValues_Click handler at setup.cs:16346-16357
     /// [v2.10.3.13].
     void resetPaValuesRequested();
+
+    /// R-R3-49: "Show PA Values page" changed; SetupDialog shows or hides
+    /// the PA Values page (Thetis chkPAValues_CheckedChanged).
+    void showPaValuesPageChanged(bool shown);
 
 private:
     PaCalibrationGroup* m_paCalGroup{nullptr};

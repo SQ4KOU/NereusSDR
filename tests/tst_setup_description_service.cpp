@@ -4,6 +4,8 @@
 
 #include "core/setup/SetupDescriptionService.h"
 #include "core/BoardCapabilities.h"
+#include "core/PaCalProfile.h"
+#include "core/RadioInfoFacts.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/StationCapabilities.h"
@@ -19,6 +21,8 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
+#include <QFile>
+#include <QHostAddress>
 #include <QJsonDocument>
 #include <QScopeGuard>
 #include <QSet>
@@ -36,6 +40,97 @@ QJsonObject projectedCategory(const QString& description, int version)
 {
     return QJsonDocument::fromJson(
         SetupDescriptionService::fitCategoryForVersion(description, version).toUtf8()).object();
+}
+}
+
+namespace {
+// A category without its rows that need `version`, empty sections and pages
+// dropped, as an older peer's projection is built.
+QJsonObject withoutRowsOf(const QJsonObject& category, int version)
+{
+    QJsonArray pages;
+    for (const QJsonValue& rawPage : category.value("pages").toArray()) {
+        QJsonObject page = rawPage.toObject();
+        QJsonArray sections;
+        for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+            QJsonObject section = rawSection.toObject();
+            QJsonArray controls;
+            for (const QJsonValue& control : section.value("controls").toArray()) {
+                if (control.toObject().value("requiresDescriptionVersion") != QJsonValue(version)) {
+                    controls.append(control);
+                }
+            }
+            if (!controls.isEmpty()) {
+                section.insert("controls", controls);
+                sections.append(section);
+            }
+        }
+        if (!sections.isEmpty()) {
+            page.insert("sections", sections);
+            pages.append(page);
+        }
+    }
+    QJsonObject older = category;
+    older.insert("pages", pages);
+    return older;
+}
+
+QJsonObject pageById(const QJsonObject& category, const QString& id)
+{
+    for (const QJsonValue& page : category.value("pages").toArray()) {
+        if (page.toObject().value("id") == QJsonValue(id)) { return page.toObject(); }
+    }
+    return {};
+}
+
+QJsonArray rowsOf(const QJsonObject& page)
+{
+    QJsonArray rows;
+    for (const QJsonValue& section : page.value("sections").toArray()) {
+        for (const QJsonValue& control : section.toObject().value("controls").toArray()) {
+            rows.append(control);
+        }
+    }
+    return rows;
+}
+
+// The resource's own rows that need `version` (the form the Core validates).
+QList<QJsonObject> resourceRows(const QString& category, int version)
+{
+    QFile file(QStringLiteral(":/setup/%1.json").arg(category));
+    if (!file.open(QIODevice::ReadOnly)) { return {}; }
+    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+    QList<QJsonObject> rows;
+    for (const QJsonValue& page : root.value("pages").toArray()) {
+        for (const QJsonValue& row : rowsOf(page.toObject())) {
+            if (row.toObject().value("requiresDescriptionVersion") == QJsonValue(version)) {
+                rows.append(row.toObject());
+            }
+        }
+    }
+    return rows;
+}
+
+// Every single-field change of a closed row: each field removed, each
+// value replaced, and one field added.
+QList<QJsonObject> mutationsOf(const QJsonObject& row)
+{
+    QList<QJsonObject> changed;
+    for (auto it = row.constBegin(); it != row.constEnd(); ++it) {
+        QJsonObject removed = row;
+        removed.remove(it.key());
+        changed.append(removed);
+        QJsonObject replaced = row;
+        replaced.insert(it.key(), it.value().isString() ? QJsonValue(it.value().toString() + "x")
+                                  : it.value().isBool() ? QJsonValue(!it.value().toBool())
+                                  : it.value().isDouble() ? QJsonValue(it.value().toDouble() + 1)
+                                                          : QJsonValue(QStringLiteral("other")));
+        changed.append(replaced);
+    }
+    QJsonObject added = row;
+    added.insert("write", true);
+    changed.append(added);
+    return changed;
 }
 }
 
@@ -243,7 +338,9 @@ private slots:
         SetupDescriptionService service;
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
                                 HPSDRModel::HERMES);
-        const QJsonObject hardware = service.category(QStringLiteral("hardware"));
+        // Version 13 added pages before and after Antenna / ALEX; read the
+        // version 12 projection this test was written for.
+        const QJsonObject hardware = projectedCategory(service.hardware(), 12);
         QCOMPARE(hardware.value("version"), QJsonValue(6));
         const QJsonArray sections = hardware.value("pages").toArray().first().toObject()
             .value("sections").toArray();
@@ -266,7 +363,7 @@ private slots:
         }
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
                                 HPSDRModel::HERMESLITE);
-        QVERIFY(service.hardware().isEmpty());
+        QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.hardware(), 12).isEmpty());
     }
 
     void antennaRowsRejectChangedEnvelopeAndProjectSkuLabels()
@@ -275,7 +372,7 @@ private slots:
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
                                 HPSDRModel::HERMES);
         const auto tables = [&service] {
-            const QJsonArray controls = service.category(QStringLiteral("hardware"))
+            const QJsonArray controls = projectedCategory(service.hardware(), 12)
                 .value("pages").toArray().first().toObject().value("sections").toArray()
                 .first().toObject().value("controls").toArray();
             return std::pair{controls.at(controls.size() - 2).toObject(),
@@ -499,7 +596,8 @@ private slots:
         radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
         SetupDescriptionService service;
         service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
-        const QJsonObject pa = service.category(QStringLiteral("pa"));
+        // Version 13 added the Watt Meter page; read the version 12 projection.
+        const QJsonObject pa = projectedCategory(service.pa(), 12);
         const QJsonArray pages = pa.value("pages").toArray();
         QCOMPARE(pages.size(), 2);
         QCOMPARE(pages.first().toObject().value("id"), QJsonValue("pa.gain"));
@@ -546,13 +644,13 @@ private slots:
         sameBoard.showsBypassPaSettingsUi = false;
         service.setRadioContext(sameBoard, radio.hardwareProfile().model);
         QVERIFY(service.revision() > withGain);
-        const QJsonArray withoutGain = service.category(QStringLiteral("pa"))
+        const QJsonArray withoutGain = projectedCategory(service.pa(), 12)
             .value("pages").toArray();
         QCOMPARE(withoutGain.size(), 1);
         QCOMPARE(withoutGain.first().toObject().value("id"), QJsonValue("pa.values"));
         sameBoard.showsBypassPaSettingsUi = true;
         service.setRadioContext(sameBoard, radio.hardwareProfile().model);
-        QCOMPARE(service.category(QStringLiteral("pa")).value("pages").toArray().size(), 2);
+        QCOMPARE(projectedCategory(service.pa(), 12).value("pages").toArray().size(), 2);
         sameBoard.isRxOnlySku = true;
         service.setRadioContext(sameBoard, radio.hardwareProfile().model);
         QVERIFY(service.pa().isEmpty());
@@ -792,6 +890,270 @@ private slots:
         const QJsonObject noVolts = QJsonDocument::fromJson(
             SetupDescriptionService::fitCategoryForVersion(service.pa(), 5).toUtf8()).object();
         QCOMPARE(findControls(noVolts).size(), 10);
+    }
+
+    // Version 13 (R-R3-49, R-IOS-18): PA's Watt Meter page, PA Values'
+    // temperature, ADC overload and Reset Peak/Min; version 12 unchanged.
+    void paV13PublishesWattMeterTemperatureOverloadAndResets()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        const QJsonObject pa = projectedCategory(service.pa(), 13);
+        QCOMPARE(pa.value("version"), QJsonValue(13));
+        QStringList pageIds;
+        for (const QJsonValue& page : pa.value("pages").toArray()) {
+            pageIds << page.toObject().value("id").toString();
+        }
+        QCOMPARE(pageIds, (QStringList{"pa.wattMeter", "pa.values"}));
+
+        // The Watt Meter: the G2's ten points (the ANAN-100 class), each
+        // labelled and defaulted with its factory value and held to its own
+        // Thetis box, then the page's two local controls.
+        const QJsonObject watt = pageById(pa, "pa.wattMeter");
+        QVERIFY(!watt.contains("coverage"));
+        QCOMPARE(watt.value("where"), QJsonValue("mixed"));
+        const QJsonArray wattSections = watt.value("sections").toArray();
+        QCOMPARE(wattSections.size(), 2);
+        QCOMPARE(wattSections.at(0).toObject().value("title"),
+                 QJsonValue("PA Forward Power Calibration"));
+        QCOMPARE(wattSections.at(1).toObject().value("title"), QJsonValue("PA Values"));
+        const QJsonArray points = wattSections.at(0).toObject().value("controls").toArray();
+        QCOMPARE(points.size(), 10);
+        const double maxima[10] = {100, 100, 100, 100, 100, 100, 100, 100, 110, 120};
+        for (int i = 0; i < 10; ++i) {
+            const QJsonObject point = points.at(i).toObject();
+            const int n = i + 1;
+            QCOMPARE(point, (QJsonObject{
+                {"id", QStringLiteral("pa.wattMeter.calPoint%1").arg(n)},
+                {"label", QStringLiteral("%1 W").arg(n * 10)},
+                {"tooltip", ""}, {"kind", "decimal"},
+                {"binding", QJsonObject{{"radioSetting",
+                                         QStringLiteral("paCalibration/calPoint%1").arg(n)}}},
+                {"applies", "live"},
+                {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 6},
+                                     {"offAir", true}}},
+                {"requiresDescriptionVersion", 13}, {"unit", "W"},
+                {"min", 0}, {"max", maxima[i]}, {"step", 0.1}, {"decimals", 1},
+                {"default", n * 10.0}, {"boardClass", int(PaCalBoardClass::Anan100)}}));
+            QVERIFY(!point.value("gate").toObject().contains("transmit"));
+        }
+        const QJsonArray local = wattSections.at(1).toObject().value("controls").toArray();
+        QCOMPARE(local.size(), 2);
+        QCOMPARE(local.at(0).toObject().value("binding"),
+                 QJsonValue(QJsonObject{{"phone", "display/showPaValuesPage"}}));
+        QCOMPARE(local.at(0).toObject().value("default"), QJsonValue(true));
+        QCOMPARE(local.at(1).toObject().value("binding"),
+                 QJsonValue(QJsonObject{{"phone", "resetPaValues"}}));
+        QVERIFY(!local.at(1).toObject().contains("gate"));
+
+        // PA Values: temperature after current, ADC overload last, and the
+        // Reset Peak/Min action in its own section.
+        const QJsonObject values = pageById(pa, "pa.values");
+        const QJsonArray valueSections = values.value("sections").toArray();
+        QCOMPARE(valueSections.size(), 4);
+        QStringList telemetryIds;
+        for (const QJsonValue& row : valueSections.at(1).toObject().value("controls").toArray()) {
+            telemetryIds << row.toObject().value("id").toString();
+        }
+        QCOMPARE(telemetryIds, (QStringList{"pa.values.paCurrent", "pa.values.paTemperature",
+                                            "pa.values.dcVoltage", "pa.values.forwardVoltage",
+                                            "pa.values.reflectedVoltage",
+                                            "pa.values.adcOverload"}));
+        const QJsonObject temperature = valueSections.at(1).toObject().value("controls")
+            .toArray().at(1).toObject();
+        QCOMPARE(temperature.value("binding"), QJsonValue(QJsonObject{{"telemetry", QJsonObject{
+            {"object", "radio"}, {"name", "paTemperatureCelsius"}}}}));
+        QCOMPARE(temperature.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "stationTelemetryVersion"}, {"min", 4}}));
+        QCOMPARE(temperature.value("unit"), QJsonValue(QString::fromUtf8("\xC2\xB0""C")));
+        QCOMPARE(temperature.value("decimals"), QJsonValue(1));
+        QCOMPARE(temperature.value("temperatureUnit"), QJsonValue("PaTempUnit"));
+        const QJsonObject overload = valueSections.at(1).toObject().value("controls")
+            .toArray().last().toObject();
+        QCOMPARE(overload.value("binding"), QJsonValue(QJsonObject{{"adcOverload", QJsonObject{
+            {"object", "stepAtt"}}}}));
+        QCOMPARE(overload.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "radioHardwareVersion"}, {"min", 1}}));
+        QVERIFY(!overload.contains("decimals"));
+        QCOMPARE(valueSections.at(3).toObject().value("title"), QJsonValue("Reset"));
+        const QJsonObject reset = valueSections.at(3).toObject().value("controls")
+            .toArray().first().toObject();
+        QCOMPARE(reset.value("id"), QJsonValue("pa.values.resetPeakMin"));
+        QCOMPARE(reset.value("binding"), QJsonValue(QJsonObject{{"phone", "resetPaValues"}}));
+
+        // Every resource row is closed: exact, and any change is refused.
+        const QList<QJsonObject> rows = resourceRows(QStringLiteral("pa"), 13);
+        QCOMPARE(rows.size(), 15);
+        for (const QJsonObject& row : rows) {
+            QVERIFY2(SetupDescriptionService::validatePaV13Control(row),
+                     qPrintable(row.value("id").toString()));
+            QVERIFY(!SetupDescriptionService::validateHardwareV13Control(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validatePaV13Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+
+        // Older peers: exactly version 12's rows, version 5, 11 readouts.
+        for (int version = 5; version <= 12; ++version) {
+            const QJsonObject older = projectedCategory(service.pa(), version);
+            QCOMPARE(older.value("version"), QJsonValue(5));
+            QCOMPARE(older, [&] {
+                QJsonObject expected = withoutRowsOf(pa, 13);
+                expected.insert("version", 5);
+                return expected;
+            }());
+            QVERIFY(!QJsonDocument(older).toJson().contains("pa.wattMeter"));
+        }
+        QCOMPARE(projectedCategory(service.pa(), 14), pa);
+
+        // Each class has its own points; an unknown model has none, so the
+        // page keeps only its two local controls.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE);
+        const QJsonArray hl2 = pageById(projectedCategory(service.pa(), 13), "pa.wattMeter")
+            .value("sections").toArray().first().toObject().value("controls").toArray();
+        QCOMPARE(hl2.size(), 10);
+        QCOMPARE(hl2.first().toObject().value("label"), QJsonValue("1 W"));
+        QCOMPARE(hl2.at(8).toObject().value("max"), QJsonValue(11));
+        QCOMPARE(hl2.last().toObject().value("max"), QJsonValue(12));
+        QCOMPARE(hl2.last().toObject().value("boardClass"),
+                 QJsonValue(int(PaCalBoardClass::Anan10)));
+        RadioModel dle;
+        dle.setHpsdrModelForTest(HPSDRModel::ANAN8000D);
+        service.setRadioContext(dle.boardCapabilities(), HPSDRModel::ANAN8000D);
+        const QJsonArray big = pageById(projectedCategory(service.pa(), 13), "pa.wattMeter")
+            .value("sections").toArray().first().toObject().value("controls").toArray();
+        QCOMPARE(big.size(), 10);
+        QCOMPARE(big.at(4).toObject().value("label"), QJsonValue("100 W"));
+        QCOMPARE(big.at(4).toObject().value("max"), QJsonValue(140));
+        QCOMPARE(big.last().toObject().value("max"), QJsonValue(240));
+        service.setRadioContext(radio.boardCapabilities(), HPSDRModel::FIRST);
+        const QJsonObject unknown = pageById(projectedCategory(service.pa(), 13), "pa.wattMeter");
+        QCOMPARE(unknown.value("sections").toArray().size(), 1);
+        QCOMPARE(unknown.value("sections").toArray().first().toObject().value("title"),
+                 QJsonValue("PA Values"));
+    }
+
+    // Version 13: Hardware Config's Radio Info (the Core's radio, as the
+    // desktop tab shows it), TX Display Cal and the HL2's N2ADR switch.
+    void hardwareV13PublishesRadioInfoCalibrationAndN2adr()
+    {
+        RadioInfo info;
+        info.name = QStringLiteral("ANAN-100");
+        info.macAddress = QStringLiteral("00:1C:C0:A2:12:34");
+        info.address = QHostAddress(QStringLiteral("192.168.1.20"));
+        info.firmwareVersion = 32;
+        info.protocol = ProtocolVersion::Protocol1;
+        const BoardCapabilities hermes = BoardCapsTable::forBoard(HPSDRHW::Hermes);
+        SetupDescriptionService service;
+        service.setRadioContext(hermes, HPSDRModel::ANAN100, info);
+        const QJsonObject hardware = projectedCategory(service.hardware(), 13);
+        QCOMPARE(hardware.value("version"), QJsonValue(13));
+        QStringList pageIds;
+        for (const QJsonValue& page : hardware.value("pages").toArray()) {
+            pageIds << page.toObject().value("id").toString();
+        }
+        QCOMPARE(pageIds, (QStringList{"hardware.radioInfo", "hardware.antennaAlex",
+                                       "hardware.calibration"}));
+        const RadioInfoFacts facts = radioInfoFacts(info, hermes, HPSDRModel::ANAN100);
+        QCOMPARE(facts.board, QStringLiteral("ANAN-100"));
+        QCOMPARE(facts.firmware, QStringLiteral("32"));
+        const QJsonArray radioRows = rowsOf(pageById(hardware, "hardware.radioInfo"));
+        QCOMPARE(radioRows.size(), 8);
+        const QStringList fields{"board", "protocol", "adcCount", "maxRx", "firmware", "mac", "ip"};
+        const QStringList values{facts.board, facts.protocol, facts.adcCount, facts.maxRx,
+                                 facts.firmware, facts.mac, facts.ip};
+        for (int i = 0; i < fields.size(); ++i) {
+            const QJsonObject row = radioRows.at(i).toObject();
+            QCOMPARE(row.value("id"), QJsonValue("hardware.radioInfo." + fields.at(i)));
+            QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"radioInfo", fields.at(i)}}));
+            QCOMPARE(row.value("value"), QJsonValue(values.at(i)));
+            QVERIFY(!row.contains("gate"));
+        }
+        QCOMPARE(radioRows.at(6).toObject().value("value"), QJsonValue("192.168.1.20"));
+        const QJsonObject copy = radioRows.last().toObject();
+        QCOMPARE(copy.value("binding"), QJsonValue(QJsonObject{{"phone", "copySupportInfo"}}));
+        QCOMPARE(copy.value("copyText"), QJsonValue(facts.supportText()));
+        QVERIFY(copy.value("copyText").toString().startsWith("Board: ANAN-100\nProtocol: Protocol 1\n"));
+
+        const QJsonArray calibration = rowsOf(pageById(hardware, "hardware.calibration"));
+        QCOMPARE(calibration.size(), 1);
+        const QJsonObject offset = calibration.first().toObject();
+        QCOMPARE(offset.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                  "cal/txDisplayOffset"}}));
+        QCOMPARE(offset.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 8}}));
+        QCOMPARE(offset.value("min"), QJsonValue(-100));
+        QCOMPARE(offset.value("max"), QJsonValue(100));
+
+        // A radio that has reported nothing reads as the tab does.
+        const quint32 known = service.revision();
+        service.setRadioContext(hermes, HPSDRModel::ANAN100, RadioInfo{});
+        QVERIFY(service.revision() > known);
+        const QJsonArray blank = rowsOf(pageById(projectedCategory(service.hardware(), 13),
+                                                 "hardware.radioInfo"));
+        const QString dash = QString(QChar(0x2014));
+        QCOMPARE(blank.at(4).toObject().value("value"), QJsonValue(dash));
+        QCOMPARE(blank.at(5).toObject().value("value"), QJsonValue(dash));
+        QCOMPARE(blank.at(6).toObject().value("value"), QJsonValue(dash));
+        // The same radio again changes nothing.
+        service.setRadioContext(hermes, HPSDRModel::ANAN100, info);
+        const quint32 again = service.revision();
+        service.setRadioContext(hermes, HPSDRModel::ANAN100, info);
+        QCOMPARE(service.revision(), again);
+
+        // The HL2: no Antenna / ALEX, its I/O board's N2ADR switch last.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE, info);
+        const QJsonObject hl2 = projectedCategory(service.hardware(), 13);
+        pageIds.clear();
+        for (const QJsonValue& page : hl2.value("pages").toArray()) {
+            pageIds << page.toObject().value("id").toString();
+        }
+        QCOMPARE(pageIds, (QStringList{"hardware.radioInfo", "hardware.calibration",
+                                       "hardware.hl2Io"}));
+        const QJsonObject n2adr = rowsOf(pageById(hl2, "hardware.hl2Io")).first().toObject();
+        QCOMPARE(n2adr.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                 "hl2IoBoard/n2adrFilter"}}));
+        QCOMPARE(n2adr.value("valueEncoding"), QJsonValue(QJsonObject{{"true", "True"},
+                                                                      {"false", "False"}}));
+        QCOMPARE(n2adr.value("default"), QJsonValue(true));
+        QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(n2adr));
+        QJsonObject unencoded = n2adr;
+        unencoded.remove("valueEncoding");
+        QVERIFY(!SetupDescriptionService::validateSettingToggleEncoding(unencoded));
+        // Before 13 the HL2 still has no Hardware category.
+        for (int version = 1; version <= 12; ++version) {
+            QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.hardware(), version)
+                        .isEmpty());
+        }
+
+        // Every resource row is closed.
+        const QList<QJsonObject> rows = resourceRows(QStringLiteral("hardware"), 13);
+        QCOMPARE(rows.size(), 10);
+        for (const QJsonObject& row : rows) {
+            QVERIFY2(SetupDescriptionService::validateHardwareV13Control(row),
+                     qPrintable(row.value("id").toString()));
+            QVERIFY(!SetupDescriptionService::validatePaV13Control(row));
+            QVERIFY(!SetupDescriptionService::validateHardwarePropertyBinding(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateHardwareV13Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+
+        // Older peers on an ALEX board: exactly version 12's rows, version 6.
+        service.setRadioContext(hermes, HPSDRModel::ANAN100, info);
+        const QJsonObject current = projectedCategory(service.hardware(), 13);
+        for (int version = 6; version <= 12; ++version) {
+            QJsonObject expected = withoutRowsOf(current, 13);
+            expected.insert("version", 6);
+            QCOMPARE(projectedCategory(service.hardware(), version), expected);
+        }
+        QCOMPARE(projectedCategory(service.hardware(), 14), current);
     }
 
     void categoriesLoadAndMirrorAsStrings()
@@ -1148,7 +1510,9 @@ private slots:
     void hardwareScalarsProjectAndRejectUnsafeBindings()
     {
         SetupDescriptionService service;
-        QVERIFY(service.hardware().isEmpty());
+        // Version 13's Radio Info and Calibration pages are on every board;
+        // before 13 a board without ALEX filters has no Hardware category.
+        QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.hardware(), 12).isEmpty());
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
         const auto v1Hardware = [&service] {
             return QJsonDocument::fromJson(SetupDescriptionService::fitCategoryForVersion(
@@ -1244,8 +1608,8 @@ private slots:
 
         const quint32 beforeRetire = service.revision();
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::HermesLite));
-        QVERIFY(service.hardware().isEmpty());
-        QVERIFY(service.category(QStringLiteral("hardware")).isEmpty());
+        QVERIFY(SetupDescriptionService::fitCategoryForVersion(service.hardware(), 12).isEmpty());
+        QVERIFY(!service.hardware().contains(QStringLiteral("hardware.antennaAlex")));
         QVERIFY(service.revision() > beforeRetire);
         service.setBoardCapabilities(BoardCapsTable::forBoard(HPSDRHW::Hermes));
         QCOMPARE(v1Hardware(), hardware);
@@ -1564,13 +1928,15 @@ private slots:
             QVERIFY(!pa.isEmpty());
             const QJsonObject paObject = QJsonDocument::fromJson(pa.toUtf8()).object();
             QCOMPARE(paObject.value("version").toInt(),
-                     qMin(expected, 5));
-            QCOMPARE(paObject.value("pages").toArray().size(), 2);
+                     expected >= 13 ? 13 : qMin(expected, 5));
+            QCOMPARE(paObject.value("pages").toArray().size(), expected >= 13 ? 3 : 2);
             for (const QJsonValue& page : paObject.value("pages").toArray()) {
                 for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
                     for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
                         const QJsonObject control = raw.toObject();
-                        if (control.value("kind") == QJsonValue("readout")) {
+                        // Version 13's ADC overload is text (No / Yes (ADC n)).
+                        if (control.value("kind") == QJsonValue("readout")
+                            && control.value("id") != QJsonValue("pa.values.adcOverload")) {
                             QVERIFY(control.value("decimals").isDouble());
                         }
                     }
@@ -1626,7 +1992,8 @@ private slots:
         check(10, kSessionProtocolMinor, 10);
         check(11, kSessionProtocolMinor, 11);
         check(12, kSessionProtocolMinor, 12);
-        check(13, kSessionProtocolMinor, 12);
+        check(13, kSessionProtocolMinor, 13);
+        check(14, kSessionProtocolMinor, 13);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

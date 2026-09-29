@@ -209,6 +209,8 @@ private:
     // Forwards the caps struct to each PA page so page-level controls can
     // self-toggle (warning rows, banner labels).
     void applyPaVisibility(const BoardCapabilities& caps);
+    // R-R3-49: hide PA Values when Watt Meter > Show PA Values page is off.
+    void applyShowPaValuesPage();
 
     // ── Lazy page registry (issues #272 + #301) ───────────────────────────────
     //
@@ -426,6 +428,10 @@ public:
     // is realized -- call realizePageForTest("Watt Meter") first.
     PaWattMeterPage* paWattMeterPageForTest() const { return m_paWattMeterPage; }
     PaValuesPage*    paValuesPageForTest()    const { return m_paValuesPage;    }
+    // R-R3-49: whether the PA Values leaf is hidden (Watt Meter > Show PA
+    // Values page).
+    bool isPaValuesPageHiddenForTest() const { return m_paValuesItem && m_paValuesItem->isHidden(); }
+    void applyPaVisibilityForTest(const BoardCapabilities& caps) { applyPaVisibility(caps); }
 
     // #272 / #301 lazy-construction seams. Defined inline because
     // NEREUS_BUILD_TESTS is set on the test targets only, not on

@@ -36,6 +36,10 @@
 //                 Display Cal and Volts/Amps Calibration follow the transmit
 //                 settings gate instead of the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 (found bug): TX Display Cal holds Thetis's
+//                 -100..100 dB (was -50..50) and carries its Setup
+//                 description id (R-IOS-18). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -343,7 +347,12 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     auto* txDisplayForm  = new QFormLayout(txDisplayGroup);
 
     // Source: setup.cs:14325-14328 udTXDisplayCalOffset -> Display.TXDisplayCalOffset [@501e3f5]
-    m_txDisplayOffsetSpin = makeSpinBox(-50.0, 50.0, 0.0, 0.1, 1, txDisplayGroup);
+    // R-R3-49 (found bug): the range was -50..50; Thetis's box holds
+    // -100..100 in 0.1 dB steps, one decimal:
+    // From Thetis setup.designer.cs:11863 [v2.10.3.15] udTXDisplayCalOffset
+    //   DecimalPlaces = 1; Increment = 0.1; Maximum = 100; Minimum = -100
+    m_txDisplayOffsetSpin = makeSpinBox(-100.0, 100.0, 0.0, 0.1, 1, txDisplayGroup);
+    m_txDisplayOffsetSpin->setProperty("nereusSetupId", "hardware.calibration.txDisplayOffset");
     m_txDisplayOffsetSpin->setSuffix(tr(" dB"));
     m_txDisplayOffsetSpin->setToolTip(
         tr("TX display calibration offset in dB. Applied to TX spectrum display."));

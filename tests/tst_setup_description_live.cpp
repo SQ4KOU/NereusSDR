@@ -3,6 +3,7 @@
 
 #include "core/AppSettings.h"
 #include "core/PaTelemetryScaling.h"
+#include "core/PaCalProfile.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -22,6 +23,118 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
+    // Config's new rows while a version 12 phone keeps its projection, and
+    // the described radio settings reach the Core through the gates the
+    // desktop's own writes go through: the Watt Meter's points off the air
+    // only, TX Display Cal on the air too.
+    void pairedV13PaAndHardwareWritesUseTheCoresSettingsGates()
+    {
+        Core core;
+        const RadioInfo info = core.model->currentRadioInfo();
+        core.model->setReceiveOnlyStationPolicy(true);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model,
+                                                         info);
+        Device current(QStringLiteral("PA V13 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("PA V12 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v13Features = kHolder;
+        v13Features.insert("setupDescription", 13);
+        auto* v13 = core.signIn(current, v13Features);
+        QVERIFY(admitted(v13));
+        QCOMPARE(capability(v13->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(13));
+        const QJsonObject pa = QJsonDocument::fromJson(latest(v13->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(pa.value("version"), QJsonValue(13));
+        const QJsonObject hardware = QJsonDocument::fromJson(latest(v13->received(),
+            QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+        QCOMPARE(hardware.value("version"), QJsonValue(13));
+        QJsonObject board;
+        QJsonObject offset;
+        for (const QJsonValue& page : hardware.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    const QJsonObject control = raw.toObject();
+                    if (control.value("id") == QJsonValue("hardware.radioInfo.board")) { board = control; }
+                    if (control.value("id") == QJsonValue("hardware.calibration.txDisplayOffset")) {
+                        offset = control;
+                    }
+                }
+            }
+        }
+        QCOMPARE(board.value("value"), QJsonValue("Bench HL2"));
+        QVERIFY(!offset.isEmpty());
+        QJsonObject point;
+        for (const QJsonValue& page : pa.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    if (raw.toObject().value("id") == QJsonValue("pa.wattMeter.calPoint3")) {
+                        point = raw.toObject();
+                    }
+                }
+            }
+        }
+        QCOMPARE(point.value("label"), QJsonValue("3 W"));
+        QCOMPARE(point.value("boardClass"), QJsonValue(int(PaCalBoardClass::Anan10)));
+
+        QHash<QByteArray, int> v12Features = kHolder;
+        v12Features.insert("setupDescription", 12);
+        auto* v12 = core.signIn(older, v12Features);
+        QVERIFY(admitted(v12));
+        const QJsonObject oldPa = QJsonDocument::fromJson(latest(v12->received(),
+            QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+        QCOMPARE(oldPa.value("version"), QJsonValue(5));
+        QVERIFY(!QJsonDocument(oldPa).toJson().contains("pa.wattMeter"));
+        // The HL2 has no ALEX filters: no Hardware category before 13.
+        QVERIFY(latest(v12->received(), QStringLiteral("setup"),
+                       QStringLiteral("hardware")).toString().isEmpty());
+
+        // The key a phone writes: hardware/<the Core's radio>/<radioSetting>.
+        const auto keyOf = [&info](const QJsonObject& control) {
+            return QStringLiteral("hardware/%1/%2").arg(info.macAddress,
+                control.value("binding").toObject().value("radioSetting").toString());
+        };
+        const auto rejectReason = [v13](const QString& key) {
+            QString reason;
+            for (const QByteArray& wire : v13->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QString pointKey = keyOf(point);
+        const QString offsetKey = keyOf(offset);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            pointKey, QStringLiteral("3.4"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(pointKey).toString(), QStringLiteral("3.4"));
+
+        allowTransmit(core);
+        core.model->setReceiveOnlyStationPolicy(true);
+        MoxController* mox = core.model->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical test state, no radio transport
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            pointKey, QStringLiteral("5"), QStringLiteral("phone"))));
+        QTRY_COMPARE(rejectReason(pointKey),
+                     QStringLiteral("The radio is on the air. Try again when it stops."));
+        QCOMPARE(core.settings->value(pointKey).toString(), QStringLiteral("3.4"));
+        v13->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            offsetKey, QStringLiteral("-2.5"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(offsetKey).toString(), QStringLiteral("-2.5"));
+        QVERIFY(rejectReason(offsetKey).isEmpty());
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(!core.model->tune());
+    }
+
     void pairedV12PublishesTheRestOfDisplayAndKeepsV11Projection()
     {
         Core core;
@@ -307,8 +420,11 @@ private slots:
         info.boardType = HPSDRHW::Hermes;
         core.model->setLastRadioInfoForTest(info);
         core.model->setConnectionStateForTest(ConnectionState::Disconnected);
+        // As StationServer does: the context carries the Core's radio, which
+        // version 13's Radio Info describes (the same radio when it connects).
         core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
-                                                         core.model->hardwareProfile().model);
+                                                         core.model->hardwareProfile().model,
+                                                         core.model->currentRadioInfo());
         const quint32 unchangedDescriptionRevision = core.server->setupDescription()->revision();
         const QString unchangedDescription = core.server->setupDescription()->hardware();
         QVERIFY(!unchangedDescription.isEmpty());
@@ -1080,7 +1196,9 @@ private slots:
         QVERIFY(core.server->setupDescription()->revision() > capturedRevision);
         QTRY_VERIFY(latest(app->received(), QStringLiteral("setup"),
                            QStringLiteral("hardware")).toString().isEmpty());
-        QVERIFY(core.server->setupDescription()->category(QStringLiteral("hardware")).isEmpty());
+        // Version 13's Radio Info and Calibration stay; Antenna / ALEX goes.
+        QVERIFY(!core.server->setupDescription()->hardware()
+                     .contains(QStringLiteral("hardware.antennaAlex")));
         const QJsonObject stale = write(rx, false);
         QVERIFY(!stale.value("accepted").toBool(true));
         QVERIFY(!stale.value("reason").toString().isEmpty());

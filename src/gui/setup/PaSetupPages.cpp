@@ -130,6 +130,13 @@
 //                 with the reason. The local page's two handlers became
 //                 applyPowerReadings and applyRawAdc, unchanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - R-R3-49 / R-IOS-18: PA Values' temperature, ADC overload
+//                 and Reset Peak/Min, and the Watt Meter's Show PA Values
+//                 page and Reset PA Values carry their Setup description
+//                 ids; Show PA Values page now shows or hides the PA Values
+//                 page, as Thetis's chkPAValues does (found bug: nothing read
+//                 it). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -2042,6 +2049,7 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
     // PaValuesPage / SetupDialog navigation can honor it.
     m_showPaValuesCheck = new QCheckBox(tr("Show PA Values page"), this);
     m_showPaValuesCheck->setObjectName(QStringLiteral("chkPAValues"));
+    m_showPaValuesCheck->setProperty("nereusSetupId", "pa.wattMeter.showPaValues");
     // Tooltip is user-visible plain English; Thetis cite kept in the
     // surrounding header comment (and the From Thetis cite block above)
     // per CLAUDE.md "No source cites in user-visible strings".
@@ -2052,10 +2060,17 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
         QStringLiteral("True")).toString() == QStringLiteral("True");
     m_showPaValuesCheck->setChecked(showPaValues);
     connect(m_showPaValuesCheck, &QCheckBox::toggled, this,
-            [](bool checked) {
+            [this](bool checked) {
         AppSettings::instance().setValue(
             QStringLiteral("display/showPaValuesPage"),
             checked ? QStringLiteral("True") : QStringLiteral("False"));
+        // R-R3-49 (found bug): nothing read the setting, so the PA Values
+        // page stayed whatever the box said. Thetis shows or hides the
+        // panel at once:
+        // From Thetis setup.cs:16381-16385 [v2.10.3.15] chkPAValues_CheckedChanged
+        //   panelPAValues.Visible = chkPAValues.Checked;
+        // SetupDialog shows or hides the PA Values page.
+        emit showPaValuesPageChanged(checked);
     });
     contentLayout()->insertWidget(contentLayout()->count() - 1, m_showPaValuesCheck);
 
@@ -2067,6 +2082,7 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
     // peak/min tracking.
     m_resetPaValuesButton = new QPushButton(tr("Reset PA Values"), this);
     m_resetPaValuesButton->setObjectName(QStringLiteral("btnResetPAValues"));
+    m_resetPaValuesButton->setProperty("nereusSetupId", "pa.wattMeter.resetPaValues");
     // Tooltip is user-visible plain English; Thetis cite kept in the
     // surrounding header comment per CLAUDE.md "No source cites in
     // user-visible strings".
@@ -2239,6 +2255,8 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     m_paCurrentLabel->setProperty("nereusSetupId", "pa.values.paCurrent");
     m_paTempLabel      = new MetricLabel(QStringLiteral("PA T"),
                                          QStringLiteral("0.0 \xC2\xB0""C"), paGroup);
+    // R-IOS-18: the Setup description's id for the temperature readout.
+    m_paTempLabel->setProperty("nereusSetupId", "pa.values.paTemperature");
     m_supplyVoltsLabel = new MetricLabel(QStringLiteral("V"),
                                          QStringLiteral("0.0 V"), paGroup);
     m_supplyVoltsLabel->setProperty("nereusSetupId", "pa.values.dcVoltage");
@@ -2255,6 +2273,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     m_revVoltageLabel->setProperty("nereusSetupId", "pa.values.reflectedVoltage");
     m_adcOverloadLabel = new MetricLabel(QStringLiteral("ADC OVF"),
                                          QStringLiteral("No"), paGroup);
+    m_adcOverloadLabel->setProperty("nereusSetupId", "pa.values.adcOverload");
     paForm->addRow(QStringLiteral("PA Current:"),     m_paCurrentLabel);
     paForm->addRow(QStringLiteral("PA Temperature:"), m_paTempLabel);
     // Group A follow-up (group B fix wave): the AIN6 reading carries
@@ -2297,6 +2316,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     resetLayout->addStretch(1);
     m_resetButton = new QPushButton(tr("Reset Peak/Min"), resetRow);
     m_resetButton->setToolTip(tr("Reset running peak/min trackers to current values."));
+    m_resetButton->setProperty("nereusSetupId", "pa.values.resetPeakMin");
     resetLayout->addWidget(m_resetButton);
     contentLayout()->insertWidget(contentLayout()->count() - 1, resetRow);
 

@@ -618,6 +618,10 @@
 //               txModMonitor.reset, and a window's ModMon/FbStream applied
 //               to the Core's feedback analyzer. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: R-R3-49 / R-IOS-18: Setup description version 13 (PA and
+//               Hardware Config); the description also carries the Core's
+//               radio for Radio Info. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2048,12 +2052,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_setupDescription = std::make_unique<SetupDescriptionService>();
     if (radioModel != nullptr) {
         m_setupDescription->setRadioContext(radioModel->boardCapabilities(),
-                                            radioModel->hardwareProfile().model);
+                                            radioModel->hardwareProfile().model,
+                                            radioModel->currentRadioInfo());
         connect(radioModel, &RadioModel::currentRadioChanged, this,
                 [this](const NereusSDR::RadioInfo&) {
                     if (m_radioModel && m_setupDescription) {
                         m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
-                                                            m_radioModel->hardwareProfile().model);
+                                                            m_radioModel->hardwareProfile().model,
+                                                            m_radioModel->currentRadioInfo());
                     }
                 });
     }
@@ -5866,7 +5872,8 @@ void StationServer::buildMirror()
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
     m_setupDescription->setRadioContext(m_radioModel->boardCapabilities(),
-                                        m_radioModel->hardwareProfile().model);
+                                        m_radioModel->hardwareProfile().model,
+                                        m_radioModel->currentRadioInfo());
     m_mirror->watch(QByteArray(kSetupDescriptionKey), m_setupDescription.get());
     // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
     // only to a peer at minor 11 (sendToPeer).
@@ -7112,7 +7119,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             && message.kind != SessionMessageKind::Schema) {
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
-            const int version = qMin(declared, 12);
+            const int version = qMin(declared, 13);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -9668,7 +9675,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 12) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 13) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

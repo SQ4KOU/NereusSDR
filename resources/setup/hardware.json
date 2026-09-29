@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 13,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -7,6 +7,120 @@
     "coverage": "partial"
   },
   "pages": [
+    {
+      "id": "hardware.radioInfo",
+      "title": "Radio Info",
+      "where": "mixed",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Board Identity",
+          "controls": [
+            {
+              "id": "hardware.radioInfo.board",
+              "label": "Board:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "board"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.protocol",
+              "label": "Protocol:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "protocol"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.adcCount",
+              "label": "ADC count:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "adcCount"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.maxRx",
+              "label": "Max RX:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "maxRx"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.firmware",
+              "label": "Firmware:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "firmware"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.mac",
+              "label": "MAC:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "mac"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            },
+            {
+              "id": "hardware.radioInfo.ip",
+              "label": "IP address:",
+              "tooltip": "",
+              "kind": "readout",
+              "binding": {
+                "radioInfo": "ip"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "value": ""
+            }
+          ]
+        },
+        {
+          "title": "Support",
+          "controls": [
+            {
+              "id": "hardware.radioInfo.copySupportInfo",
+              "label": "Copy Support Info to Clipboard",
+              "tooltip": "Copies board identity and firmware version to the clipboard for bug reports.",
+              "kind": "button",
+              "binding": {
+                "phone": "copySupportInfo"
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 13,
+              "copyText": ""
+            }
+          ]
+        }
+      ]
+    },
     {
       "id": "hardware.antennaAlex",
       "title": "Antenna / ALEX",
@@ -929,6 +1043,73 @@
                   ]
                 }
               ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hardware.calibration",
+      "title": "Calibration",
+      "where": "station",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "TX Display Cal",
+          "controls": [
+            {
+              "id": "hardware.calibration.txDisplayOffset",
+              "label": "Offset:",
+              "tooltip": "TX display calibration offset in dB. Applied to TX spectrum display.",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "cal/txDisplayOffset"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "min": -100,
+              "max": 100,
+              "step": 0.1,
+              "decimals": 1,
+              "unit": "dB",
+              "default": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hardware.hl2Io",
+      "title": "HL2 I/O",
+      "where": "station",
+      "coverage": "partial",
+      "sections": [
+        {
+          "title": "Configuration",
+          "controls": [
+            {
+              "id": "hardware.hl2Io.n2adrFilter",
+              "label": "Enable N2ADR Filter board",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "radioSetting": "hl2IoBoard/n2adrFilter"
+              },
+              "valueEncoding": {
+                "true": "True",
+                "false": "False"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 8
+              },
+              "requiresDescriptionVersion": 13,
+              "default": true
             }
           ]
         }

@@ -11,6 +11,8 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SkuUiProfile.h"
+#include "core/PaCalProfile.h"
+#include "core/RadioInfoFacts.h"
 #include "core/ControlRanges.h"
 #include "core/settings/SettingsScope.h"
 
@@ -93,6 +95,66 @@ constexpr char kDisplayV12Controls[] =
     R"json(])json";
 constexpr char kAppearanceV12ResetColours[] =
     R"json({"id":"appearance.colorsTheme.resetColors","label":"Reset all colors to defaults","tooltip":"Reset all spectrum and waterfall colors to factory defaults. Other display settings (FPS, averaging, thresholds, etc.) are not affected.","kind":"button","binding":{"phone":"resetColors"},"applies":"live","requiresDescriptionVersion":12,"confirm":"Reset all spectrum and waterfall colors to factory defaults?\n\nCustom colors set here will be discarded. Other display settings are not affected."})json";
+
+// PA and Hardware Config version 13 (R-R3-49, R-IOS-18, R-IOS-27): the
+// rest of PA Values, the Watt Meter page, and Hardware Config's Radio Info,
+// TX Display Cal and N2ADR switch. Each row is closed as the version 12 rows
+// are. Rows marked rangeSource or carrying an empty value/copyText are the
+// resource's form; loadCategory fills them for the Core's radio.
+constexpr char kPaV13Controls[] =
+    R"json([)json"
+    R"json({"id":"pa.wattMeter.calPoint1","label":"Point 1","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint1"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint2","label":"Point 2","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint2"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint3","label":"Point 3","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint3"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint4","label":"Point 4","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint4"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint5","label":"Point 5","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint5"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint6","label":"Point 6","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint6"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint7","label":"Point 7","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint7"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint8","label":"Point 8","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint8"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint9","label":"Point 9","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint9"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint10","label":"Point 10","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint10"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.showPaValues","label":"Show PA Values page","tooltip":"Toggle visibility of the PA Values page in Setup navigation.","kind":"toggle","binding":{"phone":"display/showPaValuesPage"},"applies":"live","requiresDescriptionVersion":13,"default":true},)json"
+    R"json({"id":"pa.wattMeter.resetPaValues","label":"Reset PA Values","tooltip":"Reset peak/min tracking on the PA Values page.","kind":"button","binding":{"phone":"resetPaValues"},"applies":"live","requiresDescriptionVersion":13},)json"
+    R"json({"id":"pa.values.paTemperature","label":"PA Temperature:","tooltip":"","kind":"readout","binding":{"telemetry":{"object":"radio","name":"paTemperatureCelsius"}},"applies":"live","gate":{"capability":"stationTelemetryVersion","min":4},"requiresDescriptionVersion":13,"decimals":1,"unit":"\u00b0C","temperatureUnit":"PaTempUnit"},)json"
+    R"json({"id":"pa.values.adcOverload","label":"ADC Overload:","tooltip":"","kind":"readout","binding":{"adcOverload":{"object":"stepAtt"}},"applies":"live","gate":{"capability":"radioHardwareVersion","min":1},"requiresDescriptionVersion":13},)json"
+    R"json({"id":"pa.values.resetPeakMin","label":"Reset Peak/Min","tooltip":"Reset running peak/min trackers to current values.","kind":"button","binding":{"phone":"resetPaValues"},"applies":"live","requiresDescriptionVersion":13})json"
+    R"json(])json";
+constexpr char kHardwareV13Controls[] =
+    R"json([)json"
+    R"json({"id":"hardware.radioInfo.board","label":"Board:","tooltip":"","kind":"readout","binding":{"radioInfo":"board"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.protocol","label":"Protocol:","tooltip":"","kind":"readout","binding":{"radioInfo":"protocol"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.adcCount","label":"ADC count:","tooltip":"","kind":"readout","binding":{"radioInfo":"adcCount"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.maxRx","label":"Max RX:","tooltip":"","kind":"readout","binding":{"radioInfo":"maxRx"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.firmware","label":"Firmware:","tooltip":"","kind":"readout","binding":{"radioInfo":"firmware"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.mac","label":"MAC:","tooltip":"","kind":"readout","binding":{"radioInfo":"mac"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.ip","label":"IP address:","tooltip":"","kind":"readout","binding":{"radioInfo":"ip"},"applies":"live","requiresDescriptionVersion":13,"value":""},)json"
+    R"json({"id":"hardware.radioInfo.copySupportInfo","label":"Copy Support Info to Clipboard","tooltip":"Copies board identity and firmware version to the clipboard for bug reports.","kind":"button","binding":{"phone":"copySupportInfo"},"applies":"live","requiresDescriptionVersion":13,"copyText":""},)json"
+    R"json({"id":"hardware.calibration.txDisplayOffset","label":"Offset:","tooltip":"TX display calibration offset in dB. Applied to TX spectrum display.","kind":"decimal","binding":{"radioSetting":"cal/txDisplayOffset"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"min":-100,"max":100,"step":0.1,"decimals":1,"unit":"dB","default":0},)json"
+    R"json({"id":"hardware.hl2Io.n2adrFilter","label":"Enable N2ADR Filter board","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2IoBoard/n2adrFilter"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"default":true})json"
+    R"json(])json";
+
+QHash<QString, QJsonObject> controlsById(const char* json)
+{
+    QHash<QString, QJsonObject> controls;
+    const QJsonArray rows = QJsonDocument::fromJson(QByteArray(json)).array();
+    for (const QJsonValue& row : rows) {
+        const QJsonObject control = row.toObject();
+        controls.insert(control.value(QStringLiteral("id")).toString(), control);
+    }
+    return controls;
+}
+
+const QHash<QString, QJsonObject>& paV13Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kPaV13Controls);
+    return table;
+}
+
+const QHash<QString, QJsonObject>& hardwareV13Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV13Controls);
+    return table;
+}
 
 const QHash<QString, QJsonObject>& displayV12Controls()
 {
@@ -292,7 +354,8 @@ bool validAppearanceEnvelope(const QJsonObject& root)
         && meterSection.value(QStringLiteral("controls")).toArray().size() == 3;
 }
 
-QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model)
+QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRModel model,
+                     const RadioInfo& info)
 {
     QFile resource(QStringLiteral(":/setup/%1.json").arg(id));
     if (!resource.open(QIODevice::ReadOnly)) {
@@ -313,9 +376,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          && !(id == QLatin1String("appearance")
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
-              && root.value(QStringLiteral("version")) == QJsonValue(5))
+              && root.value(QStringLiteral("version")) == QJsonValue(13))
          && !(id == QLatin1String("hardware")
-              && root.value(QStringLiteral("version")) == QJsonValue(6)))
+              && root.value(QStringLiteral("version")) == QJsonValue(13)))
         || root.value(QStringLiteral("category")).toObject()
                .value(QStringLiteral("id")).toString() != id
         || root.value(QStringLiteral("pages")).toArray().isEmpty()
@@ -385,7 +448,11 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                 && !((id == QLatin1String("display")
                                       || id == QLatin1String("appearance"))
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(12)))))
+                                         == QJsonValue(12))
+                                && !((id == QLatin1String("pa")
+                                      || id == QLatin1String("hardware"))
+                                     && control.value(QStringLiteral("requiresDescriptionVersion"))
+                                         == QJsonValue(13)))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -421,12 +488,14 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateTransmitSettingBinding(control))
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control)
-                        && !SetupDescription::validateAntennaRowsTable(control))
+                        && !SetupDescription::validateAntennaRowsTable(control)
+                        && !SetupDescription::validateHardwareV13Control(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
                         && !SetupDescription::validatePaTelemetryReadoutBinding(control)
-                        && !SetupDescription::validatePaBypassBinding(control))
+                        && !SetupDescription::validatePaBypassBinding(control)
+                        && !SetupDescription::validatePaV13Control(control))
                     || (id == QLatin1String("audio")
                         && !SetupDescription::validateAudioPropertyBinding(control))
                     || (id == QLatin1String("appearance")
@@ -448,10 +517,21 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
         }
     }
     if (id == QLatin1String("hardware") && antennaTables != 2) { return {}; }
-    // This partial page is built only when the connected board has ALEX
-    // filters. A board change must retire its old controls altogether.
-    if (id == QLatin1String("hardware") && !caps.hasAlexFilters) {
-        return {};
+    // The Antenna / ALEX page is built only when the connected board has
+    // ALEX filters, and HL2 I/O only on the HL2's I/O board (HardwarePage's
+    // own tab gates). A board change must retire their old controls
+    // altogether. Radio Info and Calibration are on every board.
+    if (id == QLatin1String("hardware")) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            const QJsonValue pageId = pages.at(p).toObject().value(QStringLiteral("id"));
+            if ((pageId == QJsonValue(QStringLiteral("hardware.antennaAlex")) && !caps.hasAlexFilters)
+                || (pageId == QJsonValue(QStringLiteral("hardware.hl2Io")) && !caps.hasIoBoardHl2)) {
+                pages.removeAt(p--);
+            }
+        }
+        if (pages.isEmpty()) { return {}; }
+        root.insert(QStringLiteral("pages"), pages);
     }
     if (id == QLatin1String("pa") && (!caps.hasPaProfile || caps.isRxOnlySku)) {
         return {};
@@ -498,6 +578,11 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
         QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
         for (int p = 0; p < pages.size(); ++p) {
             QJsonObject page = pages.at(p).toObject();
+            // The SKU labels are Antenna / ALEX's; the version 13 pages
+            // have none.
+            if (page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("hardware.antennaAlex"))) {
+                continue;
+            }
             QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
             for (int s = 0; s < sections.size(); ++s) {
                 QJsonObject section = sections.at(s).toObject();
@@ -537,6 +622,96 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     }
                     controls[c] = control;
                 }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Version 13: Radio Info's values and its support text, as the
+    // desktop's tab shows them for this Core's radio (radioInfoFacts).
+    if (id == QLatin1String("hardware")) {
+        const RadioInfoFacts facts = radioInfoFacts(info, caps, model);
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            if (page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("hardware.radioInfo"))) {
+                continue;
+            }
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    const QString field = control.value(QStringLiteral("binding")).toObject()
+                        .value(QStringLiteral("radioInfo")).toString();
+                    if (control.contains(QStringLiteral("copyText"))) {
+                        control.insert(QStringLiteral("copyText"), facts.supportText());
+                    } else if (!field.isEmpty()) {
+                        control.insert(QStringLiteral("value"),
+                            field == QLatin1String("board") ? facts.board
+                            : field == QLatin1String("protocol") ? facts.protocol
+                            : field == QLatin1String("adcCount") ? facts.adcCount
+                            : field == QLatin1String("maxRx") ? facts.maxRx
+                            : field == QLatin1String("firmware") ? facts.firmware
+                            : field == QLatin1String("mac") ? facts.mac : facts.ip);
+                    }
+                    controls[c] = control;
+                }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Version 13: the Watt Meter's ten points are the ones the desktop
+    // builds for this radio's board class (PaCalibrationGroup): each
+    // labelled with its factory value, which is also its default, and held
+    // to Thetis's range for that box (paCalPointSpec). A board with no
+    // class (or no model yet) has no points.
+    if (id == QLatin1String("pa")) {
+        const PaCalBoardClass boardClass = paCalBoardClassFor(model);
+        const PaCalProfile defaults = PaCalProfile::defaults(boardClass);
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            if (page.value(QStringLiteral("id")) != QJsonValue(QStringLiteral("pa.wattMeter"))) {
+                continue;
+            }
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    if (!control.contains(QStringLiteral("rangeSource"))) { continue; }
+                    const int point = control.value(QStringLiteral("binding")).toObject()
+                        .value(QStringLiteral("radioSetting")).toString()
+                        .mid(QStringLiteral("paCalibration/calPoint").size()).toInt();
+                    const PaCalPointSpec spec = paCalPointSpec(boardClass, point);
+                    if (boardClass == PaCalBoardClass::None || spec.maximum <= 0.0) {
+                        controls.removeAt(c--);
+                        continue;
+                    }
+                    const double factory = static_cast<double>(
+                        defaults.watts[static_cast<std::size_t>(point)]);
+                    control.remove(QStringLiteral("rangeSource"));
+                    control.insert(QStringLiteral("label"), QStringLiteral("%1 W")
+                        .arg(QString::number(factory, 'g', 4)));
+                    control.insert(QStringLiteral("min"), 0);
+                    control.insert(QStringLiteral("max"), spec.maximum);
+                    control.insert(QStringLiteral("step"), spec.step);
+                    control.insert(QStringLiteral("decimals"), spec.decimals);
+                    control.insert(QStringLiteral("default"), factory);
+                    control.insert(QStringLiteral("boardClass"), static_cast<int>(boardClass));
+                    controls[c] = control;
+                }
+                if (controls.isEmpty()) { sections.removeAt(s--); continue; }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;
             }
@@ -589,18 +764,22 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
 bool SetupDescription::validateSettingToggleEncoding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
-    const bool settingToggle = control.value(QStringLiteral("kind"))
-            == QJsonValue(QStringLiteral("toggle"))
-        && binding.contains(QStringLiteral("setting"));
+    const bool toggle = control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("toggle"));
+    // Version 13: a radioSetting names a key under the connected radio's
+    // hardware/<MAC>/, a Station key, stored the same way.
+    const bool radioSetting = binding.contains(QStringLiteral("radioSetting"));
+    const bool settingToggle = toggle && (binding.contains(QStringLiteral("setting")) || radioSetting);
     if (!settingToggle) {
         return !control.contains(QStringLiteral("valueEncoding"));
     }
     // SettingsProxyServer broadcasts the stored QString. These keys' readers
     // compare capitalized strings, so the wire value must use that spelling.
-    const QJsonValue key = binding.value(QStringLiteral("setting"));
+    const QJsonValue key = binding.value(radioSetting ? QStringLiteral("radioSetting")
+                                                      : QStringLiteral("setting"));
     const QJsonValue encoding = control.value(QStringLiteral("valueEncoding"));
     if (binding.size() != 1 || !key.isString() || key.toString().isEmpty()
-        || classifySettingsKey(key.toString()) != SettingsScope::Station
+        || classifySettingsKey(radioSetting ? QStringLiteral("hardware/mac/") + key.toString()
+                                            : key.toString()) != SettingsScope::Station
         || !encoding.isObject()) {
         return false;
     }
@@ -1384,6 +1563,19 @@ bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
         && MirrorPolicy::inboundAllowed(QByteArrayLiteral("TransmitModel"), name);
 }
 
+bool SetupDescription::validatePaV13Control(const QJsonObject& control)
+{
+    const auto row = paV13Controls().constFind(control.value(QStringLiteral("id")).toString());
+    return row != paV13Controls().constEnd() && control == *row;
+}
+
+bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
+{
+    const auto row = hardwareV13Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != hardwareV13Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -1851,8 +2043,8 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     if (pages.isEmpty()) { return {}; }
     category.insert(QStringLiteral("pages"), pages);
-    const int ceiling = categoryId == QLatin1String("hardware") ? 6
-        : categoryId == QLatin1String("pa") ? 5
+    const int ceiling = categoryId == QLatin1String("hardware") ? 13
+        : categoryId == QLatin1String("pa") ? 13
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
     // Appearance changed at 4, 7 and 12: versions 7-11 all see version 7.
@@ -1862,7 +2054,12 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                         : categoryId == QLatin1String("appearance") && version < 12
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
-                            ? qMin(version, 4) : qMin(version, ceiling));
+                            ? qMin(version, 4)
+                        // Hardware changed at 6 and 13, PA at 5 and 13.
+                        : categoryId == QLatin1String("hardware") && version < 13
+                            ? qMin(version, 6)
+                        : categoryId == QLatin1String("pa") && version < 13
+                            ? qMin(version, 5) : qMin(version, ceiling));
     if (version >= 2 && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
         category.insert(QStringLiteral("coverage"), QStringLiteral(
@@ -1910,13 +2107,21 @@ void SetupDescription::setBoardCapabilities(const BoardCapabilities& caps)
 {
     m_caps = caps;
     m_model = HPSDRModel::FIRST;
+    m_radioInfo = RadioInfo{};
     rebuild();
 }
 
 void SetupDescription::setRadioContext(const BoardCapabilities& caps, HPSDRModel model)
 {
+    setRadioContext(caps, model, RadioInfo{});
+}
+
+void SetupDescription::setRadioContext(const BoardCapabilities& caps, HPSDRModel model,
+                                       const RadioInfo& info)
+{
     m_caps = caps;
     m_model = model;
+    m_radioInfo = info;
     rebuild();
 }
 
@@ -1924,7 +2129,7 @@ void SetupDescription::rebuild()
 {
     bool changed = false;
     const auto update = [this, &changed](const QString& id, QString& target) {
-        const QString description = loadCategory(id, m_caps, m_model);
+        const QString description = loadCategory(id, m_caps, m_model, m_radioInfo);
         if (description != target) {
             target = description;
             changed = true;
