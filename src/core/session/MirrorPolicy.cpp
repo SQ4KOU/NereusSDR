@@ -1089,4 +1089,26 @@ const QList<MirrorPolicy::Entry>& MirrorPolicy::entries()
     return all;
 }
 
+const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
+{
+    static const QList<FeatureGate> gates{
+        // R-IOS-13 / R-R3-49 (txEqCurveVersion 1): the read-only TX EQ
+        // curve, to a peer that declared txEqCurve 1
+        // (StationServer::fitTxEqCurveToPeer).
+        {"TransmitModel", "txEqCurve", "txEqCurve", 1},
+    };
+    return gates;
+}
+
+const MirrorPolicy::FeatureGate* MirrorPolicy::featureGateFor(const QByteArray& className,
+                                                              const QByteArray& property)
+{
+    for (const FeatureGate& gate : featureGates()) {
+        if (className == gate.className && property == gate.property) {
+            return &gate;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace NereusSDR
