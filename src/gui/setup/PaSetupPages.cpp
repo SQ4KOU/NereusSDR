@@ -909,6 +909,26 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     // the holder too.
     connect(model, &RadioModel::transmitHolderChanged, this,
             [this]() { applyPaSettingsGate(); });
+    // The transmitting band is read afresh, not latched at key: a band
+    // change while keyed moves the open row (Thetis OnTXBandChanged,
+    // setup.cs:23835-23839 [v2.10.3.15], re-runs enabledAllPAnuds).
+    const auto followSlice = [this](SliceModel* slice) {
+        if (!slice) {
+            return;
+        }
+        connect(slice, &SliceModel::bandChanged, this, [this](Band) { refreshOnAirBand(); });
+        connect(slice, &SliceModel::txSliceChanged, this,
+                [this](bool) { refreshOnAirBand(); });
+    };
+    for (SliceModel* slice : model->slices()) {
+        followSlice(slice);
+    }
+    connect(model, &RadioModel::sliceAdded, this, [this, followSlice](int index) {
+        if (RadioModel* const radio = this->model()) {
+            followSlice(radio->slices().value(index, nullptr));
+        }
+        refreshOnAirBand();
+    });
     if (model->isCoreOnAir()) {
         applyOnAirState(true);
     }
@@ -972,21 +992,31 @@ QList<QWidget*> PaGainByBandPage::onAirLockedControls() const
 
 void PaGainByBandPage::applyOnAirState(bool onAir)
 {
-    if (onAir && !m_onAir) {
-        // Thetis _adjustingBand, read where the Core's own refusals read it.
-        // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
-        //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
-        //   _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
-        RadioModel* const radio = model();
-        m_onAirBandIndex = radio ? radio->paOnAirBandIndex() : -1;
-    }
     if (onAir == m_onAir) {
         return;
     }
     m_onAir = onAir;
-    if (!onAir) {
-        m_onAirBandIndex = -1;
+    m_onAirBandIndex = currentOnAirBandIndex();
+    applyPaSettingsGate();
+}
+
+int PaGainByBandPage::currentOnAirBandIndex()
+{
+    // Thetis _adjustingBand, read where the Core's own refusals read it.
+    // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+    RadioModel* const radio = model();
+    return (m_onAir && radio) ? radio->paOnAirBandIndex() : -1;
+}
+
+void PaGainByBandPage::refreshOnAirBand()
+{
+    const int band = currentOnAirBandIndex();
+    if (band == m_onAirBandIndex) {
+        return;
     }
+    m_onAirBandIndex = band;
     applyPaSettingsGate();
 }
 
@@ -1537,7 +1567,7 @@ void PaGainByBandPage::onGainChanged(Band band, double value)
     mutated.setGainForBand(band, static_cast<float>(value));
     m_paProfileManager->saveProfile(active->name(), mutated);
     warnIfProfileDiverged();
-    applyEditOnAir(/*adjust=*/false, -1);
+    applyEditOnAir(band, /*adjust=*/false, -1);
 }
 
 void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
@@ -1552,16 +1582,19 @@ void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
     m_paProfileManager->saveProfile(active->name(), mutated);
     // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
     //   if (console.MOX) ... console.PWR = nNumber + 10; // set drive to the value we are adjusting
-    applyEditOnAir(/*adjust=*/true, step);
+    applyEditOnAir(band, /*adjust=*/true, step);
 }
 
-void PaGainByBandPage::applyEditOnAir(bool adjust, int step)
+void PaGainByBandPage::applyEditOnAir(Band band, bool adjust, int step)
 {
     // The Core's own window drives the radio: an edit taken on the air
     // reaches the drive as Thetis's does. A remote window's edit reaches
-    // it at the Core (RadioModel::applyPaSettingOnAir).
+    // it at the Core (RadioModel::applyPaSettingOnAir). Only an edit to
+    // the band transmitting now moves the drive (Thetis _adjustingBand);
+    // the band is read at the edit, never latched at key.
     RadioModel* const radio = model();
-    if (radio && radio->ownsLocalDsp() && m_onAir) {
+    if (radio && radio->ownsLocalDsp() && radio->paOnAirNow()
+        && static_cast<int>(band) == radio->paOnAirBandIndex()) {
         radio->applyPaEditOnAir(adjust ? RadioModel::PaProfileAction::SetAdjust
                                        : RadioModel::PaProfileAction::SetGain,
                                 step);
