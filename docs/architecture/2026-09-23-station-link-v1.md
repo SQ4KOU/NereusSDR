@@ -4419,7 +4419,10 @@ are taken from a peer at agreed minor 11 offered `radioHardwareVersion` 7
 (parity Task 14) and applied to the Core's radio at once, because Thetis's
 setters (console.cs `DisableHPFonTX`, `DisableHPFonPS`, `Disable6mLNAonTX`)
 apply them with no MOX check, as it does the TX antennas; neither window
-greys them on the air. They follow the TX antennas' rule (section 18.4):
+greys them on the air. Clearing HPF Bypass on PureSignal feedback asks
+the desktop's IMD warning first, on the desktop and on a peer that reads the
+description row's `confirm` and `confirmWhen:false` (setup description
+section on the Alex filters); the Core takes the write as it comes. They follow the TX antennas' rule (section 18.4):
 the device holding transmit changes them on the air, another device's change
 waits ("<holder's short name> is on the air. Try again when they stop."), and
 off the air another device's change is asked of the holder (the

@@ -1198,7 +1198,9 @@
                 "transmit": true
               },
               "requiresDescriptionVersion": 13,
-              "default": true
+              "default": true,
+              "confirm": "Including the BPFs during a PureSignal transmission may produce passive Inter-Modulation Distortion in the inductors of the bandpass filters.\n\nYou will NOT be able to observe this degraded performance on the panadapter because PS is correcting to the distorted feedback and the panadapter is \"seeing\" that same distorted feedback. It can only be observed with an external spectrum analyzer.\n\nPlease ensure you understand the implications of including the BPFs when transmitting a PureSignal based signal. It is not recommended.",
+              "confirmWhen": false
             },
             {
               "id": "hardware.alex1Filters.disable6mLnaOnTx",

@@ -1405,6 +1405,29 @@ private slots:
             }
             QCOMPARE(row.value("gate"), QJsonValue(gate));
             QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(13));
+            // The desktop asks before clearing HPF Bypass on PureSignal
+            // feedback (the IMD warning); the description carries the same
+            // question and the value it guards. No other switch asks.
+            if (field == QLatin1String("hpfBypassOnPs")) {
+                QCOMPARE(row.value("confirm"), QJsonValue(QStringLiteral(
+                    "Including the BPFs during a PureSignal transmission may "
+                    "produce passive Inter-Modulation Distortion in the "
+                    "inductors of the bandpass filters.\n\n"
+                    "You will NOT be able to observe this degraded performance "
+                    "on the panadapter because PS is correcting to the distorted "
+                    "feedback and the panadapter is \"seeing\" that same "
+                    "distorted feedback. It can only be observed with an "
+                    "external spectrum analyzer.\n\n"
+                    "Please ensure you understand the implications of including "
+                    "the BPFs when transmitting a PureSignal based signal. "
+                    "It is not recommended.")));
+                QCOMPARE(row.value("confirmWhen"), QJsonValue(false));
+                QCOMPARE(row.size(), 12);
+            } else {
+                QVERIFY(!row.contains("confirm"));
+                QVERIFY(!row.contains("confirmWhen"));
+                QCOMPARE(row.size(), 10);
+            }
         }
         checkBank(hpfSection, "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
         checkBank(alex1Sections.at(1).toObject().value("controls").toArray(),

@@ -203,7 +203,36 @@ QString alexFilterRowsJson()
         {"hpfBypassOnPs", "HPF Bypass on PureSignal feedback", true, true},
         {"disable6mLnaOnTx", "Disable 6m LNA on TX", true, true},
         {"disable6mLnaOnRx", "Disable 6m LNA on RX", false, false}}};
+    // From Thetis setup.cs:29440-29449 [v2.10.3.15] (chkDisableHPFonPS_CheckedChanged):
+    // the desktop asks before HPF Bypass on PureSignal feedback is cleared
+    // (AntennaAlexAlex1Tab::imdWarningText, which the parity test holds this
+    // text to). A peer asks with the same words before setting the toggle to
+    // confirmWhen, and leaves it as it was on No.
+    static constexpr const char* kImdWarningText =
+        "Including the BPFs during a PureSignal transmission may "
+        "produce passive Inter-Modulation Distortion in the "
+        "inductors of the bandpass filters.\n\n"
+        "You will NOT be able to observe this degraded performance "
+        "on the panadapter because PS is correcting to the distorted "
+        "feedback and the panadapter is \"seeing\" that same "
+        "distorted feedback. It can only be observed with an "
+        "external spectrum analyzer.\n\n"
+        "Please ensure you understand the implications of including "
+        "the BPFs when transmitting a PureSignal based signal. "
+        "It is not recommended.";
     for (const MasterSwitch& master : switches) {
+        if (qstrcmp(master.field, "hpfBypassOnPs") == 0) {
+            QJsonObject row = QJsonDocument::fromJson(QString::fromLatin1(
+                R"j({"id":"hardware.alex1Filters.%1","label":"%2","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex/master/%1"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8%3},"requiresDescriptionVersion":13,"default":%4})j")
+                .arg(QString::fromLatin1(master.field), QString::fromLatin1(master.label),
+                     master.transmit ? QStringLiteral(",\"transmit\":true") : QString(),
+                     master.on ? QStringLiteral("true") : QStringLiteral("false"))
+                .toUtf8()).object();
+            row.insert(QStringLiteral("confirm"), QString::fromLatin1(kImdWarningText));
+            row.insert(QStringLiteral("confirmWhen"), false);
+            rows << QString::fromUtf8(QJsonDocument(row).toJson(QJsonDocument::Compact));
+            continue;
+        }
         rows << QString::fromLatin1(
             R"j({"id":"hardware.alex1Filters.%1","label":"%2","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex/master/%1"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8%3},"requiresDescriptionVersion":13,"default":%4})j")
             .arg(QString::fromLatin1(master.field), QString::fromLatin1(master.label),

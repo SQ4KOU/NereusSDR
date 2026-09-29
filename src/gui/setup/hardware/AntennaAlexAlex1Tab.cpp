@@ -36,6 +36,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the five switches above the rows carry
 //                their Setup description ids (version 13). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The IMD warning text moves to imdWarningText() so the Setup
+//                description can carry it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 //   2026-09-29 - The BPF1 column shows on the ANAN-7000DLE / 8000DLE too
 //                (comments only here; the gate is in AntennaAlexTab).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -441,17 +444,7 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
             if (m_imdAutoResult == ImdAutoResult::None) {
                 QMessageBox box(QMessageBox::Warning,
                     tr("PureSignal Issue"),
-                    tr("Including the BPFs during a PureSignal transmission may "
-                       "produce passive Inter-Modulation Distortion in the "
-                       "inductors of the bandpass filters.\n\n"
-                       "You will NOT be able to observe this degraded performance "
-                       "on the panadapter because PS is correcting to the distorted "
-                       "feedback and the panadapter is \"seeing\" that same "
-                       "distorted feedback. It can only be observed with an "
-                       "external spectrum analyzer.\n\n"
-                       "Please ensure you understand the implications of including "
-                       "the BPFs when transmitting a PureSignal based signal. "
-                       "It is not recommended."),
+                    imdWarningText(),
                     QMessageBox::Ok | QMessageBox::Cancel, this);
                 box.setDefaultButton(QMessageBox::Cancel);          // Button2 per Thetis
                 box.setWindowFlag(Qt::WindowStaysOnTopHint);        // MB_TOPMOST per Thetis
@@ -841,6 +834,26 @@ void AntennaAlexAlex1Tab::setLedLit(QFrame* led, bool lit)
         led->setStyleSheet(
             QStringLiteral("QFrame { background: #444444; border-radius: 5px; }"));
     }
+}
+
+// ── imdWarningText ────────────────────────────────────────────────────────────
+
+// From Thetis setup.cs:29440-29449 [v2.10.3.15] (chkDisableHPFonPS_CheckedChanged):
+// the warning shown before HPF Bypass on PureSignal feedback is cleared
+// (Thetis's "tranmission" and "inlcuding" corrected in the user-visible text).
+QString AntennaAlexAlex1Tab::imdWarningText()
+{
+    return tr("Including the BPFs during a PureSignal transmission may "
+              "produce passive Inter-Modulation Distortion in the "
+              "inductors of the bandpass filters.\n\n"
+              "You will NOT be able to observe this degraded performance "
+              "on the panadapter because PS is correcting to the distorted "
+              "feedback and the panadapter is \"seeing\" that same "
+              "distorted feedback. It can only be observed with an "
+              "external spectrum analyzer.\n\n"
+              "Please ensure you understand the implications of including "
+              "the BPFs when transmitting a PureSignal based signal. "
+              "It is not recommended.");
 }
 
 // ── updateBoardCapabilities ───────────────────────────────────────────────────

@@ -390,7 +390,13 @@ the desktop keeps once per band: the value is stored under
 centre frequency as `Band::bandFromFrequency` finds it), shared by every pan,
 and the label shows the band where the template has `%1`. `confirm` is the
 desktop's exact question before a destructive action: the renderer asks it
-with Yes and No, No the default, and acts only on Yes.
+with Yes and No, No the default, and acts only on Yes. On a `kind:"toggle"`
+row (version 13), `confirm` comes with `confirmWhen`, the value the desktop
+asks before setting: the renderer asks the question with Yes and No, No the
+default, only when the operator sets the toggle to `confirmWhen`; on Yes it
+writes, on No the toggle stays as it was and nothing is written. Setting it
+the other way writes at once. A peer that knows no `confirmWhen` writes at
+once, as before.
 
 A `kind:"button"` row with a `binding.phone` is a phone action. It has no
 value or default and acts on the pan the page is editing, exactly as the
@@ -556,8 +562,10 @@ empty tooltip, defaulting as the desktop does (on PureSignal feedback and
 transmit hardware (on TX, on PureSignal feedback, 6 m LNA on TX) add
 `transmit:true`: with remote transmit allowed, the Core takes a write of them
 only from a session permitted to transmit. The desktop asks before clearing
-HPF Bypass on PureSignal feedback (the IMD warning); the description carries
-no such confirmation, so a phone clears it at once.
+HPF Bypass on PureSignal feedback (the IMD warning, Thetis setup.cs
+`chkDisableHPFonPS_CheckedChanged`), and so does the description: that row
+carries the desktop's warning as `confirm` with `confirmWhen:false`, so a
+peer asks the same question before clearing it and leaves it set on No.
 
 Transmit > Power gains a PA Control section last with Disable HF PA
 (`transmit.power.DisableHfPa`, `setting` `DisableHfPa`, `True`/`False`,

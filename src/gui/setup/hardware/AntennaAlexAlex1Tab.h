@@ -197,6 +197,11 @@ public:
     enum class TestImdResult { ConfirmOk, ConfirmCancel };
     void setImdWarningResultForTest(TestImdResult result);
 
+    // The IMD warning the tab shows before HPF Bypass on PureSignal feedback
+    // is cleared. The Setup description carries the same text as that row's
+    // `confirm` (tst_setup_description_parity compares them).
+    static QString imdWarningText();
+
     // Test seam — bypass-the-dialog wire for the m_hpfBypassOnPs checkbox.
     // Drives QCheckBox::toggled exactly as the user would.  Tests must call
     // setImdWarningResultForTest() first to seed the auto-confirm path.

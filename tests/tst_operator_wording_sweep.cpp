@@ -305,7 +305,8 @@ QStringList headings(const ::QTreeWidget& tree)
 
 // Setup descriptions (phone request of 2026-09-28): the phone and the remote
 // windows show a description's words as the Core sends them, so every title,
-// label, tooltip, unit, reason, message and choice must be in operator words.
+// label, tooltip, unit, reason, message, confirmation question and choice
+// must be in operator words.
 // Beyond the product's term list, none may name an upstream control or
 // variable (chkDisableRXOut, udDSPNB), Thetis itself, a Qt class, a
 // function, a file or file:line, a source stamp, or a task or requirement
@@ -352,7 +353,8 @@ void collectDescriptionText(const QJsonValue& value, const QString& key, const Q
 {
     static const QStringList shownKeys{
         QStringLiteral("title"), QStringLiteral("label"), QStringLiteral("tooltip"),
-        QStringLiteral("unit"), QStringLiteral("reason"), QStringLiteral("message")};
+        QStringLiteral("unit"), QStringLiteral("reason"), QStringLiteral("message"),
+        QStringLiteral("confirm")};
     if (value.isObject()) {
         const QJsonObject object = value.toObject();
         for (auto it = object.constBegin(); it != object.constEnd(); ++it) {

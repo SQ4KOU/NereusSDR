@@ -1015,6 +1015,15 @@ private slots:
                         QVERIFY(box != nullptr);
                         QCOMPARE(box->text(), control.value("label").toString());
                         QCOMPARE(box->isChecked(), control.value("default").toBool());
+                        // The one the desktop asks about before clearing
+                        // carries the desktop's own question.
+                        if (id == QLatin1String("hardware.alex1Filters.hpfBypassOnPs")) {
+                            QCOMPARE(control.value("confirm").toString(),
+                                     AntennaAlexAlex1Tab::imdWarningText());
+                            QCOMPARE(control.value("confirmWhen"), QJsonValue(false));
+                        } else {
+                            QVERIFY2(!control.contains("confirm"), qPrintable(id));
+                        }
                         ++compared;
                         continue;
                     }
