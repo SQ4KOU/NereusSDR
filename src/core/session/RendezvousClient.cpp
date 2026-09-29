@@ -34,6 +34,7 @@
 
 #include "core/security/StationIdentity.h"
 
+#include <QAuthenticator>
 #include <QHostAddress>
 #include <QLoggingCategory>
 #include <QStandardPaths>
@@ -451,9 +452,16 @@ void RendezvousClient::connectTo(int serverIndex)
         }
     });
     connect(socket, &QWebSocket::errorOccurred, this,
-            [this, generation](QAbstractSocket::SocketError) {
+            [this, generation](QAbstractSocket::SocketError error) {
         if (generation != m_generation) {
             return;
+        }
+        // A proxy that demands a login, in the operator's words (also
+        // latched from its request below, whichever comes first).
+        const QString words = NetworkTrouble::wordsForSocketError(error);
+        if (!words.isEmpty()) {
+            qCWarning(lcRendezvous).noquote() << words;
+            m_networkTrouble = words;
         }
         // A refused or unreachable server may never say disconnected.
         QMetaObject::invokeMethod(this, [this, generation] {
@@ -461,6 +469,15 @@ void RendezvousClient::connectTo(int serverIndex)
                 onDisconnected();
             }
         }, Qt::QueuedConnection);
+    });
+    // A proxy that demands a login: NereusSDR gives it none (JJ's ruling of
+    // 2026-09-28), so the connection fails next; the reason says why.
+    connect(socket, &QWebSocket::proxyAuthenticationRequired, this,
+            [this, generation](const QNetworkProxy&, QAuthenticator*) {
+        if (generation == m_generation) {
+            qCWarning(lcRendezvous).noquote() << NetworkTrouble::proxyNeedsLoginWords();
+            m_networkTrouble = NetworkTrouble::proxyNeedsLoginWords();
+        }
     });
     // Task 29 step 2b (options survey B.6, B.7): a sign-in page or an
     // inspecting network, in the operator's words. The service is not

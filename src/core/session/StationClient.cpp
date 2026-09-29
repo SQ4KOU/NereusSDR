@@ -305,6 +305,7 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 #include "core/session/StationClient.h"
 #include "core/session/BandLinkFit.h"
@@ -344,6 +345,7 @@
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 
+#include <QAuthenticator>
 #include <QHostAddress>
 #include <QNetworkInterface>
 #include "models/PanadapterModel.h"
@@ -591,6 +593,11 @@ QString StationClient::connectionFailureReason(QAbstractSocket::SocketError erro
     // lookup failure, not this case, and "Network unreachable" (also a
     // NetworkError) means this Mac has no route at all, which Local
     // Network privacy does not produce.
+    // A proxy that demands a login: NereusSDR has none to give it.
+    const QString networkWords = NetworkTrouble::wordsForSocketError(error);
+    if (!networkWords.isEmpty()) {
+        return networkWords;
+    }
     const bool hostUnreachable =
         error == QAbstractSocket::NetworkError
         && (errorText.contains(QLatin1String("Host unreachable"), Qt::CaseInsensitive)
@@ -1364,6 +1371,18 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
         ensurePinSatisfied();
     });
 
+    // A proxy that demands a login: NereusSDR gives it none (JJ's ruling of
+    // 2026-09-28), so the socket fails next; its reason says why, whichever
+    // of the error and the close comes first.
+    connect(socket, &QWebSocket::proxyAuthenticationRequired, this,
+            [this, transportGuard](const QNetworkProxy&, QAuthenticator*) {
+                if (transportGuard.isNull() || transportGuard.data() != this->transport()) {
+                    return;
+                }
+                if (m_lastError.isEmpty()) {
+                    m_lastError = NetworkTrouble::proxyNeedsLoginWords();
+                }
+            });
     connect(socket, &QWebSocket::errorOccurred, this,
             [this, socket, transportGuard, host = url.host()](QAbstractSocket::SocketError error) {
                 if (transportGuard.isNull() || transportGuard.data() != this->transport()) {

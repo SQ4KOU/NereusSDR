@@ -167,6 +167,7 @@ private slots:
     // ---- R-R3-17: actionable reason for a blocked local network ----
     void hostUnreachableOnLocalNetworkNamesTheMacOsSetting();
     void otherFailuresKeepTheSocketText();
+    void aProxyThatNeedsALoginIsSaidPlainly();
 
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
@@ -1109,6 +1110,22 @@ void TstSessionLinkLoss::hostUnreachableOnLocalNetworkNamesTheMacOsSetting()
                                                     QStringLiteral("192.168.109.106"),
                                                     /*macOs=*/false),
              hostUnreachable);
+}
+
+// A network whose proxy demands a login: plain words, on every host and
+// platform, in place of the socket's own text.
+void TstSessionLinkLoss::aProxyThatNeedsALoginIsSaidPlainly()
+{
+    const QString words = QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide.");
+    for (const bool macOs : {true, false}) {
+        for (const QString& host : {QStringLiteral("core.example.net"),
+                                    QStringLiteral("192.168.109.106")}) {
+            QCOMPARE(StationClient::connectionFailureReason(
+                         QAbstractSocket::ProxyAuthenticationRequiredError,
+                         QStringLiteral("Proxy requires authentication"), host, macOs),
+                     words);
+        }
+    }
 }
 
 void TstSessionLinkLoss::otherFailuresKeepTheSocketText()

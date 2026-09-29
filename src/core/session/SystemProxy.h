@@ -14,9 +14,15 @@
 // and ws:// as http://, the way a browser asks. No proxy (a direct
 // connection) when the settings name none, or only kinds a WebSocket
 // cannot use, and always for this computer's own loopback addresses.
+// A proxy that demands a login is given none (NereusSDR has no proxy login
+// yet); each caller says so in plain words (NetworkTrouble::
+// proxyNeedsLoginWords) instead of failing quietly.
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: a proxy that demands a login is named (JJ's ruling of
+//               2026-09-28). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.

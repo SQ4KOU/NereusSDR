@@ -18,6 +18,7 @@
 #include "core/session/NetworkTrouble.h"
 #include "core/session/SystemProxy.h"
 
+#include <QAuthenticator>
 #include <QAbstractSocket>
 #include <QLoggingCategory>
 #include <QNetworkDatagram>
@@ -449,6 +450,20 @@ void RelayLeg::connectNow()
     // gives up (the relay is not pinned; the system's trust decides).
     connect(socket, &QWebSocket::sslErrors, this, [this](const QList<QSslError>& errors) {
         const QString words = NetworkTrouble::wordsForTlsErrors(errors);
+        if (!words.isEmpty()) {
+            qCWarning(lcRelayLeg).noquote() << words;
+            m_networkTrouble = words;
+        }
+    });
+    // A proxy that demands a login: said plainly when the leg gives up.
+    connect(socket, &QWebSocket::proxyAuthenticationRequired, this,
+            [this](const QNetworkProxy&, QAuthenticator*) {
+        qCWarning(lcRelayLeg).noquote() << NetworkTrouble::proxyNeedsLoginWords();
+        m_networkTrouble = NetworkTrouble::proxyNeedsLoginWords();
+    });
+    connect(socket, &QWebSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError error) {
+        const QString words = NetworkTrouble::wordsForSocketError(error);
         if (!words.isEmpty()) {
             qCWarning(lcRelayLeg).noquote() << words;
             m_networkTrouble = words;

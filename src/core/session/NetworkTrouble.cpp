@@ -52,4 +52,17 @@ QString wordsForTlsErrors(const QList<QSslError>& errors)
     return QString();
 }
 
+QString proxyNeedsLoginWords()
+{
+    return QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide.");
+}
+
+QString wordsForSocketError(QAbstractSocket::SocketError error)
+{
+    // Qt reports this once the proxy has answered 407 and nothing gave the
+    // challenge a user name and password; NereusSDR never does.
+    return error == QAbstractSocket::ProxyAuthenticationRequiredError ? proxyNeedsLoginWords()
+                                                                      : QString();
+}
+
 } // namespace NereusSDR::NetworkTrouble

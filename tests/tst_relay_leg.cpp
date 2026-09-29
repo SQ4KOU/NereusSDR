@@ -45,6 +45,7 @@
 #include "core/security/StationIdentity.h"
 #include "core/session/RelayLeg.h"
 #include "core/session/SystemProxy.h"
+#include "fakes/LoginProxy.h"
 
 using namespace NereusSDR;
 
@@ -660,6 +661,26 @@ private slots:
         }
         QTRY_COMPARE(watch->droppedQueueFull(), quint64(21));
         QCOMPARE(watch->datagramsSent(), quint64(0));
+    }
+
+    // A network whose proxy demands a login: when the leg gives up, its
+    // words say why (NereusSDR has no login to give the proxy).
+    void aProxyThatNeedsALoginIsSaidPlainly()
+    {
+        NereusSDR::Test::LoginProxy proxy;
+        QVERIFY(proxy.listen());
+        proxy.useAsSystemProxy();
+        auto leg = RelayLeg::create();
+        QVERIFY(leg);
+        QSignalSpy ended(leg.get(), &RelayLeg::ended);
+        leg->open(QUrl(QStringLiteral("ws://127.0.0.1:9/v1/relay")),
+                  QStringLiteral("proxy-token"));
+        QTRY_VERIFY(proxy.requests() >= 1);
+        // The leg joins again for its rejoin window before it gives up.
+        QTRY_COMPARE_WITH_TIMEOUT(ended.size(), 1, RelayLeg::kRejoinWindowMs + 15000);
+        QCOMPARE(ended.at(0).at(0).toString(), QStringLiteral("lost"));
+        QCOMPARE(ended.at(0).at(1).toString(),
+                 QStringLiteral("This network's proxy needs a login, which NereusSDR can't provide."));
     }
 
     void aLocalConnectProxyCarriesTheWebRelayLeg()
