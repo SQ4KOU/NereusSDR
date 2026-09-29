@@ -29,6 +29,9 @@
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-49 (parity Task 14).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The input pin strip, local and
+//                                    remote (UpdateIOLedStrip). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Trunk merge of remote transmit: the
 //                                    three switches from a window wait
 //                                    while the Core's own key is on the
@@ -131,6 +134,22 @@ Frame compose(IoBoardHl2& board)
 void answer(IoBoardHl2& board, quint8 c1, quint8 c2, quint8 c3, quint8 c4)
 {
     board.applyI2cReadResponse(quint8(0x80 | (0x3d << 1)), c1, c2, c3, c4);
+}
+
+// The poll's read of the input pins (register 6 at 0x1d), sent and
+// answered: C4 lands in register 6 (the pins), C2 in register 8 (the fault,
+// left 0 here).
+void readInputPins(IoBoardHl2& board, quint8 pins)
+{
+    IoBoardHl2::I2cTxn txn;
+    txn.bus = IoBoardHl2::kI2cBusIndex;
+    txn.address = IoBoardHl2::kI2cAddrGeneral;
+    txn.control = static_cast<quint8>(IoBoardHl2::Register::REG_INPUT_PINS);
+    txn.isRead = true;
+    txn.needsResponse = true;
+    board.enqueueI2c(txn);
+    QVERIFY(compose(board).composed);
+    answer(board, 0x01, 0x00, 0x00, pins);
 }
 
 // A local HL2 (the Core's own radio in the Session below, or a local
@@ -264,6 +283,7 @@ private slots:
     void alexHpfSwitchesFromARemoteWindowOnAndOffTheAir();
     void localAlexHpfSwitchesStayLiveOnTheAir();
     void reasonsArePlain();
+    void inputStripFollowsThePinsAndTransmitLocalAndRemote();
 
 private:
     QTemporaryDir m_securityDir;
@@ -722,6 +742,47 @@ void TstRemoteHl2Io::reasonsArePlain()
         QVERIFY2(OperatorWording::coreCalledStationIn(text).isEmpty(), qPrintable(text));
         QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
     }
+}
+
+// mi0bot console.cs:25887 [@c26a8a4]: after each read of the input pins,
+// SetupForm.UpdateIOLedStrip(MOX, readRegister(REG_INPUT_PINS)); the strip
+// draws its lit pins orange-red while MOX (setup.cs:22606-22610,
+// ucOCLedStrip.cs:101-111). A remote window shows the Core's pins and the
+// Core's transmit state, as a local window shows its own.
+void TstRemoteHl2Io::inputStripFollowsThePinsAndTransmitLocalAndRemote()
+{
+    {
+        LocalHl2 local;
+        HardwarePage page(local.model.get());
+        Hl2OptionsTab* tab = optionsTab(page);
+        QVERIFY(tab != nullptr);
+        IoBoardHl2& board = local.model->ioBoardMutable();
+        readInputPins(board, 0x2A);
+        QCOMPARE(tab->inputBitsForTest(), quint8(0x2A));
+        QVERIFY(!tab->inputStripTxForTest());
+        local.key();
+        QTRY_VERIFY(tab->inputStripTxForTest());
+        readInputPins(board, 0x05);
+        QCOMPARE(tab->inputBitsForTest(), quint8(0x05));
+        local.unkey();
+        QTRY_VERIFY(!tab->inputStripTxForTest());
+    }
+
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    HardwarePage page(&s.window);
+    Hl2OptionsTab* tab = optionsTab(page);
+    QVERIFY(tab != nullptr);
+    QCOMPARE(tab->inputBitsForTest(), quint8(0));
+    readInputPins(s.board(), 0x2A);
+    QTRY_COMPARE(tab->inputBitsForTest(), quint8(0x2A));
+    QVERIFY(!tab->inputStripTxForTest());
+    s.core.key();
+    QTRY_VERIFY(tab->inputStripTxForTest());
+    readInputPins(s.board(), 0x11);
+    QTRY_COMPARE(tab->inputBitsForTest(), quint8(0x11));
+    s.core.unkey();
+    QTRY_VERIFY(!tab->inputStripTxForTest());
 }
 
 QTEST_MAIN(TstRemoteHl2Io)
