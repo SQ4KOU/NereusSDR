@@ -1930,7 +1930,10 @@ bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& contro
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        // The Core takes these on the air (transmitSettingsVersion 13) and
+        // Thetis disables none of them during MOX (setup.cs:5132-5161
+        // [v2.10.3.15]), so they carry no offAir rule.
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -2160,7 +2163,7 @@ bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
         || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
         || control.value(QStringLiteral("gate")).toObject() != QJsonObject{
             {QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
-            {QStringLiteral("min"), 6}, {QStringLiteral("offAir"), true}}) {
+            {QStringLiteral("min"), 6}}) {
         return false;
     }
     const QByteArray name = QByteArrayLiteral("paSettingsBypass");
@@ -2229,7 +2232,7 @@ bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     if (key == QLatin1String("SwrProtectionLimit")) {
@@ -2270,7 +2273,7 @@ bool SetupDescription::validateAudioPropertyBinding(const QJsonObject& control)
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")) != QJsonValue(version)
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -2319,7 +2322,10 @@ bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)
                                         QStringLiteral("Low Latency")};
                     const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
                     if (choices.size() != expected.size()
-                        || (side == QLatin1String("Tx")
+                        // Only the TX buffer sizes stay off-air: Thetis
+                        // greys grpDSPBufferSize during MOX (setup.cs:5159
+                        // [v2.10.3.15]); the TX filter size and type are not.
+                        || (side == QLatin1String("Tx") && family == QLatin1String("BufferSize")
                             ? gate.value(QStringLiteral("offAir")) != QJsonValue(true)
                             : gate.contains(QStringLiteral("offAir")))
                         || (side == QLatin1String("Tx")

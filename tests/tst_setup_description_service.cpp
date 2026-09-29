@@ -774,7 +774,7 @@ private slots:
         QCOMPARE(valid.value("binding").toObject().value("property").toObject()
                      .value("name"), QJsonValue("paSettingsBypass"));
         QCOMPARE(valid.value("gate"), QJsonValue(QJsonObject{
-            {"capability", "transmitSettingsVersion"}, {"min", 6}, {"offAir", true}}));
+            {"capability", "transmitSettingsVersion"}, {"min", 6}}));
         QVERIFY(!valid.value("gate").toObject().contains("transmit"));
         const auto reject = [&valid](const QString& field, const QJsonValue& value) {
             QJsonObject bad = valid;
@@ -785,11 +785,11 @@ private slots:
         reject(QStringLiteral("label"), QStringLiteral("Bypass PA"));
         reject(QStringLiteral("tooltip"), QStringLiteral("Wrong tooltip"));
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 5}, {"offAir", true}});
+                                                   {"min", 5}});
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 6}, {"offAir", true}, {"transmit", true}});
+                                                   {"min", 6}, {"transmit", true}});
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 6}});
+                                                   {"min", 6}, {"offAir", true}});
         QJsonObject bad = valid;
         QJsonObject binding = bad.value("binding").toObject();
         QJsonObject ref = binding.value("property").toObject();
@@ -1816,6 +1816,153 @@ private slots:
                      .value("gate").toObject().contains("offAir"));
     }
 
+    // The off-air sweep: the Core has taken these transmit settings on the
+    // air since transmitSettingsVersion 13, and Thetis disables none of them
+    // during MOX (setup.cs:5132-5161 [v2.10.3.15]), so they carry no off-air
+    // rule at any description version. Thetis greys only grpDSPBufferSize
+    // (setup.cs:5159 [v2.10.3.15]), so the TX buffer sizes keep theirs.
+    void transmitSettingsTakenOnTheAirCarryNoOffAirRule()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+
+        QStringList audioIds;
+        for (const char* name : {"micGain", "hermesLineIn", "hermesMicBoost", "hermesLineInGain",
+                                 "orionMicTipRing", "orionMicBias", "orionMicPttDisabled",
+                                 "orionMicBoost", "saturnMicXlr", "saturnMicPttDisabled",
+                                 "saturnMicBias", "saturnMicBoost"}) {
+            audioIds << QStringLiteral("audio.txInput.") + QLatin1String(name);
+        }
+        for (const char* name : {"activeProfile", "save", "delete", "filterLow", "filterHigh",
+                                 "amCarrierLevel"}) {
+            audioIds << QStringLiteral("audio.txProfile.") + QLatin1String(name);
+        }
+        QStringList transmitIds;
+        for (const char* name : {"power", "attOnTx", "attOnTxValue", "forceAttWhenPsOff",
+                                 "tuneDriveSource", "fixedTunePower", "SwrProtectionEnabled",
+                                 "SwrProtectionLimit", "SwrTuneProtectionEnabled",
+                                 "TunePowerSwrIgnore", "WindBackPowerSwr",
+                                 "TxInhibitMonitorEnabled", "TxInhibitMonitorReversed"}) {
+            transmitIds << QStringLiteral("transmit.power.") + QLatin1String(name);
+        }
+        for (const char* name : {"dexpEnabled", "dexpAttackTimeMs", "voxHangTimeMs",
+                                 "dexpReleaseTimeMs", "voxThresholdDb", "dexpExpansionRatioDb",
+                                 "dexpHysteresisRatioDb", "dexpDetectorTauMs",
+                                 "dexpLookAheadEnabled", "dexpLookAheadMs",
+                                 "dexpSideChannelFilterEnabled", "dexpLowCutHz", "dexpHighCutHz",
+                                 "antiVoxRun", "antiVoxGainDb", "antiVoxTauMs"}) {
+            transmitIds << QStringLiteral("transmit.dexpVox.") + QLatin1String(name);
+        }
+        QStringList dspIds;
+        QStringList bufferIds;
+        for (const char* mode : {"Phone", "Fm", "Dig"}) {
+            dspIds << QStringLiteral("dsp.options.DspOptionsFilterSize%1Tx").arg(QLatin1String(mode))
+                   << QStringLiteral("dsp.options.DspOptionsFilterType%1Tx").arg(QLatin1String(mode));
+            bufferIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Tx").arg(QLatin1String(mode));
+        }
+        QStringList paIds{QStringLiteral("pa.gain.bypassPaSettings")};
+        for (int point = 1; point <= 10; ++point) {
+            paIds << QStringLiteral("pa.wattMeter.calPoint%1").arg(point);
+        }
+        QCOMPARE(audioIds.size() + transmitIds.size() + dspIds.size() + paIds.size(),
+                 18 + 29 + 6 + 11);
+
+        const auto withOffAir = [](QJsonObject row) {
+            QJsonObject gate = row.value("gate").toObject();
+            gate.insert("offAir", true);
+            row.insert("gate", gate);
+            return row;
+        };
+        QSet<QString> seen;
+        const auto check = [&](const QString& description, const QStringList& ids, int version) {
+            const QJsonObject category = projectedCategory(description, version);
+            for (const QString& id : ids) {
+                const QJsonObject row = controlById(category, id);
+                const QString where = QStringLiteral("%1 at %2").arg(id).arg(version);
+                if (row.isEmpty()) {
+                    continue;   // another board family's row; see `seen` below
+                }
+                seen.insert(where);
+                QVERIFY2(!row.value("gate").toObject().contains("offAir"), qPrintable(where));
+                // The closed validators refuse the row with the rule put back.
+                const QJsonObject locked = withOffAir(row);
+                if (SetupDescriptionService::validateTransmitPropertyBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateTransmitPropertyBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateTransmitSettingBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateTransmitSettingBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateAudioPropertyBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateAudioPropertyBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateDspSettingBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateDspSettingBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validatePaBypassBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validatePaBypassBinding(locked),
+                             qPrintable(where));
+                }
+            }
+        };
+        for (const int version : {15, 19, 20}) {
+            check(service.transmit(), transmitIds, version);
+            check(service.dsp(), dspIds, version);
+            check(service.pa(), paIds, version);
+        }
+        // The TX Input page describes the connected radio's Radio Mic
+        // family only: read it on a Hermes, an Orion-MkII and a Saturn.
+        for (const HPSDRHW board : {HPSDRHW::Hermes, HPSDRHW::OrionMKII, HPSDRHW::Saturn}) {
+            SetupDescriptionService family;
+            family.setRadioContext(BoardCapsTable::forBoard(board), radio.hardwareProfile().model);
+            for (const int version : {15, 19, 20}) {
+                check(family.audio(), audioIds, version);
+            }
+        }
+        for (const int version : {15, 19, 20}) {
+            for (const QStringList* ids : {&audioIds, &transmitIds, &dspIds, &paIds}) {
+                for (const QString& id : *ids) {
+                    QVERIFY2(seen.contains(QStringLiteral("%1 at %2").arg(id).arg(version)),
+                             qPrintable(QStringLiteral("%1 at %2 is not described")
+                                            .arg(id).arg(version)));
+                }
+            }
+        }
+        // The closed validators accept each family's row without the rule.
+        const QJsonObject current = projectedCategory(service.transmit(), 20);
+        QVERIFY(SetupDescriptionService::validateTransmitPropertyBinding(
+            controlById(current, "transmit.dexpVox.dexpEnabled")));
+        QVERIFY(SetupDescriptionService::validateTransmitSettingBinding(
+            controlById(current, "transmit.power.SwrProtectionEnabled")));
+        QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(
+            controlById(projectedCategory(service.audio(), 20), "audio.txProfile.filterLow")));
+        QVERIFY(SetupDescriptionService::validatePaBypassBinding(
+            controlById(projectedCategory(service.pa(), 20), "pa.gain.bypassPaSettings")));
+
+        // The TX buffer sizes keep the rule, and the validator requires it.
+        for (const int version : {15, 19, 20}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : bufferIds) {
+                const QJsonObject row = controlById(dsp, id);
+                const QString where = QStringLiteral("%1 at %2").arg(id).arg(version);
+                QVERIFY2(!row.isEmpty(), qPrintable(where));
+                QCOMPARE(row.value("gate").toObject().value("offAir"), QJsonValue(true));
+                QVERIFY2(SetupDescriptionService::validateDspSettingBinding(row), qPrintable(where));
+                QJsonObject unlocked = row;
+                QJsonObject gate = unlocked.value("gate").toObject();
+                gate.remove("offAir");
+                unlocked.insert("gate", gate);
+                QVERIFY2(!SetupDescriptionService::validateDspSettingBinding(unlocked),
+                         qPrintable(where));
+            }
+        }
+    }
+
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
     // Core applies on and off the air (transmitSettingsVersion 11), in its
     // own PA Control section after External TX Inhibit, as the desktop page
@@ -2568,7 +2715,7 @@ private slots:
         invalid.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
         gate.insert(QStringLiteral("transmit"), true);
-        gate.remove(QStringLiteral("offAir"));
+        gate.insert(QStringLiteral("offAir"), true);
         invalid.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
     }
@@ -2592,7 +2739,7 @@ private slots:
         bad.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
         gate.insert(QStringLiteral("transmit"), true);
-        gate.remove(QStringLiteral("offAir"));
+        gate.insert(QStringLiteral("offAir"), true);
         bad.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
         bad = described.first().toObject();

@@ -776,7 +776,7 @@ private slots:
         QCOMPARE(check->toolTip(), control.value("tooltip").toString());
         QVERIFY(!check->isHidden());
         QVERIFY(SetupDescriptionService::validatePaBypassBinding(control));
-        QCOMPARE(control.value("gate").toObject().value("offAir"), QJsonValue(true));
+        QVERIFY(!control.value("gate").toObject().contains("offAir"));
         QVERIFY(!control.value("gate").toObject().contains("transmit"));
 
         RadioModel other;

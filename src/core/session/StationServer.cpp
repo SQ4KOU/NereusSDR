@@ -1580,8 +1580,13 @@ bool isPowerPageTransmitKey(const QString& key)
 // (hardware/<mac>/pa/..., PaProfileManager: PA Gain's profiles, per-band
 // gains, adjust matrix and max power) and the PA forward-power table
 // (hardware/<mac>/paCalibration/..., CalibrationController: the Watt Meter
-// page). Taken while the radio is off the air and applied at once
-// (RadioModel::scheduleRemoteHardwareApply). The Calibration tab's own
+// page). Taken on the air since transmitSettingsVersion 13, as a local
+// window takes them. On the air a PA profile write goes through
+// RadioModel::paSettingOnAirRefusal (the version 20 lock: only the active
+// profile's transmitting-band row, from the transmit holder); the Watt
+// Meter points are taken and applied once the radio is back on receive
+// (RadioModel::scheduleRemoteHardwareApply, flushRemoteHardwareApply).
+// Off the air both apply at once. The Calibration tab's own
 // copies of its transmit fields (paCalibration/cal/...) are Hardware
 // Config's, not the PA pages': parity Task 13 takes them
 // (isTransmitHardwareKeyTakenOnAir).

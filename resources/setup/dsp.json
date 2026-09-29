@@ -2716,8 +2716,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "1024",
@@ -2755,8 +2754,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "1024",
@@ -2811,8 +2809,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "1024",
@@ -2852,8 +2849,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "Linear Phase",
@@ -2885,8 +2881,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "Linear Phase",
@@ -2932,8 +2927,7 @@
               "applies": "live",
               "gate": {
                 "capability": "transmitSettingsVersion",
-                "min": 1,
-                "offAir": true
+                "min": 1
               },
               "choices": [
                 "Linear Phase",

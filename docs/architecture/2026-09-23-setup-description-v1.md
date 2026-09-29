@@ -828,7 +828,7 @@ family's Radio Mic section: Hermes / Atlas (Mic In or Line In, +20 dB Mic
 Boost, Line In Gain -34 to 12 dB), Orion-MkII (Mic Tip-Ring, Mic Bias, Mic PTT
 Disabled, +20 dB Mic Boost) or Saturn G2 (3.5 mm Jack or XLR, Mic PTT
 Disabled, Mic Bias, +20 dB Mic Boost). They gate on `transmitSettingsVersion`
-3 and off the air, as the desktop does. The microphone source and the
+3 and carry no off-air rule (see the off-air sweep below). The microphone source and the
 microphone device, buffer and test are each computer's own and are not
 described (the source is not on the link). TX Profile gains the profile
 choice (`txProfile.select`, with the unsaved-changes question), Save... (a
@@ -1034,6 +1034,23 @@ served by the Core that applies the edit. With a radio that Core reports
 transmitSettingsVersion 15 and takes these settings on the air; without one it
 reports 0, which fails the `min` and disables the rows anyway.
 
+The off-air sweep applies the same rule to the other transmit rows the Core
+has taken on the air since transmitSettingsVersion 13. These lose their
+off-air rule at every description version, and the Core refuses one that
+carries `offAir`: Audio's TX Input rows (Mic Gain and the twelve Radio Mic
+rows across the three families), TX Profile's profile choice, Save, Delete,
+Filter Low, Filter High and AM Carrier Level; DSP > Options' Filter Size TX
+and Filter Type TX (Phone, FM, Digital); PA Gain's Bypass ANAN PA Settings;
+Transmit > Power's thirteen rows (drive, ATT on TX, tune power, SWR
+protection and External TX Inhibit); and Transmit > DEXP/VOX's sixteen rows.
+Thetis disables none of these while MOX is on: its MOX setter
+(setup.cs:5132-5161 [v2.10.3.15]) greys only the VAC controls and
+`grpDSPBufferSize`. So the DSP > Options Buffer Size TX rows keep their
+`offAir` rule (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled =
+!mox`), and the Core refuses one without it. The PA Watt Meter points never
+carried the rule. No description version changes: a peer at any version reads
+the rows without the lock, and the Core still applies its own on-air checks.
+
 DSP's category coverage becomes "partial: the NR3 and NNR model files are
 not described" and the CFC page carries no coverage (`coverageV19`). A V15
 to V18 peer receives DSP at version 15 without the row, with version 15's
@@ -1117,9 +1134,9 @@ On the ANAN-G2E only, the partial `PA Gain` page also describes the existing
 `transmit.paSettingsBypass` Boolean toggle. The Core projects that page away
 unless its board capabilities include both an integrated PA and
 `showsBypassPaSettingsUi`, and the SKU is not RX-only. Its gate is
-`transmitSettingsVersion:6` plus `offAir:true`, with no `transmit:true` gate:
-the Core already permits negotiated transmit *settings* on a receive-only
-station while it is off the air. The Core still applies its own property-write
+`transmitSettingsVersion:6`, with no `transmit:true` gate and no `offAir`:
+the Core permits negotiated transmit *settings* on a receive-only station,
+and takes this one on the air (see the off-air sweep below). The Core still applies its own property-write
 authority and on-air checks. This one toggle does not describe the PA profile
 grid, calibration, or auto-calibration sweep.
 
