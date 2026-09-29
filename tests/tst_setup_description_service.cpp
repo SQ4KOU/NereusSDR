@@ -2428,6 +2428,11 @@ private slots:
                  QJsonValue(QJsonObject{{"label", "dB Min (%1):"}}));
         QCOMPARE(byId("display.threeD.floor").value("perBand"),
                  QJsonValue(QJsonObject{{"label", "3D Floor:"}}));
+        // The surface starts at the pan's noise floor less this depth
+        // (SpectrumWidget::dssFloorDbm), kept per band (PanadapterModel).
+        QCOMPARE(byId("display.threeD.floor").value("tooltip"),
+                 QJsonValue("How far below the noise floor the surface starts. "
+                            "Each band keeps its own value."));
         QStringList buttons;
         for (const QJsonValue& raw : v12) {
             if (raw.toObject().value("kind") == QJsonValue("button")) {

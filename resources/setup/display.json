@@ -1825,7 +1825,7 @@
             {
               "id": "display.threeD.floor",
               "label": "3D Floor:",
-              "tooltip": "",
+              "tooltip": "How far below the noise floor the surface starts. Each band keeps its own value.",
               "kind": "slider",
               "binding": {
                 "phone": "Display3DFloorDepth"

@@ -28,6 +28,9 @@
 //                 verbatim from AetherSDR `src/gui/SpectrumOverlayMenu.cpp`
 //                 [@1872028c]. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - R-IOS-18: 3D Floor says what it does (how far below the
+//                 noise floor the 3D surface starts; kept per band).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayMenu.h"
@@ -286,6 +289,10 @@ void SpectrumOverlayMenu::buildUI()
     m_dssFloorSlider->setObjectName(QStringLiteral("dssFloorDepthSlider"));
     m_dssFloorSlider->setRange(0, 24);
     m_dssFloorSlider->setValue(6);
+    // The same words as Setup > Display > 3D View's 3D Floor.
+    m_dssFloorSlider->setToolTip(QStringLiteral(
+        "How far below the noise floor the surface starts. "
+        "Each band keeps its own value."));
     m_dssFloorLabel = new QLabel(QString::number(6), this);
     dssFloorRow->addWidget(m_dssFloorSlider);
     dssFloorRow->addWidget(m_dssFloorLabel);
