@@ -426,6 +426,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "diversityPatternVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -6165,6 +6170,12 @@
                     "kind": "f64",
                     "name": "minNotchWidthHz",
                     "ordinal": 149
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "diversityPattern",
+                    "ordinal": 150
                 }
             ]
         },

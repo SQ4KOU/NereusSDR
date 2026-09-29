@@ -112,6 +112,10 @@
 //   2026-09-27 - R-IOS-13 / R-R3-49: txModMonitorVersion, after
 //                relayAllowed. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: diversityPatternVersion, after
+//                vaxVersion, only for a peer that declared
+//                diversityPattern. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -351,6 +355,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         if (vaxEntry) {
             updates.append(intEntry("vaxVersion", vaxVersion));
         }
+        // Phone wire batch: the Diversity dialog's pattern on each slice,
+        // only for a peer that declared diversityPattern.
+        if (diversityPatternVersion > 0) {
+            updates.append(intEntry("diversityPatternVersion", diversityPatternVersion));
+        }
     }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
@@ -580,7 +589,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "remoteIqVersion"
                    || u.name == "miniDisplayVersion"
                    || u.name == "radioAntennaRowsVersion"
-                   || u.name == "vaxVersion") {
+                   || u.name == "vaxVersion"
+                   || u.name == "diversityPatternVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -602,6 +612,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "vaxVersion") {
                     caps.vaxEntry = true;
                     caps.vaxVersion = version;
+                } else if (u.name == "diversityPatternVersion") {
+                    caps.diversityPatternVersion = version;
                 } else if (u.name == "stationIdentityVersion") {
                     caps.stationIdentityVersion = version;
                 } else if (u.name == "deviceAdminVersion") {

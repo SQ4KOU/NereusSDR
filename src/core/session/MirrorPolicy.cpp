@@ -152,6 +152,9 @@
 //   2026-09-28 - iPhone app plan Task 40: TransmitModel micMuted
 //                 Bidirectional (transmitSettingsVersion 10). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Phone wire batch: SliceModel diversityPattern Outbound
+//                 (diversityPatternVersion 1). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -216,7 +219,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (150 entries) ----
+    // ---- SliceModel (151 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -411,6 +414,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 16, dspInfoVersion 1): the Core's channel's
     // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
     { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
+    // Diversity pattern for the phone (diversityPatternVersion 1): the
+    // Diversity dialog's sensitivity pattern, read-only; only to a peer that
+    // declared diversityPattern (StationServer::fitPeerOnlyProperties).
+    { "SliceModel", "diversityPattern", MirrorDirection::Outbound },
 
     // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the

@@ -1,5 +1,5 @@
 // =================================================================
-// src/gui/widgets/DiversityRadarWidget.h  (NereusSDR)
+// src/core/DiversityPattern.h  (NereusSDR)
 // =================================================================
 //
 // Ported from Thetis source:
@@ -7,29 +7,19 @@
 //   original licence from Thetis source is included below.
 //
 // Scope of port: the sensitivity-vs-angle math from
-// DiversityForm.CalcVrms (DiversityForm.cs:2398-2440 [v2.10.3.15])
-// plus the picRadar_Paint background/axes structure
-// (DiversityForm.cs:1489-1530 [v2.10.3.15]) and the
-// getControlHandlePoint placement helper
-// (DiversityForm.cs:1610-1632 [v2.10.3.15]).  Upstream Thetis
-// defines CalcVrms but its callsite in picRadar_Paint is commented
-// out (DiversityForm.cs:1564-1580 [v2.10.3.15]); NereusSDR
-// uncomments and uses it to render the antenna lobe.  Visual
-// chrome (radial gradient backdrop, compass labels, dashed range
-// rings, translucent cyan lobe fill, centre dot, yellow steering
-// handle) is NereusSDR-original Qt6 paint.
+// DiversityForm.CalcVrms (DiversityForm.cs:2398-2440 [v2.10.3.15]),
+// moved out of DiversityRadarWidget so the Core sends the pattern the
+// Diversity dialog draws (the phone draws the Core's samples and never
+// ports the formula). The inputs, their defaults and the sampling are
+// the desktop radar's own (NereusSDR-original: a 5.5 m spacing and the
+// radar's gain term, which upstream CalcVrms does not have).
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-05-27 — Reimplemented in C++20/Qt6 for NereusSDR by
-//                 J.J. Boyd (KG4VCF), with AI-assisted transformation
-//                 via Anthropic Claude Code.  Phase 3F Sub-Epic G
-//                 Task 5: polar QPainter widget with mouse-drag to
-//                 emit phaseAdjusted; consumer (Sub-Epic G Task 12)
-//                 wires the signal to SliceModel::diversityPhaseDeg.
-//   2026-09-28 - The lobe math moved to core/DiversityPattern.
-//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
-//                 Code.
+//   2026-09-28 - Moved from DiversityRadarWidget (Phase 3F Sub-Epic G
+//                 Task 5) into the Core with the sampling and the wire
+//                 value, for the phone's Diversity page. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -75,54 +65,51 @@
 
 #pragma once
 
-#include <QWidget>
+#include <QList>
+#include <QString>
 
-#include "core/DiversityPattern.h"
+namespace NereusSDR::DiversityPattern {
 
-class QMouseEvent;
-class QPaintEvent;
+/// The antenna spacing the desktop radar uses. It has no setting (Thetis's
+/// udAntSpacing is not ported), so it is a constant. NereusSDR-original.
+constexpr double kDefaultSpacingMeters = 5.5;
+/// The radar's frequency before a slice sets it (MHz). NereusSDR-original.
+constexpr double kDefaultVfoMhz = 14.225;
+/// Samples round the circle: 360 / 3 degrees, bearing 0 north, clockwise.
+constexpr int kSamples = 120;
+/// Places each wire sample keeps (a thousandth of the peak).
+constexpr int kWireDecimals = 3;
 
-namespace NereusSDR {
-
-/// Polar paint widget rendering the diversity sensitivity lobe.
-///
-/// Geometry: square, centred origin, range = unit (clamped to 1.0).
-/// Phase is supplied in radians (0..2 PI), gain as a linear ratio
-/// (1.0 = unity).  Frequency drives the antenna-spacing-in-wavelengths
-/// term used by the lobe math; default 14.225 MHz, default 5.5 m
-/// element spacing.
-class DiversityRadarWidget : public QWidget {
-    Q_OBJECT
-public:
-    explicit DiversityRadarWidget(QWidget* parent = nullptr);
-
-    void setPhase(double radians);
-    void setGain(double ratio);
-    void setCrossFire(bool on);
-    void setVfoFreqMhz(double mhz);
-    void setAntennaSpacingMeters(double m);
-
-signals:
-    void phaseAdjusted(double newRadians);
-    void gainAdjusted(double newGain);
-
-protected:
-    void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-
-private:
-    double m_phase {0.0};
-    double m_gain {1.0};
-    bool   m_crossFire {false};
-    double m_vfoMhz {DiversityPattern::kDefaultVfoMhz};
-    double m_antSpacingM {DiversityPattern::kDefaultSpacingMeters};
-    bool   m_dragging {false};
-
-    // The radar's inputs to Thetis DiversityForm.CalcVrms, now
-    // DiversityPattern::sensitivity (the Core sends the same samples).
-    DiversityPattern::Inputs patternInputs() const;
+/// Everything CalcVrms reads.
+struct Inputs {
+    double vfoMhz = kDefaultVfoMhz;
+    /// Steering angle (the diversity phase), radians.
+    double phaseRad = 0.0;
+    /// Second receiver's gain as a linear ratio (1.0 = unity).
+    double gainLinear = 1.0;
+    /// Thetis's cross_fire (pi when on). The dialog has no switch: off.
+    bool crossFire = false;
+    double spacingMeters = kDefaultSpacingMeters;
 };
 
-} // namespace NereusSDR
+/// The inputs the Diversity dialog gives its radar for a slice: its
+/// frequency (Hz), diversity phase (degrees) and gain (dB).
+Inputs inputsForSlice(double frequencyHz, double phaseDeg, double gainDb);
+
+/// Relative sensitivity at azimuth `thetaRad` (CalcVrms).
+double sensitivity(const Inputs& inputs, double thetaRad);
+
+/// kSamples values, sample i at bearing i * 3 degrees clockwise from
+/// north, each divided by the largest (so the peak is 1). When every
+/// value is below 1e-9 they are returned undivided. The radar draws
+/// sample i at radius value * 0.85 of its circle.
+QList<double> normalizedSamples(const Inputs& inputs);
+
+/// The Core's wire value for a slice (the station link document, "The
+/// diversity pattern"): compact JSON with the inputs the slice does not
+/// already carry (spacingMeters, crossFire), stepDeg and the samples, each
+/// rounded to kWireDecimals places. The frequency, phase and gain are the
+/// slice's own frequency, diversityPhaseDeg and diversityGainDb.
+QString wireJson(double frequencyHz, double phaseDeg, double gainDb);
+
+} // namespace NereusSDR::DiversityPattern

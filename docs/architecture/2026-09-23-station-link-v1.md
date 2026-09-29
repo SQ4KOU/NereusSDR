@@ -775,6 +775,15 @@ declares it at minor 11 is sent `vaxVersion` (section 6.3) and, when that is
 desktop's remote window does not: its VAX applet runs that computer's own
 VAX channels (R-R3-44).
 
+**`diversityPattern` 1** (phone wire batch): the client draws the Diversity
+dialog's sensitivity pattern from the Core's samples (section 7.1, "The
+diversity pattern"). A peer that declares it at minor 11 is sent
+`diversityPatternVersion` (section 6.3) and each slice's
+`diversityPattern`; a peer that does not sees exactly the wire it was
+built for, with neither. The station does not declare it. The desktop's
+remote window does not declare it either: its Diversity dialog draws the
+pattern itself from the same function.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -905,6 +914,7 @@ change shows as surface drift and as a change to this table.
 | `accessoryTxVersion` | 1 |
 | `radioAntennaRowsVersion` | 1 |
 | `vaxVersion` | 1 |
+| `diversityPatternVersion` | 1 |
 
 <!-- /surface -->
 
@@ -1018,6 +1028,16 @@ When a feature is off, its version is 0:
   (nereusd publishes none, R-R3-44). At 1 the Core sends that peer the `vax`
   object (section 7.1), takes its writes (section 7.3), and keeps the
   `vaxLevels` record stream (section 7.7).
+- `diversityPatternVersion` (phone wire batch): optional, sent only at
+  agreed minor 11 to a peer whose hello declared `diversityPattern` 1,
+  while the Core has a radio model, after `vaxVersion` (or after the entry
+  before it when that is absent) and before `coreBuildInfo`. At 1 every
+  `slice:<id>` carries `diversityPattern`, the Diversity dialog's
+  sensitivity pattern as read-only JSON (section 7.1, "The diversity
+  pattern"). A peer that did not declare the feature is sent neither this
+  entry nor the property. An app on a Core that sends no entry shows its
+  pattern disabled with "This Core does not send the diversity pattern.
+  Updating the Core may help."
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1599,7 +1619,9 @@ usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
 11, and `sessionHolderVersion`, last, only for a peer that declared
 `sessionHolder` (section 6.1); `remoteTxVersion` and the three
-`txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
+`txRefusal` entries after it only for a peer that declared `remoteTx`;
+`diversityPatternVersion` only for a peer that declared
+`diversityPattern`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -1772,7 +1794,8 @@ older window sees only the values it was built for.
 | 83 | `accessoryTxVersion` | `i64` |
 | 84 | `radioAntennaRowsVersion` | `i64` |
 | 85 | `vaxVersion` | `i64` |
-| 86 | `coreBuildInfo` | `utf8` |
+| 86 | `diversityPatternVersion` | `i64` |
+| 87 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2090,7 +2113,7 @@ An enum property lists the values its domain allows.
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
-**SliceModel** (150 properties)
+**SliceModel** (151 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2244,6 +2267,7 @@ An enum property lists the values its domain allows.
 | 147 | `agcPeakDb` | `f64` | outbound |  |
 | 148 | `agcAverageDb` | `f64` | outbound |  |
 | 149 | `minNotchWidthHz` | `f64` | outbound |  |
+| 150 | `diversityPattern` | `utf8` | outbound |  |
 
 **SpotSourceHost** (11 properties)
 
@@ -2615,6 +2639,11 @@ Notes on the keys:
   size and rate), 0 while the slice has no receiver. A window's TNF page
   shows it, and its pans check the notch width presets against it and
   draw the notch dent with it.
+- **`slice:<id>` diversity pattern.** `diversityPattern` (utf8, outbound,
+  no WRITE, declared last in `SliceModel`; `diversityPatternVersion` 1) is
+  the sensitivity pattern the Diversity dialog draws for the slice, below
+  ("The diversity pattern"). Sent only to a peer that declared
+  `diversityPattern` 1.
 - **`slice:<id>` ADC and AGC readings.** `adcPeakDbfs`, `adcAverageDbfs`,
   `agcGainDb`, `agcPeakDb` and `agcAverageDb` (f64, outbound, no WRITE;
   parity Task 15) are the Core's receive meters for the slice's receiver,
@@ -3150,6 +3179,63 @@ transmit-side settings keys are written only by a session `txPermitted`
 allows (refused otherwise with the gate's sentence); while another
 device's holder is on the air, a change to the transmit path is refused
 with the on-air sentence (section 18.4).
+
+#### The diversity pattern (`diversityPattern`)
+
+Phone wire batch; `diversityPatternVersion` 1. The desktop's Diversity
+dialog draws a sensitivity pattern (a polar lobe) for its slice from the
+slice's frequency, diversity phase and gain. The Core computes the same
+pattern with the same function the dialog's radar draws from
+(`DiversityPattern`, `src/core/DiversityPattern.cpp`, ported from Thetis
+`DiversityForm.CalcVrms`) and sends it on each slice as
+`diversityPattern`, so an app draws exactly what the desktop draws without
+the formula.
+
+- **Read-only.** A write is refused as any outbound property is ("The
+  Core sets this itself; it cannot be changed from here."). The pattern
+  moves when the slice's `frequency`, `diversityPhaseDeg` or
+  `diversityGainDb` moves; a writer of one of those gets the new pattern
+  in the side-effect `delta` that follows its `property.result`, and every
+  other declaring peer in the same `delta` as the input that moved it.
+- **When it is sent.** Only when a rounded sample changes: a tuning step
+  small enough to leave every sample where it was sends no pattern.
+- **Who gets it.** Only a peer at agreed minor 11 whose hello declared
+  `diversityPattern` 1. Its `SliceModel` schema, its slice snapshots and
+  its deltas carry the field. Every other peer's carry none of it, and a
+  delta that would carry only the pattern is not sent to them.
+- **Which slice.** Every slice carries its own. The desktop dialog shows
+  the first slice (Slice A); an app shows the same slice to match it.
+- **What it is.** One JSON object, compact, keys in sorted order. A
+  reader ignores a key it does not know.
+
+| Key | JSON type | Units and range | Meaning |
+| --- | --- | --- | --- |
+| `crossFire` | boolean | | Thetis's cross-fire term (adds half a turn to the second antenna). The desktop has no switch for it: always false |
+| `points` | array of numbers | 120 numbers, 0 to 1, each to 3 places | Relative sensitivity at bearing `i` × `stepDeg` degrees, `i` from 0, bearing 0 north, clockwise; each divided by the largest, so the peak is 1 (all near 0 are sent as they are) |
+| `spacingMeters` | number | metres | The antenna spacing the pattern assumes. The desktop has no setting for it: 5.5 |
+| `stepDeg` | number | degrees | The bearing step between points: 3 |
+
+The frequency, phase and gain the pattern was computed from are the
+slice's own `frequency` (Hz), `diversityPhaseDeg` and `diversityGainDb`,
+sent in the same `delta` when they move it. The desktop has no antenna
+orientation setting; bearing 0 is the radar's north.
+
+- **Drawing it.** The desktop draws point `i` at radius `points[i]` ×
+  0.85 of its circle's radius, at bearing `i` × `stepDeg` (north up,
+  clockwise), joins the points into a closed polygon and fills it. The
+  steering handle sits at bearing `diversityPhaseDeg` on the same 0.85
+  radius.
+- **The values** (the Core computes them; an app does not). For bearing
+  θ: `phi` = (π when `crossFire`, else 0) + cos(θ + phase in radians);
+  over 20 steps `i` of one RF cycle at the slice frequency `f`,
+  v1 = sin(2π `i` / 20) and v2 = sin(2π `i` / 20 + `phi` - 2π
+  `spacingMeters` `f` / 299792458) × 10^(gain dB / 20); the sensitivity is
+  the mean of (v1 + v2)² × 5.5, and `points` is it divided by the largest
+  of the 120.
+
+**Worked example.** Slice at 14.2 MHz, `diversityPhaseDeg` 0,
+`diversityGainDb` 0: `points[0]` (north) is 1, `points[30]` (east) 0.518,
+`points[60]` (south) 0.069 and `points[90]` (west) 0.518.
 
 **The `vax` object** (iPhone app plan Task 25, `vaxVersion` 1). The Core
 takes a write of `ch<N>RxGain`, `ch<N>Muted` or `txGain` only from a peer

@@ -6952,6 +6952,9 @@ nereus_add_test(tst_rx_channel_ext_div_wrappers)
 # Source: NereusSDR-original test infrastructure.
 # Design: docs/architecture/2026-05-26-phase3f-sub-epic-g-diversity-plan.md Task 2.
 nereus_add_test(tst_diversity_dialog_persistence)
+# Phone wire batch: the Diversity dialog's sensitivity pattern
+# (core/DiversityPattern) and the slice's diversityPattern.
+nereus_add_test(tst_diversity_pattern)
 
 # ── Tunable Notch Filter Task 2: RxChannel manual-notch wrappers ──────────
 # The Notch value type plus add / edit / delete / sync / count, the

@@ -631,6 +631,12 @@
 //               times a second while a peer subscribes. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: Phone wire batch: diversityPatternVersion 1 and each
+//               slice's read-only diversityPattern only to a peer at minor
+//               11 whose hello declared diversityPattern 1
+//               (fitPeerOnlyProperties); every other peer's schema,
+//               snapshot and deltas stay as they were. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1083,6 +1089,32 @@ bool isVaxMessage(const SessionMessage& message)
 {
     return message.objectKey == kVaxKey
         || (message.kind == SessionMessageKind::Schema && message.className == "StationVax");
+}
+
+// Phone wire batch: properties on an object every peer already gets that go
+// only to a peer at kRadioIdentitySessionProtocolMinor whose hello declared
+// `feature` 1 (StationServer::fitPeerOnlyProperties). Every other peer's
+// schema, snapshot and deltas stay exactly as they were.
+struct PeerOnlyProperty {
+    const char* className;
+    const char* objectKey;   // the key, or its prefix when keyIsPrefix
+    bool keyIsPrefix;
+    const char* property;
+    const char* feature;
+};
+
+constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
+    // The Diversity dialog's sensitivity pattern (diversityPatternVersion 1).
+    {"SliceModel", "slice:", true, "diversityPattern", "diversityPattern"},
+};
+
+bool peerOnlyPropertyApplies(const PeerOnlyProperty& entry, const SessionMessage& message)
+{
+    if (message.kind == SessionMessageKind::Schema) {
+        return message.className == entry.className;
+    }
+    return entry.keyIsPrefix ? message.objectKey.startsWith(entry.objectKey)
+                             : message.objectKey == entry.objectKey;
 }
 
 // iPhone app Task 13: why a connection ends when its device is removed, and
@@ -6436,7 +6468,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // A write's side effects can change nnrLimit (turning NNR off or
         // choosing a model clears it), so they are fitted to this peer too.
         SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
-        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)) {
+        // Phone wire batch: a write's side effects can move a declared
+        // feature's property (a slice's frequency moves its
+        // diversityPattern), which only a peer that declared it is sent.
+        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)
+            && fitPeerOnlyProperties(transport, delta)) {
             send(transport, delta);
         }
     }
@@ -7080,7 +7116,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     }
     // iPhone app Task 14: the pairing code only to a connection signed in
     // with a paired device's key.
-    const SessionMessage message = withPairingCodeFor(transport, original);
+    SessionMessage message = withPairingCodeFor(transport, original);
     // iPhone app Task 73 (ruling 5.6): a device's own slices, and markers
     // for the others to a view with the feature.
     if (!ownershipAllows(transport, message)) {
@@ -7090,6 +7126,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::Delta: {
+        // Phone wire batch: a declared feature's properties only to a peer
+        // that declared it; every other peer gets today's object.
+        if (!fitPeerOnlyProperties(transport, message)) {
+            return;
+        }
         const auto peer = m_peers.constFind(transport);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
@@ -7214,6 +7255,48 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         transport->sendText(SessionMessages::encode(message));
         return;
     }
+}
+
+// ── Properties for a declaring peer only (phone wire batch) ─────────────
+
+bool StationServer::peerGetsFeatureProperties(SessionTransport* transport,
+                                              const QByteArray& feature) const
+{
+    const auto peer = m_peers.constFind(transport);
+    return peer != m_peers.cend() && !m_radioModel.isNull()
+        && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, feature, 1);
+}
+
+bool StationServer::fitPeerOnlyProperties(SessionTransport* transport,
+                                          SessionMessage& message) const
+{
+    const qsizetype before = message.updates.size();
+    for (const PeerOnlyProperty& entry : kPeerOnlyProperties) {
+        if (!peerOnlyPropertyApplies(entry, message)
+            || peerGetsFeatureProperties(transport, QByteArray(entry.feature))) {
+            continue;
+        }
+        const QByteArray name(entry.property);
+        switch (message.kind) {
+        case SessionMessageKind::Schema:
+            message.fields.removeIf([&name](const SessionSchemaField& field) {
+                return field.name == name;
+            });
+            break;
+        case SessionMessageKind::ObjectCreate:
+        case SessionMessageKind::Delta:
+            message.updates.removeIf([&name](const MirrorUpdate& update) {
+                return update.name == name;
+            });
+            break;
+        default:
+            break;
+        }
+    }
+    // A delta that carried only such properties is not sent at all.
+    return message.kind != SessionMessageKind::Delta || before == 0
+        || !message.updates.isEmpty();
 }
 
 // ── Slice ownership (iPhone app Task 73) ─────────────────────────────────
@@ -9807,6 +9890,10 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.vaxEntry = true;
                 caps.vaxVersion = vaxVersion();
             }
+            // Phone wire batch: each slice's diversityPattern, after vax,
+            // for a peer that declared diversityPattern 1.
+            caps.diversityPatternVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("diversityPattern")) ? 1 : 0;
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
