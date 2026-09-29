@@ -580,6 +580,13 @@
 //                owner restores with nobody listening, so a lone device
 //                adopts it again. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 7: zero slices is a valid idle
+//                Core. closeUnclaimedSlice closes an unclaimed slice
+//                whatever the count, the transmit binding is released with
+//                the last slice, hasTransmitSlice gates keying, and a Core
+//                with no slice saves no layout (ruling Q10).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1923,11 +1930,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // The arbiter drops MOX before it flips the binding, so this always runs
     // with the transmitter unkeyed.
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
-            this, [this](int, int) {
+            this, [this](int, int newId) {
         rebindAccessorySlice();
         // R-R3-49 (parity Task 2): the transmit band's tune power.
         refreshTransmitTuneBand();
-        pushTxFrequencyFromTxSlice();
+        // Slice control plan Task 7: the binding released with the last
+        // slice has no frequency to push.
+        if (newId >= 0) {
+            pushTxFrequencyFromTxSlice();
+        }
         pushTxModeAndBandpass();
         applyTxAntennaFromBoundSlice();
         if (m_moxController) {
@@ -11982,7 +11993,24 @@ void RadioModel::removeSlice(int sliceId)
     removeSliceImpl(sliceId);
 }
 
-void RadioModel::removeSliceImpl(int sliceId, bool persist)
+bool RadioModel::closeUnclaimedSlice(int sliceId)
+{
+    // Slice control plan Task 7: the claims rule. A slice closes when it has
+    // no controller and nobody on it, whatever the count.
+    if (m_role != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->unclaimed().contains(sliceId)) {
+        return false;
+    }
+    removeSliceImpl(sliceId, true, true);
+    return sliceById(sliceId) == nullptr;
+}
+
+bool RadioModel::hasTransmitSlice() const
+{
+    return txBoundSlice() != nullptr;
+}
+
+void RadioModel::removeSliceImpl(int sliceId, bool persist, bool mayCloseLast)
 {
     const int position = m_slices.indexOf(sliceById(sliceId));
     if (position < 0) {
@@ -11996,7 +12024,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // window's last slice when the window shares the Core as a device
     // (another device took its receiver); the window shows an empty band
     // that offers a take (the several-devices design, section 12).
-    if (m_slices.size() == 1
+    // Slice control plan Task 7: and the claims rule's close of an
+    // unclaimed slice (closeUnclaimedSlice), which may leave none.
+    if (m_slices.size() == 1 && !mayCloseLast
         && !(m_role == Role::Remote && m_stationMayCloseLastSlice)) {
         return;
     }
@@ -12029,7 +12059,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         // from being re-admitted on the victim's behalf.
         clearRadeRxTarget(m_radeRxTarget.ownerSerial);
     }
-    if (victim->isTxSlice() && m_txSliceArbiter) {
+    // Slice control plan Task 7: the last slice has no other slice to hand
+    // transmit to; the binding is released once it has left the list.
+    if (victim->isTxSlice() && m_txSliceArbiter && m_slices.size() > 1) {
         const int fallbackPosition = (position == 0) ? 1 : 0;
         SliceModel* fallback = m_slices.at(fallbackPosition);
         // iPhone app plan Task 77 (ruling 8.12): the holder's transmit slice
@@ -12079,6 +12111,10 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // Reassert the invariant after the victim leaves the list.
     if (m_txSliceArbiter) {
         m_txSliceArbiter->syncToSliceList();
+        // Slice control plan Task 7: no slice left, so no transmit slice.
+        if (m_slices.isEmpty()) {
+            m_txSliceArbiter->releaseBinding();
+        }
     }
 
     // No explicit wideband push here. removeSlice reaches
@@ -16849,6 +16885,15 @@ void RadioModel::installBandPlanMoxCheck()
             refused.refusalCode = TxRefusals::kNotReady;
             return refused;
         }
+        // Slice control plan Task 7: a Core with no slice has nothing to
+        // transmit on; every key is refused, the radio's own PTT included,
+        // before any other check.
+        if (!hasTransmitSlice()) {
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
+        }
 
         bool regionOk = false;
         const int regionInt = AppSettings::instance()
@@ -16865,7 +16910,12 @@ void RadioModel::installBandPlanMoxCheck()
 
         const SliceModel* slice = txBoundSlice();
         if (!slice) {
-            return {false, QStringLiteral("No TX-bound slice")};
+            // Checked above (hasTransmitSlice); kept as the guard for the
+            // dereference below.
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
         }
 
         // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX
@@ -20047,6 +20097,17 @@ void RadioModel::completeReceiveLayoutStartup()
 bool RadioModel::captureReceiveLayout(QString* error)
 {
     if (!m_receiveLayoutManaged) {
+        return true;
+    }
+    // Slice control plan Task 7 (ruling Q10): a Core left with no slice
+    // saves no layout, so a restart starts as a first start does, with one
+    // Slice A nobody owns. Never reached before admission (the pending and
+    // protected guards of every caller).
+    if (m_slices.isEmpty()) {
+        ReceiveLayoutStore::forget(AppSettings::instance(), m_receiveLayoutMac);
+        if (error) {
+            error->clear();
+        }
         return true;
     }
     QList<ReceiveSliceState> slices;

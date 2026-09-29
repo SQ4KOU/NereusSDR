@@ -177,6 +177,9 @@
 //               refused CAT or TCI level, report pttSourcesReleased. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 7: the noTransmitSlice refusal
+//               from the mox check. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -505,6 +508,10 @@ TxRefusal MoxController::refusalForCheck(const safety::BandPlanGuard::MoxCheckRe
     }
     if (result.refusalCode == TxRefusals::kStationReceiveOnly) {
         return TxRefusals::stationReceiveOnly();
+    }
+    // Slice control plan Task 7: a Core with no slice.
+    if (result.refusalCode == TxRefusals::kNoTransmitSlice) {
+        return TxRefusals::noTransmitSlice();
     }
     return TxRefusals::bandPlan(result.reason);
 }

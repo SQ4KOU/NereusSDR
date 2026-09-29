@@ -23,6 +23,9 @@
 //   2026-09-26: iPhone app plan Task 77 fix wave, I3: radioOnAir. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 7: noTransmitSlice. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -153,6 +156,12 @@ TxRefusal changingHands()
 {
     return make(kChangingHands,
                 QStringLiteral("Transmit is changing hands. Try again in a moment."));
+}
+
+TxRefusal noTransmitSlice()
+{
+    return make(kNoTransmitSlice,
+                QStringLiteral("There is no slice to transmit on. Add a slice first."));
 }
 
 TxRefusal stopNotConfirmed()

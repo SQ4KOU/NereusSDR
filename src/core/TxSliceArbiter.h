@@ -171,6 +171,13 @@ public:
     /// last state you want to raise a binding underneath.
     void syncToSliceList();
 
+    /// Slice control plan Task 7: the last slice closed, so there is no
+    /// slice to transmit on. Unlike syncToSliceList() on an empty list
+    /// (which keeps a restored id for the first slice to come), this drops
+    /// the binding and any waiting move, and announces the change with a
+    /// new id of -1. Never keys or unkeys.
+    void releaseBinding();
+
 public slots:
     /// Request TX handoff to the slice with the stable sliceId.
     /// Returns true if handoff succeeded or was a no-op (already TX-bound).

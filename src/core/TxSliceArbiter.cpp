@@ -30,6 +30,10 @@
 //                                    dropped waiting move says whether
 //                                    transmit or the slice changed hands.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 7:
+//                                    releaseBinding for a Core left with no
+//                                    slice. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
@@ -335,6 +339,20 @@ bool TxSliceArbiter::requestHandoffFrom(int sliceId, const QByteArray& requester
     }
     flipTo(target);
     return true;
+}
+
+void TxSliceArbiter::releaseBinding()
+{
+    if (m_remote) {
+        return;
+    }
+    setPending(-1, QByteArray());
+    const int old = m_txBoundSliceId;
+    if (old < 0) {
+        return;
+    }
+    m_txBoundSliceId = -1;
+    emit txBoundSliceChanged(old, -1);
 }
 
 void TxSliceArbiter::setPending(int sliceId, const QByteArray& requester)

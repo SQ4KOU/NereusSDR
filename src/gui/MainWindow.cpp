@@ -351,6 +351,9 @@
 //               slices are the ones SliceAccessPolicy lets the station
 //               device change. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 7: no "TX > Slice" notice when
+//               the last slice closed and no slice transmits. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -6865,6 +6868,9 @@ void MainWindow::buildUI()
             // appeared. Announcing "TX > Slice A" on every connect would be
             // noise about something that did not happen.
             if (oldId < 0) { return; }
+            // Slice control plan Task 7: the last slice closed; there is
+            // no transmit slice to name.
+            if (newId < 0) { return; }
             showToast(QStringLiteral("TX > Slice %1")
                           .arg(QChar(QLatin1Char('A' + newId))),
                       ToastSeverity::Info, 2000);

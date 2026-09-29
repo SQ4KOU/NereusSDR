@@ -79,6 +79,11 @@ public:
                       QString* error = nullptr,
                       std::optional<int> radeRxOwnerId = std::nullopt);
 
+    /// Slice control plan Task 7 (ruling Q10): removes the stored layout for
+    /// `mac`, so the next start has none (a Core left with no slice).
+    /// Does not call save().
+    static void forget(AppSettings& settings, const QString& mac);
+
     /// Validate already-decoded descriptor state and receive-audio ownership.
     static bool validate(const QList<ReceiveSliceState>& slices,
                          QString* error = nullptr,

@@ -3214,7 +3214,8 @@ object says who controls and who listens. The verbs (section 9.1):
   leave it."; not joined, it is accepted and changes nothing. When it was
   the device's active receive slice, the next slice the device has joined
   (in creation order) becomes it. A slice left with no controller and no
-  listener closes (the Core's last slice stays).
+  listener closes, the Core's last slice included (the Core then has no
+  slice; see "A Core with no slice" below).
 - `slice.takeControl {sliceId, incarnation, controlRevision}` makes the
   device its controller in one change: no slice is closed or made, and
   its receiver, channel and audio stay. The former controller stays a
@@ -3238,9 +3239,19 @@ object says who controls and who listens. The verbs (section 9.1):
   for its other listeners with no controller (nobody adopts it, not even a
   device alone on the Core; `slice.takeControl` does), refused while it
   transmits ("Slice <letter> is transmitting. Release it once it
-  stops."), or closes when nobody else is on it (the Core's last slice
-  stays, with nobody on it). A `removeSlice` from a controller of a slice
-  others listen to acts as this release, from an older window too.
+  stops."), or closes when nobody else is on it, the Core's last slice
+  included. A `removeSlice` from a controller of a slice others listen
+  to acts as this release, from an older window too, and so does its
+  `removeSlice` of the Core's last slice.
+
+  A Core with no slice: zero slices is a valid idle state. No receiver
+  streams (Protocol 1 still streams its first receiver, as the protocol
+  needs one), no slice is active, nothing is bound for transmit and every
+  key is refused (`noTransmitSlice`, section 18). `addSlice` and
+  `addSliceOnPan` make a working slice again, and a device let in with no
+  slice is given one (section 7.1). Its layout is not saved, so after a
+  restart, or when the radio connects with no slice, the Core makes one
+  Slice A that nobody owns.
 - `setActiveSliceById` from a session with the feature makes any slice it
   has joined its active receive slice; only a slice it controls also
   becomes its active slice (ruling 5.10). From an older window, today's
@@ -5074,8 +5085,9 @@ other device is on the Core they keep running instead, held for it. A
 token window's slices are not saved (it cannot be recognised again): with
 another device on the Core they close, otherwise they pass to nobody.
 Removing a device closes its slices, held ones included, and forgets what
-was saved for it. The Core never closes its last slice for any of these;
-that one stays, held (or owned by nobody). When a device is let in, the
+was saved for it. The Core never closes its last slice for another
+device's reason; that one stays, held, or when it is left owned by nobody
+with nobody listening, closes, and the Core has no slice. When a device is let in, the
 Core returns the slices held for it, restores its saved slices where they
 fit (a receiver window that covers each or a free receiver; its old
 letter when free, else the lowest free), keeps any that do not fit for
@@ -6085,6 +6097,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `notHolder` | Take transmit on this device first. | `takeTransmit` |
 | `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
 | `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
+| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice) | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two
 sentences without codes; `keyEnded` answers a copy of a key the Core has

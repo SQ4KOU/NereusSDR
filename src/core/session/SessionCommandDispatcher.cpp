@@ -251,6 +251,11 @@
 //                                    device's explicit tx.setTxSlice
 //                                    choice. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 7: a device
+//                                    closing the Core's last slice with
+//                                    nobody else on it releases it, and it
+//                                    closes. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -2089,6 +2094,19 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     // for them. An older window's close follows the same rule.
     if (!m_requester.isEmpty() && !m_sliceAccessController.isNull()
         && m_sliceAccessController->closeIsRelease(m_requester, sliceId)) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceAccessController::Result result = m_sliceAccessController->release(
+            m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));
+        emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)}
+                                   : QList<QByteArray>{});
+        return;
+    }
+    // Slice control plan Task 7: the Core's last slice closes by the claims
+    // rule when its controller closes it and nobody else is on it (a
+    // release that leaves nobody on it); the Core then has no slice.
+    if (m_radioModel->slices().size() <= 1 && !m_requester.isEmpty()
+        && !m_sliceAccessController.isNull()) {
         const SliceOwnership* ownership = m_radioModel->sliceOwnership();
         const SliceAccessController::Result result = m_sliceAccessController->release(
             m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));

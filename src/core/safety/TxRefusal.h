@@ -80,6 +80,8 @@ inline constexpr char kNotHolder[] = "notHolder";
 /// Task 35: a copy of a key (the same command) that arrives after the Core
 /// stopped the transmission it started. It never keys again.
 inline constexpr char kKeyEnded[] = "keyEnded";
+/// Slice control plan Task 7: a key on a Core with no slice.
+inline constexpr char kNoTransmitSlice[] = "noTransmitSlice";
 
 // ---- Fixes ----------------------------------------------------------------
 inline constexpr char kFixTakeTransmit[] = "takeTransmit";
@@ -122,6 +124,9 @@ TxRefusal micNotConnected();
 TxRefusal remoteMicNotReady();
 /// Every key during a transfer of transmit.
 TxRefusal changingHands();
+/// Slice control plan Task 7: every key while the Core has no slice to
+/// transmit on.
+TxRefusal noTransmitSlice();
 /// Every key after a transfer that ended with MOX still on, until it
 /// reads off.
 TxRefusal stopNotConfirmed();

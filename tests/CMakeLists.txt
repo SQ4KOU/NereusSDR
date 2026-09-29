@@ -7924,6 +7924,11 @@ nereus_add_test(tst_station_fifth_device
 nereus_add_test(tst_slice_access_verbs
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Slice control and shared listening plan Task 7: zero slices is a valid
+# idle Core. The claims rule's close of the last unclaimed slice, the state
+# it leaves, a working new slice from zero, and every first-slice reader at
+# zero. No radio, no RF.
+nereus_add_test(tst_zero_slice_core)
 # Slice control and shared listening plan Task 5: the remote window's side
 # of listening to and taking a slice (SliceAccessMirror, the four verbs, a
 # listened slice held read-only, the refusals and the controlTaken notice

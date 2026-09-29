@@ -17,6 +17,9 @@
 //               controller too, and a release of the Core's last slice is
 //               refused while it transmits. AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 7 by J.J. Boyd (KG4VCF): the
+//               release of the Core's last slice with nobody else on it
+//               closes it. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -132,8 +135,8 @@ void SliceAccessController::closeIfNobodyIsOn(int sliceId)
         || !own->listenersOf(sliceId).isEmpty()) {
         return;
     }
-    // The Core's last slice stays until the zero-slice work lifts that
-    // guard (plan Task 7); it is then a slice nobody is on.
+    // Slice control plan Task 7: whatever the count, the Core's last slice
+    // included.
     if (m_hooks.close) {
         m_hooks.close(sliceId);
     }
@@ -289,9 +292,10 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
         if (m_hooks.close && m_hooks.close(sliceId)) {
             return result;
         }
-        // The Core's last slice stays, with nobody on it: a hand-off to
-        // nobody as below, so not while it transmits (slice control fix
-        // wave, Important 1). The close above changed nothing.
+        // The Core's last slice, which a close of a controlled slice leaves
+        // alone: a hand-off to nobody as below, so not while it transmits
+        // (slice control fix wave, Important 1). The close above changed
+        // nothing.
         if (m_hooks.transmitting && m_hooks.transmitting(sliceId)) {
             return refused(releaseWhileTransmittingReason(letter));
         }
@@ -300,6 +304,9 @@ SliceAccessController::Result SliceAccessController::release(const QByteArray& d
         }
         own->setOwner(sliceId, QByteArray());
         own->leave(device, sliceId);
+        // Slice control plan Task 7: nobody is on it now, so it closes and
+        // the Core has no slice.
+        closeIfNobodyIsOn(sliceId);
         return result;
     }
     // Kept for its listeners: a hand-off to nobody, so not while it

@@ -1138,8 +1138,85 @@ private slots:
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         r = core.invoke(appA, "slice.release", revisionArgs(seen));
         QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
-        QVERIFY(core.model->sliceById(0) != nullptr);
-        QVERIFY(ownership->mark(0).owner.isEmpty());
+        // Slice control plan Task 7: nobody is on it, so it closes, the
+        // Core's last slice included.
+        QVERIFY(core.model->sliceById(0) == nullptr);
+        QVERIFY(core.model->slices().isEmpty());
+    }
+
+    // Slice control plan Task 7: zero slices is a valid idle Core. The only
+    // slice released with nobody listening closes; nothing is active, bound
+    // for transmit or streaming, every key is refused in plain words and
+    // nothing keys; a new slice from zero works and reaches the window.
+    void releasingTheOnlySliceWithNobodyOnItLeavesAnIdleCore()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->slices().size(), 1);
+        const int only = core.model->slices().first()->sliceIndex();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QCOMPARE(arbiter->txBoundSliceId(), only);
+        QTRY_VERIFY(holds(appA, accessKey(only)));
+        const int from = appA->received().size();
+
+        const QJsonObject r =
+            core.invoke(appA, "slice.release", revisionArgs(seenBy(appA, only)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QVERIFY(core.model->slices().isEmpty());
+        QVERIFY(core.model->activeSlice() == nullptr);
+        QCOMPARE(arbiter->txBoundSliceId(), -1);
+        QVERIFY(!core.model->hasTransmitSlice());
+        QCOMPARE(activeStreamMask(*core.model), 0u);
+        QTRY_VERIFY(indexOf(appA, from, QStringLiteral("object.destroy"),
+                            QStringLiteral("slice:%1").arg(only)) >= 0);
+
+        MoxController* mox = core.model->moxController();
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        QSignalSpy moxChanged(mox, &MoxController::moxChanged);
+        mox->setMox(true, keyerFor(a));
+        QTRY_COMPARE(refused.count(), 1);
+        const TxRefusal refusal = refused.first().at(0).value<TxRefusal>();
+        QCOMPARE(refusal.code, QByteArray(TxRefusals::kNoTransmitSlice));
+        QCOMPARE(refusal.text, QStringLiteral("There is no slice to transmit on. Add a slice first."));
+        QVERIFY(OperatorWording::isPlain(refusal.text));
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(moxChanged.count(), 0);
+
+        const int before = appA->received().size();
+        QVERIFY(accepted(core.invoke(appA, "addSlice", {utf8("initialPanId", QString())})));
+        QCOMPARE(core.model->slices().size(), 1);
+        SliceModel* fresh = core.model->slices().first();
+        QVERIFY(fresh->streamIndex() >= 0);
+        QVERIFY(activeStreamMask(*core.model) != 0u);
+        QCOMPARE(arbiter->txBoundSliceId(), fresh->sliceIndex());
+        QVERIFY(core.model->hasTransmitSlice());
+        QCOMPARE(core.model->sliceOwnership()->mark(fresh->sliceIndex()).owner,
+                 a.key.fingerprint());
+        QTRY_VERIFY(indexOf(appA, before, QStringLiteral("object.create"),
+                            QStringLiteral("slice:%1").arg(fresh->sliceIndex())) >= 0);
+    }
+
+    // Slice control plan Task 7: a device's removeSlice of the Core's last
+    // slice with nobody else on it closes it (a release that leaves nobody).
+    void removingTheCoresLastSliceClosesIt()
+    {
+        Core core;
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->slices().size(), 1);
+        const int only = core.model->slices().first()->sliceIndex();
+        const QJsonObject r = core.invoke(appA, "removeSlice", {int64("sliceId", only)});
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QVERIFY(core.model->slices().isEmpty());
     }
 
     void aControllersCloseOfASharedSliceReleasesIt()

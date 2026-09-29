@@ -106,8 +106,10 @@ public:
         /// Ruling Q8: `taker` took the slice; its transmit binding does not
         /// pick the slice up by itself.
         std::function<void(const QByteArray& taker, int sliceId)> tookControl;
-        /// Closes a slice nobody is on; false when it stays (the Core's
-        /// last slice).
+        /// Closes a slice: one nobody is on whatever the count (slice
+        /// control plan Task 7), or its controller's own close; false when
+        /// it stays (the Core's last slice while its controller is still
+        /// on it).
         std::function<bool(int sliceId)> close;
     };
 

@@ -2033,6 +2033,17 @@ public:
     /// call that one, never this.
     void removeSlice(int sliceId);
 
+    /// Slice control plan Task 7 (Local role): closes the slice only when
+    /// SliceOwnership reports it unclaimed (no controller, nobody
+    /// listening, not held for anyone), whatever the slice count, the
+    /// Core's last slice included, and saves its settings as a removal
+    /// does. Returns whether it closed. Zero slices is a valid idle Core.
+    bool closeUnclaimedSlice(int sliceId);
+
+    /// Slice control plan Task 7: whether a slice is bound for transmit.
+    /// With none (a Core with no slice) every key is refused.
+    bool hasTransmitSlice() const;
+
     /// NOTE: still a LIST POSITION, unlike sliceById / removeSlice above.
     /// This API remains positional for internal list navigation only.
     ///
@@ -6087,7 +6098,9 @@ private:
     /// is shared. removeSlice() now sends a verb on a Role::Remote model,
     /// so the session's own inbound destroy needs a way past that branch
     /// to the removal itself.
-    void removeSliceImpl(int sliceId, bool persist = true);
+    /// `mayCloseLast` (slice control plan Task 7): the claims rule's close
+    /// of an unclaimed slice, which may leave the Core with no slice.
+    void removeSliceImpl(int sliceId, bool persist = true, bool mayCloseLast = false);
     void bindReceiveLayoutSlices();
     bool activateRestoredRadeReceiveOwner(QString* error);
     void setReceiveLayoutRestoreStatus(const QString& state, const QString& message);

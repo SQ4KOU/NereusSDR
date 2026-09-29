@@ -649,6 +649,10 @@
 //               transmit move starts or stops waiting. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 7: a slice nobody is on closes
+//               whatever the count (the Core may have none). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2026,7 +2030,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     });
     // iPhone app Task 73 (ruling 4.11): revoking a device closes its slices,
     // held ones included, and forgets its saved layout. The Core's last
-    // slice is never closed; it stays, owned by nobody.
+    // slice is not closed for another device's reason; it stays, owned by
+    // nobody, and (slice control plan Task 7) closes as well when nobody is
+    // on it, leaving the Core with none.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
             // Fix wave: and its C-Tune pins.
@@ -2041,6 +2047,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     // the former controller listening; a revoked device
                     // leaves.
                     ownership->leave(id, sliceId);
+                    // Slice control plan Task 7: the Core's last slice,
+                    // with nobody on it now, closes too.
+                    m_radioModel->closeUnclaimedSlice(sliceId);
                 }
             }
             // Slice control fix wave (Important 2): and the slices it only
@@ -8410,10 +8419,17 @@ void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId
 
 bool StationServer::closeSliceNobodyIsOn(int sliceId)
 {
-    // The Core keeps one slice: its last is never closed here (until the
-    // zero-slice work, plan Task 7).
-    if (m_radioModel.isNull() || m_radioModel->sliceById(sliceId) == nullptr
-        || m_radioModel->slices().size() <= 1) {
+    if (m_radioModel.isNull() || m_radioModel->sliceById(sliceId) == nullptr) {
+        return false;
+    }
+    // Slice control plan Task 7: a slice nobody is on closes whatever the
+    // count; the Core may be left with none.
+    if (m_radioModel->sliceOwnership()->unclaimed().contains(sliceId)) {
+        return m_radioModel->closeUnclaimedSlice(sliceId);
+    }
+    // Its controller's own close (a release with nobody else on it): the
+    // last slice stays for the release to hand to nobody first.
+    if (m_radioModel->slices().size() <= 1) {
         return false;
     }
     m_radioModel->removeSlice(sliceId);
