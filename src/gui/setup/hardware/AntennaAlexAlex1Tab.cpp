@@ -33,6 +33,19 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
 //                Setup description ids (version 13). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-18: the five switches above the rows carry
+//                their Setup description ids (version 13). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The IMD warning text moves to imdWarningText() so the Setup
+//                description can carry it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-29 - The BPF1 column shows on the ANAN-7000DLE / 8000DLE too
+//                (comments only here; the gate is in AntennaAlexTab).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - updateBoardCapabilities swaps the Alex HPF group for the
+//                BPF1 group and moves the five switches with it, as Thetis
+//                setup.cs:6336-6360 and the per-model cases do. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -367,7 +380,9 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     // ── Column 1: Alex HPF Bands ──────────────────────────────────────────────
     // Source: Thetis panelAlex1HPFControl (setup.designer.cs:23635-24420) [@501e3f5]
     auto* hpfGroup = new QGroupBox(tr("Alex HPF Bands"), content);
+    m_hpfGroup = hpfGroup;
     auto* hpfVBox  = new QVBoxLayout(hpfGroup);
+    m_hpfVBox = hpfVBox;
     hpfVBox->setContentsMargins(8, 8, 8, 8);
     hpfVBox->setSpacing(4);
 
@@ -398,6 +413,16 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
     m_hpfBypassOnTx->setObjectName(QStringLiteral("alexHpfBypassOnTx"));
     m_hpfBypassOnPs->setObjectName(QStringLiteral("alexHpfBypassOnPs"));
     m_disable6mLnaOnTx->setObjectName(QStringLiteral("alexDisable6mLnaOnTx"));
+    // Setup description version 13: the same five switches on the phone.
+    m_hpfBypass->setProperty("nereusSetupId", QStringLiteral("hardware.alex1Filters.hpfBypass"));
+    m_hpfBypassOnTx->setProperty("nereusSetupId",
+                                 QStringLiteral("hardware.alex1Filters.hpfBypassOnTx"));
+    m_hpfBypassOnPs->setProperty("nereusSetupId",
+                                 QStringLiteral("hardware.alex1Filters.hpfBypassOnPs"));
+    m_disable6mLnaOnTx->setProperty("nereusSetupId",
+                                    QStringLiteral("hardware.alex1Filters.disable6mLnaOnTx"));
+    m_disable6mLnaOnRx->setProperty("nereusSetupId",
+                                    QStringLiteral("hardware.alex1Filters.disable6mLnaOnRx"));
 
     auto wireMaster = [this](QCheckBox* chk, const QString& key) {
         connect(chk, &QCheckBox::toggled, this,
@@ -425,17 +450,7 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
             if (m_imdAutoResult == ImdAutoResult::None) {
                 QMessageBox box(QMessageBox::Warning,
                     tr("PureSignal Issue"),
-                    tr("Including the BPFs during a PureSignal transmission may "
-                       "produce passive Inter-Modulation Distortion in the "
-                       "inductors of the bandpass filters.\n\n"
-                       "You will NOT be able to observe this degraded performance "
-                       "on the panadapter because PS is correcting to the distorted "
-                       "feedback and the panadapter is \"seeing\" that same "
-                       "distorted feedback. It can only be observed with an "
-                       "external spectrum analyzer.\n\n"
-                       "Please ensure you understand the implications of including "
-                       "the BPFs when transmitting a PureSignal based signal. "
-                       "It is not recommended."),
+                    imdWarningText(),
                     QMessageBox::Ok | QMessageBox::Cancel, this);
                 box.setDefaultButton(QMessageBox::Cancel);          // Button2 per Thetis
                 box.setWindowFlag(Qt::WindowStaysOnTopHint);        // MB_TOPMOST per Thetis
@@ -585,10 +600,11 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
 
     // ── Column 3: Saturn BPF1 Bands ───────────────────────────────────────────
     // Source: spec §7; same band-edge shape as Alex HPF.
-    // Gated on Saturn / SaturnMKII board — hide for all other boards.
-    // Note: Thetis shows BPF1 always; NereusSDR gates on capability per spec.
+    // Shown in place of the Alex HPF group on the boards the Core programs
+    // through BPF1 (usesBpf1Preselector); AntennaAlexTab::populate sets it.
     m_bpf1Group = new QGroupBox(tr("Saturn BPF1 Bands"), content);
     auto* bpf1VBox = new QVBoxLayout(m_bpf1Group);
+    m_bpf1VBox = bpf1VBox;
     bpf1VBox->setContentsMargins(8, 8, 8, 8);
     bpf1VBox->setSpacing(4);
 
@@ -826,14 +842,59 @@ void AntennaAlexAlex1Tab::setLedLit(QFrame* led, bool lit)
     }
 }
 
+// ── imdWarningText ────────────────────────────────────────────────────────────
+
+// From Thetis setup.cs:29440-29449 [v2.10.3.15] (chkDisableHPFonPS_CheckedChanged):
+// the warning shown before HPF Bypass on PureSignal feedback is cleared
+// (Thetis's "tranmission" and "inlcuding" corrected in the user-visible text).
+QString AntennaAlexAlex1Tab::imdWarningText()
+{
+    return tr("Including the BPFs during a PureSignal transmission may "
+              "produce passive Inter-Modulation Distortion in the "
+              "inductors of the bandpass filters.\n\n"
+              "You will NOT be able to observe this degraded performance "
+              "on the panadapter because PS is correcting to the distorted "
+              "feedback and the panadapter is \"seeing\" that same "
+              "distorted feedback. It can only be observed with an "
+              "external spectrum analyzer.\n\n"
+              "Please ensure you understand the implications of including "
+              "the BPFs when transmitting a PureSignal based signal. "
+              "It is not recommended.");
+}
+
 // ── updateBoardCapabilities ───────────────────────────────────────────────────
 
-// Shows/hides the Saturn BPF1 column based on the connected board.
-// Gate: Saturn (ANAN-G2 / G2-1K) or SaturnMKII only.
-// From Thetis spec §7 — "spin from Thetis", Thetis shows always; we gate on capability.
-void AntennaAlexAlex1Tab::updateBoardCapabilities(bool isSaturnBoard)
+// Shows the BPF1 group in place of the Alex HPF group on the boards the Core
+// programs through BPF1 (usesBpf1Preselector, decided in
+// AntennaAlexTab::populate) and
+// moves the five HPF / 6 m LNA switches into whichever group is shown.
+// From Thetis setup.cs:6336-6360 [v2.10.3.15]: other models get
+//   panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true;
+//   and the switches reparented to panelAlex1HPFControl.
+//   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+//   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+// From Thetis setup.cs:20208-20220 [v2.10.3.15] (7000D; the other BPF-panel
+//   cases match): panelAlex1HPFControl.Visible = false;
+//   panelBPFControl.Visible = true; the switches reparented to panelBPFControl.
+void AntennaAlexAlex1Tab::updateBoardCapabilities(bool bpfPanel)
 {
-    m_bpf1Group->setVisible(isSaturnBoard);
+    m_bpf1Group->setVisible(bpfPanel);
+    m_hpfGroup->setVisible(!bpfPanel);
+
+    QVBoxLayout* target = bpfPanel ? m_bpf1VBox : m_hpfVBox;
+    QGroupBox* parent = bpfPanel ? m_bpf1Group : m_hpfGroup;
+    // BPF1 keeps its note label first; the switches follow it.
+    int at = bpfPanel ? 1 : 0;
+    for (QCheckBox* chk : { m_hpfBypass, m_hpfBypassOnTx, m_hpfBypassOnPs,
+                             m_disable6mLnaOnTx, m_disable6mLnaOnRx }) {
+        if (chk->parentWidget() != parent) {
+            const bool hidden = chk->isHidden();
+            chk->setParent(parent);
+            target->insertWidget(at, chk);
+            chk->setHidden(hidden);
+        }
+        ++at;
+    }
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────
@@ -1074,6 +1135,11 @@ void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& sett
 bool AntennaAlexAlex1Tab::isSaturnBpf1Visible() const
 {
     return m_bpf1Group && !m_bpf1Group->isHidden();
+}
+
+bool AntennaAlexAlex1Tab::isAlexHpfVisible() const
+{
+    return m_hpfGroup && !m_hpfGroup->isHidden();
 }
 
 // Phase 3M-4 Task 11 — IMD warning dialog auto-confirm seam for tests.

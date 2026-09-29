@@ -27,6 +27,7 @@
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/setup/hardware/RadioInfoTab.h"
 #include "core/PaCalProfile.h"
+#include "core/codec/AlexFilterMap.h"
 #include "core/RadioDiscovery.h"
 #include "gui/setup/PaSetupPages.h"
 #include "gui/widgets/MetricLabel.h"
@@ -975,16 +976,44 @@ private slots:
     // Version 13 (R-R3-46, R-R3-49): every Alex receive filter row the
     // Core describes is the desktop tab's row: its group, its row label with
     // Bypass / Start / End, its box's range, step, decimals and Thetis
-    // default, on the ANAN-G2 (both Alex-1 banks and Alex-2).
+    // default. The Alex-1 tab shows the bank the Core programs for the
+    // board (codec::alex::usesBpf1Preselector): BPF1 with the five switches
+    // on the ANAN-G2 and the plain Orion MKII, Alex HPF with them on the
+    // ANAN-200D (Orion board, no Alex-2).
+    // From Thetis console.cs:6827-6837 [v2.10.3.15]:
+    //   || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
+    //   { setBPF1ForOrionIISaturn(freq); } else { setAlexHPF(freq); }
+    void describedAlexFilterRowsMatchNativeTabs_data()
+    {
+        QTest::addColumn<int>("model");
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("expected");
+        // The Alex-1 tab's five switches, its one shown bank (six rows of
+        // three each), and, where the board has Alex-2, Alex-2's bank and
+        // master.
+        QTest::newRow("ANAN-G2") << int(HPSDRModel::ANAN_G2) << int(HPSDRHW::Saturn)
+                                 << 5 + 2 * 6 * 3 + 1;
+        QTest::newRow("Orion MKII") << int(HPSDRModel::ORIONMKII) << int(HPSDRHW::OrionMKII)
+                                    << 5 + 2 * 6 * 3 + 1;
+        QTest::newRow("ANAN-200D") << int(HPSDRModel::ANAN200D) << int(HPSDRHW::Orion)
+                                   << 5 + 6 * 3;
+    }
+
     void describedAlexFilterRowsMatchNativeTabs()
     {
+        QFETCH(int, model);
+        QFETCH(int, board);
+        QFETCH(int, expected);
+        const auto sku = static_cast<HPSDRModel>(model);
         AppSettings::instance().clear();
-        RadioModel model;
-        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
-        AntennaAlexAlex1Tab alex1(&model);
-        AntennaAlexAlex2Tab alex2(&model);
+        RadioModel radio;
+        radio.setHpsdrModelForTest(sku);
+        AntennaAlexAlex1Tab alex1(&radio);
+        AntennaAlexAlex2Tab alex2(&radio);
+        alex1.updateBoardCapabilities(
+            codec::alex::usesBpf1Preselector(static_cast<HPSDRHW>(board)));
         SetupDescriptionService service;
-        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn), HPSDRModel::ANAN_G2);
+        service.setRadioContext(BoardCapsTable::forBoard(static_cast<HPSDRHW>(board)), sku);
         const QJsonObject hardware = projectedCategory(service.hardware(), 13);
         int compared = 0;
         for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
@@ -1009,11 +1038,24 @@ private slots:
                     }
                     QVERIFY2(group != nullptr, qPrintable(id));
                     QCOMPARE(group->title(), section.value("title").toString());
-                    if (id == QLatin1String("hardware.alex2Filters.bypass55MhzBpf")) {
+                    // A switch above the rows (the Alex-1 tab's five and the
+                    // Alex-2 master): its box's text and default.
+                    if (id == QLatin1String("hardware.alex2Filters.bypass55MhzBpf")
+                        || control.value("binding").toObject().value("radioSetting")
+                               .toString().startsWith(QLatin1String("alex/master/"))) {
                         auto* box = qobject_cast<QCheckBox*>(widget);
                         QVERIFY(box != nullptr);
                         QCOMPARE(box->text(), control.value("label").toString());
                         QCOMPARE(box->isChecked(), control.value("default").toBool());
+                        // The one the desktop asks about before clearing
+                        // carries the desktop's own question.
+                        if (id == QLatin1String("hardware.alex1Filters.hpfBypassOnPs")) {
+                            QCOMPARE(control.value("confirm").toString(),
+                                     AntennaAlexAlex1Tab::imdWarningText());
+                            QCOMPARE(control.value("confirmWhen"), QJsonValue(false));
+                        } else {
+                            QVERIFY2(!control.contains("confirm"), qPrintable(id));
+                        }
                         ++compared;
                         continue;
                     }
@@ -1049,8 +1091,7 @@ private slots:
                 }
             }
         }
-        // Three banks of six rows of three, and the Alex-2 master.
-        QCOMPARE(compared, 3 * 6 * 3 + 1);
+        QCOMPARE(compared, expected);
     }
 
     void describedHardwareAntennaScalarsMatchDesktop_data()

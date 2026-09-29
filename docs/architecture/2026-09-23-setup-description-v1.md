@@ -407,7 +407,13 @@ the desktop keeps once per band: the value is stored under
 centre frequency as `Band::bandFromFrequency` finds it), shared by every pan,
 and the label shows the band where the template has `%1`. `confirm` is the
 desktop's exact question before a destructive action: the renderer asks it
-with Yes and No, No the default, and acts only on Yes.
+with Yes and No, No the default, and acts only on Yes. On a `kind:"toggle"`
+row (version 13), `confirm` comes with `confirmWhen`, the value the desktop
+asks before setting: the renderer asks the question with Yes and No, No the
+default, only when the operator sets the toggle to `confirmWhen`; on Yes it
+writes, on No the toggle stays as it was and nothing is written. Setting it
+the other way writes at once. A peer that knows no `confirmWhen` writes at
+once, as before.
 
 A `kind:"button"` row with a `binding.phone` is a phone action. It has no
 value or default and acts on the pan the page is editing, exactly as the
@@ -544,8 +550,16 @@ radio is on the air, and for a rate outside the list.
 Two pages follow Antenna / ALEX, both `where:"station"` and partial:
 Alex-1 Filters (`hardware.alex1Filters`, on every board with ALEX filters)
 and Alex-2 Filters (`hardware.alex2Filters`, only where the board has
-Alex-2). Alex-1 Filters has Alex HPF Bands and, on Saturn, Saturn MkII and
-the ANAN-G2E only (the desktop's own gate), Saturn BPF1 Bands; Alex-2
+Alex-2). Alex-1 Filters has one bank section: the bank the Core programs
+for the board (`codec::alex::usesBpf1Preselector`, the selector
+`computeRxPreselector` uses, Thetis setAlex1HPF at console.cs:6827-6837
+[v2.10.3.15]), the desktop's own gate. That is Saturn BPF1 Bands on the
+OrionMKII, Saturn, Saturn MkII and HermesC10 boards (ANAN-7000DLE, 8000DLE,
+Anvelina Pro 3, Red Pitaya, plain ORION MKII, ANAN-G2E, G2, G2-1K), and Alex
+HPF Bands on every other board. It matches Thetis's panel list
+(setup.cs:6336-6360) on every model but the plain ORION MKII, where Thetis
+programs BPF1 yet shows the HPF panel; the page shows BPF1 there, the rows
+that take effect. Alex-2
 Filters has Alex-2 HPF Bands, whose first row is ByPass / 55 MHz BPF
 (master) (`hardware.alex2Filters.bypass55MhzBpf`, `radioSetting`
 `alex2/master/bypass55MhzBpf`). Each bank has six rows in the desktop's
@@ -560,6 +574,23 @@ defaulting to Thetis's spinner values. Every row has the gate
 `radioHardwareVersion:8` and no off-air rule: the Core applies a change to
 its radio at once, on or off the air, as Thetis's setters do.
 
+The shown bank section opens with the tab's five switches above its rows, in the
+desktop's order: HPF Bypass (master), HPF Bypass on TX, HPF Bypass on
+PureSignal feedback, Disable 6m LNA on TX and Disable 6m LNA on RX (ids
+`hardware.alex1Filters.hpfBypass`, `.hpfBypassOnTx`, `.hpfBypassOnPs`,
+`.disable6mLnaOnTx`, `.disable6mLnaOnRx`; `radioSetting`
+`alex/master/<the same name>`). Each is a `True`/`False` toggle with an
+empty tooltip, defaulting as the desktop does (on PureSignal feedback and
+6 m LNA on TX checked, the other three clear), gate
+`radioHardwareVersion:8` and no off-air rule. The three the Core counts as
+transmit hardware (on TX, on PureSignal feedback, 6 m LNA on TX) add
+`transmit:true`: with remote transmit allowed, the Core takes a write of them
+only from a session permitted to transmit. The desktop asks before clearing
+HPF Bypass on PureSignal feedback (the IMD warning, Thetis setup.cs
+`chkDisableHPFonPS_CheckedChanged`), and so does the description: that row
+carries the desktop's warning as `confirm` with `confirmWhen:false`, so a
+peer asks the same question before clearing it and leaves it set on No.
+
 Transmit > Power gains a PA Control section last with Disable HF PA
 (`transmit.power.DisableHfPa`, `setting` `DisableHfPa`, `True`/`False`,
 default false, gate `transmitSettingsVersion:11` plus `transmit:true` and
@@ -573,9 +604,9 @@ Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
 bank is serialized per profile and no closed profile state or command exists
 on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
 auto-calibration sweep (it keys the radio from the desktop's own window);
-the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
-Alex-1 Filters tab's five switches above its rows (HPF Bypass, on TX and
-on PureSignal feedback, and the two 6 m LNA boxes) and both tabs' LPF edges (the LPF edges stay hidden on the desktop too); OC Outputs; the rest of Calibration (frequency and level calibration,
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); both
+Alex Filters tabs' LPF edges (hidden on the desktop too: the Core does not
+apply them yet, as nothing selects the transmit low-pass from them); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
 HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or

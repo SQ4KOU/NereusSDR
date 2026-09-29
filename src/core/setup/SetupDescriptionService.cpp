@@ -155,7 +155,8 @@ constexpr std::array<const char*, 6> kAlexBpf1RowLabels = {
 QHash<QString, QJsonObject> controlsById(const char* json);
 
 // Hardware version 13 (R-R3-46, R-R3-49): the Alex receive filter rows the
-// Core applies (radioHardwareVersion 8): each row's Bypass, Start and End on
+// Core applies (radioHardwareVersion 8), after the Alex-1 tab's five
+// switches above them: each row's Bypass, Start and End on
 // the Alex-1 high-pass and BPF1 banks and the Alex-2 bank, and the Alex-2
 // master bypass. Defaults are Thetis's spinner values
 // (codec::alex::AlexHpfEdges::thetisDefaults); the edge boxes are the
@@ -189,6 +190,55 @@ QString alexFilterRowsJson()
             }
         }
     };
+    // The Alex-1 tab's five switches above its rows, in its order, which the
+    // Core applies on a change (RadioModel::applyAlexHpfSwitchSettings, by
+    // radioHardwareVersion 8). Defaults are the desktop's, from Thetis's
+    // designer (chkDisableHPFonPSb and chkDisable6mLNAonTX checked). The
+    // three the Core takes as transmit hardware (isTransmitHardwareKey) need
+    // transmit permission, as a settings write of them does.
+    struct MasterSwitch { const char* field; const char* label; bool transmit; bool on; };
+    const std::array<MasterSwitch, 5> switches{{
+        {"hpfBypass", "HPF Bypass (master)", false, false},
+        {"hpfBypassOnTx", "HPF Bypass on TX", true, false},
+        {"hpfBypassOnPs", "HPF Bypass on PureSignal feedback", true, true},
+        {"disable6mLnaOnTx", "Disable 6m LNA on TX", true, true},
+        {"disable6mLnaOnRx", "Disable 6m LNA on RX", false, false}}};
+    // From Thetis setup.cs:29440-29449 [v2.10.3.15] (chkDisableHPFonPS_CheckedChanged):
+    // the desktop asks before HPF Bypass on PureSignal feedback is cleared
+    // (AntennaAlexAlex1Tab::imdWarningText, which the parity test holds this
+    // text to). A peer asks with the same words before setting the toggle to
+    // confirmWhen, and leaves it as it was on No.
+    static constexpr const char* kImdWarningText =
+        "Including the BPFs during a PureSignal transmission may "
+        "produce passive Inter-Modulation Distortion in the "
+        "inductors of the bandpass filters.\n\n"
+        "You will NOT be able to observe this degraded performance "
+        "on the panadapter because PS is correcting to the distorted "
+        "feedback and the panadapter is \"seeing\" that same "
+        "distorted feedback. It can only be observed with an "
+        "external spectrum analyzer.\n\n"
+        "Please ensure you understand the implications of including "
+        "the BPFs when transmitting a PureSignal based signal. "
+        "It is not recommended.";
+    for (const MasterSwitch& master : switches) {
+        if (qstrcmp(master.field, "hpfBypassOnPs") == 0) {
+            QJsonObject row = QJsonDocument::fromJson(QString::fromLatin1(
+                R"j({"id":"hardware.alex1Filters.%1","label":"%2","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex/master/%1"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8%3},"requiresDescriptionVersion":13,"default":%4})j")
+                .arg(QString::fromLatin1(master.field), QString::fromLatin1(master.label),
+                     master.transmit ? QStringLiteral(",\"transmit\":true") : QString(),
+                     master.on ? QStringLiteral("true") : QStringLiteral("false"))
+                .toUtf8()).object();
+            row.insert(QStringLiteral("confirm"), QString::fromLatin1(kImdWarningText));
+            row.insert(QStringLiteral("confirmWhen"), false);
+            rows << QString::fromUtf8(QJsonDocument(row).toJson(QJsonDocument::Compact));
+            continue;
+        }
+        rows << QString::fromLatin1(
+            R"j({"id":"hardware.alex1Filters.%1","label":"%2","tooltip":"","kind":"toggle","binding":{"radioSetting":"alex/master/%1"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":8%3},"requiresDescriptionVersion":13,"default":%4})j")
+            .arg(QString::fromLatin1(master.field), QString::fromLatin1(master.label),
+                 master.transmit ? QStringLiteral(",\"transmit\":true") : QString(),
+                 master.on ? QStringLiteral("true") : QStringLiteral("false"));
+    }
     bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("hpf"),
          QString::fromLatin1(alexKeys::kAlex1HpfPrefix), kAlexHpfRowLabels, defaults.hpf);
     bank(QStringLiteral("hardware.alex1Filters"), QStringLiteral("bpf1"),
@@ -657,18 +707,61 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                 pages.removeAt(p--);
                 continue;
             }
-            // Version 13: the Alex-1 Filters tab shows its Saturn BPF1 Bands
-            // only on the boards AntennaAlexTab::populate names (Saturn,
-            // Saturn MkII and the ANAN-G2E's HermesC10).
-            if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))
-                && caps.board != HPSDRHW::Saturn && caps.board != HPSDRHW::SaturnMKII
-                && caps.board != HPSDRHW::HermesC10) {
+            // Version 13: the Alex-1 Filters tab shows either the Alex HPF
+            // Bands or the Saturn BPF1 Bands: the bank the Core programs for
+            // the board (codec::alex::usesBpf1Preselector, the selector
+            // computeRxPreselector uses), as AntennaAlexTab::populate does.
+            // The five HPF / 6 m LNA switches go with whichever section is
+            // shown, first.
+            // From Thetis console.cs:6827-6837 [v2.10.3.15] (setAlex1HPF):
+            //   if ((HardwareSpecific.Hardware == HPSDRHW.OrionMKII) || (HardwareSpecific.Hardware == HPSDRHW.Saturn)
+            //      || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
+            //   { setBPF1ForOrionIISaturn(freq); } else { setAlexHPF(freq); }
+            // From Thetis setup.cs:6336-6360 [v2.10.3.15] (the panel list by model):
+            //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+            //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+            //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
+            // From Thetis setup.cs:20208-20220 [v2.10.3.15] (7000D; the other
+            //   BPF-panel cases match): panelAlex1HPFControl.Visible = false;
+            //   panelBPFControl.Visible = true; switches moved to panelBPFControl.
+            // The two agree for every model but the plain ORIONMKII, which is
+            // on the OrionMKII board: Thetis programs BPF1 for it but shows
+            // the HPF panel. The page describes the rows that take effect.
+            if (pageId == QJsonValue(QStringLiteral("hardware.alex1Filters"))) {
+                const bool bpfPanel = codec::alex::usesBpf1Preselector(caps.board);
+                const QString hpfTitle = QStringLiteral("Alex HPF Bands");
+                const QString bpf1Title = QStringLiteral("Saturn BPF1 Bands");
                 QJsonObject page = pages.at(p).toObject();
                 QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+                QJsonArray switchRows;
                 for (int s = 0; s < sections.size(); ++s) {
-                    if (sections.at(s).toObject().value(QStringLiteral("title"))
-                        == QJsonValue(QStringLiteral("Saturn BPF1 Bands"))) {
+                    QJsonObject section = sections.at(s).toObject();
+                    const QString title = section.value(QStringLiteral("title")).toString();
+                    if (bpfPanel && title == hpfTitle) {
+                        const QJsonArray rows = section.value(QStringLiteral("controls")).toArray();
+                        for (const QJsonValue& row : rows) {
+                            const QString id = row.toObject().value(QStringLiteral("id")).toString();
+                            if (!id.startsWith(QStringLiteral("hardware.alex1Filters.hpf."))) {
+                                switchRows.append(row);
+                            }
+                        }
                         sections.removeAt(s--);
+                    } else if (!bpfPanel && title == bpf1Title) {
+                        sections.removeAt(s--);
+                    }
+                }
+                if (bpfPanel) {
+                    for (int s = 0; s < sections.size(); ++s) {
+                        QJsonObject section = sections.at(s).toObject();
+                        if (section.value(QStringLiteral("title")).toString() != bpf1Title) {
+                            continue;
+                        }
+                        QJsonArray rows = switchRows;
+                        for (const QJsonValue& row : section.value(QStringLiteral("controls")).toArray()) {
+                            rows.append(row);
+                        }
+                        section.insert(QStringLiteral("controls"), rows);
+                        sections[s] = section;
                     }
                 }
                 page.insert(QStringLiteral("sections"), sections);

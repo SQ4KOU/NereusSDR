@@ -1212,9 +1212,10 @@ private slots:
         // Every resource row is closed.
         const QList<QJsonObject> rows = resourceRows(QStringLiteral("hardware"), 13);
         // Radio Info's seven, its sample rate and copy button, TX Display
-        // Cal, N2ADR, and the Alex receive filter rows: three banks of six
-        // rows of three, and the Alex-2 master.
-        QCOMPARE(rows.size(), 11 + 3 * 6 * 3 + 1);
+        // Cal, N2ADR, the Alex-1 tab's five switches, and the Alex receive
+        // filter rows: three banks of six rows of three, and the Alex-2
+        // master.
+        QCOMPARE(rows.size(), 11 + 5 + 3 * 6 * 3 + 1);
         for (const QJsonObject& row : rows) {
             QVERIFY2(SetupDescriptionService::validateHardwareV13Control(row),
                      qPrintable(row.value("id").toString()));
@@ -1327,9 +1328,11 @@ private slots:
         const QJsonObject alex1 = pageById(g2, "hardware.alex1Filters");
         QCOMPARE(alex1.value("title"), QJsonValue("Alex-1 Filters"));
         const QJsonArray alex1Sections = alex1.value("sections").toArray();
-        QCOMPARE(alex1Sections.size(), 2);
-        QCOMPARE(alex1Sections.at(0).toObject().value("title"), QJsonValue("Alex HPF Bands"));
-        QCOMPARE(alex1Sections.at(1).toObject().value("title"), QJsonValue("Saturn BPF1 Bands"));
+        // The G2 is a BPF-panel model: Thetis hides the Alex HPF panel and
+        // moves the five switches into the BPF panel (setup.cs:6336-6360
+        // and 20313-20325 [v2.10.3.15]), so the page has one section.
+        QCOMPARE(alex1Sections.size(), 1);
+        QCOMPARE(alex1Sections.at(0).toObject().value("title"), QJsonValue("Saturn BPF1 Bands"));
         const codec::alex::AlexHpfEdges defaults = codec::alex::AlexHpfEdges::thetisDefaults();
         const QStringList slugs{"1_5MHz", "6_5MHz", "9_5MHz", "13MHz", "20MHz", "6mBP"};
         const auto checkBank = [&slugs](const QJsonArray& rows, const QString& idBase,
@@ -1374,12 +1377,83 @@ private slots:
         };
         const QStringList hpfLabels{"1.5 MHz HPF", "6.5 MHz HPF", "9.5 MHz HPF", "13 MHz HPF",
                                     "20 MHz HPF", "6m Bypass"};
-        checkBank(alex1Sections.at(0).toObject().value("controls").toArray(),
-                  "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
-        checkBank(alex1Sections.at(1).toObject().value("controls").toArray(),
-                  "hardware.alex1Filters.bpf1.", "alex/bpf1/",
+        // The five switches above the rows, in the desktop's order, each a
+        // True/False radioSetting under alex/master (radioHardwareVersion 8,
+        // no off-air rule). The three the Core counts as transmit hardware
+        // (isTransmitHardwareKey) carry the transmit gate.
+        QJsonArray alex1Rows = alex1Sections.at(0).toObject().value("controls").toArray();
+        QCOMPARE(alex1Rows.size(), 5 + 18);
+        QJsonArray switchRows;
+        struct Switch { const char* field; const char* label; bool transmit; bool on; };
+        const Switch switches[] = {
+            {"hpfBypass", "HPF Bypass (master)", false, false},
+            {"hpfBypassOnTx", "HPF Bypass on TX", true, false},
+            {"hpfBypassOnPs", "HPF Bypass on PureSignal feedback", true, true},
+            {"disable6mLnaOnTx", "Disable 6m LNA on TX", true, true},
+            {"disable6mLnaOnRx", "Disable 6m LNA on RX", false, false}};
+        for (const Switch& expected : switches) {
+            const QJsonObject row = alex1Rows.takeAt(0).toObject();
+            switchRows.append(row);
+            const QString field = QString::fromLatin1(expected.field);
+            QCOMPARE(row.value("id"), QJsonValue("hardware.alex1Filters." + field));
+            QCOMPARE(row.value("label"), QJsonValue(QString::fromLatin1(expected.label)));
+            QCOMPARE(row.value("tooltip"), QJsonValue(""));
+            QCOMPARE(row.value("kind"), QJsonValue("toggle"));
+            QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"radioSetting",
+                                                                   "alex/master/" + field}}));
+            QVERIFY(SetupDescriptionService::validateSettingToggleEncoding(row));
+            QCOMPARE(row.value("default"), QJsonValue(expected.on));
+            QJsonObject gate{{"capability", "radioHardwareVersion"}, {"min", 8}};
+            if (expected.transmit) {
+                gate.insert("transmit", true);
+            }
+            QCOMPARE(row.value("gate"), QJsonValue(gate));
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(13));
+            // The desktop asks before clearing HPF Bypass on PureSignal
+            // feedback (the IMD warning); the description carries the same
+            // question and the value it guards. No other switch asks.
+            if (field == QLatin1String("hpfBypassOnPs")) {
+                QCOMPARE(row.value("confirm"), QJsonValue(QStringLiteral(
+                    "Including the BPFs during a PureSignal transmission may "
+                    "produce passive Inter-Modulation Distortion in the "
+                    "inductors of the bandpass filters.\n\n"
+                    "You will NOT be able to observe this degraded performance "
+                    "on the panadapter because PS is correcting to the distorted "
+                    "feedback and the panadapter is \"seeing\" that same "
+                    "distorted feedback. It can only be observed with an "
+                    "external spectrum analyzer.\n\n"
+                    "Please ensure you understand the implications of including "
+                    "the BPFs when transmitting a PureSignal based signal. "
+                    "It is not recommended.")));
+                QCOMPARE(row.value("confirmWhen"), QJsonValue(false));
+                QCOMPARE(row.size(), 12);
+            } else {
+                QVERIFY(!row.contains("confirm"));
+                QVERIFY(!row.contains("confirmWhen"));
+                QCOMPARE(row.size(), 10);
+            }
+        }
+        checkBank(alex1Rows, "hardware.alex1Filters.bpf1.", "alex/bpf1/",
                   QStringList{"160m BPF", "80/60m BPF", "40/30m BPF", "20/17/15m BPF",
                               "12/10m BPF", "6m BPF/LNA"}, defaults.bpf1);
+        // The ANAN-200D (Orion board) is programmed through the Alex HPF
+        // bank (usesBpf1Preselector false, as Thetis console.cs:6827-6837
+        // [v2.10.3.15] routes Orion to setAlexHPF), so it keeps the Alex HPF
+        // rows with the same five switches and no BPF1.
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Orion),
+                                HPSDRModel::ANAN200D, info);
+        const QJsonArray orionSections = pageById(projectedCategory(service.hardware(), 13),
+                                                  "hardware.alex1Filters")
+            .value("sections").toArray();
+        QCOMPARE(orionSections.size(), 1);
+        QCOMPARE(orionSections.at(0).toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        QJsonArray orionRows = orionSections.at(0).toObject().value("controls").toArray();
+        QCOMPARE(orionRows.size(), 5 + 18);
+        for (const QJsonValue& expected : switchRows) {
+            QCOMPARE(orionRows.takeAt(0), expected);
+        }
+        checkBank(orionRows, "hardware.alex1Filters.hpf.", "alex/hpf/", hpfLabels, defaults.hpf);
+        service.setRadioContext(saturn, HPSDRModel::ANAN_G2, info);
         const QJsonObject alex2 = pageById(g2, "hardware.alex2Filters");
         QCOMPARE(alex2.value("title"), QJsonValue("Alex-2 Filters"));
         QJsonArray alex2Rows = rowsOf(alex2);
@@ -1427,13 +1501,54 @@ private slots:
             .value("sections").toArray();
         QCOMPARE(hermesSections.size(), 1);
         QCOMPARE(hermesSections.first().toObject().value("title"), QJsonValue("Alex HPF Bands"));
+        // Every Alex model: the one Alex-1 bank the page describes is the
+        // bank the Core programs for that model's board
+        // (codec::alex::usesBpf1Preselector). The plain ORION MKII model is
+        // on the OrionMKII board, so it gets BPF1, as Thetis programs it.
+        for (int m = int(HPSDRModel::FIRST) + 1; m < int(HPSDRModel::LAST); ++m) {
+            const HPSDRModel model = HPSDRModel(m);
+            const HPSDRHW board = boardForModel(model);
+            const BoardCapabilities caps = BoardCapsTable::forBoard(board);
+            if (!caps.hasAlexFilters) {
+                continue;
+            }
+            service.setRadioContext(caps, model, info);
+            const QJsonArray sections = pageById(projectedCategory(service.hardware(), 13),
+                                                 "hardware.alex1Filters")
+                .value("sections").toArray();
+            QVERIFY2(sections.size() == 1, qPrintable(QString::number(m)));
+            QCOMPARE(sections.at(0).toObject().value("title"),
+                     QJsonValue(codec::alex::usesBpf1Preselector(board)
+                                    ? "Saturn BPF1 Bands" : "Alex HPF Bands"));
+        }
         // The ANAN-G2E shows the BPF1 bank but has no Alex-2.
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesC10),
                                 HPSDRModel::ANAN_G2E, info);
         const QJsonObject g2e = projectedCategory(service.hardware(), 13);
-        QCOMPARE(pageById(g2e, "hardware.alex1Filters").value("sections").toArray().size(), 2);
+        const QJsonArray g2eSections = pageById(g2e, "hardware.alex1Filters")
+            .value("sections").toArray();
+        QCOMPARE(g2eSections.size(), 1);
+        QCOMPARE(g2eSections.at(0).toObject().value("title"), QJsonValue("Saturn BPF1 Bands"));
         QCOMPARE(pageById(g2e, "hardware.alex2Filters").isEmpty(),
                  !BoardCapsTable::forBoard(HPSDRHW::HermesC10).hasAlex2);
+        // The ANAN-7000DLE and 8000DLE are BPF-panel models too: BPF1 with
+        // the switches, no Alex HPF rows (Thetis setup.cs:20208-20220 and
+        // 20260-20272 [v2.10.3.15]).
+        for (const HPSDRModel dle : {HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D}) {
+            service.setRadioContext(BoardCapsTable::forBoard(boardForModel(dle)), dle, info);
+            const QJsonArray dleSections = pageById(projectedCategory(service.hardware(), 13),
+                                                    "hardware.alex1Filters")
+                .value("sections").toArray();
+            QCOMPARE(dleSections.size(), 1);
+            QCOMPARE(dleSections.at(0).toObject().value("title"),
+                     QJsonValue("Saturn BPF1 Bands"));
+            const QJsonArray dleRows = dleSections.at(0).toObject().value("controls").toArray();
+            QCOMPARE(dleRows.size(), 5 + 18);
+            QCOMPARE(dleRows.at(0).toObject().value("id"),
+                     QJsonValue("hardware.alex1Filters.hpfBypass"));
+            QCOMPARE(dleRows.at(5).toObject().value("id"),
+                     QJsonValue("hardware.alex1Filters.bpf1.1_5MHz.bypass"));
+        }
         // The HL2 has neither page.
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
                                 HPSDRModel::HERMESLITE, info);

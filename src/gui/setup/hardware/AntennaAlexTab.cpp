@@ -34,6 +34,13 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The BPF1 rows follow codec::alex::usesBpf1Preselector, so
+//                the ANAN-7000DLE / 8000DLE (OrionMKII) show them as Thetis
+//                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The Alex-1 panels follow the bank the Core programs
+//                (usesBpf1Preselector, console.cs:6827-6837): BPF1 with the
+//                switches, or Alex HPF with them. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -88,6 +95,7 @@
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
+#include "core/codec/AlexFilterMap.h"
 #include "models/RadioModel.h"
 
 #include <QTabWidget>
@@ -161,15 +169,24 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     // internally by AntennaAlexAntennaControlTab via AlexController.
     // Phase 3P-F Task 3: removed old placeholder table gating code.
 
-    // Gate Saturn BPF1 column on board type.
-    // Saturn = ANAN-G2 / G2-1K (G8NJJ). SaturnMKII = MkII board revision.
-    // HermesC10 (ANAN-G2E) also uses the BPF1 algorithm path.
-    // From Thetis console.cs:6829-6834 [v2.10.3.15] //N1GP G2E added (HermesC10) //DK1HLM:
-    //   setAlex1HPF dispatches setBPF1ForOrionIISaturn for OrionMKII || Saturn || HermesC10.
-    const bool isSaturn = (caps.board == HPSDRHW::Saturn
-                        || caps.board == HPSDRHW::SaturnMKII
-                        || caps.board == HPSDRHW::HermesC10);  //N1GP G2E added (HermesC10) //DK1HLM
-    m_alex1Tab->updateBoardCapabilities(isSaturn);
+    // Show the BPF1 group, with the five HPF / 6 m LNA switches, in place of
+    // the Alex HPF group when the Core programs the board's receive filter
+    // through BPF1 (codec::alex::usesBpf1Preselector, the selector
+    // computeRxPreselector uses): OrionMKII, Saturn, SaturnMKII, HermesC10.
+    // From Thetis console.cs:6827-6837 [v2.10.3.15] (setAlex1HPF):
+    //   if ((HardwareSpecific.Hardware == HPSDRHW.OrionMKII) || (HardwareSpecific.Hardware == HPSDRHW.Saturn)
+    //      || (HardwareSpecific.Hardware == HPSDRHW.HermesC10))  //N1GP G2E added (HermesC10) //DK1HLM
+    //   { setBPF1ForOrionIISaturn(freq); } else { setAlexHPF(freq); }
+    // From Thetis setup.cs:6336-6360 [v2.10.3.15] (the panel list by model):
+    //   HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //   HardwareSpecific.Model != HPSDRModel.REDPITAYA)//DH1KLM
+    //   { panelBPFControl.Visible = false; panelAlex1HPFControl.Visible = true; ... }
+    // Thetis's panel list matches the programmed bank for every model but the
+    // plain ORIONMKII: it is on the OrionMKII board, so Thetis programs BPF1
+    // yet shows the HPF panel, whose rows then do nothing. The tab shows the
+    // rows that take effect, so the ORION MKII shows BPF1.
+    const bool bpfPanel = codec::alex::usesBpf1Preselector(caps.board);
+    m_alex1Tab->updateBoardCapabilities(bpfPanel);
 
     // Gate Alex-2 board status on caps.hasAlex2 (Phase 3P-I-b T8).
     // From Thetis setup.cs:6228-6264 [v2.10.3.13]: tpAlex2FilterControl
