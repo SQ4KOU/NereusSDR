@@ -32,13 +32,10 @@ private slots:
     // Version 16: a phone that declares version 16 or later reads the HL2
     // Options rows on HL2 I/O, the stored-only ones disabled with their
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
-    // (the Alex-1 low-pass rows) keeps them, and is the cap.
+    // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
+    // clock rows) opens the clock rows and is the cap.
     void pairedV16PhoneReadsHl2Options()
     {
-        Core core;
-        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
-                                                         core.model->hardwareProfile().model,
-                                                         core.model->currentRadioInfo());
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
             QJsonObject options;
             for (const QJsonValue& page : hardware.value("pages").toArray()) {
@@ -52,8 +49,13 @@ private slots:
         };
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
-            {16, 16, 16}, {17, 17, 17}, {99, 17, 17}, {15, 15, 13}};
+            {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {99, 18, 18}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
+            // One Core per phone: five phones are more than a Core's places.
+            Core core;
+            core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                             core.model->hardwareProfile().model,
+                                                             core.model->currentRadioInfo());
             Device phone(QStringLiteral("HL2 V%1 iPhone").arg(declared), QStringLiteral("phone"));
             core.pair(phone);
             QHash<QByteArray, int> features = kHolder;
@@ -72,6 +74,12 @@ private slots:
                 QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
                 QCOMPARE(swap.value("availability").toObject().value("enabled"),
                          QJsonValue(false));
+                // The clock rows are open from version 18; a version 16 or
+                // 17 phone keeps them closed.
+                const QJsonObject cl2 = rows.at(2).toObject();
+                QCOMPARE(cl2.value("id"), QJsonValue("hardware.hl2Io.cl2Enable"));
+                QCOMPARE(cl2.contains("availability"), received < 18);
+                QCOMPARE(rows.at(3).toObject().contains("enabledWhen"), received == 18);
             }
         }
     }

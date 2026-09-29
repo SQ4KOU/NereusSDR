@@ -679,6 +679,10 @@
 //                 as mi0bot's SetI2CPollingPause callers do (setup.cs
 //                 21457-21529, 30014-30052 [@c26a8a4]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 clock: applyHl2Options hands the saved External
+//                 10 MHz, Enable CL2 and CL2 frequency to the connection
+//                 (mi0bot setup.cs:21732-21756 [@c26a8a4]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8965,6 +8969,20 @@ QString RadioModel::lpfBypassUnavailableReason()
 //   Reset on Ethernet disconnect, bank 18 C4
 //     From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
 //       // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+//   External 10 MHz, Enable CL2 and CL2 frequency, the clock chip over I2C
+//   (P1RadioConnection::setHl2Clock)
+//     From mi0bot Console/setup.cs:21732-21756 [@c26a8a4]:
+//       // MI0BOT: Support for HL2 Cl2 clock output
+//       // MI0BOT: Support for HL2 10MHz clock input
+void RadioModel::connectHl2OptionsToConnection()
+{
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        applyHl2Options();
+        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
+                [this]() { applyHl2Options(); });
+    }
+}
+
 void RadioModel::applyHl2Options()
 {
     auto* p1 = qobject_cast<P1RadioConnection*>(m_connection);
@@ -8976,13 +8994,17 @@ void RadioModel::applyHl2Options()
     const int txLatencyMs = m_hl2Options.txLatencyMs();
     const int pttHangMs = m_hl2Options.pttHangMs();
     const bool resetOnDisconnect = m_hl2Options.disconnectReset();
+    const bool ext10MHz = m_hl2Options.ext10MHz();
+    const bool cl2Enabled = m_hl2Options.cl2Enabled();
+    const int cl2FreqKHz = m_hl2Options.cl2FreqKHz();
     QMetaObject::invokeMethod(p1, [p1, bandVolts, psSync, txLatencyMs, pttHangMs,
-                                   resetOnDisconnect]() {
+                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqKHz]() {
         p1->setHl2BandVolts(bandVolts);
         p1->setHl2PsSync(psSync);
         p1->setHl2TxLatency(txLatencyMs);
         p1->setHl2PttHang(pttHangMs);
         p1->setHl2ResetOnDisconnect(resetOnDisconnect);
+        p1->setHl2Clock(ext10MHz, cl2Enabled, cl2FreqKHz);
     });
 }
 
@@ -16979,11 +17001,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // loaded above, before the connection thread starts; later changes
     // follow on that thread (applyHl2Options). changed() also fires when a
     // remote window's edit reloads them on the Core (reload "hl2").
-    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
-        applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
-    }
+    connectHl2OptionsToConnection();
     // The HL2 I/O board's poll writes the TX VFO's mode and frequency.
     rebindIoBoardSlice();
 

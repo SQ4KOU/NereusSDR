@@ -56,6 +56,10 @@
 //               txInhibitReason only to a peer that declared
 //               txInhibitReason 1 (fitPeerOnlyProperties). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: HL2 clock options: radioHardwareVersion 11 (the Core
+//               sends Enable CL2, CL2 frequency and External 10 MHz to its
+//               radio) and Setup description version 18. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -770,6 +774,7 @@
 #include "core/session/BandLinkFit.h"
 
 #include "core/TxSliceArbiter.h"
+#include "core/Hl2OptionsModel.h"
 #include "core/session/DataChannelTransport.h"
 #include "core/session/RelayLeg.h"
 #include "core/session/media/IMediaTransport.h"
@@ -1744,6 +1749,26 @@ bool sameSettledValue(const QVariant& a, const QVariant& b)
         return true;
     }
     return a == b;
+}
+
+// The plain refusal for an HL2 CL2 frequency its Setup box cannot hold;
+// empty when it can, or when the key is not that one. Refused whole, never
+// clamped, as the calibration values are. From mi0bot setup.designer.cs:
+// 11133-11163 [@c26a8a4] udCl2Freq: Maximum = 200, Minimum = 1 (MHz),
+// DecimalPlaces = 3.
+QString hl2ClockKeyValueRefusal(const QString& key, const QVariant& value)
+{
+    const QStringList parts = key.split(QLatin1Char('/'));
+    if (parts.size() != 4 || parts[0].compare(QLatin1String("hardware"), Qt::CaseInsensitive) != 0
+        || parts[2].compare(QLatin1String("hl2"), Qt::CaseInsensitive) != 0
+        || parts[3].compare(QLatin1String("cl2FreqMHz"), Qt::CaseInsensitive) != 0) {
+        return {};
+    }
+    int kHz = 0;
+    return Hl2OptionsModel::parseCl2FreqMHz(value.toString(), &kHz)
+            && kHz >= Hl2OptionsModel::kCl2FreqMinKHz && kHz <= Hl2OptionsModel::kCl2FreqMaxKHz
+        ? QString()
+        : QStringLiteral("Choose a CL2 frequency from 1 to 200 MHz.");
 }
 
 // R-R3-49 (parity Task 5): true when both values are the same JSON object.
@@ -7156,6 +7181,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), range));
         return;
     }
+    // An HL2 CL2 frequency outside its box's range, or not a number, is
+    // refused whole, and the Core's value handed back.
+    if (const QString range = hl2ClockKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
     // D79 (R-IOS-11, R-R3-49): a band plan this Core does not have is
     // refused, and the Core's value handed back.
     if (const QString plan = bandPlanRefusal(key, message.updates.first().value);
@@ -7928,8 +7963,9 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             SessionMessage fitted = message;
             const int declared = peer->features.value(QByteArrayLiteral("setupDescription"), 0);
             // 16: Hardware's HL2 Options rows. 17: Hardware's Alex-1 low-pass
-            // rows (radioHardwareVersion 10).
-            const int version = qMin(declared, 17);
+            // rows (radioHardwareVersion 10). 18: HL2 Options' clock rows
+            // (radioHardwareVersion 11).
+            const int version = qMin(declared, 18);
             // The table describes the supported board's static row shape.
             // A disconnected radio withdraws the live row capability, but a
             // paired peer that negotiated rows keeps this description across
@@ -10822,7 +10858,14 @@ int StationServer::radioHardwareVersion() const
     // and off the air, as Thetis's handlers do (setup.cs:15888-15994,
     // 18832-18835 [v2.10.3.15]). radio's alexLpfBits (the low-pass in use)
     // goes to a peer that declared alexLpf 1.
-    return m_radioModel->ioBoardFacade()->isBound() ? 10 : 2;
+    //
+    // 11: the HL2 clock options (hardware/<mac>/hl2/cl2Enable, cl2FreqMHz
+    // and ext10MHz) reach this Core's radio through the "hl2" reload
+    // (RadioModel::applyHl2Options -> P1RadioConnection::setHl2Clock), on
+    // and off the air, as mi0bot's handlers write the clock chip with no
+    // MOX check (mi0bot setup.cs:21732-21756 [@c26a8a4]). A Core below 11
+    // stores them without sending them, so a window keeps the rows closed.
+    return m_radioModel->ioBoardFacade()->isBound() ? 11 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
@@ -10958,7 +11001,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 17) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 18) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

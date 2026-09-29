@@ -1,4 +1,4 @@
-# Setup description versions 1–17
+# Setup description versions 1–18
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,10 +165,10 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 17. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-17 ceiling (version 16
-for V16, version 13
-for V13–V15, version 6 for V6–V12; see Versions 16 and 17); Display a version-12 ceiling, and
+future declaration at version 18. PA has a version-14 ceiling (version 13
+for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
+for V17, version 16 for V16, version 13
+for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP, Transmit, Audio,
 Diagnostics and CAT & Network are version 15 to a V15 or later peer (see
@@ -896,7 +896,8 @@ transmit hardware settings. In the desktop's order:
 - `hardware.hl2Io.txLatency`, TX buffer latency, integer 0..70 ms, default 20.
 - `hardware.hl2Io.pttHang`, PTT hang, integer 0..30 ms, default 12.
 - `hardware.hl2Io.cl2Enable`, Enable CL2, toggle, default off.
-- `hardware.hl2Io.cl2Freq`, CL2 frequency, integer 1..200 MHz, default 116.
+- `hardware.hl2Io.cl2Freq`, CL2 frequency, 1..200 MHz, default 116;
+  integer at 16, decimal from 18 (step 0.1, 3 decimals; below).
 - `hardware.hl2Io.ext10MHz`, External 10 MHz reference, toggle, default off.
 - `hardware.hl2Io.disconnectReset`, Reset on Ethernet disconnect, toggle.
 - `hardware.hl2Io.psSync`, Disable power supply sync, toggle.
@@ -917,7 +918,7 @@ value is defined.
 Version 17 describes the Alex-1 Filters tab's low-pass rows (R-R3-46,
 R-R3-49). The Core applies them to its radio as Thetis's setAlexLPF selects
 the transmit low-pass (console.cs:7177-7243 [v2.10.3.15]), with capability
-`radioHardwareVersion` 10. A peer that declares 17 or higher receives
+`radioHardwareVersion` 10. A peer that declares 17 receives
 Hardware as version 17; a V16 peer receives it as version 16, with no
 low-pass row, a V13 to V15 peer exactly as version 13, and V6 to V12 keep
 version 6. Every new row has `requiresDescriptionVersion:17`.
@@ -946,6 +947,27 @@ disabled with "This radio does not have the 6m low-pass bypass on
 receive." The low-pass in use is not a Setup row: a peer that declares
 `alexLpf` 1 reads it from `radio`'s `alexLpfBits` (link document section
 7.1). No other wire field changes.
+
+Version 18 opens the three clock rows, which the Core now sends to a
+Hermes Lite 2 (radioHardwareVersion 11). A peer that declares 18 or higher
+receives Hardware as version 18. `hardware.hl2Io.cl2Enable`,
+`hardware.hl2Io.cl2Freq` and `hardware.hl2Io.ext10MHz` carry
+`requiresDescriptionVersion:18`, no `availability`, and the tooltips "Enable
+frequency output on CL2", "Output frequency on CL2 output" and "Enable
+external 10 MHz input on CL1". The frequency row becomes `kind:"decimal"`,
+1..200 MHz, `step` 0.1, `decimals` 3, as the desktop's box holds three
+decimal places; its value is the stored text, such as "116" or "24.576".
+Labels, bindings, the other ranges, defaults and the gate are unchanged. The
+frequency row also carries one closed dependency,
+`"enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]}`: the row is
+enabled only while the row of this description bound to `hl2/cl2Enable`
+holds on, as the desktop disables the frequency box while Enable CL2 is off.
+Hardware accepts `enabledWhen` only on that exact row. A peer declaring
+V16 or V17 receives Hardware at version 16 or 17 with the three version 16
+rows, closed with the old reason, in place of the version 18 rows; the six other rows
+are unchanged. Its frequency row stays `kind:"integer"` and closed, so it
+can show a value such as "24.576" set from the desktop or a version 18
+peer, but never write one. No new wire field or verb is defined.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

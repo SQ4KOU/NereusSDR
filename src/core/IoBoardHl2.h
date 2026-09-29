@@ -251,6 +251,20 @@ public:
     bool   i2cQueueIsEmpty() const;
     bool   i2cQueueIsFull() const;
     void   clearI2cQueue();
+    // How many transactions have left the queue since it was made. A
+    // writer that finds the queue full reads it to tell a queue that is
+    // draining from one that has stopped.
+    quint64 i2cDequeuedCount() const;
+    // How many transactions have gone into the queue since it was made. A
+    // writer reads it after its last write: once i2cDequeuedCount() reaches
+    // it, that write has left the queue.
+    quint64 i2cEnqueuedCount() const;
+    // Goes up by one as clearI2cQueue() starts and again as it ends. A
+    // writer that sees it change knows writes it queued may have been
+    // dropped rather than sent. Read it after i2cDequeuedCount(), with an
+    // acquire fence between the two: a count raised by the clear's own
+    // dequeues then always comes with the change.
+    quint64 i2cClearCount() const;
 
     // ── Pending-read FIFO ──
     // Mi0bot tracks one in-flight read at a time (IoBoardHl2.cs:142-143
@@ -392,6 +406,7 @@ private:
     std::array<I2cSlot, kMaxI2cQueue> m_i2cSlots{};
     alignas(64) std::atomic<quint64> m_i2cEnqueuePos{0};
     alignas(64) std::atomic<quint64> m_i2cDequeuePos{0};
+    std::atomic<quint64> m_i2cClearCount{0};
 
     // When each pending read went out (nowMs()), parallel to m_pendingReads.
     std::array<qint64, kMaxI2cQueue> m_pendingSentMs{};

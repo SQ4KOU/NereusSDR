@@ -1123,7 +1123,8 @@ public:
     void applyDisableHfPaSetting(const QVariant& value);
     // Pushes the saved HL2 options the radio takes on the wire (Band Volts,
     // Disable PS Sync, TX buffer latency, PTT hang, reset on Ethernet
-    // disconnect) to a P1 connection. Nothing without one.
+    // disconnect, External 10 MHz, Enable CL2, CL2 frequency) to a P1
+    // connection. Nothing without one.
     void applyHl2Options();
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
@@ -1634,6 +1635,9 @@ public:
     // Test seam: the production connection -> model report, for a test that
     // injects a connection (injectConnectionForTest does no wiring).
     void wireBandOutputsReportForTest() { connectBandOutputsReport(); }
+    // Test seam: the production HL2 options -> connection push, for a test
+    // that injects a connection.
+    void wireHl2OptionsForTest() { connectHl2OptionsToConnection(); }
 
     // The Alex-1 low-pass filter bits the Core's connection selected (see
     // the Q_PROPERTY), or -1 before any.
@@ -5874,6 +5878,9 @@ private:
     // bandOutputsByte (onBandOutputsComposed). Called from
     // wireConnectionSignals.
     void connectBandOutputsReport();
+    // Pushes the saved HL2 options to a P1 connection now and again each
+    // time they change (applyHl2Options). Nothing without one.
+    void connectHl2OptionsToConnection();
     void onBandOutputsComposed(quint8 ocByte, int band, bool keyed);
     void onAlexLpfBitsComposed(quint8 bits);
     void resetBandOutputs();

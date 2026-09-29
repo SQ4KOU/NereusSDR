@@ -1569,6 +1569,10 @@ const QList<AppSideReason>& appSideReasons()
         // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
         {"src/core/session/IStationLink.h", "alexHpfRowsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 11: HL2 Options' Enable CL2, CL2 frequency
+        // and External 10 MHz.
+        {"src/core/session/IStationLink.h", "hl2ClockUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // iPhone app plan Task 25: This Core's device list on a Core that
         // does not offer device administration to this window.
         {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",

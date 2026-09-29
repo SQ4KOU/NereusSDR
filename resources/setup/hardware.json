@@ -1,5 +1,5 @@
 {
-  "version": 17,
+  "version": 18,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -2847,7 +2847,7 @@
             {
               "id": "hardware.hl2Io.cl2Enable",
               "label": "Enable CL2",
-              "tooltip": "",
+              "tooltip": "Enable frequency output on CL2",
               "kind": "toggle",
               "binding": {
                 "radioSetting": "hl2/cl2Enable"
@@ -2861,18 +2861,14 @@
                 "capability": "transmitSettingsVersion",
                 "min": 8
               },
-              "requiresDescriptionVersion": 16,
-              "default": false,
-              "availability": {
-                "enabled": false,
-                "reason": "NereusSDR does not change the radio's clock settings."
-              }
+              "requiresDescriptionVersion": 18,
+              "default": false
             },
             {
               "id": "hardware.hl2Io.cl2Freq",
               "label": "CL2 frequency",
-              "tooltip": "",
-              "kind": "integer",
+              "tooltip": "Output frequency on CL2 output",
+              "kind": "decimal",
               "binding": {
                 "radioSetting": "hl2/cl2FreqMHz"
               },
@@ -2881,21 +2877,24 @@
                 "capability": "transmitSettingsVersion",
                 "min": 8
               },
-              "requiresDescriptionVersion": 16,
+              "requiresDescriptionVersion": 18,
               "min": 1,
               "max": 200,
-              "step": 1,
+              "step": 0.1,
+              "decimals": 3,
               "unit": "MHz",
-              "default": 116,
-              "availability": {
-                "enabled": false,
-                "reason": "NereusSDR does not change the radio's clock settings."
-              }
+              "enabledWhen": {
+                "radioSetting": "hl2/cl2Enable",
+                "oneOf": [
+                  true
+                ]
+              },
+              "default": 116
             },
             {
               "id": "hardware.hl2Io.ext10MHz",
               "label": "External 10 MHz reference",
-              "tooltip": "",
+              "tooltip": "Enable external 10 MHz input on CL1",
               "kind": "toggle",
               "binding": {
                 "radioSetting": "hl2/ext10MHz"
@@ -2909,12 +2908,8 @@
                 "capability": "transmitSettingsVersion",
                 "min": 8
               },
-              "requiresDescriptionVersion": 16,
-              "default": false,
-              "availability": {
-                "enabled": false,
-                "reason": "NereusSDR does not change the radio's clock settings."
-              }
+              "requiresDescriptionVersion": 18,
+              "default": false
             },
             {
               "id": "hardware.hl2Io.disconnectReset",

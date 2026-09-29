@@ -1434,6 +1434,8 @@ private slots:
             const QString id = row.value("id").toString();
             QVERIFY2(row.value("binding").toObject().value("radioSetting").toString()
                          .startsWith("hl2/"), qPrintable(id));
+            // A version 16 peer keeps the rows it was built for, closed.
+            QVERIFY2(SetupDescriptionService::validateHardwareV16Control(row), qPrintable(id));
             if (reasons.contains(id)) {
                 QCOMPARE(row.value("availability"), QJsonValue(QJsonObject{
                     {"enabled", false}, {"reason", reasons.value(id)}}));
@@ -1449,13 +1451,15 @@ private slots:
             }
         }
 
-        // Every resource row is closed.
+        // Every resource row is closed. Six rows stay version 16's; the
+        // three clock rows are version 18's.
         const QList<QJsonObject> resource = resourceRows(QStringLiteral("hardware"), 16);
-        QCOMPARE(resource.size(), 9);
+        QCOMPARE(resource.size(), 6);
         for (const QJsonObject& row : resource) {
             QVERIFY2(SetupDescriptionService::validateHardwareV16Control(row),
                      qPrintable(row.value("id").toString()));
             QVERIFY(!SetupDescriptionService::validateHardwareV13Control(row));
+            QVERIFY(!SetupDescriptionService::validateHardwareV18Control(row));
             for (const QJsonObject& changed : mutationsOf(row)) {
                 QVERIFY2(!SetupDescriptionService::validateHardwareV16Control(changed),
                          qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
@@ -1479,6 +1483,96 @@ private slots:
         service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
                                 HPSDRModel::ANAN100, RadioInfo{});
         QVERIFY(pageById(projectedCategory(service.hardware(), 16), "hardware.hl2Io").isEmpty());
+    }
+
+    // Version 18: HL2 Options' clock rows open, now that the Core sends
+    // them to its radio (radioHardwareVersion 11). They carry mi0bot's
+    // tooltips (setup.designer.cs:11158, 11174, 11187 [@c26a8a4]) and no
+    // availability, and the frequency row is enabled only while Enable CL2
+    // is on. The rest of the category is version 16's; a later declaration
+    // sees version 18.
+    void hardwareV18OpensHl2ClockRows()
+    {
+        SetupDescriptionService service;
+        service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::HermesLite),
+                                HPSDRModel::HERMESLITE, RadioInfo{});
+        const QJsonObject current = projectedCategory(service.hardware(), 18);
+        QCOMPARE(current.value("version"), QJsonValue(18));
+        const QJsonObject older = projectedCategory(service.hardware(), 16);
+        QCOMPARE(older.value("version"), QJsonValue(16));
+        const QJsonArray rows = pageById(current, "hardware.hl2Io").value("sections")
+            .toArray().at(1).toObject().value("controls").toArray();
+        const QJsonArray olderRows = pageById(older, "hardware.hl2Io").value("sections")
+            .toArray().at(1).toObject().value("controls").toArray();
+        QCOMPARE(rows.size(), 9);
+        QCOMPARE(olderRows.size(), 9);
+        const QHash<QString, QString> tooltips{
+            {"hardware.hl2Io.cl2Enable", "Enable frequency output on CL2"},
+            {"hardware.hl2Io.cl2Freq", "Output frequency on CL2 output"},
+            {"hardware.hl2Io.ext10MHz", "Enable external 10 MHz input on CL1"}};
+        for (int i = 0; i < rows.size(); ++i) {
+            const QJsonObject row = rows.at(i).toObject();
+            const QJsonObject was = olderRows.at(i).toObject();
+            const QString id = row.value("id").toString();
+            QCOMPARE(was.value("id").toString(), id);
+            if (!tooltips.contains(id)) {
+                QCOMPARE(row, was);
+                continue;
+            }
+            QCOMPARE(row.value("requiresDescriptionVersion"), QJsonValue(18));
+            QCOMPARE(row.value("tooltip"), QJsonValue(tooltips.value(id)));
+            QVERIFY2(!row.contains("availability"), qPrintable(id));
+            QVERIFY2(SetupDescriptionService::validateHardwareV18Control(row), qPrintable(id));
+            QVERIFY2(!SetupDescriptionService::validateHardwareV16Control(row), qPrintable(id));
+            // Everything else is the version 16 row's, except that the
+            // frequency is decimal to three places with a 0.1 step, as
+            // mi0bot's udCl2Freq (setup.designer.cs:11133-11163 [@c26a8a4]).
+            const bool isFreq = id == "hardware.hl2Io.cl2Freq";
+            for (const QString& key : {"label", "kind", "binding", "valueEncoding", "applies",
+                                       "gate", "min", "max", "step", "unit", "default"}) {
+                if (isFreq && (key == "kind" || key == "step")) {
+                    continue;
+                }
+                QCOMPARE(row.value(key), was.value(key));
+            }
+            if (isFreq) {
+                QCOMPARE(row.value("kind"), QJsonValue("decimal"));
+                QCOMPARE(row.value("step"), QJsonValue(0.1));
+                QCOMPARE(row.value("decimals"), QJsonValue(3));
+                QCOMPARE(was.value("kind"), QJsonValue("integer"));
+                QCOMPARE(was.value("step"), QJsonValue(1));
+                QVERIFY(!was.contains("decimals"));
+            } else {
+                QVERIFY2(!row.contains("decimals"), qPrintable(id));
+            }
+            QCOMPARE(row.value("enabledWhen"), id == "hardware.hl2Io.cl2Freq"
+                ? QJsonValue(QJsonObject{{"radioSetting", "hl2/cl2Enable"},
+                                         {"oneOf", QJsonArray{true}}})
+                : QJsonValue(QJsonValue::Undefined));
+        }
+        QCOMPARE(QJsonValue(rows.at(3).toObject().value("default")), QJsonValue(116));
+        QCOMPARE(rows.at(3).toObject().value("min"), QJsonValue(1));
+        QCOMPARE(rows.at(3).toObject().value("max"), QJsonValue(200));
+
+        // The resource's clock rows are closed, the dependency included.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("hardware"), 18);
+        QCOMPARE(resource.size(), 3);
+        for (const QJsonObject& row : resource) {
+            QVERIFY2(SetupDescriptionService::validateHardwareV18Control(row),
+                     qPrintable(row.value("id").toString()));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateHardwareV18Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+            QJsonObject dependent = row;
+            dependent.insert("enabledWhen", QJsonObject{{"radioSetting", "hl2/ext10MHz"},
+                                                        {"oneOf", QJsonArray{true}}});
+            QVERIFY(!SetupDescriptionService::validateHardwareV18Control(dependent));
+        }
+
+        // A later declaration is capped at 18.
+        QCOMPARE(projectedCategory(service.hardware(), 19), current);
+        QCOMPARE(projectedCategory(service.hardware(), 99), current);
     }
 
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
@@ -2870,7 +2964,8 @@ private slots:
         check(15, kSessionProtocolMinor, 15);
         check(16, kSessionProtocolMinor, 16);
         check(17, kSessionProtocolMinor, 17);
-        check(18, kSessionProtocolMinor, 17);
+        check(18, kSessionProtocolMinor, 18);
+        check(19, kSessionProtocolMinor, 18);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }
