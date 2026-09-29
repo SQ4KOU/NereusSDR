@@ -40,6 +40,8 @@
 //      with transmit audio queued on a Protocol 1 or Protocol 2 connection
 //      its unkey never waits for the send ring (G-05) before the radio
 //      reaches receive.
+//  15. (Unkey drain review) So is the keyed device's lost link, whether its
+//      link drops or the same device connects again over a new one.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -62,6 +64,11 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
 //               radio keeps transmit after its press. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: Unkey drain review: the Core's stops (a revoke, a lost
+//               link, the same device connecting again) never wait for the
+//               send ring, on Protocol 1 and Protocol 2. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -267,6 +274,35 @@ void verifyStopSent(const LoopbackTransport* app, const QString& reason, const Q
 }
 
 } // namespace
+
+// Watches the log for the MoxController's send-ring wait lines: a wait
+// the ceiling ended, or one a stop cut short. Either means an unkey began
+// to wait for the send ring.
+class SendRingWaitLog {
+public:
+    SendRingWaitLog()
+    {
+        s_line.clear();
+        s_previous = qInstallMessageHandler(&SendRingWaitLog::handle);
+    }
+    ~SendRingWaitLog() { qInstallMessageHandler(s_previous); }
+    bool seen() const { return !s_line.isEmpty(); }
+    QString line() const { return s_line; }
+
+private:
+    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+    {
+        if (msg.contains(QStringLiteral("not waiting for the send ring"))
+            || msg.contains(QStringLiteral("send ring did not drain"))) {
+            s_line = msg;
+        }
+        if (s_previous) {
+            s_previous(type, context, msg);
+        }
+    }
+    static inline QString s_line;
+    static inline QtMessageHandler s_previous{nullptr};
+};
 
 class TstTransmitStateFacade : public QObject {
     Q_OBJECT
@@ -644,15 +680,28 @@ private slots:
 
     // 14. A revoke is the Core's stop: its unkey never waits for the send
     //     ring, on either protocol, whatever transmit audio is queued.
-    void revokingTheKeyedDeviceNeverWaitsForTheSendRing_data()
+    // 15. So is a lost link (the keyed device's link drops, or the same
+    //     device connects again over a new link): the Core stops it.
+    void theCoresStopsNeverWaitForTheSendRing_data()
     {
         QTest::addColumn<int>("protocol");
-        QTest::newRow("protocol 1") << 1;
-        QTest::newRow("protocol 2") << 2;
+        QTest::addColumn<QString>("stop");
+        QTest::addColumn<QString>("reason");
+        for (int protocol : {1, 2}) {
+            const QByteArray tag = "protocol " + QByteArray::number(protocol);
+            QTest::newRow(tag + ", revoked") << protocol << QStringLiteral("revoke")
+                                             << QStringLiteral("revoked");
+            QTest::newRow(tag + ", link lost") << protocol << QStringLiteral("linkLost")
+                                               << QStringLiteral("linkLost");
+            QTest::newRow(tag + ", connected again") << protocol << QStringLiteral("again")
+                                                     << QStringLiteral("linkLost");
+        }
     }
-    void revokingTheKeyedDeviceNeverWaitsForTheSendRing()
+    void theCoresStopsNeverWaitForTheSendRing()
     {
         QFETCH(int, protocol);
+        QFETCH(QString, stop);
+        QFETCH(QString, reason);
         Pair p;
         // An unconnected connection: nothing sends, so what is queued stays.
         std::unique_ptr<RadioConnection> conn;
@@ -674,7 +723,16 @@ private slots:
         conn->sendTxIq(iq.data(), 1);
         QVERIFY(!conn->txIqRingDrained());
 
-        QVERIFY(p.core.server->deviceStore()->remove(p.a.key.fingerprint()));
+        // A wait that starts and is cut short at once is still a wait: the
+        // MoxController says so in the log when a stop ends one.
+        SendRingWaitLog waitLog;
+        if (stop == QStringLiteral("revoke")) {
+            QVERIFY(p.core.server->deviceStore()->remove(p.a.key.fingerprint()));
+        } else if (stop == QStringLiteral("linkLost")) {
+            p.appA->closeLink(QStringLiteral("lost"));
+        } else {
+            p.core.signIn(p.a, kTransmitter);
+        }
         bool waited = mox->isSendRingWaitActive();
         QElapsedTimer t;
         t.start();
@@ -683,9 +741,11 @@ private slots:
             waited = waited || mox->isSendRingWaitActive();
         }
         QVERIFY(!waited);
+        QVERIFY2(!waitLog.seen(), qPrintable(waitLog.line()));
         QVERIFY(!mox->isMox());
         QCOMPARE(mox->state(), MoxState::Rx);
-        QCOMPARE(p.state().stopReason(), QStringLiteral("revoked"));
+        pumpEvents();
+        QCOMPARE(p.state().stopReason(), reason);
     }
 
     void anUnkeyTheDeviceAskedForIsNoStop()

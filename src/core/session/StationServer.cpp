@@ -709,6 +709,10 @@
 //               with Stop All TX, so its unkey never waits for the send
 //               ring. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-29: Unkey drain review: the same device connecting again while
+//               its older link was on the air is stopped with Stop All TX
+//               too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 //   2026-09-29: The phone's direct addresses: devices' coreAddresses from
 //               a CoreAddressWatcher that follows the listener, with
 //               coreAddressesVersion 1, only to a device signed in with its
@@ -5144,8 +5148,18 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
             // over to the new connection, unkeyed.
             // iPhone app plan Task 39: its older link is gone; a key on it
             // is stopped by the Core.
-            noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
+            const QString stopText =
+                noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
             if (!self) { return; }
+            // Unkey drain review (G-05): that stop is the Core's, so it is
+            // Stop All TX, as a dropped link's is. The fence's own unkey (the
+            // unkey gate's normal unkey) is the operator's, and would hold
+            // the hardware keyed for the queued transmit audio, up to the
+            // send ring's length.
+            if (!stopText.isEmpty() && m_radioModel) {
+                m_radioModel->stopAllTx(stopText);
+                if (!self) { return; }
+            }
             m_transmitHolder->holderDropped(device.deviceId,
                                             QStringLiteral("This device connected again."));
             if (!self) { return; }
