@@ -81,6 +81,9 @@
 //   2026-09-29: the direct media ladder: setStunServer, so a media
 //               connection's own settings carry the Core's STUN server.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: direct media fix wave: setOnlySourceCandidates, for the
+//               window's fallback onto the tunnel alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -274,6 +277,12 @@ public:
     }
     void setMediaRouting(bool routed) { m_mediaRouting = routed; }
     bool mediaRouting() const { return m_mediaRouting; }
+    /// The direct media ladder's fallback: a connection that uses only its
+    /// own candidate source (the tunnel). It takes none of the far end's
+    /// signalled candidates and sends none of its own, so no direct pair can
+    /// form and the far end never learns this computer's addresses.
+    void setOnlySourceCandidates(bool only) { m_onlySourceCandidates = only; }
+    bool onlySourceCandidates() const { return m_onlySourceCandidates; }
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     /// The direct media ladder: the STUN server a media connection gathers
@@ -316,6 +325,7 @@ private:
     CandidateSourceFactory m_sourceFactory;
     bool m_sourceNeedsRelay = true;
     bool m_mediaRouting = false;
+    bool m_onlySourceCandidates = false;
 };
 
 } // namespace NereusSDR

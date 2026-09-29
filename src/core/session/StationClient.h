@@ -205,6 +205,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    mediaTunnelOnlyIceConfiguration, the
+//                                    tunnel alone for the fallback;
+//                                    mediaTunnelInUse.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder:
 //                                    mediaStunServer, mediaDirectAvailable,
 //                                    mediaDirectIceConfiguration.
@@ -562,6 +567,7 @@ public:
     /// Step 2b: media runs in the WebSocket tunnel (the media controller
     /// says so), which counts as a relayed path for the heartbeat.
     void setMediaTunnelInUse(bool inUse);
+    bool mediaTunnelInUse() const { return m_mediaTunnelInUse; }
 
     /// How often locally-observed property changes are drained toward the
     /// station. See StationServer::kDefaultDeltaFlushMs for the same
@@ -709,6 +715,10 @@ public:
     bool mediaDirectAvailable() const;
     /// STUN and host candidates only: no relay, no tunnel.
     IceConfiguration mediaDirectIceConfiguration() const;
+    /// The fallback from a silent direct path: the tunnel's candidates
+    /// alone, no STUN and no host candidates (none unless the tunnel is
+    /// usable, as mediaTunnelIceConfiguration()).
+    std::optional<IceConfiguration> mediaTunnelOnlyIceConfiguration();
 
     /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
     /// paired Core can be reached through the internet service: the

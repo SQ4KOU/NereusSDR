@@ -235,7 +235,7 @@ may add `"mediaDirectVersion": 1` to its `replace`. The Core then makes the
 new peer with its STUN server and host candidates only: no media tunnel
 candidate and no relay (`MediaTunnel::directIceFor`). Everything else is
 the replace above: the same refusals, the same overlap, and the Core's own
-`replace` keeps its two fields. A `replace` that names the field when the
+`replace` keeps its three fields. A `replace` that names the field when the
 Core did not advertise it, or with any value but 1, is malformed, as any
 other extra key. A direct-only replace that does not become ready is
 dropped as in "When it fails", and the tunnel keeps carrying media. The
@@ -263,11 +263,21 @@ and waits for the next. A new media start begins the schedule again.
 tunnel, not a relay) with receive audio wanted, when no audio or display
 packet arrives for `RemoteMediaController::kDirectMediaSilenceFallbackMs`
 (3000 ms) while the control session still runs, the window sends the
-normal three-field `replace` (the tunnel included) and starts the direct
-schedule again at its first step. The tunnel and the relays keep the
-stall rule (`kMediaStallMs`, a new media start). While the Core is on the
-air the window does nothing here; the Core's own rule for a keyed device
-whose microphone packets stop ends transmit as a lost link. The Core sees
+normal three-field `replace` and starts the direct schedule again at its
+first step. That replace's new connection offers the tunnel alone
+(`MediaTunnel::tunnelIceFor`): the tunnel's candidate only, no STUN server
+and no host candidates, and it takes none the Core signals, so ICE can only
+nominate the tunnel. Nothing changes on the wire or at the Core. The
+fallback runs once per silence: only a media packet arms it again. If no
+media has arrived one window (3000 ms) after the fallback finished,
+whether it moved media or failed, the window asks for recovery (a new
+media start). Receive audio is wanted when this window's radio is
+connected and it is not muted; the silence while the Core transmits is
+expected, so the return to receive starts the window again. The tunnel
+and the relays keep the stall rule (`kMediaStallMs`, a new media start).
+While the Core is on the air the window does nothing here; the Core's own
+rule for a keyed device whose microphone packets stop ends transmit as a
+lost link. The Core sees
 only the packets it receives: it cannot tell that its own packets stop
 arriving at the device, so the fallback is the device's to start.
 

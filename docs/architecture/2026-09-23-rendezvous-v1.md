@@ -658,23 +658,24 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   `hello` names the same two hosts on 3478, also IPv4 first:
   `stun:rv4.nereussdr.com:3478`, then `stun:rv6.nereussdr.com:3478`. The
   names are configuration.
-- **Why IPv4 first.** The pinned libjuice uses only the first STUN server
-  it is given. A peer on an IPv4-only network behind NAT needs a
-  server-reflexive candidate from an IPv4 STUN server, or it has nothing
-  but its private address to offer. A peer with IPv6 usually has a global
-  IPv6 host candidate already, but that address alone does not make a
-  path: behind a stateful IPv6 firewall (most home routers) an inbound
-  check reaches the peer only after the peer's own check has opened the
-  firewall toward the other end, and a STUN binding from that same socket
-  keeps the pinhole and tells each end the other's address is live. So a
+- **Why IPv4 first.** The pinned libjuice takes one STUN server name
+  (libjuice `agent.c:449-470`), so an end passes it the first it can use.
+  STUN supplies the IPv4 server-reflexive candidate for the hole punch: a
+  peer on an IPv4-only network behind NAT needs one from an IPv4 STUN
+  server, or it has nothing but its private address to offer. A peer with
+  IPv6 usually has a global IPv6 host candidate already, and a direct IPv6
+  path comes from the ICE checks both ends send: behind a stateful IPv6
+  firewall (most home routers) each end's own checks open its firewall
+  toward the other, so the other end's checks then get through. So a
   NereusSDR end uses the STUN server on every media connection, the first
-  one included, and never assumes a global IPv6 host needs none (the Core
-  passes its STUN servers to its devices in `mediaStunUrls`, the station
-  link document section 6.3). The IPv4-only name goes first in `stun`, and the TURN list keeps the same
-  order so every list the service sends reads the same way. The service's
-  built-in defaults, `rendezvous/server/rendezvous.conf.sample` and what
-  `rendezvous/deploy/setup-server.sh` writes all list them in this order
-  (`test_limits_config_transport.py` and `coturn-check.sh` check it).
+  one included, for the IPv4 candidate (the Core passes its STUN servers to
+  its devices in `mediaStunUrls`, the station link document section 6.3).
+  The IPv4-only name goes first in `stun`, and the TURN list keeps the
+  same order so every list the service sends reads the same way. The
+  service's built-in defaults, `rendezvous/server/rendezvous.conf.sample`
+  and what `rendezvous/deploy/setup-server.sh` writes all list them in
+  this order (`test_limits_config_transport.py` and `coturn-check.sh`
+  check it).
 - The order serves an end that takes the first entry; an end must still not
   depend on it. It chooses its STUN server, and the relay host it allocates
   on, by the address families it has: the first entry whose name resolves,

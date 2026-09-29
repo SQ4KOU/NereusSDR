@@ -1,5 +1,10 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: direct media fix wave: the silence fallback runs once per
+//               silence while the window wants audio (connected, not
+//               muted), replaces onto the tunnel alone, and asks for
+//               recovery when media stays away a window after it; the
+//               silence clock restarts on the return to receive
 //   2026-09-29: the direct media ladder: a direct-only replace while media
 //               rides the tunnel, at the PathRacer::kUpgradeRetryMs steps;
 //               the no-packets fallback back to the tunnel on a silent
@@ -888,6 +893,13 @@ struct RemoteMediaController::Private {
     QTimer* directUpgrade = nullptr;
     int directUpgradeStep = 0;
     qint64 lastMediaMs = -1;
+    // The fix wave: the silence fallback ran for this silence (cleared when
+    // a media packet comes), the replace being started is that fallback,
+    // and when it finished (allocationClock; -1 when none is waiting on
+    // media to return).
+    bool silenceFallbackFired = false;
+    bool replacementFallback = false;
+    qint64 fallbackFinishedMs = -1;
     bool txSilenceSuppressed = false;
     bool coreTransmitting() const
     {
@@ -1611,6 +1623,14 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             // armed by RTP. Periodic txState fields cannot defer recovery.
             if (returningToRx && d->lastAudio.isValid()) {
                 d->lastAudio.restart();
+            }
+            // The direct media ladder: the silence while keyed is expected,
+            // so the silence fallback's clock (and a finished fallback's
+            // wait) restarts on the return to receive too.
+            if (returningToRx) {
+                const qint64 now = d->allocationClock();
+                if (d->lastMediaMs >= 0) { d->lastMediaMs = now; }
+                if (d->fallbackFinishedMs >= 0) { d->fallbackFinishedMs = now; }
             }
         });
         connect(txState, &TransmitState::holderChanged, this, [this, txState] {
@@ -2686,6 +2706,9 @@ void RemoteMediaController::stop()
     d->currentRouted = false;
     d->replacementRouted = false;
     d->replacementDirect = false;
+    d->silenceFallbackFired = false;
+    d->replacementFallback = false;
+    d->fallbackFinishedMs = -1;
     d->txSilenceSuppressed = false;
     if (d->client) {
         d->client->setMediaTunnelInUse(false);
@@ -2942,16 +2965,17 @@ quint64 RemoteMediaController::duplicateAudioDropped() const
 
 bool RemoteMediaController::replaceConnection()
 {
-    return startReplacement(false);
+    return startReplacement(ReplaceKind::Normal);
 }
 
 bool RemoteMediaController::upgradeToDirectConnection()
 {
-    return startReplacement(true);
+    return startReplacement(ReplaceKind::Direct);
 }
 
-bool RemoteMediaController::startReplacement(bool direct)
+bool RemoteMediaController::startReplacement(ReplaceKind kind)
 {
+    const bool direct = kind == ReplaceKind::Direct;
     if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
         || d->replacement || d->retiring || d->epoch != d->client->sessionEpoch()
         || d->client->capabilities().mediaReplaceVersion < 1 || d->logicalSsrcs.isEmpty()) {
@@ -2980,6 +3004,12 @@ bool RemoteMediaController::startReplacement(bool direct)
     std::optional<IceConfiguration> nextIce;
     if (direct) {
         nextIce = d->client->mediaDirectIceConfiguration();
+    } else if (kind == ReplaceKind::TunnelFallback && d->tunnelNegotiated) {
+        // The fix wave: the tunnel's own candidate alone (no STUN, no host
+        // candidates), so ICE cannot settle on the silent direct pair
+        // again. The replace on the wire is the plain three-field one.
+        nextIce = d->client->mediaTunnelOnlyIceConfiguration();
+        if (!nextIce) { nextIce = mediaIceConfiguration(); }
     } else {
         nextIce = mediaIceConfiguration();
     }
@@ -3030,6 +3060,7 @@ bool RemoteMediaController::startReplacement(bool direct)
     });
     d->replacementRouted = nextIce && nextIce->mediaRouting();
     d->replacementDirect = direct;
+    d->replacementFallback = kind == ReplaceKind::TunnelFallback;
     peer->setIceConfiguration(nextIce);
     const QPointer<MediaPeer> started(peer);
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
@@ -3133,6 +3164,12 @@ void RemoteMediaController::promoteReplacement()
     d->currentRouted = std::exchange(d->replacementRouted, false);
     d->replacementDirect = false;
     d->lastMediaMs = d->allocationClock();
+    // The fix wave: a finished fallback waits one window for media; the
+    // tunnel's stall rule counts from here too, not from the old silence.
+    if (std::exchange(d->replacementFallback, false)) {
+        d->fallbackFinishedMs = d->lastMediaMs;
+        if (d->lastAudio.isValid()) { d->lastAudio.restart(); }
+    }
     emit networkPathChanged();
     d->connectionId = d->replacementId;
     d->replacementId.clear();
@@ -3261,6 +3298,9 @@ void RemoteMediaController::dropReplacement(const QString& why)
     d->replacementId.clear();
     d->replacementRouted = false;
     d->replacementDirect = false;
+    if (std::exchange(d->replacementFallback, false)) {
+        d->fallbackFinishedMs = d->allocationClock();
+    }
     for (const quint32 ssrc : audioSsrcsOf(peer)) {
         d->toLogical.remove(ssrc);
     }
@@ -3332,19 +3372,39 @@ void RemoteMediaController::runDirectUpgradeStep()
 void RemoteMediaController::checkMediaSilence()
 {
     // The direct media ladder: a direct path whose media stopped for
-    // kDirectMediaSilenceFallbackMs while control still runs goes back to a
-    // connection that includes the tunnel (the normal replace), and the
-    // direct-only schedule starts over. The Core keyed follows the existing
-    // link-loss path instead (its own starvation rule), so nothing here
-    // runs while it transmits.
+    // kDirectMediaSilenceFallbackMs while control still runs goes back to
+    // the tunnel alone (a plain replace whose connection offers only the
+    // tunnel's candidate), and the direct-only schedule starts over. That
+    // runs once per silence: if media has not returned a window after the
+    // fallback finished, the window asks for recovery instead. The Core
+    // keyed follows the existing link-loss path instead (its own starvation
+    // rule), so nothing here runs while it transmits.
     if (!d->client || !d->peer || !d->peer->isReady() || d->replacement || d->retiring
         || d->epoch != d->client->sessionEpoch() || !d->client->mediaAvailable()
         || !d->client->mediaDirectAvailable()
         || d->client->capabilities().mediaReplaceVersion < 1) {
         return;
     }
-    const bool wanted = d->model && !d->model->audioEngine()->masterMuted();
+    // The same test the audio request makes: silence is expected from a
+    // Core this window does not ask for audio.
+    const bool wanted = d->model && d->model->isConnected()
+        && !d->model->audioEngine()->masterMuted();
     if (!wanted || !d->lastAudio.isValid() || d->coreTransmitting()) {
+        return;
+    }
+    const qint64 now = d->allocationClock();
+    if (d->fallbackFinishedMs >= 0) {
+        if (now - d->fallbackFinishedMs < kDirectMediaSilenceFallbackMs) {
+            return;
+        }
+        qCInfo(lcRemoteMedia) << "No audio or display from the Core for"
+                              << (now - d->fallbackFinishedMs)
+                              << "ms after moving back to the tunnel; starting audio and "
+                                 "display again";
+        d->fallbackFinishedMs = -1;
+        d->lastAudio.invalidate();
+        requestRecovery(d->epoch, QStringLiteral("Audio from the Core stopped. Starting "
+                                                 "audio and display again."));
         return;
     }
     const std::optional<MediaIcePath> path = d->peer->selectedPath();
@@ -3353,20 +3413,23 @@ void RemoteMediaController::checkMediaSilence()
         || rank == PathRacer::Floor) {
         return; // the tunnel and relays have the stall rule
     }
-    const qint64 now = d->allocationClock();
     if (d->lastMediaMs < 0) {
         d->lastMediaMs = now;
         return;
     }
-    if (now - d->lastMediaMs < kDirectMediaSilenceFallbackMs) {
+    if (d->silenceFallbackFired || now - d->lastMediaMs < kDirectMediaSilenceFallbackMs) {
         return;
     }
     qCInfo(lcRemoteMedia) << "No audio or display from the Core for" << (now - d->lastMediaMs)
                           << "ms on a direct path; moving back to the tunnel";
     d->lastMediaMs = now;
+    d->silenceFallbackFired = true;
     d->directUpgradeStep = 0;
     d->directUpgrade->stop();
-    replaceConnection();
+    if (!startReplacement(ReplaceKind::TunnelFallback)) {
+        // Nothing started, so nothing will finish: wait one window from here.
+        d->fallbackFinishedMs = now;
+    }
 }
 
 void RemoteMediaController::connectPeer(MediaPeer* peer, quint32 epoch)
@@ -3472,6 +3535,8 @@ void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer*
     // Step 2b: the stall rule's clock.
     d->lastAudio.start();
     d->lastMediaMs = d->allocationClock();
+    d->silenceFallbackFired = false;
+    d->fallbackFinishedMs = -1;
     if (d->stallTimer && !d->stallTimer->isActive()) {
         d->stallTimer->start();
     }
@@ -3578,6 +3643,9 @@ void RemoteMediaController::start()
     d->directUpgrade->stop();
     d->directUpgradeStep = 0;
     d->lastMediaMs = -1;
+    d->silenceFallbackFired = false;
+    d->replacementFallback = false;
+    d->fallbackFinishedMs = -1;
     peer->setIceConfiguration(startIce);
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
@@ -6002,6 +6070,8 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
 {
     // The direct media ladder: a display packet is media too.
     d->lastMediaMs = d->allocationClock();
+    d->silenceFallbackFired = false;
+    d->fallbackFinishedMs = -1;
     if (packet.startsWith("PS3D")) {
         if (!d->client || !d->model || d->client->capabilities().psDisplayVersion != 1
             || !d->model->pureSignalFacade()->ampViewSubscribed()) {

@@ -3,6 +3,10 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: direct media fix wave: the silence fallback runs once per
+//               silence, only while the window wants audio, onto the
+//               tunnel alone, and a fallback that brings no media back
+//               asks for recovery (ReplaceKind)
 //   2026-09-29: the direct media ladder: upgradeToDirectConnection (a
 //               direct-only replace while media rides the tunnel, on the
 //               PathRacer::kUpgradeRetryMs steps, never keyed or with VOX
@@ -468,8 +472,11 @@ public:
     static constexpr int kMaxReplaceRearms = 3;
     /// The direct media ladder: on a direct path (not the tunnel or a
     /// relay), no audio or display packet for this long while control still
-    /// runs moves media back to a connection that includes the tunnel (the
-    /// normal replace), and the direct-only schedule starts over.
+    /// runs moves media back to the tunnel alone (a three-field replace
+    /// whose connection offers only the tunnel's candidate), and the
+    /// direct-only schedule starts over. It runs once per silence; if media
+    /// has not returned this long after that replace finishes, the window
+    /// asks for recovery (recoveryRequested) instead of replacing again.
     static constexpr int kDirectMediaSilenceFallbackMs = 3000;
     bool replacePending() const;
     /// iPhone app plan Task 29: the media connection's id now, and whether
@@ -595,7 +602,10 @@ private:
     void receiveReplacementControl(const QJsonObject& payload);
     void promoteReplacement();
     void dropReplacement(const QString& why);
-    bool startReplacement(bool direct);
+    // The direct media ladder: a plain replace, a direct-only one, and the
+    // silence fallback's plain replace onto the tunnel alone.
+    enum class ReplaceKind { Normal, Direct, TunnelFallback };
+    bool startReplacement(ReplaceKind kind);
     void updateDirectUpgrade(bool viaTunnel);
     void markReplacePending();
     void tryPendingReplace();

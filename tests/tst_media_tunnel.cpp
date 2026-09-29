@@ -18,6 +18,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: direct media fix wave: the stall test's bound anchored on
+//               the last message before the silence, without slack; an
+//               ordering barrier in place of a fixed wait.
 //   2026-09-29: the direct media ladder: STUN in the first and direct-only
 //               configurations, media moving from the tunnel to a direct
 //               path, and one stall tick of slack in the stall test's lower
@@ -46,12 +49,14 @@
 #include "core/session/StationServer.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/LibDataChannelMediaTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "fakes/LoopbackTransport.h"
 #include "core/session/MediaTunnel.h"
 #include "core/session/PathRacer.h"
 #include "core/session/CandidateSourceLease.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/SwitchableTransport.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
@@ -248,6 +253,38 @@ private slots:
         QVERIFY(bare.hasCandidateSourceFactory());
     }
 
+    // The silence fallback's configuration: the tunnel's candidate alone.
+    // The transport offers the far end no candidate of its own and takes
+    // none the far end signals, so ICE can only nominate the tunnel.
+    void theTunnelOnlyTransportTakesNoOtherCandidate()
+    {
+        Test::LoopbackTransport local(QStringLiteral("local"));
+        Test::LoopbackTransport remote(QStringLiteral("remote"));
+        local.linkTo(&remote);
+        auto tunnel = MediaTunnel::create(&local);
+        QVERIFY(tunnel);
+        const IceConfiguration ice = MediaTunnel::tunnelIceFor(tunnel);
+        QVERIFY(ice.onlySourceCandidates());
+        QVERIFY(!ice.stunServer());
+        QVERIFY(!ice.relayAllowed());
+        QVERIFY(ice.hasCandidateSourceFactory());
+        QVERIFY(!MediaTunnel::iceFor(tunnel, std::nullopt).onlySourceCandidates());
+
+        LibDataChannelMediaTransport transport;
+        QSignalSpy candidates(&transport, &IMediaTransport::localCandidate);
+        QSignalSpy complete(&transport, &IMediaTransport::gatheringComplete);
+        IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0x1234};
+        options.connectionId = QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        options.ice = ice;
+        QVERIFY(transport.start(options));
+        QTRY_VERIFY_WITH_TIMEOUT(complete.size() == 1, 10000);
+        QCOMPARE(candidates.size(), 0);
+        QVERIFY(!transport.acceptCandidate(
+            QStringLiteral("candidate:1 1 UDP 2122317823 127.0.0.1 50123 typ host"),
+            QString()));
+        transport.stop();
+    }
+
     // A direct-only replacement: STUN and host candidates, no tunnel and no
     // relay, so ICE can only nominate a direct pair.
     void theDirectOnlyConfigurationHasStunAndNoCandidateSource()
@@ -373,8 +410,15 @@ private slots:
         // Off the tunnel: nothing more is scheduled, and audio stops
         // riding the session's link.
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(), -1, 5000);
+        // Counted against the Core's own audio rather than a clock: after
+        // the Core takes 200 more blocks (about 2 s of audio), fewer than 10
+        // messages rode the session's link.
         BinaryCount atCore(h.stationLink);
-        QTest::qWait(2000);
+        int blocks = 0;
+        const QMetaObject::Connection fed = QObject::connect(
+            &source, &QTimer::timeout, &source, [&blocks] { ++blocks; });
+        QTRY_VERIFY_WITH_TIMEOUT(blocks >= 200, 20000);
+        QObject::disconnect(fed);
         QVERIFY2(atCore.messages < 10, qPrintable(QString::number(atCore.messages)));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
@@ -432,19 +476,44 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!frames.isEmpty(), 10000);
         const QString oldId = remoteMedia.mediaConnectionId();
         QVERIFY(!oldId.isEmpty());
+        // The window's stall clock starts at the last audio packet it took,
+        // which can come before the link goes silent (on a loaded computer
+        // it was 20 ms before, load average 34). So the bound is anchored on
+        // the last message the window's session link delivered, and the
+        // display stops first so that message is audio: every tunnel message
+        // after a quiet 300 ms with no display frame is. The window takes an
+        // audio packet after its tunnel message arrives, so the rule (never
+        // before kMediaStallMs of silence) holds from that anchor exactly.
         QElapsedTimer silence;
         silence.start();
+        qint64 lastMessageMs = -1;
+        qint64 lastFrameMs = -1;
+        qint64 recoveredMs = -1;
+        const QMetaObject::Connection messages = QObject::connect(
+            h.client.sessionTransport(), &SessionTransport::binaryReceived, &remoteMedia,
+            [&silence, &lastMessageMs](const QByteArray&) { lastMessageMs = silence.elapsed(); });
+        const QMetaObject::Connection frameTimes = QObject::connect(
+            &remoteMedia, &RemoteMediaController::displayFrameReceived, &remoteMedia,
+            [&silence, &lastFrameMs] { lastFrameMs = silence.elapsed(); });
+        const QMetaObject::Connection recoveredAt = QObject::connect(
+            &remoteMedia, &RemoteMediaController::recoveryRequested, &remoteMedia,
+            [&silence, &recoveredMs] {
+                if (recoveredMs < 0) { recoveredMs = silence.elapsed(); }
+            });
+        display.stop();
+        const qint64 displayStoppedMs = silence.elapsed();
+        QTRY_VERIFY_WITH_TIMEOUT(
+            lastMessageMs - std::max(displayStoppedMs, lastFrameMs) > 300, 10000);
         h.stationLink->setDropsOutgoing(true);
         QTRY_VERIFY_WITH_TIMEOUT(!recovery.isEmpty(), 10000);
-        const qint64 found = silence.elapsed();
-        qInfo("A stalled tunnel found after %lld ms", static_cast<long long>(found));
-        // The window's stall clock starts at the last audio packet it took,
-        // which can be a little before `silence` started: the last packets
-        // are read when the event loop gets to them, and on a loaded computer
-        // that was 20 ms early (2980 ms found, load average 34). One stall
-        // tick (500 ms) of slack below the window keeps the check on the
-        // rule (never well before kMediaStallMs) without timing the loop.
-        QVERIFY2(found >= RemoteMediaController::kMediaStallMs - 500 && found <= 5000,
+        QObject::disconnect(messages);
+        QObject::disconnect(frameTimes);
+        QObject::disconnect(recoveredAt);
+        display.start();
+        const qint64 found = recoveredMs - lastMessageMs;
+        qInfo("A stalled tunnel found %lld ms after its last message",
+              static_cast<long long>(found));
+        QVERIFY2(found >= RemoteMediaController::kMediaStallMs && found <= 5000,
                  qPrintable(QString::number(found)));
         QTRY_COMPARE_WITH_TIMEOUT(ended.size(), 1, 5000);
         const int framesBeforeReconnect = frames.size();
@@ -562,13 +631,26 @@ private slots:
         QCOMPARE(recovery.size(), 0);
         QCOMPARE(remoteMedia.mediaConnectionId(), mediaId);
 
+        // The RX stall clock restarts on the notification that the Core
+        // stopped transmitting, which the check below can see up to a poll
+        // later (2983 ms found at load 3.8). So the silence is timed from
+        // that notification: this slot runs after the window's own.
+        QElapsedTimer rxSilence;
+        const TransmitState* txState = h.client.transmitState();
+        const QMetaObject::Connection rxEdge = QObject::connect(
+            txState, &TransmitState::stateChanged, &remoteMedia, [&rxSilence, txState] {
+                if (!rxSilence.isValid() && !txState->keyed() && !txState->tuning()
+                    && !txState->txEnding()) {
+                    rxSilence.start();
+                }
+            });
         h.station.moxController()->setTune(false);
         h.station.transmitModel().setTune(false);
         QTRY_VERIFY_WITH_TIMEOUT(!h.client.transmitState()->keyed()
                                      && !h.client.transmitState()->tuning()
                                      && !h.client.transmitState()->txEnding(), 5000);
-        QElapsedTimer rxSilence;
-        rxSilence.start();
+        QObject::disconnect(rxEdge);
+        QVERIFY(rxSilence.isValid());
         const int framesBeforeRx = frames.size();
         if (resumeAudio) {
             const int audioStart = h.remoteBus->heard.size() / 2;

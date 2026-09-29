@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    mediaTunnelOnlyIceConfiguration, the
+//                                    tunnel alone for the fallback.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder: the hello
 //                                    declares mediaDirect 1; media takes
 //                                    the Core's STUN (mediaStunServer), and
@@ -1252,6 +1256,15 @@ bool StationClient::mediaDirectAvailable() const
 IceConfiguration StationClient::mediaDirectIceConfiguration() const
 {
     return MediaTunnel::directIceFor(mediaStunServer());
+}
+
+std::optional<IceConfiguration> StationClient::mediaTunnelOnlyIceConfiguration()
+{
+    // The direct media ladder's fallback: the same tunnel, alone.
+    if (!mediaTunnelIceConfiguration()) {
+        return std::nullopt;
+    }
+    return MediaTunnel::tunnelIceFor(m_mediaTunnel);
 }
 
 SwitchableTransport* StationClient::sessionTransport() const

@@ -13,6 +13,8 @@
 //   2026-09-29: the direct media ladder: iceFor with the Core's STUN
 //               server, and directIceFor. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29: direct media fix wave: tunnelIceFor. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MediaTunnel.h"
@@ -136,6 +138,16 @@ IceConfiguration MediaTunnel::iceFor(std::shared_ptr<MediaTunnel> tunnel,
         },
         /*needsRelay=*/false);
     ice.setMediaRouting(true);
+    return ice;
+}
+
+IceConfiguration MediaTunnel::tunnelIceFor(std::shared_ptr<MediaTunnel> tunnel)
+{
+    // The fallback: the tunnel's source and nothing else. No STUN server,
+    // and the connection takes and sends no other candidate
+    // (IceConfiguration::onlySourceCandidates).
+    IceConfiguration ice = iceFor(std::move(tunnel), std::nullopt);
+    ice.setOnlySourceCandidates(true);
     return ice;
 }
 
