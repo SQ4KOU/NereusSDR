@@ -195,6 +195,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <type_traits>
 
 #include "core/AppSettings.h"
 #include "core/BuildIdentity.h"
@@ -3644,8 +3645,19 @@ private slots:
         VaxApplet remoteApplet(&remote, remote.localAudioDevices());
         QVERIFY(remoteApplet.isEnabled());
         QVERIFY(remoteApplet.toolTip().isEmpty());
+        // This computer's own rows, not the "Station computer" section's
+        // (iPhone app plan Task 25), which holds the Core computer's VAX.
+        const auto ownRows = [](const VaxApplet& applet, auto* tag) {
+            using W = std::remove_pointer_t<decltype(tag)>;
+            QWidget* const station = applet.stationSectionForTest();
+            QList<W*> own;
+            for (W* w : applet.findChildren<W*>()) {
+                if (station == nullptr || !station->isAncestorOf(w)) { own.append(w); }
+            }
+            return own;
+        };
         QPushButton* mute = nullptr;
-        for (QPushButton* b : remoteApplet.findChildren<QPushButton*>()) {
+        for (QPushButton* b : ownRows(remoteApplet, static_cast<QPushButton*>(nullptr))) {
             if (b->text() == QStringLiteral("Mute") && !mute) { mute = b; }
         }
         QVERIFY(mute != nullptr);
@@ -3659,7 +3671,8 @@ private slots:
             QVERIFY(!remote.localAudioDevices()->vaxMuted(1));
         }
         // The TX row waits for remote transmit, and says so plainly.
-        const QList<MeterSlider*> sliders = remoteApplet.findChildren<MeterSlider*>();
+        const QList<MeterSlider*> sliders =
+            ownRows(remoteApplet, static_cast<MeterSlider*>(nullptr));
         QCOMPARE(sliders.size(), 5);
         MeterSlider* const txRow = sliders.constLast();
         QVERIFY(!txRow->isEnabled());
@@ -3673,9 +3686,46 @@ private slots:
         remoteApplet.setTransmitPermitted(true, QString());
         QVERIFY(txRow->isEnabled());
         QVERIFY(txRow->toolTip() != reason);
+
+        // The "Station computer" section: built with its own four RX rows
+        // and TX row, apart from this computer's, and shown only while a
+        // Core sends its `vax` object. None has here. Its TX row follows
+        // the transmit permission, disabled with the gate's reason.
+        QWidget* const station = remoteApplet.stationSectionForTest();
+        QVERIFY(station != nullptr);
+        QVERIFY(!station->isVisibleTo(&remoteApplet));
+        const QList<MeterSlider*> stationSliders = station->findChildren<MeterSlider*>();
+        QCOMPARE(stationSliders.size(), 5);
+        for (int channel = 1; channel <= 4; ++channel) {
+            MeterSlider* const rx = remoteApplet.stationRxMeterForTest(channel);
+            QVERIFY(rx != nullptr);
+            QVERIFY(stationSliders.contains(rx));
+            QVERIFY(!sliders.contains(rx));
+        }
+        MeterSlider* const stationTx = remoteApplet.stationTxMeterForTest();
+        QVERIFY(stationTx != nullptr);
+        QVERIFY(stationSliders.contains(stationTx));
+        QVERIFY(stationTx != txRow);
+        remoteApplet.setStationTransmitPermitted(false, reason);
+        QVERIFY(!stationTx->isEnabled());
+        QCOMPARE(stationTx->toolTip(), reason);
+        remoteApplet.setStationTransmitPermitted(false, QString());
+        QVERIFY(!stationTx->isEnabled());
+        QVERIFY2(OperatorWording::isPlain(stationTx->toolTip()), qPrintable(stationTx->toolTip()));
+        remoteApplet.setStationTransmitPermitted(true, QString());
+        QVERIFY(stationTx->isEnabled());
+        QVERIFY(stationTx->toolTip() != reason);
+        // Its permission is its own: this computer's TX row is untouched.
+        QVERIFY(txRow->isEnabled());
+
         VaxApplet localApplet(&local, local.localAudioDevices());
         QVERIFY(localApplet.isEnabled());
-        QVERIFY(localApplet.findChildren<MeterSlider*>().constLast()->isEnabled());
+        const QList<MeterSlider*> localSliders =
+            ownRows(localApplet, static_cast<MeterSlider*>(nullptr));
+        QCOMPARE(localSliders.size(), 5);
+        QVERIFY(localSliders.constLast()->isEnabled());
+        QVERIFY(localApplet.stationSectionForTest() != nullptr);
+        QVERIFY(!localApplet.stationSectionForTest()->isVisibleTo(&localApplet));
 
         // VFO flag's VAX tab selector: a pick moves the remote slice.
         VfoWidget remoteFlag;
