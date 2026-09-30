@@ -888,6 +888,11 @@
 //   2026-09-30 - RADE gaps: a slice rolled back at creation (its placement
 //                refused) takes the RADE decoder its seeded mode made.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - RADE gaps fix round 1: queueRadeRxRoute publishes the
+//                RADE-mode slices before it queues the route; the mask width
+//                is named; a rolled-back slice gives the restored RADE
+//                owner back to the slice that held it.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -13483,10 +13488,12 @@ void RadioModel::publishSliceAudioView()
 // plays silence, never its sideband (RxDspWorker::setRadeModeSlices).
 quint32 RadioModel::radeModeSliceMask() const
 {
+    static_assert(WdspEngine::kMaxSliceChannels <= RxDspWorker::kRadeModeMaskSlices,
+                  "every slice id needs a RADE mode bit");
     quint32 mask = 0;
     for (const SliceModel* s : m_slices) {
         const int id = s != nullptr ? s->sliceIndex() : -1;
-        if (id < 0 || id >= 32) {
+        if (id < 0 || id >= RxDspWorker::kRadeModeMaskSlices) {
             continue;
         }
         const DSPMode mode = s->dspMode();
@@ -13948,6 +13955,11 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
     connect(slice, &SliceModel::afGainChanged, this, [this](int) { publishSliceAudioView(); });
     // RADE gaps: the worker mutes a RADE slice until its route lands.
+    // queueRadeRxRoute publishes too, earlier; this one is still needed for
+    // a slice in RADE that queues no route at all: its decoder could not be
+    // made (createRadeChannel null), or its start waits for admission
+    // (restoreReceiveState's offline seam). Without it that slice would
+    // play its sideband.
     connect(slice, &SliceModel::dspModeChanged, this,
             [this](DSPMode) { publishRadeModeSlices(); });
     publishSliceAudioView();
@@ -13986,6 +13998,9 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // iPhone app Task 73 (ruling 5.2 step 4): a device's new slice opens on
     // its own active slice; a device with none opens on the station-level
     // active slice, whose receiver it then joins (D48) at no cost.
+    // RADE gaps fix round 1: a RADE seed makes this slice the restored RADE
+    // owner (installRadeRxRoute); a rollback below gives the owner back.
+    const std::optional<int> radeOwnerBeforeSeed = m_restoredRadeReceiveOwner;
     SliceModel* seedFrom = m_activeSlice;
     if (role() == Role::Local && !m_sliceOwnership->creator().isEmpty()) {
         const int own = m_sliceOwnership->activeFor(m_sliceOwnership->creator());
@@ -14079,6 +14094,13 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
             }
             if (m_wdspEngine && m_wdspEngine->radeChannel(id) != nullptr) {
                 m_wdspEngine->destroyRadeChannel(id);
+            }
+            // The retire cleared the owner this slice took; the slice that
+            // held it before (still here, still decoding) gets it back.
+            if (m_receiveLayoutManaged
+                && m_restoredRadeReceiveOwner != radeOwnerBeforeSeed) {
+                m_restoredRadeReceiveOwner = radeOwnerBeforeSeed;
+                scheduleSettingsSave();
             }
         }
         m_slices.removeAll(slice);
@@ -14778,6 +14800,11 @@ bool RadioModel::canAdmitRadeSlice(int sliceId,
 // the DSP worker, on the worker's thread: the channel's rings, or none.
 void RadioModel::queueRadeRxRoute(int sliceId, RadeChannel* channel)
 {
+    // RADE gaps fix round 1: the mode is committed before every route is
+    // queued (setDspMode, restoreFromSettings, admission, the TX-init path,
+    // a rollback), so the worker has the RADE-mode slices before the route,
+    // and before the route's first block, rather than after it.
+    publishRadeModeSlices();
     RxDspWorker* const worker = m_dspWorker;
     if (worker == nullptr) {
         return;

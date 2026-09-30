@@ -45,6 +45,11 @@
 //                 slice in RADE leaves no decoder behind. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 -- RADE gaps fix round 1: the mode mask reaches the worker
+//                 before the route; a refused create gives the restored
+//                 RADE owner back; item C checks A's block count. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -79,6 +84,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 using namespace NereusSDR;
@@ -1215,7 +1221,10 @@ private slots:
             .arg(playedA).arg(bridgeA->playedSlots())
             .arg(peakSince(vaxA, fromA)).arg(peakSince(vaxB, fromB));
         QVERIFY2(bridgeA->playedSlots() > playedA, qPrintable(evidence));
-        // JJ's report 2: A never falls back to its sideband.
+        // JJ's report 2: A never falls back to its sideband. A block a tick
+        // reached A's bus (decodesOnItsOwnThread feeds 512), all silent.
+        QCOMPARE(vaxA->buffer().size() - fromA,
+                 qsizetype(512) * kFrames * 2 * qsizetype(sizeof(float)));
         QVERIFY2(peakSince(vaxA, fromA) == 0.0f, qPrintable(evidence));
 
         if (bInRade) {
@@ -1261,6 +1270,8 @@ private slots:
         const qsizetype fromA = vaxA->buffer().size();
         QString evidence;
         QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+        QCOMPARE(vaxA->buffer().size() - fromA,
+                 qsizetype(512) * kFrames * 2 * qsizetype(sizeof(float)));
         QCOMPARE(peakSince(vaxA, fromA), 0.0f);
 
         // The id is free for the next slice, with no "already exists".
@@ -1274,6 +1285,53 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(rig.wdsp->radeChannel(next) && rig.wdsp->radeChannel(next)->isActive());
         QCOMPARE(rig.worker.radeRxRouteCount(), 2);
+    }
+
+    // Fix round 1: a refused create gives the restored RADE owner (the
+    // saved layout's RADE receiver) back to the slice that held it, not
+    // leave it empty.
+    void aRefusedNewSliceGivesTheRadeOwnerBack()
+    {
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        rig.radio.prepareReceiveLayout(QString());  // the layout is managed
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.radio.restoredRadeReceiveOwner(), std::optional<int>(rig.a));
+
+        const int b = createSlice(rig.radio, CreatePath::PhoneAddSliceOnPan,
+                                  QStringLiteral("pan-new"));
+        QCOMPARE(b, -1);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.radio.slices().size(), 1);
+        QCOMPARE(rig.radio.restoredRadeReceiveOwner(), std::optional<int>(rig.a));
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+    }
+
+    // Fix round 1: every route is queued after its mode is committed, and
+    // queueRadeRxRoute hands the worker the RADE-mode slices first, so the
+    // mute is on the worker before the route (and its first block). Seen
+    // on a path with no mode change (a re-wire, as radio recovery does),
+    // with the worker's mask cleared first so only the queue can set it.
+    void theRadeModeMaskReachesTheWorkerBeforeTheRoute()
+    {
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA);
+
+        rig.worker.setRadeModeSlices(0);
+        rig.worker.clearRadeRxRoutes();
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        rig.radio.wireRadeChannel(rig.a, radeA, rig.sliceA);
+        // The route is queued, not delivered; the mask is already set.
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        QCOMPARE(rig.worker.radeModeSlices(), 1u << rig.a);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
     }
 
     // Item D, JJ's report 1: two RADE slices on one pan (one DDC) are both

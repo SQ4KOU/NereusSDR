@@ -36,6 +36,7 @@
 //                 made) plays silence, not its WDSP sideband. RadioModel
 //                 publishes the RADE-mode slices as one atomic bit mask
 //                 (setRadeModeSlices); the DSP thread only loads it.
+//                 Fix round 1: the mask width is kRadeModeMaskSlices.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
 // =================================================================
@@ -367,6 +368,8 @@ public:
     // the demodulated audio only when the operator picks Analog
     // (TxRxThread.cpp:483-495 [@77e793a]). Lock-free: one atomic store here,
     // one atomic load per slice block on the DSP thread.
+    // Slice ids the mask can carry: one bit each of a quint32.
+    static constexpr int kRadeModeMaskSlices = 32;
     void setRadeModeSlices(quint32 mask)
     {
         m_radeModeSlices.store(mask, std::memory_order_release);

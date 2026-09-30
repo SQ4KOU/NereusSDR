@@ -1058,7 +1058,10 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                     // route is not here (yet) keeps its place in the mix
                     // with silence. Its WDSP audio is the sideband, which
                     // a RADE slice never plays (setRadeModeSlices).
-                    const bool radeWithoutRoute = sliceIdx >= 0 && sliceIdx < 32
+                    static_assert(WdspEngine::kMaxSliceChannels <= kRadeModeMaskSlices,
+                                  "every slice id needs a RADE mode bit");
+                    const bool radeWithoutRoute = sliceIdx >= 0
+                        && sliceIdx < kRadeModeMaskSlices
                         && ((m_radeModeSlices.load(std::memory_order_acquire)
                              >> sliceIdx) & 1u) != 0;
                     // Phase 3F Sub-Epic I Task 4: slice 0 keeps
