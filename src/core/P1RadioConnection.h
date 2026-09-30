@@ -78,6 +78,8 @@
 //                the slots the receive low-pass and the HL2 OC receive band
 //                follow. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: countedCandidates.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -109,6 +111,7 @@
 #include "RadioConnection.h"
 #include "BoardCapabilities.h"
 #include "HpsdrModel.h"
+#include "SharedInputLowPass.h"
 #include "codec/IP1Codec.h"
 #include "codec/CodecContext.h"
 
@@ -877,6 +880,10 @@ private:
     // The frequency whose band selects the OC outputs: the transmitting
     // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
     quint64 ocBandFrequencyHz() const;
+
+    // The receivers counted on the input, in slot order, with their DDC
+    // centres and slice VFOs (shared-input filters, ruling (c)).
+    QList<SharedInputLowPass::Candidate> countedCandidates() const;
 
     // HL2 mic decimation state.  At sample rates above 48 kHz the radio
     // embeds one mic sample per I/Q sample group in EP6 frames (so mic

@@ -31,9 +31,16 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  Created (shared-input filters, rulings
 //                                    (c) and (d)). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Follow-up: CTUN at a low-pass edge
+//                                    (the reason names the filter's
+//                                    slice); an HL2 pin edit refreshes
+//                                    the held reason. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
+
+#include <memory>
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -414,6 +421,112 @@ private slots:
         QCOMPARE(OcMatrix::extCtrlBandIndex(Band::Band11m), 40);
         QCOMPARE(OcMatrix::extCtrlBandIndex(Band::GEN), -1);
         QCOMPARE(OcMatrix::extCtrlBandIndex(Band::XVTR), -1);
+    }
+
+    // ── CTUN at a low-pass edge: the reason names the filter's slice ─────
+    //
+    // Thetis picks the Alex low-pass from the DDS frequency, which under
+    // click-tune is the DDC centre (console.cs:31894-31910 [v2.10.3.15]).
+    // A sits at 16.55 MHz on a centre of 16.46 MHz (the 30/20 m row, which
+    // ends at 16.5 MHz); B sits at 16.52 MHz on a centre of 16.53 MHz (the
+    // 17/15 m row). By VFO A is higher; by centre B is. The filter follows
+    // B's centre, and the reason must name B, with A and C (40 m) held.
+    void ctun_reasonNamesTheSliceTheFilterFollows_data()
+    {
+        QTest::addColumn<bool>("protocol2");
+        QTest::newRow("Protocol 1 (Hermes)") << false;
+        QTest::newRow("Protocol 2 (G2)") << true;
+    }
+    void ctun_reasonNamesTheSliceTheFilterFollows()
+    {
+        QFETCH(bool, protocol2);
+        constexpr double kVfoA = 16550000.0;
+        constexpr double kCentreA = 16460000.0;
+        constexpr double kFirstB = 16620000.0;   // outside A's window, so B has its own DDC
+        constexpr double kVfoB = 16520000.0;
+        constexpr double kCentreB = 16530000.0;
+
+        std::unique_ptr<P1Session> p1;
+        std::unique_ptr<G2Session> p2;
+        RadioModel* model = nullptr;
+        if (protocol2) {
+            p2 = std::make_unique<G2Session>();
+            model = &p2->model;
+        } else {
+            p1 = std::make_unique<P1Session>(HPSDRHW::Hermes);
+            model = &p1->model;
+        }
+        const auto add = [&](double hz) { return protocol2 ? p2->add(hz) : p1->add(hz); };
+        const auto lowPass = [&]() { return protocol2 ? p2Alex0Lpf(p2->conn) : p1LpfBits(p1->conn); };
+
+        const int c = add(k40mHz);
+        const int a = add(kVfoA);
+        QVERIFY(model->requestStreamCtunPinned(a, true));
+        QVERIFY(model->requestStreamCentre(a, kCentreA));
+        const int b = add(kFirstB);
+        QVERIFY(model->requestStreamCtunPinned(b, true));
+        QVERIFY(model->requestStreamCentre(b, kCentreB));
+        model->sliceById(b)->setFrequency(kVfoB);
+
+        // The two orders disagree.
+        const int streamA = model->sliceById(a)->streamIndex();
+        const int streamB = model->sliceById(b)->streamIndex();
+        QVERIFY(streamA >= 0 && streamB >= 0 && streamA != streamB);
+        QCOMPARE(model->streamCentreHzForTest(streamA), kCentreA);
+        QCOMPARE(model->streamCentreHzForTest(streamB), kCentreB);
+        QVERIFY(model->sliceById(a)->frequency() > model->sliceById(b)->frequency());
+        QCOMPARE(model->sliceChainIndex(a), 0);
+        QCOMPARE(model->sliceChainIndex(b), 0);
+        QCOMPARE(model->sliceChainIndex(c), 0);
+
+        // The filter follows B's centre, and the reason names B.
+        QCOMPARE(lowPass(), codec::alex::computeLpf(kCentreB / 1e6));
+        QVERIFY(codec::alex::computeLpf(kCentreB / 1e6) != codec::alex::computeLpf(kCentreA / 1e6));
+        const AlexController::AlexAdcState& st = model->filterChainState(0);
+        QCOMPARE(st.lowPassSlice, b);
+        const QString letterB = model->sliceById(b)->sliceLetter();
+        const QString letterA = model->sliceById(a)->sliceLetter();
+        QVERIFY2(st.lowPassReason.startsWith(
+                     QStringLiteral("The receive low-pass filter is set for slice %1 ").arg(letterB)),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("%1 on ").arg(letterA)),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(letterOn(*model, c, "40m")), qPrintable(st.lowPassReason));
+        QVERIFY2(OperatorWording::isPlain(st.lowPassReason), qPrintable(st.lowPassReason));
+    }
+
+    // ── HL2: a pin edit refreshes the held reason at once ────────────────
+    //
+    // The N2ADR pins are the HL2's receive low-pass. With 20 m and 17 m on
+    // the same pin the two slices share one filter and nothing is held;
+    // giving 17 m its own pin in Setup holds the 20 m slice behind the
+    // 17 m filter straight away, with no slice or band change.
+    void hl2_pinEditRefreshesTheHeldReason()
+    {
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = s.model.ocMatrixMutable();
+        s.conn.setOcMatrix(&oc);
+        oc.setPin(Band::Band20m, 0, /*tx=*/false, true);
+        oc.setPin(Band::Band17m, 0, /*tx=*/false, true);
+
+        const int a = s.add(k20mHz);
+        const int b = s.add(k17mHz);
+        QCOMPARE(s.model.sliceChainIndex(a), 0);
+        QCOMPARE(s.model.sliceChainIndex(b), 0);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+        QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
+
+        QSignalSpy changed(&s.model, &RadioModel::filterStateChanged);
+        oc.setPin(Band::Band17m, 1, /*tx=*/false, true);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+        QVERIFY2(s.model.filterChainState(0).lowPassReason.contains(letterOn(s.model, a, "20m")),
+                 qPrintable(s.model.filterChainState(0).lowPassReason));
+        QVERIFY(changed.count() > 0);
+
+        // 17 m back on pin 0 alone: one filter again, nothing held.
+        oc.setPin(Band::Band17m, 1, /*tx=*/false, false);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+        QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
     }
 
     // ── Keyed: the transmit low-pass, untouched ──────────────────────────

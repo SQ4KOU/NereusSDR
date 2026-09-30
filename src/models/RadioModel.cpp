@@ -25,6 +25,14 @@
 //               rxFilterLowPass. bypassReasonForAdc names the counted slices
 //               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: Shared-input filters, follow-up: the low-pass reason picks
+//               its slice with SharedInputLowPass::highest over the
+//               connection's candidates (DDC centre for the Alex low-pass,
+//               VFO band for the HL2 pins), so under CTUN it names the slice
+//               the filter follows; receiverVfoHzBySlot shared with
+//               republishReceiverVfoFrequencies; an OC pin edit on the HL2
+//               recomputes the reason at once. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -1113,6 +1121,7 @@ warren@wpratt.com
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
 #include "core/ReceiverManager.h"
+#include "core/SharedInputLowPass.h"
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
@@ -1191,6 +1200,7 @@ warren@wpratt.com
 #include <QFileInfo>
 #include <QDir>
 #include <cmath>
+#include <map>
 #include <condition_variable>
 #include <functional>
 #include <limits>
@@ -1748,6 +1758,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(&m_alexController, &AlexController::bpfStateChanged, this,
             [this](int, const AlexController::AlexAdcState&) {
         republishAlexAdcSlices();
+    });
+    // Shared-input filters, ruling (d): on the HL2 the receive low-pass is
+    // the N2ADR board's pins, so a pin edit in Setup (this window's, or a
+    // remote window's through the "oc" reload) can change which slices are
+    // held behind another's filter. Recompute at once rather than at the
+    // next slice or band change.
+    connect(&m_ocMatrix, &OcMatrix::changed, this, [this]() {
+        if (m_hardwareProfile.model == HPSDRModel::HERMESLITE) {
+            republishAlexAdcSlices();
+        }
     });
     connect(&m_alexController, &AlexController::bpfStateChanged, this,
             [this](int, const AlexController::AlexAdcState&) {
@@ -22229,51 +22249,82 @@ void RadioModel::republishAlexAdcSlices()
     // low-pass, every slice below that one hears through a filter set for a
     // higher band, and the operator is told which slice holds it there.
     //
-    // The identity compared is the low-pass the slice would get alone: the
-    // Alex-1 row selection (codec::alex::selectAlexLpf over the tab's rows,
-    // as the connection selects it), and on the HL2 the N2ADR board's
-    // receive pins for the band (OcMatrix, as buildCodecContext sends them),
-    // falling back to the row selection where no pins are set. With 6m/
-    // ByPass on RX on, the receive low-pass is the 6 m filter for every
-    // slice (codec::alex::setAlexLpf) and nothing is held.
+    // The receiver the low-pass follows is chosen by
+    // SharedInputLowPass::highest, the same call the connections make, over
+    // the same candidates they hold: one per hardware receiver slot counted
+    // on ADC0 (countedSlotsAdc0 above), in slot order, each with its DDC
+    // centre (the stream centre the allocator commands) and the VFO of the
+    // slice the connection knows the slot by (receiverVfoHzBySlot, which
+    // republishReceiverVfoFrequencies sends). The frequency read is the one
+    // Thetis uses for the filter: the DDC centre for the Alex low-pass, the
+    // VFO's band for the HL2's N2ADR pins (SharedInputLowPass.h). So under
+    // CTUN, where VFO and centre order can differ, the reason names the
+    // slice the filter actually follows.
+    //
+    // The identity compared is the low-pass each receiver would get alone,
+    // at that same frequency: the Alex-1 row selection
+    // (codec::alex::selectAlexLpf over the tab's rows, as the connection
+    // selects it), and on the HL2 the N2ADR board's receive pins for the
+    // band (OcMatrix, as buildCodecContext sends them), falling back to the
+    // row selection where no pins are set. With 6m/ByPass on RX on, the
+    // receive low-pass is the 6 m filter for every slice
+    // (codec::alex::setAlexLpf) and nothing is held.
     {
         const bool hl2 = m_hardwareProfile.model == HPSDRModel::HERMESLITE;
         const bool lowPassPresent = boardCapabilities().hasAlexFilters || hl2;
         int forcing = -1;
         QString lowPassReason;
         const QList<SliceModel*>& onInput = countedSlices[0];
-        if (lowPassPresent && !m_alexLpfBypassSwitch && onInput.size() >= 2) {
-            const auto lowPassFor = [this, hl2](const SliceModel* s) -> int {
-                const double hz = s->frequency();
+        if (lowPassPresent && !m_alexLpfBypassSwitch && onInput.size() >= 2
+            && m_receiverManager != nullptr) {
+            const SharedInputLowPass::Rule rule = hl2
+                ? SharedInputLowPass::Rule::HighestVfoBand
+                : SharedInputLowPass::Rule::HighestCentre;
+            const QVector<quint64> vfoBySlot = receiverVfoHzBySlot();
+            std::map<int, QList<const SliceModel*>> slicesOnSlot;  // slot order
+            std::map<int, quint64> centreOnSlot;
+            for (const SliceModel* s : onInput) {
+                const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
+                if (!cfg.active || cfg.hardwareRx < 0 || cfg.hardwareRx >= 32) { continue; }
+                slicesOnSlot[cfg.hardwareRx].append(s);
+                const double centre = m_streamAllocator.streamCentreHz(s->streamIndex());
+                centreOnSlot[cfg.hardwareRx] = (std::isfinite(centre) && centre > 0.0)
+                    ? static_cast<quint64>(std::llround(centre)) : 0;
+            }
+            QList<SharedInputLowPass::Candidate> candidates;
+            QList<QList<const SliceModel*>> slicesOf;
+            for (const auto& [slot, list] : slicesOnSlot) {
+                const quint64 vfo = (slot < vfoBySlot.size()) ? vfoBySlot.at(slot) : 0;
+                candidates.append({slot, centreOnSlot[slot], vfo});
+                slicesOf.append(list);
+            }
+            const auto lowPassFor = [this, hl2, rule](const SharedInputLowPass::Candidate& c) {
+                const double hz = static_cast<double>(SharedInputLowPass::ruleHz(rule, c));
                 if (hl2) {
                     const quint8 pins = m_ocMatrix.maskFor(bandFromFrequency(hz), /*tx=*/false);
-                    if (pins != 0) { return 0x100 | pins; }
+                    if (pins != 0) { return 0x100 | int(pins); }
                 }
-                return codec::alex::selectAlexLpf(hz / 1.0e6, m_alexLpfEdges);
+                return int(codec::alex::selectAlexLpf(hz / 1.0e6, m_alexLpfEdges));
             };
-            // Which slice sets it: the highest frequency, and on the HL2 the
-            // highest band in mi0bot's order (OcMatrix::extCtrlBandIndex),
-            // the same choice the connections make.
-            const auto higher = [hl2](const SliceModel* a, const SliceModel* b) {
-                if (hl2) {
-                    const int ia = OcMatrix::extCtrlBandIndex(bandFromFrequency(a->frequency()));
-                    const int ib = OcMatrix::extCtrlBandIndex(bandFromFrequency(b->frequency()));
-                    if (ia != ib) { return ia > ib; }
+            const int best = SharedInputLowPass::highest(rule, candidates);
+            if (best >= 0) {
+                const int topLowPass = lowPassFor(candidates.at(best));
+                QList<const SliceModel*> held;
+                for (int i = 0; i < candidates.size(); ++i) {
+                    if (i != best && lowPassFor(candidates.at(i)) != topLowPass) {
+                        held.append(slicesOf.at(i));
+                    }
                 }
-                return a->frequency() > b->frequency();
-            };
-            const SliceModel* top = nullptr;
-            for (const SliceModel* s : onInput) {
-                if (top == nullptr || higher(s, top)) { top = s; }
-            }
-            QList<const SliceModel*> held;
-            const int topLowPass = lowPassFor(top);
-            for (const SliceModel* s : onInput) {
-                if (s != top && lowPassFor(s) != topLowPass) { held.append(s); }
-            }
-            if (!held.isEmpty()) {
-                forcing = top->sliceIndex();
-                lowPassReason = lowPassHoldReason(top, held);
+                // The slice the slot is known by: the lowest slice index,
+                // as receiverVfoHzBySlot picks the slot's VFO.
+                const SliceModel* top = nullptr;
+                for (const SliceModel* s : slicesOf.at(best)) {
+                    if (top == nullptr || s->sliceIndex() < top->sliceIndex()) { top = s; }
+                }
+                if (!held.isEmpty() && top != nullptr) {
+                    forcing = top->sliceIndex();
+                    lowPassReason = lowPassHoldReason(top, held);
+                }
             }
         }
         m_alexController.setLowPassHold(0, forcing, lowPassReason);
@@ -28119,7 +28170,26 @@ void RadioModel::republishReceiverVfoFrequencies()
         return;
     }
 
+    const QVector<quint64> vfoHz = receiverVfoHzBySlot();
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, vfoHz]() {
+        conn->setReceiverVfoFrequencies(vfoHz);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// receiverVfoHzBySlot: each hardware receiver slot's slice VFO, the lowest
+// slice index on a slot holding it; 0 where no slice is. What
+// republishReceiverVfoFrequencies sends the connection, and what the
+// shared-input low-pass reason reads (republishAlexAdcSlices), so both see
+// the same VFO per slot.
+// ---------------------------------------------------------------------------
+QVector<quint64> RadioModel::receiverVfoHzBySlot() const
+{
     QVector<quint64> vfoHz;
+    if (m_receiverManager == nullptr) {
+        return vfoHz;
+    }
     QVector<int> speaker;   // slice index holding each slot's entry
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s == nullptr || s->streamIndex() < 0) {
@@ -28143,11 +28213,7 @@ void RadioModel::republishReceiverVfoFrequencies()
             vfoHz[slot] = static_cast<quint64>(std::llround(hz));
         }
     }
-
-    RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, vfoHz]() {
-        conn->setReceiverVfoFrequencies(vfoHz);
-    });
+    return vfoHz;
 }
 
 // ---------------------------------------------------------------------------

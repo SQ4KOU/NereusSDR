@@ -123,6 +123,10 @@
 //                (Thetis UpdateAlexTXFilter, console.cs:15487-15498
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: the choice goes through
+//                SharedInputLowPass::highest on the DDC centre, the call
+//                RadioModel's reason makes. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -317,6 +321,7 @@ warren@wpratt.com
 #include "P2RadioConnection.h"
 #include "LogCategories.h"
 #include "OcMatrix.h"
+#include "SharedInputLowPass.h"
 #include "CalibrationController.h"
 #include "PerfMonitor.h"
 #include "audio/RealtimeAudioPriority.h"
@@ -1015,18 +1020,23 @@ void P2RadioConnection::applyReceiveAlexLpf()
     // counted set is already per input, so a receiver on its own front end
     // is simply not in it. With nothing counted the RX1 stand-in rule below
     // stands, as the band-pass falls back to its frequency-derived bits.
+    //
+    // The frequency compared is each DDC's centre, Thetis's DDS frequency
+    // (SharedInputLowPass::Rule::HighestCentre), and the choice is the one
+    // RadioModel names in the low-pass reason.
     {
         const quint32 counted = (m_liveSlotMask != 0)
             ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
-        double highestMhz = 0.0;
+        QList<SharedInputLowPass::Candidate> candidates;
         for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
             if ((counted & (1u << ddc)) == 0) { continue; }
             const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
-            if (hz <= 0) { continue; }
-            highestMhz = std::max(highestMhz, hz / 1e6);
+            candidates.append({ddc, hz > 0 ? static_cast<quint64>(hz) : 0, 0});
         }
-        if (highestMhz > 0.0) {
-            applyAlexLpf(highestMhz, /*freqIsTx=*/false);
+        const int best = SharedInputLowPass::highest(
+            SharedInputLowPass::Rule::HighestCentre, candidates);
+        if (best >= 0) {
+            applyAlexLpf(double(candidates.at(best).centreHz) / 1e6, /*freqIsTx=*/false);
             return;
         }
     }

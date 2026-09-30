@@ -14,6 +14,8 @@
 //                 last; lowPassHoldReason; the counted slices and 6m/ByPass
 //                 on RX as last applied. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: receiverVfoHzBySlot.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -6603,6 +6605,7 @@ public:
     /// slice letter speaks for it, as VFO A does in Thetis. Runs on the same
     /// triggers as republishAlexAdcSlices.
     void republishReceiverVfoFrequencies();
+    QVector<quint64> receiverVfoHzBySlot() const;
 
     /// Phase 3F Sub-Epic I closeout, defect H1: put the DSP side of the pool
     /// back in step with the allocator after anything moves a stream's rate

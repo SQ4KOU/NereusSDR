@@ -125,6 +125,11 @@
 //                the highest band among them (mi0bot Penny.cs UpdateExtCtrl,
 //                183-189 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: both choices go through
+//                SharedInputLowPass::highest over countedCandidates (the
+//                DDC centre for the Alex low-pass, the VFO's band for the
+//                HL2 pins), the call RadioModel's reason makes. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1228,15 +1233,15 @@ void P1RadioConnection::applyReceiveAlexLpf(quint64 rx1Hz, quint64 fallbackHz)
     //     }
     // With nothing counted the rule below stands, as the band-pass falls
     // back to its frequency-derived bits.
+    //
+    // The frequency compared is each receiver's DDC centre, Thetis's DDS
+    // frequency (SharedInputLowPass::Rule::HighestCentre), and the choice
+    // is the one RadioModel names in the low-pass reason.
     {
-        const quint32 counted = (m_liveSlotMask != 0)
-            ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
-        quint64 highestHz = 0;
-        for (int slot = 0; slot < 7; ++slot) {
-            if ((counted & (1u << slot)) != 0) {
-                highestHz = std::max(highestHz, m_rxFreqHz[slot]);
-            }
-        }
+        const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
+        const int best = SharedInputLowPass::highest(
+            SharedInputLowPass::Rule::HighestCentre, candidates);
+        const quint64 highestHz = (best >= 0) ? candidates.at(best).centreHz : 0;
         if (highestHz != 0) {
             const quint8 oldRxLpf = m_alexLpfBitsRx;
             applyAlexLpf(double(highestHz) / 1e6, /*freqIsTx=*/false);
@@ -2551,9 +2556,11 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 // counted on the input (AlexRxBpf::countedSlotsAdc0), the same set the
 // band-pass was chosen over, and the one on the highest band wins. "Higher"
 // is mi0bot's own comparison, the Band enum's order
-// (OcMatrix::extCtrlBandIndex), with the RX1 stand-in first so that it
-// keeps a tie, as `idxb > idx` does. With nothing counted RX1 decides
-// alone, as before.
+// (OcMatrix::extCtrlBandIndex), and the earlier slot keeps a tie, as
+// `idxb > idx` keeps RX1 (a tie is one band, so one set of pins). The
+// choice is SharedInputLowPass::Rule::HighestVfoBand, the one RadioModel
+// names in the low-pass reason. With nothing counted RX1 decides alone, as
+// before.
 // ---------------------------------------------------------------------------
 quint64 P1RadioConnection::ocBandFrequencyHz() const
 {
@@ -2565,29 +2572,34 @@ quint64 P1RadioConnection::ocBandFrequencyHz() const
     };
     if (!m_mox && m_hardwareProfile.model == HPSDRModel::HERMESLITE
         && m_countedSlotsAdc0 != 0) {
-        const quint32 counted = (m_liveSlotMask != 0)
-            ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
-        int best = -1;
-        int bestIndex = -1;
-        // The stand-in first, then every other slot in order.
-        for (int i = -1; i < 7; ++i) {
-            const int slot = (i < 0) ? m_rx1Slot : i;
-            if (i >= 0 && slot == m_rx1Slot) { continue; }
-            if (slot < 0 || slot >= 7 || (counted & (1u << slot)) == 0) { continue; }
-            const quint64 hz = slotHz(slot);
-            if (hz == 0) { continue; }
-            const int index = OcMatrix::extCtrlBandIndex(
-                bandFromFrequency(static_cast<double>(hz)));
-            if (best < 0 || index > bestIndex) {
-                best = slot;
-                bestIndex = index;
-            }
-        }
+        const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
+        const int best = SharedInputLowPass::highest(
+            SharedInputLowPass::Rule::HighestVfoBand, candidates);
         if (best >= 0) {
-            return slotHz(best);
+            return SharedInputLowPass::ruleHz(SharedInputLowPass::Rule::HighestVfoBand,
+                                              candidates.at(best));
         }
     }
     return slotHz(m_rx1Slot);
+}
+
+// ---------------------------------------------------------------------------
+// countedCandidates: the receivers counted on the input
+// (AlexRxBpf::countedSlotsAdc0, live ones when the live set is known), in
+// slot order, each with its DDC centre and its slice's VFO, for
+// SharedInputLowPass. Shared-input filters, ruling (c) 2026-09-30.
+// ---------------------------------------------------------------------------
+QList<SharedInputLowPass::Candidate> P1RadioConnection::countedCandidates() const
+{
+    const quint32 counted = (m_liveSlotMask != 0)
+        ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
+    QList<SharedInputLowPass::Candidate> candidates;
+    for (int slot = 0; slot < 7; ++slot) {
+        if ((counted & (1u << slot)) != 0) {
+            candidates.append({slot, m_rxFreqHz[slot], m_rxVfoHz[slot]});
+        }
+    }
+    return candidates;
 }
 
 // ---------------------------------------------------------------------------
