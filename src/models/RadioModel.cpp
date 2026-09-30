@@ -55,6 +55,11 @@
 //               follow has none set), the board is reported off: WIDE,
 //               naming that slice, no low-pass sentence (JJ's ruling).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: The low-pass hold is published on lowPassHoldChanged, not
+//               filterStateChanged, so a hold alone sends a peer without
+//               rxFilterLowPass no delta (the session fixture
+//               antenna-kept). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -1807,6 +1812,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(&m_alexController, &AlexController::bpfStateChanged, this,
             [this](int, const AlexController::AlexAdcState&) {
         if (ownsLocalDsp()) { emit filterStateChanged(); }
+    });
+    // Shared-input filters, ruling (d): the low-pass hold on its own
+    // notifier (see the Q_PROPERTYs in RadioModel.h).
+    connect(&m_alexController, &AlexController::lowPassHoldChanged, this, [this](int) {
+        if (ownsLocalDsp()) { emit lowPassHoldChanged(); }
     });
     // R-R3-46 / R-R3-21: an operator filter policy change (the local
     // dialog's Apply, or a remote window's through the Core's
@@ -22479,6 +22489,7 @@ void RadioModel::clearStationFilterState()
         state.lowPassSlice = -1;
     }
     emit filterStateChanged();
+    emit lowPassHoldChanged();
 }
 
 void RadioModel::setStationFilterSnapshotReady()
@@ -22504,7 +22515,7 @@ bool RadioModel::applyStationFilterValue(const QByteArray& name, const QVariant&
             const QString reason = value.toString();
             if (reason.size() > 512) { return false; }
             state.lowPassReason = reason;
-            emit filterStateChanged();
+            emit lowPassHoldChanged();
             return true;
         }
         if (field == "LowPassSlice") {
@@ -22512,7 +22523,7 @@ bool RadioModel::applyStationFilterValue(const QByteArray& name, const QVariant&
             const int slice = value.toInt(&ok);
             if (!ok || slice < -1 || slice > 63) { return false; }
             state.lowPassSlice = slice;
-            emit filterStateChanged();
+            emit lowPassHoldChanged();
             return true;
         }
         unsigned received = 0;

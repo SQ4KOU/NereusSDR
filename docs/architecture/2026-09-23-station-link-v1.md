@@ -945,7 +945,8 @@ shows why the receive low-pass on a shared input is set for another slice.
 A peer that declares it is sent `rxFilterLowPassVersion` (section 6.3) and
 the `radio` object's `rxFilter0LowPassReason` and `rxFilter0LowPassSlice`
 (section 7); a peer that does not sees exactly the wire it was built for,
-with neither property. The station does not declare it; the desktop's
+with neither property, and a change to the two alone sends that peer no
+`radio` delta at all. The station does not declare it; the desktop's
 remote window does.
 
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices

@@ -16,6 +16,9 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). The tooltip comment covers the HL2's
 //                high-pass sentence. AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). The filter indicators also refresh on
+//                RadioModel::lowPassHoldChanged. AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Level Cal fix wave: the grid follow
 //                guard holds the saved follow at the user's value while a
 //                run holds it off. The step attenuator's ceiling is the
@@ -6912,6 +6915,10 @@ void MainWindow::buildUI()
         refreshPanWideBadges();
     };
     connect(m_radioModel, &RadioModel::filterStateChanged,
+            this, refreshFilterIndicators);
+    // The CH tooltip and the WIDE reason carry the low-pass hold, which
+    // has its own notifier.
+    connect(m_radioModel, &RadioModel::lowPassHoldChanged,
             this, refreshFilterIndicators);
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, refreshFilterIndicators);

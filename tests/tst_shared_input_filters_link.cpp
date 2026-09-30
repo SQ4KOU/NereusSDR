@@ -23,6 +23,9 @@
 //   2026-09-30 - The HL2 hold is set up in Auto again (JJ's ruling: two
 //                masks keep the pins of the highest slice). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - A hold alone sends a peer without rxFilterLowPass no
+//                radio delta. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -181,6 +184,73 @@ private slots:
 
         QVERIFY(!sawProperty(appB, QStringLiteral("rxFilter0LowPassReason")));
         QVERIFY(!sawProperty(appB, QStringLiteral("rxFilter0LowPassSlice")));
+    }
+
+    // A hold that starts while the band-pass stays where it was changes
+    // nothing a peer without rxFilterLowPass can see, so that peer is sent
+    // no radio delta for it: older peers see the wire they saw before
+    // (link document, section 17). Hermes, slices on 20 m and 17 m: one
+    // 13 MHz high-pass for both, so the chain stays filtered on 20 m, while
+    // the 17 m slice holds the low-pass. Then a move to 40 m, which bypasses
+    // the band-pass, is a change that peer does see, as one radio delta.
+    void holdAlone_sendsAPeerWithoutTheFeatureNoRadioDelta()
+    {
+        Core core;
+        core.model->setBoardForTest(HPSDRHW::Hermes);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        QHash<QByteArray, int> asks = kHolder;
+        asks.insert(QByteArrayLiteral("rxFilterLowPass"), 1);
+        LoopbackTransport* appA = core.signIn(a, asks);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+
+        RadioModel& model = *core.model;
+        model.configureStreamPool(2, 5, 192000);
+        for (int i = 0; i < 2; ++i) {
+            model.receiverManager()->createReceiver();
+        }
+        const int second = model.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(second > 0 && model.sliceById(second) != nullptr);
+        model.sliceById(0)->setFrequency(14200000.0);
+        model.sliceById(second)->setFrequency(14250000.0);
+        QCOMPARE(model.rxFilter0LowPassSlice(), -1);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("radio"),
+                            QStringLiteral("rxFilter0Band")).toInt(), int(Band::Band20m));
+        QTest::qWait(200);
+        const qsizetype mark = appB->received().size();
+
+        // The hold alone.
+        model.sliceById(second)->setFrequency(18100000.0);
+        QCOMPARE(model.rxFilter0LowPassSlice(), second);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Filtered));
+        QCOMPARE(model.rxFilter0Band(), int(Band::Band20m));
+        QTRY_COMPARE(latest(appA->received(), QStringLiteral("radio"),
+                            QStringLiteral("rxFilter0LowPassSlice")).toInteger(), second);
+        QTest::qWait(200);
+
+        // A change the peer sees.
+        model.sliceById(second)->setFrequency(7100000.0);
+        QCOMPARE(model.rxFilter0Effective(), int(AlexController::BpfEffective::Bypass));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("radio"),
+                            QStringLiteral("rxFilter0Effective")).toInt(),
+                     int(AlexController::BpfEffective::Bypass));
+        QTest::qWait(200);
+
+        QList<QJsonObject> radioDeltas;
+        const QList<QByteArray> received = appB->received();
+        for (qsizetype i = mark; i < received.size(); ++i) {
+            const QJsonObject o = QJsonDocument::fromJson(received.at(i)).object();
+            if (o.value(QStringLiteral("type")).toString() == QStringLiteral("delta")
+                && o.value(QStringLiteral("key")).toString() == QStringLiteral("radio")) {
+                radioDeltas.append(o);
+            }
+        }
+        QCOMPARE(radioDeltas.size(), 1);
+        QVERIFY(!sawProperty(appB, QStringLiteral("rxFilter0LowPassReason")));
     }
 
     // A remote window (which declares rxFilterLowPass) shows what the Core

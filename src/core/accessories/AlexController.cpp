@@ -41,6 +41,9 @@
 //   2026-09-30 - SwitchBypass::NoFilterPins: the HL2's N2ADR pins sent are
 //                0x00 (JJ's ruling). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - setLowPassHold emits lowPassHoldChanged in place of
+//                bpfStateChanged. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -195,7 +198,10 @@ void AlexController::setLowPassHold(int adc, int sliceIndex, const QString& reas
     if (s.lowPassSlice == slice && s.lowPassReason == reason) { return; }
     s.lowPassSlice = slice;
     s.lowPassReason = reason;
-    emit bpfStateChanged(adc, s);
+    // Its own signal: the band-pass did not move, and RadioModel publishes
+    // the hold under a notifier of its own (lowPassHoldChanged), so a peer
+    // without rxFilterLowPass is sent nothing for it.
+    emit lowPassHoldChanged(adc);
 }
 
 // Phase 3F: slice-aware recompute trigger.
