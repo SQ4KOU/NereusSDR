@@ -19,6 +19,11 @@
 //                 for the external-diversity input bound, R-R3-40) by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code. NereusSDR-original.
+//   2026-09-30 - beginIqBatch / endIqBatch: the queued stamped batches of
+//                 one socket drain go to the DSP worker as one post per
+//                 stream, not one per packet, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -74,6 +79,8 @@
 
 #include "ReceiverManager.h"
 #include "LogCategories.h"
+
+#include <QThread>
 
 #include "codec/IP1Codec.h"
 #include "codec/IP2Codec.h"
@@ -343,7 +350,34 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
     // hash lookups + emit setup.
     // R-R3-40: the external-diversity fork needs every hardware leg,
     // mapped or not; emitting outside the routing lock keeps it short.
-    emit hardwareIqDataStamped(hwReceiverIndex, samples, enqueueClockNs());
+    QVector<HeldIqBatch> full;
+    const bool held =
+        m_iqBatchThread.load(std::memory_order_acquire) == QThread::currentThreadId();
+    const auto hold = [&](bool hardware, int index) {
+        // Joins this packet to the stream's held batch, in arrival order.
+        QMutexLocker batchLock(&m_iqBatchMutex);
+        HeldIqBatch* batch = nullptr;
+        for (HeldIqBatch& candidate : m_heldIq) {
+            if (candidate.hardware == hardware && candidate.index == index) {
+                batch = &candidate;
+                break;
+            }
+        }
+        if (!batch) {
+            m_heldIq.append(HeldIqBatch{hardware, index, {}});
+            batch = &m_heldIq.last();
+        }
+        batch->samples += samples;
+        if (batch->samples.size() / 2 >= kIqBatchMaxSamples) {
+            full.append(std::move(*batch));
+            batch->samples = QVector<float>();
+        }
+    };
+    if (held) {
+        hold(true, hwReceiverIndex);
+    } else {
+        emit hardwareIqDataStamped(hwReceiverIndex, samples, enqueueClockNs());
+    }
 
     QMutexLocker locker(&m_routingMutex);
     auto it = m_hwToLogical.constFind(hwReceiverIndex);
@@ -358,6 +392,8 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
                                   << "hwReceiverIndex=" << hwReceiverIndex
                                   << "map=" << (mapped.isEmpty() ? QStringLiteral("(empty)") : mapped.join(','));
         }
+        locker.unlock();
+        flushHeldIq(full);
         return;
     }
 
@@ -373,11 +409,50 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
                                << "samples=" << samples.size();
         }
         emit iqDataForReceiver(logicalIndex, samples);
-        emit iqDataForReceiverStamped(logicalIndex, samples, enqueueClockNs());
+        if (held) {
+            hold(false, logicalIndex);
+        } else {
+            emit iqDataForReceiverStamped(logicalIndex, samples, enqueueClockNs());
+        }
         if (rxIt->wdspChannel >= 0) {
             emit iqDataForChannel(rxIt->wdspChannel, samples);
         }
     }
+    locker.unlock();
+    flushHeldIq(full);
+}
+
+void ReceiverManager::beginIqBatch()
+{
+    // A batch this thread left open (it cannot, but be safe) goes out first.
+    endIqBatch();
+    m_iqBatchThread.store(QThread::currentThreadId(), std::memory_order_release);
+}
+
+void ReceiverManager::endIqBatch()
+{
+    QVector<HeldIqBatch> batches;
+    {
+        QMutexLocker batchLock(&m_iqBatchMutex);
+        m_iqBatchThread.store(nullptr, std::memory_order_release);
+        batches.swap(m_heldIq);
+    }
+    flushHeldIq(batches);
+}
+
+void ReceiverManager::flushHeldIq(QVector<HeldIqBatch>& batches)
+{
+    for (const HeldIqBatch& batch : batches) {
+        if (batch.samples.isEmpty()) {
+            continue;
+        }
+        if (batch.hardware) {
+            emit hardwareIqDataStamped(batch.index, batch.samples, enqueueClockNs());
+        } else {
+            emit iqDataForReceiverStamped(batch.index, batch.samples, enqueueClockNs());
+        }
+    }
+    batches.clear();
 }
 
 void ReceiverManager::rebuildHardwareMapping()

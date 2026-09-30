@@ -18624,6 +18624,14 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             this, [this](int ddcIndex, const QVector<float>& samples) {
         m_receiverManager->feedIqData(ddcIndex, samples);
     }, Qt::DirectConnection);
+    // One socket drain's I/Q goes to the DSP worker as one post per stream
+    // (ReceiverManager::beginIqBatch). Both run on the connection thread.
+    connect(m_connection, &RadioConnection::iqBatchStarted,
+            m_receiverManager, &ReceiverManager::beginIqBatch,
+            Qt::DirectConnection);
+    connect(m_connection, &RadioConnection::iqBatchFinished,
+            m_receiverManager, &ReceiverManager::endIqBatch,
+            Qt::DirectConnection);
 
     // Phase 3M-4 bench-fix 2026-05-23 (J.J. Boyd KG4VCF): source-first
     // PS pairing.  RadioConnection emits psPairedIqDataReceived once per
