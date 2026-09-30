@@ -28,6 +28,9 @@
 //   2026-09-30 - Added the enums.cs headers (ramdor/Thetis and the mi0bot
 //                fork) this file cites. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - extCtrlBandIndex now serves only the range test; the HL2
+//                pins are ordered by frequency. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Penny.cs header ===
@@ -195,6 +198,10 @@ public:
     // are 0 .. 10, B2M 11, WWV 12, VHF0 .. VHF13 13 .. 26, BLMF 27, B120M
     // .. B11M 28 .. 40. GEN comes before B160M (-1); NereusSDR's XVTR has
     // no place in that enum and is -1 too.
+    // NereusSDR uses it only for mi0bot's range test (idx < 0 or idx > 40
+    // sends no pins, Penny.cs:162-165 [@c26a8a4]); which receiver's band
+    // the pins follow is ordered by frequency (SharedInputLowPass.h,
+    // maintainer ruling 2026-09-30), not by this index.
     static constexpr int extCtrlBandIndex(Band band) noexcept
     {
         const int n = static_cast<int>(band);

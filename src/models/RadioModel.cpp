@@ -37,6 +37,9 @@
 //               band-pass (the N2ADR pins sent as 0x00) clears the low-pass
 //               hold, so the reason describes only what is on the wire.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Shared-input filters: the HL2 reason names the slice
+//               with the highest frequency, whose band's pins are sent.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -22259,11 +22262,13 @@ void RadioModel::republishAlexAdcSlices()
     // on ADC0 (countedSlotsAdc0 above), in slot order, each with its DDC
     // centre (the stream centre the allocator commands) and the VFO of the
     // slice the connection knows the slot by (receiverVfoHzBySlot, which
-    // republishReceiverVfoFrequencies sends). The frequency read is the one
-    // Thetis uses for the filter: the DDC centre for the Alex low-pass, the
-    // VFO's band for the HL2's N2ADR pins (SharedInputLowPass.h). So under
-    // CTUN, where VFO and centre order can differ, the reason names the
-    // slice the filter actually follows.
+    // republishReceiverVfoFrequencies sends). Receivers are ordered by the
+    // DDC centre, the frequency Thetis sets the Alex low-pass from, on every
+    // board; the chosen one sets the Alex row for its centre, or on the HL2
+    // the N2ADR pins for its VFO's band (SharedInputLowPass.h; the HL2
+    // ordering by frequency, not mi0bot's band enum, is the maintainer's
+    // ruling of 2026-09-30). So under CTUN, where VFO and centre order can
+    // differ, the reason names the slice the filter actually follows.
     //
     // The identity compared is the low-pass each receiver would get alone,
     // at that same frequency: the Alex-1 row selection
@@ -22290,7 +22295,7 @@ void RadioModel::republishAlexAdcSlices()
         if (lowPassPresent && !hl2PinsCleared && !m_alexLpfBypassSwitch
             && onInput.size() >= 2 && m_receiverManager != nullptr) {
             const SharedInputLowPass::Rule rule = hl2
-                ? SharedInputLowPass::Rule::HighestVfoBand
+                ? SharedInputLowPass::Rule::HighestCentrePins
                 : SharedInputLowPass::Rule::HighestCentre;
             const QVector<quint64> vfoBySlot = receiverVfoHzBySlot();
             std::map<int, QList<const SliceModel*>> slicesOnSlot;  // slot order

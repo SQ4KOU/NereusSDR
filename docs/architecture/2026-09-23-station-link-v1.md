@@ -3851,9 +3851,9 @@ Notes on the keys:
 - **The receive low-pass held for another slice (`radio`).** When two or
   more slices are counted on the first receiver input (a slice on another
   device that is away is not counted), the Core sets the receive low-pass
-  for the slice on the highest band (the highest receiver centre
-  frequency; on the Hermes Lite 2, the highest VFO band in mi0bot's band
-  order), as Thetis does for RX1
+  for the slice with the highest receiver centre frequency (on the Hermes
+  Lite 2, the N2ADR pins of that slice's band; a slice outside the bands
+  the pins cover counts only when no other does), as Thetis does for RX1
   and RX2 together. `rxFilter0LowPassReason` (utf8, outbound only,
   read-only) says so in operator words, naming that slice and the slices
   that share the input with less protection, for example "The receive

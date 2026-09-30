@@ -133,6 +133,10 @@
 //   2026-09-30 - Review fix: ocBandFrequencyHz notes the out-of-range RX1
 //                band divergence from mi0bot. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - HL2 receive pins follow the counted slice with the
+//                highest frequency, not mi0bot's band enum order
+//                (maintainer ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2557,17 +2561,21 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 //         }
 // mi0bot has two receivers. Here the candidates are the slices the model
 // counted on the input (AlexRxBpf::countedSlotsAdc0), the same set the
-// band-pass was chosen over, and the one on the highest band wins. "Higher"
-// is mi0bot's own comparison, the Band enum's order
-// (OcMatrix::extCtrlBandIndex), and the earlier slot keeps a tie, as
-// `idxb > idx` keeps RX1 (a tie is one band, so one set of pins). The
-// choice is SharedInputLowPass::Rule::HighestVfoBand, the one RadioModel
-// names in the low-pass reason. With nothing counted RX1 decides alone, as
-// before.
+// band-pass was chosen over, and the pins are those of the band of the one
+// with the highest frequency, read as for the Alex low-pass (the DDC
+// centre, SharedInputLowPass::Rule::HighestCentrePins, the one RadioModel
+// names in the low-pass reason). The N2ADR bank is low-pass filters, so the
+// filter for the highest counted receiver passes every lower one. On a
+// frequency tie the earlier slot keeps it, RX1 first, as `idxb > idx` keeps
+// RX1. With nothing counted RX1 decides alone, as before.
+// Divergence (maintainer ruling, 2026-09-30): NereusSDR orders by
+// frequency; mi0bot compares band enum values (Penny.cs:158-159 and
+// 183-189 [@c26a8a4], over enums.cs:280-322), which rank WWV and the SWL
+// bands above 10 m.
 // Divergence: when RX1's band is out of range (GEN and the like, idx < 0),
-// mi0bot sends bits = 0 (Penny.cs:161-164 [@c26a8a4]), but here an
-// out-of-range band ranks below every band (extCtrlBandIndex -1), so the
-// other counted slice's band is taken.
+// mi0bot sends bits = 0 (Penny.cs:162-165 [@c26a8a4]), but here an
+// out-of-range band ranks below every band in range (extCtrlBandIndex -1),
+// so the other counted slice's band is taken.
 // ---------------------------------------------------------------------------
 quint64 P1RadioConnection::ocBandFrequencyHz() const
 {
@@ -2581,9 +2589,9 @@ quint64 P1RadioConnection::ocBandFrequencyHz() const
         && m_countedSlotsAdc0 != 0) {
         const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
         const int best = SharedInputLowPass::highest(
-            SharedInputLowPass::Rule::HighestVfoBand, candidates);
+            SharedInputLowPass::Rule::HighestCentrePins, candidates);
         if (best >= 0) {
-            return SharedInputLowPass::ruleHz(SharedInputLowPass::Rule::HighestVfoBand,
+            return SharedInputLowPass::ruleHz(SharedInputLowPass::Rule::HighestCentrePins,
                                               candidates.at(best));
         }
     }

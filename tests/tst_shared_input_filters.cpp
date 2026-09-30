@@ -40,6 +40,10 @@
 //                                    clears the reason; P2 away rule;
 //                                    6m/ByPass on RX empties the reason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  HL2 pins by frequency (maintainer
+//                                    ruling): 20 m + 10 m, 49 m SWL,
+//                                    WWV and an equal-frequency tie.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -219,6 +223,19 @@ struct G2Session {
     ConnectedP2      conn;
     DetachConnection detach;
 };
+
+// The model names the held slices from its own OcMatrix; point the
+// connection at it too, so the pins on the wire and in the reason agree.
+// P1Session's defaults (20 m pin 0, 40 m pin 1, 80 m pin 2) carried over.
+OcMatrix& sharedPins(RadioModel& model, P1RadioConnection& conn)
+{
+    OcMatrix& oc = model.ocMatrixMutable();
+    conn.setOcMatrix(&oc);
+    oc.setPin(Band::Band20m, 0, /*tx=*/false, true);
+    oc.setPin(Band::Band40m, 1, /*tx=*/false, true);
+    oc.setPin(Band::Band80m, 2, /*tx=*/false, true);
+    return oc;
+}
 
 QString letterOn(const RadioModel& model, int id, const char* band)
 {
@@ -457,11 +474,13 @@ private slots:
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
     }
 
-    // ── The HL2 follows mi0bot's high-band rule ─────────────────────────
+    // ── The HL2 pins follow the highest-frequency slice ─────────────────
     //
-    // The N2ADR board's receive pins are the HL2's filter. With the policy
-    // forcing a filter (so the multi-band bypass does not clear the pins)
-    // the pins are the HIGH band's, whichever slice is RX1.
+    // The N2ADR board's receive pins are the HL2's filter, a bank of
+    // low-passes. With the policy forcing a filter (so the multi-band bypass
+    // does not clear the pins) the pins are the band's of the slice with the
+    // highest frequency, whichever slice is RX1 (maintainer ruling
+    // 2026-09-30; mi0bot's own compare is by band enum).
     void hl2_receivePinsFollowTheHighBand()
     {
         P1Session s(HPSDRHW::HermesLite);
@@ -474,15 +493,120 @@ private slots:
         QCOMPARE(p1OcByte(s.conn), s.oc.maskFor(Band::Band20m, /*tx=*/false));
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
 
-        // RX1 above B: RX1 keeps it (mi0bot's idxb > idx is strict).
+        // RX1 above B: RX1's band.
         s.model.sliceById(a)->setFrequency(k10mHz);
         QCOMPARE(p1OcByte(s.conn), s.oc.maskFor(Band::Band10m, /*tx=*/false));
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, a);
 
-        // Same band on both: RX1's, and nothing is held.
+        // Same band on both: one set of pins, and nothing is held.
         s.model.sliceById(b)->setFrequency(k10mHz + 10000.0);
         QCOMPARE(p1OcByte(s.conn), s.oc.maskFor(Band::Band10m, /*tx=*/false));
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+    }
+
+    // 20 m and 10 m: the pins follow 10 m, the higher frequency.
+    void hl2_twentyAndTen_pinsFollowTen()
+    {
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = sharedPins(s.model, s.conn);
+        oc.setPin(Band::Band10m, 3, /*tx=*/false, true);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        const int a = s.add(k20mHz);
+        const int b = s.add(k10mHz);
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band10m, /*tx=*/false));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.lowPassSlice, b);
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, b, "10m")), qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, a, "20m")), qPrintable(st.lowPassReason));
+    }
+
+    // RX1 on 49 m SWL (6.0 MHz), slice B on 20 m. mi0bot's enum puts B49M
+    // (idx 31) above B20M (idx 5) and would send the 49 m pins, a lower
+    // low-pass that cuts 20 m. By frequency the pins follow 20 m and the
+    // reason names the 20 m slice. (NereusSDR's band lookup files 6.0 MHz
+    // under GEN, outside mi0bot's range, which also ranks it below 20 m.)
+    void hl2_swl49mAndTwenty_pinsFollowTwenty()
+    {
+        constexpr double k49mSwlHz = 6000000.0;
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = sharedPins(s.model, s.conn);
+        oc.setPin(Band::Band49m, 4, /*tx=*/false, true);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        const int a = s.add(k49mSwlHz);
+        const int b = s.add(k20mHz);
+        QCOMPARE(s.conn.rx1SlotForTest(), 0);
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band20m, /*tx=*/false));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.lowPassSlice, b);
+        QVERIFY2(st.lowPassReason.startsWith(
+                     QStringLiteral("The receive low-pass filter is set for slice %1,")
+                         .arg(letterOn(s.model, b, "20m"))),
+                 qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(QStringLiteral("%1 on ")
+                                               .arg(s.model.sliceById(a)->sliceLetter())),
+                 qPrintable(st.lowPassReason));
+    }
+
+    // RX1 on 20 m, slice B on WWV at 10 MHz. mi0bot's enum puts WWV
+    // (idx 12) above B20M (idx 5) and would send the WWV pins; by frequency
+    // the pins follow 20 m and the reason names RX1's 20 m slice.
+    void hl2_wwvAndTwenty_pinsFollowTwenty()
+    {
+        constexpr double kWwv10Hz = 10000000.0;
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = sharedPins(s.model, s.conn);
+        oc.setPin(Band::WWV, 4, /*tx=*/false, true);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        const int a = s.add(k20mHz);
+        const int b = s.add(kWwv10Hz);
+        QCOMPARE(bandFromFrequency(kWwv10Hz), Band::WWV);
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band20m, /*tx=*/false));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.lowPassSlice, a);
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, a, "20m")), qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, b, "WWV")), qPrintable(st.lowPassReason));
+    }
+
+    // An equal-frequency tie goes to RX1. Under CTUN both receivers sit on
+    // one centre, 10.05 MHz: RX1's VFO on WWV (10.0 MHz), B's on 30 m
+    // (10.12 MHz). The pins are RX1's band's (WWV), and B is held.
+    void hl2_equalFrequencyTie_rx1Keeps()
+    {
+        constexpr double kCentre = 10050000.0;
+        constexpr double kVfoA = 10000000.0;     // WWV
+        constexpr double kFirstB = 10300000.0;   // outside A's window: B gets its own DDC
+        constexpr double kVfoB = 10120000.0;     // 30 m
+        constexpr double kStepCentre = 10220000.0;
+        constexpr double kStepVfo = 10130000.0;
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = sharedPins(s.model, s.conn);
+        oc.setPin(Band::WWV, 4, /*tx=*/false, true);
+        oc.setPin(Band::Band30m, 5, /*tx=*/false, true);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+
+        const int a = s.add(kVfoA);
+        QVERIFY(s.model.requestStreamCtunPinned(a, true));
+        QVERIFY(s.model.requestStreamCentre(a, kCentre));
+        const int b = s.add(kFirstB);
+        QVERIFY(s.model.requestStreamCtunPinned(b, true));
+        // Walk B's centre down to A's, keeping B's VFO inside its window.
+        QVERIFY(s.model.requestStreamCentre(b, kStepCentre));
+        s.model.sliceById(b)->setFrequency(kStepVfo);
+        QVERIFY(s.model.requestStreamCentre(b, kCentre));
+        s.model.sliceById(b)->setFrequency(kVfoB);
+
+        const int streamA = s.model.sliceById(a)->streamIndex();
+        const int streamB = s.model.sliceById(b)->streamIndex();
+        QVERIFY(streamA >= 0 && streamB >= 0 && streamA != streamB);
+        QCOMPARE(s.model.streamCentreHzForTest(streamA), kCentre);
+        QCOMPARE(s.model.streamCentreHzForTest(streamB), kCentre);
+        QCOMPARE(s.conn.rx1SlotForTest(), 0);
+
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::WWV, /*tx=*/false));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.lowPassSlice, a);
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, a, "WWV")), qPrintable(st.lowPassReason));
+        QVERIFY2(st.lowPassReason.contains(letterOn(s.model, b, "30m")), qPrintable(st.lowPassReason));
     }
 
     // In Auto the multi-band bypass still clears the pins, as it did. With
@@ -498,7 +622,9 @@ private slots:
         QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
     }
 
-    // The band order mi0bot compares (enums.cs [@c26a8a4]).
+    // mi0bot's band index (enums.cs [@c26a8a4]). NereusSDR uses it only
+    // for mi0bot's range test (-1 sends no pins); the pins are ordered by
+    // frequency.
     void extCtrlBandIndex_isMi0botsOrder()
     {
         QCOMPARE(OcMatrix::extCtrlBandIndex(Band::Band160m), 0);
