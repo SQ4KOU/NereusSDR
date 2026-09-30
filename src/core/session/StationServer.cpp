@@ -871,6 +871,10 @@
 //               desktop's slice passes to a remote device as from any
 //               device, and the desktop is told. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): the keying gate refuses a
+//               device's key that would land on the slice it lost
+//               (othersSliceKeyRefusal, m_lostTxSlice). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2457,6 +2461,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     !taken.isEmpty()) {
                     return {KeyingVerdict::Refuse, taken};
                 }
+                // Take-over fix wave (I-2): nor on the slice it lost, where
+                // the flag stays after a take from a device that did not
+                // hold transmit (the hosting desktop included).
+                if (const TxRefusal others = othersSliceKeyRefusal(request.deviceId);
+                    !others.isEmpty()) {
+                    return {KeyingVerdict::Refuse, others};
+                }
             }
             const quint64 epochBefore = m_transmitHolder->epoch();
             const KeyingAnswer answer = m_transmitHolder->askKey(request);
@@ -3419,6 +3430,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         connect(radioModel, &RadioModel::sliceRemoved, this, [this](int sliceId) {
             m_sliceForms.remove(sliceId);
             for (auto it = m_takenNotChosenForTx.begin(); it != m_takenNotChosenForTx.end(); ++it) {
+                it->remove(sliceId);
+            }
+            // Take-over fix wave (I-2): a closed slice is nobody's lost one.
+            for (auto it = m_lostTxSlice.begin(); it != m_lostTxSlice.end(); ++it) {
                 it->remove(sliceId);
             }
             // Fix wave (Important 4): a closed slice is nobody's choice.
@@ -9857,6 +9872,8 @@ void StationServer::releaseDeviceClaims(const QByteArray& deviceId,
         clearTransmitSelection(deviceId, sliceId);
         if (!self || !m_radioModel) return;
     }
+    // Take-over fix wave (I-2): a device that left keys nothing.
+    m_lostTxSlice.remove(deviceId);
     // Approved policy 6: every control and listening claim goes at once.
     // No slice is held for it (Q12).
     const SliceOwnership::ClaimsRemoved removed = ownership->removeClaims(deviceId);
@@ -10114,6 +10131,13 @@ void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId
     // included (taking control grants no transmit). The radio's own PTT
     // keeps ruling 8.11: it transmits where the flag is.
     const SliceModel* txSlice = m_radioModel->txBoundSlice();
+    // Take-over fix wave (I-2): the flag stays on this slice when nobody
+    // holds transmit (or the radio's own PTT does), so the former
+    // controller's next key would land on a slice it no longer controls.
+    // Remember it; othersSliceKeyRefusal() reads this.
+    if (!former.isEmpty() && txSlice != nullptr && txSlice->sliceIndex() == sliceId) {
+        m_lostTxSlice[former].insert(sliceId);
+    }
     if (!m_transmitHolder || txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
         return;
     }

@@ -52,6 +52,10 @@
 //               binding's preference, shared with the keying gate) and
 //               takenSliceKeyRefusal. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal, a key
+//               never lands on the slice a device lost. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -630,6 +634,58 @@ TxRefusal StationServer::takenSliceKeyRefusal(const QByteArray& device)
         arbiter->bindForHolder(device, transmitPreferenceFor(device));
     }
     return {};
+}
+
+TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device)
+{
+    if (device.isEmpty() || m_radioModel.isNull() || m_radioModel->txSliceArbiter() == nullptr
+        || !m_transmitHolder) {
+        return {};
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    const auto mayTransmit = [&](int id) {
+        return id >= 0 && m_radioModel->sliceById(id) != nullptr
+            && SliceAccessPolicy::mayTransmitOn(*ownership, device, id);
+    };
+    // Where the key lands, as takenSliceKeyRefusal reads it: the holder's
+    // bound slice; a new holder's binding, or the flag when that binds
+    // nothing (TxSliceArbiter::bindForHolder leaves the flag where it is).
+    int landing = arbiter->txBoundSliceId();
+    if (!m_transmitHolder->isHeldBy(device)) {
+        const int preferred = transmitPreferenceFor(device);
+        const int active = ownership->activeFor(device);
+        if (mayTransmit(preferred)) {
+            landing = preferred;
+        } else if (mayTransmit(active)) {
+            landing = active;
+        }
+    }
+    if (landing < 0 || m_radioModel->sliceById(landing) == nullptr) {
+        return {};
+    }
+    // Ruling Q8: control of a slice grants no transmit, and the flag left
+    // on the slice control passed from is not this device's to key. Only
+    // that slice: a key landing on any other slice keeps today's rules.
+    // A slice nobody owns, or one it controls again, keeps today's keying.
+    auto lost = m_lostTxSlice.find(device);
+    if (lost == m_lostTxSlice.end() || !lost->contains(landing)) {
+        return {};
+    }
+    const QByteArray subject = ownership->mark(landing).subject();
+    if (subject.isEmpty() || subject == device) {
+        lost->remove(landing);
+        return {};
+    }
+    MoxController* mox = m_radioModel->moxController();
+    if (mox == nullptr || !mox->isMox()) {
+        for (int id : ownership->ownedBy(device)) {
+            if (mayTransmit(id) && arbiter->requestHandoff(id, device)) {
+                return {};
+            }
+        }
+    }
+    return TxRefusals::noTransmitSlice();
 }
 
 void StationServer::onSliceClosedForHolder(int sliceId)

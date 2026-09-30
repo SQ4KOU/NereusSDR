@@ -508,6 +508,10 @@
 //               the hosting desktop's slices can pass to a remote device.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal(), a
+//               key never lands on the slice a device lost. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -2345,6 +2349,15 @@ private:
     /// slice it may transmit on; empty otherwise. A holder bound on such a
     /// slice with another of its own is moved there first (unkeyed only).
     TxRefusal takenSliceKeyRefusal(const QByteArray& device);
+    /// Take-over fix wave (I-2, ruling Q8): the refusal for a key from
+    /// `device` that would land on the slice it lost, the one the flag was
+    /// on when control passed from it (m_lostTxSlice; a slice taken from it
+    /// while it did not hold transmit, the hosting desktop's included)
+    /// while another device controls it: noTransmitSlice when it
+    /// has no slice it may transmit on; with one, the unkeyed flag moves
+    /// there first and nothing is refused. A slice nobody owns is left as
+    /// it was. The radio's own PTT is not asked (ruling 8.11).
+    TxRefusal othersSliceKeyRefusal(const QByteArray& device);
     /// Ruling 8.12: the holder's last slice closed: transmit is released.
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.
@@ -2745,6 +2758,10 @@ private:
     // control of and has not chosen to transmit on since; its transmit
     // binding never picks one up by itself.
     QHash<QByteArray, QSet<int>> m_takenNotChosenForTx;
+    // Take-over fix wave (I-2, ruling Q8): the slice the transmit flag was
+    // on when control of it passed from each device. A key from that device
+    // never lands there while another device controls it.
+    QHash<QByteArray, QSet<int>> m_lostTxSlice;
     // True while a restored layout's owners are settled just before every
     // view's burst is sent again (receiveLayoutHydrated).
     bool m_ownerChangesInBurst = false;
