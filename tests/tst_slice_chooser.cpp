@@ -13,6 +13,10 @@
 //   2026-09-29: created for NereusSDR by J.J. Boyd (KG4VCF), slice control
 //               and shared listening plan Task 13, with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: Take control of the Core's own
+//               slice is disabled with the Core's words below
+//               sliceAccessVersion 3. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -408,6 +412,65 @@ private slots:
         SliceChooser chooser;
         chooser.setInventory(rows);
         render(chooser, QStringLiteral("Listening"), QStringLiteral("remote-away"));
+    }
+
+    // Core-slice take-over (JJ, 2026-09-30): the Core's own slice's Take
+    // control follows the Core's sliceAccessVersion. Below 3 the Core
+    // refuses it, so it is disabled with the Core's words, never hidden;
+    // at 3 it is offered like any other.
+    void theCoresOwnSliceTakeFollowsTheCoresVersion()
+    {
+        const QString words = QStringLiteral("Slice A is run by the Core itself, so control of it cannot pass to this device.");
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        // The Core's own slice: its marker names no device (kind station).
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, nullptr);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        access.applyObject("access:0", {count("incarnation", 3),
+                                        text("controllerDeviceId", "station"),
+                                        count("controlRevision", 1),
+                                        text("listenerDeviceIds", "[\"station\"]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+        QVERIFY(!access.coreSliceTakeable());
+
+        QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(rows.first().controller, Controller::CoreDesktop);
+        QCOMPARE(rows.first().takeRefusal, words);
+        SliceChooser chooser;
+        chooser.setInventory(rows);
+        chooser.selectSlice(0);
+        QPushButton* take = action(chooser, QStringLiteral("Take control"));
+        QVERIFY(take);
+        QVERIFY(!take->isEnabled());
+        QCOMPARE(take->toolTip(), words);
+        QVERIFY(action(chooser, QStringLiteral("Listen in"))->isEnabled());
+        render(chooser, QStringLiteral("Choose a slice"), QStringLiteral("core-slice-refused"));
+
+        // Listening to it, the flag's Take control is off with the words.
+        Row listened = rows.first();
+        listened.listeningHere = true;
+        QCOMPARE(SliceChooser::flagAccessFor(listened).takeHeldReason, words);
+
+        QSignalSpy changed(&access, &SliceAccessMirror::changed);
+        access.setCoreSliceTakeable(true);
+        QCOMPARE(changed.count(), 1);
+        rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QVERIFY(rows.first().takeRefusal.isEmpty());
+        chooser.setInventory(rows);
+        chooser.selectSlice(0);
+        take = action(chooser, QStringLiteral("Take control"));
+        QVERIFY(take && take->isEnabled());
+        QSignalSpy taken(&chooser, &SliceChooser::takeControlRequested);
+        take->click();
+        QCOMPARE(taken.count(), 1);
+        render(chooser, QStringLiteral("Choose a slice"), QStringLiteral("core-slice-offered"));
     }
 
     // The hosting desktop: the Core's slices, two same-named devices told

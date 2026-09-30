@@ -565,7 +565,7 @@ private slots:
 
     // Take-over re-review (N-3): the hosting window's controlTaken card
     // stays when Take it back is refused and may be tried again (the slice
-    // transmitting, its controller away), and goes when it never can now.
+    // transmitting), and goes when the take-back works.
     void hostTakeItBackCardStaysWhileItMayBeTriedAgain()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
@@ -628,23 +628,15 @@ private slots:
         QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
         QCOMPARE(cards().size(), 1);
 
-        // Once it stops, the phone (a session with no link here, so away)
-        // still cannot hand over: refused again, may be tried again, and
-        // the card stays.
+        // Once it stops, the same tap works (JJ's wider ruling, 2026-09-30:
+        // every slice can be taken, and the one refusal is while it
+        // transmits). The phone, a session with no link here, cannot stay
+        // on as a listener, so it loses the slice; the card goes.
         server->transmitHolder()->release(phone.deviceId, QStringLiteral("test release"));
         QVERIFY(!server->sliceOnAir(aId));
         cards().first()->takeBackButton()->click();
-        QTest::qWait(100);
-        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
-        QCOMPARE(cards().size(), 1);
-
-        // The phone lets go of the slice, so control moved on: the take-back
-        // can never run now, and the card goes.
-        const SliceAccessController::Result released =
-            access->release(phone.deviceId, SliceOwnership::SliceRef{aId, ownership->incarnation(aId)},
-                            ownership->controlRevision(aId));
-        QVERIFY2(released.accepted, qPrintable(released.reason));
-        cards().first()->takeBackButton()->click();
+        QTRY_COMPARE(ownership->mark(aId).owner, station);
+        QVERIFY(!ownership->listenersOf(aId).contains(phone.deviceId));
         QTRY_COMPARE(cards().size(), 0);
         controller.stop();
     }

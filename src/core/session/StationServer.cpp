@@ -890,6 +890,19 @@
 //               one it only listens to (listenerChangeReason). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: core-slice take-over (JJ, 2026-09-30): sliceAccessVersion
+//               3. With nobody at the Core's desktop (no hosting desktop
+//               takes the station device's notices) a device at 3 takes
+//               the Core's own slice with no one to ask; a peer below 3
+//               is refused as before. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: JJ's wider ruling: every slice can be taken; only a
+//               slice on the air is refused. The "needs an update" and
+//               "is away" refusals are gone: a controller that cannot stay
+//               listening loses the slice (staysListeningAfterTake), is
+//               sent no controlTaken, and an older window left with none
+//               ends (ruling 6.10). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2264,7 +2277,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                               {QByteArrayLiteral("sessionHolder"), 1},
                               // Take-over parity: Take it back on
                               // controlTaken (sliceAccessVersion 2).
-                              {QByteArrayLiteral("sliceAccess"), 2}};
+                              // Core-slice take-over: 3.
+                              {QByteArrayLiteral("sliceAccess"), 3}};
     m_stationPeer.deviceId = SliceOwnership::stationDevice();
     m_stationPeer.sessionDeviceId = SliceOwnership::stationDevice();
     m_stationPeer.placeSettled = true;
@@ -3536,8 +3550,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // desktop's own window).
         SliceAccessController::Hooks hooks;
         hooks.transmitting = [this](int sliceId) { return sliceTransmitting(sliceId); };
-        hooks.cannotHandOff = [this](const QByteArray& controller, int sliceId) {
-            return handOffRefusal(controller, sliceId);
+        hooks.cannotHandOff = [this](const QByteArray& controller, const QByteArray& taker,
+                                     int sliceId) {
+            return handOffRefusal(controller, taker, sliceId);
+        };
+        hooks.staysListening = [this](const QByteArray& former) {
+            return staysListeningAfterTake(former);
         };
         hooks.clearTransmitSelection = [this](const QByteArray& former, int sliceId) {
             clearTransmitSelection(former, sliceId);
@@ -4412,7 +4430,9 @@ int StationServer::sliceAccessVersion() const
     // Slice control plan Task 4: a Core that runs its radio keeps who
     // controls and who listens to each slice.
     // Take-over parity: 2 adds Take it back on the controlTaken notice.
-    return m_radioModel && m_radioModel->role() == RadioModel::Role::Local ? 2 : 0;
+    // Core-slice take-over (JJ, 2026-09-30): 3, a device may take the
+    // Core's own slice with nobody at the Core's desktop.
+    return m_radioModel && m_radioModel->role() == RadioModel::Role::Local ? 3 : 0;
 }
 
 bool StationServer::peerHasSliceAccess(SessionTransport* transport) const
@@ -4427,6 +4447,13 @@ bool StationServer::peerTakesControlBack(SessionTransport* transport) const
     return peerHasSliceAccess(transport)
         && peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 2)
         && sliceAccessVersion() >= 2;
+}
+
+bool StationServer::peerTakesCoreSlice(SessionTransport* transport) const
+{
+    return peerHasSliceAccess(transport)
+        && peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 3)
+        && sliceAccessVersion() >= 3;
 }
 
 void StationServer::noteActivity(SessionTransport* transport)
@@ -10166,12 +10193,14 @@ bool StationServer::sliceTransmitting(int sliceId) const
     return mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
 }
 
-QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId) const
+QString StationServer::handOffRefusal(const QByteArray& controller, const QByteArray& taker,
+                                      int sliceId) const
 {
     const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
-    // Ruling Q7: control passes only from a controller that stays on as a
-    // listener, which a window that does not share slices cannot do. The
-    // Core's own position is not a device that can be asked.
+    // Ruling Q7 once passed control only from a controller that stays on
+    // as a listener; JJ's wider ruling (2026-09-30) lets every slice be
+    // taken. What is left: the Core's own slice with nobody at its desktop,
+    // for a taker below sliceAccessVersion 3 (its wire as before).
     if (controller == SliceOwnership::stationDevice()) {
         // Slice control plan Task 8: a slice the Core keeps for a device
         // that is not here may be taken, as an away device's slice may.
@@ -10182,32 +10211,45 @@ QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId)
         // here as a device (Task 10). It stays on as a listener and is
         // told, so control passes from it under the checks below, as from
         // any device.
+        // Core-slice take-over (JJ, 2026-09-30): with nobody at the
+        // Core's desktop (no hosting desktop takes the station device's
+        // notices, as on a headless Core), a device at sliceAccessVersion
+        // 3 takes the Core's own slice with no one to ask. A peer below 3
+        // is refused as before.
         if (liveTransportFor(controller) == nullptr) {
+            SessionTransport* takerTransport = liveTransportFor(taker);
+            if (takerTransport != nullptr && peerTakesCoreSlice(takerTransport)) {
+                return {};
+            }
             return QStringLiteral("Slice %1 is run by the Core itself, so control of it "
                                   "cannot pass to this device.")
                 .arg(letter);
         }
     }
-    const QString name = planDevice(controller).name;
-    SessionTransport* transport = liveTransportFor(controller);
+    // Core-slice take-over, JJ's wider ruling (2026-09-30): every other
+    // slice can be taken; only a slice on the air is refused (the take's
+    // own check). A controller that cannot stay on as a listener (a
+    // session without the feature, or a device neither here nor away)
+    // loses the slice (staysListeningAfterTake).
+    return {};
+}
+
+bool StationServer::staysListeningAfterTake(const QByteArray& former) const
+{
+    // The Core's own position stays joined, a hosting desktop or not.
+    if (former == SliceOwnership::stationDevice()) {
+        return true;
+    }
+    SessionTransport* transport = liveTransportFor(former);
     if (transport == nullptr) {
         // Slice control plan Task 8: a device away within its 180 s stays
         // joined as a listener and finds itself one when it returns.
-        const std::optional<DeviceSessionRegistry::Entry> away =
-            m_deviceSessions->entry(controller);
-        if (away && away->state == DeviceSessionRegistry::State::Away) {
-            return {};
-        }
-        return QStringLiteral("%1 is away, so control of slice %2 cannot pass now. Try again "
-                              "when it is back.")
-            .arg(name, letter);
+        const std::optional<DeviceSessionRegistry::Entry> away = m_deviceSessions->entry(former);
+        return away && away->state == DeviceSessionRegistry::State::Away;
     }
-    if (!peerHasSliceAccess(transport)) {
-        return QStringLiteral("%1 needs an update before control of slice %2 can pass to "
-                              "another device.")
-            .arg(name, letter);
-    }
-    return {};
+    // Ruling Q7: only a session that shares slices can listen to one it
+    // does not control.
+    return peerHasSliceAccess(transport);
 }
 
 void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId)
@@ -10370,6 +10412,14 @@ void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
     // and it is told.
     if (former == SliceOwnership::stationDevice()
         && !ownership->listenersOf(sliceId).contains(former)) {
+        return;
+    }
+    // JJ's wider ruling (2026-09-30): a former controller that could not
+    // stay on as a listener lost the slice. It is told nothing it cannot
+    // read ("You are still listening" would be wrong); an older window
+    // left with no slice ends as ruling 6.10 says.
+    if (!ownership->listenersOf(sliceId).contains(former)) {
+        endOlderWindowsWithoutSlices({former}, taker);
         return;
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);
@@ -12507,10 +12557,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                     caps.sliceAccessEntry = true;
                     // Take-over parity: the lower of the Core's version and
                     // the peer's, so a peer that declared 1 reads 1.
-                    caps.sliceAccessVersion =
-                        peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 2)
-                        ? sliceAccessVersion()
-                        : std::min(sliceAccessVersion(), 1);
+                    // Core-slice take-over: 3 likewise.
+                    const int declared =
+                        peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 3)   ? 3
+                        : peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 2) ? 2
+                                                                                       : 1;
+                    caps.sliceAccessVersion = std::min(sliceAccessVersion(), declared);
                 }
             }
             // iPhone app plan Task 34: remote transmit, last, for a peer whose

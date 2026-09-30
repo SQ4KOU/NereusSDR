@@ -11,16 +11,18 @@ where to look and what the phone must not get wrong.
 
 ## What the phone declares and receives
 
-- **Hello feature.** The phone declares `sliceAccess` 2 in the `features` of
-  its hello (1 before Take it back on `controlTaken`; a phone that still
-  declares 1 keeps exactly the wire it had). It declares it only together
+- **Hello feature.** The phone declares `sliceAccess` 3 in the `features` of
+  its hello (2 before the Core's own slice could be taken, 1 before Take it
+  back on `controlTaken`; a phone that still declares 1 or 2 keeps exactly
+  the wire it had). It declares it only together
   with `sessionHolder` 1 (and so `deviceAuth` 1). Without both, the Core
   treats it as not declared.
 - **Capability.** A phone that declared it is sent `sliceAccessVersion` in
   the Core's capabilities, appended after `radioAntennaRowsVersion` and
   before `coreBuildInfo`: the lower of the Core's version and the one the
-  phone declared. 2 means the `controlTaken` notice offers Take it back
-  (below); 1 is a Core from before that. A Core that does not offer the
+  phone declared. 3 means the Core's own slice can be taken (below,
+  "Taking the Core's own slice"); 2 means the `controlTaken` notice offers
+  Take it back (below); 1 is a Core from before that. A Core that does not offer the
   feature sends nothing, and the phone reads 0.
 - **Gate.** Two keys, both required (link 6.2): agreed protocol minor 11 or
   later, and `sliceAccessVersion` 1 or more. Every verb below carries
@@ -62,7 +64,7 @@ Every verb names the slice by `sliceId` and `incarnation`, both read from
 | --- | --- | --- |
 | `slice.listen` | `sliceId`, `incarnation` | Joins the slice. Allocates no slice, receiver or DDC, so it works when every receiver and the slice cap are in use. `controlRevision` in `values` |
 | `slice.stopListening` | `sliceId`, `incarnation` | Leaves the slice. Refused from the controller (use release) |
-| `slice.takeControl` | `sliceId`, `incarnation`, `controlRevision` | Moves control in one change. The former controller stays a listener. `controlRevision` in `values` |
+| `slice.takeControl` | `sliceId`, `incarnation`, `controlRevision` | Moves control in one change. The former controller stays a listener (an older app that cannot listen loses the slice). Refused only while the slice transmits. `controlRevision` in `values` |
 | `slice.release` | `sliceId`, `incarnation`, `controlRevision` | Controller only. The controller is cleared and leaves. The slice stays for its other listeners, or closes when nobody is left |
 | `slice.setListenLevel` | `sliceId`, `incarnation`, `level`, `muted` | This device's own level (`f64`, 0 to 1) and mute (`bool`) for a slice it listens to |
 
@@ -142,9 +144,41 @@ its 3 minutes) shows it disabled with "That can no longer be taken back."
 
 The hosting desktop's own slices pass the same way: a phone may take a
 slice the desktop controls (the desktop is told and can take it back),
-under the same rules. With nobody at the desktop, the Core's own slice is
-refused: "Slice <letter> is run by the Core itself, so control of it cannot
-pass to this device."
+under the same rules.
+
+## Taking the Core's own slice (`sliceAccessVersion` 3)
+
+JJ, 2026-09-30: with nobody at the Core's desktop, a device may take the
+Core's own slice. The phone learns this from the Core, never by guessing:
+
+- **The signal.** `sliceAccessVersion` in the Core's capabilities (`i64`,
+  the lower of the Core's version and the one the phone declared). Per
+  slice, the phone reads `controllerDeviceId` of `access:<id>`: `station`
+  is the Core's own position.
+- **At 3.** Take control is offered on every slice this phone does not
+  control, a `station` slice included; the one refusal is while the slice
+  is transmitting (`onAir` true on `access:<id>`: show Take control
+  disabled with "Slice <letter> is transmitting. Take control once it
+  stops."). The Core decides on the tap: with nobody at its desktop
+  (a Core with no desktop window, such as the Rock's headless Core) the
+  take goes through at once, with no question and nobody told; on a Core
+  hosted by a desktop window, the desktop is the slice's controller and
+  the take follows the take-over rules above (the desktop is told with
+  `controlTaken` and can take it back in one tap). Every other rule holds:
+  on the air it is refused ("Slice <letter> is transmitting. Take control
+  once it stops."), transmit does not move with it, and the phone's first
+  key on it needs `tx.setTxSlice`, as after any take.
+- **Below 3.** The Core refuses the take of a `station` slice with nobody
+  at its desktop: "Slice <letter> is run by the Core itself, so control of
+  it cannot pass to this device." The phone shows Take control on a
+  `station` slice disabled, never hidden, with those words. A `station`
+  slice the Core keeps for an away device (its `marker:<id>` names that
+  device) may be taken at any version.
+- **Wire shape.** Nothing else is new: the same `slice.takeControl
+  {sliceId, incarnation, controlRevision}` and the same result
+  (`controlRevision` in `values`). After the take, `access:<id>` names the
+  phone as `controllerDeviceId`, and `station` stays in
+  `listenerDeviceIds`.
 
 The `sliceClosed` notice (no Take it back) also now reaches a slice's
 listeners when a take or a pan move closes it.
@@ -246,12 +280,12 @@ The verbs:
   control once it stops."
 - A release while the slice transmits: "Slice <letter> is transmitting.
   Release it once it stops."
-- A take from a controller that cannot stay on as a listener: "<name> needs
-  an update before control of slice <letter> can pass to another device."
-- A take from an away controller that is not held: "<name> is away, so control
-  of slice <letter> cannot pass now. Try again when it is back."
-- A take from the Core's own position: "Slice <letter> is run by the Core
-  itself, so control of it cannot pass to this device."
+- A take whose controller cannot stay on as a listener (an older app) is no
+  longer refused (JJ, 2026-09-30): the take goes through and that device
+  loses the slice. The same holds for a controller that is gone.
+- A take from the Core's own position, from a device below
+  `sliceAccessVersion` 3: "Slice <letter> is run by the Core itself, so
+  control of it cannot pass to this device."
 - A peer without the feature sending a `slice.*` verb: "Update this app to
   listen to and take slices on this Core."; from a Core that cannot share:
   "This Core cannot share slices between devices."
@@ -289,7 +323,7 @@ the plan addendum G-118).
 | Action or event | Required result |
 | --- | --- |
 | Listen in | Join the existing slice without allocating another slice or receiver. Its one controller keeps tuning. This device controls its own volume and mute |
-| Take control | The existing slice moves; letter, color, frequency, mode and filter stay. The former controller stays a listener and is told |
+| Take control | The existing slice moves; letter, color, frequency, mode and filter stay. The former controller stays a listener and is told. Every slice can be taken; the one refusal is while it transmits (JJ, 2026-09-30) |
 | Release | This device gives up control and stops listening. Other listeners keep audio and the slice can be taken. With nobody left it closes, the Core's last slice included |
 | Handoff while TX is selected but idle | The slice's TX selection clears. The new controller selects transmit explicitly |
 | Handoff while transmitting | Refused until transmission stops, rechecked when applied |

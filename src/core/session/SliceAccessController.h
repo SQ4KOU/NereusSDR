@@ -82,6 +82,11 @@
 //               slice transmits before any close; the comments name the
 //               last slice's close (Task 7). AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-30: core-slice take-over: Hooks::cannotHandOff is also given
+//               the taker. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-09-30: JJ's wider ruling: Hooks::staysListening. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -117,15 +122,22 @@ public:
         /// Whether the slice is transmitting now: the transmit slice of a
         /// holder on the air, or the one the station freeze holds.
         std::function<bool(int sliceId)> transmitting;
-        /// Why control of the slice cannot pass from `controller` (it
-        /// cannot stay on as a listener: an older window, a device that is
-        /// away, the Core's own position), or empty when it can.
-        std::function<QString(const QByteArray& controller, int sliceId)> cannotHandOff;
+        /// Why control of the slice cannot pass from `controller` to
+        /// `taker` (it cannot stay on as a listener: an older window, a
+        /// device that is away, the Core's own position for a taker that
+        /// cannot take it), or empty when it can.
+        std::function<QString(const QByteArray& controller, const QByteArray& taker,
+                              int sliceId)>
+            cannotHandOff;
         /// Ruling Q8: clears `former`'s transmit selection of the slice
         /// before control passes from it (`former` is empty for a slice
         /// with no controller), and that of any device holding transmit
         /// with the flag on the slice.
         std::function<void(const QByteArray& former, int sliceId)> clearTransmitSelection;
+        /// JJ's wider ruling (2026-09-30): whether `former` stays joined as
+        /// a listener after control is taken from it; one that cannot (a
+        /// session without the feature) leaves the slice. Unset: it stays.
+        std::function<bool(const QByteArray& former)> staysListening;
         /// Ruling Q8: `taker` took the slice; its transmit binding does not
         /// pick the slice up by itself.
         std::function<void(const QByteArray& taker, int sliceId)> tookControl;

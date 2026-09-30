@@ -25,6 +25,8 @@
 //   2026-09-29: created for NereusSDR by J.J. Boyd (KG4VCF), slice control
 //               and shared listening plan Task 13, with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: Row::takeRefusal. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QColor>
@@ -76,6 +78,10 @@ public:
         /// Devices joined to it, the controller included.
         int listenerCount = 0;
         bool transmitting = false;
+        /// Core-slice take-over (JJ, 2026-09-30): why Take control is not
+        /// offered (the Core's own words), or empty when it is. A Core
+        /// below sliceAccessVersion 3 refuses a take of its own slice.
+        QString takeRefusal;
 
         QChar letter() const { return QChar(QLatin1Char('A').unicode() + sliceId); }
     };

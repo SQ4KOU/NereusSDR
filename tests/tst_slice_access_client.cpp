@@ -36,6 +36,10 @@
 //               card stays when Take it back may be tried again and goes
 //               when it worked or never can; an ended take-back's card.
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: the window reads sliceAccessVersion
+//               3 and learns whether the Core's own slice may be taken.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -778,6 +782,35 @@ private slots:
         QTest::qWait(100);
         QVERIFY(w.sentVerbs(QStringLiteral("notice.takeBack")).isEmpty());
         QCOMPARE(core.model->sliceOwnership()->mark(own).owner, b.key.fingerprint());
+    }
+
+    // Core-slice take-over (JJ, 2026-09-30): the window learns from the
+    // Core's sliceAccessVersion whether the Core's own slice may be taken.
+    // This window declares 3 and reads 3; one that declares 2 reads 2 and
+    // shows Take control on the Core's own slice off with the Core's words.
+    void theCoresOwnSliceTakeFollowsTheLinksVersion()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        QCOMPARE(w.client.capabilities().sliceAccessVersion, 3);
+        QVERIFY(w.client.coreSliceTakeAvailable());
+        QVERIFY(w.access().coreSliceTakeable());
+
+        Window older;
+        older.client.setSliceAccessDeclaredForTest(2);
+        QVERIFY(core.server->deviceStore()->add(older.record()));
+        QVERIFY(older.connectTo(core));
+        QCOMPARE(older.client.capabilities().sliceAccessVersion, 2);
+        QVERIFY(older.client.controlTakeBackAvailable());
+        QVERIFY(!older.client.coreSliceTakeAvailable());
+        QVERIFY(!older.access().coreSliceTakeable());
+        const QString words = StationClient::coreSliceTakeUnavailableReason(QLatin1Char('A'));
+        QCOMPARE(words, QStringLiteral("Slice A is run by the Core itself, so control of it "
+                                       "cannot pass to this device."));
+        QVERIFY(OperatorWording::isPlain(words));
     }
 
     // A window whose link has no sliceAccessVersion (here: a window that
