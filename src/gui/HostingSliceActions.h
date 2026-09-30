@@ -39,6 +39,9 @@
 //   2026-09-30: take-over re-review (N-3): forgetNotice(), a closed
 //               card's Take it back record goes. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings review: hasTakeBackForTest(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -87,6 +90,11 @@ public:
     /// Take-over re-review (N-3): the notice's card was closed; its Take it
     /// back record here goes.
     void forgetNotice(qint64 noticeId);
+    /// Whether a notice's Take it back record is kept (tests).
+    bool hasTakeBackForTest(qint64 noticeId) const
+    {
+        return m_takeBackNotices.contains(noticeId);
+    }
 
     /// True while a request is being run. A refusal RadioModel raises
     /// during it (sliceAddRejected) is also this request's refusal, so a

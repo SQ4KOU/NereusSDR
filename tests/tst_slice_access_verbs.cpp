@@ -424,19 +424,45 @@ private slots:
         const int dB = facade->attenuationDb();
         const int mode = facade->preampMode();
         const QString words = listenerWords(QStringLiteral("A"), QStringLiteral("iPhone"));
-        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
-            "stepAtt", {int64("attenuationDb", dB + 5), int64("preampMode", mode == 0 ? 1 : 0)},
-            701)));
+        const auto flag = [](const char* name, bool on) {
+            return MirrorUpdate{0, QByteArray(name), MirrorWireKind::Bool, QVariant(on)};
+        };
+        // Every receive-level setting, both ADCs (review I-2).
+        const bool enabled = facade->enabled();
+        const bool autoOn = facade->autoAttEnabled();
+        const QList<MirrorUpdate> writes{
+            flag("enabled", !enabled), int64("attenuationDb", dB + 5),
+            int64("preampMode", mode == 0 ? 1 : 0), flag("rx1Preamp", true),
+            flag("autoAttEnabled", !autoOn), int64("autoAttMode", 1),
+            flag("autoAttUndo", true), int64("autoAttUndoDelayMs", 3000),
+            int64("autoAttHoldMs", 4000), flag("rx2StepAttEnabled", true),
+            int64("rx2AttenuationDb", 7), int64("rx2PreampMode", 1),
+            flag("rx2AutoAttEnabled", true), flag("rx2AutoAttUndo", true),
+            int64("rx2AutoAttUndoDelayMs", 3000)};
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::propertyWrite("stepAtt", writes, 701)));
         QTRY_VERIFY(!propertyResult(appB, 701).isEmpty());
         const QJsonArray refused =
             propertyResult(appB, 701).value(QStringLiteral("results")).toArray();
-        QCOMPARE(refused.size(), 2);
+        QCOMPARE(refused.size(), writes.size());
         for (const QJsonValue& r : refused) {
-            QCOMPARE(r.toObject().value(QStringLiteral("accepted")).toBool(true), false);
+            const QString what = r.toObject().value(QStringLiteral("name")).toString();
+            QVERIFY2(!r.toObject().value(QStringLiteral("accepted")).toBool(true),
+                     qPrintable(what));
             QCOMPARE(r.toObject().value(QStringLiteral("reason")).toString(), words);
         }
         QCOMPARE(facade->attenuationDb(), dB);
         QCOMPARE(facade->preampMode(), mode);
+        QCOMPARE(facade->enabled(), enabled);
+        QCOMPARE(facade->autoAttEnabled(), autoOn);
+
+        // The transmit settings are not the slice's: ATT on TX applies.
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "stepAtt", {flag("attOnTxEnabled", !facade->attOnTxEnabled())}, 704)));
+        QTRY_VERIFY(!propertyResult(appB, 704).isEmpty());
+        const QJsonObject tx = propertyResult(appB, 704)
+            .value(QStringLiteral("results")).toArray().first().toObject();
+        QVERIFY(tx.value(QStringLiteral("reason")).toString() != words);
 
         // The controller of slice A changes it.
         appA->sendText(SessionMessages::encode(

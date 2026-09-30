@@ -2366,9 +2366,10 @@ private:
     /// TX rulings (ruling 8.11 for a hosting desktop): the refusal for a
     /// key from the radio's own PTT (RadioPtt) on a Core with a hosting
     /// desktop, while the flag is on another device's slice. Nothing is
-    /// refused when the flag is on a slice the desktop controls, on one
-    /// nobody controls, or on the desktop's active slice, and on a Core
-    /// with no desktop. Otherwise `moveTo` names the desktop's active slice
+    /// refused, and the flag stays, when it is on one of the desktop's own
+    /// slices (a non-active one included: split transmit, JJ 2026-09-30,
+    /// keys that chosen slice), on one nobody controls, or on the desktop's
+    /// active slice, and on a Core with no desktop. Otherwise `moveTo` names the desktop's active slice
     /// (its receive focus, wherever it is) and the gate moves the flag
     /// there once askKey admits the key; noTransmitSlice when the desktop
     /// has no slice, radioOnAir while the radio is not back in receive or

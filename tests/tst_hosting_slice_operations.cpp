@@ -1047,6 +1047,127 @@ private slots:
         QCOMPARE(arbiter->txBoundSliceId(), p);
     }
 
+    // TX rulings review: the radio's own PTT on a hosting desktop is
+    // refused rather than keyed elsewhere. With no active slice it has no
+    // slice to transmit on; while the flag is frozen (or the radio still
+    // coming back to receive) the radio is on the air.
+    void theDesktopsFootswitchIsRefusedWhenItCannotMoveTheFlag()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        if (ownership->ownedBy(phone.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appP, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int p = ownership->ownedBy(phone.key.fingerprint()).first();
+        core.model->sliceById(p)->setDspMode(DSPMode::USB);
+        core.model->sliceById(p)->setFrequency(14210000.0);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        QVERIFY(accepted(core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))))));
+        QTRY_COMPARE(notices.count(), 1);
+        QVERIFY(ownedBy(core, station).isEmpty());
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+
+        // The desktop leaves slice A: it has no slice at all.
+        host.stopListening(0);
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        QCOMPARE(ownership->activeRxFor(station), -1);
+        mox->onMicPttFromRadio(true);
+        QTest::qWait(20);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->onMicPttFromRadio(false);
+
+        // It listens to the phone's slice and selects it; the flag frozen.
+        host.listen(p);
+        QTRY_COMPARE(finished.count(), 2);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        host.select(p);
+        QTRY_COMPARE(finished.count(), 3);
+        QCOMPARE(ownership->activeRxFor(station), p);
+        bool frozen = true;
+        arbiter->setFrozen([&frozen] { return frozen; });
+        mox->onMicPttFromRadio(true);
+        QTest::qWait(20);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kHolderOnAir));
+        QCOMPARE(mox->lastRefusal().text, TxRefusals::radioOnAir().text);
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->onMicPttFromRadio(false);
+
+        // Thawed, the same footswitch moves the flag and keys.
+        frozen = false;
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Ruling 8.11 on a hosting desktop (JJ, 2026-09-30): the flag on one of
+    // the desktop's own slices that is not its active one (split transmit)
+    // is its chosen transmit slice. The footswitch keys that slice and the
+    // flag stays.
+    void theDesktopsFootswitchKeysItsOwnSplitTransmitSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+        host.addOnPan(QStringLiteral("pan-0"));
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.first().at(2).toBool(), qPrintable(finished.first().at(3).toString()));
+        QCOMPARE(ownedBy(core, station).size(), 2);
+        const int first = ownedBy(core, station).first();
+        const int second = ownedBy(core, station).last();
+        core.model->sliceById(second)->setDspMode(DSPMode::USB);
+        core.model->sliceById(second)->setFrequency(14210000.0);
+        host.select(first);
+        QTRY_COMPARE(finished.count(), 2);
+        QCOMPARE(ownership->activeRxFor(station), first);
+        QVERIFY(arbiter->requestHandoff(second, station));
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+        QCOMPARE(ownership->activeRxFor(station), first);
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+    }
+
     // Ruling 8.11 on a Core with no desktop is as it was: the radio's own
     // PTT transmits where the flag is, a phone's slice included.
     void withNoDesktopTheFootswitchKeysWhereTheFlagIs()

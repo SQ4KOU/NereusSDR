@@ -1609,13 +1609,20 @@ bool isTunerTransmitPathProperty(const QByteArray& name)
     return name == "isOperate" || name == "isBypass" || name == "antennaA";
 }
 
-// TX rulings (JJ, 2026-09-30): the stepAtt properties the RX applet's
-// attenuator and preamp controls write, for either ADC. A listener of the
-// slice it is shown may not change them.
+// TX rulings (JJ, 2026-09-30): the stepAtt properties that set the
+// receive level, for either ADC: the attenuator, its on/off, the preamp and
+// auto-attenuation (review I-2, the controller's ruling: they change the
+// controlling device's receive level too). A listener of the slice it is
+// shown may not change them. The transmit settings (attOnTx*,
+// forceAttWhenPsOff) are not the slice's and stay as they are.
 bool isListenedAttProperty(const QByteArray& name)
 {
-    return name == "attenuationDb" || name == "preampMode" || name == "rx1Preamp"
-        || name == "rx2AttenuationDb" || name == "rx2PreampMode";
+    static const QSet<QByteArray> kProperties{
+        "enabled", "attenuationDb", "preampMode", "rx1Preamp",
+        "autoAttEnabled", "autoAttMode", "autoAttUndo", "autoAttUndoDelayMs", "autoAttHoldMs",
+        "rx2StepAttEnabled", "rx2AttenuationDb", "rx2PreampMode",
+        "rx2AutoAttEnabled", "rx2AutoAttUndo", "rx2AutoAttUndoDelayMs"};
+    return kProperties.contains(name);
 }
 
 // DSP > Options TX combos persist to DspOptions<Setting><Mode>Tx
@@ -2501,11 +2508,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                        && m_transmitHolder->keyRefusalFor(request.deviceId, request.program)
                               .isEmpty()) {
                 // TX rulings (JJ, 2026-09-30, ruling 8.11 for a hosting
-                // desktop): the desktop's footswitch and mic PTT key the
-                // desktop's active slice, even one another device
-                // controls: the flag moves there once the key is admitted,
-                // in the N-2 order. A Core with no desktop keeps 8.11 as it
-                // is, transmitting where the flag is.
+                // desktop): with the flag on another device's slice, the
+                // desktop's footswitch and mic PTT key the desktop's active
+                // slice, even one another device controls: the flag moves
+                // there once the key is admitted, in the N-2 order. With
+                // the flag on one of the desktop's own slices, a non-active
+                // one included (split transmit, JJ 2026-09-30), they key
+                // that chosen slice. A Core with no desktop keeps 8.11 as
+                // it is, transmitting where the flag is.
                 if (const TxRefusal ptt = radioPttKeyRefusal(&moveTo); !ptt.isEmpty()) {
                     return {KeyingVerdict::Refuse, ptt};
                 }
@@ -2532,7 +2542,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                         && m_transmitHolder->epoch() != epochBefore) {
                         watchUnstartedTake(m_transmitHolder->epoch());
                     }
-                    return {KeyingVerdict::Refuse, TxRefusals::noTransmitSlice()};
+                    // TX rulings review: the radio's own PTT has its
+                    // active slice; what stopped the move is the radio on
+                    // the air or the flag frozen.
+                    return {KeyingVerdict::Refuse,
+                            request.source == TransmitHolder::Source::RadioPtt
+                                ? TxRefusals::radioOnAir()
+                                : TxRefusals::noTransmitSlice()};
                 }
             }
             // Fix wave 2, Important 2: a take whose key never starts (a

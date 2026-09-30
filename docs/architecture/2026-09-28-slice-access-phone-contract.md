@@ -206,14 +206,29 @@ A write or slice verb from a device that only listens:
   <name>. It can be changed only there."
 
 The attenuator and preamp (TX rulings, JJ 2026-09-30): the `stepAtt`
-properties `attenuationDb`, `preampMode`, `rx1Preamp`, `rx2AttenuationDb` and
-`rx2PreampMode` act on the slice a device is shown (its `activeRxDeviceIds`
-entry). While that slice is one the device only listens to, the Core refuses
-those writes with the listener words above, naming the slice shown. The phone
-greys its ATT and preamp controls whenever the slice it shows is one it
-listens to (it is in the slice's `listenerDeviceIds` and is not the
-controller), with the same reason as its other held controls, and treats the
-Core's refusal the same way. Nothing new is sent on the wire.
+properties that set the receive level act on the slice a device is shown.
+They are, for either ADC:
+
+- the attenuator and its on/off: `enabled`, `attenuationDb`,
+  `rx2StepAttEnabled`, `rx2AttenuationDb`;
+- the preamp: `preampMode`, `rx1Preamp`, `rx2PreampMode`;
+- auto-attenuation: `autoAttEnabled`, `autoAttMode`, `autoAttUndo`,
+  `autoAttUndoDelayMs`, `autoAttHoldMs`, `rx2AutoAttEnabled`,
+  `rx2AutoAttUndo`, `rx2AutoAttUndoDelayMs`.
+
+A `stepAtt` write carries no slice id, so the Core judges the shown slice as
+the device's single chosen receive slice (the one whose `activeRxDeviceIds`
+lists it, set by `setActiveSliceById`). While that slice is one the device
+only listens to, the Core refuses those writes with the listener words above,
+naming that slice. The transmit settings (`attOnTxEnabled`, `attOnTxValue`,
+`forceAttWhenPsOff`) are not the slice's and are not refused this way.
+
+The phone greys these controls whenever the slice it shows is one it listens
+to (it is in the slice's `listenerDeviceIds` and is not the controller), with
+the same reason as its other held controls, and treats the Core's refusal the
+same way. It keeps its chosen receive slice (`setActiveSliceById`) the slice it
+shows, so the Core and the phone judge the same slice. Nothing new is sent on
+the wire.
 
 The verbs:
 
@@ -253,10 +268,13 @@ Keying (link section 18):
   radio's own PTT holds the flag) is refused `holderOnAir`, "The radio is on
   the air. Try again when it stops.", and may be tried again a moment later.
 - The hosting desktop's footswitch and mic PTT (ruling 8.11 on a hosting
-  desktop) key the desktop's active slice, even a slice the phone controls:
-  the flag moves there and the radio transmits on it. The phone sees this in
-  `txState` (`holderSource` `radioPtt`, `txSliceId` its own slice) as for
-  any radio PTT; nothing new is sent.
+  desktop, JJ 2026-09-30): with the flag on another device's slice (the
+  phone's included), they key the desktop's active slice, even a slice the
+  phone controls: the flag moves there once the key is admitted and the radio
+  transmits on it. With the flag on one of the desktop's own slices, a
+  non-active one included (split transmit), they key that chosen transmit
+  slice and the flag stays. The phone sees this in `txState` (`holderSource`
+  `radioPtt`, `txSliceId`) as for any radio PTT; nothing new is sent.
 - `chooseTransmitSlice`: "You took this slice from another device. Choose it
   for transmit first with its TX button." This refusal applies to a key whose
   binding would land on a slice this device took and has not chosen with

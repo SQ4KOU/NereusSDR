@@ -754,9 +754,11 @@ TxRefusal StationServer::radioPttKeyRefusal(int* moveTo)
     }
     // TX rulings (JJ, 2026-09-30, ruling 8.11 for a hosting desktop): its
     // footswitch and mic PTT key the desktop's active slice, wherever it
-    // is, even one another device controls. The flag on a slice the
-    // desktop controls, or on one nobody controls, is its own choice of
-    // transmit slice and stays.
+    // is, even one another device controls. JJ (2026-09-30): the flag on
+    // one of the desktop's own slices, a non-active one included (split
+    // transmit), is its chosen transmit slice, keyed where it is; the flag
+    // on a slice nobody controls stays too. Only a flag on another device's
+    // slice moves.
     const QByteArray subject = ownership->mark(flag).subject();
     if (subject.isEmpty() || subject == station) {
         return {};

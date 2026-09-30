@@ -99,6 +99,9 @@
 //   2026-09-30 - J.J. Boyd (KG4VCF). TX rulings (item 3):
 //                refreshOverlayAttAccess. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). TX rulings review:
+//                hostingSliceActionsForTest. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -311,6 +314,9 @@ public:
     // Slice control plan Task 15 fix round 1: drops the hosting slice
     // requests so a test reaches selectSliceForWindow's fallback path.
     void dropHostingSliceActionsForTest();
+    // TX rulings review: the hosting slice requests, for a test that
+    // checks what a card's close leaves there.
+    HostingSliceActions* hostingSliceActionsForTest() const { return m_hostingSlices.get(); }
 
     // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
     // before main() by tests/TestSandboxInit.cpp), false in the app. A test
