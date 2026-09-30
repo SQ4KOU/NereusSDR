@@ -66,6 +66,10 @@ comment on the nearest equivalent line with
 * Hardware facts (DDC count, board byte, clocks) may cite the FPGA gateware at
   `../n1gp-Anvelina_PROIII/` (pinned `8e86a61`, never pull). Cite facts only;
   ask before porting Verilog logic. Details in HOW-TO-PORT.md.
+* piHPSDR (`../pihpsdr/`, pinned `4aa95c5`) and deskhpsdr (`../deskhpsdr/`,
+  pinned `f3d857c`) follow the same rule: cite facts only (PROVENANCE kind
+  `reference`), stop and ask before translating their logic, and never propose
+  adopting their structure. Details in HOW-TO-PORT.md.
 
 ## Agent boundaries
 
@@ -120,6 +124,10 @@ main (GUI + all models), connection (UDP), audio (WDSP + output), spectrum
 (FFT). Cross-thread traffic is auto-queued signals only. Details and data flow:
 [docs/architecture/overview.md](docs/architecture/overview.md).
 
+**Rule R1: nothing under `src/core/` or `src/models/` includes a GUI header.**
+`tst_core_has_no_gui_includes` enforces it; extract an interface instead (as
+`ISpectrumSink` did).
+
 ## Build and test
 
 ```
@@ -128,6 +136,8 @@ cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
 
+The build also produces the headless `nereusd`, installed only with
+`--component nereusd`; install notes in [README.md](README.md).
 Dependencies: [README.md](README.md) "Building from Source". **Read
 [docs/development/fast-test-loop.md](docs/development/fast-test-loop.md)
 before running tests**; build single tests, never the whole suite by default.
