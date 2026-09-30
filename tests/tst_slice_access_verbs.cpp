@@ -463,6 +463,8 @@ private slots:
         const QJsonObject tx = propertyResult(appB, 704)
             .value(QStringLiteral("results")).toArray().first().toObject();
         QVERIFY(tx.value(QStringLiteral("reason")).toString() != words);
+        QVERIFY2(tx.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(tx.value(QStringLiteral("reason")).toString()));
 
         // The controller of slice A changes it.
         appA->sendText(SessionMessages::encode(

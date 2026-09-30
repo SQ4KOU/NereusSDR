@@ -90,11 +90,13 @@ public:
     /// Take-over re-review (N-3): the notice's card was closed; its Take it
     /// back record here goes.
     void forgetNotice(qint64 noticeId);
+#ifdef NEREUS_BUILD_TESTS
     /// Whether a notice's Take it back record is kept (tests).
     bool hasTakeBackForTest(qint64 noticeId) const
     {
         return m_takeBackNotices.contains(noticeId);
     }
+#endif
 
     /// True while a request is being run. A refusal RadioModel raises
     /// during it (sliceAddRejected) is also this request's refusal, so a
