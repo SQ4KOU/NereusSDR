@@ -18,8 +18,9 @@
 //                       takeReceiver / takeSlice: TakeReceiverDialog;
 //                       each answers confirm.proceed or confirm.cancel
 //   notice              a NoticeCard on the band, Take it back when offered;
-//                       controlTaken is a refusal toast instead (slice
-//                       control plan Task 5)
+//                       controlTaken too (take-over parity): its Take it
+//                       back is shown off, with the reason, when this Core
+//                       cannot run it (controlTakeBackOff)
 //   session.held        the Core is full: ReplaceDeviceDialog, answered
 //                       with session.takeover (Task 78 item 7, G-53)
 //   slice access        a refused listen, stop listening, take control or
@@ -45,6 +46,9 @@
 //   2026-09-29: slice control plan Task 10: questionDialog(), shared with
 //               the hosting desktop's HostingSliceActions. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: controlTaken is a card with Take it
+//               back, shown off with a reason on an older Core. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -63,6 +67,7 @@ namespace NereusSDR {
 
 class NoticeCard;
 class RemoteDevicesState;
+struct RemotePrompt;
 struct SessionPrompt;
 class StationClient;
 
@@ -106,10 +111,14 @@ public:
     QDialog* openDialog() const { return m_dialog.data(); }
     QList<NoticeCard*> noticeCards() const;
 
+    /// Take-over parity: why a notice's Take it back is shown off, or empty
+    /// (it is offered, or the notice is not controlTaken). `available` is
+    /// StationClient::controlTakeBackAvailable().
+    static QString controlTakeBackOff(const RemotePrompt& notice, bool available);
+
 signals:
     /// A refusal to show the operator (a take, an answer, Take it back; a
-    /// slice access verb, a change held back on a listened slice, another
-    /// device taking control of a slice this window controlled).
+    /// slice access verb, a change held back on a listened slice).
     void refusal(const QString& reason);
     /// tx.take was accepted: this window holds transmit.
     void transmitTaken();

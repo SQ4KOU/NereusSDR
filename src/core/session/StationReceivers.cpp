@@ -81,10 +81,19 @@
 //               (peerFor), so the hosting desktop's slice requests and
 //               notices take the remote path. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: Take it back on controlTaken
+//               (takeBackControl), offered to a peer at sliceAccessVersion
+//               2 (sendNotice). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-1): a peer below sliceAccess 2 is
+//               sent controlTaken without the slice entry's incarnation and
+//               controlRevision. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -108,6 +117,7 @@
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/ReceiverPlanner.h"
+#include "core/session/SliceAccessController.h"
 #include "core/session/SliceAccessPolicy.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionTransport.h"
@@ -1500,6 +1510,24 @@ void StationServer::sendNotice(SessionTransport* transport, const ConfirmStep::N
 {
     SessionPrompt prompt = notice.prompt;
     prompt.secondsAgo = std::max<qint64>(0, (m_deviceSessions->now() - notice.happenedAtMs) / 1000);
+    // Take-over parity: Take it back on controlTaken is offered only to a
+    // peer at sliceAccessVersion 2; any other is told as before.
+    // Take-over fix wave (M-1): as before exactly, so the slice entry's
+    // incarnation and controlRevision, which only Take it back reads, go
+    // too.
+    if (prompt.kind == QLatin1String("controlTaken") && !peerTakesControlBack(transport)) {
+        prompt.takeBack = false;
+        if (prompt.slices.has_value()) {
+            QJsonArray entries;
+            for (const QJsonValue& value : *prompt.slices) {
+                QJsonObject entry = value.toObject();
+                entry.remove(QStringLiteral("incarnation"));
+                entry.remove(QStringLiteral("controlRevision"));
+                entries.append(entry);
+            }
+            prompt.slices = entries;
+        }
+    }
     send(transport, SessionMessages::notice(prompt, notice.reason));
 }
 
@@ -2000,6 +2028,48 @@ SessionMessage StationServer::proceedTakeSlice(SessionTransport* transport,
 
 // ── Take it back (section 6.4) ───────────────────────────────────────────
 
+SessionMessage StationServer::takeBackControl(SessionTransport* transport,
+                                              const SessionMessage& invoke,
+                                              const ConfirmStep::Notice& record)
+{
+    const QByteArray device = peerFor(transport).sessionDeviceId;
+    if (!peerTakesControlBack(transport) || m_sliceAccessController == nullptr
+        || !record.prompt.slices || record.prompt.slices->isEmpty()) {
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              QString::fromLatin1(kNoTakeBackReason), {});
+    }
+    // The slice, its incarnation and the control revision the notice named:
+    // a slice made again under the letter, or one whose control moved on
+    // since, is refused as slice.takeControl refuses it.
+    const QJsonObject entry = record.prompt.slices->first().toObject();
+    SliceOwnership::SliceRef ref;
+    ref.sliceId = entry.value(QStringLiteral("sliceId")).toInt(-1);
+    ref.incarnation =
+        static_cast<quint64>(entry.value(QStringLiteral("incarnation")).toInteger(0));
+    const quint64 revision =
+        static_cast<quint64>(entry.value(QStringLiteral("controlRevision")).toInteger(0));
+    // The same checks and change as slice.takeControl: refused while the
+    // slice transmits; the taker's transmit selection of it is cleared and
+    // its transmit binding does not pick it up (ruling Q8).
+    const SliceAccessController::Result result =
+        m_sliceAccessController->takeControl(device, ref, revision);
+    const SliceOwnership* ownership =
+        m_radioModel.isNull() ? nullptr : m_radioModel->sliceOwnership();
+    if (result.accepted || ownership == nullptr || !ownership->matches(ref)
+        || ownership->controlRevision(ref.sliceId) != revision) {
+        // Taken back, or it never can be now.
+        m_confirm->forgetTakeBack(device, record.id);
+    }
+    QList<MirrorUpdate> values;
+    if (result.accepted) {
+        values.append(MirrorUpdate{0, QByteArrayLiteral("controlRevision"), MirrorWireKind::Int64,
+                                   QVariant(static_cast<qlonglong>(result.controlRevision))});
+    }
+    return SessionMessages::commandResult(
+        invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, values);
+}
+
 SessionMessage StationServer::askTakeBack(SessionTransport* transport, const SessionMessage& invoke,
                                           int noticeId)
 {
@@ -2013,6 +2083,11 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
     // tx.take with its usual confirmation.
     if (record->prompt.kind == QLatin1String("transmitTaken")) {
         return takeBackTransmit(transport, invoke, noticeId);
+    }
+    // Take-over parity: Take it back for control is slice.takeControl the
+    // other way.
+    if (record->prompt.kind == QLatin1String("controlTaken")) {
+        return takeBackControl(transport, invoke, *record);
     }
     const ReceiverPlanner planner = questionPlanner(transport);
     const SliceStreamAllocator& live = m_radioModel->streamAllocator();

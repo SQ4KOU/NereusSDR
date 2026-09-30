@@ -158,6 +158,9 @@
 //               client declares sliceAccess), SliceAccess and the
 //               `access:<id>` key. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the live client declares sliceAccess 2,
+//               so sliceAccessVersion reads 2. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -655,8 +658,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // progress.
                                   {"levelCalibration", 1},
                                   // Slice control plan Task 4: SliceAccess
-                                  // and the slice.* access verbs.
-                                  {"sliceAccess", 1},
+                                  // and the slice.* access verbs; take-over
+                                  // parity: 2, Take it back on
+                                  // controlTaken.
+                                  {"sliceAccess", 2},
                                   // The direct media ladder:
                                   // mediaDirectVersion and mediaStunUrls.
                                   {"mediaDirect", 1}})));

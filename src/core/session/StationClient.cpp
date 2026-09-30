@@ -394,6 +394,12 @@
 //               declares sliceAccess with sessionHolder when
 //               setTokenSliceAccessForTest asks. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the hello declares sliceAccess 2 (Take
+//               it back on controlTaken); controlTakeBackAvailable().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-3): a controlTaken card stays when
+//               its Take it back was refused and may be tried again.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -2123,6 +2129,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // unanswered commands would suppress completions for fresh requests
     // after reconnect (including the 4O3A master and C-Tune controls).
     m_pendingCommands.clear();
+    m_controlTakeBacks.clear();
     m_pendingPs3Display.reset();
 
     // Fix round 1, Important 1: disconnect the dead transport's signals to
@@ -3103,7 +3110,8 @@ bool StationClient::signIn(const SessionMessage& hello)
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
             // Slice control plan Task 4: listening to and taking another
             // device's slice (the rest of the window's side is Task 5).
-            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+            // Take-over parity: 2, Take it back on controlTaken.
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
         }
         m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3150,7 +3158,7 @@ bool StationClient::signIn(const SessionMessage& hello)
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
         features.insert(QByteArrayLiteral("sessionHolder"), 1);
         if (m_tokenSliceAccessForTest) {
-            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
         }
         m_declaredSessionHolder = true;
     }
@@ -4774,6 +4782,19 @@ bool StationClient::remoteSliceAccessAvailable() const
     // a window that declared sliceAccess with sessionHolder.
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.sliceAccessVersion >= 1;
+}
+
+bool StationClient::controlTakeBackAvailable() const
+{
+    // Take-over parity: the Core sends the lower of its sliceAccessVersion
+    // and the one this window declared.
+    return remoteSliceAccessAvailable() && m_capabilities.sliceAccessVersion >= 2;
+}
+
+QString StationClient::controlTakeBackUnavailableReason()
+{
+    return QStringLiteral("This Core cannot give control back from here. Updating the Core may "
+                          "help.");
 }
 
 namespace {
@@ -6778,6 +6799,35 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         || message.commandVerb == "slice.setListenLevel"
         || message.commandVerb == "tx.setTxSlice") {
         m_pendingCommands.remove(message.commandId);
+        if (const auto kept = m_controlTakeBacks.constFind(message.commandId);
+            kept != m_controlTakeBacks.cend()) {
+            const qint64 noticeId = kept.value();
+            m_controlTakeBacks.erase(kept);
+            // Take-over fix wave (M-3): the card goes when control came
+            // back or never can now; a refusal that may be tried again
+            // (the slice transmits) leaves it.
+            bool retry = false;
+            if (!message.accepted) {
+                for (const RemotePrompt& notice : m_remoteDevices->notices()) {
+                    if (notice.prompt.id != noticeId || !notice.prompt.slices
+                        || notice.prompt.slices->isEmpty()) {
+                        continue;
+                    }
+                    const int sliceId = notice.prompt.slices->first().toObject()
+                                            .value(QStringLiteral("sliceId")).toInt(-1);
+                    const std::optional<SliceAccessMirror::Entry> now =
+                        m_sliceAccess ? m_sliceAccess->entry(sliceId) : std::nullopt;
+                    retry = controlTakeBackMayBeTriedAgain(
+                        notice.prompt, message.reason,
+                        now ? static_cast<qint64>(now->incarnation) : -1,
+                        now ? static_cast<qint64>(now->controlRevision) : -1);
+                    break;
+                }
+            }
+            if (!retry) {
+                m_remoteDevices->dismissNotice(noticeId);
+            }
+        }
         emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
                                    message.reason, awaiting);
         return;
@@ -7642,13 +7692,45 @@ quint32 StationClient::cancelQuestion(qint64 id)
 
 quint32 StationClient::takeBackNotice(qint64 id)
 {
-    m_remoteDevices->dismissNotice(id);
+    // Take-over fix wave (M-3): a controlTaken card waits for the answer.
+    bool controlTaken = false;
+    for (const RemotePrompt& notice : m_remoteDevices->notices()) {
+        if (notice.prompt.id == id) {
+            controlTaken = notice.prompt.kind == QLatin1String("controlTaken");
+            break;
+        }
+    }
+    if (!controlTaken || !sessionHolderAvailable()) {
+        m_remoteDevices->dismissNotice(id);
+    }
     if (!sessionHolderAvailable()) {
         return 0;
     }
-    return invokeCommand(
+    const quint32 commandId = invokeCommand(
         QByteArrayLiteral("notice.takeBack"),
         {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)}});
+    if (controlTaken) {
+        if (commandId == 0) {
+            m_remoteDevices->dismissNotice(id);
+        } else {
+            m_controlTakeBacks.insert(commandId, id);
+        }
+    }
+    return commandId;
+}
+
+bool StationClient::controlTakeBackMayBeTriedAgain(const SessionPrompt& notice,
+                                                   const QString& reason, qint64 incarnationNow,
+                                                   qint64 revisionNow)
+{
+    if (notice.kind != QLatin1String("controlTaken") || !notice.slices
+        || notice.slices->isEmpty() || incarnationNow < 0
+        || reason == QLatin1String("That can no longer be taken back.")) {
+        return false;
+    }
+    const QJsonObject entry = notice.slices->first().toObject();
+    return entry.value(QStringLiteral("incarnation")).toInteger(-1) == incarnationNow
+        && entry.value(QStringLiteral("controlRevision")).toInteger(-1) == revisionNow;
 }
 
 bool StationClient::answerHeld(const QString& deviceId)

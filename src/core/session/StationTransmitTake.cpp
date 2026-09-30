@@ -52,6 +52,12 @@
 //               binding's preference, shared with the keying gate) and
 //               takenSliceKeyRefusal. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal, a key
+//               never lands on the slice a device lost. Re-review (N-1,
+//               N-2): nor, for a keyer that shares slices
+//               (keyerSharesSlices), on any other device's slice; the flag
+//               moves only once the key is admitted. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -630,6 +636,85 @@ TxRefusal StationServer::takenSliceKeyRefusal(const QByteArray& device)
         arbiter->bindForHolder(device, transmitPreferenceFor(device));
     }
     return {};
+}
+
+bool StationServer::keyerSharesSlices(const QByteArray& device) const
+{
+    // Take-over re-review (N-1): the keyers that share slices, the
+    // hosting desktop once it takes its notices (Task 10) and a device
+    // that declared sliceAccess. A legacy window and a headless station
+    // keep today's keying.
+    if (device == SliceOwnership::stationDevice()) {
+        return liveTransportFor(device) != nullptr;
+    }
+    SessionTransport* transport = liveTransportFor(device);
+    return transport != nullptr && peerHasSliceAccess(transport);
+}
+
+TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device, int* moveTo)
+{
+    if (moveTo != nullptr) {
+        *moveTo = -1;
+    }
+    if (device.isEmpty() || m_radioModel.isNull() || m_radioModel->txSliceArbiter() == nullptr
+        || !m_transmitHolder) {
+        return {};
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    const auto mayTransmit = [&](int id) {
+        return id >= 0 && m_radioModel->sliceById(id) != nullptr
+            && SliceAccessPolicy::mayTransmitOn(*ownership, device, id);
+    };
+    // Where the key lands, as takenSliceKeyRefusal reads it: the holder's
+    // bound slice; a new holder's binding, or the flag when that binds
+    // nothing (TxSliceArbiter::bindForHolder leaves the flag where it is).
+    int landing = arbiter->txBoundSliceId();
+    if (!m_transmitHolder->isHeldBy(device)) {
+        const int preferred = transmitPreferenceFor(device);
+        const int active = ownership->activeFor(device);
+        if (mayTransmit(preferred)) {
+            landing = preferred;
+        } else if (mayTransmit(active)) {
+            landing = active;
+        }
+    }
+    if (landing < 0 || m_radioModel->sliceById(landing) == nullptr) {
+        return {};
+    }
+    // Ruling Q8: control of a slice grants no transmit. A slice nobody
+    // owns, or one it controls, keeps today's keying.
+    const QByteArray subject = ownership->mark(landing).subject();
+    auto lost = m_lostTxSlice.find(device);
+    const bool lostHere = lost != m_lostTxSlice.end() && lost->contains(landing);
+    if (subject.isEmpty() || subject == device) {
+        if (lostHere) {
+            lost->remove(landing);
+        }
+        return {};
+    }
+    // Another device's slice. Take-over re-review (N-1): a keyer that
+    // shares slices never keys there. Take-over fix wave (I-2): nor does
+    // any keyer on the slice it lost, the flag's slice when control passed
+    // from it (a keyer outside that scope, such as a legacy window).
+    if (!keyerSharesSlices(device) && !lostHere) {
+        return {};
+    }
+    // With a slice of its own it may transmit on, the unkeyed flag moves
+    // there once the key is admitted (N-2); the caller moves it. A move
+    // that could not happen now (keyed, or the flag frozen) is refused.
+    MoxController* mox = m_radioModel->moxController();
+    if ((mox == nullptr || !mox->isMox()) && !arbiter->isFrozen()) {
+        for (int id : ownership->ownedBy(device)) {
+            if (mayTransmit(id)) {
+                if (moveTo != nullptr) {
+                    *moveTo = id;
+                }
+                return {};
+            }
+        }
+    }
+    return TxRefusals::noTransmitSlice();
 }
 
 void StationServer::onSliceClosedForHolder(int sliceId)

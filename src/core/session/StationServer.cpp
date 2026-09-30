@@ -864,6 +864,19 @@
 //               slice.release and slice.stopListening on the station's
 //               frozen slice are refused. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: sliceAccessVersion 2 offers Take it back
+//               on the controlTaken notice, which carries the slice's
+//               incarnation and control revision; a peer is sent the lower
+//               of the Core's version and its own. Control of the hosting
+//               desktop's slice passes to a remote device as from any
+//               device, and the desktop is told. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): the keying gate refuses a
+//               device's key that would land on the slice it lost
+//               (othersSliceKeyRefusal, m_lostTxSlice). Re-review (N-1,
+//               N-2): or, for a keyer that shares slices, on any other
+//               device's slice; the flag moves after askKey admits. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2220,7 +2233,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_stationPeer.agreedMinor = kSessionProtocolMinor;
     m_stationPeer.features = {{QByteArrayLiteral("deviceAuth"), 1},
                               {QByteArrayLiteral("sessionHolder"), 1},
-                              {QByteArrayLiteral("sliceAccess"), 1}};
+                              // Take-over parity: Take it back on
+                              // controlTaken (sliceAccessVersion 2).
+                              {QByteArrayLiteral("sliceAccess"), 2}};
     m_stationPeer.deviceId = SliceOwnership::stationDevice();
     m_stationPeer.sessionDeviceId = SliceOwnership::stationDevice();
     m_stationPeer.placeSettled = true;
@@ -2442,15 +2457,47 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // The radio's own PTT transmits where the flag is (ruling 8.11).
             // Asked after the holder's own refusals, so another device's
             // hold is still named first.
+            // Take-over re-review (N-2): the slice of its own the flag moves
+            // to, once the key is admitted.
+            int moveTo = -1;
             if (request.source == TransmitHolder::Source::Device
                 && m_transmitHolder->keyRefusalFor(request.deviceId, request.program).isEmpty()) {
                 if (const TxRefusal taken = takenSliceKeyRefusal(request.deviceId);
                     !taken.isEmpty()) {
                     return {KeyingVerdict::Refuse, taken};
                 }
+                // Take-over fix wave (I-2): nor on the slice it lost, where
+                // the flag stays after a take from a device that did not
+                // hold transmit (the hosting desktop included). Re-review
+                // (N-1): nor, for a keyer that shares slices, on any other
+                // device's slice. The radio's own PTT (RadioPtt) is not
+                // asked: today it transmits where the flag is, and whether
+                // a hosting desktop's PTT may key a slice it lost is open
+                // for JJ's ruling (8.11 covers a Core with no desktop).
+                if (const TxRefusal others = othersSliceKeyRefusal(request.deviceId, &moveTo);
+                    !others.isEmpty()) {
+                    return {KeyingVerdict::Refuse, others};
+                }
             }
             const quint64 epochBefore = m_transmitHolder->epoch();
             const KeyingAnswer answer = m_transmitHolder->askKey(request);
+            // Take-over re-review (N-2): the flag leaves the other device's
+            // slice only for a key that was admitted. A move that did not
+            // land refuses the key rather than key that slice; a take it
+            // made is released as an unstarted one.
+            if (moveTo >= 0 && answer.verdict == KeyingVerdict::Admit) {
+                TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+                if (arbiter == nullptr || !arbiter->requestHandoff(moveTo, request.deviceId)
+                    || arbiter->txBoundSliceId() != moveTo) {
+                    qCWarning(lcStation) << "The transmit flag could not move to the keyer's slice;"
+                                            " the key is refused";
+                    if (m_transmitHolder->isTakeUnstarted()
+                        && m_transmitHolder->epoch() != epochBefore) {
+                        watchUnstartedTake(m_transmitHolder->epoch());
+                    }
+                    return {KeyingVerdict::Refuse, TxRefusals::noTransmitSlice()};
+                }
+            }
             // Fix wave 2, Important 2: a take whose key never starts (a
             // TUNE or two-tone refused after the gate) is released.
             if (answer.verdict == KeyingVerdict::Admit && m_transmitHolder->isTakeUnstarted()
@@ -3412,6 +3459,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             for (auto it = m_takenNotChosenForTx.begin(); it != m_takenNotChosenForTx.end(); ++it) {
                 it->remove(sliceId);
             }
+            // Take-over fix wave (I-2): a closed slice is nobody's lost one.
+            for (auto it = m_lostTxSlice.begin(); it != m_lostTxSlice.end(); ++it) {
+                it->remove(sliceId);
+            }
             // Fix wave (Important 4): a closed slice is nobody's choice.
             for (auto it = m_explicitTxSlice.begin(); it != m_explicitTxSlice.end();) {
                 it = it.value() == sliceId ? m_explicitTxSlice.erase(it) : std::next(it);
@@ -4304,7 +4355,8 @@ int StationServer::sliceAccessVersion() const
 {
     // Slice control plan Task 4: a Core that runs its radio keeps who
     // controls and who listens to each slice.
-    return m_radioModel && m_radioModel->role() == RadioModel::Role::Local ? 1 : 0;
+    // Take-over parity: 2 adds Take it back on the controlTaken notice.
+    return m_radioModel && m_radioModel->role() == RadioModel::Role::Local ? 2 : 0;
 }
 
 bool StationServer::peerHasSliceAccess(SessionTransport* transport) const
@@ -4312,6 +4364,13 @@ bool StationServer::peerHasSliceAccess(SessionTransport* transport) const
     return peerHasSessionHolderVersion(transport)
         && peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 1)
         && sliceAccessVersion() >= 1;
+}
+
+bool StationServer::peerTakesControlBack(SessionTransport* transport) const
+{
+    return peerHasSliceAccess(transport)
+        && peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 2)
+        && sliceAccessVersion() >= 2;
 }
 
 void StationServer::noteActivity(SessionTransport* transport)
@@ -9840,6 +9899,8 @@ void StationServer::releaseDeviceClaims(const QByteArray& deviceId,
         clearTransmitSelection(deviceId, sliceId);
         if (!self || !m_radioModel) return;
     }
+    // Take-over fix wave (I-2): a device that left keys nothing.
+    m_lostTxSlice.remove(deviceId);
     // Approved policy 6: every control and listening claim goes at once.
     // No slice is held for it (Q12).
     const SliceOwnership::ClaimsRemoved removed = ownership->removeClaims(deviceId);
@@ -10043,9 +10104,15 @@ QString StationServer::handOffRefusal(const QByteArray& controller, int sliceId)
         if (!m_radioModel.isNull() && m_radioModel->sliceOwnership()->mark(sliceId).isHeld()) {
             return {};
         }
-        return QStringLiteral("Slice %1 is run by the Core itself, so control of it cannot "
-                              "pass to this device.")
-            .arg(letter);
+        // Take-over parity: a hosting desktop that takes its notices is
+        // here as a device (Task 10). It stays on as a listener and is
+        // told, so control passes from it under the checks below, as from
+        // any device.
+        if (liveTransportFor(controller) == nullptr) {
+            return QStringLiteral("Slice %1 is run by the Core itself, so control of it "
+                                  "cannot pass to this device.")
+                .arg(letter);
+        }
     }
     const QString name = planDevice(controller).name;
     SessionTransport* transport = liveTransportFor(controller);
@@ -10090,7 +10157,18 @@ void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId
     // flag parked on this slice loses that selection as well, the taker
     // included (taking control grants no transmit). The radio's own PTT
     // keeps ruling 8.11: it transmits where the flag is.
+    // Take-over re-review: ruling 8.11 covers a Core with no desktop. On a
+    // hosting desktop that lost this slice to a take, its footswitch or mic
+    // PTT today still transmits where the flag is; that case is open for
+    // JJ's ruling, not settled.
     const SliceModel* txSlice = m_radioModel->txBoundSlice();
+    // Take-over fix wave (I-2): the flag stays on this slice when nobody
+    // holds transmit (or the radio's own PTT does), so the former
+    // controller's next key would land on a slice it no longer controls.
+    // Remember it; othersSliceKeyRefusal() reads this.
+    if (!former.isEmpty() && txSlice != nullptr && txSlice->sliceIndex() == sliceId) {
+        m_lostTxSlice[former].insert(sliceId);
+    }
     if (!m_transmitHolder || txSlice == nullptr || txSlice->sliceIndex() != sliceId) {
         return;
     }
@@ -10207,10 +10285,17 @@ void StationServer::fireDeferredCloses()
 void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
                                      const QByteArray& taker)
 {
+    if (m_radioModel.isNull() || former.isEmpty()) {
+        return;
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
     // Slice control plan Task 8: the station device is the former
-    // controller only of a slice it kept for a device that is not here;
-    // nobody there listens.
-    if (m_radioModel.isNull() || former.isEmpty() || former == SliceOwnership::stationDevice()) {
+    // controller of a slice it kept for a device that is not here; nobody
+    // there listens (the hold does not join it). Take-over parity: of the
+    // hosting desktop's own slice too, which it stays on as a listener,
+    // and it is told.
+    if (former == SliceOwnership::stationDevice()
+        && !ownership->listenersOf(sliceId).contains(former)) {
         return;
     }
     const SliceModel* slice = m_radioModel->sliceById(sliceId);
@@ -10218,16 +10303,33 @@ void StationServer::tellControlTaken(int sliceId, const QByteArray& former,
         return;
     }
     const QString letter = QString(QChar(QLatin1Char('A').unicode() + sliceId));
+    // Take-over parity: one Take it back per device and slice. The taker's
+    // own records for the slice, and the former controller's older ones,
+    // name a control revision that has passed.
+    const auto sameSlice = [sliceId](const ConfirmStep::Notice& kept) {
+        return kept.prompt.kind == QLatin1String("controlTaken")
+            && kept.prompt.slices && !kept.prompt.slices->isEmpty()
+            && kept.prompt.slices->first().toObject().value(QStringLiteral("sliceId")).toInt(-1)
+                == sliceId;
+    };
+    m_confirm->forgetTakeBacks(taker, sameSlice);
+    m_confirm->forgetTakeBacks(former, sameSlice);
     ConfirmStep::Notice notice;
     notice.device = former;
     notice.prompt.kind = QStringLiteral("controlTaken");
-    notice.prompt.takeBack = false;
+    // Take-over parity: Take it back is the same take the other way
+    // (takeBackControl). A peer below sliceAccessVersion 2 is sent false
+    // (sendNotice).
+    notice.prompt.takeBack = true;
     notice.prompt.slices = QJsonArray{QJsonObject{
         {QStringLiteral("sliceId"), sliceId},
         {QStringLiteral("letter"), letter},
         {QStringLiteral("frequencyHz"), slice->frequency()},
         {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
         {QStringLiteral("band"), static_cast<int>(slice->band())},
+        {QStringLiteral("incarnation"), static_cast<qint64>(ownership->incarnation(sliceId))},
+        {QStringLiteral("controlRevision"),
+         static_cast<qint64>(ownership->controlRevision(sliceId))},
     }};
     notice.reason = QStringLiteral("%1 took control of slice %2. You are still listening.")
                         .arg(planDevice(taker).name, letter);
@@ -12323,7 +12425,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 // no entry, so its capabilities are today's.
                 if (peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 1)) {
                     caps.sliceAccessEntry = true;
-                    caps.sliceAccessVersion = sliceAccessVersion();
+                    // Take-over parity: the lower of the Core's version and
+                    // the peer's, so a peer that declared 1 reads 1.
+                    caps.sliceAccessVersion =
+                        peerDeclares(transport, QByteArrayLiteral("sliceAccess"), 2)
+                        ? sliceAccessVersion()
+                        : std::min(sliceAccessVersion(), 1);
                 }
             }
             // iPhone app plan Task 34: remote transmit, last, for a peer whose

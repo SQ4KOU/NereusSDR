@@ -40,9 +40,9 @@ An empty window still offers Choose a slice and New slice.
 | Action or event | Required result |
 | --- | --- |
 | Listen in | Join the existing slice without allocating another slice or hardware receiver. Its one controller retains tuning. This device controls its own volume and mute. |
-| Take control | Transfer the existing slice, preserving letter, color, frequency, mode and filter. The previous controller remains a listener and receives clear notice. |
+| Take control | Transfer the existing slice, preserving letter, color, frequency, mode and filter. The previous controller remains a listener and receives clear notice. The notice offers Take it back: one tap takes control again under the same checks, and transmit does not move with it. A slice the hosting desktop controls transfers the same way; the desktop hears the notice and can take it back. |
 | Release | This device relinquishes control and stops listening. Other listeners retain audio and the slice becomes available to control. With nobody left, close it and free its resources, including the last physical Core slice. |
-| Handoff while TX is selected but idle | Clear that slice's TX selection. Its new controller must select transmit explicitly. Taking RX control grants no transmit permission. |
+| Handoff while TX is selected but idle | Clear that slice's TX selection. Its new controller must select transmit explicitly. Taking RX control grants no transmit permission. A device that shares slices (the hosting desktop, or a device on sliceAccess) never keys on another device's slice, the one it lost included: its key moves the flag to a slice of its own once the key is admitted, or is refused with "There is no slice to transmit on. Add a slice first." when it has none. Any other keyer never keys on the slice it lost. Today the radio's own PTT (footswitch or mic) still transmits where the flag is, on a hosting desktop too; ruling 8.11 covers a Core with no desktop, and the hosting desktop's case is open for JJ's ruling. |
 | Handoff while transmitting | Refuse until transmission stops. Recheck when the action is applied. |
 | Missing device | Preserve the existing three-minute reconnect grace. At expiry, remove the absent device's control/listening claims. Keep slices for remaining listeners; close those with nobody left. |
 
@@ -58,7 +58,10 @@ Mac controls A, phone joins A: the phone chooses Listen in. Both hear A;
 the phone's volume/mute affect only the phone. Its tuning controls explain
 that the Mac controls A and offer Take control. Taking control retains A's
 tuning and audio, updates both controller labels, and leaves the Mac
-listening. The Mac can then leave or take control again.
+listening. The Mac can then leave or take control again, in one tap from
+its notice (Take it back, take-over parity 2026-09-30: `sliceAccessVersion`
+2, the link document section 7.4). The same holds when the Mac is the
+hosting desktop and A is its own slice.
 
 Selecting another slice on this device changes the active receive focus
 and the bottom banner. It does not release previously joined slices or

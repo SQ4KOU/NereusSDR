@@ -503,6 +503,16 @@
 //               nobody is on closes only once it is not transmitting.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: take-over parity: sliceAccessVersion 2 (Take it back on
+//               controlTaken), peerTakesControlBack(), takeBackControl();
+//               the hosting desktop's slices can pass to a remote device.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal(), a
+//               key never lands on the slice a device lost; re-review
+//               (N-1): keyerSharesSlices(), nor on another device's
+//               slice. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1352,10 +1362,16 @@ public:
     /// every other as `marker:<id>`, and takes slice.listen,
     /// slice.stopListening, slice.takeControl and slice.release, to a peer
     /// at minor 11 that declared sliceAccess 1 with sessionHolder.
+    /// Take-over parity: 2 adds Take it back on the controlTaken notice
+    /// (notice.takeBack runs slice.takeControl with the notice's slice).
+    /// A peer is sent the lower of this and the version its hello declared.
     int sliceAccessVersion() const;
     /// Slice control plan Task 4: sliceAccessVersion 1 reached `transport`
     /// (sessionHolderVersion 1, and sliceAccess 1 in its hello).
     bool peerHasSliceAccess(SessionTransport* transport) const;
+    /// Take-over parity: sliceAccessVersion 2 reached `transport` (its hello
+    /// declared sliceAccess 2): its controlTaken notices offer Take it back.
+    bool peerTakesControlBack(SessionTransport* transport) const;
     /// Slice control plan Task 4: each attached view's `slice:` and
     /// `marker:` forms of `sliceId` after its controller or its listeners
     /// changed: object.destroy of the form it had, object.create of the
@@ -2307,6 +2323,12 @@ private:
     /// usual confirmation (section 8.6).
     SessionMessage takeBackTransmit(SessionTransport* transport, const SessionMessage& invoke,
                                     qint64 noticeId);
+    /// Take-over parity: notice.takeBack for a controlTaken notice:
+    /// SliceAccessController::takeControl with the slice, incarnation and
+    /// control revision the notice named, under the same checks as
+    /// slice.takeControl. Transmit does not move with it (ruling Q8).
+    SessionMessage takeBackControl(SessionTransport* transport, const SessionMessage& invoke,
+                                   const ConfirmStep::Notice& record);
     /// The words of the station device as a taker or holder: "Radio" after
     /// the radio's PTT, otherwise a hosting desktop's own name.
     TransmitHolder::Words stationTakerWords(TransmitHolder::Source source) const;
@@ -2328,6 +2350,18 @@ private:
     /// slice it may transmit on; empty otherwise. A holder bound on such a
     /// slice with another of its own is moved there first (unkeyed only).
     TxRefusal takenSliceKeyRefusal(const QByteArray& device);
+    /// Take-over fix wave (I-2, ruling Q8) and re-review (N-1): the
+    /// refusal for a key from `device` that would land on another device's
+    /// slice, when `device` shares slices (keyerSharesSlices) or the slice
+    /// is the one it lost (m_lostTxSlice): noTransmitSlice when it has no
+    /// slice it may transmit on. With one, nothing is refused and
+    /// `moveTo` names it; the gate moves the flag there once askKey admits
+    /// the key (N-2). A slice nobody owns is left as it was. The radio's
+    /// own PTT is not asked (ruling 8.11).
+    TxRefusal othersSliceKeyRefusal(const QByteArray& device, int* moveTo);
+    /// Take-over re-review (N-1): the hosting desktop once it takes its
+    /// notices, or a device that declared sliceAccess.
+    bool keyerSharesSlices(const QByteArray& device) const;
     /// Ruling 8.12: the holder's last slice closed: transmit is released.
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.
@@ -2728,6 +2762,10 @@ private:
     // control of and has not chosen to transmit on since; its transmit
     // binding never picks one up by itself.
     QHash<QByteArray, QSet<int>> m_takenNotChosenForTx;
+    // Take-over fix wave (I-2, ruling Q8): the slice the transmit flag was
+    // on when control of it passed from each device. A key from that device
+    // never lands there while another device controls it.
+    QHash<QByteArray, QSet<int>> m_lostTxSlice;
     // True while a restored layout's owners are settled just before every
     // view's burst is sent again (receiveLayoutHydrated).
     bool m_ownerChangesInBurst = false;

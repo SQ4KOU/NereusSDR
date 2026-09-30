@@ -94,6 +94,9 @@
 //               one joins, and every listener is told of the close. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-2): forgetTakeBacks on its own. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -3891,6 +3894,46 @@ private slots:
         QCOMPARE(s.core.model->sliceOwnership()->mark(cSlices.first()).owner, s.c.key.fingerprint());
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Take-over fix wave (M-2): forgetTakeBacks drops only the records of
+    // the one device that the predicate picks.
+    void forgetTakeBacksDropsOnlyThePickedRecordsOfOneDevice()
+    {
+        const auto record = [](const QByteArray& device, qint64 id, int sliceId) {
+            ConfirmStep::Notice notice;
+            notice.id = id;
+            notice.device = device;
+            notice.prompt.kind = QStringLiteral("controlTaken");
+            notice.prompt.slices = QJsonArray{QJsonObject{{QStringLiteral("sliceId"), sliceId}}};
+            return notice;
+        };
+        const auto onSlice = [](int sliceId) {
+            return [sliceId](const ConfirmStep::Notice& kept) {
+                return kept.prompt.slices->first().toObject().value(QStringLiteral("sliceId"))
+                           .toInt(-1)
+                    == sliceId;
+            };
+        };
+        ConfirmStep step;
+        step.keepTakeBack(record("x", 1, 0));
+        step.keepTakeBack(record("x", 2, 1));
+        step.keepTakeBack(record("y", 3, 0));
+
+        step.forgetTakeBacks("x", onSlice(0));
+        QVERIFY(!step.takeBackRecord("x", 1).has_value());
+        QVERIFY(step.takeBackRecord("x", 2).has_value());
+        QVERIFY(step.takeBackRecord("y", 3).has_value());
+
+        // No predicate, or a device with none: nothing goes.
+        step.forgetTakeBacks("x", {});
+        step.forgetTakeBacks("z", onSlice(1));
+        QVERIFY(step.takeBackRecord("x", 2).has_value());
+        QVERIFY(step.takeBackRecord("y", 3).has_value());
+
+        step.forgetTakeBacks("x", onSlice(1));
+        QVERIFY(!step.takeBackRecord("x", 2).has_value());
+        QVERIFY(step.takeBackRecord("y", 3).has_value());
     }
 };
 

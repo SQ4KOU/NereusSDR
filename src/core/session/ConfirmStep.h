@@ -62,6 +62,9 @@
 //               listeners when a device that shares slices was asked. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: take-over parity: forgetTakeBacks(), the records of one
+//               device that a test picks. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -71,6 +74,7 @@
 #include <QSet>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 #include "core/DeviceLayoutStore.h"
@@ -202,6 +206,10 @@ public:
     void keepTakeBack(const Notice& notice);
     std::optional<Notice> takeBackRecord(const QByteArray& device, qint64 id) const;
     void forgetTakeBack(const QByteArray& device, qint64 id);
+    /// Take-over parity: every Take it back record of `device` that
+    /// `which` picks goes.
+    void forgetTakeBacks(const QByteArray& device,
+                         const std::function<bool(const Notice&)>& which);
 
     /// Keeps a notice for a device that is away.
     void keepPending(const Notice& notice);

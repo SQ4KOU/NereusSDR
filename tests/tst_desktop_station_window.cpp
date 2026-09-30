@@ -14,7 +14,9 @@
 #include "gui/meters/OtherButtonItem.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/multidevice/NoticeCard.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
+#include "core/session/SliceAccessController.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
@@ -558,6 +560,92 @@ private slots:
         QCOMPARE(spectrum->foreignSliceMarkers().size(), 1);
         controller.stop();
         QVERIFY(spectrum->foreignSliceMarkers().isEmpty());
+    }
+
+    // Take-over re-review (N-3): the hosting window's controlTaken card
+    // stays when Take it back is refused and may be tried again (the slice
+    // transmitting, its controller away), and goes when it never can now.
+    void hostTakeItBackCardStaysWhileItMayBeTriedAgain()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-take-back-01"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        QCOMPARE(ownership->mark(aId).owner, station);
+
+        const auto cards = [&window]() {
+            QList<NoticeCard*> shown;
+            for (NoticeCard* card : window.findChildren<NoticeCard*>()) {
+                if (card->isVisibleTo(&window) && card->takeBackButton() != nullptr) {
+                    shown.append(card);
+                }
+            }
+            return shown;
+        };
+        SliceAccessController* access = server->sliceAccessController();
+        QVERIFY(access);
+        const SliceOwnership::SliceRef ref{aId, ownership->incarnation(aId)};
+        QVERIFY(access->listen(phone.deviceId, ref).accepted);
+        const SliceAccessController::Result took =
+            access->takeControl(phone.deviceId, ref, ownership->controlRevision(aId));
+        QVERIFY2(took.accepted, qPrintable(took.reason));
+        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
+        QTRY_COMPARE(cards().size(), 1);
+        NoticeCard* card = cards().first();
+        QVERIFY(card->takeBackButton()->isEnabled());
+
+        // The phone keys on the slice it took: Take it back is refused and
+        // may be tried again, so the card stays.
+        TransmitHolder::KeyRequest key;
+        key.deviceId = phone.deviceId;
+        QCOMPARE(server->transmitHolder()->askKey(key).verdict, KeyingVerdict::Admit);
+        server->transmitHolder()->setKeyed(true);
+        TxSliceArbiter* arbiter = model->txSliceArbiter();
+        if (arbiter->txBoundSliceId() != aId) {
+            QVERIFY(arbiter->requestHandoff(aId, phone.deviceId));
+        }
+        QVERIFY(server->sliceOnAir(aId));
+        card->takeBackButton()->click();
+        QTest::qWait(100);
+        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
+        QCOMPARE(cards().size(), 1);
+
+        // Once it stops, the phone (a session with no link here, so away)
+        // still cannot hand over: refused again, may be tried again, and
+        // the card stays.
+        server->transmitHolder()->release(phone.deviceId, QStringLiteral("test release"));
+        QVERIFY(!server->sliceOnAir(aId));
+        cards().first()->takeBackButton()->click();
+        QTest::qWait(100);
+        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
+        QCOMPARE(cards().size(), 1);
+
+        // The phone lets go of the slice, so control moved on: the take-back
+        // can never run now, and the card goes.
+        const SliceAccessController::Result released =
+            access->release(phone.deviceId, SliceOwnership::SliceRef{aId, ownership->incarnation(aId)},
+                            ownership->controlRevision(aId));
+        QVERIFY2(released.accepted, qPrintable(released.reason));
+        cards().first()->takeBackButton()->click();
+        QTRY_COMPARE(cards().size(), 0);
+        controller.stop();
     }
 
     // Slice control plan Task 14a: a slice the hosting window listens to
