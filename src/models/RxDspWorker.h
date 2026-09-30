@@ -30,6 +30,14 @@
 //                 its main-thread hop (radeIqReady, routeRadeSpeech).
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 - RADE gaps: a slice in RADE mode that has no route on this
+//                 worker yet (the blocks before the queued route lands, a
+//                 new worker before the replay, a decoder that could not be
+//                 made) plays silence, not its WDSP sideband. RadioModel
+//                 publishes the RADE-mode slices as one atomic bit mask
+//                 (setRadeModeSlices); the DSP thread only loads it.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -352,6 +360,18 @@ public:
     void clearRadeRxRoutes();
     // Any thread: how many slices are routed to RADE.
     int radeRxRouteCount() const { return m_radeRxRouteCount.load(std::memory_order_acquire); }
+    // RADE gaps (2026-09-30). Any thread: the slices in RADE mode, bit n for
+    // slice id n (RadioModel::publishRadeModeSlices). A RADE-mode slice with
+    // no route here plays silence, never its sideband: freedv-gui plays only
+    // decoded speech in RADE (RADEReceiveStep.cpp:196-270 [@77e793a]) and
+    // the demodulated audio only when the operator picks Analog
+    // (TxRxThread.cpp:483-495 [@77e793a]). Lock-free: one atomic store here,
+    // one atomic load per slice block on the DSP thread.
+    void setRadeModeSlices(quint32 mask)
+    {
+        m_radeModeSlices.store(mask, std::memory_order_release);
+    }
+    quint32 radeModeSlices() const { return m_radeModeSlices.load(std::memory_order_acquire); }
 
 public slots:
 
@@ -633,6 +653,8 @@ private:
 
     std::unordered_map<int, RadeRxRoute> m_radeRxRoutes;
     std::atomic<int>            m_radeRxRouteCount{0};
+    // RADE gaps: see setRadeModeSlices.
+    std::atomic<quint32>        m_radeModeSlices{0};
     // Scratch for the (audio, 0) pairs presented to the codec as
     // interleaved stereo float32 at 24 kHz (RadeChannel::processIq's input
     // convention), and for the speech coming back.

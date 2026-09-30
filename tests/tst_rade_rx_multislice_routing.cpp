@@ -37,6 +37,10 @@
 //                 slice; two RADE slices on one pan both decode. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 -- RADE gaps: a RADE slice with no route yet (the blocks
+//                 before the queued route lands, a new DSP worker before the
+//                 replay) is muted. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -1051,6 +1055,75 @@ private slots:
         QVERIFY2(peakSince(vaxA, fromA) == 0.0f, qPrintable(evidence));
         // The USB slice beside it still plays.
         QVERIFY2(peakSince(vaxB, fromB) > kAudible, qPrintable(evidence));
+    }
+
+    // Item B. A slice in RADE whose route has not reached the worker (the
+    // blocks after the mode change, or a new DSP worker before the replay
+    // lands) is muted. It does not play its sideband.
+    void aRadeSliceWithNoRouteYetIsMuted()
+    {
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        QVERIFY(rig.feedUntilAudible(vaxA, 0) > 0);
+
+        // The mode changes; the route is queued, not yet on the worker.
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        QCOMPARE(rig.worker.radeModeSlices(), 1u << rig.a);
+        qsizetype from = vaxA->buffer().size();
+        constexpr int kTransient = 8;
+        for (int i = 0; i < kTransient; ++i) {
+            rig.feedOnce(rig.worker);
+        }
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        QCOMPARE(vaxA->buffer().size() - from,
+                 qsizetype(kTransient) * kFrames * 2 * qsizetype(sizeof(float)));
+        QVERIFY2(peakSince(vaxA, from) == 0.0f,
+                 qPrintable(QStringLiteral("peakBeforeRoute=%1").arg(peakSince(vaxA, from))));
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+
+        // A new DSP worker, as after a radio recovery: until the replayed
+        // route lands it has no route for A, and A is still silent.
+        RxDspWorker second;
+        second.setEngines(rig.wdsp, rig.radio.audioEngine());
+        second.setBufferSizes(kFrames, kFrames);
+        second.setStreamSlices(rig.sliceA->streamIndex(), QVector<int>{rig.a});
+        struct Reattach {
+            RadioModel& radio;
+            RxDspWorker& worker;
+            ~Reattach()
+            {
+                radio.attachDspWorkerForTest(&worker);
+                QCoreApplication::processEvents();
+            }
+        } reattach{rig.radio, rig.worker};
+        rig.radio.attachDspWorkerForTest(&second);
+        QCOMPARE(second.radeRxRouteCount(), 0);
+        QCOMPARE(second.radeModeSlices(), 1u << rig.a);
+        from = vaxA->buffer().size();
+        for (int i = 0; i < kTransient; ++i) {
+            rig.feedOnce(second);
+        }
+        QCOMPARE(second.radeRxRouteCount(), 0);
+        QCOMPARE(vaxA->buffer().size() - from,
+                 qsizetype(kTransient) * kFrames * 2 * qsizetype(sizeof(float)));
+        QVERIFY2(peakSince(vaxA, from) == 0.0f,
+                 qPrintable(QStringLiteral("peakNewWorker=%1").arg(peakSince(vaxA, from))));
+        QCoreApplication::processEvents();
+        QCOMPARE(second.radeRxRouteCount(), 1);
+
+        // Out of RADE, the sideband plays again once the route has gone.
+        rig.radio.attachDspWorkerForTest(&rig.worker);
+        QCoreApplication::processEvents();
+        rig.sliceA->setDspMode(DSPMode::USB);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        QCOMPARE(rig.worker.radeModeSlices(), 0u);
+        from = vaxA->buffer().size();
+        QVERIFY2(rig.feedUntilAudible(vaxA, from) > 0,
+                 qPrintable(QStringLiteral("usbPeakAgain=%1").arg(peakSince(vaxA, from))));
     }
 
     // Item C. With A in RADE and decoding, a new slice B, made locally or

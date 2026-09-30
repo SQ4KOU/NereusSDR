@@ -880,6 +880,11 @@
 //                to the current TX worker, so a worker made again after a
 //                reconnect reaches a slice the transmitter moves to. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - RADE gaps: publishRadeModeSlices hands the DSP worker the
+//                slices in RADE mode, on every mode change, slice list
+//                change and worker attach, so a RADE slice with no route
+//                yet plays silence, not its sideband. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -13445,6 +13450,8 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
 // R-R3-49: see the declaration. The audio thread's only view of the slices.
 void RadioModel::publishSliceAudioView()
 {
+    // RADE gaps (2026-09-30): the DSP worker follows the same slice set.
+    publishRadeModeSlices();
     if (m_audioEngine == nullptr) {
         return;
     }
@@ -13465,6 +13472,32 @@ void RadioModel::publishSliceAudioView()
     }
     for (int id = 0; id < AudioEngine::kMaxSliceAudioViews; ++id) {
         m_audioEngine->setSliceAudioView(id, views[static_cast<size_t>(id)]);
+    }
+}
+
+// RADE gaps (2026-09-30), NereusSDR-original. The slices in RADE mode, one
+// bit per slice id, for the DSP worker: a RADE slice with no route there
+// plays silence, never its sideband (RxDspWorker::setRadeModeSlices).
+quint32 RadioModel::radeModeSliceMask() const
+{
+    quint32 mask = 0;
+    for (const SliceModel* s : m_slices) {
+        const int id = s != nullptr ? s->sliceIndex() : -1;
+        if (id < 0 || id >= 32) {
+            continue;
+        }
+        const DSPMode mode = s->dspMode();
+        if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
+            mask |= 1u << id;
+        }
+    }
+    return mask;
+}
+
+void RadioModel::publishRadeModeSlices()
+{
+    if (m_dspWorker != nullptr) {
+        m_dspWorker->setRadeModeSlices(radeModeSliceMask());
     }
 }
 
@@ -13911,6 +13944,9 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
             [this](SliceModel::OutputRoute) { publishSliceAudioView(); });
     connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
     connect(slice, &SliceModel::afGainChanged, this, [this](int) { publishSliceAudioView(); });
+    // RADE gaps: the worker mutes a RADE slice until its route lands.
+    connect(slice, &SliceModel::dspModeChanged, this,
+            [this](DSPMode) { publishRadeModeSlices(); });
     publishSliceAudioView();
 
     // ── The transmitter needs a home the moment one exists ───────────────
@@ -14750,6 +14786,9 @@ void RadioModel::attachRadeRxWorker(RxDspWorker* worker)
     if (worker == nullptr) {
         return;
     }
+    // RADE gaps: before the replay below lands, the new worker already
+    // mutes every RADE slice rather than play its sideband.
+    publishRadeModeSlices();
     // Replay every route onto the new worker. Each install takes a new
     // epoch on the channel's rings, so nothing queued for the old worker
     // plays through the new one.
