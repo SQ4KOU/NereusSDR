@@ -31,6 +31,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: media back on the direct pair ends a refused fallback
+//               waiting to be retried (a folded move is still followed, as
+//               a normal replace). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: a session move while a refused fallback waits keeps the
 //               retry on the tunnel alone. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -1215,6 +1219,85 @@ private slots:
             const IceConfiguration& ice = *g.guiTransports.at(i)->startOptions.ice;
             QVERIFY2(ice.onlySourceCandidates(), qPrintable(QString::number(i)));
             QVERIFY(!ice.stunServer().has_value());
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Media comes back on the direct pair while a refused fallback waits
+    // for the Core to be back on receive: the silence that fallback
+    // answered is over, so it is dropped, and nothing moves to the tunnel
+    // when the Core unkeys. With a session move folded into the wait, the
+    // move is still followed, as a normal replace (the direct pair is no
+    // longer silent, so nothing keeps it to the tunnel alone).
+    void mediaBackOnTheDirectPairEndsAWaitingFallback_data()
+    {
+        QTest::addColumn<bool>("moved");
+        QTest::newRow("no move") << false;
+        QTest::newRow("a move folded in") << true;
+    }
+    void mediaBackOnTheDirectPairEndsAWaitingFallback()
+    {
+        QFETCH(bool, moved);
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        if (moved) {
+            emit g.core.client.pathChanged();
+            QVERIFY(g.gui->replacePending());
+        }
+        // Audio arrives again on the direct pair while the retry waits.
+        g.audioOn(0);
+        QCOMPARE(g.gui->replacePending(), moved);
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        if (!moved) {
+            // Past the retry: no replace, and media stays on the direct pair.
+            QTest::qWait(RemoteMediaController::kReplaceRetryMs + 500);
+            QVERIFY(!g.gui->replacePending());
+            QCOMPARE(g.core.transports.size(), 1);
+            QCOMPARE(g.guiTransports.size(), 2);
+        } else {
+            // The move is followed, by a normal replace.
+            QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                      RemoteMediaController::kReplaceRetryMs + 5000);
+            QVERIFY(!g.gui->replacePending());
+            QVERIFY(g.guiTransports.size() >= 3);
+            QVERIFY(g.guiTransports.last());
+            QVERIFY(!g.guiTransports.last()->startOptions.ice->onlySourceCandidates());
         }
         g.core.client.disconnectFromStation(QStringLiteral("test complete"));
     }

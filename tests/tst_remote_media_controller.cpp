@@ -40,6 +40,13 @@
 //   2026-09-29: new aPlaybackFailureEndsAWaitingRestart: a playback
 //               failure while a restart waits leaves nothing waiting.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: aPlaybackFailureEndsAWaitingRestart holds the restart's
+//               4 s step instead of racing it;
+//               directSilenceFallsBackOnceWhileAudioRestartsBackOff judges
+//               the move back to direct by the direct-only schedule's first
+//               step (with a coarse timer's 5% slack), not by the silence
+//               window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 #include <QTest>
 #include <QApplication>
 #include <QMetaMethod>
@@ -6862,6 +6869,11 @@ private slots:
         audio.source.stop();
         QTRY_VERIFY_WITH_TIMEOUT(requests >= before + 2
                                      && remoteMedia.audioRestartPendingForTest(), 10000);
+        // The 4 s step is held, not raced: however long what follows
+        // takes, the step cannot run before the context and the failure
+        // have landed.
+        remoteMedia.holdAudioRestartForTest(true);
+        QCOMPARE(requests, before + 2);
         QVERIFY(errors.isEmpty());
         QVERIFY(!lastContext.isEmpty());
 
@@ -6879,9 +6891,13 @@ private slots:
         QCOMPARE(remoteMedia.audioStatus().state, State::PlaybackProblem);
         // Nothing is left waiting.
         QVERIFY(!remoteMedia.audioRestartPendingForTest());
-        // Past the 4 s step no automatic request came: the failure waits for
-        // Retry.
-        QTest::qWait(4500);
+        // The 4 s step comes due while held; released, it finds the
+        // restart ended and asks for nothing: the failure waits for Retry.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioRestartStepHeldForTest(), 10000);
+        QCOMPARE(requests, atContext);
+        remoteMedia.holdAudioRestartForTest(false);
+        QVERIFY(!remoteMedia.audioRestartStepHeldForTest());
+        QTest::qWait(200);
         QCOMPARE(requests, atContext);
         QVERIFY(!remoteMedia.audioRestartPendingForTest());
         QCOMPARE(remoteMedia.audioStatus().state, State::PlaybackProblem);
@@ -6903,16 +6919,16 @@ private slots:
     // window's audio restart backoff is running. The silence fallback moves
     // media to the tunnel once; the restart waiting at the move still asks
     // for audio on the new connection at its backoff step (no storm, no
-    // restart lost); nothing moves back to a direct path within a silence
-    // window of the move, and the direct-only schedule starts again from
-    // its first step. The Core's audio comes back once media is on the
+    // restart lost); the direct-only schedule starts again from its first
+    // step, and nothing moves back to a direct path before that step. The Core's audio comes back once media is on the
     // tunnel, so the window plays again only if that waiting restart ran.
     //
     // The ordering is arranged, not left to timing: the silence clock (the
     // injected allocation clock) is held still while the audio restarts
     // step through the backoff, and moved on by one silence window only
-    // once a restart is waiting on the 4 s step. The move then finishes
-    // while that restart waits, which the test asserts.
+    // once a restart is waiting on the 4 s step. That step is held until
+    // the move has finished, so the move finishes while that restart
+    // waits, which the test asserts.
     void directSilenceFallsBackOnceWhileAudioRestartsBackOff()
     {
         using State = RemoteAudioStatus::State;
@@ -6929,6 +6945,12 @@ private slots:
         QList<qint64> requestMs;
         QList<qint64> fallbackMs;
         QList<qint64> directMs;
+        // Every time the window says its path changed, as it says it: the
+        // first after the fallback went out is at or before the promotion,
+        // so at or before the direct-only schedule could start again.
+        QList<qint64> pathChangeMs;
+        connect(&remoteMedia, &RemoteMediaController::networkPathChanged, &remoteMedia,
+                [&] { pathChangeMs << clock.elapsed(); }, Qt::DirectConnection);
         connect(&h.server, &StationServer::mediaControlReceived, this,
                 [&](const QJsonObject& control) {
             const QString op = control.value(QStringLiteral("op")).toString();
@@ -6977,6 +6999,11 @@ private slots:
         const qint64 lastBeforeMove = requestMs.last();
         QCOMPARE(remoteMedia.mediaConnectionId(), directId);
         QVERIFY(fallbackMs.isEmpty());
+        // The restart's 4 s step is held until the move has finished: the
+        // move takes real time, and under load it can outlast the 4 s step
+        // (the restart then ran on the old connection, and the next one
+        // was waiting at the move instead).
+        remoteMedia.holdAudioRestartForTest(true);
         // A silence window passes on the silence clock: the fallback runs.
         heldAt += RemoteMediaController::kDirectMediaSilenceFallbackMs;
         QTRY_VERIFY_WITH_TIMEOUT(movedMs >= 0, 10000);
@@ -6984,11 +7011,21 @@ private slots:
             "the restart ran before the move finished (moved at %1 ms, last request at %2 ms)")
             .arg(movedMs).arg(lastBeforeMove)));
         QCOMPARE(requestsAtMove, before + 2);
+        // Released: the step runs now if it came due during the move, or
+        // at its time if not.
+        remoteMedia.holdAudioRestartForTest(false);
+        // Right after the move, on the tunnel, the direct-only schedule
+        // starts again at its first step (that step cannot have fired yet).
+        QTRY_VERIFY_WITH_TIMEOUT(h.client.mediaTunnelInUse(), 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(),
+                                  PathRacer::kUpgradeRetryMs[0], 2000);
+        QVERIFY(directMs.isEmpty());
         // The waiting restart ran on the new connection and the window
         // plays again.
         QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
                                   h.mediaStage(remoteMedia).constData(), 10000);
-        // Hold to a silence window after the move before judging it.
+        // Hold to a silence window after the move before judging the
+        // restarts.
         const qint64 windowEnd = movedMs + RemoteMediaController::kDirectMediaSilenceFallbackMs;
         if (clock.elapsed() < windowEnd) { QTest::qWait(int(windowEnd - clock.elapsed())); }
 
@@ -7008,14 +7045,6 @@ private slots:
         // The fallback ran once, to the tunnel.
         QVERIFY2(fallbackMs.size() == 1, qPrintable(evidence));
         QVERIFY(remoteMedia.mediaConnectionId() != directId);
-        QTRY_VERIFY_WITH_TIMEOUT(h.client.mediaTunnelInUse(), 2000);
-        // Nothing moved back to a direct path within a window of the move.
-        for (qint64 at : std::as_const(directMs)) {
-            QVERIFY2(at >= windowEnd, qPrintable(evidence));
-        }
-        // The direct-only schedule starts again at its first step.
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.directUpgradeDelayMs(),
-                                  PathRacer::kUpgradeRetryMs[0], 2000);
         // The waiting restart asked for audio after the move, at its 4 s
         // step from the request before (the move neither lost nor hurried
         // it), and every restart kept at least the first step: no storm.
@@ -7027,6 +7056,32 @@ private slots:
         }
         // Audio came back on the tunnel: no recovery was needed.
         QCOMPARE(recoveries.count(), 0);
+
+        // Nothing moves back to a direct path before the direct-only
+        // schedule's first step, judged from that step and not from the
+        // silence window: the step's timer is a coarse one, which Qt keeps
+        // within 5% of its interval and may fire that much early, and it
+        // starts on the first stall tick after the promotion, which is at
+        // or after the first path change after the fallback went out.
+        const int firstStep = PathRacer::kUpgradeRetryMs[0];
+        QTRY_VERIFY_WITH_TIMEOUT(!directMs.isEmpty(), firstStep + 2000);
+        qint64 promotionLower = -1;
+        for (qint64 at : std::as_const(pathChangeMs)) {
+            if (at >= fallbackMs.first()) {
+                promotionLower = at;
+                break;
+            }
+        }
+        QVERIFY(promotionLower >= 0);
+        const qint64 earliestStep = promotionLower + firstStep - firstStep / 20;
+        const QString stepEvidence = QStringLiteral(
+            "promoted no earlier than %1 ms; first direct step at %2 ms; earliest allowed %3 ms;"
+            " a silence window after the move ends at %4 ms")
+            .arg(promotionLower).arg(directMs.first()).arg(earliestStep).arg(windowEnd);
+        qInfo().noquote() << stepEvidence;
+        for (qint64 at : std::as_const(directMs)) {
+            QVERIFY2(at >= earliestStep, qPrintable(stepEvidence));
+        }
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));

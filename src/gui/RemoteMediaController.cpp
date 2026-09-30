@@ -1,5 +1,11 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: holdAudioRestartForTest, so a test can hold an audio
+//               restart's backoff step instead of racing its timer; a
+//               refused fallback waiting to be retried ends when media
+//               arrives again (its silence is over), or becomes a normal
+//               replace when a move was folded into it. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: a playback failure ends a restart waiting on its backoff
 //               step (it could never run once the failure moved the audio
 //               revision on); a session move keeps a refused fallback
@@ -893,6 +899,9 @@ struct RemoteMediaController::Private {
     // The follow-up fix: the kind of the move waiting (a refused silence
     // fallback stays a fallback onto the tunnel alone when it is retried).
     ReplaceKind pendingReplaceKind = ReplaceKind::Normal;
+    // A session move came while that refused fallback waited: when media
+    // comes back the move is still followed, as a normal replace.
+    bool pendingMoveFolded = false;
     int replaceRearms = 0;
     // Task 29 step 2b: this media start declared the media tunnel.
     bool tunnelNegotiated = false;
@@ -1228,6 +1237,12 @@ struct RemoteMediaController::Private {
     // restart does nothing; a media move leaves it alone, so a restart
     // waiting across the move still runs on the new connection.
     quint64 audioRetryGeneration = 0;
+    // Test only: while held, a restart's backoff step that comes due is
+    // kept here instead of running, and runs (through its own fence) once
+    // released, so a test can order events against the step without
+    // racing a real timer.
+    bool audioRestartHeldForTest = false;
+    std::function<void()> heldAudioRestartStep;
     // R-R3-21: repeated restarts wait 1, 2, 4 s, reset by a healthy 10 s.
     RemoteAudioRestartBackoff audioRestartBackoff;
     // R-R3-23. The operator's choice, stored on this computer. Whether this
@@ -1538,11 +1553,18 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             const quint32 revision = d->audioRevision;
             const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
                                                                      d->lastAudioRequestMs));
-            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, generation, revision] {
+            const auto step = [this, generation, revision] {
                 if (generation != d->audioRetryGeneration
                     || revision != d->audioRevision) { return; }
                 d->audioRetryPending = false;
                 requestAudio();
+            };
+            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, step] {
+                if (d->audioRestartHeldForTest) {
+                    d->heldAudioRestartStep = step;
+                    return;
+                }
+                step();
             });
         }
         refreshAudioStatus();
@@ -2724,6 +2746,7 @@ void RemoteMediaController::stop()
     d->retireTimer->stop();
     d->replacePending = false;
     d->pendingReplaceKind = ReplaceKind::Normal;
+    d->pendingMoveFolded = false;
     d->replaceRearms = 0;
     d->replaceRetry->stop();
     if (d->stallTimer) {
@@ -3164,6 +3187,7 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
             d->replacePending = true;
             d->pendingReplaceKind = wasFallback ? ReplaceKind::TunnelFallback
                                                 : ReplaceKind::Normal;
+            d->pendingMoveFolded = false;
             d->replaceRetry->start();
         }
         return;
@@ -3275,8 +3299,27 @@ void RemoteMediaController::markReplacePending()
     d->replacePending = true;
     d->pendingReplaceKind = fallbackWaiting ? ReplaceKind::TunnelFallback
                                             : ReplaceKind::Normal;
+    d->pendingMoveFolded = fallbackWaiting;
     d->replaceRearms = 0;
     tryPendingReplace();
+}
+
+void RemoteMediaController::endWaitingFallback()
+{
+    // Media arrived: the silence a refused fallback answered is over, so a
+    // retry onto the tunnel alone would move off a working pair for
+    // nothing. A move folded into the wait is still followed, as a normal
+    // replace.
+    if (!d->replacePending || d->pendingReplaceKind != ReplaceKind::TunnelFallback) {
+        return;
+    }
+    if (d->pendingMoveFolded) {
+        d->pendingReplaceKind = ReplaceKind::Normal;
+        d->pendingMoveFolded = false;
+        return;
+    }
+    d->replacePending = false;
+    d->replaceRetry->stop();
 }
 
 void RemoteMediaController::tryPendingReplace()
@@ -3369,6 +3412,22 @@ int RemoteMediaController::directUpgradeDelayMs() const
 bool RemoteMediaController::audioRestartPendingForTest() const
 {
     return d->audioRetryPending;
+}
+
+void RemoteMediaController::holdAudioRestartForTest(bool held)
+{
+    d->audioRestartHeldForTest = held;
+    if (held) {
+        return;
+    }
+    if (const std::function<void()> step = std::exchange(d->heldAudioRestartStep, {})) {
+        step();
+    }
+}
+
+bool RemoteMediaController::audioRestartStepHeldForTest() const
+{
+    return bool(d->heldAudioRestartStep);
 }
 
 void RemoteMediaController::updateDirectUpgrade(bool viaTunnel)
@@ -3585,6 +3644,7 @@ void RemoteMediaController::routeRtp(const QByteArray& arrived, const MediaPeer*
     d->lastMediaMs = d->allocationClock();
     d->silenceFallbackFired = false;
     d->fallbackFinishedMs = -1;
+    endWaitingFallback();
     if (d->stallTimer && !d->stallTimer->isActive()) {
         d->stallTimer->start();
     }
@@ -6121,6 +6181,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     d->lastMediaMs = d->allocationClock();
     d->silenceFallbackFired = false;
     d->fallbackFinishedMs = -1;
+    endWaitingFallback();
     if (packet.startsWith("PS3D")) {
         if (!d->client || !d->model || d->client->capabilities().psDisplayVersion != 1
             || !d->model->pureSignalFacade()->ampViewSubscribed()) {

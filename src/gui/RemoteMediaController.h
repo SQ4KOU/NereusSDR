@@ -3,6 +3,9 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: holdAudioRestartForTest and audioRestartStepHeldForTest;
+//               endWaitingFallback.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: kDirectMediaSilenceFallbackMs 3000 -> 5000 ms, as JJ
 //               ruled. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
@@ -464,6 +467,12 @@ public:
     /// Test only: whether an audio restart is waiting on its backoff step
     /// (so a test can order a media move against it; no production caller).
     bool audioRestartPendingForTest() const;
+    /// Test only: while held, an audio restart's backoff step that comes
+    /// due waits instead of running; releasing runs it (through the same
+    /// fence as ever). No production caller.
+    void holdAudioRestartForTest(bool held);
+    /// Test only: whether a backoff step came due while held.
+    bool audioRestartStepHeldForTest() const;
     /// iPhone app plan Task 29 fix wave (review Important 1): media follows
     /// every move of the session. A move marks a replacement pending; it
     /// starts as soon as it can (the media connection ready, unkeyed, VOX
@@ -618,6 +627,8 @@ private:
     // silence fallback's plain replace onto the tunnel alone.
     enum class ReplaceKind { Normal, Direct, TunnelFallback };
     bool startReplacement(ReplaceKind kind);
+    // Media arrived while a refused fallback waits to be retried.
+    void endWaitingFallback();
     void updateDirectUpgrade(bool viaTunnel);
     void markReplacePending();
     void tryPendingReplace();
