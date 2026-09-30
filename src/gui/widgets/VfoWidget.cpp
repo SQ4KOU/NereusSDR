@@ -122,6 +122,10 @@
 //   2026-09-30 - core-slice take-over: the flag's Take control is
 //                 disabled with the Core's words when it refuses the take.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX badge take (JJ's ruling): while the badge offers a
+//                 take (TxBadgeOffer) it is enabled, says what a click will
+//                 do, and a click emits txTakeRequested. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -410,6 +414,11 @@ warren@wpratt.com
 namespace NereusSDR {
 
 namespace {
+// The TX badge's own words while it is held or offers a take
+// (updateTransmitControlAvailability, setInUseByRadio).
+constexpr const char* kSavedTransmitTooltip = "VfoSavedTransmitTooltip";
+constexpr const char* kSavedTransmitDescription = "VfoSavedTransmitDescription";
+
 // BYPS's tooltip while it may be pressed (group B fix wave: kept in one
 // place, since setRxBypassPermitted puts it back).
 QString rxBypassToolTip()
@@ -2509,11 +2518,34 @@ void VfoWidget::onTxBadgeClicked()
         m_txBadge->setChecked(false);
         return;
     }
+    // TX badge take (JJ, 2026-09-30): a click that starts a take. The
+    // badge's own toggle is undone: the TX mark follows the Core.
+    if (txBadgeTakeOffered()) {
+        m_txBadge->setChecked(m_txMarked);
+        emit txTakeRequested(m_sliceIndex);
+        return;
+    }
     if (!m_transmitPermitted) { return; }
     // Task 14a: a slice another device controls is not this window's to
     // make the TX slice.
     if (isListening()) { return; }
     emit txHandoffRequested(m_sliceIndex);
+}
+
+bool VfoWidget::txBadgeTakeOffered() const
+{
+    // Offered only where a click could not make the slice the TX slice at
+    // once, never while a slice request waits or the radio's own PTT
+    // transmits on this frequency.
+    return m_txBadgeOffer.offered && m_accessPending.isEmpty() && !m_inUseByRadio
+        && (!m_transmitPermitted || isListening());
+}
+
+void VfoWidget::setTxBadgeOffer(const TxBadgeOffer& offer)
+{
+    if (m_txBadgeOffer == offer) { return; }
+    m_txBadgeOffer = offer;
+    updateTransmitControlAvailability();
 }
 
 void VfoWidget::setSliceIndex(int index)
@@ -2530,6 +2562,7 @@ void VfoWidget::setSliceIndex(int index)
 
 void VfoWidget::setTxSlice(bool isTx)
 {
+    m_txMarked = isTx;
     m_txBadge->setChecked(isTx && !m_inUseByRadio);
 }
 
@@ -2570,6 +2603,13 @@ void VfoWidget::setInUseByRadio(bool inUse)
                            "QPushButton:checked { background: #6a3030; border-color: #ff4444; color: #ff8080; }"));
         m_txBadge->setToolTip(QStringLiteral("Indicates this slice is the TX slice"));
         m_txBadge->setAccessibleDescription(QString());
+    }
+    // TX badge take: a held or offering badge keeps these as the words it
+    // returns to, and shows its own now.
+    if (m_txBadge->property(kSavedTransmitTooltip).isValid()) {
+        m_txBadge->setProperty(kSavedTransmitTooltip, m_txBadge->toolTip());
+        m_txBadge->setProperty(kSavedTransmitDescription, m_txBadge->accessibleDescription());
+        updateTransmitControlAvailability();
     }
 }
 
@@ -3837,23 +3877,34 @@ void VfoWidget::updateTransmitControlAvailability()
 {
     const auto apply = [this](QWidget* control) {
         if (!control) { return; }
-        static constexpr auto kSavedTooltip = "VfoSavedTransmitTooltip";
-        static constexpr auto kSavedDescription = "VfoSavedTransmitDescription";
+        static constexpr auto kSavedTooltip = kSavedTransmitTooltip;
+        static constexpr auto kSavedDescription = kSavedTransmitDescription;
         static constexpr auto kSavedEnabled = "VfoSavedTransmitEnabled";
+        // TX badge take (JJ, 2026-09-30): a badge that offers a take is
+        // enabled and says what a click will do.
+        const bool offered = txBadgeTakeOffered();
         // Task 14a: a listened slice holds the TX badge too; the checked
         // (red on the air) state is left alone so it still shows.
-        const bool held = !m_transmitPermitted || isListening();
-        const QString reason = !m_transmitPermitted
+        const bool held = !offered && (!m_transmitPermitted || isListening());
+        QString reason = !m_transmitPermitted
             ? m_transmitPermissionReason : m_sliceAccess.heldReason;
-        if (held) {
+        if (!m_txBadgeOffer.heldReason.isEmpty()) {
+            reason = m_txBadgeOffer.heldReason;
+        } else if (m_txBadgeOffer.offered && !m_accessPending.isEmpty()) {
+            reason = m_accessPending;
+        } else if (m_txBadgeOffer.offered && m_inUseByRadio) {
+            reason = inUseByRadioText();
+        }
+        if (held || offered) {
             if (!control->property(kSavedTooltip).isValid()) {
                 control->setProperty(kSavedTooltip, control->toolTip());
                 control->setProperty(kSavedDescription, control->accessibleDescription());
                 control->setProperty(kSavedEnabled, control->isEnabled());
             }
-            control->setEnabled(false);
-            control->setToolTip(reason);
-            control->setAccessibleDescription(reason);
+            const QString words = offered ? m_txBadgeOffer.toolTip : reason;
+            control->setEnabled(offered);
+            control->setToolTip(words);
+            control->setAccessibleDescription(words);
             return;
         }
         if (control->property(kSavedTooltip).isValid()) {

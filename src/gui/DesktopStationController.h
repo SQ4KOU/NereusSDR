@@ -18,7 +18,8 @@ class StationServer;
 class DesktopStationController final : public QObject {
     Q_OBJECT
 public:
-    enum class Key { Mox, Tune };
+    // TX badge take (JJ, 2026-09-30): Take takes transmit and keys nothing.
+    enum class Key { Mox, Tune, Take };
     enum class RequestState { Refused, NoChange, Pending, Ask };
 
     struct TakeQuestion {
@@ -54,6 +55,10 @@ signals:
 public:
     RequestResult requestMox(bool on);
     RequestResult requestTune(bool on);
+    /// TX badge take: the station device takes transmit through tx.take's
+    /// rules (asked first while another device holds it) and keys nothing.
+    /// NoChange when it already holds transmit.
+    RequestResult requestTakeTransmit();
     RequestResult confirmTake(const TakeQuestion& shown);
 
 #ifdef NEREUS_BUILD_TESTS

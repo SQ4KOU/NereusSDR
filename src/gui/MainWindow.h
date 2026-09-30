@@ -105,6 +105,10 @@
 //   2026-09-30 - J.J. Boyd (KG4VCF). Desktop listening: listening ends only
 //                when the operator ends it; stopListeningOffWindow removed.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). TX badge take (JJ's ruling): a flag's
+//                TX badge takes the slice, then transmit, then makes the
+//                slice the TX slice (applyTxBadgeOffer, startTxBadgeTake).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1761,7 +1765,29 @@ private:
     QPointer<SliceChooser> m_sliceChooser;
     // Task 14a: the flag whose menu sent the request in flight (-1: none);
     // it shows the wait and then the Core's answer.
+    // TX badge take (JJ's ruling, 2026-09-30): a TX badge click on a slice
+    // this window cannot make the TX slice at once takes what it needs, in
+    // order: the slice (slice.takeControl, as the flag's Take control),
+    // then transmit (tx.take, asked as the Take transmit control asks),
+    // then makes the slice the TX slice. Two requests in sequence: a slice
+    // take never carries transmit (ruling Q8). Nothing keys.
+    enum class TxBadgeStage { None, Slice, Transmit };
+    // What the flag's badge offers now (VfoWidget::TxBadgeOffer).
+    void applyTxBadgeOffer(VfoWidget* flag) const;
+    // Whether this window holds transmit: the station device's hold in a
+    // hosting window, the Core's word in a remote one, always on its own.
+    bool windowHoldsTransmit() const;
+    void startTxBadgeTake(int sliceId);
+    // The Core answered the slice take the badge started.
+    void txBadgeSliceAnswered(int sliceId, bool accepted);
+    void takeTransmitForTxBadge(int sliceId);
+    // Once this window holds transmit, the slice becomes the TX slice.
+    void finishTxBadgeTakeIfHeld();
+    void abandonTxBadgeTake();
     int m_flagRequestSlice{-1};
+    // TX badge take: the slice a badge click is taking, and its stage.
+    int m_txBadgeTakeSlice{-1};
+    TxBadgeStage m_txBadgeTakeStage{TxBadgeStage::None};
     // Slice control plan Task 16: where this window shows a slice it only
     // listens to, when that slice's own pan key names no pan here (slice id
     // to pan id). Never written to the slice: its pan key belongs to its

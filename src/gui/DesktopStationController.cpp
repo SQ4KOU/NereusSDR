@@ -128,6 +128,19 @@ DesktopStationController::RequestResult DesktopStationController::requestTune(bo
     return request(Key::Tune, on);
 }
 
+DesktopStationController::RequestResult DesktopStationController::requestTakeTransmit()
+{
+    ++m_intentGeneration;
+    m_question.reset();
+    if (!m_model || !enabled() || !server()) {
+        return {RequestState::Refused, {}, QStringLiteral("This computer is not hosting a Core.")};
+    }
+    if (stationHoldsTransmit()) {
+        return {RequestState::NoChange, {}, {}};
+    }
+    return takeAndKey(Key::Take, std::nullopt, std::nullopt);
+}
+
 DesktopStationController::RequestResult DesktopStationController::request(Key key, bool on)
 {
     ++m_intentGeneration;
@@ -244,6 +257,8 @@ DesktopStationController::RequestResult DesktopStationController::ask(Key key)
 
 void DesktopStationController::keyNow(Key key)
 {
+    // TX badge take: a take alone keys nothing.
+    if (key == Key::Take) { return; }
     if (!m_model || !stationHoldsTransmit()) { return; }
     const QPointer<DesktopStationController> self(this);
     const QPointer<RadioModel> model(m_model);
