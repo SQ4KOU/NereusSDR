@@ -262,6 +262,12 @@ public:
     static bool forgetRx2VfobSetting();
     static bool useRx1VfoaForRx2VfoaSetting();
 
+    // RX2 is on (Thetis console.RX2Enabled): receiver 1 has a slice. With a
+    // receiver map that is the map's receiver 1; without one (the Core's
+    // station server, a plain desktop) it is slice 1, since trx:N is slice N.
+    // A test radio that is not a RadioModel answers through rx2Enabled().
+    bool rx2EnabledNow() const;
+
     // Build the post-connect init burst. Stub returns empty list in Phase 3;
     // Phase 4 Task 4.1 replaces with the 8-line wrapper from
     // Thetis TCIServer.cs:2512-2552 [v2.10.3.13].
@@ -699,10 +705,6 @@ private:
     // As buildIfLineForRx, labelled rx but read from receiver sourceRx: the
     // if:1,0 that Use RX1 VFO A for RX2 VFO A sends for receiver 0's VFO.
     QString buildIfLineFrom(int labelRx, int chan, int sourceRx) const;
-
-    // RX2 is on: receiver 1 has a slice (with a receiver map), else the
-    // radio's rx2Enabled. Thetis console.RX2Enabled.
-    bool rx2EnabledNow() const;
 
     // Receiver rx's dds line, its centre read from the radio. The init burst
     // uses it; the drain reads the same readDdsHz so it can record what it

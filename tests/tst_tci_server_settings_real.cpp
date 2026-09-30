@@ -277,7 +277,7 @@ private slots:
 
     // Under the defaults an app sees what it saw before, with two Thetis
     // corrections: with RX2 on, the second receiver's move goes out as
-    // channel 1 then channel 0 (TCIServer.cs:1386-1392 [v2.10.3.15]); with
+    // channel 1 then channel 0 (TCIServer.cs:1385-1393 [v2.10.3.15]); with
     // RX2 off, a set for the second receiver is ignored and not echoed
     // (TCIServer.cs:3897-3899 [v2.10.3.15]). The vfo commands act on each
     // receiver's own slice, and the first lines are unchanged.
@@ -320,7 +320,7 @@ private slots:
     }
 
     // Duplicate RX2 VFO B to RX2 VFO A, and Forget RX2 VFO B, from Thetis
-    // TCIServer.cs:7293-7294 and 1385-1398 [v2.10.3.15]: with RX2 on, a
+    // TCIServer.cs:7295-7296 and 1385-1398 [v2.10.3.15]: with RX2 on, a
     // move of the second receiver's VFO goes out on channel 1, plus a
     // copy on channel 0 with Copy on; Forget (only with Copy on) drops
     // channel 1 and keeps the copy.
@@ -336,7 +336,7 @@ private slots:
         QTest::newRow("copy off") << false << false << ch1;
         QTest::newRow("copy off, forget on") << false << true << ch1;
         // Thetis's order: channel 1, then its copy on channel 0
-        // (TCIServer.cs:1386-1392 [v2.10.3.15]); a client acting on the
+        // (TCIServer.cs:1385-1393 [v2.10.3.15]); a client acting on the
         // last frame lands on channel 0.
         QTest::newRow("copy on") << true << false << ch1 + ch0;
         QTest::newRow("copy on, forget on") << true << true << ch0;
@@ -358,7 +358,7 @@ private slots:
         QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
     }
 
-    // Use RX1 VFO A for RX2 VFO A, from Thetis TCIServer.cs:7256-7267
+    // Use RX1 VFO A for RX2 VFO A, from Thetis TCIServer.cs:7256-7269
     // [v2.10.3.15]: with RX2 on, the first receiver's VFO goes out as
     // receiver 1 channel 0 (never vfo:0,0), its if read from receiver 0.
     // Off, or with RX2 off, nothing changes.

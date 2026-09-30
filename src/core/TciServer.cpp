@@ -1260,12 +1260,10 @@ void TciServer::hookGlobalBroadcasts()
                     // / sendTXEnable at TCIServer.cs:2515-2516 + 2618-2619
                     // [v2.10.3.15].  Re-emit both to mirror the init burst
                     // when MOX flips.
-                    bool rx2en = m_desktopHostMode && desktopSliceForReceiver(1) >= 0;
-                    if (!m_desktopHostMode) {
-                        QMetaObject::invokeMethod(m_model, "rx2Enabled",
-                                                  Qt::DirectConnection,
-                                                  Q_RETURN_ARG(bool, rx2en));
-                    }
+                    // RX2 is on when receiver 1 has a slice, as the
+                    // protocol reads it (not the connection's active RX
+                    // count, which stays at 1).
+                    const bool rx2en = m_protocol->rx2EnabledNow();
                     const QString notMox =
                         on ? QStringLiteral("false") : QStringLiteral("true");
                     m_protocol->enqueueLocalBroadcast(

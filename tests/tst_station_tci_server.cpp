@@ -666,6 +666,123 @@ private slots:
         app.socket.close();
     }
 
+    // The three RX2 VFO options on the Core's own server. The Core has no
+    // receiver map, so RX2 is on when slice 1 exists (trx:N is slice N),
+    // not when the connection's active RX count says so. Thetis
+    // TCIServer.cs:7256-7269 and 7295-7296 [v2.10.3.15]: slice 1 (RX2 VFO
+    // B) goes out on channel 1, then copied to channel 0 unless replaced;
+    // with Use RX1 VFO A, slice 0 goes out as receiver 1 channel 0 only.
+    void stationRx2VfoOptions_data()
+    {
+        QTest::addColumn<bool>("copy");
+        QTest::addColumn<bool>("forget");
+        QTest::addColumn<bool>("useRx1");
+        QTest::addColumn<QStringList>("slice1Lines");
+        const QString b1 = QStringLiteral("vfo:1,1,14100000;");
+        const QString b0 = QStringLiteral("vfo:1,0,14100000;");
+        QTest::newRow("copy, keep channel 1") << true << false << false << QStringList{b1, b0};
+        QTest::newRow("copy, forget channel 1") << true << true << false << QStringList{b0};
+        QTest::newRow("no copy") << false << false << false << QStringList{b1};
+        QTest::newRow("no copy, forget has no effect") << false << true << false << QStringList{b1};
+        QTest::newRow("copy, use RX1 VFO A") << true << false << true << QStringList{b1, b0};
+    }
+    void stationRx2VfoOptions()
+    {
+        QFETCH(bool, copy);
+        QFETCH(bool, forget);
+        QFETCH(bool, useRx1);
+        QFETCH(QStringList, slice1Lines);
+        auto& s = AppSettings::instance();
+        const auto flag = [](bool on) { return on ? QStringLiteral("True") : QStringLiteral("False"); };
+        s.setValue(QStringLiteral("TciCopyRx2VfobToVfoa"), flag(copy));
+        s.setValue(QStringLiteral("TciForgetRx2VfoBOnDisconnect"), flag(forget));
+        s.setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), flag(useRx1));
+
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceById(1)->setFrequency(14074000.0);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->hold(0, QByteArray(32, '\x42'));
+        ownership->hold(1, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+        const auto vfoLines = [&app]() {
+            QStringList lines;
+            for (const QString& f : app.frames) {
+                if (f.startsWith(QStringLiteral("vfo:"))) { lines.append(f); }
+            }
+            return lines;
+        };
+
+        // Slice 1 moves: RX2 VFO B's lines.
+        app.frames.clear();
+        station.sliceById(1)->setFrequency(14100000.0);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(slice1Lines.last()), 3000);
+        QTest::qWait(150);
+        QCOMPARE(vfoLines(), slice1Lines);
+
+        // Slice 0 moves: with Use RX1 VFO A it is receiver 1 channel 0 only.
+        app.frames.clear();
+        station.sliceById(0)->setFrequency(7100000.0);
+        if (useRx1) {
+            QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:1,0,7100000;")), 3000);
+            QTest::qWait(150);
+            QCOMPARE(vfoLines(), QStringList{QStringLiteral("vfo:1,0,7100000;")});
+            // And a set of receiver 1 channel 0 tunes slice 0.
+            app.socket.sendTextMessage(QStringLiteral("vfo:1,0,7110000;"));
+            QTRY_COMPARE_WITH_TIMEOUT(station.sliceById(0)->frequency(), 7110000.0, 3000);
+            QCOMPARE(station.sliceById(1)->frequency(), 14100000.0);
+        } else {
+            QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,0,7100000;")), 3000);
+            QTest::qWait(150);
+            for (const QString& line : vfoLines()) {
+                QVERIFY2(line.startsWith(QStringLiteral("vfo:0,")), qPrintable(line));
+            }
+        }
+        app.socket.close();
+    }
+
+    // A Core with one slice has RX2 off: a set of receiver 1 is ignored
+    // (Thetis TCIServer.cs:3897-3899 [v2.10.3.15]), and slice 0 goes out on
+    // both of its own channels even with every option on.
+    void stationWithOneSliceHasRx2Off()
+    {
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("TciCopyRx2VfobToVfoa"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), QStringLiteral("True"));
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceOwnership()->hold(0, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,0,14100000;"));
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,1,14100000;"));
+        app.socket.sendTextMessage(QStringLiteral("vfo:0,0,7100000;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,0,7100000;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,1,7100000;")), 3000);
+        QTest::qWait(150);
+        QCOMPARE(station.sliceById(0)->frequency(), 7100000.0);
+        for (const QString& f : app.frames) {
+            QVERIFY2(!f.startsWith(QStringLiteral("vfo:1,")), qPrintable(f));
+        }
+        app.socket.close();
+    }
+
     // iPhone app Task 73 (ruling 5.11): TCI's per-slice broadcasts that
     // exist once per radio (digl_offset, digu_offset) follow the
     // station-level active slice. Two devices, each with its own active
