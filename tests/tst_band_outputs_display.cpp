@@ -22,13 +22,14 @@
 //   in a cross-band split is the other slice's pins, and ignores the HL2's
 //   receive bypass.
 //
-// The scenario is the HL2 bench's cross-band split: the N2ADR board, slice A
-// on 20 m, slice B on 40 m holding the transmitter. On the wire:
-// - unkeyed: 0x48, the receive pins of the higher slice (A, 20 m). In Auto
+// The scenario is a cross-band split on the N2ADR board: slice A on 40 m
+// with pan 1, slice B on 20 m holding the transmitter. On the wire:
+// - unkeyed: 0x48, the receive pins of the higher slice (B, 20 m). In Auto
 //   the HL2's receive pins follow the highest-frequency slice on the input
 //   rather than bypassing the board (JJ's ruling of 2026-09-30);
-// - keyed on B: 0x04 (the 60/40 m transmit low-pass).
-// A byte computed from pan 1 (20 m) would be 20 m's transmit pins keyed.
+// - keyed on B: 0x08 (the 30/20 m transmit low-pass).
+// A byte computed from pan 1 (40 m) would be 40 m's pins in both states
+// (0x44 unkeyed, 0x04 keyed).
 //
 // Remote-window parity Task 14 (R-R3-46): HL2 Options' output strip is not
 // one of these displays any more. It shows the I/O board's output register
@@ -40,8 +41,10 @@
 //   2026-09-30 - Unkeyed, the cross-band split now expects the 20 m receive
 //                pins instead of the N2ADR receive bypass (0x00): in Auto the
 //                HL2 pins follow the highest-frequency slice (JJ's ruling).
-//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
-//                Anthropic Claude Code.
+//                The roles are swapped (A and pan 1 on 40 m, B on 20 m
+//                transmitting), so the wire differs from pan 1 both unkeyed
+//                and keyed. J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -74,9 +77,9 @@ namespace {
 
 constexpr double k20mHz = 14200000.0;
 constexpr double k40mHz =  7100000.0;
-constexpr quint8 kN2adrTx40m = 0x04;   // N2adrPreset.cpp: 40 m transmit, pin 3
+constexpr quint8 kN2adrTx20m = 0x08;   // N2adrPreset.cpp: 20 m transmit, pin 4
 // N2adrPreset.cpp: 20 m receive, pin 4 plus pin 7. Unkeyed, the split's
-// wire byte: the pins of the higher slice.
+// wire byte: the pins of the higher slice, B.
 constexpr quint8 kN2adrRx20m = 0x48;
 
 class ConnectedP1 final : public P1RadioConnection {
@@ -139,13 +142,13 @@ struct Hl2Core {
         return id;
     }
 
-    // The cross-band split of the bench script, pan 1 on A's band.
+    // The cross-band split, pan 1 on A's band (40 m), B on 20 m transmits.
     void crossBandSplit()
     {
-        const int a = add(k20mHz);
-        const int b = add(k40mHz);
+        const int a = add(k40mHz);
+        const int b = add(k20mHz);
         model.setActiveSlice(a);
-        model.panadapters().first()->setCenterFrequency(k20mHz);
+        model.panadapters().first()->setCenterFrequency(k40mHz);
         QVERIFY(model.txSliceArbiter()->requestHandoff(b));
     }
 
@@ -193,11 +196,13 @@ private slots:
         OcOutputsHfTab ocTab(&core.model, &core.oc);
         Hl2IoBoardTab ioTab(&core.model);
 
-        // What a byte computed from pan 1 would show keyed: 20 m's pins.
+        // What a byte computed from pan 1 would show: 40 m's pins.
         QCOMPARE(core.oc.maskFor(Band::Band20m, /*tx=*/false), kN2adrRx20m);
-        QVERIFY(core.oc.maskFor(Band::Band20m, /*tx=*/true)  != kN2adrTx40m);
+        QVERIFY(core.oc.maskFor(Band::Band40m, /*tx=*/false) != kN2adrRx20m);
+        QCOMPARE(core.oc.maskFor(Band::Band20m, /*tx=*/true), kN2adrTx20m);
+        QVERIFY(core.oc.maskFor(Band::Band40m, /*tx=*/true)  != kN2adrTx20m);
 
-        // Unkeyed: the receive pins of the higher slice, A on 20 m.
+        // Unkeyed: the receive pins of the higher slice, B on 20 m.
         QCOMPARE(core.send(), kN2adrRx20m);
         QVERIFY(core.model.bandOutputsKnown());
         QCOMPARE(core.model.bandOutputsByte(), int(kN2adrRx20m));
@@ -206,17 +211,17 @@ private slots:
         QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
 
-        // Keyed on B: B's 40 m transmit pin.
+        // Keyed on B: B's 20 m transmit pin.
         core.conn.setMox(true);
-        QCOMPARE(core.send(), kN2adrTx40m);
-        QCOMPARE(core.model.bandOutputsByte(), int(kN2adrTx40m));
-        QCOMPARE(core.model.bandOutputsBand(), int(Band::Band40m));
+        QCOMPARE(core.send(), kN2adrTx20m);
+        QCOMPARE(core.model.bandOutputsByte(), int(kN2adrTx20m));
+        QCOMPARE(core.model.bandOutputsBand(), int(Band::Band20m));
         QCOMPARE(core.model.bandOutputsKeyed(), true);
-        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrTx40m);
-        QVERIFY(ocTab.livePinLitForTest(2));
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrTx40m));
-        QCOMPARE(ioTab.ocByteTextForTest(), QStringLiteral("0X04"));
-        QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=40m"));
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrTx20m);
+        QVERIFY(ocTab.livePinLitForTest(3));
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrTx20m));
+        QCOMPARE(ioTab.ocByteTextForTest(), QStringLiteral("0X08"));
+        QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=20m"));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("TX"));
 
         // Unkeyed again.
@@ -314,9 +319,9 @@ private slots:
         StationClient client(&remote, &proxy);
         QSignalSpy completed(&client, &StationClient::handshakeComplete);
 
-        // The window's own copy of the matrix and its own pan say 20 m.
+        // The window's own copy of the matrix and its own pan say 40 m.
         remote.addPanadapter();
-        remote.panadapters().first()->setCenterFrequency(k20mHz);
+        remote.panadapters().first()->setCenterFrequency(k40mHz);
         applyN2adrPreset(remote.ocMatrixMutable(), true);
         OcOutputsHfTab ocTab(&remote, &remote.ocMatrixMutable());
         Hl2IoBoardTab ioTab(&remote);
@@ -331,7 +336,7 @@ private slots:
         server.acceptTransport(stationEnd);
         QTRY_COMPARE(completed.count(), 1);
 
-        // Unkeyed: the Core's receive pins, A's 20 m.
+        // Unkeyed: the Core's receive pins, B's 20 m.
         QTRY_VERIFY(remote.bandOutputsKnown());
         QCOMPARE(remote.bandOutputsByte(), int(kN2adrRx20m));
         QCOMPARE(remote.bandOutputsKeyed(), false);
@@ -339,15 +344,15 @@ private slots:
         QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
 
-        // Keyed on B at the Core: the window shows B's 40 m transmit pin.
+        // Keyed on B at the Core: the window shows B's 20 m transmit pin.
         core.conn.setMox(true);
         core.send();
-        QTRY_COMPARE(remote.bandOutputsByte(), int(kN2adrTx40m));
+        QTRY_COMPARE(remote.bandOutputsByte(), int(kN2adrTx20m));
         QTRY_COMPARE(remote.bandOutputsKeyed(), true);
-        QCOMPARE(remote.bandOutputsBand(), int(Band::Band40m));
-        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrTx40m);
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrTx40m));
-        QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=40m"));
+        QCOMPARE(remote.bandOutputsBand(), int(Band::Band20m));
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrTx20m);
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrTx20m));
+        QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=20m"));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("TX"));
 
         // Unkeyed again.

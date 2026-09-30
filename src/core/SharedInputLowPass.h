@@ -63,6 +63,10 @@
 //                N2ADR broadcast-band high-pass (bit 6) cleared when a
 //                counted slice's own pins lack it (JJ's ruling). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Review fix: a top receiver whose own mask lacks bit 6 is
+//                named in highPassOff; hl2PinsReceiver is the one place the
+//                pins' receiver is chosen. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -163,30 +167,69 @@ inline constexpr quint8 kN2adrBroadcastHighPassBit = 0x40;  // bit 6, pin 7
 struct Hl2ReceivePins {
     int         best {-1};     // index of the receiver the pins follow, -1 if none tuned
     quint8      pins {0};      // the byte to send, valid when best >= 0
-    QList<int>  highPassOff;   // indices of the receivers that turned bit 6 off
+    QList<int>  highPassOff;   // indices of the receivers bit 6 is off for, empty when
+                               // every counted receiver's own mask has it or none does
+    bool        boardOff {false};  // pins is 0x00 on a board with receive pins set
 };
+
+// Whether any band has receive pins set: an N2ADR (or other) board is
+// configured. With none set the pins are 0x00 on every band, as they
+// always were, and nothing is reported off.
+inline bool hasReceivePins(const OcMatrix& oc)
+{
+    for (int b = 0; b < static_cast<int>(Band::Count); ++b) {
+        if (oc.maskFor(static_cast<Band>(b), /*tx=*/false) != 0) { return true; }
+    }
+    return false;
+}
+
+// The receiver the HL2's pins follow. One place, so the rule for a top
+// receiver whose band has no pins set can change here alone.
+inline int hl2PinsReceiver(const OcMatrix& /*oc*/, const QList<Candidate>& candidates)
+{
+    return highest(Rule::HighestCentrePins, candidates);
+}
 
 inline Hl2ReceivePins hl2ReceivePins(const OcMatrix& oc,
                                      const QList<Candidate>& candidates)
 {
     Hl2ReceivePins result;
-    result.best = highest(Rule::HighestCentrePins, candidates);
+    result.best = hl2PinsReceiver(oc, candidates);
     if (result.best < 0) { return result; }
     const auto maskOf = [&oc](const Candidate& c) {
         return oc.maskFor(bandFromFrequency(static_cast<double>(
                               ruleHz(Rule::HighestCentrePins, c))), /*tx=*/false);
     };
     result.pins = maskOf(candidates.at(result.best));
-    if ((result.pins & kN2adrBroadcastHighPassBit) == 0) { return result; }
+    bool anyHas = false;
+    QList<int> lacking;
     for (int i = 0; i < candidates.size(); ++i) {
         const Candidate& c = candidates.at(i);
         if (orderHz(Rule::HighestCentrePins, c) == 0) { continue; }
-        if ((maskOf(c) & kN2adrBroadcastHighPassBit) == 0) {
-            result.highPassOff.append(i);
+        if ((maskOf(c) & kN2adrBroadcastHighPassBit) != 0) {
+            anyHas = true;
+        } else {
+            lacking.append(i);
         }
     }
-    if (!result.highPassOff.isEmpty()) {
-        result.pins = quint8(result.pins & ~kN2adrBroadcastHighPassBit);
+    if ((result.pins & kN2adrBroadcastHighPassBit) != 0) {
+        // The top receiver's mask has it: cleared for the ones that lack it.
+        if (!lacking.isEmpty()) {
+            result.pins = quint8(result.pins & ~kN2adrBroadcastHighPassBit);
+            result.highPassOff = lacking;
+        }
+    } else if (anyHas) {
+        // The top receiver's own mask lacks it while another's has it: the
+        // high-pass is off for the top receiver, so it is the one named.
+        result.highPassOff.append(result.best);
+    }
+    // JJ's ruling of 2026-09-30: when the pins sent come to 0x00 (the top
+    // receiver's band has no pins set, WWV or a band the operator left
+    // empty), the board is off, and RadioModel reports it so (WIDE, no
+    // low-pass sentence). Only on a board with some receive pins set.
+    if (result.pins == 0 && hasReceivePins(oc)) {
+        result.boardOff = true;
+        result.highPassOff.clear();
     }
     return result;
 }

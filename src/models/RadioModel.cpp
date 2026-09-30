@@ -47,6 +47,14 @@
 //               needs it off (JJ's ruling). The low-pass choice is made once
 //               and read by both. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: Review fix: the HL2's pins, receiver and high-pass come from
+//               one hl2ReceivePins call; 6m/ByPass on RX leaves the HL2's
+//               reason as it leaves its pins. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: HL2: when the pins sent come to 0x00 (the band the pins
+//               follow has none set), the board is reported off: WIDE,
+//               naming that slice, no low-pass sentence (JJ's ruling).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -22171,7 +22179,14 @@ void RadioModel::republishAlexAdcSlices()
             lowPassSlicesOf.append(list);
         }
     }
-    const int lowPassBest = SharedInputLowPass::highest(lowPassRule, lowPassCandidates);
+    // On the HL2 the pins and the high-pass come from hl2ReceivePins, the
+    // call the connection sends them from; its receiver is the low-pass's.
+    const SharedInputLowPass::Hl2ReceivePins hl2Rx = hl2
+        ? SharedInputLowPass::hl2ReceivePins(m_ocMatrix, lowPassCandidates)
+        : SharedInputLowPass::Hl2ReceivePins{};
+    const int lowPassBest = hl2
+        ? hl2Rx.best
+        : SharedInputLowPass::highest(lowPassRule, lowPassCandidates);
 
     // ── HL2 in Auto: mi0bot's way, the pins of the highest slice ─────────
     //
@@ -22185,7 +22200,10 @@ void RadioModel::republishAlexAdcSlices()
     // not by mi0bot's band enum (SharedInputLowPass.h).
     // The chain is handed to AlexController as the one band those pins
     // serve, so in Auto it reports Filtered: a band difference never shows
-    // WIDE on the HL2, which shows only when 0x00 is actually sent.
+    // WIDE on the HL2. WIDE shows when 0x00 is actually sent: ForceBypass,
+    // WidebandLocked, or pins that come to 0x00 because the band they
+    // follow has none set (hl2Rx.boardOff, reported below as
+    // SwitchBypass::NoFilterPins).
     //
     // The N2ADR broadcast-band high-pass (bit 6) is cleared when a counted
     // slice's own receive pins lack it, a slice on 160 m in the N2ADR preset
@@ -22257,7 +22275,28 @@ void RadioModel::republishAlexAdcSlices()
                 chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnTx;
             }
         }
-        m_alexController.setSwitchBypass(0, chain0Switch);
+        // JJ's ruling of 2026-09-30: on the HL2 the pins sent (hl2Rx, the
+        // byte the connection sends unkeyed) come to 0x00 when the band of
+        // the slice they follow has none set, WWV or a band the operator
+        // left empty: the filter board is off, and the chain says so,
+        // naming that slice. The band's selection still goes to the
+        // connection, which sends the pins as they are.
+        QString chain0Detail;
+        m_hl2NoPinsSliceId = -1;
+        if (hl2 && ocFilterPath && chain0Switch == AlexController::SwitchBypass::None
+            && hl2Rx.boardOff && hl2Rx.best >= 0) {
+            const SliceModel* off = nullptr;
+            for (const SliceModel* s : lowPassSlicesOf.at(hl2Rx.best)) {
+                if (off == nullptr || s->sliceIndex() < off->sliceIndex()) { off = s; }
+            }
+            if (off != nullptr) {
+                chain0Switch = AlexController::SwitchBypass::NoFilterPins;
+                m_hl2NoPinsSliceId = off->sliceIndex();
+                chain0Detail = QStringLiteral("slice %1 on %2").arg(
+                    off->sliceLetter(), bandLabel(bandFromFrequency(off->frequency())));
+            }
+        }
+        m_alexController.setSwitchBypass(0, chain0Switch, chain0Detail);
         // SetAlexHPFBits writes Alex0 only (netInterface.c:604-621
         // [v2.10.3.15]): chain 1 is never bypassed by these switches.
         m_alexController.setSwitchBypass(1, AlexController::SwitchBypass::None);
@@ -22351,12 +22390,16 @@ void RadioModel::republishAlexAdcSlices()
     // (SharedInputLowPass::hl2ReceivePins), falling back to the row
     // selection where no pins are set. On the HL2 the reason also says when
     // that high-pass is off and which slice needs it off, from the same
-    // hl2ReceivePins call the connection sends the pins from. With 6m/ByPass on RX on, the
-    // receive low-pass is the 6 m filter for every slice
-    // (codec::alex::setAlexLpf) and nothing is held.
+    // hl2ReceivePins call the connection sends the pins from. With 6m/ByPass
+    // on RX on, an Alex board's receive low-pass is the 6 m filter for every
+    // slice (codec::alex::setAlexLpf) and nothing is held; the HL2 has no
+    // Alex low-pass, so there the switch changes neither the pins nor the
+    // reason.
     //
-    // On the HL2 the reason describes only what is on the wire. When chain
-    // 0's band-pass is bypassed (hpfBitsAdc0 == 0x20: ForceBypass or
+    // On the HL2 the reason describes only what is on the wire. When the
+    // pins sent come to 0x00 because the band they follow has none set
+    // (NoFilterPins above) no low-pass is set, and nothing is held. When
+    // chain 0's band-pass is bypassed (hpfBitsAdc0 == 0x20: ForceBypass or
     // WidebandLocked),
     // P1RadioConnection sends the N2ADR board's receive pins as 0x00 (the
     // hasIoBoardHl2 block in the OC byte build), so no low-pass is set for
@@ -22364,11 +22407,17 @@ void RadioModel::republishAlexAdcSlices()
     {
         const bool lowPassPresent = boardCapabilities().hasAlexFilters || hl2;
         constexpr int kAlexBypassSentinel = 0x20;  // AlexRxBpf.hpfBitsAdc0 bypass encoding
-        const bool hl2PinsCleared = hl2 && bpf.hpfBitsAdc0 == kAlexBypassSentinel;
+        const bool hl2PinsCleared = hl2
+            && (bpf.hpfBitsAdc0 == kAlexBypassSentinel || m_hl2NoPinsSliceId >= 0);
         int forcing = -1;
         QString lowPassReason;
         const QList<SliceModel*>& onInput = countedSlices[0];
-        if (lowPassPresent && !hl2PinsCleared && !m_alexLpfBypassSwitch
+        // 6m/ByPass on RX is an Alex switch (codec::alex::setAlexLpf); the
+        // HL2's N2ADR pins do not read it (hl2ReceivePins, the OC byte), so
+        // on the HL2 it does not empty the reason either, and the reason
+        // matches the pins sent.
+        const bool lpfBypassOnRx = m_alexLpfBypassSwitch && !hl2;
+        if (lowPassPresent && !hl2PinsCleared && !lpfBypassOnRx
             && onInput.size() >= 2 && m_receiverManager != nullptr) {
             const SharedInputLowPass::Rule rule = lowPassRule;
             const QList<SharedInputLowPass::Candidate>& candidates = lowPassCandidates;
@@ -22406,9 +22455,7 @@ void RadioModel::republishAlexAdcSlices()
                 const SliceModel* top = knownBy(best);
                 QList<const SliceModel*> highPassOff;
                 if (hl2) {
-                    const SharedInputLowPass::Hl2ReceivePins rx =
-                        SharedInputLowPass::hl2ReceivePins(m_ocMatrix, candidates);
-                    for (int i : rx.highPassOff) {
+                    for (int i : hl2Rx.highPassOff) {
                         if (const SliceModel* s = knownBy(i)) { highPassOff.append(s); }
                     }
                 }
@@ -22962,6 +23009,17 @@ QString RadioModel::bypassReasonForAdc(
         return tr("Preselector bypassed on 6 m while transmitting by the Disable 6m "
                   "LNA on TX setting on the Antenna / ALEX page of the hardware "
                   "setup. Filtering returns when transmit ends.");
+    }
+
+    // JJ's ruling of 2026-09-30: the HL2's N2ADR pins sent are all off
+    // because the band of the slice they follow has none set.
+    if (st.bypassSwitch == AlexController::SwitchBypass::NoFilterPins) {
+        const SliceModel* off = (adc == 0) ? sliceById(m_hl2NoPinsSliceId) : nullptr;
+        if (off != nullptr) {
+            return tr("Slice %1 on %2 has no filter pins set, so the filter board is off.")
+                .arg(off->sliceLetter(), bandLabel(bandFromFrequency(off->frequency())));
+        }
+        return tr("The band has no filter pins set, so the filter board is off.");
     }
 
     if (st.mode == AlexController::BpfMode::ForceBypass) {

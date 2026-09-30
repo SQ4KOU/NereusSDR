@@ -38,6 +38,9 @@
 //   2026-09-30 - Shared-input filters (ruling (d)): setLowPassHold.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - SwitchBypass::NoFilterPins: the HL2's N2ADR pins sent are
+//                0x00 (JJ's ruling). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -173,11 +176,12 @@ void AlexController::setWidebandActive(int adc, bool on)
 // Plan Task 14 re-review N4 (Phase 3F design section 16.4.1): WIDE means
 // the chain is bypassed on the wire. An Alex tab switch can put the bypass
 // there over a filtered band, so the chain's state has to know about it.
-void AlexController::setSwitchBypass(int adc, SwitchBypass cause)
+void AlexController::setSwitchBypass(int adc, SwitchBypass cause, const QString& detail)
 {
     if (adc < 0 || adc >= 2) { return; }
-    if (m_switchBypass[adc] == cause) { return; }
+    if (m_switchBypass[adc] == cause && m_switchBypassDetail[adc] == detail) { return; }
     m_switchBypass[adc] = cause;
+    m_switchBypassDetail[adc] = detail;
     recomputeBpf(adc);
 }
 
@@ -269,6 +273,11 @@ void AlexController::recomputeBpf(int adc)
             break;
         case SwitchBypass::Disable6mLnaOnTx:
             s.reasonText = QStringLiteral("BYPASS (6m LNA off on TX)");
+            break;
+        case SwitchBypass::NoFilterPins:
+            s.reasonText = m_switchBypassDetail[adc].isEmpty()
+                ? QStringLiteral("BYPASS (no filter pins)")
+                : QStringLiteral("BYPASS (%1 has no filter pins)").arg(m_switchBypassDetail[adc]);
             break;
         case SwitchBypass::None:
             break;

@@ -233,6 +233,9 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  lowPassHoldReason's broadcast-band
 //                                    high-pass sentences (JJ's ruling).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  AlexController's NoFilterPins reason
+//                                    names the slice (JJ's ruling).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1851,10 +1854,13 @@ const QList<ReasonSource>& propertyTextSources()
         // publish's error: Rf2ksConnection's connectionFailed reason, scanned
         // above.
         {"src/core/StationRfKitController.cpp", {}, {}, 1, {}, {QStringLiteral("reason")}},
-        // Band names ("20m"), one or several joined with " + ".
+        // Band names ("20m"), one or several joined with " + ". On the HL2
+        // the slice the filter board is off for, by letter and band ("slice
+        // B on WWV"), which RadioModel::republishAlexAdcSlices passes in.
         {"src/core/accessories/AlexController.cpp", {QStringLiteral("recomputeBpf")}, {}, 3,
          {QStringLiteral("bandLabel(s.currentBpfBand)"),
-          QStringLiteral("bandList.join(QStringLiteral(\" + \"))")},
+          QStringLiteral("bandList.join(QStringLiteral(\" + \"))"),
+          QStringLiteral("m_switchBypassDetail[adc]")},
          // One band's name alone: the reason when one band is filtered.
          {QStringLiteral("bandLabel(s.currentBpfBand)")}},
         {"src/core/dsp/NnrSettings.h", {QStringLiteral("nnrLimitExplanation")}, {}, 4},

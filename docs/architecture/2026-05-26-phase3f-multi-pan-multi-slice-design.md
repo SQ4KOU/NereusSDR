@@ -332,10 +332,17 @@ reason). A slice on 160 m in the N2ADR preset, on GEN, or on any band the operat
 pin 7 turns the high-pass off for the input; no band is named in the rule. mi0bot takes the higher
 band's mask whole, with no bit-6 handling. `RadioModel::republishAlexAdcSlices` hands
 AlexController the one band the pins follow, so the chain reports `Filtered`, and WIDE never
-shows for a band difference. The slices below the highest are held behind its filter; the
+shows for a band difference. WIDE shows when `0x00` is actually sent: ForceBypass,
+WidebandLocked, or pins that come to `0x00` because the band of the slice they follow has no pins
+set (WWV under the N2ADR preset, or a band the operator left empty) on a board with receive pins
+configured. Then the chain reports bypassed (`SwitchBypass::NoFilterPins`, from the same
+`hl2ReceivePins` result the connection sends), the WIDE reason names that slice ("Slice B on WWV
+has no filter pins set, so the filter board is off."), and there is no low-pass sentence
+(`lowPassSlice` -1). With no receive pins set on any band nothing is reported off, as before. The slices below the highest are held behind its filter; the
 low-pass reason names the slice the pins follow and, when bit 6 is cleared, adds a line naming
-the slice that needs the high-pass off. ForceBypass and WidebandLocked still send `0x00` (the
-2026-08-01 maintainer note); keyed, the transmitting band's TX pins go out as before; the Alex
+the slice that needs the high-pass off (the top slice itself when its own mask lacks bit 6 and
+another's has it). 6m/ByPass on RX is an Alex switch; it changes neither the HL2's pins nor its
+reason. ForceBypass and WidebandLocked still force `0x00` (the 2026-08-01 maintainer note); keyed, the transmitting band's TX pins go out as before; the Alex
 boards are unchanged.
 
 Recompute triggers (16-row event matrix in §10).

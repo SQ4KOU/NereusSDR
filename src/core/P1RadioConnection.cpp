@@ -142,6 +142,9 @@
 //                pins lack it; only ForceBypass and WidebandLocked send 0x00
 //                (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Review fix: ocBandFrequencyHz reports the receiver
+//                hl2ReceivePins takes the pins from. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2593,8 +2596,12 @@ quint64 P1RadioConnection::ocBandFrequencyHz() const
     if (!m_mox && m_hardwareProfile.model == HPSDRModel::HERMESLITE
         && m_countedSlotsAdc0 != 0) {
         const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
-        const int best = SharedInputLowPass::highest(
-            SharedInputLowPass::Rule::HighestCentrePins, candidates);
+        // The receiver hl2ReceivePins takes the pins from, so the band
+        // reported with the byte is the one sent.
+        const int best = m_ocMatrix
+            ? SharedInputLowPass::hl2PinsReceiver(*m_ocMatrix, candidates)
+            : SharedInputLowPass::highest(SharedInputLowPass::Rule::HighestCentrePins,
+                                          candidates);
         if (best >= 0) {
             return SharedInputLowPass::ruleHz(SharedInputLowPass::Rule::HighestCentrePins,
                                               candidates.at(best));

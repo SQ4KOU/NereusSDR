@@ -6,7 +6,7 @@
 //   Project Files/Source/Console/HPSDR/Penny.cs:33-150
 //   Project Files/Source/Console/enums.cs:443-457
 // Ported from mi0bot-Thetis (mi0bot/OpenHPSDR-Thetis fork) sources:
-//   Project Files/Source/Console/HPSDR/Penny.cs:158-159
+//   Project Files/Source/Console/HPSDR/Penny.cs:158-159, 162-165
 //   Project Files/Source/Console/enums.cs:272-325
 //   (RXABitMasks[], TXABitMasks[], setBandABitMask,
 //    TX pin action mapping, TXPinActions enum)

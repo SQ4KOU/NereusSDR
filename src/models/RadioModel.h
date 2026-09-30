@@ -19,6 +19,9 @@
 //   2026-09-30 - lowPassHoldReason names the slices the HL2's N2ADR
 //                 broadcast-band high-pass is off for (JJ's ruling).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - m_hl2NoPinsSliceId: the slice the HL2 filter board is off
+//                 for (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -7423,6 +7426,10 @@ private:
     // counted on each chain (away and unbound slices left out), for
     // bypassReasonForAdc's range names.
     std::array<QList<int>, 2> m_alexCountedSliceIds{};
+    // JJ's ruling of 2026-09-30: on the HL2, the slice whose band has no
+    // N2ADR pins set when the pins sent come to 0x00 (hl2ReceivePins
+    // boardOff), for bypassReasonForAdc. -1 otherwise.
+    int m_hl2NoPinsSliceId{-1};
     // alexLpfBits(): -1 until the connection (or the Core) reports one.
     int m_alexLpfBits{-1};
     // Level Cal: the Core's run (local role), created on first use.

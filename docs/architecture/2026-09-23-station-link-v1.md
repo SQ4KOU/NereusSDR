@@ -3863,7 +3863,10 @@ Notes on the keys:
   slice is counted, when every counted slice uses the same low-pass, when
   the radio has no receive low-pass, when 6m/ByPass on receive is on, or
   on the Hermes Lite 2 when the band-pass is bypassed (the N2ADR pins are
-  then all off, so no low-pass is set: Force bypass or wideband). In Auto
+  then all off, so no low-pass is set: Force bypass or wideband), or on
+  the Hermes Lite 2 when the pins sent are all off because the band of
+  the slice they follow has none set (the chain is then reported bypassed
+  and `rxFilter0Reason` names that slice). In Auto
   on the Hermes Lite 2, slices whose pins differ get the pins of the
   highest slice, and the reason names it. When the N2ADR board's
   broadcast-band high-pass (pin 7) is off because a counted slice's own

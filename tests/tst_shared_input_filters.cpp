@@ -50,6 +50,13 @@
 //                                    and for a user table without it,
 //                                    ForceBypass 0x00, keyed TX pins.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Review fix: the top slice named when
+//                                    its own mask lacks pin 7; the
+//                                    high-pass-only reason; Force band
+//                                    with 160 m; 6m/ByPass on the HL2;
+//                                    the 6.0 MHz case renamed for GEN;
+//                                    WWV over 20 m reports the board off.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -539,19 +546,21 @@ private slots:
         QVERIFY2(st.lowPassReason.contains(letterOn(s.model, a, "20m")), qPrintable(st.lowPassReason));
     }
 
-    // RX1 on 49 m SWL (6.0 MHz), slice B on 20 m. mi0bot's enum puts B49M
-    // (idx 31) above B20M (idx 5) and would send the 49 m pins, a lower
-    // low-pass that cuts 20 m. By frequency the pins follow 20 m and the
-    // reason names the 20 m slice. (NereusSDR's band lookup files 6.0 MHz
-    // under GEN, outside mi0bot's range, which also ranks it below 20 m.)
-    void hl2_swl49mAndTwenty_pinsFollowTwenty()
+    // RX1 at 6.0 MHz, slice B on 20 m. NereusSDR's band lookup has no SWL
+    // ranges, so 6.0 MHz is GEN, a band outside mi0bot's range
+    // (OcMatrix::extCtrlBandIndex -1, where mi0bot sends no pins,
+    // Penny.cs:162-165 [@c26a8a4]). It ranks below every band in range, so
+    // the pins follow 20 m and the reason names the 20 m slice. (SWL enum
+    // order cannot be reached by frequency here; WWV, below, is the case
+    // that tests the frequency ordering against mi0bot's enum.)
+    void hl2_genAndTwenty_pinsFollowTwenty()
     {
-        constexpr double k49mSwlHz = 6000000.0;
+        constexpr double kGenHz = 6000000.0;
         P1Session s(HPSDRHW::HermesLite);
         OcMatrix& oc = sharedPins(s.model, s.conn);
-        oc.setPin(Band::Band49m, 4, /*tx=*/false, true);
         s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
-        const int a = s.add(k49mSwlHz);
+        QCOMPARE(bandFromFrequency(kGenHz), Band::GEN);
+        const int a = s.add(kGenHz);
         const int b = s.add(k20mHz);
         QCOMPARE(s.conn.rx1SlotForTest(), 0);
         QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band20m, /*tx=*/false));
@@ -728,8 +737,9 @@ private slots:
     }
 
     // A user pin table where 20 m has no pin 7: 40 m + 20 m sends 20 m's
-    // pins, bit 6 clear (20 m's own mask has none to clear). Then 20 m under
-    // a 10 m slice that keeps pin 7: the 10 m pins go out with bit 6
+    // pins, bit 6 clear (20 m's own mask has none to clear), and the reason
+    // names the 20 m slice as the one the high-pass is off for. Then 20 m
+    // under a 10 m slice that keeps pin 7: the 10 m pins go out with bit 6
     // cleared, and the reason says the 20 m slice needs it off.
     void hl2Auto_userTableTwentyWithoutPin7_clearsTheHighPass()
     {
@@ -742,6 +752,12 @@ private slots:
         QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band20m, /*tx=*/false));
         QVERIFY(!(p1OcByte(s.conn) & kHighPassBit));
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+        // The high-pass is off for the 20 m slice itself, the one the pins
+        // follow, so it is the slice named.
+        QVERIFY2(s.model.filterChainState(0).lowPassReason.endsWith(
+                     QStringLiteral("The broadcast-band high-pass filter is off because slice "
+                                    "%1 needs it off.").arg(letterOn(s.model, b, "20m"))),
+                 qPrintable(s.model.filterChainState(0).lowPassReason));
 
         // With the highest slice keeping pin 7 and a lower one without it,
         // the bit is cleared from the higher mask: 20 m + 10 m.
@@ -756,6 +772,144 @@ private slots:
                      QStringLiteral("The broadcast-band high-pass filter is off because slice "
                                     "%1 needs it off.").arg(letterOn(s.model, b, "20m"))),
                  qPrintable(st.lowPassReason));
+    }
+
+    // Masks that differ only in pin 7: a user table with 30 m lacking it,
+    // under a 20 m slice. One low-pass (the 30/20 m filter), so nothing is
+    // held and lowPassSlice is -1; the reason is the high-pass sentence
+    // alone, naming the 30 m slice.
+    void hl2Auto_highPassOnly_reasonIsTheHighPassSentence()
+    {
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = n2adrPins(s.model, s.conn);
+        oc.setPin(Band::Band30m, 6, /*tx=*/false, false);
+        const int a = s.add(k30mHz);
+        s.add(k20mHz);
+        const quint8 twenty = oc.maskFor(Band::Band20m, /*tx=*/false);
+        QCOMPARE(quint8(twenty & ~kHighPassBit), oc.maskFor(Band::Band30m, /*tx=*/false));
+        QCOMPARE(p1OcByte(s.conn), quint8(twenty & ~kHighPassBit));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.lowPassSlice, -1);
+        QCOMPARE(st.lowPassReason,
+                 QStringLiteral("The broadcast-band high-pass filter is off because slice %1 "
+                                "needs it off.").arg(letterOn(s.model, a, "30m")));
+    }
+
+    // Force band with a slice on 160 m: the pins are the highest slice's,
+    // as in Auto (the HL2 has no forced-band pins), so bit 6 goes off and
+    // the reason says so.
+    void hl2_forceBand_160mAndForty_highPassOff()
+    {
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = n2adrPins(s.model, s.conn);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
+        const int a = s.add(k160mHz);
+        const int b = s.add(k40mHz);
+        QCOMPARE(p1OcByte(s.conn),
+                 quint8(oc.maskFor(Band::Band40m, /*tx=*/false) & ~kHighPassBit));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(st.lowPassSlice, b);
+        QVERIFY2(st.lowPassReason.endsWith(
+                     QStringLiteral("The broadcast-band high-pass filter is off because slice "
+                                    "%1 needs it off.").arg(letterOn(s.model, a, "160m"))),
+                 qPrintable(st.lowPassReason));
+    }
+
+    // 6m/ByPass on RX is an Alex switch; the HL2's pins do not read it, and
+    // neither does its reason, so the two still agree.
+    void hl2_lpfBypassOnRx_changesNeitherPinsNorReason()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:6F");
+        P1Session s(HPSDRHW::HermesLite);
+        RadioInfo info;
+        info.macAddress = mac;
+        info.boardType = HPSDRHW::HermesLite;
+        s.model.setLastRadioInfoForTest(info);
+        s.model.setConnectionStateForTest(ConnectionState::Connected);
+        OcMatrix& oc = n2adrPins(s.model, s.conn);
+        s.add(k160mHz);
+        const int b = s.add(k40mHz);
+        const quint8 wire = quint8(oc.maskFor(Band::Band40m, false) & ~kHighPassBit);
+        QCOMPARE(p1OcByte(s.conn), wire);
+        const QString reason = s.model.filterChainState(0).lowPassReason;
+        QVERIFY(reason.contains(QStringLiteral("high-pass")));
+
+        AppSettings::instance().setHardwareValue(mac, QStringLiteral("alex/master/lpfBypass"),
+                                                 QStringLiteral("True"));
+        s.model.applyAlexHpfSwitchSettings();
+        QCOMPARE(p1OcByte(s.conn), wire);
+        QCOMPARE(s.model.filterChainState(0).lowPassReason, reason);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+        AppSettings::instance().setHardwareValue(mac, QStringLiteral("alex/master/lpfBypass"),
+                                                 QStringLiteral("False"));
+        s.model.applyAlexHpfSwitchSettings();
+    }
+
+    // ── HL2: the pins sent come to 0x00, the board is off ────────────────
+    //
+    // JJ's ruling of 2026-09-30 (option 2): the pins are the top slice's
+    // receive mask as the rules say; when that comes to 0x00 because its
+    // band has no pins set (WWV under the N2ADR preset), the board is
+    // reported off: bypassed, WIDE naming that slice, no low-pass sentence,
+    // lowPassSlice -1. The stock HL2 does not cover 6 m or 2 m, so WWV is
+    // the band here.
+    void hl2Auto_wwvOverTwenty_boardOff_data()
+    {
+        QTest::addColumn<double>("wwvHz");
+        QTest::newRow("WWV 25 MHz") << 25000000.0;
+        QTest::newRow("WWV 15 MHz") << 15000000.0;
+    }
+    void hl2Auto_wwvOverTwenty_boardOff()
+    {
+        QFETCH(double, wwvHz);
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = n2adrPins(s.model, s.conn);
+        QCOMPARE(bandFromFrequency(wwvHz), Band::WWV);
+        QCOMPARE(oc.maskFor(Band::WWV, /*tx=*/false), quint8(0));
+        const int a = s.add(k20mHz);
+        const int b = s.add(wwvHz);
+        QCOMPARE(p1OcByte(s.conn), quint8(0x00));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(st.lowPassSlice, -1);
+        QVERIFY2(st.lowPassReason.isEmpty(), qPrintable(st.lowPassReason));
+        const RadioModel::PanBypassState pan = s.model.panBypassState({a, b});
+        QVERIFY(pan.bypassed);
+        QCOMPARE(pan.reason,
+                 QStringLiteral("Slice %1 has no filter pins set, so the filter board is off.")
+                     .arg(letterOn(s.model, b, "WWV")));
+        QVERIFY2(st.reasonText.contains(QStringLiteral("slice %1")
+                                            .arg(letterOn(s.model, b, "WWV"))),
+                 qPrintable(st.reasonText));
+
+        // Retuned onto 17 m, the pins are set again: filtered, no WIDE.
+        s.model.sliceById(b)->setFrequency(k17mHz);
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band17m, /*tx=*/false));
+        QCOMPARE(s.model.filterChainState(0).effective, AlexController::BpfEffective::Filtered);
+        QVERIFY(!s.model.panBypassState({a, b}).bypassed);
+    }
+
+    // A user table with 20 m's pins set and 40 m left empty: 40 m + 20 m
+    // sends 20 m's mask. The top band has pins, so the board is not off.
+    void hl2Auto_userTableFortyEmpty_twentyPins()
+    {
+        P1Session s(HPSDRHW::HermesLite);
+        OcMatrix& oc = n2adrPins(s.model, s.conn);
+        oc.setPin(Band::Band40m, 2, /*tx=*/false, false);
+        oc.setPin(Band::Band40m, 6, /*tx=*/false, false);
+        QCOMPARE(oc.maskFor(Band::Band40m, /*tx=*/false), quint8(0));
+        const int a = s.add(k40mHz);
+        const int b = s.add(k20mHz);
+        const quint8 twenty = oc.maskFor(Band::Band20m, /*tx=*/false);
+        QVERIFY(twenty != 0);
+        // 40 m's empty mask lacks pin 7, so the high-pass goes off for it.
+        QCOMPARE(p1OcByte(s.conn), quint8(twenty & ~kHighPassBit));
+        const AlexController::AlexAdcState& st = s.model.filterChainState(0);
+        QCOMPARE(st.effective, AlexController::BpfEffective::Filtered);
+        QVERIFY(!s.model.panBypassState({a, b}).bypassed);
+        QCOMPARE(st.lowPassSlice, b);
     }
 
     // ForceBypass still switches the board off: 0x00, WIDE, no reason.

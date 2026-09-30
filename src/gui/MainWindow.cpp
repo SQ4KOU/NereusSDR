@@ -14,6 +14,8 @@
 //   2026-09-30 - J.J. Boyd (KG4VCF). Shared-input filters (ruling (d)):
 //                the CH label's tooltip is the receive low-pass reason.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). The tooltip comment covers the HL2's
+//                high-pass sentence. AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Level Cal fix wave: the grid follow
 //                guard holds the saved follow at the user's value while a
 //                run holds it off. The step attenuator's ceiling is the
@@ -6810,8 +6812,9 @@ void MainWindow::buildUI()
             lbl->setText(available ? state.reasonText
                 : (m_radioModel->isConnected() ? tr("awaiting Core") : tr("offline")));
             // Shared-input filters, ruling (d): which slice holds the
-            // receive low-pass on this input, and what that costs the
-            // slices below it. Empty when no slice holds it.
+            // receive low-pass on this input and what that costs the
+            // slices below it, and on the HL2 which slice needs the
+            // broadcast-band high-pass off. Empty when neither applies.
             lbl->setToolTip(available ? state.lowPassReason : QString());
             const QString color =
                 (available && state.effective == AlexController::BpfEffective::Filtered)
