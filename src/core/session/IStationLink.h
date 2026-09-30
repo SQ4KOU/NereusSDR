@@ -224,6 +224,10 @@
 //                                    requestListenLevel, a listened slice's
 //                                    own volume and mute. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec lane:
+//                                    hl2SwapAudioUnavailableReason
+//                                    (radioHardwareVersion 13).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -633,6 +637,10 @@ public:
     // External 10 MHz, which the Core sends to its radio.
     static QString hl2ClockUnavailableReason()
     { return QStringLiteral("This Core cannot change its radio's clock settings for this app. Updating the Core may help."); }
+    // radioHardwareVersion 13: HL2 Options' Swap audio channels, which the
+    // Core applies to the receive audio it sends its radio.
+    static QString hl2SwapAudioUnavailableReason()
+    { return QStringLiteral("This Core cannot swap its radio's audio channels for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.

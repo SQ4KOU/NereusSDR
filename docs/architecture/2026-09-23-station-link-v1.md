@@ -933,6 +933,13 @@ control from the catalogue's `board` (`rx2Attenuator`, `rx2PreampItems`,
 capabilities it was built for. Neither the station nor the desktop's remote
 window declares it; the phone does.
 
+**`radioMic` 1** (the radio codec lane): the client reads whether the
+radio's own mic input can be chosen, and the note that goes with it, from
+the catalogue's `board` (`radioMic`, `radioMicNote`). A peer that declares
+it is sent `radioMicVersion` (section 6.3); a peer that does not sees
+exactly the capabilities it was built for. Neither the station nor the
+desktop's remote window declares it; the phone does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1058,7 +1065,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 12 |
+| `radioHardwareVersion` | 13 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -1114,6 +1121,7 @@ change shows as surface drift and as a change to this table.
 | `sliceAccessVersion` | 2 |
 | `mediaDirectVersion` | 1 |
 | `rx2AttenuatorVersion` | 1 |
+| `radioMicVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2134,6 +2142,14 @@ At 1 the catalogue's `board` carries `rx2Attenuator`, `rx2PreampItems` and
 the feature is sent no entry; the catalogue keys are sent to every peer,
 and an app that does not know them ignores them.
 
+**The radio's mic input.** A client that declared `radioMic` 1 is sent
+`radioMicVersion`, an `i64`, 1, after `rx2AttenuatorVersion` (or after the
+last entry before it when that is absent) and before `coreBuildInfo`. At 1
+the catalogue's `board` carries `radioMic` and `radioMicNote` (section
+"Catalogue"). A peer that did not declare the feature is sent no entry; the
+catalogue keys are sent to every peer, and an app that does not know them
+ignores them.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2358,7 +2374,8 @@ older window sees only the values it was built for.
 | 100 | `mediaDirectVersion` | `i64` |
 | 101 | `mediaStunUrls` | `utf8` |
 | 102 | `rx2AttenuatorVersion` | `i64` |
-| 103 | `coreBuildInfo` | `utf8` |
+| 103 | `radioMicVersion` | `i64` |
+| 104 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -4906,6 +4923,8 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `rx2Attenuator` | `{min, max, step}` in dB for RX2's own input attenuator, 0 to 31 in 1 dB steps on the radios with a second ADC (ANAN-100D, 200D, OrionMKII, 7000D, 8000D, Anvelina Pro3, G2, G2 1K), or `null`. An app draws a slider and writes `stepAtt`'s `rx2AttenuationDb` with `rx2StepAttEnabled` true (`adcAttenuatorVersion` 1) |
 | `rx2PreampItems` | `[{id, label}]`: RX2's preamp choices where RX2's input has two states instead (the HPSDR's second Mercury: `0dB`, `-20dB`), `id` the `stepAtt` object's `rx2PreampMode`; empty elsewhere |
 | `rx2AttenuatorReason` | Why RX2 has no input control of its own, in operator words, when `rx2Attenuator` is `null` and `rx2PreampItems` is empty (RX2 shares RX1's input, or the radio's second input is not known); `null` otherwise |
+| `radioMic` | Whether the operator can choose the radio's own mic input (Radio Mic) on this radio. True on every board with a mic jack, and on the Hermes Lite 2, which takes mic audio through its audio add-on board; false on the receive-only kits |
+| `radioMicNote` | What the radio's mic input needs, in operator words, when it depends on hardware the radio cannot report: on the Hermes Lite 2, "Needs the Hermes Lite 2 audio add-on board. A stock Hermes Lite 2 sends no mic audio."; `null` otherwise |
 
 `board.transmit`: each key is `{min, max, step}` in the property's own
 units, as the desktop's control ranges it (the TX applet's RF Power and Tune

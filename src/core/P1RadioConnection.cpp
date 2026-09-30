@@ -111,6 +111,12 @@
 //                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the EP2 L/R bytes carry the receive audio
+//                for the radio's own speaker out, swapped as Thetis
+//                sendProtocol1Samples does (networkproto1.c:726-731
+//                [v2.10.3.15]); on the HL2 only when Swap audio channels is
+//                on, as mi0bot (networkproto1.c:1231-1239 [@c26a8a4]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -418,6 +424,7 @@ mw0lge@grange-lane.co.uk
 
 #include <array>
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>    // memset
@@ -1592,6 +1599,11 @@ void P1RadioConnection::setHl2ResetOnDisconnect(bool on)
     m_hl2ResetOnDisconnect = on;
 }
 
+void P1RadioConnection::setHl2SwapAudioChannels(bool on)
+{
+    m_hl2SwapAudioChannels = on;
+}
+
 // ---------------------------------------------------------------------------
 // HL2 clock chip: External 10 MHz (CL1 input) and the CL2 output
 //
@@ -2676,6 +2688,9 @@ void P1RadioConnection::sendTxIq(const float* iq, int n)
         // Write 8 bytes: [mic_L hi][mic_L lo][mic_R hi][mic_R lo][I hi][I lo][Q hi][Q lo]
         // From deskhpsdr/src/old_protocol.c:2429-2458 [@120188f]
         //   mic bytes zero — NullMicSource (3M-1b will fill them)
+        // Radio codec (2026-09-30): the first four bytes are the receive
+        // audio L/R for the radio's speaker out, not mic data. They are
+        // zero here; fillRadioAudioZone writes them as the frame is built.
         int wp = m_txIqWritePos.load(std::memory_order_relaxed);
         m_txIqBuf[wp++] = 0;                                                      // mic_L hi
         m_txIqBuf[wp++] = 0;                                                      // mic_L lo
@@ -2775,6 +2790,70 @@ bool P1RadioConnection::fillTxZone(quint8* zone63) noexcept
     // m_txIqCount before deciding whether the buffer has space.
     m_txIqCount.fetch_sub(kSamplesPerZone, std::memory_order_relaxed);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// fillRadioAudioZone — radio codec (2026-09-30)
+//
+// Writes the receive audio for the radio's own speaker out into the L/R
+// bytes of the 63 samples of one EP2 zone. Porting from Thetis
+// ChannelMaster/networkproto1.c:726-740 [v2.10.3.15] (sendProtocol1Samples;
+// pbuffs[0] is outLRbufp, the receive audio, 126 L/R pairs a packet):
+//   for (i = 0; i < 4 * 63; i += 2)			// swap L & R audio; firmware bug fix
+//   {
+//       swap = pbuffs[0][i + 0];
+//       pbuffs[0][i + 0] = pbuffs[0][i + 1];
+//       pbuffs[0][i + 1] = swap;
+//   }
+//   for (i = 0; i < 2 * 63; i++)				// for each sample from both sets, 8 bytes per
+//       for (j = 0; j < 2; j++)					// for a sample from each set, 4 bytes per
+//           for (k = 0; k < 2; k++)				// for each component of the sample, 2 per
+//           {
+//               temp = pbuffs[j][i * 2 + k] >= 0.0 ? (short)floor(pbuffs[j][i * 2 + k] * 32767.0 + 0.5) :
+//                   (short)ceil(pbuffs[j][i * 2 + k] * 32767.0 - 0.5);
+//               ...
+//               prn->OutBufp[8 * i + 4 * j + 2 * k + 0] = (char)((temp >> 8) & 0xff);
+//               prn->OutBufp[8 * i + 4 * j + 2 * k + 1] = (char)(temp & 0xff);
+//           }
+// The HL2 swaps only while Swap audio channels is on. From mi0bot
+// ChannelMaster/networkproto1.c:1231-1239 [@c26a8a4]:
+//   if (prn->swap_audio_channels)				// To cater for different firmware at the hardware, allow control of audio channels swapping
+//   {
+//       for (i = 0; i < 4 * 63; i += 2)			// swap L & R audio; firmware bug fix
+//       ...
+//   }
+//
+// NereusSDR: the value is held to +/-32767 before the conversion, where
+// Thetis's (short) cast of a sample past full scale is undefined in C++.
+// Thetis overwrites the L/R data with EER data while transmitting in
+// EER/ETR mode (networkproto1.c:717-721 [v2.10.3.15]); NereusSDR has no
+// EER mode, so that branch is not ported. While the audio ring holds none
+// due (takeRadioAudio), the zone's L/R bytes stay zero.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::fillRadioAudioZone(quint8* zone63) noexcept
+{
+    static constexpr int kSamplesPerZone = 63;
+    float lr[kSamplesPerZone * 2];
+    if (!takeRadioAudio(lr, kSamplesPerZone)) {
+        return;
+    }
+    const bool swap = isHl2() ? m_hl2SwapAudioChannels : true;
+    const auto toShort = [](float x) -> int16_t {
+        const double scaled = x >= 0.0f ? std::floor(double(x) * 32767.0 + 0.5)
+                                        : std::ceil(double(x) * 32767.0 - 0.5);
+        return static_cast<int16_t>(std::clamp(scaled, -32767.0, 32767.0));
+    };
+    for (int i = 0; i < kSamplesPerZone; ++i) {
+        const float left = lr[i * 2 + 0];
+        const float right = lr[i * 2 + 1];
+        const int16_t first = toShort(swap ? right : left);
+        const int16_t second = toShort(swap ? left : right);
+        quint8* slot = zone63 + i * kTxIqBytesPerSample;
+        slot[0] = static_cast<quint8>((first >> 8) & 0xFF);
+        slot[1] = static_cast<quint8>(first & 0xFF);
+        slot[2] = static_cast<quint8>((second >> 8) & 0xFF);
+        slot[3] = static_cast<quint8>(second & 0xFF);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4591,6 +4670,10 @@ void P1RadioConnection::sendCommandFrame()
     // frame[528..1031] = subframe 1 TX data zone (after 3-byte sync + 5-byte C&C)
     fillTxZone(frame + 16);
     fillTxZone(frame + 528);
+    // Radio codec (2026-09-30): the L/R bytes of both zones carry the
+    // receive audio for the radio's own speaker out (fillRadioAudioZone).
+    fillRadioAudioZone(frame + 16);
+    fillRadioAudioZone(frame + 528);
 
     QByteArray pkt(reinterpret_cast<const char*>(frame), 1032);
     m_socket->writeDatagram(pkt, m_radioInfo.address, m_radioInfo.port);

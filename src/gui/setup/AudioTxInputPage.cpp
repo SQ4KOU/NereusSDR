@@ -20,6 +20,9 @@
 //   transmit permission.
 // R-R3-49 / R-IOS-18 (2026-09-29): Setup description version 15 ids on Mic
 //   Gain and the radio microphone groups, whose titles use parentheses.
+// Radio codec lane (2026-09-30): Radio Mic opens on the Hermes Lite 2 with
+//   the audio add-on note and the Hermes group; Saturn G2 Mic Tip-Ring; the
+//   Orion group disabled on the Red Pitaya; Line In Gain in 1.5 dB steps.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -48,6 +51,8 @@
 #include <QRadioButton>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 // PortAudio enumeration — only the opaque struct access and hostApis() are
 // used here (no direct Pa_* calls); PortAudioBus wraps the C API.
@@ -124,14 +129,19 @@ const QVector<int> AudioTxInputPage::kBufferSizes = {
 AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("TX Input"), model, parent)
 {
-    const bool hasMicJack = model
-        ? model->boardCapabilities().hasMicJack
+    // Radio codec lane: a board with a mic jack, or the HL2 with its
+    // audio add-on board, takes the radio mic.
+    const bool radioMicSelectable = model
+        ? model->boardCapabilities().radioMicSelectable()
         : true;  // safe default: don't disable Radio Mic for null model
     m_hw = model
         ? model->boardCapabilities().board
         : HPSDRHW::Unknown;
+    m_radioMicNeedsAddOn = model && model->boardCapabilities().radioMicNeedsAddOn;
+    m_orionMicPanelAvailable = !model
+        || RadioModel::orionMicPanelAvailable(model->hardwareProfile().model);
 
-    buildPage(hasMicJack, m_hw);
+    buildPage(radioMicSelectable, m_hw);
 
     // Wire two-way sync with TransmitModel.
     if (model) {
@@ -194,14 +204,7 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
             QSignalBlocker blk(m_hermesMicBoostChk);
             m_hermesMicBoostChk->setChecked(tx->micBoost());
         }
-        if (m_hermesLineInGainSlider) {
-            QSignalBlocker blk(m_hermesLineInGainSlider);
-            const int sliderVal = static_cast<int>(tx->lineInBoost());
-            m_hermesLineInGainSlider->setValue(sliderVal);
-            if (m_hermesLineInGainLabel) {
-                m_hermesLineInGainLabel->setText(lineInBoostLabel(sliderVal));
-            }
-        }
+        showLineInBoost(tx->lineInBoost());
         // Orion family: micTipRing + micBias + micPttDisabled + micBoost
         if (m_orionMicTipRingChk) {
             QSignalBlocker blk(m_orionMicTipRingChk);
@@ -239,6 +242,10 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
         if (m_saturnMicBoostChk) {
             QSignalBlocker blk(m_saturnMicBoostChk);
             m_saturnMicBoostChk->setChecked(tx->micBoost());
+        }
+        if (m_saturnMicTipRingChk) {
+            QSignalBlocker blk(m_saturnMicTipRingChk);
+            m_saturnMicTipRingChk->setChecked(tx->micTipRing());
         }
     }
 
@@ -434,7 +441,7 @@ void AudioTxInputPage::applyHeldControlGate()
 // Build helpers
 // ---------------------------------------------------------------------------
 
-void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
+void AudioTxInputPage::buildPage(bool radioMicSelectable, HPSDRHW hw)
 {
     // ── Mic Source group box (I.1) ────────────────────────────────────────────
     auto* srcGrp = new QGroupBox(QStringLiteral("Mic Source"), this);
@@ -457,8 +464,9 @@ void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
     // PC Mic is selected by default.
     m_pcMicBtn->setChecked(true);
 
-    // Gate Radio Mic on hasMicJack capability.
-    if (!hasMicJack) {
+    // Gate Radio Mic on the board taking the radio mic (a mic jack, or the
+    // HL2's audio add-on board).
+    if (!radioMicSelectable) {
         m_radioMicBtn->setEnabled(false);
         m_radioMicBtn->setToolTip(
             QStringLiteral("Radio mic jack not present on Hermes Lite 2"));
@@ -466,6 +474,16 @@ void AudioTxInputPage::buildPage(bool hasMicJack, HPSDRHW hw)
 
     srcLayout->addWidget(m_pcMicBtn);
     srcLayout->addWidget(m_radioMicBtn);
+    // Radio codec lane: the HL2 gateware cannot report its AK4951 audio
+    // add-on board, so Radio Mic stays open with a plain note, as mi0bot
+    // leaves Mic In / Line In open on every model (mi0bot setup.cs:14566-14589
+    // [@c26a8a4]).
+    if (m_radioMicNeedsAddOn) {
+        m_radioMicBtn->setToolTip(RadioModel::radioMicAddOnNote());
+        m_radioMicNoteLabel = new QLabel(RadioModel::radioMicAddOnNote(), srcGrp);
+        m_radioMicNoteLabel->setWordWrap(true);
+        srcLayout->addWidget(m_radioMicNoteLabel);
+    }
     srcLayout->addWidget(m_vaxMicBtn);
 
     contentLayout()->insertWidget(0, srcGrp);
@@ -713,10 +731,13 @@ void AudioTxInputPage::updateRadioMicGroupVisibility(MicSource source, HPSDRHW h
     // Only show a Radio Mic group when Radio Mic is actually selected.
     const bool radioMicActive = (source == MicSource::Radio);
 
+    // The Hermes Lite 2 takes the Hermes group's Mic In / Line In, boost and
+    // Line In Gain through its AK4951 add-on board (P1CodecHl2).
     const bool isHermes = (hw == HPSDRHW::Hermes
                         || hw == HPSDRHW::HermesII
                         || hw == HPSDRHW::Angelia
-                        || hw == HPSDRHW::Atlas);
+                        || hw == HPSDRHW::Atlas
+                        || (hw == HPSDRHW::HermesLite && m_radioMicNeedsAddOn));
     const bool isOrion  = (hw == HPSDRHW::Orion
                         || hw == HPSDRHW::OrionMKII);
     const bool isSaturn = (hw == HPSDRHW::Saturn
@@ -731,9 +752,25 @@ void AudioTxInputPage::updateRadioMicGroupVisibility(MicSource source, HPSDRHW h
 // lineInBoostLabel: format dB label for the Line In Gain slider (I.3)
 // ---------------------------------------------------------------------------
 
-/*static*/ QString AudioTxInputPage::lineInBoostLabel(int sliderValue)
+/*static*/ QString AudioTxInputPage::lineInBoostLabel(double dB)
 {
-    return QStringLiteral("%1 dB").arg(sliderValue);
+    // One decimal place, as Thetis's udLineInBoost shows it.
+    return QStringLiteral("%1 dB").arg(dB, 0, 'f', 1);
+}
+
+// Shows a Line In Gain in the slider (half decibels) and its label.
+void AudioTxInputPage::showLineInBoost(double dB)
+{
+    if (!m_hermesLineInGainSlider) { return; }
+    {
+        QSignalBlocker blk(m_hermesLineInGainSlider);
+        m_hermesLineInGainSlider->setValue(
+            static_cast<int>(std::lround(dB * kLineInGainSliderScale)));
+    }
+    if (m_hermesLineInGainLabel) {
+        m_hermesLineInGainLabel->setText(lineInBoostLabel(
+            double(m_hermesLineInGainSlider->value()) / kLineInGainSliderScale));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -929,7 +966,10 @@ void AudioTxInputPage::onModelMicGainDbChanged(int dB)
 
 void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
 {
-    m_hermesGroup = new QGroupBox(QStringLiteral("Radio Mic (Hermes / Atlas)"), this);
+    m_hermesGroup = new QGroupBox(m_hw == HPSDRHW::HermesLite
+                                      ? QStringLiteral("Radio Mic (Hermes Lite 2)")
+                                      : QStringLiteral("Radio Mic (Hermes / Atlas)"),
+                                  this);
     auto* grpLayout = new QVBoxLayout(m_hermesGroup);
 
     // ── Row 1: Mic In / Line In radio buttons ─────────────────────────────────
@@ -961,17 +1001,24 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
             this, &AudioTxInputPage::onHermesMicBoostToggled);
 
     // ── Row 3: Line In Gain slider ───────────────────────────────────────────
-    // Range: kLineInBoostMin (-34.5 → int: -34) to kLineInBoostMax (12), 1 dB steps.
-    // kLineInBoostMin is a double (-34.5) cast to int at slider construction
-    // time via static_cast<int>; the slider integer minimum is therefore -34.
+    // Range kLineInBoostMin (-34.5) to kLineInBoostMax (12) in
+    // kLineInBoostStep (1.5 dB) steps, as Thetis's udLineInBoost (setup.
+    // designer.cs:47006-47034 [v2.10.3.15]: Increment 1.5, Minimum -34.5,
+    // Maximum 12, one decimal). The slider counts half decibels
+    // (kLineInGainSliderScale), so -34.5 dB is -69 and a step is 3.
     m_hermesLineInGainSlider = new QSlider(Qt::Horizontal, m_hermesGroup);
     m_hermesLineInGainSlider->setProperty("nereusSetupId", "audio.txInput.hermesLineInGain");
-    m_hermesLineInGainSlider->setMinimum(static_cast<int>(TransmitModel::kLineInBoostMin));
-    m_hermesLineInGainSlider->setMaximum(static_cast<int>(TransmitModel::kLineInBoostMax));
-    m_hermesLineInGainSlider->setSingleStep(1);
+    m_hermesLineInGainSlider->setProperty("nereusSetupScale", double(kLineInGainSliderScale));
+    m_hermesLineInGainSlider->setMinimum(
+        static_cast<int>(std::lround(TransmitModel::kLineInBoostMin * kLineInGainSliderScale)));
+    m_hermesLineInGainSlider->setMaximum(
+        static_cast<int>(std::lround(TransmitModel::kLineInBoostMax * kLineInGainSliderScale)));
+    m_hermesLineInGainSlider->setSingleStep(
+        static_cast<int>(std::lround(TransmitModel::kLineInBoostStep * kLineInGainSliderScale)));
+    m_hermesLineInGainSlider->setPageStep(m_hermesLineInGainSlider->singleStep());
     m_hermesLineInGainSlider->setValue(0);  // TransmitModel default: 0.0 dB
 
-    m_hermesLineInGainLabel = new QLabel(lineInBoostLabel(0), m_hermesGroup);
+    m_hermesLineInGainLabel = new QLabel(lineInBoostLabel(0.0), m_hermesGroup);
     m_hermesLineInGainLabel->setMinimumWidth(60);
 
     auto* gainRow = new QHBoxLayout();
@@ -982,6 +1029,17 @@ void AudioTxInputPage::buildHermesRadioMicGroup(QVBoxLayout* parentLayout)
 
     connect(m_hermesLineInGainSlider, &QSlider::valueChanged,
             this, &AudioTxInputPage::onHermesLineInGainChanged);
+
+    // On the Hermes Lite 2 these settings reach the AK4951 on its audio
+    // add-on board, which the gateware cannot report, so each row carries
+    // the same note as Radio Mic (the Setup description's tooltip).
+    if (m_hw == HPSDRHW::HermesLite && m_radioMicNeedsAddOn) {
+        const QString note = RadioModel::radioMicAddOnNote();
+        micInBtn->setToolTip(note);
+        lineInBtn->setToolTip(note);
+        m_hermesMicBoostChk->setToolTip(note);
+        m_hermesLineInGainSlider->setToolTip(note);
+    }
 
     parentLayout->addWidget(m_hermesGroup);
 }
@@ -1027,6 +1085,16 @@ void AudioTxInputPage::buildOrionRadioMicGroup(QVBoxLayout* parentLayout)
     connect(m_orionMicBoostChk,      &QCheckBox::toggled,
             this, &AudioTxInputPage::onOrionMicBoostToggled);
 
+    // Radio codec lane: Thetis greys out the ORION mic panel on the Red
+    // Pitaya (RadioModel::orionMicPanelAvailable). The group stays in view,
+    // disabled with its reason; the transmit gates keep this state as the
+    // one they put back.
+    if (!m_orionMicPanelAvailable) {
+        m_orionGroup->setEnabled(false);
+        m_orionGroup->setToolTip(RadioModel::orionMicPanelUnavailableReason());
+        m_orionGroup->setAccessibleDescription(RadioModel::orionMicPanelUnavailableReason());
+    }
+
     parentLayout->addWidget(m_orionGroup);
 }
 
@@ -1059,7 +1127,20 @@ void AudioTxInputPage::buildSaturnRadioMicGroup(QVBoxLayout* parentLayout)
     connect(m_saturnMicInputGroup, &QButtonGroup::idToggled,
             this, &AudioTxInputPage::onSaturnMicInputToggled);
 
-    // ── Rows 2-4: three checkboxes ───────────────────────────────────────────
+    // ── Row 2: Mic Tip-Ring ─────────────────────────────────────────────────
+    // Radio codec lane: Thetis enables the ORION mic panel (Tip / Ring) on
+    // the G2 and G2-1K as well (setup.cs:20292, 20343 [v2.10.3.15]); its
+    // Tip radio sends SetMicTipRing(0) (setup.cs:16504-16510), the same
+    // TransmitModel::micTipRing the Orion group sets.
+    m_saturnMicTipRingChk = new QCheckBox(
+        QStringLiteral("Mic Tip-Ring (Tip is Mic)"), m_saturnGroup);
+    m_saturnMicTipRingChk->setProperty("nereusSetupId", "audio.txInput.saturnMicTipRing");
+    m_saturnMicTipRingChk->setChecked(true);  // TransmitModel default: true
+    grpLayout->addWidget(m_saturnMicTipRingChk);
+    connect(m_saturnMicTipRingChk, &QCheckBox::toggled,
+            this, &AudioTxInputPage::onSaturnMicTipRingToggled);
+
+    // ── Rows 3-5: three checkboxes ───────────────────────────────────────────
     m_saturnMicPttDisabledChk = new QCheckBox(
         QStringLiteral("Mic PTT Disabled"), m_saturnGroup);
     m_saturnMicPttDisabledChk->setProperty("nereusSetupId", "audio.txInput.saturnMicPttDisabled");
@@ -1110,11 +1191,23 @@ void AudioTxInputPage::onHermesMicBoostToggled(bool on)
 void AudioTxInputPage::onHermesLineInGainChanged(int sliderValue)
 {
     if (m_updatingFromModel) { return; }
+    // The slider counts half decibels; a value between steps (a drag) snaps
+    // to the nearest 1.5 dB step from the minimum, as udLineInBoost's
+    // Increment does.
+    const int step = m_hermesLineInGainSlider ? m_hermesLineInGainSlider->singleStep() : 1;
+    const int minimum = m_hermesLineInGainSlider ? m_hermesLineInGainSlider->minimum() : 0;
+    const int snapped = minimum + static_cast<int>(
+        std::lround(double(sliderValue - minimum) / step)) * step;
+    if (m_hermesLineInGainSlider && snapped != sliderValue) {
+        QSignalBlocker blk(m_hermesLineInGainSlider);
+        m_hermesLineInGainSlider->setValue(snapped);
+    }
+    const double dB = double(snapped) / kLineInGainSliderScale;
     if (m_hermesLineInGainLabel) {
-        m_hermesLineInGainLabel->setText(lineInBoostLabel(sliderValue));
+        m_hermesLineInGainLabel->setText(lineInBoostLabel(dB));
     }
     if (!model()) { return; }
-    model()->transmitModel().setLineInBoost(static_cast<double>(sliderValue));
+    model()->transmitModel().setLineInBoost(dB);
 }
 
 // ===========================================================================
@@ -1183,6 +1276,13 @@ void AudioTxInputPage::onSaturnMicBoostToggled(bool on)
     model()->transmitModel().setMicBoost(on);
 }
 
+void AudioTxInputPage::onSaturnMicTipRingToggled(bool on)
+{
+    if (m_updatingFromModel) { return; }
+    if (!model()) { return; }
+    model()->transmitModel().setMicTipRing(on);
+}
+
 // ===========================================================================
 // ── Radio Mic Model→UI slots — all families (I.3) ───────────────────────────
 // ===========================================================================
@@ -1216,25 +1316,19 @@ void AudioTxInputPage::onModelMicBoostChanged(bool on)
 
 void AudioTxInputPage::onModelLineInBoostChanged(double dB)
 {
-    if (!m_hermesLineInGainSlider) { return; }
     m_updatingFromModel = true;
-    {
-        QSignalBlocker blk(m_hermesLineInGainSlider);
-        m_hermesLineInGainSlider->setValue(static_cast<int>(dB));
-    }
-    if (m_hermesLineInGainLabel) {
-        m_hermesLineInGainLabel->setText(lineInBoostLabel(static_cast<int>(dB)));
-    }
+    showLineInBoost(dB);
     m_updatingFromModel = false;
 }
 
 void AudioTxInputPage::onModelMicTipRingChanged(bool on)
 {
-    if (!m_orionMicTipRingChk) { return; }
     m_updatingFromModel = true;
-    {
-        QSignalBlocker blk(m_orionMicTipRingChk);
-        m_orionMicTipRingChk->setChecked(on);
+    for (QCheckBox* box : {m_orionMicTipRingChk, m_saturnMicTipRingChk}) {
+        if (box) {
+            QSignalBlocker blk(box);
+            box->setChecked(on);
+        }
     }
     m_updatingFromModel = false;
 }

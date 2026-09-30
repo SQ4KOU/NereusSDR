@@ -9,6 +9,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
+//                 the radio speaker output tap. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the connect-load seam locks the mic source
+//                 on radioMicSelectable; orionMicPanelAvailable and the HL2
+//                 add-on note. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-29 - Radio Status PTT source: a remote window reads a key from
 //                 a device that does not hold transmit as Remote, as the
 //                 Core's window does; both keep the key's source through a
@@ -616,6 +623,7 @@ enum class PreampMode;
 class ReceiverManager;
 class RemoteDevicesState;
 class AudioEngine;
+class MasterMixAudioTap;
 class WdspEngine;
 class RxDspWorker;
 class DspControlThread;
@@ -1183,6 +1191,16 @@ public:
     static constexpr const char* kDisableHfPaKey = "DisableHfPa";
     static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
     static QString hfPaSwitchUnavailableReason();
+    // Setup > Audio > TX Input's radio mic groups (radio codec lane).
+    // Thetis greys out the whole ORION mic panel (Tip/Ring, PTT, Bias) on
+    // the Red Pitaya (orionMicPanelAvailable); the desktop's Orion group and
+    // the Setup description's Orion rows are shown disabled with this
+    // reason. The Hermes Lite 2 takes the radio mic only with its AK4951
+    // audio add-on board, which the gateware cannot report, so Radio Mic
+    // stays open there with radioMicAddOnNote beside it.
+    static bool orionMicPanelAvailable(HPSDRModel model) noexcept;
+    static QString orionMicPanelUnavailableReason();
+    static QString radioMicAddOnNote();
     // Alex-1 Filters' "6m/ByPass on RX" on a radio Thetis hides it on
     // (codec::alex::lpfBypassAvailable): the desktop's box and the Setup
     // description's row are shown disabled with this reason.
@@ -4345,6 +4363,10 @@ public:
     // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
     // path without spinning up the full wireConnectionSignals pipeline.
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
+    // Radio codec lane: the mic codec wiring alone, for an injected connection.
+    void wireMicCodecForTest() { connectMicCodecSignals(); }
+    void wireRadioSpeakerOutputForTest() { connectRadioSpeakerOutput(); }
+    void unwireRadioSpeakerOutputForTest() { disconnectRadioSpeakerOutput(); }
     // Task 13: wire the injected connection's user digital inputs to the
     // TX inhibit monitor, and undo it, without the full connect pipeline.
     void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
@@ -4553,7 +4575,7 @@ public:
     // reflect the HL2 (or non-HL2) post-connect state.
     void simulateConnectLoadForTest(const QString& mac) {
         m_transmitModel.loadFromSettings(mac);
-        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().radioMicSelectable());
     }
 
     // Release the lock, mirroring teardownConnection()'s setMicSourceLocked(false).
@@ -6189,6 +6211,17 @@ private:
     // in isolation by tst_radio_model_mic_ptt_wire without needing to spin
     // up the full DSP-thread pipeline that wireConnectionSignals starts.
     void connectMicPttDisabledSignal();
+    // Radio codec lane: TransmitModel's mic boost, line in, XLR, tip/ring
+    // and bias reach the connection on connect and on every change (Thetis
+    // SetMicGain and the Setup mic panel). Called from wireConnectionSignals.
+    void connectMicCodecSignals();
+    // Radio codec (2026-09-30): the station's program to the radio's own
+    // speaker out (AudioEngine::setRadioOutputTap into
+    // RadioConnection::pushRadioAudio), for a connection that carries it.
+    // Called from wireConnectionSignals; teardownConnection removes it
+    // before the connection goes.
+    void connectRadioSpeakerOutput();
+    void disconnectRadioSpeakerOutput();
     // Task 13: the radio's user digital inputs reach TxInhibitMonitor
     // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
     // wireConnectionSignals.
@@ -7634,6 +7667,9 @@ private:
     //
     // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
     std::unique_ptr<PcMicSource>           m_pcMicSource;
+    // Radio codec (2026-09-30): the audio engine's radio output tap,
+    // forwarding to the connection (connectRadioSpeakerOutput).
+    std::unique_ptr<MasterMixAudioTap>     m_radioSpeakerTap;
     std::unique_ptr<RadioMicSource>        m_radioMicSource;
     // VAX TX consumer (added 2026-05-06, eager-borg-d64bed).  Pulls
     // audio from /nereussdr-vax-tx shared memory via AudioEngine and

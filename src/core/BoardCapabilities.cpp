@@ -56,6 +56,9 @@
 //                console.cs:40883-40889 [v2.10.3.15] and gives SaturnMKII the
 //                G2's list. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 — Radio codec lane: radioMicNeedsAddOn (HL2) and
+//                 radioMicSelectable(). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -1040,6 +1043,7 @@ const BoardCapabilities kHermesLite = {
     .hasIoBoardHl2    = true,
     .hasSidetoneGenerator = true,
     .hasMicJack       = false,  // HL2 has no radio-side mic input (3M-1b §11)
+    .radioMicNeedsAddOn = true, // the AK4951 audio add-on board (radio codec lane)
     .hasApollo        = false,  // HL2 has no Apollo port; not in RadioModelChanged() switch
     .hasAlex          = false,  // HL2 has no Alex board slot (ocOutputCount=0, hasAlexFilters=false)
     .hasPennyLane     = false,  // HL2 has no OC ext-ctrl; uses IoBoardHl2 for I2C accessories

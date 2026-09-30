@@ -23,6 +23,9 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 — Radio codec lane: radioMicNeedsAddOn (HL2) and
+//                 radioMicSelectable(). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -504,6 +507,21 @@ struct BoardCapabilities {
     // Drives Setup -> Audio -> TX Input page Radio-Mic radio button visibility.
     // 3M-1b.
     bool hasMicJack {true};
+
+    // Radio codec lane (2026-09-30): the radio has a mic input only with an
+    // audio add-on board it cannot report. The HL2 gets its codec from the
+    // AK4951 add-on (Hermes-Lite2 gateware variants hl2b5up_ak4951v3/v4,
+    // BOARD 5 @7472bd1), and its discovery reply carries no field for it
+    // (usopenhpsdr1.v:254-314 @7472bd1). mi0bot has no HL2 mic lock: its
+    // Mic In / Line In / boost / line gain controls (setup.cs:14566-14589
+    // [@c26a8a4] radMicIn/radLineIn_CheckedChanged) work on every model, and
+    // the HL2 codec sends them (networkproto1.c bank 10 C2, bank 11 C2).
+    // hasMicJack stays false for such a board; the Radio Mic choice is
+    // offered with a note (radioMicSelectable).
+    bool radioMicNeedsAddOn {false};
+
+    // Whether the operator may pick the radio's own mic input.
+    bool radioMicSelectable() const noexcept { return hasMicJack || radioMicNeedsAddOn; }
 
     // Per-board mic gain slider range (Phase 3M-1b Task I.4).
     //

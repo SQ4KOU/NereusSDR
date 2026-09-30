@@ -1,4 +1,8 @@
 // no-port-check: NereusSDR-original test of the Setup description wire surface.
+// 2026-09-30: Audio version 24 (radio codec lane): Line In Gain's 1.5 dB
+// steps, Saturn Mic Tip-Ring, the Red Pitaya's Orion rows and the HL2's
+// Hermes rows; the cap is 24. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #include <QtTest>
 #include <QRegularExpression>
 
@@ -1690,9 +1694,9 @@ private slots:
         const QHash<QString, QString> reasons{
             {"hardware.hl2Io.cl2Enable", clock},
             {"hardware.hl2Io.cl2Freq", clock},
-            {"hardware.hl2Io.ext10MHz", clock},
-            {"hardware.hl2Io.swapAudioChannels", QStringLiteral(
-                "NereusSDR does not send the radio audio of its own, so there is nothing to swap.")}};
+            {"hardware.hl2Io.ext10MHz", clock}};
+        // Swap audio channels is open from version 16 (the radio codec
+        // lane): the Core sends the HL2 its receive audio.
         for (const QJsonValue& raw : rows) {
             const QJsonObject row = raw.toObject();
             const QString id = row.value("id").toString();
@@ -1895,6 +1899,167 @@ private slots:
                          qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
             }
         }
+    }
+
+    // Version 24 (radio codec lane): TX Input's Line In Gain moves in the
+    // 1.5 dB steps of Thetis's udLineInBoost with one decimal
+    // (setup.designer.cs:47006-47034 [v2.10.3.15]), and the Saturn G2 group
+    // gains Mic Tip-Ring (Thetis enables the ORION Tip / Ring panel on the
+    // G2, setup.cs:20292). A peer below 24 reads version 15: Line In Gain in
+    // whole decibels from -34, no Tip-Ring row. A later declaration is
+    // capped at 24.
+    void audioV24LineInStepsAndSaturnTipRing()
+    {
+        const auto sectionOf = [](const QJsonObject& category, const QString& title) {
+            for (const QJsonValue& section : pageById(category, "audio.txInput")
+                                                 .value("sections").toArray()) {
+                if (section.toObject().value("title") == QJsonValue(title)) {
+                    return section.toObject();
+                }
+            }
+            return QJsonObject{};
+        };
+        const QJsonObject lineInGain{
+            {"id", "audio.txInput.hermesLineInGain"}, {"label", "Line In Gain:"},
+            {"tooltip", ""}, {"kind", "decimal"},
+            {"binding", QJsonObject{{"property", QJsonObject{{"object", "transmit"},
+                                                             {"name", "lineInBoost"}}}}},
+            {"applies", "live"}, {"requiresDescriptionVersion", 24},
+            {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 3},
+                                 {"transmit", true}}},
+            {"min", -34.5}, {"max", 12}, {"step", 1.5}, {"decimals", 1}, {"unit", "dB"}};
+        const QJsonObject tipRing{
+            {"id", "audio.txInput.saturnMicTipRing"}, {"label", "Mic Tip-Ring (Tip is Mic)"},
+            {"tooltip", ""}, {"kind", "toggle"},
+            {"binding", QJsonObject{{"property", QJsonObject{{"object", "transmit"},
+                                                             {"name", "micTipRing"}}}}},
+            {"applies", "live"}, {"requiresDescriptionVersion", 24},
+            {"gate", QJsonObject{{"capability", "transmitSettingsVersion"}, {"min", 3},
+                                 {"transmit", true}}}};
+
+        {
+            SetupDescriptionService service;
+            service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Hermes),
+                                    HPSDRModel::HERMES, RadioInfo{});
+            const QJsonObject current = projectedCategory(service.audio(), 24);
+            QCOMPARE(current.value("version"), QJsonValue(24));
+            QCOMPARE(controlById(current, "audio.txInput.hermesLineInGain"), lineInGain);
+            QVERIFY(SetupDescriptionService::validateAudioV24Control(lineInGain));
+            QCOMPARE(projectedCategory(service.audio(), 99), current);
+
+            // Versions 15 to 23 read version 15: whole decibels from -34.
+            const QJsonObject older = projectedCategory(service.audio(), 23);
+            QCOMPARE(older.value("version"), QJsonValue(15));
+            QJsonObject olderRow = lineInGain;
+            olderRow.insert("requiresDescriptionVersion", 15);
+            olderRow.insert("min", -34);
+            olderRow.insert("step", 1);
+            olderRow.remove("decimals");
+            QCOMPARE(controlById(older, "audio.txInput.hermesLineInGain"), olderRow);
+            QString why;
+            QVERIFY2(SetupDescriptionV15::validateControl("audio", olderRow, &why),
+                     qPrintable(why));
+            QCOMPARE(projectedCategory(service.audio(), 15), older);
+        }
+        {
+            SetupDescriptionService service;
+            service.setRadioContext(BoardCapsTable::forBoard(HPSDRHW::Saturn),
+                                    HPSDRModel::ANAN_G2, RadioInfo{});
+            const QJsonObject current = projectedCategory(service.audio(), 24);
+            const QJsonArray rows = sectionOf(current, "Radio Mic (Saturn G2)")
+                .value("controls").toArray();
+            QCOMPARE(rows.size(), 5);
+            QCOMPARE(rows.at(0).toObject().value("id"), QJsonValue("audio.txInput.saturnMicXlr"));
+            QCOMPARE(rows.at(1).toObject(), tipRing);
+            QVERIFY(SetupDescriptionService::validateAudioV24Control(tipRing));
+            // Below 24 the Saturn group is version 15's four rows.
+            const QJsonObject older = projectedCategory(service.audio(), 23);
+            QCOMPARE(sectionOf(older, "Radio Mic (Saturn G2)").value("controls").toArray().size(), 4);
+            QVERIFY(controlById(older, "audio.txInput.saturnMicTipRing").isEmpty());
+        }
+
+        // The resource's two rows are closed.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("audio"), 24);
+        QCOMPARE(resource.size(), 2);
+        for (const QJsonObject& row : resource) {
+            QVERIFY(SetupDescriptionService::validateAudioV24Control(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateAudioV24Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
+    }
+
+    // Radio codec lane: Thetis greys out the ORION mic panel on the Red
+    // Pitaya (setup.cs:20440-20445 [v2.10.3.15], //DH1KLM): its Orion rows
+    // are sent disabled with the reason, at every version from 15; another
+    // Orion-MkII radio's are open.
+    void audioOrionMicRowsAreDisabledOnTheRedPitaya()
+    {
+        for (const auto& [model, open] : {std::pair{HPSDRModel::REDPITAYA, false},
+                                          std::pair{HPSDRModel::ANAN7000D, true}}) {
+            RadioModel radio;
+            radio.setHpsdrModelForTest(model);
+            SetupDescriptionService service;
+            service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+            for (int version : {15, 24}) {
+                const QJsonObject audio = projectedCategory(service.audio(), version);
+                for (const char* name : {"orionMicTipRing", "orionMicBias",
+                                         "orionMicPttDisabled", "orionMicBoost"}) {
+                    const QJsonObject row = controlById(
+                        audio, QStringLiteral("audio.txInput.") + QLatin1String(name));
+                    QVERIFY2(!row.isEmpty(), name);
+                    QVERIFY(!row.contains("availableOn"));
+                    if (open) {
+                        QVERIFY(!row.contains("availability"));
+                    } else {
+                        QCOMPARE(row.value("availability"), QJsonValue(QJsonObject{
+                            {"enabled", false},
+                            {"reason", "These mic settings do not apply to the Red Pitaya."}}));
+                    }
+                }
+            }
+        }
+    }
+
+    // Radio codec lane: the Hermes Lite 2 takes the Hermes group's rows
+    // through its AK4951 audio add-on board, which its gateware cannot
+    // report: the section is sent, titled for the HL2, each row with the
+    // add-on note. The receive-only kit (no add-on) has no such section.
+    void audioHermesRowsReachTheHermesLite2WithTheAddOnNote()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::HERMESLITE);
+        QVERIFY(radio.boardCapabilities().radioMicNeedsAddOn);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+        for (int version : {15, 24}) {
+            const QJsonObject audio = projectedCategory(service.audio(), version);
+            QJsonObject hermes;
+            for (const QJsonValue& section : pageById(audio, "audio.txInput")
+                                                 .value("sections").toArray()) {
+                if (section.toObject().value("title")
+                    == QJsonValue("Radio Mic (Hermes Lite 2)")) {
+                    hermes = section.toObject();
+                }
+            }
+            const QJsonArray rows = hermes.value("controls").toArray();
+            QCOMPARE(rows.size(), 3);
+            for (const QJsonValue& row : rows) {
+                QCOMPARE(row.toObject().value("tooltip"), QJsonValue(
+                    "Needs the Hermes Lite 2 audio add-on board. "
+                    "A stock Hermes Lite 2 sends no mic audio."));
+            }
+            QVERIFY(controlById(audio, "audio.txInput.orionMicTipRing").isEmpty());
+            QVERIFY(controlById(audio, "audio.txInput.saturnMicXlr").isEmpty());
+        }
+
+        BoardCapabilities kit = BoardCapsTable::forBoard(HPSDRHW::HermesLite);
+        kit.radioMicNeedsAddOn = false;
+        SetupDescriptionService kitService;
+        kitService.setRadioContext(kit, HPSDRModel::HERMESLITE);
+        QVERIFY(controlById(projectedCategory(kitService.audio(), 24),
+                            "audio.txInput.hermesLineIn").isEmpty());
     }
 
     // Version 19 (R-R3-49): DSP > CFC's band editor, bound to transmit's
@@ -3579,11 +3744,13 @@ private slots:
         check(20, kSessionProtocolMinor, 20);
         // 21 is CAT & Network's TCI Forget enabledWhen; 22 is the RX
         // buffer sizes' on-the-air lock; 23 is Calibration's Rx1 6m LNA
-        // row and the cap.
+        // row; 24 is TX Input's Line In Gain steps and Saturn Mic
+        // Tip-Ring, and the cap.
         check(21, kSessionProtocolMinor, 21);
         check(22, kSessionProtocolMinor, 22);
         check(23, kSessionProtocolMinor, 23);
-        check(24, kSessionProtocolMinor, 23);
+        check(24, kSessionProtocolMinor, 24);
+        check(25, kSessionProtocolMinor, 24);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

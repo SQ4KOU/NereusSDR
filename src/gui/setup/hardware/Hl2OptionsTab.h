@@ -64,6 +64,10 @@
 //                10 MHz reach the radio and are enabled; a remote window
 //                needs a Core that sends them (setClockControlAvailable).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec lane: Swap audio channels reaches the radio
+//                and is enabled; a remote window needs a Core at
+//                radioHardwareVersion 13 (setSwapAudioAvailable).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -152,6 +156,12 @@ public:
     // remote window, a Core at radioHardwareVersion 11), with the reason
     // when they do not. The rows are disabled with the reason, never hidden.
     void setClockControlAvailable(bool available, const QString& reason);
+
+    // HL2 Swap audio channels: whether this window's change reaches the
+    // radio (always locally; in a remote window, a Core at
+    // radioHardwareVersion 13, which sends its radio the receive audio).
+    // Disabled with the reason, never hidden.
+    void setSwapAudioAvailable(bool available, const QString& reason);
 
 #ifdef NEREUS_BUILD_TESTS
     bool   transmitTimingsEnabledForTest() const;
@@ -250,6 +260,8 @@ private:
     QString      m_ioUnavailableReason;
     bool         m_clockAvailable{true};
     QString      m_clockUnavailableReason;
+    bool         m_swapAudioAvailable{true};
+    QString      m_swapAudioUnavailableReason;
 
     // I/O Pin State — two LED strips + Pin Control gate.
     OcLedStripWidget* m_outputStrip{nullptr}; // 8 LEDs (interactive when chkI2CEnable)

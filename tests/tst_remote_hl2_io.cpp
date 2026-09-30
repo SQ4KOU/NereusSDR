@@ -37,6 +37,9 @@
 //                                    while the Core's own key is on the
 //                                    air, as the TX antennas do.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec lane: Swap audio channels
+//                                    from a remote window (version 13).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -309,6 +312,8 @@ private slots:
     void toolReadsPauseThePollUntilAnswered();
     void clockOptionsFromARemoteWindowReachTheCoresRadio();
     void olderCoreKeepsTheClockOptionsClosedWithItsReason();
+    void swapAudioFromARemoteWindowReachesTheCoresRadio();
+    void olderCoreKeepsSwapAudioClosedWithItsReason();
 
 private:
     QTemporaryDir m_securityDir;
@@ -342,7 +347,7 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 12);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 13);
     QVERIFY(s.client->radioHardwareAvailable(7));
     s.window.alexAntennaFacade()->setWindowAvailability(true, {});
     HardwarePage page(&s.window);
@@ -1097,6 +1102,52 @@ void TstRemoteHl2Io::olderCoreKeepsTheClockOptionsClosedWithItsReason()
         QCOMPARE(w->toolTip(), IStationLink::hl2ClockUnavailableReason());
     }
     QVERIFY(!IStationLink::hl2ClockUnavailableReason().contains(QStringLiteral("yet")));
+}
+
+// HL2 Swap audio channels (radioHardwareVersion 13): a remote window's box
+// is open with mi0bot's tooltip, and its change reaches the Core's radio
+// connection through the "hl2" reload (RadioModel::applyHl2Options ->
+// P1RadioConnection::setHl2SwapAudioChannels). No radio is keyed.
+void TstRemoteHl2Io::swapAudioFromARemoteWindowReachesTheCoresRadio()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QVERIFY(s.client->radioHardwareAvailable(13));
+    s.core.model->wireHl2OptionsForTest();
+    QVERIFY(!s.core.p1.hl2SwapAudioChannelsForTest());
+
+    s.window.alexAntennaFacade()->setWindowAvailability(true, {});
+    {
+        HardwarePage page(&s.window);
+        auto* swap = page.findChild<QCheckBox*>(QStringLiteral("hl2SwapAudioChannels"));
+        QVERIFY(swap != nullptr);
+        QVERIFY(swap->isEnabled());
+        QCOMPARE(swap->toolTip(), QStringLiteral("Swap the audio channels sent to the HL2"));
+    }
+
+    s.proxy.setValue(hw(QStringLiteral("hl2/swapAudioChannels")), QStringLiteral("True"));
+    QTRY_VERIFY(s.core.model->hl2Options().swapAudioChannels());
+    QTRY_VERIFY(s.core.p1.hl2SwapAudioChannelsForTest());
+    s.proxy.setValue(hw(QStringLiteral("hl2/swapAudioChannels")), QStringLiteral("False"));
+    QTRY_VERIFY(!s.core.p1.hl2SwapAudioChannelsForTest());
+    QString keyed;
+    QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
+}
+
+// A remote window whose Core does not offer version 13 keeps Swap audio
+// channels disabled with its reason, never hidden: that Core stores it
+// without effect.
+void TstRemoteHl2Io::olderCoreKeepsSwapAudioClosedWithItsReason()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    remote.alexAntennaFacade()->setWindowAvailability(true, {});
+    HardwarePage page(&remote);
+    auto* swap = page.findChild<QWidget*>(QStringLiteral("hl2SwapAudioChannels"));
+    QVERIFY(swap != nullptr);
+    QVERIFY(!swap->isHidden() && !swap->isEnabled());
+    QCOMPARE(swap->toolTip(), IStationLink::hl2SwapAudioUnavailableReason());
+    QVERIFY(!IStationLink::hl2SwapAudioUnavailableReason().contains(QStringLiteral("yet")));
 }
 
 #include "tst_remote_hl2_io.moc"

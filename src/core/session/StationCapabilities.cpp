@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Radio codec lane: radioMicVersion, after
+//               rx2AttenuatorVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Level Cal 2: rx2AttenuatorVersion, after the direct media
 //               ladder and before coreBuildInfo. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -504,6 +507,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
     if (rx2AttenuatorVersion > 0) {
         updates.append(intEntry("rx2AttenuatorVersion", rx2AttenuatorVersion));
     }
+    // Radio codec lane: the catalogue's radio mic keys, after
+    // rx2AttenuatorVersion and before coreBuildInfo (which stays last),
+    // only for a peer that declared radioMic.
+    if (radioMicVersion > 0) {
+        updates.append(intEntry("radioMicVersion", radioMicVersion));
+    }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
@@ -524,6 +533,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     int mediaDirectEntries = 0;
     int mediaStunEntries = 0;
     int rx2AttenuatorEntries = 0;
+    int radioMicEntries = 0;
     for (const MirrorUpdate& u : updates) {
         if (u.name == "mediaDirectVersion") {
             // The direct media ladder: one entry, an Int64 of 1 or more.
@@ -531,6 +541,15 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong version = u.value.toLongLong();
                 caps.mediaDirectVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "radioMicVersion") {
+            // Radio codec lane: one entry, an Int64 of 1 or more.
+            if (++radioMicEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.radioMicVersion = version > 0 && version <= 65535
                     ? static_cast<int>(version) : 0;
             }
         } else if (u.name == "rx2AttenuatorVersion") {

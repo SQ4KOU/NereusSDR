@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 12
+            "value": 13
         },
         {
             "kind": "i64",
@@ -508,6 +508,11 @@
         {
             "kind": "i64",
             "name": "rx2AttenuatorVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "radioMicVersion",
             "value": 1
         },
         {

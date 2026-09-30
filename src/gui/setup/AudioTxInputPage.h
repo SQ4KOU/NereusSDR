@@ -86,6 +86,13 @@
 //                settings gate (setTransmitSettingsPermittedAt, version 3)
 //                and change the Core's values off the air; the mic source
 //                keeps the transmit permission.
+//   2026-09-30 : Radio codec lane by J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code. Radio Mic opens
+//                on the Hermes Lite 2 with a note that it needs the audio
+//                add-on board, and the Hermes group shows there; the Saturn
+//                G2 group gains Mic Tip-Ring; the Orion group is disabled
+//                on the Red Pitaya with its reason; Line In Gain moves in
+//                1.5 dB steps (Setup description version 24).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
@@ -180,6 +187,15 @@ public:
     QGroupBox* orionRadioMicGroup()  const { return m_orionGroup; }
     QGroupBox* saturnRadioMicGroup() const { return m_saturnGroup; }
     QGroupBox* micSourceGroup()      const { return m_micSourceGroup; }
+    QRadioButton* radioMicButton()   const { return m_radioMicBtn; }
+    QLabel*    radioMicNoteLabel()   const { return m_radioMicNoteLabel; }
+    QSlider*   hermesLineInGainSlider() const { return m_hermesLineInGainSlider; }
+    QLabel*    hermesLineInGainLabel()  const { return m_hermesLineInGainLabel; }
+    QCheckBox* saturnMicTipRingCheck()  const { return m_saturnMicTipRingChk; }
+
+    // The Line In Gain slider counts half decibels, so it moves in the
+    // 1.5 dB steps of Thetis's udLineInBoost (TransmitModel::kLineInBoostStep).
+    static constexpr int kLineInGainSliderScale = 2;
 
     // R-R3-36: the page is Mixed. The PC microphone device, backend,
     // buffer, Test Mic and Retry are this computer's and stay usable in a
@@ -236,6 +252,7 @@ private slots:
     void onSaturnMicPttDisabledToggled(bool on);
     void onSaturnMicBiasToggled(bool on);
     void onSaturnMicBoostToggled(bool on);
+    void onSaturnMicTipRingToggled(bool on);
 
     // Model → UI: radio mic flag changes (all families, I.3)
     void onModelLineInChanged(bool on);
@@ -247,7 +264,7 @@ private slots:
     void onModelMicXlrChanged(bool on);
 
 private:
-    void buildPage(bool hasMicJack, HPSDRHW hw);
+    void buildPage(bool radioMicSelectable, HPSDRHW hw);
     void buildPcMicGroup(QVBoxLayout* parentLayout);
     void buildHermesRadioMicGroup(QVBoxLayout* parentLayout);
     void buildOrionRadioMicGroup(QVBoxLayout* parentLayout);
@@ -258,7 +275,8 @@ private:
     void updateBufferLabel(int samples);
     void updatePcMicGroupVisibility(MicSource source);
     void updateRadioMicGroupVisibility(MicSource source, HPSDRHW hw);
-    static QString lineInBoostLabel(int sliderValue);
+    static QString lineInBoostLabel(double dB);
+    void showLineInBoost(double dB);
 
     // R-R3-36: shared audio/TxInput config.
     AudioEngine* engine();
@@ -328,6 +346,13 @@ private:
 
     // HW family, captured at construction time for visibility logic (I.3).
     HPSDRHW m_hw{HPSDRHW::Unknown};
+    // Radio codec lane: the HL2 takes the radio mic only with its audio
+    // add-on board (BoardCapabilities::radioMicNeedsAddOn), and Thetis
+    // greys out the Orion mic panel on the Red Pitaya
+    // (RadioModel::orionMicPanelAvailable). Captured at construction.
+    bool m_radioMicNeedsAddOn{false};
+    bool m_orionMicPanelAvailable{true};
+    QLabel* m_radioMicNoteLabel{nullptr};
 
     // ── Radio Mic per-family group boxes (I.3) ────────────────────────────────
     QGroupBox* m_hermesGroup{nullptr};
@@ -351,6 +376,7 @@ private:
     QCheckBox*    m_saturnMicPttDisabledChk{nullptr};
     QCheckBox*    m_saturnMicBiasChk{nullptr};
     QCheckBox*    m_saturnMicBoostChk{nullptr};
+    QCheckBox*    m_saturnMicTipRingChk{nullptr};
 
 public:
     // Discrete buffer sizes exposed by the slider (power-of-2 steps).

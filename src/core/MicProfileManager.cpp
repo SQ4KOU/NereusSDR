@@ -31,6 +31,9 @@
 //                 dialog's Legacy EQ box), default True as every Thetis
 //                 factory profile sets it (database.cs:4552 [v2.10.3.15]).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: a profile's Mic_LineInGain no longer
+//                 overrides the index its Line_Input_Level gives. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived handler logic
@@ -1467,7 +1470,10 @@ void MicProfileManager::applyValuesToModel(const QHash<QString, QVariant>& value
     tx->setMicBias(take(QStringLiteral("Mic_Bias"), QStringLiteral("False")) == QLatin1String("True"));
     tx->setMicPttDisabled(take(QStringLiteral("Mic_PTT_Disabled"), QStringLiteral("False")) == QLatin1String("True"));
     // line_in_gain + user_dig_out (Task 2.4)
-    tx->setLineInGain(take(QStringLiteral("Mic_LineInGain"), QStringLiteral("0")).toInt());
+    // Radio codec lane (2026-09-30): Mic_LineInGain is not applied. The
+    // index follows Line_Input_Level (setLineInBoost above), as Thetis
+    // SetMicGain derives it from line_in_boost (console.cs:40928-40932
+    // [v2.10.3.15]); the key is still written, and ignored here.
     tx->setUserDigOut(take(QStringLiteral("Mic_UserDigOut"), QStringLiteral("0")).toInt());
     tx->setVoxThresholdDb(take(QStringLiteral("Dexp_Threshold"), QStringLiteral("-40")).toInt());
     tx->setVoxGainScalar(take(QStringLiteral("VOX_GainScalar"), QStringLiteral("1")).toFloat());

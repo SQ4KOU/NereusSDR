@@ -1,6 +1,12 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Radio codec lane: radioHardwareVersion 13, the receive
+//               audio to the Core's radio and HL2 Swap audio channels from
+//               a window. Setup description version 24 (Audio > TX Input's
+//               Line In Gain steps and Saturn Mic Tip-Ring), and the radio
+//               mic catalogue (radioMicVersion). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: One setup description revision per on-air edge (PA and the
 //               DSP RX buffer lock together). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -8693,7 +8699,9 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // per row. 21: CAT & Network's TCI Forget row greys out while
             // Duplicate is off. 22: DSP > Options' RX buffer sizes'
             // on-the-air lock. 23: Hardware > Calibration's Rx1 6m LNA row.
-            const int version = qMin(declared, 23);
+            // 24: Audio > TX Input's Line In Gain in 1.5 dB steps and the
+            // Saturn G2's Mic Tip-Ring row.
+            const int version = qMin(declared, 24);
             // Version 20: the transmit holder's own PA band stays live.
             const QByteArray deviceId = peerInfoFor(transport).deviceId;
             const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
@@ -12288,7 +12296,16 @@ int StationServer::radioHardwareVersion() const
     // slice, whose progress reaches a peer that declared levelCalibration.
     // The number was extended, not raised: no Core shipped 12 without
     // these verbs.
-    return m_radioModel->ioBoardFacade()->isBound() ? 12 : 2;
+    //
+    // 13 (radio codec lane): the Core sends its radio the receive audio
+    // (P1's L/R bytes, P2's port 1028 packets), and HL2 Options' Swap audio
+    // channels (hardware/<mac>/hl2/swapAudioChannels) reaches it through
+    // the "hl2" reload (RadioModel::applyHl2Options ->
+    // P1RadioConnection::setHl2SwapAudioChannels), on and off the air, as
+    // mi0bot's chkSwapAudioChannels_CheckedChanged has no MOX check
+    // (setup.cs:38065 [@c26a8a4]). A Core below 13 stores it without
+    // effect, so a window keeps the box closed.
+    return m_radioModel->ioBoardFacade()->isBound() ? 13 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,
@@ -12424,7 +12441,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 23) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 24) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
@@ -12488,6 +12505,11 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // peer's capabilities are today's.
             caps.rx2AttenuatorVersion =
                 peerDeclares(transport, QByteArrayLiteral("rx2Attenuator"), 1) ? 1 : 0;
+            // Radio codec lane: the catalogue's radio mic keys, only to a
+            // peer whose hello declared radioMic 1 (after
+            // rx2AttenuatorVersion and before coreBuildInfo on the wire).
+            caps.radioMicVersion =
+                peerDeclares(transport, QByteArrayLiteral("radioMic"), 1) ? 1 : 0;
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();

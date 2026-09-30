@@ -21,6 +21,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 : Radio codec (JJ's ruling): m_radioOutScratch, the radio's
+//                 speaker out, every receiving slice as Thetis's mixer 0,
+//                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 : R-R3-45 transmit monitor output by J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code. MON plays on the
 //                 speakers or the headphones, the operator's own choice,
@@ -413,6 +416,19 @@ public:
     // master tap. clear removes `tap` only while it owns the slot.
     void setHeadphonesMixAudioTap(MasterMixAudioTap* tap);
     void clearHeadphonesMixAudioTap(MasterMixAudioTap* tap);
+
+    // Radio codec (2026-09-30): the one non-owning synchronous tap for the
+    // radio's own speaker / headphone out. It takes every receiving slice,
+    // whichever device owns it (JJ's ruling), on the speakers or the
+    // headphones, plus MON where the local outputs carry it, at the master
+    // volume, and silence while the master is muted: Thetis sends audio
+    // mixer 0 (all receivers and MON) at the AF volume to the radio's
+    // codec (cmaster.cs:954-957, netInterface.c:1571-1575 [v2.10.3.15]).
+    // The master tap's gate, on its
+    // own slot; clear removes `tap` only while it owns the slot and returns
+    // once no callback into it runs. Control thread.
+    void setRadioOutputTap(MasterMixAudioTap* tap);
+    void clearRadioOutputTap(MasterMixAudioTap* tap);
 
     // R-R3-43: per-slice receiver audio taps, at most kMaxSliceAudioTaps at
     // once. Each slot has its own admission gate, so installing or removing
@@ -1310,6 +1326,7 @@ private:
     std::vector<float> m_mixScratch;
     std::vector<float> m_hpMixScratch;
     std::vector<float> m_programScratch;
+    std::vector<float> m_radioOutScratch; // the radio's speaker out (radio codec)
     std::vector<float> m_avMixScratch;   // anti-VOX reference
     std::vector<float> m_vaxScratch;     // one VAX channel's mix
     std::atomic<int> m_mixScratchFrames{0};
@@ -1374,6 +1391,11 @@ private:
     // scratch (ensureMixScratchFrames), never on the DSP thread.
     std::array<std::vector<float>, kMaxOwnerMixes> m_ownerSpeakersScratch;
     std::array<std::vector<float>, kMaxOwnerMixes> m_ownerHeadphonesScratch;
+    // Radio codec (2026-09-30): the radio output tap (setRadioOutputTap),
+    // on the owner mixes' gate. m_radioOutputControlMutex serialises set
+    // and clear.
+    MixTapGate m_radioOutputTap;
+    std::mutex m_radioOutputControlMutex;
     static void closeAndDrainMixTap(MixTapGate& gate);
     static void invokeMixTap(MixTapGate& gate, const float* samples, int frames) noexcept;
     bool validOwnerMixSlot(int slot) const

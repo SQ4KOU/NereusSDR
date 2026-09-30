@@ -54,6 +54,9 @@ public:
     static bool validateHardwareV18Control(const QJsonObject& control);
     /// Version 23: Calibration's Rx1 6m LNA row, exactly as published.
     static bool validateHardwareV23Control(const QJsonObject& control);
+    /// Version 24: TX Input's Line In Gain in 1.5 dB steps and the Saturn
+    /// G2's Mic Tip-Ring row, exactly as published.
+    static bool validateAudioV24Control(const QJsonObject& control);
     /// Version 19: DSP > CFC's band editor (`dsp.cfc.bands`), exactly as
     /// published: transmit's cfcProfile, applied with cfc.setProfile.
     static bool validateDspV19Control(const QJsonObject& control);
