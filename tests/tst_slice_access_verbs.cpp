@@ -49,6 +49,10 @@
 //               cannot stay listening (it loses the slice; an older
 //               window left with none ends). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over review: listening to an older window's slice
+//               and its own close releasing it to a listener (ruling Q6)
+//               are back in their own tests. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -976,6 +980,50 @@ private slots:
         QVERIFY(!ownership->listenersOf(0).contains(d.key.fingerprint()));
         QVERIFY(!endOf(appD).isEmpty());
         QVERIFY(core.model->sliceById(0) != nullptr);
+    }
+
+    // Review fix (Job B, a): a current device may listen to an older
+    // window's slice.
+    void aDeviceMayListenToAnOlderWindowsSlice()
+    {
+        Core core;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device d(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.pair(d);
+        core.pair(b);
+        LoopbackTransport* appD = core.signIn(d, kHolder);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appD) && admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, d.key.fingerprint());
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QVERIFY(ownership->listenersOf(0).contains(b.key.fingerprint()));
+        QCOMPARE(ownership->mark(0).owner, d.key.fingerprint());
+    }
+
+    // Review fix (Job B, b): the older window's own close of its slice
+    // releases it while a remote listener is there (ruling Q6): the slice
+    // stays for B, controlled by nobody.
+    void anOlderWindowsCloseReleasesItsSliceToAListener()
+    {
+        Core core;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device d(QStringLiteral("Mac"), QStringLiteral("computer"));
+        core.pair(d);
+        core.pair(b);
+        LoopbackTransport* appD = core.signIn(d, kHolder);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appD) && admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, d.key.fingerprint());
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QVERIFY(accepted(core.invoke(appD, "removeSlice", {int64("sliceId", 0)})));
+        QVERIFY(core.model->sliceById(0) != nullptr);
+        QVERIFY(core.model->sliceOwnership()->mark(0).owner.isEmpty());
+        QCOMPARE(core.model->sliceOwnership()->listenersOf(0),
+                 QList<QByteArray>{b.key.fingerprint()});
+        QTRY_VERIFY(!holds(appD, QStringLiteral("slice:0")));
     }
 
     // ── Transmit (ruling Q8) ─────────────────────────────────────────────
