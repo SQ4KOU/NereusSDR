@@ -71,6 +71,9 @@
 //               is not its active one, on another band, is refused with the
 //               Core's band plan reason. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: load finding: the different-band case waits for the
+//               window's MOX to show the release before pressing again.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -703,6 +706,12 @@ private slots:
 
         // The window's transmit moves to its own B; A stays active.
         QTRY_COMPARE(coreMox->state(), MoxState::Rx);
+        // The window's MOX follows the Core's `transmitting`, which reaches
+        // it on the Core's delta flush, after the Core's own state. A late
+        // `true` from this key can light it after the checks above; the
+        // Core's `false` follows. Until then a press is a release of the key
+        // it shows, not a new key.
+        QTRY_VERIFY(!window.mox->isChecked());
         QVERIFY(arbiter->requestHandoff(h.sliceB, device));
         QCOMPARE(arbiter->txBoundSliceId(), h.sliceB);
         const QString reason = QStringLiteral(
