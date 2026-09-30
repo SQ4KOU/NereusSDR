@@ -181,6 +181,10 @@
 //                Thetis's MOX gate on the TX band: the band (and the power
 //                the slider recalls and writes) holds while transmitting.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX rulings (item 1): a remote window's
+//                MOX and TUNE press toggles against its own key
+//                (RadioModel::moxPressAsksOn, tunePressAsksOn).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1313,7 +1317,15 @@ void TxApplet::wireControls()
             m_desktopTuneRequest(on);
             if (self) { syncDesktopKeyState(); }
         } else {
-            m_model->setTune(on);
+            // TX rulings (item 1): a remote window's press keys after a
+            // release even while the Core's TUNE still reads on, and the
+            // button shows what it asked until the Core's state arrives.
+            const bool asked = m_model->tunePressAsksOn(on);
+            if (asked != on) {
+                QSignalBlocker b(m_tuneBtn);
+                m_tuneBtn->setChecked(asked);
+            }
+            m_model->setTune(asked);
         }
     });
 
@@ -1347,7 +1359,16 @@ void TxApplet::wireControls()
                 m_desktopMoxRequest(on);
                 if (self) { syncDesktopKeyState(); }
             } else {
-                m_model->setMoxFromButton(on);
+                // TX rulings (item 1): a remote window's press keys after a
+                // release even while the Core's confirmation is on its way,
+                // and the button shows what it asked until the Core's state
+                // arrives.
+                const bool asked = m_model->moxPressAsksOn(on);
+                if (asked != on) {
+                    QSignalBlocker b(m_moxBtn);
+                    m_moxBtn->setChecked(asked);
+                }
+                m_model->setMoxFromButton(asked);
             }
         });
 

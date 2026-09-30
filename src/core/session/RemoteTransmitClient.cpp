@@ -27,6 +27,11 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
 //               setTunerTune. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (item 1): screenReleasePending and
+//               tuneReleasePending, the operator's MOX or TUNE let go while
+//               the Core's confirmation is on its way, so the next press
+//               keys. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -77,6 +82,16 @@ RemoteTransmitClient::RemoteTransmitClient(Sender sender, QObject* parent)
     m_keepaliveTimer.setInterval(kKeepaliveIntervalMs);
     m_keepaliveTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_keepaliveTimer, &QTimer::timeout, this, &RemoteTransmitClient::keepaliveTick);
+    // TX rulings (item 1): a release the Core accepted, with no late
+    // `transmitting` from its key within the grace, is confirmed.
+    m_releaseGraceTimer.setSingleShot(true);
+    m_releaseGraceTimer.setInterval(kReleaseConfirmGraceMs);
+    connect(&m_releaseGraceTimer, &QTimer::timeout, this, [this]() {
+        if (!m_coreTransmitting) {
+            m_screenReleasePending = false;
+            m_tuneReleasePending = false;
+        }
+    });
 }
 
 void RemoteTransmitClient::setVoxArmed(bool armed)
@@ -238,6 +253,7 @@ void RemoteTransmitClient::setScreenKey(bool down)
         if (m_screen.phase != Phase::Idle) {
             return;  // already pressed
         }
+        m_screenReleasePending = false;
         const QPointer<RemoteTransmitClient> self(this);
         const quint32 id = send(QByteArrayLiteral("tx.key"),
                                 {utf8Argument("trigger", QString::fromLatin1(kScreenTrigger))},
@@ -279,6 +295,9 @@ void RemoteTransmitClient::setScreenKey(bool down)
     // this device's (the key may already be on at the Core).
     const quint32 epoch = m_screen.phase == Phase::On ? m_screen.epoch : kReleaseAnyEpoch;
     m_screen = Key{};
+    // TX rulings (item 1): until the Core says it stopped, a `transmitting`
+    // that still reads true is this key's, and a press is a new key.
+    m_screenReleasePending = true;
     // The program's key is the same key at the Core; the operator's
     // release ends it too, as the MOX button's off does locally.
     if (m_program.phase == Phase::On) {
@@ -299,6 +318,8 @@ void RemoteTransmitClient::release(quint32 epoch)
 
 void RemoteTransmitClient::setTune(bool on)
 {
+    // TX rulings (item 1): TUNE let go, as MOX above.
+    m_tuneReleasePending = !on && (m_tuneAsked || m_tuneReleasePending);
     const QPointer<RemoteTransmitClient> self(this);
     const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune,
                             /*releaseIntent=*/!on);
@@ -417,6 +438,12 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
     m_pending.erase(pending);
     if (command.releaseIntent) {
         --m_pendingReleases;
+        // TX rulings (item 1): the Core took the release; a `transmitting`
+        // still on its way from the key arrives within the grace.
+        if (accepted && (m_screenReleasePending || m_tuneReleasePending)
+            && !m_coreTransmitting) {
+            m_releaseGraceTimer.start();
+        }
         if (!accepted) {
             m_releaseFailureSticky = true;
             m_releaseFailureNotified = true;  // The Core's refusal is emitted below.
@@ -436,6 +463,11 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
     case Kind::ScreenKey:
         if (m_screen.phase != Phase::Waiting || m_screen.commandId != commandId) {
             // Released before the answer: the release already went.
+            // TX rulings (item 1): a key the Core refused never transmitted,
+            // so nothing of it is left to stop.
+            if (!accepted && m_screen.phase == Phase::Idle) {
+                m_screenReleasePending = false;
+            }
             return;
         }
         if (accepted) {
@@ -480,6 +512,9 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
             m_tuneAsked = false;
             refreshKeepalive();
         }
+        if (!command.releaseIntent && !accepted) {
+            m_tuneReleasePending = false;
+        }
         [[fallthrough]];
     case Kind::Release:
     case Kind::TwoTone:
@@ -497,11 +532,19 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
 void RemoteTransmitClient::setCoreTransmitting(bool on)
 {
     m_coreTransmitting = on;
+    if (on) {
+        // TX rulings (item 1): a late `transmitting` from a key let go
+        // holds its release open until the Core reads not transmitting.
+        m_releaseGraceTimer.stop();
+    }
     if (!on) {
         // The Core stopped transmitting: a TUNE or two-tone this window
         // asked for is over too.
         m_tuneAsked = false;
         m_twoToneAsked = false;
+        // TX rulings (item 1): and a key let go has stopped.
+        m_screenReleasePending = false;
+        m_tuneReleasePending = false;
     }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
@@ -530,6 +573,14 @@ void RemoteTransmitClient::coreStopped(quint32 stopSerial, bool coreKeyed, quint
         return;
     }
     m_coreStopSerial = stopSerial;
+    // TX rulings (item 1): a stop while the Core reads not transmitting
+    // ends a release waiting to be confirmed (a key that never reached
+    // `transmitting`). While it still reads true the tail runs on, and
+    // the release waits for its false.
+    if (!m_coreTransmitting) {
+        m_screenReleasePending = false;
+        m_tuneReleasePending = false;
+    }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
         if (key->phase != Phase::On) {
@@ -571,6 +622,9 @@ void RemoteTransmitClient::reset()
     m_program = Key{};
     m_tuneAsked = false;
     m_twoToneAsked = false;
+    m_screenReleasePending = false;
+    m_tuneReleasePending = false;
+    m_releaseGraceTimer.stop();
     m_pending.clear();
     m_pendingReleases = 0;
     m_releaseDispatches = 0;

@@ -803,6 +803,8 @@
 //                attenuator's ceiling on connect is the Core's
 //                (BoardCapsTable::stepAttMaxDb).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 1): moxPressAsksOn and tunePressAsksOn.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -25444,6 +25446,44 @@ void RadioModel::setTwoTone(bool on)
     if (m_twoToneController) {
         m_twoToneController->setActive(on);
     }
+}
+
+bool RadioModel::moxPressAsksOn(bool toggledOn) const
+{
+    // TX rulings (JJ, 2026-09-30, item 1): a remote window's MOX lights from
+    // the Core's `transmitting`, which reaches it after the Core's own
+    // state, so for a moment after a quick key and release it can still
+    // show the key let go. A press then is a new key, never a second
+    // release. A press while this window's own key is down (or waiting for
+    // its answer) still unkeys.
+    if (!remoteTransmitRouted()) {
+        return toggledOn;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    if (remote->screenKeyDown()) {
+        return false;
+    }
+    if (remote->screenReleasePending()) {
+        return true;
+    }
+    return toggledOn;
+}
+
+bool RadioModel::tunePressAsksOn(bool toggledOn) const
+{
+    // TX rulings (item 1): TUNE, as MOX above, against this window's own
+    // TUNE (tuneAsked).
+    if (!remoteTransmitRouted()) {
+        return toggledOn;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    if (remote->tuneAsked()) {
+        return false;
+    }
+    if (remote->tuneReleasePending()) {
+        return true;
+    }
+    return toggledOn;
 }
 
 void RadioModel::setMoxFromButton(bool on)
