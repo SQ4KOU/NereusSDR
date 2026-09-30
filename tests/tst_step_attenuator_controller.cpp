@@ -1025,6 +1025,53 @@ private slots:
         s.clearHardwareValues(newRadio);
     }
 
+    // Level Cal: with the step attenuator off, classic auto-attenuate steps
+    // the preamp setting to the step-attenuator settings and sends each one.
+    // From Thetis console.cs:21614-21631 [v2.10.3.15]:
+    //   case PreampMode.HPSDR_OFF:
+    //   case PreampMode.HPSDR_ON:
+    //       pam = PreampMode.SA_MINUS10;
+    //   case PreampMode.SA_MINUS10: pam = PreampMode.SA_MINUS20;
+    //   case PreampMode.SA_MINUS20: pam = PreampMode.SA_MINUS30;
+    void classicAutoAttStepsThePreampToTheStepAttenuatorSettings()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Hermes, HPSDRModel::ANAN100, true);
+        ctrl.setStepAttEnabled(false);
+        ctrl.setPreampMode(PreampMode::On);
+        ctrl.setAutoAttEnabled(true);
+        ctrl.setAutoAttMode(AutoAttMode::Classic);
+        ctrl.setAutoAttUndo(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+
+        const PreampMode expected[] = {PreampMode::SaMinus10,
+                                       PreampMode::SaMinus20,
+                                       PreampMode::SaMinus30,
+                                       PreampMode::SaMinus30};
+        const int expectedAtt[] = {10, 20, 30, 30};
+        for (int i = 0; i < 3; ++i) {
+            ctrl.onAdcOverflow(0);
+            ctrl.tick();
+        }
+        for (int step = 0; step < 4; ++step) {
+            ctrl.onAdcOverflow(0);
+            ctrl.tick();
+            QCOMPARE(ctrl.preampMode(), expected[step]);
+            QVERIFY(!radio.attenuator.isEmpty());
+            QCOMPARE(radio.attenuator.last(), expectedAtt[step]);
+        }
+        QVERIFY(radio.preamp.isEmpty());
+
+        // Turning auto-attenuate off puts the operator's setting back on
+        // the radio: On sends 0 dB of step attenuator.
+        ctrl.setAutoAttEnabled(false);
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+        QCOMPARE(radio.attenuator.last(), 0);
+        ctrl.setRadioConnection(nullptr);
+    }
+
     // Level Cal: each preamp setting drives the step attenuator, the preamp
     // bit and the Alex attenuator as Thetis's RX1PreampMode setter does.
     // From Thetis console.cs:19232-19284 [v2.10.3.15] (the switch) and

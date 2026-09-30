@@ -50,6 +50,10 @@
 //                value + 2 (console.cs:11027-11065); the HPSDR's MOX
 //                preamp is HPSDR_OFF. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Level Cal: classic auto-att steps the preamp to
+//                SA_MINUS10/20/30 and each step and its undo drive the
+//                radio (console.cs:21611-21651 [v2.10.3.15]). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1241,18 +1245,37 @@ void StepAttenuatorController::applyClassicAutoAtt(int adc)
             setAutoAttApplied(true);
         }
     } else {
-        // Preamp mode fallback — From Thetis console.cs:21574-21594.
+        // Preamp mode fallback: the step attenuator settings, set through
+        // the RX1PreampMode setter so the radio receives each one.
+        // From Thetis console.cs:21611-21633 [v2.10.3.15]:
+        //   PreampMode pam = har.preampMode;
+        //   switch (pam)
+        //   {
+        //       case PreampMode.HPSDR_OFF:
+        //       case PreampMode.HPSDR_ON:
+        //           pam = PreampMode.SA_MINUS10;
+        //           break;
+        //       case PreampMode.SA_MINUS10:
+        //           pam = PreampMode.SA_MINUS20;
+        //           break;
+        //       case PreampMode.SA_MINUS20:
+        //           pam = PreampMode.SA_MINUS30;
+        //           break;
+        //   }
+        //   if (pam != har.preampMode)
+        //   {
+        //       RX1PreampMode = pam;
         PreampMode newMode = m_preampMode;
         switch (m_preampMode) {
         case PreampMode::Off:
         case PreampMode::On:
-            newMode = PreampMode::Minus10;
+            newMode = PreampMode::SaMinus10;
             break;
-        case PreampMode::Minus10:
-            newMode = PreampMode::Minus20;
+        case PreampMode::SaMinus10:
+            newMode = PreampMode::SaMinus20;
             break;
-        case PreampMode::Minus20:
-            newMode = PreampMode::Minus30;
+        case PreampMode::SaMinus20:
+            newMode = PreampMode::SaMinus30;
             break;
         default:
             break;
@@ -1263,6 +1286,7 @@ void StepAttenuatorController::applyClassicAutoAtt(int adc)
                 m_classicSavedAttDb = 0;  // sentinel: we have a saved value
             }
             m_preampMode = newMode;
+            applyPreampDrive();
             m_lastAutoAttTimeMs = QDateTime::currentMSecsSinceEpoch();
             emit preampModeChanged(m_preampMode);
             setAutoAttApplied(true);
@@ -1295,7 +1319,11 @@ void StepAttenuatorController::applyClassicUndo()
         }
     } else if (!m_stepAttEnabled && m_classicSavedAttDb >= 0) {
         if (m_classicSavedPreamp != m_preampMode) {
+            // console.cs:21648-21651 [v2.10.3.15]: the undo goes through the
+            // RX1PreampMode setter too:
+            //   if (har.preampMode != RX1PreampMode) RX1PreampMode = har.preampMode;
             m_preampMode = m_classicSavedPreamp;
+            applyPreampDrive();
             emit preampModeChanged(m_preampMode);
         }
     }
