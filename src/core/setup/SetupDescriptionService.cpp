@@ -705,6 +705,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(13))
          && !(id == QLatin1String("hardware")
               && root.value(QStringLiteral("version")) == QJsonValue(18))
+         // Version 21: CAT & Network's TCI Forget row greys out with Duplicate.
+         && !(id == QLatin1String("catNetwork")
+              && root.value(QStringLiteral("version")) == QJsonValue(21))
          && !(SetupDescriptionV15::isCategory(id)
               && root.value(QStringLiteral("version"))
                   == QJsonValue(SetupDescriptionV15::kVersion)))
@@ -749,7 +752,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         || (root.value(QStringLiteral("version"))
                                 != QJsonValue(SetupDescriptionV15::kVersion)
                             && !(id == QLatin1String("dsp")
-                                 && root.value(QStringLiteral("version")) == QJsonValue(19)))) {
+                                 && root.value(QStringLiteral("version")) == QJsonValue(19))
+                            && !(id == QLatin1String("catNetwork")
+                                 && root.value(QStringLiteral("version")) == QJsonValue(21)))) {
                         return {};
                     }
                     ids.insert(controlId);
@@ -779,7 +784,10 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                   && SetupDescription::validateHardwareV13Control(control)))
                             || (control.contains(QStringLiteral("enabledWhen"))
                                 && !(id == QLatin1String("hardware")
-                                     && SetupDescription::validateHardwareV18Control(control)))))
+                                     && SetupDescription::validateHardwareV18Control(control))
+                                && !(id == QLatin1String("catNetwork")
+                                     && root.value(QStringLiteral("version")) == QJsonValue(21)
+                                     && SetupDescription::validateCatNetworkV21EnabledWhen(control)))))
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
                         && (root.value(QStringLiteral("version")).toInt()
                                 < control.value(QStringLiteral("requiresDescriptionVersion")).toInt()
@@ -2196,6 +2204,18 @@ bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
     return row != hardwareV13Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateCatNetworkV21EnabledWhen(const QJsonObject& control)
+{
+    // Forget acts only while Duplicate is on, as the desktop greys it out.
+    return control.value(QStringLiteral("id"))
+            == QJsonValue(QStringLiteral("catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect"))
+        && control.value(QStringLiteral("enabledWhen")) == QJsonValue(QJsonObject{
+            {QStringLiteral("property"), QJsonObject{
+                {QStringLiteral("object"), QStringLiteral("stationTci")},
+                {QStringLiteral("name"), QStringLiteral("copyRx2VfobToVfoa")}}},
+            {QStringLiteral("oneOf"), QJsonArray{true}}});
+}
+
 bool SetupDescription::validateDspV19Control(const QJsonObject& control)
 {
     const auto row = dspV19Controls().constFind(
@@ -2804,6 +2824,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                         control = *older;
                     }
                 }
+                // CAT & Network 21 greys TCI's Forget row out while Duplicate
+                // is off: a peer below 21 keeps the row, always enabled.
+                if (categoryId == QLatin1String("catNetwork") && version < 21) {
+                    control.remove(QStringLiteral("enabledWhen"));
+                }
                 if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version
                     && (antennaRowsAvailable || !control.value(QStringLiteral("binding"))
                             .toObject().contains(QStringLiteral("antennaRows")))) {
@@ -2891,7 +2916,10 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         });
     }
     // DSP changed at 15 and 19 (CFC's band editor): 15 to 18 see 15.
+    // CAT & Network changed at 15 and 21 (TCI Forget's enabledWhen): 15 to
+    // 20 see 15.
     const int ceiling = categoryId == QLatin1String("dsp") && version >= 19 ? 19
+        : categoryId == QLatin1String("catNetwork") && version >= 21 ? 21
         : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
         // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
@@ -2938,7 +2966,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17 and 18;
     // transmit at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at
-    // 15; DSP at 19.
+    // 15; DSP at 19; CAT & Network at 21.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {

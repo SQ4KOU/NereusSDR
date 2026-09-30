@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 21,
   "category": {
     "id": "catNetwork",
     "title": "CAT & Network",
@@ -436,7 +436,15 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
-              }            },
+              },
+              "enabledWhen": {
+                "property": {
+                  "object": "stationTci",
+                  "name": "copyRx2VfobToVfoa"
+                },
+                "oneOf": [true]
+              }
+            },
             {
               "id": "catNetwork.tciServer.core.useRx1VfoaForRx2Vfoa",
               "label": "Use RX1 VFO A for RX2 VFO A",

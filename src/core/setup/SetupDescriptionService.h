@@ -53,6 +53,9 @@ public:
     /// Version 19: DSP > CFC's band editor (`dsp.cfc.bands`), exactly as
     /// published: transmit's cfcProfile, applied with cfc.setProfile.
     static bool validateDspV19Control(const QJsonObject& control);
+    /// Version 21: CAT & Network's TCI Forget row greys out while Duplicate
+    /// is off. Only that row, with exactly that enabledWhen.
+    static bool validateCatNetworkV21EnabledWhen(const QJsonObject& control);
     static bool validateTransmitV13Control(const QJsonObject& control);
     static bool validateTransmitSettingBinding(const QJsonObject& control);
     static bool validateAudioPropertyBinding(const QJsonObject& control);

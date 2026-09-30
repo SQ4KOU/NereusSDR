@@ -1285,6 +1285,60 @@ private slots:
     // every band but the transmitting one are locked; the transmitting band
     // opens only for the device that holds transmit. Version 19 and older
     // keep the exact closed rows.
+    // Version 21: TCI's Forget row greys out while Duplicate is off, as the
+    // desktop's does. Version 20 and older keep the row without the
+    // dependency, and CAT & Network at version 15.
+    void catNetworkV21GreysForgetWithDuplicate()
+    {
+        SetupDescriptionService service;
+        const QString forgetId =
+            QStringLiteral("catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect");
+        const QJsonObject dependency{
+            {"property", QJsonObject{{"object", "stationTci"}, {"name", "copyRx2VfobToVfoa"}}},
+            {"oneOf", QJsonArray{true}}};
+        const QJsonObject current = service.category(QStringLiteral("catNetwork"));
+        QCOMPARE(current.value("version"), QJsonValue(21));
+        QCOMPARE(controlById(current, forgetId).value("enabledWhen"), QJsonValue(dependency));
+
+        for (int version : {21, 22}) {
+            const QJsonObject v21 = projectedCategory(service.catNetwork(), version);
+            QCOMPARE(v21.value("version"), QJsonValue(21));
+            QCOMPARE(controlById(v21, forgetId).value("enabledWhen"), QJsonValue(dependency));
+        }
+        const QJsonObject v21 = projectedCategory(service.catNetwork(), 21);
+        for (int version : {1, 3, 14, 15, 20}) {
+            const QJsonObject older = projectedCategory(service.catNetwork(), version);
+            QCOMPARE(older.value("version"), QJsonValue(version >= 15 ? 15 : qMin(version, 3)));
+            const QJsonObject forget = controlById(older, forgetId);
+            QCOMPARE(forget.value("id"), QJsonValue(forgetId));
+            QVERIFY(!forget.contains("enabledWhen"));
+            QVERIFY(!QJsonDocument(older).toJson().contains("enabledWhen"));
+        }
+        // Only the dependency and the version differ between 20 and 21.
+        QJsonObject v20 = projectedCategory(service.catNetwork(), 20);
+        v20.insert("version", 21);
+        QVERIFY(v20 != v21);
+        QJsonObject withDependency = controlById(v20, forgetId);
+        withDependency.insert("enabledWhen", dependency);
+        QCOMPARE(withDependency, controlById(v21, forgetId));
+        QCOMPARE(controlCount(v20, 0), controlCount(v21, 0));
+
+        // The Core accepts that exact dependency on that row only.
+        QJsonObject forget = controlById(current, forgetId);
+        QVERIFY(SetupDescriptionService::validateCatNetworkV21EnabledWhen(forget));
+        QJsonObject altered = forget;
+        altered.insert("enabledWhen", QJsonObject{
+            {"property", QJsonObject{{"object", "stationTci"}, {"name", "copyRx2VfobToVfoa"}}},
+            {"oneOf", QJsonArray{false}}});
+        QVERIFY(!SetupDescriptionService::validateCatNetworkV21EnabledWhen(altered));
+        altered = forget;
+        altered.insert("id", QStringLiteral("catNetwork.tciServer.core.useRx1VfoaForRx2Vfoa"));
+        QVERIFY(!SetupDescriptionService::validateCatNetworkV21EnabledWhen(altered));
+        altered = forget;
+        altered.remove("enabledWhen");
+        QVERIFY(!SetupDescriptionService::validateCatNetworkV21EnabledWhen(altered));
+    }
+
     void paV20PublishesTheOnAirLockPerRow()
     {
         RadioModel radio;
@@ -2256,10 +2310,11 @@ private slots:
         for (const QString& id : {QStringLiteral("general"), QStringLiteral("test"),
                                   QStringLiteral("catNetwork"), QStringLiteral("dsp")}) {
             const QJsonObject category = service.category(id);
-            // Version 15 carries DSP and CAT & Network rows; 19, CFC's band editor.
+            // Version 15 carries DSP and CAT & Network rows; 19, CFC's band
+            // editor; 21, TCI Forget's dependency on Duplicate.
             QCOMPARE(category.value(QStringLiteral("version")).toInt(),
                      id == QLatin1String("dsp") ? 19
-                         : id == QLatin1String("catNetwork") ? 15 : 1);
+                         : id == QLatin1String("catNetwork") ? 21 : 1);
             QCOMPARE(category.value(QStringLiteral("category")).toObject()
                          .value(QStringLiteral("id")).toString(), id);
             QVERIFY(!category.value(QStringLiteral("pages")).toArray().isEmpty());
@@ -3152,6 +3207,15 @@ private slots:
                     }
                 }
             }
+            // CAT & Network: 15 to V15-V20, 21 (Forget's dependency) to V21.
+            const QString catNetwork = setupCategoryOnWire(
+                *core.app, "catNetwork", SessionMessageKind::ObjectCreate);
+            if (expected >= 1) {
+                QCOMPARE(QJsonDocument::fromJson(catNetwork.toUtf8()).object()
+                             .value("version").toInt(),
+                         expected >= 21 ? 21 : expected >= 15 ? 15 : qMin(expected, 3));
+                QCOMPARE(catNetwork.contains(QStringLiteral("enabledWhen")), expected >= 21);
+            }
             const QString diagnostics = setupCategoryOnWire(
                 *core.app, "diagnostics", SessionMessageKind::ObjectCreate);
             if (expected < 3) {
@@ -3212,7 +3276,8 @@ private slots:
         check(18, kSessionProtocolMinor, 18);
         check(19, kSessionProtocolMinor, 19);
         check(20, kSessionProtocolMinor, 20);
-        check(21, kSessionProtocolMinor, 20);
+        check(21, kSessionProtocolMinor, 21);
+        check(22, kSessionProtocolMinor, 21);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

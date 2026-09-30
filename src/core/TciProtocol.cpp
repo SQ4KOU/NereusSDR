@@ -373,11 +373,11 @@ void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBoun
     //   bVFOaUseRX2 = console.RX2Enabled && UseRX1VFOaForRX2VFOa;
     //   rx = bVFOaUseRX2 ? 1 : rx - 1, chan = 0
     // so with the option on, receiver 0's VFO goes out as receiver 1's
-    // channel 0 and never as vfo:0,0. Channel 1 is NereusSDR's collapse of
-    // VFO B onto the same slice and still goes out as receiver 0's.
+    // channel 0 only: the VFO A handler sends channel 0 alone, and with RX2
+    // on Thetis's VFO B belongs to RX2 (console.cs:32951-32954
+    // [v2.10.3.15], rx = 2), so nothing goes out as vfo:0,1 either.
     if (rxIndex == 0 && rx2On && useRx1VfoaForRx2VfoaSetting()) {
         queuePair(1, 0);
-        queuePair(0, 1);
     } else if (rxIndex == 1 && rx2On) {
         // Receiver 1 is Thetis VFO B acting as RX2. From Thetis
         // TCIServer.cs:7293-7294 [v2.10.3.15] (OnVFOBFrequencyChangeHandler):
@@ -392,10 +392,11 @@ void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBoun
         } else if (forget) {
             queuePair(1, 0);
         } else {
-            // Both channels. NereusSDR keeps its channel 0 then 1 order
-            // (Thetis sends 1 then its copy on 0) so the wire is unchanged.
-            queuePair(1, 0);
+            // Both channels, in Thetis's order: channel 1, then its copy on
+            // channel 0 (TCIServer.cs:1386-1392 [v2.10.3.15]). A client that
+            // acts on the last frame lands on channel 0, as with Thetis.
             queuePair(1, 1);
+            queuePair(1, 0);
         }
     } else {
         for (int chan = 0; chan < 2; ++chan) {
@@ -2015,6 +2016,17 @@ QString TciProtocol::handleVfoCommand(const QStringList& args)
         bool ok3 = false;
         const qint64 hz = args.at(2).trimmed().toLongLong(&ok3);
         if (!ok3) {
+            return {};
+        }
+        // A set for the second receiver while RX2 is off does nothing, and
+        // nothing is echoed. From Thetis TCIServer.cs:3897-3899 [v2.10.3.15]:
+        //   else if (rx == 1)
+        //   {
+        //       if (consoleThreadSafe.RX2Enabled)
+        // The Core's own station server is left out: there trx:N is slice N
+        // for every slice (ruling 5.13), not Thetis's RX1/RX2 pair, and a
+        // Core with no radio yet reports RX2 off while it holds slice 1.
+        if (rx == 1 && !m_stationReceiveOnly && !rx2EnabledNow()) {
             return {};
         }
         // Write to mock via QMetaObject::invokeMethod (DirectConnection — test thread).

@@ -275,9 +275,12 @@ private slots:
         QCOMPARE(TciProtocol::useRx1VfoaForRx2VfoaSetting(), false);
     }
 
-    // Under the defaults an app sees exactly what it saw before: both
-    // channels for each receiver's VFO move, the vfo commands on each
-    // receiver's own slice, and the same first lines.
+    // Under the defaults an app sees what it saw before, with two Thetis
+    // corrections: with RX2 on, the second receiver's move goes out as
+    // channel 1 then channel 0 (TCIServer.cs:1386-1392 [v2.10.3.15]); with
+    // RX2 off, a set for the second receiver is ignored and not echoed
+    // (TCIServer.cs:3897-3899 [v2.10.3.15]). The vfo commands act on each
+    // receiver's own slice, and the first lines are unchanged.
     void rx2VfoOptionDefaultsKeepTheWire_data()
     {
         QTest::addColumn<bool>("rx2On");
@@ -294,21 +297,25 @@ private slots:
         protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
         QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
         protocol.enqueueLocalBroadcastVfo(1, 14'200'000, false);
-        QCOMPARE(drainLines(protocol), bothChannels(1, 14'200'000, 50'000));
+        const QStringList rx1Both = bothChannels(1, 14'200'000, 50'000);
+        QCOMPARE(drainLines(protocol),
+                 rx2On ? rx1Both.mid(2) + rx1Both.mid(0, 2) : rx1Both);
 
         QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:1,0;")),
                  QStringLiteral("vfo:1,0,14200000;"));
         QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:0,0;")),
                  QStringLiteral("vfo:0,0,7100000;"));
         protocol.handleCommand(QStringLiteral("vfo:1,0,14210000;"));
-        QCOMPARE(radio.vfoHz(1, 0), qint64(14'210'000));
+        const qint64 rx1Hz = rx2On ? 14'210'000 : 14'200'000;
+        QCOMPARE(radio.vfoHz(1, 0), rx1Hz);
         QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
-        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,0,14210000;")});
+        QCOMPARE(drainLines(protocol),
+                 rx2On ? QStringList{QStringLiteral("vfo:1,0,14210000;")} : QStringList{});
 
         const QStringList burst = protocol.buildInitBurst();
         // Both channels of a receiver read its slice (channel 0).
-        QVERIFY(burst.contains(QStringLiteral("vfo:1,0,14210000;")));
-        QVERIFY(burst.contains(QStringLiteral("vfo:1,1,14210000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:1,0,%1;").arg(rx1Hz)));
+        QVERIFY(burst.contains(QStringLiteral("vfo:1,1,%1;").arg(rx1Hz)));
         QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7100000;")));
     }
 
@@ -328,7 +335,10 @@ private slots:
                               QStringLiteral("vfo:1,1,14200000;")};
         QTest::newRow("copy off") << false << false << ch1;
         QTest::newRow("copy off, forget on") << false << true << ch1;
-        QTest::newRow("copy on") << true << false << ch0 + ch1;
+        // Thetis's order: channel 1, then its copy on channel 0
+        // (TCIServer.cs:1386-1392 [v2.10.3.15]); a client acting on the
+        // last frame lands on channel 0.
+        QTest::newRow("copy on") << true << false << ch1 + ch0;
         QTest::newRow("copy on, forget on") << true << true << ch0;
     }
     void copyAndForgetShapeTheSecondReceiversVfo()
@@ -357,12 +367,12 @@ private slots:
         QTest::addColumn<bool>("on");
         QTest::addColumn<bool>("rx2On");
         QTest::addColumn<QStringList>("expected");
+        // Channel 0 only: with RX2 on, Thetis's VFO B is RX2's, so nothing
+        // goes out as vfo:0,1 (console.cs:32951-32954 [v2.10.3.15]).
         QTest::newRow("on, RX2 on")
             << true << true
             << QStringList{QStringLiteral("if:1,0,10000;"),
-                           QStringLiteral("vfo:1,0,7100000;"),
-                           QStringLiteral("if:0,1,10000;"),
-                           QStringLiteral("vfo:0,1,7100000;")};
+                           QStringLiteral("vfo:1,0,7100000;")};
         QTest::newRow("on, RX2 off") << true << false << bothChannels(0, 7'100'000, 10'000);
         QTest::newRow("off, RX2 on") << false << true << bothChannels(0, 7'100'000, 10'000);
     }
@@ -412,8 +422,36 @@ private slots:
 
         protocol.handleCommand(QStringLiteral("vfo:1,0,7150000;"));
         QCOMPARE(radio.vfoHz(0, 0), acts ? qint64(7'150'000) : qint64(7'100'000));
-        QCOMPARE(radio.vfoHz(1, 0), acts ? qint64(14'200'000) : qint64(7'150'000));
-        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,0,7150000;")});
+        // With RX2 off the set does nothing (the next test).
+        QCOMPARE(radio.vfoHz(1, 0), acts || !rx2On ? qint64(14'200'000) : qint64(7'150'000));
+        QCOMPARE(drainLines(protocol),
+                 rx2On ? QStringList{QStringLiteral("vfo:1,0,7150000;")} : QStringList{});
+    }
+
+    // A set for the second receiver while RX2 is off is ignored and not
+    // echoed, as in Thetis handleVFOMessage, TCIServer.cs:3897-3899
+    // [v2.10.3.15]. The first receiver's set still acts.
+    void secondReceiverVfoSetIgnoredWhileRx2Off()
+    {
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/false);
+        TciProtocol protocol(&radio);
+        for (const QString& set : {QStringLiteral("vfo:1,0,7150000;"),
+                                   QStringLiteral("vfo:1,1,7160000;")}) {
+            QCOMPARE(protocol.handleCommand(set), QString());
+        }
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'200'000));
+        QCOMPARE(radio.vfoHz(1, 1), qint64(14'200'000));
+        QCOMPARE(drainLines(protocol), QStringList{});
+        protocol.handleCommand(QStringLiteral("vfo:0,0,7120000;"));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'120'000));
+        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:0,0,7120000;")});
+
+        // With RX2 on the same set acts.
+        tuneTwoReceivers(radio, /*rx2On=*/true);
+        protocol.handleCommand(QStringLiteral("vfo:1,1,14210000;"));
+        QCOMPARE(radio.vfoHz(1, 1), qint64(14'210'000));
+        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,1,14210000;")});
     }
 
     // ...and in the first lines, from Thetis sendVFO,
