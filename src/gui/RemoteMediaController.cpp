@@ -3056,7 +3056,7 @@ bool RemoteMediaController::upgradeToDirectConnection()
     return startReplacement(ReplaceKind::Direct);
 }
 
-bool RemoteMediaController::startReplacement(ReplaceKind kind)
+bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFoldedMove)
 {
     const bool direct = kind == ReplaceKind::Direct;
     if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
@@ -3144,7 +3144,7 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind)
     d->replacementRouted = nextIce && nextIce->mediaRouting();
     d->replacementDirect = direct;
     d->replacementFallback = kind == ReplaceKind::TunnelFallback;
-    d->replacementMoveFolded = false;
+    d->replacementMoveFolded = carriesFoldedMove;
     peer->setIceConfiguration(nextIce);
     const QPointer<MediaPeer> started(peer);
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
@@ -3391,10 +3391,11 @@ void RemoteMediaController::tryPendingReplace()
         return;
     }
     d->replaceStartFailed = false;
-    if (startReplacement(d->pendingReplaceKind)) {
-        // The move folded into a fallback rides with the replace; a refusal
-        // while transmitting puts it back.
-        d->replacementMoveFolded = std::exchange(d->pendingMoveFolded, false);
+    // The move folded into a fallback rides with the replace; a refusal
+    // while transmitting puts it back (even one that arrives during the
+    // send, when startReplacement returns false and this leaves it pending).
+    if (startReplacement(d->pendingReplaceKind, d->pendingMoveFolded)) {
+        d->pendingMoveFolded = false;
         d->replacePending = false;
         d->replaceRetry->stop();
         return;

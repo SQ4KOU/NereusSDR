@@ -9360,6 +9360,13 @@ endif()
 # real window, real DTLS/SRTP over an in-process link. Plays real-time
 # audio, so REALTIME.
 nereus_add_test(tst_media_tunnel fakes/LoopbackTransport.cpp REALTIME EXTRA_LABELS session)
+# R-R3-49: its direct-pair and tunnel-pair waits each allow the product's
+# own ICE bound (IceConfiguration::kConnectDeadlineMs, 63 s), so one that
+# stalls reports its stage before ctest ends the binary. Two such waits
+# pass the default 120 s, which would end it first, silently.
+if(TEST tst_media_tunnel)
+    set_tests_properties(tst_media_tunnel PROPERTIES TIMEOUT 300)
+endif()
 
 # ── R-R3-49: the audio thread reads a published view of the slices ───────────
 # rxBlockReady used to walk RadioModel's slice list on the DSP thread while
