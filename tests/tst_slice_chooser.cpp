@@ -17,6 +17,9 @@
 //               slice is disabled with the Core's words below
 //               sliceAccessVersion 3. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over review: the Core's own slice reads "the Core
+//               itself". J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -303,9 +306,9 @@ private slots:
         const VfoWidget::SliceAccess coreAccess = SliceChooser::flagAccessFor(core);
         QCOMPARE(coreAccess.state, State::Listening);
         QCOMPARE(coreAccess.line,
-                 QStringLiteral("Listening \u00b7 controlled by the Core's own window"));
+                 QStringLiteral("Listening \u00b7 controlled by the Core itself"));
         QCOMPARE(coreAccess.heldReason,
-                 QStringLiteral("The Core's own window controls this slice"));
+                 QStringLiteral("The Core itself controls this slice"));
 
         Row nobody = row(3, Controller::Nobody);
         nobody.listeningHere = true;

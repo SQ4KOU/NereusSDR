@@ -13,6 +13,10 @@
 //               slice is disabled with the Core's words below
 //               sliceAccessVersion 3. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: take-over review: the Core's own slice reads "the Core
+//               itself", as the Core's refusal does, not "the Core's own
+//               window". J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "gui/SliceChooser.h"
@@ -211,8 +215,8 @@ VfoWidget::SliceAccess SliceChooser::flagAccessFor(const Row& row)
     access.state = VfoWidget::SliceAccess::State::Listening;
     switch (row.controller) {
     case Controller::CoreDesktop:
-        access.line = tr("Listening · controlled by the Core's own window");
-        access.heldReason = tr("The Core's own window controls this slice");
+        access.line = tr("Listening · controlled by the Core itself");
+        access.heldReason = tr("The Core itself controls this slice");
         // Core-slice take-over: Take control off with the Core's words.
         access.takeHeldReason = row.takeRefusal;
         break;
@@ -275,7 +279,7 @@ QString SliceChooser::ownerWords(const Row& row) const
 {
     switch (row.controller) {
     case Controller::ThisWindow:  return tr("This window controls");
-    case Controller::CoreDesktop: return tr("The Core's own window controls");
+    case Controller::CoreDesktop: return tr("The Core itself controls");
     case Controller::OtherDevice: return tr("%1 controls").arg(row.controllerName);
     case Controller::Nobody:      break;
     }
@@ -315,7 +319,7 @@ QString SliceChooser::descriptionFor(const Row& row) const
                                  : tr("You can listen in. %1").arg(row.takeRefusal);
     }
     const QString who = row.controller == Controller::OtherDevice ? row.controllerName
-        : row.controller == Controller::CoreDesktop ? tr("The Core's own window")
+        : row.controller == Controller::CoreDesktop ? tr("The Core itself")
                                                     : QString();
     if (row.controllerAway && !who.isEmpty()) {
         return tr("%1 is away. You can listen or take control now. It loses this slice after "

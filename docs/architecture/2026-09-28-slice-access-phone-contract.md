@@ -283,9 +283,10 @@ The verbs:
 - A take whose controller cannot stay on as a listener (an older app) is no
   longer refused (JJ, 2026-09-30): the take goes through and that device
   loses the slice. The same holds for a controller that is gone.
-- A take from the Core's own position, from a device below
-  `sliceAccessVersion` 3: "Slice <letter> is run by the Core itself, so
-  control of it cannot pass to this device."
+- A take of the Core's own slice with nobody at the Core's desktop (a
+  headless Core), from a device below `sliceAccessVersion` 3: "Slice
+  <letter> is run by the Core itself, so control of it cannot pass to this
+  device." With someone at the desktop the take goes through as any other.
 - A peer without the feature sending a `slice.*` verb: "Update this app to
   listen to and take slices on this Core."; from a Core that cannot share:
   "This Core cannot share slices between devices."
