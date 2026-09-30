@@ -22,6 +22,11 @@
 //   2026-09-30 - m_hl2NoPinsSliceId: the slice the HL2 filter board is off
 //                 for (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - lowPassHoldChanged: rxFilter0LowPassReason and
+//                 rxFilter0LowPassSlice notify on it, not on
+//                 filterStateChanged, so a hold alone sends a peer without
+//                 rxFilterLowPass no delta. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -871,9 +876,13 @@ class RadioModel : public QObject {
     // on chain 0's input is held for one slice, and that slice's id (-1 when
     // none is). Peer-only, to a peer that declared rxFilterLowPass 1
     // (rxFilterLowPassVersion 1). Declared last so every earlier property
-    // keeps its wire ordinal.
-    Q_PROPERTY(QString rxFilter0LowPassReason READ rxFilter0LowPassReason NOTIFY filterStateChanged)
-    Q_PROPERTY(int rxFilter0LowPassSlice READ rxFilter0LowPassSlice NOTIFY filterStateChanged)
+    // keeps its wire ordinal. They notify on lowPassHoldChanged, not
+    // filterStateChanged: a peer without the feature has both removed from
+    // a delta (StationServer::fitPeerOnlyProperties), and a delta left with
+    // nothing is not sent, so a hold alone reaches that peer as nothing, as
+    // before the feature (link document, section 17).
+    Q_PROPERTY(QString rxFilter0LowPassReason READ rxFilter0LowPassReason NOTIFY lowPassHoldChanged)
+    Q_PROPERTY(int rxFilter0LowPassSlice READ rxFilter0LowPassSlice NOTIFY lowPassHoldChanged)
 
 
 public:
@@ -3985,6 +3994,11 @@ public:
 signals:
     void stationLinkStateChanged();
     void filterStateChanged();
+    // rxFilter0LowPassReason / rxFilter0LowPassSlice changed (the chain's
+    // lowPassReason and lowPassSlice). Separate from filterStateChanged so
+    // the hold is published on its own; a display of the filter state
+    // listens to both.
+    void lowPassHoldChanged();
     // bandOutputsByte / bandOutputsBand / bandOutputsKeyed / bandOutputsKnown
     // changed.
     void bandOutputsChanged();

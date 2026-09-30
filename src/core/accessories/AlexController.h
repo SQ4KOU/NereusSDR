@@ -53,6 +53,10 @@
 //                HL2's N2ADR pins sent are 0x00 (JJ's ruling).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - lowPassHoldChanged: setLowPassHold no longer emits
+//                bpfStateChanged, so a hold alone sends a peer without
+//                rxFilterLowPass no delta. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -239,7 +243,8 @@ public:
 
     /// Shared-input filters, ruling (d): the low-pass reason and the slice
     /// that forces it (AlexAdcState::lowPassReason, lowPassSlice). Emits
-    /// bpfStateChanged when either changes.
+    /// lowPassHoldChanged, not bpfStateChanged, when either changes: the
+    /// band-pass state did not move.
     void setLowPassHold(int adc, int sliceIndex, const QString& reason);
 
     /// Mark that a wideband stream is active on this ADC.
@@ -343,6 +348,8 @@ public:
 
 signals:
     void bpfStateChanged(int adc, const AlexController::AlexAdcState& state);
+    /// setLowPassHold changed `adc`'s lowPassReason or lowPassSlice.
+    void lowPassHoldChanged(int adc);
     /// R-R3-46 / R-R3-21: setBpfMode changed `adc`'s operator policy. Fires
     /// even when the effective state did not change (a wideband chain), so
     /// the policy is saved and published whatever it does to the filter.

@@ -57,6 +57,10 @@
 //                                    the 6.0 MHz case renamed for GEN;
 //                                    WWV over 20 m reports the board off.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  The pin edit's hold is announced on
+//                                    lowPassHoldChanged, its own
+//                                    notifier. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1068,7 +1072,7 @@ private slots:
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
         QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
 
-        QSignalSpy changed(&s.model, &RadioModel::filterStateChanged);
+        QSignalSpy changed(&s.model, &RadioModel::lowPassHoldChanged);
         oc.setPin(Band::Band17m, 1, /*tx=*/false, true);
         QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band17m, /*tx=*/false));
         QCOMPARE(s.model.filterChainState(0).effective, AlexController::BpfEffective::Filtered);
