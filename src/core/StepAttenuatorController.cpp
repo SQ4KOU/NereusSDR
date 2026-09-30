@@ -38,6 +38,10 @@
 //                 via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten Thetis preamp modes (SA_MINUS10/20/30
+//                added), setBoardIdentity and the once-per-radio move of
+//                stored preamp modes to that numbering. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -93,6 +97,7 @@
 
 #include "StepAttenuatorController.h"
 #include "AppSettings.h"
+#include "BoardCapabilities.h"
 #include "RadioConnection.h"
 #include "P2RadioConnection.h"
 #include "ReceiverManager.h"
@@ -104,6 +109,12 @@
 #include <QMetaObject>
 
 namespace NereusSDR {
+
+namespace {
+// options/preamp/modeVersion: 2 once the stored preamp modes use the ten
+// Thetis modes (SA_MINUS10..30 as 7..9). Absent reads as 1.
+constexpr int kPreampModeVersion = 2;
+} // namespace
 
 StepAttenuatorController::StepAttenuatorController(QObject* parent)
     : QObject(parent)
@@ -1613,6 +1624,15 @@ void StepAttenuatorController::setRadioConnection(RadioConnection* conn)
 
 // --- ReceiverManager wiring ---
 
+void StepAttenuatorController::setBoardIdentity(HPSDRHW board, HPSDRModel model,
+                                                bool alexPresent)
+{
+    m_board = board;
+    m_hpsdrModel = model;
+    m_alexPresent = alexPresent;
+    m_boardKnown = true;
+}
+
 void StepAttenuatorController::setReceiverManager(ReceiverManager* mgr)
 {
     m_receiverManager = mgr;
@@ -1812,6 +1832,15 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     m_autoUndoDelaySec = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1UndoDelaySec"),
                                          5).toInt();
 
+    // Preamp modes stored before the SA modes existed used 0..6 on every
+    // board with the old per-board labels. Move them once per radio to the
+    // mode the same label now carries (BoardCapsTable::preampModeFromV1).
+    // That needs the board, so an unknown board reads them as they are and
+    // leaves the move for a load that knows it.
+    const QString preampVersionKey = QStringLiteral("options/preamp/modeVersion");
+    const bool movePreampModes = m_boardKnown
+        && s.hardwareValue(mac, preampVersionKey, 1).toInt() < kPreampModeVersion;
+
     // Per-band ATT values and preamp modes.
     for (const Band band : kPerBandStateBands) {
         const int b = static_cast<int>(band);
@@ -1828,9 +1857,23 @@ void StepAttenuatorController::loadSettings(const QString& mac)
                 st.attDb = attVal.toInt();
             }
             if (preampVal.isValid()) {
-                st.preamp = static_cast<PreampMode>(preampVal.toInt());
+                int mode = preampVal.toInt();
+                if (movePreampModes) {
+                    const int moved = BoardCapsTable::preampModeFromV1(
+                        m_board, m_alexPresent, mode);
+                    if (moved != mode) {
+                        mode = moved;
+                        s.setHardwareValue(mac,
+                            QStringLiteral("options/preamp/rx1Band/") + key, mode);
+                    }
+                }
+                st.preamp = static_cast<PreampMode>(mode);
             }
         }
+    }
+
+    if (movePreampModes) {
+        s.setHardwareValue(mac, preampVersionKey, kPreampModeVersion);
     }
 
     // Restore current band's ATT/preamp from per-band storage.

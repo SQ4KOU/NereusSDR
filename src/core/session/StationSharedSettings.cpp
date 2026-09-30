@@ -276,6 +276,12 @@ QString preampWords(int mode)
         return QStringLiteral("-40 dB");
     case PreampMode::Minus50:
         return QStringLiteral("-50 dB");
+    case PreampMode::SaMinus10:
+        return QStringLiteral("-10 dB");
+    case PreampMode::SaMinus20:
+        return QStringLiteral("-20 dB");
+    case PreampMode::SaMinus30:
+        return QStringLiteral("-30 dB");
     }
     return QString::number(mode);
 }

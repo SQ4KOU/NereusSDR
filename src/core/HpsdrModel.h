@@ -405,7 +405,7 @@ constexpr float rxDisplayCalOffsetDefaultFor(HPSDRModel m) noexcept {
 }
 
 // Per-preamp-mode RX offset (dB), applied when step-att is DISABLED.
-// Ported byte-for-byte from Thetis console.cs:1991-2001 [v2.10.3.13]:
+// Ported byte-for-byte from Thetis console.cs:1999-2009 [v2.10.3.15]:
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_OFF]      = 20.0f;  // atten inline
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_ON]       =  0.0f;  // no atten
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_MINUS10]  = 10.0f;
@@ -413,6 +413,9 @@ constexpr float rxDisplayCalOffsetDefaultFor(HPSDRModel m) noexcept {
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_MINUS30]  = 30.0f;
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_MINUS40]  = 40.0f;
 //   rx1_preamp_offset[(int)PreampMode.HPSDR_MINUS50]  = 50.0f;
+//   rx1_preamp_offset[(int)PreampMode.SA_MINUS10] = 10.0f;
+//   rx1_preamp_offset[(int)PreampMode.SA_MINUS20] = 20.0f; //MW0LGE_21d step atten
+//   rx1_preamp_offset[(int)PreampMode.SA_MINUS30] = 30.0f;
 //
 // Called from RxMeterCalibration::computeOffsetDb in the
 // `!stepAttEnabled` branch of Thetis RXPreampOffset (console.cs:20989).
@@ -425,6 +428,9 @@ constexpr float rxPreampOffsetDbFor(int preampModeIdx) noexcept {
         case 4: return 30.0f;   // PreampMode::Minus30
         case 5: return 40.0f;   // PreampMode::Minus40
         case 6: return 50.0f;   // PreampMode::Minus50
+        case 7: return 10.0f;   // PreampMode::SaMinus10 == SA_MINUS10
+        case 8: return 20.0f;   // PreampMode::SaMinus20 == SA_MINUS20 //MW0LGE_21d step atten
+        case 9: return 30.0f;   // PreampMode::SaMinus30 == SA_MINUS30
         default: return 0.0f;
     }
 }

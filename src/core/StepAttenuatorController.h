@@ -3,7 +3,9 @@
 // =================================================================
 //
 // Ported from Thetis source:
-//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/console.cs,
+//   Project Files/Source/Console/enums.cs [v2.10.3.15],
+//   original licences from Thetis source are included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -45,6 +47,11 @@
 //                 ADC, the other ADC's own value following the band of the
 //                 first slice on it, both equal while diversity links them.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: PreampMode carries all ten Thetis modes
+//                 (enums.cs:236-251 [v2.10.3.15], SA_MINUS10/20/30 added;
+//                 that file's header is now carried below) and
+//                 setBoardIdentity feeds the stored-mode move. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -98,10 +105,53 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+// --- From enums.cs ---
+/*  enums.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2000-2025 Original authors
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
 #pragma once
 
 #include "models/Band.h"
 #include "core/WdspTypes.h"
+#include "core/HpsdrModel.h"
 
 #include <QObject>
 #include <QPointer>
@@ -132,16 +182,40 @@ enum class AutoAttMode {
     Adaptive    // NereusSDR attack/hold/decay with per-band memory
 };
 
-// Preamp mode (Thetis PreampMode enum, console.cs:21574-21586).
-// Used by classic auto-att when step-att is disabled.
+// Preamp mode: the ten Thetis modes, in Thetis's order (the integer is
+// what a band's stored mode and the link carry).
+// From Thetis enums.cs:236-251 [v2.10.3.15]:
+//   public enum PreampMode
+//   {
+//       FIRST = -1,
+//       HPSDR_OFF,
+//       HPSDR_ON,
+//       HPSDR_MINUS10,
+//       HPSDR_MINUS20,
+//       HPSDR_MINUS30,
+//       HPSDR_MINUS40,
+//       HPSDR_MINUS50,
+//       SA_MINUS10,
+//       SA_MINUS20,  //MW0LGE_21d
+//       SA_MINUS30,
+//       // STEP_ATTEN,
+//       LAST,
+//   }
+// Off..Minus50 are the HPSDR modes (the preamp switch and the Alex
+// attenuator); SaMinus10..SaMinus30 put 10, 20 or 30 dB on the step
+// attenuator. Values stored before the SA modes existed are moved once by
+// loadSettings (BoardCapsTable::preampModeFromV1).
 enum class PreampMode {
-    Off,
-    On,
-    Minus10,
-    Minus20,    // MW0LGE_21d step atten [Thetis enums.cs:246]
-    Minus30,
-    Minus40,
-    Minus50
+    Off,        // HPSDR_OFF
+    On,         // HPSDR_ON
+    Minus10,    // HPSDR_MINUS10
+    Minus20,    // HPSDR_MINUS20
+    Minus30,    // HPSDR_MINUS30
+    Minus40,    // HPSDR_MINUS40
+    Minus50,    // HPSDR_MINUS50
+    SaMinus10,  // SA_MINUS10
+    SaMinus20,  // SA_MINUS20  //MW0LGE_21d
+    SaMinus30   // SA_MINUS30
 };
 
 // --- Controller ---
@@ -467,6 +541,11 @@ public:
     // previously-loaded different radio.
     void saveSettings(const QString& mac);
     void loadSettings(const QString& mac);
+
+    // The connected board, its Thetis model and Alex presence. Set before
+    // loadSettings: the preamp modes stored before the SA modes existed
+    // are moved to the new numbering only once the board is known.
+    void setBoardIdentity(HPSDRHW board, HPSDRModel model, bool alexPresent);
     // R-R3-46: also drops the band memory, which is the unloaded radio's.
     void markSettingsUnloaded()
     {
@@ -634,6 +713,12 @@ private:
     // markSettingsUnloaded() so a different-MAC connect doesn't reuse
     // a stale load tag from a prior radio.)
     QString m_loadedMac;
+
+    // setBoardIdentity(); m_boardKnown stays false until it is called.
+    HPSDRHW m_board{HPSDRHW::Unknown};
+    HPSDRModel m_hpsdrModel{HPSDRModel::FIRST};
+    bool m_alexPresent{false};
+    bool m_boardKnown{false};
 
     // Auto-att configuration.
     bool m_autoAttEnabled = false;

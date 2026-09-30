@@ -41,7 +41,7 @@ namespace NereusSDR {
 namespace {
 
 constexpr int kPreampModeFirst = static_cast<int>(PreampMode::Off);
-constexpr int kPreampModeLast = static_cast<int>(PreampMode::Minus50);
+constexpr int kPreampModeLast = static_cast<int>(PreampMode::SaMinus30);
 
 int overloadWireLevel(OverloadLevel level)
 {

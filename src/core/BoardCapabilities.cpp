@@ -40,6 +40,13 @@
 //                 clsHardwareSpecific.cs:258-270 [v2.10.3.13-beta2]).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Preamp items carry the Thetis mode of their label
+//                 (comboPreamp_SelectedIndexChanged, console.cs:28401-28466
+//                 [v2.10.3.15]): "-10dB"/"-20dB"/"-30dB" are the SA step
+//                 attenuator modes off Atlas. preampModeForLabel ports that
+//                 map; preampModeFromV1 moves a mode stored before the SA
+//                 modes existed. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -295,6 +302,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "SampleRateCatalog.h"
 
 #include <algorithm>
+#include <string_view>
 
 namespace NereusSDR {
 namespace {
@@ -1473,39 +1481,62 @@ std::span<const BoardCapabilities> all() noexcept {
 
 // --- Per-model preamp item tables ---
 // From Thetis console.cs:40755-40825 SetComboPreampForHPSDR().
-// PreampMode mapping: 0=Off(-20dB HPSDR), 1=On(0dB), 2=Minus10, 3=Minus20,
-//                     4=Minus30, 5=Minus40, 6=Minus50.
+// Each item carries the PreampMode Thetis picks for its label when the
+// operator selects it (preampModeForLabel below):
+//   0=HPSDR_OFF, 1=HPSDR_ON, 2..6=HPSDR_MINUS10..50 (the lowercase "db"
+//   Alex items), 7..9=SA_MINUS10..30 (the step attenuator).
+// "-20dB" is HPSDR_OFF only on Model == HPSDR (the Atlas board) and
+// SA_MINUS20 everywhere else, so on/off lists come in two forms.
 // Upstream inline attribution preserved verbatim:
 //   :40790  case HPSDRModel.REDPITAYA: // DH1KLM: changed to enable on_off_preamp_settings for OpenHPSDR compat. DIY PA/Filter boards
 //   :40805  // case HPSDRModel.REDPITAYA: // DH1KLM: removed for compatibility reasons
 //   :40813  ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+// From Thetis console.cs:40823-40825 [v2.10.3.15]:
+//   private String[] on_off_preamp_settings = { "0dB", "-20dB" };
+//   private String[] anan100d_preamp_settings = { "0dB", "-10dB", "-20dB", "-30dB" };
+//   private String[] alex_preamp_settings = { "-10db", "-20db", "-30db", "-40db", "-50db" };
 
-// on_off_preamp_settings = { "0dB", "-20dB" }
+// on_off_preamp_settings on Model == HPSDR (Atlas).
+static constexpr PreampItem kOnOffHpsdr[] = {
+    {"0dB",   1},  // HPSDR_ON
+    {"-20dB", 0},  // HPSDR_OFF  //MW0LGE_21d step atten
+};
+
+// on_off_preamp_settings on every other model.
 static constexpr PreampItem kOnOff[] = {
-    {"0dB",   1},  // PreampMode::On
-    {"-20dB", 0},  // PreampMode::Off
+    {"0dB",   1},  // HPSDR_ON
+    {"-20dB", 8},  // SA_MINUS20
 };
 
-// anan100d_preamp_settings = { "0dB", "-10dB", "-20dB", "-30dB" }
+// anan100d_preamp_settings (never on Model == HPSDR).
 static constexpr PreampItem kAnan100d[] = {
-    {"0dB",   1},  // PreampMode::On
-    {"-10dB", 2},  // PreampMode::Minus10
-    {"-20dB", 3},  // PreampMode::Minus20
-    {"-30dB", 4},  // PreampMode::Minus30
+    {"0dB",   1},  // HPSDR_ON
+    {"-10dB", 7},  // SA_MINUS10
+    {"-20dB", 8},  // SA_MINUS20
+    {"-30dB", 9},  // SA_MINUS30
 };
 
-// alex_preamp_settings = { "-10db", "-20db", "-30db", "-40db", "-50db" }
-// (lowercase "db" distinguishes ALEX modes from SA modes in Thetis)
+// on_off + alex_preamp_settings on Model == HPSDR (Atlas with Alex).
+// (lowercase "db" distinguishes the Alex modes from the SA modes in Thetis)
+static constexpr PreampItem kOnOffPlusAlexHpsdr[] = {
+    {"0dB",   1},  // HPSDR_ON
+    {"-20dB", 0},  // HPSDR_OFF
+    {"-10db", 2},  // HPSDR_MINUS10 (Alex)
+    {"-20db", 3},  // HPSDR_MINUS20 (Alex)
+    {"-30db", 4},  // HPSDR_MINUS30 (Alex)
+    {"-40db", 5},  // HPSDR_MINUS40 (Alex)
+    {"-50db", 6},  // HPSDR_MINUS50 (Alex)
+};
 
-// Combined: on_off + alex (for HPSDR/Hermes/ANAN100/etc with ALEX)
+// on_off + alex_preamp_settings on every other model (Hermes/ANAN-100 etc.).
 static constexpr PreampItem kOnOffPlusAlex[] = {
-    {"0dB",   1},  // PreampMode::On
-    {"-20dB", 0},  // PreampMode::Off
-    {"-10db", 2},  // PreampMode::Minus10 (ALEX)
-    {"-20db", 3},  // PreampMode::Minus20 (ALEX)
-    {"-30db", 4},  // PreampMode::Minus30 (ALEX)
-    {"-40db", 5},  // PreampMode::Minus40 (ALEX)
-    {"-50db", 6},  // PreampMode::Minus50 (ALEX)
+    {"0dB",   1},  // HPSDR_ON
+    {"-20dB", 8},  // SA_MINUS20
+    {"-10db", 2},  // HPSDR_MINUS10 (Alex)
+    {"-20db", 3},  // HPSDR_MINUS20 (Alex)
+    {"-30db", 4},  // HPSDR_MINUS30 (Alex)
+    {"-40db", 5},  // HPSDR_MINUS40 (Alex)
+    {"-50db", 6},  // HPSDR_MINUS50 (Alex)
 };
 
 // Hermes Lite 2: uses anan100d 4-step set (Off / -10 / -20 / -30 dB).
@@ -1520,13 +1551,120 @@ static constexpr std::span<const PreampItem> items(const PreampItem (&a)[N]) noe
     return {a, N};
 }
 
+int preampModeForLabel(const char* label, bool hpsdrModel) noexcept
+{
+    // From Thetis console.cs:28405-28450 [v2.10.3.15]
+    // (comboPreamp_SelectedIndexChanged; comboRX2Preamp_SelectedIndexChanged
+    // at 28468 maps the upper-case labels the same way):
+    //   switch (comboPreamp.Text)
+    //   {
+    //       case "-20dB":
+    //           if (HardwareSpecific.Model == HPSDRModel.HPSDR) //MW0LGE_21d step atten
+    //           {
+    //               mode = PreampMode.HPSDR_OFF;
+    //           }
+    //           else
+    //           {
+    //               mode = PreampMode.SA_MINUS20;
+    //           }
+    //           break;
+    //       case "0dB":
+    //           mode = PreampMode.HPSDR_ON;
+    //           break;
+    //       case "-10dB":
+    //           mode = PreampMode.SA_MINUS10;
+    //           break;
+    //       case "-30dB":
+    //           mode = PreampMode.SA_MINUS30;
+    //           break;
+    //       // NOTE: lower case db !!! not a very nice implemention //MW0LGE_22b commented
+    //       case "-10db":
+    //           mode = PreampMode.HPSDR_MINUS10;
+    //       ...
+    //       case "-50db":
+    //           mode = PreampMode.HPSDR_MINUS50;
+    //           break;
+    //       default:
+    //           exit = true;
+    const std::string_view text = label ? std::string_view(label) : std::string_view();
+    if (text == "-20dB") {
+        return hpsdrModel ? 0 : 8;  //MW0LGE_21d step atten
+    }
+    if (text == "0dB")   { return 1; }
+    if (text == "-10dB") { return 7; }
+    if (text == "-30dB") { return 9; }
+    // NOTE: lower case db !!! not a very nice implemention //MW0LGE_22b commented
+    if (text == "-10db") { return 2; }
+    if (text == "-20db") { return 3; }
+    if (text == "-30db") { return 4; }
+    if (text == "-40db") { return 5; }
+    if (text == "-50db") { return 6; }
+    return -1;  // PreampMode.FIRST: Thetis leaves the mode unchanged
+}
+
+namespace {
+
+// The items as NereusSDR stored them before the SA modes (settings saved
+// up to 2026-09-29). Frozen: preampModeFromV1 reads a stored value's label
+// from here. 0=Off 1=On 2..6=Minus10..Minus50.
+constexpr PreampItem kV1OnOff[] = {{"0dB", 1}, {"-20dB", 0}};
+constexpr PreampItem kV1Anan100d[] = {
+    {"0dB", 1}, {"-10dB", 2}, {"-20dB", 3}, {"-30dB", 4}};
+constexpr PreampItem kV1OnOffPlusAlex[] = {
+    {"0dB", 1}, {"-20dB", 0}, {"-10db", 2}, {"-20db", 3},
+    {"-30db", 4}, {"-40db", 5}, {"-50db", 6}};
+
+std::span<const PreampItem> v1PreampItemsForBoard(HPSDRHW hw, bool alexPresent) noexcept
+{
+    switch (hw) {
+    case HPSDRHW::Atlas:
+        return alexPresent ? items(kV1OnOffPlusAlex) : items(kV1OnOff);
+    case HPSDRHW::Hermes:
+    case HPSDRHW::HermesII:
+    case HPSDRHW::Angelia:
+    case HPSDRHW::Orion:
+    case HPSDRHW::HermesLite:
+        return alexPresent ? items(kV1OnOffPlusAlex) : items(kV1Anan100d);
+    default:
+        return items(kV1Anan100d);
+    }
+}
+
+} // namespace
+
+int preampModeFromV1(HPSDRHW hw, bool alexPresent, int stored) noexcept
+{
+    // Atlas (Model == HPSDR) numbered its modes as Thetis does already.
+    if (hw == HPSDRHW::Atlas) {
+        return stored;
+    }
+    // Off switched the preamp out: 20 dB less gain. Off Atlas Thetis
+    // reaches that through SA_MINUS20 (20 dB on the step attenuator), the
+    // mode its "-20dB" item picks there.
+    if (stored == 0) {
+        return 8;
+    }
+    // Any other value keeps the label it showed on this board.
+    for (const PreampItem& old : v1PreampItemsForBoard(hw, alexPresent)) {
+        if (old.modeInt == stored) {
+            for (const PreampItem& now : preampItemsForBoard(hw, alexPresent)) {
+                if (std::string_view(now.label) == std::string_view(old.label)) {
+                    return now.modeInt;
+                }
+            }
+        }
+    }
+    return stored;
+}
+
 std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) noexcept
 {
     // From Thetis console.cs:40755 SetComboPreampForHPSDR — per-model switch.
     switch (hw) {
     case HPSDRHW::Atlas:
-        return alexPresent ? items(kOnOffPlusAlex)
-                           : items(kOnOff);
+        // Model == HPSDR: "-20dB" is HPSDR_OFF (console.cs:28407 [v2.10.3.15]).
+        return alexPresent ? items(kOnOffPlusAlexHpsdr)
+                           : items(kOnOffHpsdr);
 
     case HPSDRHW::Hermes:
         // Hermes: with ALEX → on_off + alex; without → anan100d (4-step).
@@ -1597,6 +1735,10 @@ std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
     case HPSDRHW::OrionMKII:
     case HPSDRHW::Saturn:
         return items(kAnan100d);
+    case HPSDRHW::Atlas:
+        // Model == HPSDR: "-20dB" is HPSDR_OFF on RX2 as well
+        // (comboRX2Preamp_SelectedIndexChanged, console.cs:28468 [v2.10.3.15]).
+        return items(kOnOffHpsdr);
     default:
         return items(kOnOff);
     }

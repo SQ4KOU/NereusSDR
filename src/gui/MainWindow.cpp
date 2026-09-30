@@ -15653,6 +15653,13 @@ void MainWindow::onConnectionStateChanged()
             // persisted "Adaptive" string is clamped to Classic when the
             // connected board lacks the feature.
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+            // Before loadSettings: the stored preamp modes move to the ten
+            // Thetis modes by the label this board shows (the RX applet's
+            // preamp combo uses the same board and Alex flag).
+            m_stepAttController->setBoardIdentity(
+                conn->radioInfo().boardType,
+                m_radioModel->hardwareProfile().model,
+                caps.hasAlexFilters);
             // R-R3-46: select slice A's band first, because
             // loadSettings restores the per-band slot for the current band
             // (DaemonApp::applyStepAttenuatorConnection does the same).

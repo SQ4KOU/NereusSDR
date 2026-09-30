@@ -1854,6 +1854,9 @@ target_compile_definitions(tst_oc_outputs_hf_no_n2adr_writer PRIVATE NEREUS_BUIL
 nereus_add_test(tst_preamp_combo)
 target_compile_definitions(tst_preamp_combo PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Level Cal: the ten Thetis preamp modes, label map and stored-mode move ──
+nereus_add_test(tst_preamp_mode)
+
 # ── Phase 3P-D Task 1: OcMatrix model + per-MAC persistence ──────────────────
 # Verifies per-band × per-pin × {RX,TX} bit assignments, TXPinAction mapping
 # (Thetis enums.cs:443 TXPinActions [@501e3f5]), and AppSettings round-trip

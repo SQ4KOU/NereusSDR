@@ -679,8 +679,21 @@ namespace BoardCapsTable {
     // Preamp combo item: display text + underlying PreampMode-like index.
     struct PreampItem {
         const char* label;   // e.g. "0dB", "-10dB", "-20db" (case from Thetis)
-        int         modeInt; // index into NereusSDR PreampMode (0=Off..6=Minus50)
+        int         modeInt; // NereusSDR PreampMode value, numbered as Thetis
+                             // PreampMode (0=HPSDR_OFF .. 9=SA_MINUS30)
     };
+
+    // The PreampMode Thetis picks when the operator selects this label, or
+    // -1 for a label it does not know. hpsdrModel is Model == HPSDR, which
+    // NereusSDR reaches as the Atlas board.
+    // From Thetis console.cs:28401-28466 comboPreamp_SelectedIndexChanged [v2.10.3.15].
+    int preampModeForLabel(const char* label, bool hpsdrModel) noexcept;
+
+    // Moves a preamp mode stored before the SA modes existed (numbered
+    // 0=Off..6=Minus50 on every board) to the mode the same combo label
+    // now carries. Off becomes SA_MINUS20 away from Atlas, the 20 dB
+    // attenuation it stood for. Unknown values come back unchanged.
+    int preampModeFromV1(HPSDRHW hw, bool alexPresent, int stored) noexcept;
 
     // Returns the RX1 preamp combo items for a given board + ALEX presence.
     // From Thetis console.cs:40755 SetComboPreampForHPSDR.
