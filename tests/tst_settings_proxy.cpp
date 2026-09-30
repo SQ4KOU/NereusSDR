@@ -813,6 +813,39 @@ private slots:
         QVERIFY(proxy.hasNonEmptySnapshot());
     }
 
+    // The same contract AFTER a snapshot has landed. An empty snapshot, or
+    // one carrying only the seed marker, followed by this window's own
+    // write must still read as "the station sent nothing real": the write
+    // came from here, not from the Core.
+    void hasNonEmptySnapshotIgnoresThisWindowsOwnWritesAfterASnapshot()
+    {
+        SettingsProxy empty;
+        empty.setReady(true);
+        empty.applySnapshot(QMap<QString, QString>{});
+        empty.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        QVERIFY2(!empty.hasNonEmptySnapshot(),
+                 "this window's own write is not station content");
+        QVERIFY2(!empty.setupDialogAllowed(),
+                 "an own write must not open Setup over an empty station snapshot");
+
+        SettingsProxy seeded;
+        QMap<QString, QString> marker;
+        marker.insert(QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True"));
+        seeded.applySnapshot(marker);
+        seeded.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        QVERIFY2(!seeded.hasNonEmptySnapshot(),
+                 "the seed marker plus an own write is still not station content");
+
+        // A value the Core pushes later does count.
+        seeded.applyRemoteValue(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("core"),
+                                QStringLiteral("other"));
+        QVERIFY(seeded.hasNonEmptySnapshot());
+
+        // A Core-asserted removal takes it back out.
+        seeded.applyRemoteRemoval(QStringLiteral("hardware/aa:bb/k2"));
+        QVERIFY(!seeded.hasNonEmptySnapshot());
+    }
+
     // ── Whole-branch review, Minor 6 ──────────────────────────────────────
     //
     // ISettingsBackend's contract is handledKeys() subset-of handlesKey():

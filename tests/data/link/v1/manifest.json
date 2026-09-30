@@ -100,6 +100,7 @@
         {"id": "session-fifth-device-cancel", "file": "sessions/fifth-device-cancel.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-fifth-device-no-answer", "file": "sessions/fifth-device-no-answer.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-fifth-device-away", "file": "sessions/fifth-device-away.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
+        {"id": "session-place-freed", "file": "sessions/place-freed.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-connected-devices", "file": "sessions/connected-devices.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-short-name", "file": "sessions/short-name.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-grace-return", "file": "sessions/grace-return.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},

@@ -1488,6 +1488,8 @@ list(APPEND CORE_SOURCES
     # iPhone app plan Task 28 (R-IOS-16): the control session over a data
     # channel, for a connection the service introduced.
     src/core/session/DataChannelTransport.cpp
+    # Test builds only (the file is empty without NEREUS_BUILD_TESTS).
+    src/core/session/DataChannelLibraryLogTestHook.cpp
     src/core/session/RendezvousDialer.cpp
     # iPhone app plan Task 29 (R-IOS-16): moving a session to a better
     # path (the link document, section 21): the switchable transport under

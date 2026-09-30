@@ -301,6 +301,11 @@
 //                                    a production consumer. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  hasNonEmptySnapshot() counts only
+//                                    keys the Core sent (m_coreKeys), not
+//                                    this window's own writes. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QMap>
@@ -365,11 +370,13 @@ public:
 
     bool hasReceivedSnapshot() const { return m_snapshotEverApplied; }
 
-    // True once at least one snapshot has been applied AND it carried at
-    // least one key besides AppSettings::kDaemonProfileSeededKey. See
-    // the class comment: the seed marker alone does not count as "real"
-    // station content, which is exactly what lets the OR-fallback in
-    // setupDialogAllowed() below do anything.
+    // True once at least one snapshot has been applied AND the Core has
+    // sent at least one key besides AppSettings::kDaemonProfileSeededKey
+    // (in a snapshot, a remote value or a rejection's restored value).
+    // This window's own writes never count. See the class comment: the
+    // seed marker alone does not count as "real" station content, which
+    // is exactly what lets the OR-fallback in setupDialogAllowed() below
+    // do anything.
     bool hasNonEmptySnapshot() const;
 
     // Step 7's Setup-dialog gate: ready() AND (hasNonEmptySnapshot() OR
@@ -482,6 +489,12 @@ private:
     /// class comment's "Offline behaviour" section.
     QSet<QString> m_droppedWhileOffline;
     QSet<QString> m_lastSnapshotContradictions;
+
+    /// Keys the Core itself has sent a value for (snapshot, remote value,
+    /// a rejection's restored value) and not since removed. setValue() and
+    /// remove() never touch it, so hasNonEmptySnapshot() is not satisfied
+    /// by this window's own writes.
+    QSet<QString> m_coreKeys;
 
     bool m_ready = false;
     bool m_snapshotEverApplied = false;

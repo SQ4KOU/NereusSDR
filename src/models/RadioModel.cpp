@@ -14681,6 +14681,12 @@ void RadioModel::attachDspWorkerForTest(RxDspWorker* worker)
     attachRadeRxWorker(worker);
 }
 
+void RadioModel::attachDspWorkerOnThreadForTest(RxDspWorker* worker, QThread* thread)
+{
+    attachRadeRxWorker(worker);
+    setRxWorkerTarget(worker, thread);
+}
+
 bool RadioModel::waitForReceiveLaneForTest(int timeoutMs)
 {
     if (!m_rxLane) {

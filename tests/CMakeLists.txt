@@ -8996,6 +8996,12 @@ endif()
 nereus_add_test(tst_daemon_media_controller
     fakes/LoopbackTransport.cpp)
 
+# iPhone app plan Task 24 (R-IOS-10): a session with no display endpoint
+# keeps its audio, metrics and S-meter readings and gets no display.
+nereus_add_test(tst_sound_only_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # Remote-window parity Task 28 (R-R3-49, A11): the Core sends the transmit
 # analyzer's display for the transmitting pan while keyed, to a media peer
 # that declared txDisplayVersion; txState's high-SWR state.

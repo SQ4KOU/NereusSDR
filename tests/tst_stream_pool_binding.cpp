@@ -9,12 +9,19 @@
 // 2026-09-27: R-R3-49: a Protocol 2 slice comes back at the rate saved for
 // its band after a restart, and a rate change saves it. J.J. Boyd (KG4VCF),
 // with AI-assisted implementation via Anthropic Claude Code.
+// 2026-09-28: a stream rate change never makes the event loop wait on a busy
+// DSP worker, and the new drain size still lands before the next batch.
+// J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude
+// Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QRegularExpression>
+#include <QSemaphore>
 #include <QSignalSpy>
+#include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <numbers>
@@ -1350,6 +1357,90 @@ private slots:
         QCOMPARE(spy.at(1).at(1).toInt(), bufferSizeForRate(192000));
 
         model.attachDspWorkerForTest(nullptr);
+    }
+
+    // The stream geometry change quiesces a running DSP worker (disconnect
+    // the feed, reset its accumulator on its own thread, publish the drain
+    // size, re-rate the channels, reconnect). That wait belongs to the
+    // receive lane, never the event loop: with the worker's thread busy in a
+    // long block, setStreamSampleRate still returns at once, and the first
+    // batch after the worker frees up drains at the new stream's size.
+    void a_stream_rate_change_never_waits_on_a_busy_dsp_worker()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(7150000.0);
+        const int streamA = model.sliceById(a)->streamIndex();
+        QVERIFY(streamA >= 0);
+        QVERIFY(model.sliceById(b)->streamIndex() != streamA);
+
+        QThread dspThread;
+        dspThread.setObjectName(QStringLiteral("TestDspThread"));
+        auto worker = std::make_unique<RxDspWorker>();
+        worker->setBufferSizes(bufferSizeForRate(192000), 64);
+        worker->moveToThread(&dspThread);
+        dspThread.start();
+        struct Teardown {
+            RadioModel* model;
+            QThread* thread;
+            ~Teardown()
+            {
+                model->attachDspWorkerOnThreadForTest(nullptr, nullptr);
+                thread->quit();
+                thread->wait();
+            }
+        } teardown{&model, &dspThread};
+
+        model.attachDspWorkerOnThreadForTest(worker.get(), &dspThread);
+        ReceiverManager* receivers = model.receiverManager();
+        QVERIFY(receivers != nullptr);
+        connect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                worker.get(), &RxDspWorker::processStampedIqBatch,
+                Qt::QueuedConnection);
+        model.republishAllStreamBindings();
+
+        // Drains observed on this thread, in the order the worker made them.
+        QObject sink;
+        QVector<QPair<int, int>> drained;
+        connect(worker.get(), &RxDspWorker::chunkDrainedForStream, &sink,
+                [&drained](int stream, int samples) {
+            drained.append({stream, samples});
+        }, Qt::QueuedConnection);
+
+        // Hold the worker's thread in one long block. It lets go when the
+        // test releases it, or after a bound if the event loop were ever made
+        // to wait on it (then workerBusy reads false below and the test fails
+        // instead of hanging).
+        QSemaphore entered;
+        QSemaphore release;
+        std::atomic<bool> workerBusy{false};
+        QMetaObject::invokeMethod(worker.get(), [&entered, &release, &workerBusy]() {
+            workerBusy.store(true);
+            entered.release();
+            release.tryAcquire(1, 10000);
+            workerBusy.store(false);
+        }, Qt::QueuedConnection);
+        QVERIFY(entered.tryAcquire(1, 10000));
+
+        model.setStreamSampleRate(streamA, 768000);
+        QVERIFY2(workerBusy.load(),
+                 "setStreamSampleRate waited on the busy DSP worker");
+
+        release.release();
+        QVERIFY(model.waitForReceiveLaneForTest(10000));
+
+        // The next batch on stream A drains once, at the new 768 kHz size. At
+        // the old 192 kHz threshold the same samples drain as four chunks.
+        emit receivers->iqDataForReceiverStamped(
+            streamA, oneChunk(bufferSizeForRate(768000)),
+            ReceiverManager::enqueueClockNs());
+        QTRY_COMPARE_WITH_TIMEOUT(drained.size(), 1, 10000);
+        QCOMPARE(drained.at(0).first, streamA);
+        QCOMPARE(drained.at(0).second, bufferSizeForRate(768000));
     }
 
     // Protocol 1 carries one rate for the whole radio (composeCcBank0 takes a
