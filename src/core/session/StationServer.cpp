@@ -1566,10 +1566,14 @@ bool isTransmitHardwareKey(const QString& rawKey)
 
 // R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection and
 // External TX Inhibit groups, Station keys (SettingsScope.cpp) that gate
-// the Core's own transmitting. Taken while the radio is off the air.
+// the Core's own transmitting, and (transmitSettingsVersion 11) "Disable
+// HF PA" (DisableHfPa). On isTransmitSettingKeyAcceptedOffAir's list, so a
+// receive-only Core takes them; since transmitSettingsVersion 13 they are
+// taken on the air as well and apply at once (transmitSettingOnAirRefusal
+// holds back only the OC transmit pins). Thetis's MOX setter greys none of
+// them (setup.cs:5132-5161 [v2.10.3.15]).
 bool isPowerPageTransmitKey(const QString& key)
 {
-    // transmitSettingsVersion 11: and "Disable HF PA" (DisableHfPa).
     return RadioModel::isSwrProtectionSettingKey(key)
         || key == QLatin1String("TxInhibitMonitorEnabled")
         || key == QLatin1String("TxInhibitMonitorReversed")
