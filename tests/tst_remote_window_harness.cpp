@@ -77,6 +77,16 @@
 //                                    the Core's access updates, the take's
 //                                    answer arriving before its update.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Load findings 4: run as six ctest
+//                                    entries (TestFunctionGroups), past
+//                                    the 120 s limit as one under load.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Load findings 4: the take answered
+//                                    before its access update waits for
+//                                    the Core's update to be held (it
+//                                    comes on the Core's next delta
+//                                    flush). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -107,7 +117,9 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 
+#include "TestFunctionGroups.h"
 #include "core/safety/TxRefusal.h"
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
@@ -2080,7 +2092,11 @@ private slots:
         QCOMPARE(answered.first().at(0).toByteArray(), QByteArrayLiteral("slice.takeControl"));
         QVERIFY(answered.first().at(2).toBool());
         QCOMPARE(ownership->mark(bId).owner, self);
-        QVERIFY(h.coreLink()->heldSliceAccessCount() > 0);
+        // The Core answers the take at once, but sends the slice's access
+        // update on its next delta flush (StationServer::kDefaultDeltaFlushMs,
+        // a rate limit), so on a busy computer the window can read the answer
+        // before the update is made and held. Wait for it to be held.
+        QTRY_VERIFY(h.coreLink()->heldSliceAccessCount() > 0);
         // Step one: the mirror still names the phone, so the window places
         // the slice on a pan of its own without moving it for anyone.
         QVERIFY(client->sliceAccess()->entry(bId)->controllerDeviceId != QStringLiteral("token:1"));
@@ -2100,5 +2116,48 @@ private slots:
     }
 };
 
-QTEST_MAIN(TestRemoteWindowHarness)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TestRemoteWindowHarness test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // Load findings 4: about 37 s on a quiet computer, past ctest's 120 s
+    // under 150 busy loops (200 to 207 s at load 133 to 187), every case
+    // still passing one after another. The time is the window's own work,
+    // spread over all the cases (about 3 to 9 s each at that load, the
+    // Setup page sweep 18 s); its fixed waits are "nothing happens" windows
+    // that do not grow with load. Five groups run as their own ctest
+    // entries, tst_remote_window_harness_connect, _disconnect, _links,
+    // _setup and _radio (tests/CMakeLists.txt), each 27 to 41 s at that
+    // load; the slice access cases run as tst_remote_window_harness. The
+    // limit is not raised.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_REMOTE_WINDOW_HARNESS_GROUP",
+        {{QStringLiteral("connect"),
+          {QStringLiteral("entryPointsStartAnExplicitConnect"),
+           QStringLiteral("connectedHeaderShowsCurrentSocketAndClearsOnDisconnect"),
+           QStringLiteral("setupConnectionsAsksManagedPickerWithoutDialing")}},
+         {QStringLiteral("disconnect"),
+          {QStringLiteral("cancelDuringBackoffStopsTheRetry"),
+           QStringLiteral("operatorDisconnectOpensConnectionsOnce")}},
+         {QStringLiteral("links"),
+          {QStringLiteral("linkLossOpensNothingAndRetries"),
+           QStringLiteral("radioOfflineOpensNothing"),
+           QStringLiteral("heldSnapshotCreatesNoSliceOnConnectOrReconnect")}},
+         {QStringLiteral("setup"),
+          {QStringLiteral("disconnectedWindowSetupKeepsThisComputersSettings"),
+           QStringLiteral("connectedWithoutTheCoresSettingsCorePagesWait"),
+           QStringLiteral("setupOpenedWhileDisconnectedRecordsNoEdit"),
+           QStringLiteral("freshWindowFirstConnectRaisesNoOfflineEditWarning"),
+           QStringLiteral("meterIntervalFollowsTheCoresSetting")}},
+         {QStringLiteral("radio"),
+          {QStringLiteral("windowFollowsTheCoresBandPlan"),
+           QStringLiteral("attenuatorControlsUseTheCoresObject"),
+           QStringLiteral("hardwareConfigReceiveSettingsReachTheCore"),
+           QStringLiteral("olderCoreLeavesAttenuatorControlsDisabledWithAReason"),
+           QStringLiteral("windowFollowsTheCoresRadio"),
+           QStringLiteral("capabilityChangeRegatesWithoutReconnect")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
 #include "tst_remote_window_harness.moc"
