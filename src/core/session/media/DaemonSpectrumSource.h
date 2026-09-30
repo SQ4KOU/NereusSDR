@@ -15,6 +15,7 @@
 #include <QSharedPointer>
 #include <QVector>
 
+#include <atomic>
 #include <memory>
 #include <optional>
 
@@ -55,6 +56,12 @@ struct DaemonSpectrumFrame {
     QVector<float> binsLinear;
     double windowEnb{0.0};
     double dbmOffset{0.0};
+    /// The bins in dBm, filled on the engine thread only by a source whose
+    /// setComputesBinsDbm(true) is set (DaemonAgcSource), so its consumer
+    /// does no per-bin log10 on the main thread. binsLinearToDbm() gives the
+    /// values; binsDbmValid is false when it rejected the frame.
+    QVector<float> binsDbm;
+    bool binsDbmValid{false};
 };
 
 class DaemonSpectrumSource final : public QObject {
@@ -145,6 +152,19 @@ public:
     /// window can present display frames on its audio's clock.
     static qint64 monotonicNowNs();
 
+    /// When true, every frame this source publishes also carries binsDbm,
+    /// computed on the engine thread that produced it. Any thread.
+    void setComputesBinsDbm(bool computes);
+    bool computesBinsDbm() const;
+
+    /// Exactly FFTEngine::fftReady's conversion, as DaemonAgcSource did it
+    /// per frame on the main thread: a bin below 1e-20 is -200 dBm, any
+    /// other is 10*log10(power) + dbmOffset. Returns false (and leaves `out`
+    /// empty) when a power or a result is not finite, which rejects the
+    /// whole frame.
+    static bool binsLinearToDbm(const QVector<float>& binsLinear, double dbmOffset,
+                                QVector<float>& out);
+
 signals:
     /// At most one queued notification per active source exists at a time.
     /// Consumers call takeLatest() to acquire the current frame.
@@ -179,6 +199,7 @@ private:
     std::unique_ptr<FftEnginePool> m_pool;
     QMap<MediaSourceKey, SourceEntry> m_sources;
     quint64 m_nextGeneration{0};
+    std::atomic<bool> m_computesBinsDbm{false};
 };
 
 } // namespace NereusSDR
