@@ -79,6 +79,10 @@
 //               datagram and for both ends of a relayed connection closed
 //               at once giving both allocations back. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: theServiceEndsWithTheProcessThatStartedIt: the service
+//               LocalService starts ends with the process it is tied to.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -2614,6 +2618,31 @@ private slots:
                  qPrintable(service.turnReport()));
         QVERIFY2(service.turnProcess()->state() == QProcess::Running,
                  qPrintable(service.turnReport()));
+    }
+
+    // The service a test starts ends with the process it was tied to, even
+    // when no destructor runs (a test killed at its ctest timeout): here
+    // tied to a stand-in process that is then killed.
+    void theServiceEndsWithTheProcessThatStartedIt()
+    {
+        QProcess standIn;
+        standIn.start(QStringLiteral("/bin/sleep"), {QStringLiteral("600")});
+        QVERIFY(standIn.waitForStarted(10000));
+        LocalService service;
+        service.setParentPidForTest(standIn.processId());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        QProcess* running = service.serviceProcess();
+        QVERIFY(running != nullptr);
+        QCOMPARE(running->state(), QProcess::Running);
+        standIn.kill();
+        QVERIFY(standIn.waitForFinished(10000));
+        // The launcher looks every 0.5 s (PARENT_POLL_S); ten times that.
+        constexpr int kEndBoundMs = 5000;
+        QVERIFY2(running->waitForFinished(kEndBoundMs),
+                 qPrintable(QStringLiteral("the service was still running %1 ms after the "
+                                           "process it was tied to ended\n%2")
+                                .arg(kEndBoundMs)
+                                .arg(service.log())));
     }
 
     void relayDeniedAsksForNoCredentials()
