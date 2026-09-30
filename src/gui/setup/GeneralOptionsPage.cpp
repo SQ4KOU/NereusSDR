@@ -86,6 +86,9 @@
 //                 Region 3" (display text only; the saved value is
 //                 unchanged). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: the RX2 box stops at 31 dB, the
+//                 second ADC's field (rx2StepAttMaxDb), except while linked.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -145,6 +148,8 @@
 #include "core/session/StationCapabilities.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/safety/BandPlanGuard.h"
+
+#include <algorithm>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -301,7 +306,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         const int minDb = m_ctrl->minAttenuation();
         const int maxDb = m_ctrl->maxAttenuation();
         m_spnRx1StepAttValue->setRange(minDb, maxDb);
-        m_spnRx2StepAttValue->setRange(minDb, maxDb);
+        m_spnRx2StepAttValue->setRange(minDb, rx2StepAttMaxDb());
         connectController();
         // Issue #259 — pull the controller's already-restored state into
         // the widgets. Must run AFTER connectController() so that any
@@ -578,7 +583,7 @@ void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*inf
             const int minDb = m_ctrl->minAttenuation();
             const int maxDb = m_ctrl->maxAttenuation();
             m_spnRx1StepAttValue->setRange(minDb, maxDb);
-            m_spnRx2StepAttValue->setRange(minDb, maxDb);
+            m_spnRx2StepAttValue->setRange(minDb, rx2StepAttMaxDb());
         }
     }
 }
@@ -1728,7 +1733,7 @@ void GeneralOptionsPage::syncFromFacade()
     }
     {
         QSignalBlocker blk(m_spnRx2StepAttValue);
-        m_spnRx2StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
+        m_spnRx2StepAttValue->setRange(m_stepAtt->minDb(), rx2StepAttMaxDb());
     }
     refreshRx2StepAtt();
     {
@@ -1787,6 +1792,23 @@ void GeneralOptionsPage::applyRadioHardwareAvailability()
 // attenuator; it is usable on a radio with a second receive ADC while the
 // step attenuator is on (and, in a remote window, when the Core sends it).
 // Otherwise it is shown disabled with the reason.
+// Level Cal 2 review: the top of the RX2 box. RX2's own value stops at the
+// second ADC's 0-31 dB field (StepAttenuatorController::rx2MaxAttenuation,
+// kRx2StepAttMaxDb); linked (diversity) it is RX1's and takes RX1's range.
+int GeneralOptionsPage::rx2StepAttMaxDb() const
+{
+    if (m_ctrl) {
+        return m_ctrl->adcAttenuatorsLinked() ? m_ctrl->maxAttenuation()
+                                              : m_ctrl->rx2MaxAttenuation();
+    }
+    if (m_stepAtt) {
+        return m_stepAtt->adcLinked()
+            ? m_stepAtt->maxDb()
+            : std::min(m_stepAtt->maxDb(), StepAttenuatorController::kRx2StepAttMaxDb);
+    }
+    return StepAttenuatorController::kRx2StepAttMaxDb;
+}
+
 void GeneralOptionsPage::refreshRx2StepAtt()
 {
     if (!m_spnRx2StepAttValue || !m_chkRx2StepAttEnable) {
@@ -1835,6 +1857,7 @@ void GeneralOptionsPage::refreshRx2StepAtt()
     m_chkRx2StepAttEnable->setToolTip(rx2Usable ? tr("Enable the step attenuator.") : reason);
     {
         QSignalBlocker blk(m_spnRx2StepAttValue);
+        m_spnRx2StepAttValue->setMaximum(rx2StepAttMaxDb());
         m_spnRx2StepAttValue->setValue(dB);
     }
     m_spnRx2StepAttValue->setEnabled(rx2Usable && stepOn);

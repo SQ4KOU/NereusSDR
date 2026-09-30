@@ -63,6 +63,10 @@
 //                and the HPSDR MOX path turns RX1's step attenuator off and
 //                holds RX2's mode (console.cs:29598-29608, 29688-29692).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: RX2's own attenuator is held to the
+//                second ADC's 0-31 dB field (kRx2StepAttMaxDb,
+//                rx2MaxAttenuation), so no RX2 value wraps on the wire.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -168,6 +172,7 @@ mw0lge@grange-lane.co.uk
 #include <QPointer>
 #include <QTimer>
 
+#include <algorithm>
 #include <array>
 #include <optional>
 #include <unordered_map>
@@ -331,9 +336,21 @@ public:
     Band rx2Band() const noexcept { return m_rx2Band; }
     bool adcAttenuatorsLinked() const noexcept { return m_adcAttLinked; }
     // Thetis RX2AttenuatorData: the other ADC's own value (RX1's while
-    // linked). Clamped to the same range as RX1's.
+    // linked). Its own value is clamped to rx2MaxAttenuation().
     int rx2AttenuatorDb() const noexcept { return m_rx2AttDb; }
     void setRx2Attenuation(int dB);
+    // RX2's own step attenuator is the second ADC's 5-bit field, 0-31 dB:
+    // TAPR-OpenHPSDR-Firmware @e7c6584 Angelia.v:2319 (C1[4:0] input
+    // attenuator 2), Orion.v:2295 ("0-31 dB") and :2419. Thetis lets RX2
+    // reach 61 on an Alex board (console.cs:11176-11189 [v2.10.3.15],
+    // udRX2StepAttData.Maximum = 61) and sends the value + 2 above 31
+    // (console.cs:11211-11222), but RX2's setter never switches the Alex
+    // attenuator in (SetAlexAtten is only in RX1's, console.cs:11044-11056),
+    // so the gateware keeps the low 5 bits and 40 dB lands as 10. NereusSDR
+    // holds RX2's own value to the field instead, so nothing wraps.
+    static constexpr int kRx2StepAttMaxDb = 31;
+    // The top of RX2's own range: the radio's, no higher than the field's.
+    int rx2MaxAttenuation() const noexcept { return std::min(m_maxAttDb, kRx2StepAttMaxDb); }
     // True when `adc` reads and is set through attenuatorDb() (slice A's
     // ADC, an ADC not in use, or any ADC while linked); false for the other
     // ADC in use, which reads rx2AttenuatorDb().
