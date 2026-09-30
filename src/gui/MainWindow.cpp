@@ -13,7 +13,9 @@
 // Modification history (NereusSDR):
 //   2026-09-30 - J.J. Boyd (KG4VCF). Level Cal fix wave: the grid follow
 //                guard holds the saved follow at the user's value while a
-//                run holds it off. AI-assisted via Anthropic Claude Code.
+//                run holds it off. The step attenuator's ceiling is the
+//                Core's (BoardCapsTable::stepAttMaxDb). AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). A regained RADE lock repaints the VFO
 //                flag from the slice's SNR, which a remote window's Core
 //                does not resend when it is unchanged. AI-assisted via
@@ -15654,7 +15656,15 @@ void MainWindow::onConnectionStateChanged()
             m_stepAttController->setRadioConnection(conn);
             const auto& caps = BoardCapsTable::forBoard(
                 conn->radioInfo().boardType);
-            m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+            // Level Cal fix wave: the same ceiling the Core gives the board
+            // (DaemonApp::applyStepAttenuatorConnection and the RX applet,
+            // BoardCapsTable::stepAttMaxDb): 61 dB on the Alex boards, the
+            // board row's own maximum otherwise.
+            {
+                const auto& modelCaps = m_radioModel->boardCapabilities();
+                m_stepAttController->setMaxAttenuation(
+                    BoardCapsTable::stepAttMaxDb(modelCaps.board, modelCaps.hasAlexFilters));
+            }
             // Wire HPSDR-board flag — Atlas/Metis kit uses preamp save/restore on
             // MOX rather than per-band TX ATT (Thetis console.cs:29548 [v2.10.3.13]:
             //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).

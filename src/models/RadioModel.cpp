@@ -796,7 +796,9 @@
 //                rx2_preamp_offset[rx2_preamp_mode] from RX2's own mode
 //                (console.cs:21052 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
-//   2026-09-30 - Level Cal fix wave: rx2PreampModeAvailable.
+//   2026-09-30 - Level Cal fix wave: rx2PreampModeAvailable; the step
+//                attenuator's ceiling on connect is the Core's
+//                (BoardCapsTable::stepAttMaxDb).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -16593,9 +16595,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // the spinbox UI clamps any negative dB the user types back to 0 even
     // though BoardCapabilities advertises the wider range.
     if (m_stepAttController) {
-        const auto& atten = boardCapabilities().attenuator;
-        m_stepAttController->setMinAttenuation(atten.minDb);
-        m_stepAttController->setMaxAttenuation(atten.maxDb);
+        const auto& caps = boardCapabilities();
+        m_stepAttController->setMinAttenuation(caps.attenuator.minDb);
+        // Level Cal fix wave: the Core's ceiling (BoardCapsTable::
+        // stepAttMaxDb, as DaemonApp and the RX applet use): 61 dB on the
+        // Alex boards, the board row's own maximum otherwise.
+        m_stepAttController->setMaxAttenuation(
+            BoardCapsTable::stepAttMaxDb(caps.board, caps.hasAlexFilters));
     }
 
     // Load per-MAC OC matrix state so the codec layer (P1/P2 buildCodecContext)
