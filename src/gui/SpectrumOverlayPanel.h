@@ -48,6 +48,10 @@
 //                 and takes the pan's state through setGridVisible. J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 3, JJ): setAttHeldReason, the ATT flyout
+//                 held on a pan whose slice this window only listens to.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -76,6 +80,13 @@ class SpectrumOverlayPanel : public QWidget {
 
 public:
     explicit SpectrumOverlayPanel(QWidget* parent = nullptr);
+
+    /// TX rulings (JJ, 2026-09-30, item 3): this pan's slice is one this
+    /// window only listens to (another device controls it), so the ATT
+    /// flyout's controls are disabled with `reason` and write nothing;
+    /// empty lets them be. MainWindow sets it with the RX applet's access.
+    void setAttHeldReason(const QString& reason);
+    QString attHeldReason() const { return m_attHeldReason; }
 
     /// The panadapter this strip is drawn on. A control rendered on a pan acts
     /// on THAT pan -- the id travels with the signals rather than the consumer
@@ -259,6 +270,7 @@ private:
     QCheckBox* m_attEnableChk{nullptr};
     QSpinBox*  m_attSpin{nullptr};
     QLabel*    m_attReason{nullptr};
+    QString    m_attHeldReason;   // TX rulings (item 3)
 
     // ── Waterfall zoom buttons (bottom-left of spectrum widget) ──────────
     QWidget*     m_zoomStrip{nullptr};   // container for the 4 zoom buttons

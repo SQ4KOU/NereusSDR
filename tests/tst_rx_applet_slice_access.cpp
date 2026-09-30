@@ -16,6 +16,11 @@
 //   2026-09-29 - Written for slice control plan Task 15. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - TX rulings (item 3, JJ): the attenuator and preamp
+//                 controls are held on a listened slice with the same
+//                 reason, write nothing, and come back on a controlled one,
+//                 local and remote. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QAbstractButton>
@@ -33,6 +38,8 @@
 #include <QToolButton>
 
 #include "core/AppSettings.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/widgets/FilterPassbandWidget.h"
@@ -77,7 +84,8 @@ QAction* findAction(QMenu& menu, const QString& text)
 
 // Every control in the applet that changes the slice: combos, sliders,
 // buttons and the passband. The radio's own hardware (the ATT/S-ATT row and
-// the RX1 preamp toggle) and the slice tabs are not slice settings.
+// the RX1 preamp toggle, held too since TX rulings item 3 and checked by
+// their own tests below) and the slice tabs are not slice settings.
 QList<QWidget*> sliceControls(RxApplet& applet)
 {
     QWidget* attStack = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
@@ -187,6 +195,86 @@ private slots:
             QCOMPARE(control->toolTip(), kReason);
             QCOMPARE(control->accessibleDescription(), kReason);
         }
+    }
+
+    // TX rulings (item 3, JJ): on a listened slice the attenuator and
+    // preamp controls are disabled with the reason naming the controller,
+    // and the applet writes neither; on a controlled slice they work.
+    void listened_applet_holds_the_attenuator_and_preamp()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::Saturn);
+        auto* ctrl = new StepAttenuatorController(&model);
+        ctrl->setTickTimerEnabled(false);
+        model.setStepAttController(ctrl);
+        SliceModel* a = model.sliceById(model.addSlice());
+        QVERIFY(a);
+        ctrl->setStepAttEnabled(false);
+        ctrl->setPreampMode(PreampMode::SaMinus10);
+        RxApplet applet(nullptr, &model);
+        applet.setSlice(a);
+        auto* label = applet.findChild<QLabel*>(QStringLiteral("RxAttLabel"));
+        auto* stack = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        auto* combo = applet.findChild<QComboBox*>(QStringLiteral("RxPreampCombo"));
+        auto* spin = stack ? stack->findChild<QSpinBox*>() : nullptr;
+        QVERIFY(label && stack && combo && spin);
+        const QList<QWidget*> att{label, stack, combo, spin};
+        QVERIFY(combo->count() > 1);
+
+        applet.setSliceAccess(listened());
+        const QList<QWidget*> held = applet.heldControlsForTest();
+        for (QWidget* w : att) {
+            QVERIFY2(held.contains(w), qPrintable(w->objectName()));
+            QVERIFY2(!w->isEnabled(), qPrintable(w->objectName()));
+            QCOMPARE(w->toolTip(), kReason);
+            QCOMPARE(w->accessibleDescription(), kReason);
+        }
+        const PreampMode mode = ctrl->preampMode();
+        const int dB = ctrl->attenuatorDb();
+        combo->setCurrentIndex((combo->currentIndex() + 1) % combo->count());
+        spin->setValue(spin->value() == spin->maximum() ? spin->minimum() : spin->maximum());
+        QCOMPARE(ctrl->preampMode(), mode);
+        QCOMPARE(ctrl->attenuatorDb(), dB);
+
+        applet.setSliceAccess(controlled());
+        for (QWidget* w : att) {
+            QVERIFY2(w->isEnabled(), qPrintable(w->objectName()));
+            QVERIFY(w->toolTip() != kReason);
+        }
+        const int next = (combo->currentIndex() + 1) % combo->count();
+        combo->setCurrentIndex(next);
+        QCOMPARE(static_cast<int>(ctrl->preampMode()), combo->itemData(next).toInt());
+    }
+
+    // A remote window: the Core's attenuator arriving while the slice is
+    // listened keeps the controls held, and control brings them back.
+    void remote_attenuator_offered_while_listening_stays_held()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setBoardForTest(HPSDRHW::Hermes);
+        RxApplet applet(nullptr, &remote);
+        SliceModel slice(1);
+        applet.setSlice(&slice);
+        auto* combo = applet.findChild<QComboBox*>(QStringLiteral("RxPreampCombo"));
+        QVERIFY(combo);
+        applet.setSliceAccess(listened());
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        stepAtt->setWindowAvailability(true, QString());
+        QVERIFY(!combo->isEnabled());
+        QCOMPARE(combo->toolTip(), kReason);
+
+        applet.setSliceAccess(controlled());
+        QVERIFY(combo->isEnabled());
+        QVERIFY(combo->toolTip().isEmpty());
+
+        // The Core withdrawing it while listened comes back withdrawn.
+        applet.setSliceAccess(listened());
+        const QString gone = QStringLiteral("The Core has no attenuator ready.");
+        stepAtt->setWindowAvailability(false, gone);
+        QCOMPARE(combo->toolTip(), kReason);
+        applet.setSliceAccess(controlled());
+        QVERIFY(!combo->isEnabled());
+        QVERIFY(combo->toolTip() != kReason);
     }
 
     void controlled_applet_writes_the_slice()

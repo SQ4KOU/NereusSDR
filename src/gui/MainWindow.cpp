@@ -468,6 +468,9 @@
 //   2026-09-30 - Take-over re-review (N-3): a closed hosting card
 //               forgets its Take it back record. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 3): refreshOverlayAttAccess, each pan's
+//               ATT flyout held on a slice this window only listens to.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2020,8 +2023,31 @@ QString MainWindow::sliceChangeRefusal(int sliceId) const
     return QString();
 }
 
+void MainWindow::refreshOverlayAttAccess()
+{
+    if (!m_radioModel || !m_panStack) { return; }
+    for (auto it = m_overlayPanels.constBegin(); it != m_overlayPanels.constEnd(); ++it) {
+        SpectrumOverlayPanel* panel = it.value();
+        if (!panel) { continue; }
+        // The pan's own active slice, a listened one included; else the
+        // slice the panel resolves.
+        int sliceId = -1;
+        if (const auto* applet = m_panStack->panadapter(it.key())) {
+            sliceId = applet->activeSliceIndex();
+        }
+        if (sliceId < 0) {
+            if (const SliceModel* slice = sliceForPan(it.key())) {
+                sliceId = slice->sliceIndex();
+            }
+        }
+        panel->setAttHeldReason(sliceId >= 0 ? sliceChangeRefusal(sliceId) : QString());
+    }
+}
+
 void MainWindow::refreshRxAppletSlices()
 {
+    // TX rulings (item 3): the pans' ATT flyouts follow the same access.
+    refreshOverlayAttAccess();
     if (!m_rxApplet || !m_radioModel) { return; }
     const bool remoteShared = sliceAccessClient() != nullptr;
     const QList<SliceChooser::Row> rows =
@@ -5596,9 +5622,12 @@ void MainWindow::ensureOverlayPanels()
 
         // Phase 3O Sub-Phase 9 Task 9.2c — bind the VAX Ch combo to the model.
         panel->setRadioModel(m_radioModel);
+        // TX rulings (item 3): held from the start on a listened slice.
+        refreshOverlayAttAccess();
         connect(applet, &PanadapterApplet::activeSliceChanged, panel,
-                [panel](const QString&, int) {
+                [this, panel](const QString&, int) {
             panel->bindToPanSlice();
+            refreshOverlayAttAccess();   // TX rulings (item 3)
         });
 
         // Phase 3P-I-a T18 — board caps drive the antenna combos, and are
