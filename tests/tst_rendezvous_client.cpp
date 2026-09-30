@@ -65,6 +65,11 @@
 //               before it checks that media takes no relay. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: load finding: the relay-only case waits the product's ICE
+//               connect bound (IceConfiguration::kConnectDeadlineMs) and on
+//               failure prints both ends' progress, the relay's output and
+//               the service's log. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -956,6 +961,25 @@ public:
 
     LibDataChannelMediaTransport* offerer() const { return m_offerer.get(); }
     LibDataChannelMediaTransport* answerer() const { return m_answerer.get(); }
+
+    // What each end got to, for a failure message: readiness, gathering,
+    // the relay servers each was given and the candidates each produced
+    // (addresses are loopback, nothing secret).
+    QString describe() const
+    {
+        return QStringLiteral("clientReady=%1 stationReady=%2 clientGathered=%3 stationGathered=%4 "
+                              "clientRelays=%5 stationRelays=%6 stationHeard=%7\n"
+                              "client candidates: %8\nstation candidates: %9")
+            .arg(clientReady)
+            .arg(stationReady)
+            .arg(clientGathered)
+            .arg(stationGathered)
+            .arg(clientRelays)
+            .arg(stationRelays)
+            .arg(stationHeard)
+            .arg(clientCandidates.join(QStringLiteral(" | ")),
+                 stationCandidates.join(QStringLiteral(" | ")));
+    }
 
     bool clientReady = false;
     bool stationReady = false;
@@ -2250,7 +2274,17 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, /*relayOnly=*/true);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 60000);
+        // The product's bound for an ICE connection through the service:
+        // gathering, then the connectivity checks, after which failure is
+        // certain (IceConfiguration::kConnectDeadlineMs). The service's own
+        // client idle close starts only when the introduction ends (its
+        // 120 s lifetime), so it cannot cut this wait short. On failure the
+        // relay's and the service's output say which leg stalled.
+        QTRY_VERIFY2_WITH_TIMEOUT(pair.clientReady && pair.stationReady,
+                                  qPrintable(pair.describe() + QStringLiteral("\n--- relay:\n")
+                                             + service.turnOutput()
+                                             + QStringLiteral("\n--- service:\n") + service.log()),
+                                  IceConfiguration::kConnectDeadlineMs);
         QCOMPARE(pair.stationRelays, 1);
         QCOMPARE(pair.clientRelays, 1);
         QVERIFY(pair.offerer()->selectedPath().has_value());
