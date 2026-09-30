@@ -648,9 +648,10 @@ private slots:
         QVERIFY(!property.isWritable());
         QVERIFY(property.hasNotifySignal());
         // Only paTransmitBand (paTransmitBandVersion, appended after it)
-        // follows it.
-        QCOMPARE(index, meta.propertyCount() - 2);
-        QCOMPARE(meta.indexOfProperty("paTransmitBand"), meta.propertyCount() - 1);
+        // and the four Level Cal run properties follow it.
+        QCOMPARE(index, meta.propertyCount() - 6);
+        QCOMPARE(meta.indexOfProperty("paTransmitBand"), meta.propertyCount() - 5);
+        QCOMPARE(meta.indexOfProperty("levelCalSucceeded"), meta.propertyCount() - 1);
         QCOMPARE(MirrorPolicy::directionFor(QByteArrayLiteral("RadioModel"), "alexLpfBits"),
                  MirrorDirection::Outbound);
         const MirrorPolicy::FeatureGate* gate =

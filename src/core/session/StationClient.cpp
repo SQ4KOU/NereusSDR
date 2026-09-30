@@ -9,6 +9,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
 //                                    (radioHardwareVersion 12). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -782,6 +787,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // PA on-air gate re-review, Important C: the PA pages open and lock
     // the row the Core holds on the air (paTransmitBandVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("paTransmitBand"), 1);
+    // Level Cal: Setup's calibration shows the Core's run as it goes
+    // (radio's levelCal* properties, radioHardwareVersion 12).
+    m_declaredFeatures.insert(QByteArrayLiteral("levelCalibration"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -2180,6 +2188,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->clearStationFilterState();
         m_radioModel->clearStationBandOutputs();
         m_radioModel->clearStationAlexLpf();
+        m_radioModel->clearStationLevelCal();
         for (SliceModel* slice : m_radioModel->slices()) {
             slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
                                               slice->stationAutoAgcNoiseFloorGeneration());
@@ -4180,6 +4189,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         if (m_radioModel->applyStationAlexLpfValue(propertyName, native)) {
             return true;
         }
+        if (m_radioModel->applyStationLevelCalValue(propertyName, native)) {
+            return true;
+        }
         return m_radioModel->applyStationFilterValue(propertyName, native);
     }
     if (className == "PureSignalSessionFacade") {
@@ -5014,6 +5026,34 @@ StationClient::CommandOutcome StationClient::requestResetLevelCalibration()
     }
     return sendCommand("resetLevelCalibration", -1, {},
                        QStringLiteral("the level calibration reset"));
+}
+
+bool StationClient::levelCalibrationRunAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+StationClient::CommandOutcome StationClient::requestStartLevelCalibration(float levelDbm,
+                                                                          double frequencyHz,
+                                                                          int sliceId)
+{
+    if (!levelCalibrationRunAvailable()) {
+        return IStationLink::requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+    }
+    return sendCommand("startLevelCalibration", -1,
+                       { doubleArgument("levelDbm", levelDbm),
+                         doubleArgument("frequencyHz", frequencyHz),
+                         intArgument("sliceId", sliceId) },
+                       QStringLiteral("the level calibration"));
+}
+
+StationClient::CommandOutcome StationClient::requestCancelLevelCalibration()
+{
+    if (!levelCalibrationRunAvailable()) {
+        return IStationLink::requestCancelLevelCalibration();
+    }
+    return sendCommand("cancelLevelCalibration", -1, {},
+                       QStringLiteral("the level calibration cancel"));
 }
 
 bool StationClient::dspInfoAvailable() const

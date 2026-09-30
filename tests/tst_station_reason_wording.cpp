@@ -177,6 +177,10 @@
 //                                    setting's refusal forwards, and the
 //                                    window's transmitPermissionReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: the calibration run's
+//                                    refusals and messages scanned, and the
+//                                    window's reason for an older Core.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  txEq.setCurve's refusals scanned; the
 //                                    This Core page's two device reasons
 //                                    named on the app side. AI-assisted via
@@ -1036,6 +1040,11 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
+          // Level Cal: RadioModel::requestStartLevelCalibration's refusal,
+          // worded in LevelCalibrationService.cpp and LevelCalibrationRun.cpp
+          // (both scanned below) or RadioModel.cpp's on-air words.
+          QStringLiteral("m_radioModel->requestStartLevelCalibration( "
+                         "static_cast<float>(levelDbm), frequencyHz, sliceId)"),
           // iPhone app Task 73: StationServer::changeRefusal (slice control plan
           // Task 2; was sliceRefusal), scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
@@ -1076,6 +1085,16 @@ const QList<ReasonSource>& reasonSources()
         // sentence. The device name put into two of them is the operator's
         // own word (ruling 4.3); a band plan reason is the band plan's
         // sentence, passed on only when it is plain.
+        // Level Cal: the calibration run's refusals and messages, sent as
+        // startLevelCalibration's result and as radio's levelCalMessage.
+        {"src/core/LevelCalibrationRun.cpp", {}, {}, 8, {},
+         {// A search's failure, one of this file's messages.
+          QStringLiteral("m_failure")}},
+        {"src/core/LevelCalibrationService.cpp", {},
+         {// AppSettings keys, never shown.
+          "RX1_", "DspOptionsBufferSizePhoneRx"},
+         2, {},
+         {QStringLiteral("m_run->start(levelDbm, frequencyHz)"), QStringLiteral("refused")}},
         {"src/core/safety/TxRefusal.cpp", {}, {}, 15,
          {QStringLiteral("holderName"), QStringLiteral("holderShortName")},
          {QStringLiteral("reason"), QStringLiteral("std::move(text)"),
@@ -1674,6 +1693,10 @@ const QList<AppSideReason>& appSideReasons()
         // Level Cal: Setup's level calibration Reset on a Core without
         // resetLevelCalibration.
         {"src/core/session/IStationLink.h", "levelCalibrationResetUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal: Setup's level calibration Start and Cancel on a Core
+        // without startLevelCalibration.
+        {"src/core/session/IStationLink.h", "levelCalibrationRunUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",

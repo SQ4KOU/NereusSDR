@@ -1384,8 +1384,8 @@ void TstStationSession::featureGatesNameRealProperties()
 
 // The Core leaves a feature-gated property (MirrorPolicy::featureGates) out
 // for a window whose hello did not declare its feature. The desktop remote
-// window declares only radeStatus, txInhibitReason, alexLpf and
-// paTransmitBand of them, so its schema comparison must not count the other
+// window declares only radeStatus, txInhibitReason, alexLpf,
+// paTransmitBand and levelCalibration of them, so its schema comparison must not count the other
 // absences as skew: after the whole snapshot it logs no schema skew and both
 // skew sets are empty.
 void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
@@ -1417,11 +1417,13 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
     // the gate rather than passing vacuously. The gated features it
     // declares (radeStatus: its VFO flag's RADE row; txInhibitReason: why
     // the Core's transmit is held; alexLpf: the Alex-1 tab's low-pass
-    // lamps; paTransmitBand: the PA row the Core holds on the air) arrive.
+    // lamps; paTransmitBand: the PA row the Core holds on the air;
+    // levelCalibration: Setup's calibration run) arrive.
     const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus"),
                                                  QByteArrayLiteral("txInhibitReason"),
                                                  QByteArrayLiteral("alexLpf"),
-                                                 QByteArrayLiteral("paTransmitBand")};
+                                                 QByteArrayLiteral("paTransmitBand"),
+                                                 QByteArrayLiteral("levelCalibration")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {
@@ -6420,7 +6422,8 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // R-R3-21); 7 since parity Task 14; 8 with the Alex Filters tabs'
     // receive filter rows; 9 with setRadioSampleRate (parity ruling C4);
     // 10 with the Alex-1 Filters tab's low-pass rows; 11 with HL2 Options'
-    // clock rows; 12 with resetLevelCalibration (Level Cal).
+    // clock rows; 12 with resetLevelCalibration, startLevelCalibration and
+    // cancelLevelCalibration (Level Cal).
     QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 12);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);

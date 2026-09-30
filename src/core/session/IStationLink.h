@@ -46,6 +46,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
 //                                    (radioHardwareVersion 12). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -654,6 +659,21 @@ public:
     { return QStringLiteral("This Core cannot reset the level calibration for this app. Updating the Core may help."); }
     virtual CommandOutcome requestResetLevelCalibration()
     { return { false, levelCalibrationResetUnavailableReason() }; }
+
+    // Level Cal, verbs "startLevelCalibration" and "cancelLevelCalibration"
+    // (radioHardwareVersion 12): Setup's Start and Cancel, the calibration
+    // run on the Core (RadioModel::requestStartLevelCalibration). Its
+    // progress comes back as the radio's levelCal* properties (feature
+    // "levelCalibration"). The default refuses, and the window shows Start
+    // disabled with the reason.
+    virtual bool levelCalibrationRunAvailable() const { return false; }
+    static QString levelCalibrationRunUnavailableReason()
+    { return QStringLiteral("This Core cannot run the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestStartLevelCalibration(float /*levelDbm*/, double /*frequencyHz*/,
+                                                        int /*sliceId*/)
+    { return { false, levelCalibrationRunUnavailableReason() }; }
+    virtual CommandOutcome requestCancelLevelCalibration()
+    { return { false, levelCalibrationRunUnavailableReason() }; }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The

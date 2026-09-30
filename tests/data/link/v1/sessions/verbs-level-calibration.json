@@ -40,6 +40,15 @@
         {"advanceMs": 50},
         {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "resetLevelCalibration", "id": 1972, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "utf8", "value": "x"}]}},
         {"from": "station", "message": {"accepted": false, "affected": [], "id": 1972, "reason": "The Core could not read this request.", "type": "command.result", "verb": "resetLevelCalibration"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "startLevelCalibration", "id": 1975, "args": [{"ordinal": 0, "name": "levelDbm", "kind": "f64", "value": -73.0}, {"ordinal": 1, "name": "frequencyHz", "kind": "f64", "value": 14200000.0}, {"ordinal": 2, "name": "sliceId", "kind": "i64", "value": 99}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1975, "reason": "The slice to calibrate is not open.", "type": "command.result", "verb": "startLevelCalibration"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "startLevelCalibration", "id": 1973, "args": [{"ordinal": 0, "name": "levelDbm", "kind": "f64", "value": -73.0}, {"ordinal": 1, "name": "conformanceWrongName", "kind": "f64", "value": 14200000.0}, {"ordinal": 2, "name": "sliceId", "kind": "i64", "value": 99}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1973, "reason": "The Core could not read this request.", "type": "command.result", "verb": "startLevelCalibration"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "cancelLevelCalibration", "id": 1974, "args": []}},
+        {"from": "station", "message": {"accepted": true, "affected": [], "id": 1974, "reason": "", "type": "command.result", "verb": "cancelLevelCalibration"}},
         {"advanceMs": 50}
     ]
 }

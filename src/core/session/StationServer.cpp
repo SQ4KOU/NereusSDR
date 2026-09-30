@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: Level Cal: startLevelCalibration (a paired device, off the
+//               air) and cancelLevelCalibration, and the run's progress to
+//               a peer that declared levelCalibration. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: Level Cal: radioHardwareVersion 12, resetLevelCalibration,
 //               and a window's level calibration write reaches the Core's
 //               meter and TCI. J.J. Boyd (KG4VCF), AI-assisted via
@@ -1379,6 +1383,12 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The Alex-1 low-pass in use, for the Alex tab's lamps (alexLpf 1,
     // radioHardwareVersion 10).
     {"RadioModel", "radio", false, "alexLpfBits", "alexLpf"},
+    // The Core's level calibration run (levelCalibration 1,
+    // radioHardwareVersion 12).
+    {"RadioModel", "radio", false, "levelCalRunning", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalPercent", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalMessage", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalSucceeded", "levelCalibration"},
     // The CFC dialog's band editor (transmitSettingsVersion 15).
     {"TransmitModel", "transmit", false, "cfcProfile", "cfcProfile"},
 };
@@ -5491,6 +5501,26 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             QString refusal;
             if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
                 refusal = QStringLiteral("Change the radio's sample rate from a paired device.");
+            } else if (!m_radioModel.isNull()) {
+                m_radioModel->stationOnAirRefusal(&refusal);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
+        }
+        // Level Cal (radioHardwareVersion 12): the calibration run retunes
+        // a slice, switches the preamp and step attenuator and rewrites the
+        // station's calibration, so it is for a paired device, and it
+        // waits while the radio is on the air, like the Core's other radio
+        // verbs (NereusSDR's rule: Thetis runs it from its own console,
+        // which is not transmitting while the calibration holds it). Cancel
+        // only stops a run and is taken from anyone.
+        if (message.commandVerb == "startLevelCalibration") {
+            QString refusal;
+            if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+                refusal = QStringLiteral("Calibrate the receive level from a paired device.");
             } else if (!m_radioModel.isNull()) {
                 m_radioModel->stationOnAirRefusal(&refusal);
             }
@@ -11990,7 +12020,12 @@ int StationServer::radioHardwareVersion() const
     // RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb reaches the Core's
     // meter and TCI calibration_ex at once, on and off the air, as
     // Thetis's setters and ResetLevelCalibration have no MOX check
-    // (console.cs:21089-21122, 46868-46886 [v2.10.3.15]).
+    // (console.cs:21089-21122, 46868-46886 [v2.10.3.15]). It also carries
+    // startLevelCalibration and cancelLevelCalibration, the Core's run of
+    // Thetis CalibrateLevel (console.cs:9856-10232 [v2.10.3.15]) on a
+    // slice, whose progress reaches a peer that declared levelCalibration.
+    // The number was extended, not raised: no Core shipped 12 without
+    // these verbs.
     return m_radioModel->ioBoardFacade()->isBound() ? 12 : 2;
 }
 

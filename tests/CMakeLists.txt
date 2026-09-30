@@ -8214,6 +8214,12 @@ target_compile_definitions(tst_radio_bound_antenna_rows PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+
+# Level Cal as a Core procedure: a paired device starts and cancels it,
+# progress comes back on the wire, a remote window makes the same calls.
+nereus_add_test(tst_level_calibration_station
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # Slice control and shared listening plan Task 10: the hosting desktop's
 # slice requests run as the station device (HostingSliceActions).
 nereus_add_test(tst_hosting_slice_operations

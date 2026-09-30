@@ -1901,6 +1901,37 @@
         {
             "arguments": [
                 {
+                    "kind": "f64",
+                    "name": "levelDbm",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "frequencyHz",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "startLevelCalibration"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "cancelLevelCalibration"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "i64",
                     "name": "sliceId",
                     "optional": false
@@ -5240,6 +5271,30 @@
                     "kind": "i64",
                     "name": "paTransmitBand",
                     "ordinal": 30
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "levelCalRunning",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "levelCalPercent",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "levelCalMessage",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "levelCalSucceeded",
+                    "ordinal": 34
                 }
             ]
         },

@@ -855,6 +855,14 @@ rest, as a local window's does, even when the transmit slice is retuned
 to another band while keyed. On a Core that sends neither, the window
 opens the row for its own transmit slice's band, as before.
 
+**`levelCalibration` 1** (Level Cal): the client shows the Core's level
+calibration run. A peer that declares it is sent `radio`'s
+`levelCalRunning`, `levelCalPercent`, `levelCalMessage` and
+`levelCalSucceeded` (section 7.1); a peer that does not sees exactly the
+wire it was built for, without them. The station does not declare it.
+The desktop's remote window declares it: Setup > Hardware > Calibration
+shows the run's progress and its result as a local window does.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -1237,10 +1245,15 @@ When a feature is off, its version is 0:
   applies a window's `RX1_MeterCalOffsetDb` or `RX1_DisplayCalOffsetDb`
   (section 8) to the Core's meter and TCI `calibration_ex` when it is
   written or removed, on and off the air, as Thetis's setters and its
-  reset have no MOX check. A station no longer sends 11; 12 serves every
-  earlier version's command and property. A window of a station at 11 or
-  lower shows Reset disabled with "This Core cannot reset the level
-  calibration for this app. Updating the Core may help.".
+  reset have no MOX check. 12 also carries `startLevelCalibration` and
+  `cancelLevelCalibration` (section 9.1), the Core's run of Thetis's
+  `CalibrateLevel` on a slice; the number was extended, not raised, as no
+  Core shipped 12 without them. A station no longer sends 11; 12 serves
+  every earlier version's command and property. A window of a station at
+  11 or lower shows Reset disabled with "This Core cannot reset the level
+  calibration for this app. Updating the Core may help." and Start
+  disabled with "This Core cannot run the level calibration for this app.
+  Updating the Core may help.".
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with
@@ -2503,7 +2516,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (31 properties)
+**RadioModel** (35 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2538,6 +2551,10 @@ An enum property lists the values its domain allows.
 | 28 | `txInhibitReason` | `utf8` | outbound |  |
 | 29 | `alexLpfBits` | `i64` | outbound |  |
 | 30 | `paTransmitBand` | `i64` | outbound |  |
+| 31 | `levelCalRunning` | `bool` | outbound |  |
+| 32 | `levelCalPercent` | `i64` | outbound |  |
+| 33 | `levelCalMessage` | `utf8` | outbound |  |
+| 34 | `levelCalSucceeded` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -3476,6 +3493,15 @@ Notes on the keys:
   Sent only to a peer that declared `paTransmitBand` 1. A window clears
   its copy when the session ends and falls back to its own transmit
   slice's band.
+- **`radio`'s level calibration run** (Level Cal; `radioHardwareVersion`
+  12). Outbound, no WRITE, declared last in `RadioModel` after
+  `paTransmitBand`: `levelCalRunning` (bool, true while a run holds the
+  receiver), `levelCalPercent` (i64, 0 to 100, Thetis's progress bar),
+  `levelCalMessage` (utf8, how the last run ended, such as "Level
+  calibration finished." or why it stopped; empty while running) and `levelCalSucceeded` (bool, the last run
+  stored new offsets). A write is refused "The Core sets this itself; it
+  cannot be changed from here." Sent only to a peer that declared
+  `levelCalibration` 1. A window clears its copies when the session ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -5465,6 +5491,8 @@ letter, controllerDeviceId}`) in its `values` (section 7.5).
 | `setIoBoardOutput` | `pin` i64, `on` bool | `radioHardwareVersion` | 7 | 11 |
 | `setRadioSampleRate` | `rateHz` i64 | `radioHardwareVersion` | 9 | 11 |
 | `resetLevelCalibration` | none | `radioHardwareVersion` | 12 | 11 |
+| `startLevelCalibration` | `levelDbm` f64, `frequencyHz` f64, `sliceId` i64 | `radioHardwareVersion` | 12 | 11 |
+| `cancelLevelCalibration` | none | `radioHardwareVersion` | 12 | 11 |
 | `dsp.filterResponse` | `sliceId` i64, `highResolution` bool | `dspInfoVersion` | 1 | 11 |
 | `records.subscribe` | `stream` utf8, `backlog` i64 | `recordStreamVersion` | 1 | 11 |
 | `records.unsubscribe` | `stream` utf8 | `recordStreamVersion` | 1 | 11 |
@@ -5867,6 +5895,28 @@ These command groups need a sentence beyond the table:
   request." answers arguments it does not take. The display offset feeds
   only TCI `calibration_ex`; the panadapter follows the meter offset, as
   Thetis's does (console.cs:12311 [v2.10.3.15]).
+- **The level calibration run** (Level Cal, `radioHardwareVersion` 12).
+  `startLevelCalibration` (`levelDbm` f64, the generator's level;
+  `frequencyHz` f64, its frequency; `sliceId` i64, the slice to calibrate,
+  -1 for the Core's active slice) runs Thetis's `CalibrateLevel`
+  (console.cs:9856-10232 [v2.10.3.15]) on the Core. The slice stands in
+  for Thetis's RX1 and VFO A: the Core saves its frequency, RIT and mode,
+  the phone receive buffer, the step attenuators and the preamp setting,
+  tunes to the carrier in AM with a 16384 buffer and the step attenuators
+  off, searches the spectrum for the peak, averages 50 readings for each
+  preamp setting the radio has, stores each setting's offset and the
+  meter and display offsets, and puts everything back. It is taken only
+  from a paired device and only while the radio is off the air ("Calibrate
+  the receive level from a paired device.", or the Core's on-the-air
+  reason). The run's own refusals come back in the result: "Turn the
+  radio on before calibrating the receive level.", "Stop transmitting
+  before calibrating the receive level.", "Level calibration is already
+  running.", "Open a slice before calibrating the receive level." and
+  "The slice to calibrate is not open."; a run that stops early sets
+  `levelCalMessage`. `cancelLevelCalibration` (no arguments) stops a run
+  and puts the receiver back; it is taken from any window and is accepted
+  when nothing runs. "The Core could not read this request." answers
+  arguments either verb does not take.
 - **The amp's and tuner's own settings.** `setPgxlName`,
   `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and
   `readPgxlSettings`, and `setTgxlName`, `setTgxlNetwork`,

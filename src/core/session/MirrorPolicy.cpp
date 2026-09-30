@@ -6,6 +6,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - Level Cal: RadioModel levelCalRunning, levelCalPercent,
+//                 levelCalMessage and levelCalSucceeded Outbound, gated on
+//                 levelCalibration (radioHardwareVersion 12). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - R-R3-46 / R-R3-49: RadioModel alexLpfBits Outbound, gated
 //                 on alexLpf (radioHardwareVersion 10). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -1086,7 +1090,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (29 entries) ----
+    // ---- RadioModel (35 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1149,6 +1153,13 @@ const MirrorPolicy::Entry kEntries[] = {
     // PA row the Core holds on the air, Core to window only; only to a peer
     // that declared paTransmitBand (StationServer::fitPeerOnlyProperties).
     { "RadioModel", "paTransmitBand", MirrorDirection::Outbound },
+    // Level Cal (radioHardwareVersion 12): the Core's calibration run as it
+    // goes, Core to window only; only to a peer that declared
+    // levelCalibration (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "levelCalRunning", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalPercent", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalMessage", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalSucceeded", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1245,6 +1256,12 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // radioHardwareVersion 10: radio's Alex-1 low-pass in use, to a peer
         // that declared alexLpf 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "alexLpfBits", "alexLpf", 1},
+        // radioHardwareVersion 12: the Core's level calibration run, to a
+        // peer that declared levelCalibration 1.
+        {"RadioModel", "levelCalRunning", "levelCalibration", 1},
+        {"RadioModel", "levelCalPercent", "levelCalibration", 1},
+        {"RadioModel", "levelCalMessage", "levelCalibration", 1},
+        {"RadioModel", "levelCalSucceeded", "levelCalibration", 1},
     };
     return gates;
 }

@@ -781,6 +781,10 @@
 //                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
 //                RX1's saved under RX1_PreampOffsetsDb.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress properties and
+//                the start and cancel calls of both windows.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1021,6 +1025,7 @@ warren@wpratt.com
 #include "core/IoBoardHl2Facade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
+#include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "core/TxAnalyzer.h"
@@ -9723,6 +9728,13 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // Follow-up 3: the command is over, so no page's claim on it remains
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
+    // Level Cal: the Core refused the start this window sent.
+    if (commandId != 0 && commandId == m_levelCalStartCommandId) {
+        m_levelCalStartCommandId = 0;
+        if (!accepted) {
+            emit levelCalibrationRefused(reason);
+        }
+    }
     emit stationCommandFinished(commandId, accepted, reason);
 }
 
@@ -16135,6 +16147,160 @@ void RadioModel::clearStationAlexLpf()
     }
     m_alexLpfBits = -1;
     emit alexLpfBitsChanged();
+}
+
+// --- Level Cal: the calibration run ---
+
+LevelCalibrationService* RadioModel::levelCalibrationService()
+{
+    if (m_role == Role::Remote) {
+        return nullptr;
+    }
+    if (m_levelCalService == nullptr) {
+        m_levelCalService = new LevelCalibrationService(this, this);
+        connect(m_levelCalService, &LevelCalibrationService::stateChanged,
+                this, &RadioModel::levelCalStateChanged);
+    }
+    return m_levelCalService;
+}
+
+LevelCalibrationService* RadioModel::levelCalibrationServiceForTest()
+{
+    return levelCalibrationService();
+}
+
+bool RadioModel::levelCalibrationRunAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationRunAvailable();
+}
+
+QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)
+{
+    if (m_role != Role::Remote) {
+        return levelCalibrationService()->start(levelDbm, frequencyHz, sliceId);
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+    if (!outcome.sent) {
+        return outcome.reason;
+    }
+    m_levelCalStartCommandId = outcome.commandId;
+    return {};
+}
+
+QString RadioModel::requestCancelLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        levelCalibrationService()->cancel();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration cancel"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestCancelLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
+}
+
+bool RadioModel::levelCalRunning() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalRunning;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->running();
+}
+
+int RadioModel::levelCalPercent() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalPercent;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->percent() : 0;
+}
+
+QString RadioModel::levelCalMessage() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalMessage;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->message() : QString();
+}
+
+bool RadioModel::levelCalSucceeded() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalSucceeded;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->succeeded();
+}
+
+bool RadioModel::applyStationLevelCalValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) {
+        return false;
+    }
+    if (name == "levelCalRunning") {
+        if (m_stationLevelCalRunning != value.toBool()) {
+            m_stationLevelCalRunning = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalPercent") {
+        bool ok = false;
+        const int percent = value.toInt(&ok);
+        if (!ok || percent < 0 || percent > 100) {
+            return false;
+        }
+        if (m_stationLevelCalPercent != percent) {
+            m_stationLevelCalPercent = percent;
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalMessage") {
+        if (m_stationLevelCalMessage != value.toString()) {
+            m_stationLevelCalMessage = value.toString();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalSucceeded") {
+        if (m_stationLevelCalSucceeded != value.toBool()) {
+            m_stationLevelCalSucceeded = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    return false;
+}
+
+void RadioModel::clearStationLevelCal()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    m_levelCalStartCommandId = 0;
+    if (!m_stationLevelCalRunning && m_stationLevelCalPercent == 0
+        && m_stationLevelCalMessage.isEmpty() && !m_stationLevelCalSucceeded) {
+        return;
+    }
+    m_stationLevelCalRunning = false;
+    m_stationLevelCalPercent = 0;
+    m_stationLevelCalMessage.clear();
+    m_stationLevelCalSucceeded = false;
+    emit levelCalStateChanged();
 }
 
 

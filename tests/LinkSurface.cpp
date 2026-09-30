@@ -646,6 +646,9 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // PA on-air gate re-review: radio's
                                   // paTransmitBand.
                                   {"paTransmitBand", 1},
+                                  // Level Cal: radio's levelCal* run
+                                  // progress.
+                                  {"levelCalibration", 1},
                                   // Slice control plan Task 4: SliceAccess
                                   // and the slice.* access verbs.
                                   {"sliceAccess", 1}})));

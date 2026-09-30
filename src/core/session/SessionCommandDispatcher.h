@@ -85,6 +85,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
 //                                    (radioHardwareVersion 12). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -614,6 +617,11 @@ private:
     // Level Cal (radioHardwareVersion 12): Setup's Reset
     // (RadioModel::resetLevelCalibration).
     void handleResetLevelCalibration(const NereusSDR::SessionMessage& invoke);
+    // Level Cal: start the Core's calibration run on a slice, and stop it
+    // (RadioModel::requestStartLevelCalibration /
+    // requestCancelLevelCalibration).
+    void handleStartLevelCalibration(const NereusSDR::SessionMessage& invoke);
+    void handleCancelLevelCalibration(const NereusSDR::SessionMessage& invoke);
     // Parity Task 16 (dspInfoVersion 1): the filter graph's curve for a
     // slice's receiver (RadioModel::filterResponseForStation).
     void handleFilterResponse(const NereusSDR::SessionMessage& invoke);

@@ -459,6 +459,12 @@
 //                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
 //                RX1's saved under RX1_PreampOffsetsDb.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress as
+//                levelCalRunning / levelCalPercent / levelCalMessage /
+//                levelCalSucceeded, and the start and cancel calls a
+//                local and a remote window both make.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -818,6 +824,15 @@ class RadioModel : public QObject {
     // window opens and locks this row, not its own slice's. Declared last
     // so every earlier property keeps its wire ordinal.
     Q_PROPERTY(int paTransmitBand READ paTransmitBand NOTIFY paTransmitBandChanged)
+    // Level Cal (levelCalibrationVersion 1): the Core's calibration run.
+    // Running, its percent done, the sentence it ended with (empty while
+    // it runs or before one ran) and whether it finished. Core to window
+    // only, and only to a peer that declared levelCalibration. Declared
+    // last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(bool levelCalRunning READ levelCalRunning NOTIFY levelCalStateChanged)
+    Q_PROPERTY(int levelCalPercent READ levelCalPercent NOTIFY levelCalStateChanged)
+    Q_PROPERTY(QString levelCalMessage READ levelCalMessage NOTIFY levelCalStateChanged)
+    Q_PROPERTY(bool levelCalSucceeded READ levelCalSucceeded NOTIFY levelCalStateChanged)
 
 
 public:
@@ -3827,6 +3842,28 @@ public:
     // The one call both windows make for Setup's Reset. Empty when it was
     // done (locally) or sent (remote); otherwise the reason it was not.
     QString requestResetLevelCalibration();
+    // Level Cal, Thetis CalibrateLevel (console.cs:9856-10232
+    // [v2.10.3.15]) run by the Core on one slice (Thetis RX1 and VFO A;
+    // -1 the active slice). Whether this window can start one: always
+    // locally, in a remote window when its Core offers
+    // startLevelCalibration.
+    bool levelCalibrationRunAvailable() const;
+    // The calls both windows make. Empty when it started or was sent;
+    // otherwise the reason it was not. A refusal the Core sends later
+    // arrives as levelCalibrationRefused.
+    QString requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId);
+    QString requestCancelLevelCalibration();
+    bool levelCalRunning() const;
+    int levelCalPercent() const;
+    QString levelCalMessage() const;
+    bool levelCalSucceeded() const;
+    // Remote window: a levelCal* value from the Core. False on a local
+    // model or for any other name.
+    bool applyStationLevelCalValue(const QByteArray& name, const QVariant& value);
+    // Remote window: the session ended, nothing is known about a run.
+    void clearStationLevelCal();
+    // The Core's run (created on first use). Null on a Remote model.
+    class LevelCalibrationService* levelCalibrationServiceForTest();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
     // Level Cal: the receive offset of each preamp setting, Thetis
@@ -3858,6 +3895,11 @@ signals:
     void bandOutputsChanged();
     // alexLpfBits() changed.
     void alexLpfBitsChanged();
+    // levelCalRunning / levelCalPercent / levelCalMessage /
+    // levelCalSucceeded changed.
+    void levelCalStateChanged();
+    // Remote window: the Core refused a start this window sent.
+    void levelCalibrationRefused(const QString& reason);
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -7265,6 +7307,16 @@ private:
     codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
     // alexLpfBits(): -1 until the connection (or the Core) reports one.
     int m_alexLpfBits{-1};
+    // Level Cal: the Core's run (local role), created on first use.
+    class LevelCalibrationService* levelCalibrationService();
+    class LevelCalibrationService* m_levelCalService{nullptr};
+    // A remote window's copy of the Core's run.
+    bool m_stationLevelCalRunning{false};
+    int m_stationLevelCalPercent{0};
+    QString m_stationLevelCalMessage;
+    bool m_stationLevelCalSucceeded{false};
+    // The start this window sent, whose refusal it reports.
+    quint32 m_levelCalStartCommandId{0};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

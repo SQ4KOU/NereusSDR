@@ -205,6 +205,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
 //                                    (radioHardwareVersion 12). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -1346,6 +1351,12 @@ public:
     /// (radioHardwareVersion 12).
     bool levelCalibrationResetAvailable() const override;
     CommandOutcome requestResetLevelCalibration() override;
+    /// Level Cal: the Core offers startLevelCalibration and
+    /// cancelLevelCalibration (radioHardwareVersion 12).
+    bool levelCalibrationRunAvailable() const override;
+    CommandOutcome requestStartLevelCalibration(float levelDbm, double frequencyHz,
+                                                int sliceId) override;
+    CommandOutcome requestCancelLevelCalibration() override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
