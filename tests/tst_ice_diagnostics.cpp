@@ -11,6 +11,10 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-30 - Review fix: the username fragment in every form, the
+//                 STUN username, realm and nonce, and the "yes" switch.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -231,6 +235,8 @@ private slots:
         QVERIFY(IceDiagnostics::switchRequested(QByteArrayLiteral("1")));
         QVERIFY(IceDiagnostics::switchRequested(QByteArrayLiteral("true")));
         QVERIFY(IceDiagnostics::switchRequested(QByteArrayLiteral("on")));
+        QVERIFY(IceDiagnostics::switchRequested(QByteArrayLiteral("yes")));
+        QVERIFY(IceDiagnostics::switchRequested(QByteArrayLiteral(" YES ")));
         QVERIFY(!IceDiagnostics::switchRequested(QByteArray()));
         QVERIFY(!IceDiagnostics::switchRequested(QByteArrayLiteral("0")));
         QVERIFY(!IceDiagnostics::switchRequested(QByteArrayLiteral("no")));
@@ -280,6 +286,60 @@ private slots:
         QVERIFY2(all.contains(QStringLiteral("pwd=\"<hidden>\", candidates=0")), qPrintable(all));
     }
 
+    // Review fix (I-1, M-3): the ICE username fragment in every form
+    // libjuice prints it, and the STUN username, realm and nonce.
+    void usernameFragmentsAreHidden()
+    {
+        QStringList lines;
+        IceDiagnostics::installForTest([&](const QString& line) { lines.append(line); });
+        // ice.c:172 and ice.c:141.
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: ice.c:173: Created local description: ufrag=\"LrY/\", pwd=\"L3mmGG\""));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: ice.c:142: Parsed remote description: ufrag=\"9NCk\", pwd=\"zIrWy2\", candidates=0"));
+        // agent.c:505 over ice.c:302: the description's first line.
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: agent.c:505: Generated local SDP description: a=ice-ufrag:Qw7e\r\n"
+            "a=ice-pwd:Pz0kLmnopq\r\n"));
+        IceDiagnostics::logPath("control", QStringLiteral("a=ice-ufrag:Hq2x"));
+        // agent.c:1286 and agent.c:1296.
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: agent.c:1286: STUN local ufrag check failed, expected=\"Aa1b\", actual=\"Cc2d\""));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: agent.c:1296: STUN remote ufrag check failed, expected=\"Ee3f\", actual=\"Gg4h\""));
+        // stun.c:713, :763 and :774, on a path other than the library's.
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: stun.c:713: Got username: Jj5k:Ll6m"));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: stun.c:763: Got realm: shack realm Nn7p"));
+        IceDiagnostics::logPath("control", QStringLiteral(
+            "juice: stun.c:774: Got nonce: Qq8rNonce"));
+        IceDiagnostics::installForTest({});
+        const QString all = lines.join(QLatin1Char('\n'));
+        for (const char* secret : {"LrY/", "9NCk", "Qw7e", "Pz0kLmnopq", "Hq2x", "Aa1b", "Cc2d",
+                                   "Ee3f", "Gg4h", "Jj5k", "Ll6m", "Nn7p", "shack realm",
+                                   "Qq8rNonce"}) {
+            QVERIFY2(!all.contains(QLatin1String(secret)), qPrintable(all));
+        }
+        QVERIFY2(all.contains(QStringLiteral("ufrag=\"<hidden>\"")), qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("a=ice-ufrag:<hidden>")), qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("expected=\"<hidden>\", actual=\"<hidden>\"")),
+                 qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("Got username: <hidden>")), qPrintable(all));
+        // The per-message STUN lines are left out of the library's log whole.
+        for (const char* line : {"Got username: Jj5k:Ll6m", "Got realm: shack", "Got nonce: Qq8r"}) {
+            QVERIFY(IceDiagnostics::isSecretLine(
+                QStringLiteral("rtc::impl::IceTransport::LogCallback@391: juice: stun.c:713: ")
+                + QLatin1String(line)));
+            QVERIFY(!IceDiagnostics::isLibraryNoise(
+                QStringLiteral("rtc::impl::IceTransport::LogCallback@391: juice: stun.c:713: ")
+                + QLatin1String(line)));
+        }
+        QVERIFY(!IceDiagnostics::isSecretLine(QStringLiteral(
+            "rtc::impl::IceTransport::LogCallback@391: juice: agent.c:1502: "
+            "Candidate pair check succeeded")));
+    }
+
     void offWritesNothing()
     {
         QVERIFY(!IceDiagnostics::enabled());
@@ -294,6 +354,7 @@ private slots:
     {
         QMutex mutex;
         QStringList lines;
+        QStringList ufrags;
         // The Core's own address source, as the switch installs it.
         IceDiagnostics::installForTest([&](const QString& line) {
             QMutexLocker lock(&mutex);
@@ -307,7 +368,11 @@ private slots:
             auto answerer = std::make_shared<rtc::PeerConnection>(config);
             const std::weak_ptr<rtc::PeerConnection> weakOfferer = offerer;
             const std::weak_ptr<rtc::PeerConnection> weakAnswerer = answerer;
-            offerer->onLocalDescription([weakAnswerer](rtc::Description d) {
+            offerer->onLocalDescription([weakAnswerer, &mutex, &ufrags](rtc::Description d) {
+                if (const auto ufrag = d.iceUfrag()) {
+                    QMutexLocker lock(&mutex);
+                    ufrags.append(QString::fromStdString(*ufrag));
+                }
                 if (auto p = weakAnswerer.lock()) { p->setRemoteDescription(d); }
             });
             offerer->onLocalCandidate([weakAnswerer](rtc::Candidate c) {
@@ -315,7 +380,11 @@ private slots:
                                                     .arg(QString::fromStdString(c.candidate())));
                 if (auto p = weakAnswerer.lock()) { p->addRemoteCandidate(c); }
             });
-            answerer->onLocalDescription([weakOfferer](rtc::Description d) {
+            answerer->onLocalDescription([weakOfferer, &mutex, &ufrags](rtc::Description d) {
+                if (const auto ufrag = d.iceUfrag()) {
+                    QMutexLocker lock(&mutex);
+                    ufrags.append(QString::fromStdString(*ufrag));
+                }
                 if (auto p = weakOfferer.lock()) { p->setRemoteDescription(d); }
             });
             answerer->onLocalCandidate([weakOfferer](rtc::Candidate c) {
@@ -352,6 +421,14 @@ private slots:
         QVERIFY2(!all.contains(QRegularExpression(QStringLiteral("pwd=\"[^<]"))),
                  "an ICE password reached the log");
         QVERIFY2(!all.contains(QStringLiteral("Receiving datagram")), "per-packet lines reached the log");
+        // Review fix (I-1): no ICE username fragment, in any form.
+        QCOMPARE(ufrags.size(), 2);
+        for (const QString& ufrag : std::as_const(ufrags)) {
+            QVERIFY(!ufrag.isEmpty());
+            QVERIFY2(!all.contains(ufrag), "an ICE username fragment reached the log");
+        }
+        QVERIFY2(!all.contains(QRegularExpression(QStringLiteral("ufrag[=:]\"?[^<\"]"))),
+                 "an ICE username fragment reached the log");
         const QByteArray excerpt = qgetenv("NEREUS_ICE_DIAG_EXCERPT");
         if (!excerpt.isEmpty()) {
             QFile file(QString::fromLocal8Bit(excerpt));

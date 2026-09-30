@@ -6,16 +6,22 @@
 // checks, for one diagnostic run: the candidates each peer gathers and
 // admits (the loopback tunnel's included), libjuice's pair checks through
 // libdatachannel's log callback, and the pair each peer selects. Every line
-// passes through IceAddressRedactor first, so no address reaches the log.
+// passes through IceAddressRedactor first, which replaces every IPv4 and
+// IPv6 literal with a token. Hostnames, mDNS candidate names (".local")
+// and the TURN server's host name are not redacted. The ICE password and
+// username fragment, and the STUN username, realm and nonce, are hidden.
 //
-// Off unless the environment variable NEREUS_ICE_DIAG is set to 1, true or
-// on when the Core starts. Off, the library logger is never installed and
+// Off unless the environment variable NEREUS_ICE_DIAG is set to 1, true,
+// on or yes when the Core starts. Off, the library logger is never installed and
 // every call here returns after one atomic load.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-29 - Created for the 5G media-path diagnosis. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Review fix: says which addresses are redacted and which
+//                 are not, the "yes" switch value, and isSecretLine(). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -97,7 +103,8 @@ private:
 
 namespace IceDiagnostics {
 
-/// The switch: set to 1 (or true, on) in the Core's environment for a run.
+/// The switch: set to 1 (or true, on, yes) in the Core's environment for a
+/// run. Case and surrounding spaces do not matter.
 inline constexpr char kEnvironmentVariable[] = "NEREUS_ICE_DIAG";
 
 using Sink = std::function<void(const QString& line)>;
@@ -116,6 +123,9 @@ void installFromEnvironment();
 /// turns the log off again.
 void installForTest(Sink sink, IceAddressRedactor::LocalSource localSource = {});
 
+/// libjuice's per-message STUN username, realm and nonce lines: secrets,
+/// left out whole.
+bool isSecretLine(const QString& line);
 /// libdatachannel and libjuice lines that come once per packet (sends,
 /// receives, SCTP, SRTP) and say nothing about the checks; left out.
 bool isLibraryNoise(const QString& line);

@@ -8,6 +8,10 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created for the 5G media-path diagnosis. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Review fix: the ICE username fragment, a failed ufrag
+//                 check's fragments and the STUN username, realm and nonce
+//                 are hidden (isSecretLine). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceDiagnostics.h"
@@ -421,13 +425,21 @@ State& state()
     return s;
 }
 
-// libjuice prints the ICE password in its description lines and one
-// warning; it goes with the addresses.
+// libjuice prints the ICE password and username fragment in its
+// description lines ("ufrag=", "pwd=", and "a=ice-ufrag:", "a=ice-pwd:" in
+// the generated description's first line), the fragments of a failed
+// ufrag check ("expected=", "actual="), one warning's password, and a STUN
+// message's username, realm and nonce. They go with the addresses.
 QString hideSecrets(QString line)
 {
-    static const QRegularExpression secret(QStringLiteral(
-        "(password=\"|pwd=\"|ice-pwd:)[^\"\\s]*"));
-    return line.replace(secret, QStringLiteral("\\1<hidden>"));
+    static const QRegularExpression quoted(QStringLiteral(
+        "((?:password|pwd|ufrag|expected|actual)=\")[^\"]*"));
+    static const QRegularExpression bare(QStringLiteral("(ice-pwd:|ice-ufrag:)\\S*"));
+    // A realm may hold spaces: the rest of the line goes.
+    static const QRegularExpression stun(QStringLiteral("(Got (?:username|realm|nonce): ).*$"));
+    line.replace(quoted, QStringLiteral("\\1<hidden>"));
+    line.replace(bare, QStringLiteral("\\1<hidden>"));
+    return line.replace(stun, QStringLiteral("\\1<hidden>"));
 }
 
 void write(const char* tag, const QString& text)
@@ -482,7 +494,7 @@ void libraryLine(rtc::LogLevel, const std::string& message)
         if (line.endsWith(QLatin1Char('\r'))) {
             line.chop(1);
         }
-        if (isQuietSdpLine(line) || isLibraryNoise(line)) {
+        if (isQuietSdpLine(line) || isSecretLine(line) || isLibraryNoise(line)) {
             continue;
         }
         if (line.startsWith(QLatin1String("rtc::impl::"))) {
@@ -552,6 +564,16 @@ void installForTest(Sink sink, IceAddressRedactor::LocalSource localSource)
     install(std::move(sink), std::move(localSource));
 }
 
+bool isSecretLine(const QString& line)
+{
+    // libjuice's STUN username (the two ICE username fragments), TURN
+    // realm and nonce, one line per message read (stun.c). Left out whole;
+    // hideSecrets() hides their values on any other path.
+    static const QRegularExpression secret(QStringLiteral(
+        "juice: (?:[A-Za-z0-9_]+\\.c:\\d+: )?Got (?:username|realm|nonce): "));
+    return secret.match(line).hasMatch();
+}
+
 bool isLibraryNoise(const QString& line)
 {
     // Once per packet or per STUN attribute; none says which pair was
@@ -562,7 +584,7 @@ bool isLibraryNoise(const QString& line)
         "Setting Differentiated", "STUN message is", "Found STUN entry",
         "Reading ", "Writing ", "Found data",
         "Found even port", "Found requested transport", "Found don't fragment",
-        "Found reservation", "Got username", "Got realm", "Got nonce", "Got priority",
+        "Found reservation", "Got priority",
         "STUN fingerprint check", "STUN message integrity", "Nonce has cookie",
         "Remote agent is", "Not a STUN message", "Finished reading", "STUN attribute",
         "Looking up agent", "Received ChannelData", "Forwarding", "Fairness limit",
