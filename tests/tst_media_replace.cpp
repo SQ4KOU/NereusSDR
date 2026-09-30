@@ -31,6 +31,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: a refused replace keeps the move it carried: a move folded
+//               into the retried fallback, or one made while the
+//               fallback's replace is under way, is still followed after
+//               the Core unkeys. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: load finding: a session move folded into a refused
 //               fallback's wait is made only once the window has heard the
 //               Core on the air, and the waits for the refusal use the
@@ -1323,6 +1328,107 @@ private slots:
             QVERIFY(g.guiTransports.last());
             QVERIFY(!g.guiTransports.last()->startOptions.ice->onlySourceCandidates());
         }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A session move folded into a waiting fallback rides with the replace
+    // that retries it; if the Core refuses that replace too (it keyed again
+    // as it arrived, or the window had not yet heard it keyed), the move
+    // stays pending. The same holds for a move that comes while the
+    // fallback's own replace is under way. Media then comes back on the
+    // direct pair, which ends the fallback but not the move: after the Core
+    // unkeys, the move is followed by a normal replace.
+    void aRefusedReplaceKeepsTheMoveItCarried_data()
+    {
+        QTest::addColumn<bool>("duringFlight");
+        QTest::newRow("folded into the retried fallback") << false;
+        QTest::newRow("a move while the fallback is under way") << true;
+    }
+    void aRefusedReplaceKeepsTheMoveItCarried()
+    {
+        QFETCH(bool, duringFlight);
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        // The Core keys the moment a replace leaves the window, so it reads
+        // that replace while it transmits and refuses it.
+        int replacesSeen = 0;
+        int keyOnReplace = 1;
+        const QMetaObject::Connection keyer = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&replacesSeen, &keyOnReplace, mox](const QByteArray& wire) {
+                if (!wire.contains("\"replace\"")) { return; }
+                if (++replacesSeen == keyOnReplace) { mox->setMox(true); }
+            });
+        const auto refused = [&g](int index) {
+            return !g.guiTransports.at(index) || g.guiTransports.at(index)->stopped;
+        };
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QCOMPARE(replacesSeen, 1);
+        int carrier = 1;
+        if (duringFlight) {
+            // The fallback's replace is on its way and not yet answered: the
+            // session moves now, and the move waits for it.
+            QVERIFY(!refused(1));
+            QVERIFY(!g.gui->replacePending());
+            emit g.core.client.pathChanged();
+            QVERIFY(g.gui->replacePending());
+        } else {
+            // The fallback is refused; the session moves once the window has
+            // heard the Core on the air, so the move folds into the wait.
+            QTRY_VERIFY_WITH_TIMEOUT(g.core.remote.isTransmitting(), kReplaceAnswerMs);
+            QTRY_VERIFY_WITH_TIMEOUT(g.gui->replacePending(), kReplaceAnswerMs);
+            QCOMPARE(g.core.transports.size(), 1);
+            emit g.core.client.pathChanged();
+            QVERIFY(g.gui->replacePending());
+            // The retry, carrying the move, is refused as well: the Core
+            // keys again as it arrives.
+            keyOnReplace = 2;
+            mox->setMox(false);
+            QTRY_VERIFY_WITH_TIMEOUT(replacesSeen == 2,
+                                     RemoteMediaController::kReplaceRetryMs + 5000);
+            QCOMPARE(g.guiTransports.size(), 3);
+            carrier = 2;
+        }
+        // The refusal of the replace carrying the move, within the window's
+        // bound for a replace answer; the window then hears the Core on the
+        // air (so no retry starts while this test looks).
+        QTRY_VERIFY_WITH_TIMEOUT(refused(carrier), kReplaceAnswerMs);
+        QTRY_VERIFY_WITH_TIMEOUT(g.core.remote.isTransmitting() && g.gui->replacePending(),
+                                 kReplaceAnswerMs);
+        QCOMPARE(g.core.transports.size(), 1);
+        QObject::disconnect(keyer);
+        // Audio arrives again on the direct pair: the fallback is over, the
+        // move is not.
+        g.audioOn(0);
+        QVERIFY(g.gui->replacePending());
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                  RemoteMediaController::kReplaceRetryMs + 5000);
+        QVERIFY(!g.gui->replacePending());
+        QVERIFY(g.guiTransports.last());
+        QVERIFY(!g.guiTransports.last()->startOptions.ice->onlySourceCandidates());
         g.core.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
