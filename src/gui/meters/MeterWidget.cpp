@@ -7,6 +7,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - the geometry buffer is written only in a frame that binds
+//                 it (drawsGeometryLayer); with no geometry pipeline (a
+//                 shader failed to load) every frame's write stayed pending
+//                 in Qt's Metal backend. GUI memory leak follow-up. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - Task 25: keep unbound filter/click-box and producerless
 //                 PB SNR items saved but not rendered. J.J. Boyd (KG4VCF),
 //                 AI-assisted via OpenAI Codex.
@@ -993,7 +998,7 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
         }
         m_geomVertCount = qMin(verts.size() / kGeomVertStride, kMaxGeomVerts);
-        if (m_geomVertCount > 0) {
+        if (drawsGeometryLayer(m_geomPipeline != nullptr, m_geomVertCount)) {
             batch->updateDynamicBuffer(m_geomVbo, 0,
                 m_geomVertCount * kGeomVertStride * sizeof(float), verts.constData());
         }
@@ -1081,7 +1086,7 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // Draw geometry
-    if (m_geomPipeline && m_geomVertCount > 0) {
+    if (drawsGeometryLayer(m_geomPipeline != nullptr, m_geomVertCount)) {
         cb->setGraphicsPipeline(m_geomPipeline);
         cb->setShaderResources(m_geomSrb);
         cb->setViewport({0, 0,

@@ -226,6 +226,7 @@
 #include "core/spectrum/SpectrumDetector.h"
 #include "ImdOverlay.h"
 #include "gui/DssMeshGeometry.h"
+#include "gui/SpectrumTraceFramePlan.h"
 #include "spectrum/WaterfallTicker.h"
 #include "widgets/VfoWidget.h"
 #include "ColorSwatchButton.h"
@@ -11821,18 +11822,30 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // ---- Spectrum-region draw selection ----
-    // Which of the three spectrum-region draws this frame makes, decided
-    // once, after the 3DSS updates above (they can clear m_dssMeshReady or
-    // size the fallback texture), so the trace uploads below write only the
-    // buffers the draw binds. Same conditions as before the split.
-    const bool is3D =
-        (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) && m_dssMeshReady;
-    const bool drawsDssMesh = is3D && m_dss.rowCount() > 0;
-    const bool drawsDssFallback = !drawsDssMesh
-        && m_spectrumRenderMode == SpectrumRenderMode::Mode3D
-        && m_ovPipeline && m_dssFallbackSrb && m_dssFallbackTexW > 0;
-    const bool fftTraceBound = !drawsDssMesh && !drawsDssFallback && !is3D
-        && m_fftFillPipeline && m_fftLinePipeline;
+    // Which spectrum-region draw this frame makes, and which trace buffers
+    // it writes and binds, decided once by planSpectrumTraceFrame()
+    // (SpectrumTraceFramePlan.h), after the 3DSS updates above (they can
+    // clear m_dssMeshReady or size the fallback texture). The trace uploads
+    // below and the draw calls after beginPass both read this plan, so a
+    // buffer is never written in a frame that does not bind it.
+    SpectrumTraceFrameInputs traceIn;
+    traceIn.mode3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
+    traceIn.dssMeshReady = m_dssMeshReady;
+    traceIn.dssHasRows = m_dss.rowCount() > 0;
+    traceIn.dssFallbackReady =
+        m_ovPipeline && m_dssFallbackSrb && m_dssFallbackTexW > 0;
+    traceIn.tracePipelines = m_fftFillPipeline && m_fftLinePipeline;
+    traceIn.traceBuffers = m_fftLineVbo && m_fftFillVbo;
+    traceIn.peakBuffer = m_fftPeakVbo != nullptr;
+    traceIn.hasPixels = !m_renderedPixels.isEmpty();
+    traceIn.panFill = m_panFill;
+    traceIn.peakHoldReady = m_peakHoldEnabled
+        && m_pxPeakHold.size() == m_renderedPixels.size();
+    traceIn.showsTransmitView = showsTransmitView();
+    traceIn.heldTrace = m_visibleBinCount > 0;
+    traceIn.heldFill = m_fftFillHasData;
+    traceIn.heldPeak = m_peakHoldHasData;
+    const SpectrumTraceFramePlan trace = planSpectrumTraceFrame(traceIn);
 
     // ---- FFT spectrum vertices ----
     // GPU vertex generation -- one vertex per display pixel.  Mirrors
@@ -11845,14 +11858,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     //   - m_fillColor / m_fillAlpha (used for the flat-fill path)
     //   - m_peakHoldEnabled (generates a second line VBO for peak hold)
     //
-    // Written only when this frame binds them (fftTraceBound, above). Qt's
+    // Written only when this frame binds them (the trace plan, above). Qt's
     // Metal backend keeps a partial dynamic-buffer write in the buffer's
     // pending list until the buffer is next bound
     // (QRhiMetal::executeBufferHostWritesForSlot, qrhimetal.mm, Qt 6.11);
     // a buffer written every frame and never bound -- the 2D trace under a
     // 3D pan, the fill with pan fill off -- kept every frame's vertex copy,
     // 23 GB in 2.5 hours on the desktop window.
-    if (fftTraceBound && !m_renderedPixels.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
+    if (trace.writeLine) {
         const int n = qMin(m_renderedPixels.size(), kMaxFftBins);
         m_visibleBinCount = n;
         const float minDbm = m_refLevel - m_dynamicRange;
@@ -11869,7 +11882,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const float flatB = m_fillColor.blueF();
 
         QVector<float> lineVerts(n * kFftVertStride);
-        const bool buildFill = m_panFill;
+        const bool buildFill = trace.writeFill;
         QVector<float> fillVerts(buildFill ? n * 2 * kFftVertStride : 0);
 
         for (int j = 0; j < n; ++j) {
@@ -11928,7 +11941,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
         batch->updateDynamicBuffer(m_fftLineVbo, 0,
             n * kFftVertStride * sizeof(float), lineVerts.constData());
-        m_fftFillHasData = buildFill;
         if (buildFill) {
             batch->updateDynamicBuffer(m_fftFillVbo, 0,
                 n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
@@ -11939,9 +11951,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // is off we leave the buffer stale and skip the draw call via
         // m_peakHoldHasData.  Per-display-pixel array (m_pxPeakHold) is
         // sized to m_renderedPixels in updateSpectrumLinear.
-        m_peakHoldHasData = false;
-        if (m_peakHoldEnabled && m_pxPeakHold.size() == m_renderedPixels.size()
-            && m_fftPeakVbo) {
+        if (trace.writePeak) {
             QVector<float> peakVerts(n * kFftVertStride);
             for (int j = 0; j < n; ++j) {
                 float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
@@ -11957,15 +11967,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
             batch->updateDynamicBuffer(m_fftPeakVbo, 0,
                 n * kFftVertStride * sizeof(float), peakVerts.constData());
-            m_peakHoldHasData = true;
         }
-    } else if (!fftTraceBound) {
+    } else if (!trace.heldTrace) {
         // Nothing this frame binds the trace buffers, so nothing was written
         // to them: they no longer hold a trace to redraw later.
         m_visibleBinCount = 0;
-        m_peakHoldHasData = false;
-        m_fftFillHasData = false;
     }
+    m_fftFillHasData = trace.heldFill;
+    m_peakHoldHasData = trace.heldPeak;
 
     cb->resourceUpdate(batch);
 
@@ -11996,9 +12005,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // normal 2D positions. Everything below is identical to 2D except the
     // FFT trace is swapped for the 3DSS surface quad inside specRect.
     // From AetherSDR SpectrumWidget.cpp:13304-13307 [@1872028c].
-    // is3D, drawsDssMesh, drawsDssFallback and fftTraceBound are decided
-    // above, before the resource updates.
-    if (drawsDssMesh) {
+    // The region draw comes from the trace plan decided above, before the
+    // resource updates.
+    if (trace.drawsDssMesh) {
         const float specVpX = static_cast<float>(specRect.x()) * dpr;
         const float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         const float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -12022,7 +12031,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QRhiCommandBuffer::VertexInput lineVbuf(m_dssMeshLineVbo, 0);
         cb->setVertexInput(0, 1, &lineVbuf);
         cb->draw(rows * dssLineVerticesPerRow(m_dssMeshCols));
-    } else if (drawsDssFallback) {
+    } else if (trace.drawsDssFallback) {
         // Task 10: CPU cached-image fallback (mesh pipeline unavailable --
         // is3D is false here precisely because m_dssMeshReady is false, so
         // this branch is Mode3D's ONLY remaining path; it must win over the
@@ -12046,7 +12055,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
-    } else if (fftTraceBound && m_visibleBinCount > 0 && drawsSpectrumTrace()) {
+    } else if (trace.drawsTrace) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -12054,7 +12063,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         QRhiViewport specVp(specVpX, specVpY, specVpW, specVpH);
 
         // Fill pass — Phase 3G-8 commit 10: skip when fill is disabled.
-        if (m_panFill && m_fftFillHasData) {
+        if (trace.bindFill) {
             cb->setGraphicsPipeline(m_fftFillPipeline);
             cb->setShaderResources(m_fftSrb);
             cb->setViewport(specVp);
@@ -12064,7 +12073,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         }
 
         // Peak hold line (drawn before main line so live trace is on top).
-        if (m_peakHoldHasData && m_fftPeakVbo) {
+        if (trace.bindPeak) {
             cb->setGraphicsPipeline(m_fftLinePipeline);
             cb->setShaderResources(m_fftSrb);
             cb->setViewport(specVp);

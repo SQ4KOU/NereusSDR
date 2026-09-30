@@ -9202,6 +9202,13 @@ if(NEREUS_GPU_SPECTRUM)
     nereus_add_test(tst_spectrum_gpu_buffer_growth NATIVE_WINDOW EXTRA_LABELS gpu)
 endif()
 
+# The same rule without a GPU, on every platform CI runs: every combination
+# of planSpectrumTraceFrame()'s inputs binds each trace buffer it writes and
+# draws no fill or peak left from another trace, and MeterWidget's geometry
+# buffer is written only when it is bound. renderGpuFrame() takes both its
+# uploads and its draws from these helpers. NereusSDR-original.
+nereus_add_test(tst_gpu_buffer_write_bind_plan)
+
 # ── 3D stacked-trace spectrum plan, Task 11: 3D dBm scale ────────────────
 # Pins drawDbmScale3D(): floor-anchored (dssFloorDbm() + rounded 3D Span),
 # not Ref-anchored like the 2D scale, so its rendered output must move when
