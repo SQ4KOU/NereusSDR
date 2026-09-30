@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original receive restoration integration tests.
 #include <QtTest>
 #include <QFile>
+#include <QPointer>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/RadeChannel.h"
@@ -120,7 +121,9 @@ private slots:
         // the older saved tuning or let cfg.sliceCount change membership.
         SliceModel* const retained = model->sliceById(2);
         retained->setFrequency(7210000);
-        const RxDspWorker* const oldWorker = model->m_dspWorker;
+        // A QPointer, not a raw address: the new worker can reuse the old one's
+        // address, so only the old object's destruction proves a new worker.
+        const QPointer<RxDspWorker> oldWorker(model->m_dspWorker);
         model->disconnectFromRadio();
         model->connectToRadioPreservingSlices(info);
         QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 10000);
@@ -134,7 +137,8 @@ private slots:
             QCOMPARE(model->m_restoredRadeReceiveOwner.value_or(-1), 2);
             QVERIFY(model->m_radeRxRoutes.contains(2));
             // RADE threads: recovery replays the route onto the new worker.
-            QVERIFY(model->m_dspWorker != nullptr && model->m_dspWorker != oldWorker);
+            QTRY_VERIFY_WITH_TIMEOUT(oldWorker.isNull(), 5000);
+            QVERIFY(model->m_dspWorker != nullptr);
             QTRY_COMPARE_WITH_TIMEOUT(model->m_dspWorker->radeRxRouteCount(), 1, 5000);
             QVERIFY(model->wdspEngine()->radeChannel(2)->isActive());
             // Keep two RADE mode descriptors, explicitly choose B last,
