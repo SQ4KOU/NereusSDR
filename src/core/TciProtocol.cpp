@@ -177,8 +177,25 @@ QString TciProtocol::handleCommand(const QString& command)
             const auto query = kQueryArgs.constFind(name);
             bool ok = false;
             const int rx = args.at(0).trimmed().toInt(&ok);
+            // Queries whose answer does not come from the receiver's own
+            // slice are answered for a receiver with no slice, as Thetis
+            // answers them with RX2 off: rx_enable is false then
+            // (TCIServer.cs:4624-4627 [v2.10.3.15], RX2Enabled && !MOX),
+            // rx_nf_enable is the global notch (GetMNF, console.cs:52317-52330
+            // [v2.10.3.15]: "mnf enabled globally") and split_enable is
+            // VFOSplit (TCIServer.cs:3268-3275 [v2.10.3.15]), which NereusSDR
+            // does not model and answers false. Every other query Thetis
+            // answers from RX2's own state, which a receiver with no slice
+            // does not have, so those and every set stay dropped.
+            static const QSet<QString> kVacantReceiverQueries{
+                QStringLiteral("rx_enable"), QStringLiteral("rx_nf_enable"),
+                QStringLiteral("split_enable"),
+            };
+            const bool vacantAnswered = query != kQueryArgs.cend()
+                                        && args.size() == *query
+                                        && kVacantReceiverQueries.contains(name);
             if (m_receiverSliceMap && query != kQueryArgs.cend() && ok
-                && m_receiverSliceMap(rx) < 0) {
+                && m_receiverSliceMap(rx) < 0 && !vacantAnswered) {
                 return {};
             }
             // A vfo set can name one receiver and write another's slice

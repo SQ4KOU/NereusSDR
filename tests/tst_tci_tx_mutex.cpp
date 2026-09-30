@@ -98,6 +98,7 @@ private slots:
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
     void stopped_server_queues_no_rx2_lines();
+    void desktop_host_answers_rx2_off_queries_without_receiver_1();
     void desktop_host_reentrant_stop_cannot_take_audio();
     void desktop_host_reentrant_destruction_releases_original_key();
     void desktop_host_release_callback_may_destroy_server_data();
@@ -279,6 +280,61 @@ void TestTciTxMutex::stopped_server_queues_no_rx2_lines()
     };
     QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:1,true;")), 3000);
     QVERIFY(hasLine(QStringLiteral("tx_enable:1,true;")));
+    app.close();
+    server.stop();
+}
+
+// With the desktop hosting and no slice for receiver 1, the queries Thetis
+// answers with RX2 off whose value is not receiver 1's own state are
+// answered, not dropped: rx_enable:1 is false (TCIServer.cs:4624-4627
+// [v2.10.3.15]), rx_nf_enable:1 is the global notch and split_enable:1 is
+// VFOSplit. Queries of receiver 1's own state and every set stay dropped.
+void TestTciTxMutex::desktop_host_answers_rx2_off_queries_without_receiver_1()
+{
+    RadioModel radio;
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+    radio.sliceOwnership()->setOwner(0, SliceOwnership::stationDevice());
+    radio.sliceOwnership()->setOwner(1, QByteArray("phone"));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
+    QTest::qWait(150);
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+
+    text.clear();
+    app.sendTextMessage(QStringLiteral("rx_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("rx_nf_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_nf_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("split_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("split_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("rx_channel_enable:1,0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_channel_enable:1,0,false;")), 3000);
+
+    text.clear();
+    app.sendTextMessage(QStringLiteral("modulation:1;"));
+    app.sendTextMessage(QStringLiteral("rx_enable:1,true;"));
+    app.sendTextMessage(QStringLiteral("split_enable:1,true;"));
+    app.sendTextMessage(QStringLiteral("rx_enable:0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:0,true;")), 3000);
+    QTest::qWait(150);
+    QVERIFY(!hasLine(QStringLiteral("modulation:1,")));
+    QVERIFY(!hasLine(QStringLiteral("rx_enable:1,")));
+    QVERIFY(!hasLine(QStringLiteral("split_enable:1,")));
+    QCOMPARE(radio.sliceOwnership()->ownedBy(SliceOwnership::stationDevice()), QList<int>{0});
+    QVERIFY(radio.sliceById(1) != nullptr);
     app.close();
     server.stop();
 }
