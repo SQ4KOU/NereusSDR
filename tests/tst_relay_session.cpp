@@ -153,104 +153,6 @@ private:
     }
 };
 
-// What a wait is waiting on, closing or failing first. The first such
-// reason is kept; a wait ends as soon as there is one. Declared after the
-// objects it watches, so it lets go of them before they are destroyed.
-class EndWatch {
-public:
-    EndWatch() = default;
-    EndWatch(const EndWatch&) = delete;
-    EndWatch& operator=(const EndWatch&) = delete;
-    ~EndWatch()
-    {
-        for (const QMetaObject::Connection& connection : m_connections) {
-            QObject::disconnect(connection);
-        }
-    }
-
-    void watch(StationClient* window)
-    {
-        m_connections.append(QObject::connect(
-            window, &StationClient::sessionEnded, [this](const QString& reason) {
-                note(QStringLiteral("the session ended: %1")
-                         .arg(reason.isEmpty() ? QStringLiteral("(no reason given)") : reason));
-            }));
-    }
-    void watch(IMediaTransport* transport, const QString& name)
-    {
-        m_connections.append(QObject::connect(
-            transport, &IMediaTransport::connectionFailed, [this, name](const QString& message) {
-                note(QStringLiteral("the %1 media connection failed: %2").arg(name, message));
-            }));
-        m_connections.append(QObject::connect(
-            transport, &IMediaTransport::errorOccurred, [this, name](const QString& message) {
-                note(QStringLiteral("the %1 media connection hit an error: %2").arg(name, message));
-            }));
-        m_connections.append(QObject::connect(transport, &IMediaTransport::closed, [this, name] {
-            note(QStringLiteral("the %1 media connection closed").arg(name));
-        }));
-    }
-    void watch(RendezvousClient* client)
-    {
-        m_connections.append(QObject::connect(client, &RendezvousClient::connectionLost, [this] {
-            note(QStringLiteral("the Core lost the remote access service"));
-        }));
-    }
-
-    bool ended() const { return !m_reason.isEmpty(); }
-    QString reason() const { return m_reason; }
-
-private:
-    void note(const QString& reason)
-    {
-        if (m_reason.isEmpty()) {
-            m_reason = reason;
-        }
-    }
-
-    QString m_reason;
-    QList<QMetaObject::Connection> m_connections;
-};
-
-// Waits until `done`, until `ends` has a reason, or for `boundMs`, whichever
-// is first, and says which through `why`. Unlike QTRY_*, which after its
-// timeout waits twice as long again to report whether more time would have
-// helped, it stops at the bound, and it stops at once when what it waits on
-// has closed or failed.
-bool waitUntil(const std::function<bool()>& done, int boundMs, const EndWatch& ends,
-               const QString& what, QString* why, qint64* elapsedMs = nullptr)
-{
-    QElapsedTimer elapsed;
-    elapsed.start();
-    const QDeadlineTimer deadline(boundMs);
-    while (!done() && !ends.ended() && !deadline.hasExpired()) {
-        QTest::qWait(int(std::clamp<qint64>(deadline.remainingTime(), 1, 50)));
-    }
-    if (elapsedMs != nullptr) {
-        *elapsedMs = elapsed.elapsed();
-    }
-    if (done()) {
-        return true;
-    }
-    if (why != nullptr) {
-        *why = ends.ended()
-            ? QStringLiteral("waiting for %1, %2 after %3 ms")
-                  .arg(what, ends.reason())
-                  .arg(elapsed.elapsed())
-            : QStringLiteral("%1 had not happened after %2 ms (the bound)")
-                  .arg(what)
-                  .arg(elapsed.elapsed());
-    }
-    return false;
-}
-
-// Adds the window's own account of its attempt to a failed wait's reason.
-QString withAttempt(const QString& why, const StationClient& window)
-{
-    return QStringLiteral("%1\nlast error: %2\nattempt: %3")
-        .arg(why, window.lastError(), window.connectionAttempt().summary());
-}
-
 // A Core registered with the local service, with the web relay allowed.
 struct CoreThroughService {
     Core core;
@@ -278,7 +180,8 @@ struct CoreThroughService {
 };
 
 // Connects `window` to `station` through `service` and waits for the
-// handshake, ending early if the session closes or fails.
+// handshake, ending early if the session closes or fails. The watch is
+// set before the connect call, so a failure inside it is seen too.
 bool connectWindow(StationClient& window, LocalService& service, CoreThroughService& station,
                    QString* why, qint64* elapsedMs = nullptr)
 {
@@ -286,13 +189,7 @@ bool connectWindow(StationClient& window, LocalService& service, CoreThroughServ
     ends.watch(&window);
     window.connectThroughService({service.url()}, station.rendezvous->client()->stationId(),
                                  station.core.server->stationIdentity().fingerprint());
-    const bool ok = waitUntil([&window] { return window.isHandshakeComplete(); },
-                              kServiceConnectBudgetMs, ends,
-                              QStringLiteral("the window's handshake"), why, elapsedMs);
-    if (!ok && why != nullptr) {
-        *why = withAttempt(*why, window);
-    }
-    return ok;
+    return waitForHandshake(window, kServiceConnectBudgetMs, why, elapsedMs, &ends);
 }
 
 } // namespace

@@ -2493,7 +2493,11 @@ private slots:
         window.setServiceRoute(route);
         window.connectToStation(QUrl(), QString(), QString(), false,
                                 saved->connection.identityFingerprint);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectionAttempt().tries.size(), 1);
         QVERIFY(window.connectionAttempt().tries.first().path
                 == StationConnectionAttempt::Path::Service
@@ -2613,7 +2617,11 @@ private slots:
         const QUrl saved(QStringLiteral("wss://127.0.0.1:%1").arg(freeTcpPort()));
         window.connectToStation(saved, QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         // Task 29 (the link document, section 21.1): a paired Core's
         // addresses are raced, so the saved one is tried too, beside the
@@ -2656,7 +2664,11 @@ private slots:
         window.setCachedAddresses({dead, other.url()});
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 3);
@@ -2700,7 +2712,11 @@ private slots:
         window.setCachedAddressOpenTimeoutMs(60000);
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
         QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::AnotherPathFirst);
@@ -2759,7 +2775,11 @@ private slots:
         QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
         window.connectToStation(core.url(), core.server->token(),
                                 core.server->certificateFingerprint(), false);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
@@ -2831,7 +2851,11 @@ private slots:
         QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
         window.connectToStation(core.url(), core.server->token(),
                                 core.server->certificateFingerprint(), false);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
@@ -2933,7 +2957,11 @@ private slots:
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
         QVERIFY(window.isConnectionActive());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(ended.size(), 0);
         QCOMPARE(introduced.size(), 1);
         QVERIFY(core.server->hasAuthenticatedSession());
@@ -3034,7 +3062,11 @@ private slots:
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         const quint64 epoch = core.server->mediaSessionEpoch();
         const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
         QVERIFY(coreIce.has_value());
@@ -3077,7 +3109,11 @@ private slots:
         QSignalSpy results(&window, &StationClient::commandResult);
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
 
         // The Core's pongs stop: it leaves the service and registers again.
         link.setDropAllPongs(true);

@@ -21,6 +21,11 @@
 //               line, fails at once if it exits, and says why with its
 //               output (startFailure). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: EndWatch, waitUntil and waitForHandshake, moved here from
+//               tst_relay_session: a wait that ends when what it waits on
+//               closes or fails, stops at its bound (QTRY_* runs on for
+//               twice its timeout after it expires) and says why. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -30,6 +35,7 @@
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
+#include <QPointer>
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QTcpServer>
@@ -39,6 +45,8 @@
 #include "core/session/RendezvousDialer.h"
 #include <QUrl>
 
+#include <algorithm>
+#include <functional>
 #include <memory>
 
 #ifdef Q_OS_UNIX
@@ -50,7 +58,10 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/RendezvousClient.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/IMediaTransport.h"
 #include "models/RadioModel.h"
 
 #include "fakes/UpgradedCoreToken.h"
@@ -417,5 +428,152 @@ struct Core {
     }
 };
 
+
+// What a wait is waiting on, closing or failing first. The first such
+// reason is kept; a wait ends as soon as there is one. Declared after the
+// objects it watches, so it lets go of them before they are destroyed.
+class EndWatch {
+public:
+    EndWatch() = default;
+    EndWatch(const EndWatch&) = delete;
+    EndWatch& operator=(const EndWatch&) = delete;
+    ~EndWatch()
+    {
+        for (const QMetaObject::Connection& connection : m_connections) {
+            QObject::disconnect(connection);
+        }
+    }
+
+    void watch(StationClient* window)
+    {
+        m_connections.append(QObject::connect(
+            window, &StationClient::sessionEnded, [this](const QString& reason) {
+                note(QStringLiteral("the session ended: %1")
+                         .arg(reason.isEmpty() ? QStringLiteral("(no reason given)") : reason));
+            }));
+    }
+    void watch(IMediaTransport* transport, const QString& name)
+    {
+        m_connections.append(QObject::connect(
+            transport, &IMediaTransport::connectionFailed, [this, name](const QString& message) {
+                note(QStringLiteral("the %1 media connection failed: %2").arg(name, message));
+            }));
+        m_connections.append(QObject::connect(
+            transport, &IMediaTransport::errorOccurred, [this, name](const QString& message) {
+                note(QStringLiteral("the %1 media connection hit an error: %2").arg(name, message));
+            }));
+        m_connections.append(QObject::connect(transport, &IMediaTransport::closed, [this, name] {
+            note(QStringLiteral("the %1 media connection closed").arg(name));
+        }));
+    }
+    void watch(RendezvousClient* client)
+    {
+        m_connections.append(QObject::connect(client, &RendezvousClient::connectionLost, [this] {
+            note(QStringLiteral("the Core lost the remote access service"));
+        }));
+    }
+
+    bool ended() const { return !m_reason.isEmpty(); }
+    QString reason() const { return m_reason; }
+
+private:
+    void note(const QString& reason)
+    {
+        if (m_reason.isEmpty()) {
+            m_reason = reason;
+        }
+    }
+
+    QString m_reason;
+    QList<QMetaObject::Connection> m_connections;
+};
+
+// Waits until `done`, until `ends` has a reason, or for `boundMs`, whichever
+// is first, and says which through `why`. Unlike QTRY_*, which after its
+// timeout waits twice as long again to report whether more time would have
+// helped, it stops at the bound, and it stops at once when what it waits on
+// has closed or failed.
+inline bool waitUntil(const std::function<bool()>& done, int boundMs, const EndWatch& ends,
+               const QString& what, QString* why, qint64* elapsedMs = nullptr)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const QDeadlineTimer deadline(boundMs);
+    while (!done() && !ends.ended() && !deadline.hasExpired()) {
+        QTest::qWait(int(std::clamp<qint64>(deadline.remainingTime(), 1, 50)));
+    }
+    if (elapsedMs != nullptr) {
+        *elapsedMs = elapsed.elapsed();
+    }
+    if (done()) {
+        return true;
+    }
+    if (why != nullptr) {
+        *why = ends.ended()
+            ? QStringLiteral("waiting for %1, %2 after %3 ms")
+                  .arg(what, ends.reason())
+                  .arg(elapsed.elapsed())
+            : QStringLiteral("%1 had not happened after %2 ms (the bound)")
+                  .arg(what)
+                  .arg(elapsed.elapsed());
+    }
+    return false;
+}
+
+// Adds the window's own account of its attempt to a failed wait's reason.
+inline QString withAttempt(const QString& why, const StationClient& window)
+{
+    return QStringLiteral("%1\nlast error: %2\nattempt: %3")
+        .arg(why, window.lastError(), window.connectionAttempt().summary());
+}
+
+// Waits for `window`'s handshake for `boundMs`, ending at once if its
+// session ends first (StationClient::sessionEnded: the handshake deadline,
+// a heartbeat, a failed dial or race, a refusal), with the reason, the
+// window's last error and its attempt summary in `why`. Pass `armed`, a
+// watch already on the window, to see a session that ends inside the
+// connect call itself; without it the watch starts here, and such an end
+// runs the wait to its bound.
+inline bool waitForHandshake(StationClient& window, int boundMs, QString* why,
+                             qint64* elapsedMs = nullptr, const EndWatch* armed = nullptr)
+{
+    EndWatch own;
+    if (armed == nullptr) {
+        own.watch(&window);
+    }
+    const EndWatch& ends = armed != nullptr ? *armed : own;
+    const bool ok = waitUntil([&window] { return window.isHandshakeComplete(); }, boundMs,
+                              ends, QStringLiteral("the window's handshake"), why, elapsedMs);
+    if (!ok && why != nullptr) {
+        *why = withAttempt(*why, window);
+    }
+    return ok;
+}
+
+// The same for a window that is still being created: `find` returns its
+// client once there is one (nullptr until then), and the session watch
+// starts from that moment. One bound covers both.
+inline bool waitForHandshake(const std::function<StationClient*()>& find, int boundMs,
+                             QString* why)
+{
+    QPointer<StationClient> client;
+    EndWatch ends;
+    const bool ok = waitUntil(
+        [&] {
+            if (!client) {
+                client = find();
+                if (client) {
+                    ends.watch(client);
+                }
+            }
+            return client && client->isHandshakeComplete();
+        },
+        boundMs, ends, QStringLiteral("the window's handshake"), why);
+    if (!ok && why != nullptr) {
+        *why = client ? withAttempt(*why, *client)
+                      : QStringLiteral("%1 (no window client was ever created)").arg(*why);
+    }
+    return ok;
+}
 
 } // namespace NereusSDR::Test::Rendezvous
