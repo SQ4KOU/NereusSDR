@@ -27,6 +27,11 @@
 //                 Anthropic Claude Code.
 //   2026-09-21 - Updated for generation-checked worker return by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via OpenAI Codex.
+//   2026-09-30 - RADE threads: the codec decodes on its own thread and the
+//                 worker plays its speech; the test waits for that thread
+//                 instead of spying the retired radeIqReady hop. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -123,10 +128,9 @@ private slots:
         radio->attachDspWorkerForTest(&worker);
         DspWorkerDetach detach{radio.get()};
         radio->wireRadeChannel(sliceId, &channel, slice);
-        QSignalSpy radeFeed(&worker, &RxDspWorker::radeIqReady);
         QSignalSpy speech(&channel, &RadeChannel::rxSpeechReady);
-        QVERIFY(radeFeed.isValid());
         QVERIFY(speech.isValid());
+        QVERIFY(channel.rxWorkerRunning());
         QCoreApplication::processEvents();
 
         // Baseline: speakers bus has not been pushed yet.
@@ -140,21 +144,25 @@ private slots:
         // 96-block bound on some platforms. 256 blocks remain a bounded
         // 341-ms input while clearing that documented filter history.
         constexpr int kMaxInputBlocks = 256;
+        // RADE threads: the codec runs on the channel's decoder thread; wait
+        // for it to take each block so the loop's count is deterministic.
         for (int rep = 0;
              rep < kMaxInputBlocks
-             && speakersRaw->pushCount() == baselinePushes;
+             && (speakersRaw->pushCount() == baselinePushes
+                 || speech.count() == 0);
              ++rep) {
             worker.processIqBatch(0, iq);
+            QVERIFY(channel.waitRxIdleForTest(5000));
             QCoreApplication::processEvents();
         }
 
         const QString evidence = QStringLiteral(
-            "feed=%1 speech=%2 speakers=%3 after at most %4 blocks")
-            .arg(radeFeed.count())
+            "speech=%1 speakers=%2 after at most %3 blocks")
             .arg(speech.count())
             .arg(speakersRaw->pushCount() - baselinePushes)
             .arg(kMaxInputBlocks);
-        QVERIFY2(speakersRaw->pushCount() > baselinePushes,
+        QVERIFY2(speakersRaw->pushCount() > baselinePushes
+                     && speech.count() > 0,
                  qPrintable(evidence));
     }
 };

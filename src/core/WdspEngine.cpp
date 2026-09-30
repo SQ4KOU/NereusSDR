@@ -50,6 +50,11 @@
 //                 covers single-precision FFTW. NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - RADE threads: createRadeChannel names the channel with its
+//                 id; destroyRadeChannel joins the channel's decoder thread
+//                 before stopping the codec. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  cmaster.c
@@ -924,6 +929,8 @@ RadeChannel* WdspEngine::createRadeChannel(int channelId)
     // checks for already-deleted children.
     auto channel = std::make_unique<RadeChannel>(this);
     RadeChannel* ptr = channel.get();
+    // RADE threads: the id names the decoder thread and the tick log.
+    ptr->setChannelId(channelId);
 
     m_radeChannels.emplace(channelId, std::move(channel));
     qCInfo(lcDsp) << "Created RADE channel" << channelId;
@@ -944,6 +951,10 @@ void WdspEngine::destroyRadeChannel(int channelId)
     // is idempotent (the I1 implementation checks m_active and returns
     // early if already stopped), so this is safe whether or not start()
     // was ever called.
+    //
+    // RADE threads: join the decoder thread first, so no block is mid-decode
+    // when the codec goes. This waits for at most the block in hand.
+    it->second->stopRxWorker();
     it->second->stop();
 
     m_radeChannels.erase(it);

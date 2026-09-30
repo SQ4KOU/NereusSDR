@@ -471,6 +471,13 @@
 //   2026-09-30 - TX rulings (item 1): moxPressAsksOn and tunePressAsksOn, a
 //                remote window's press toggles against its own key.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - RADE threads: every RADE slice decodes at once, each on its
+//                own decoder thread fed by the DSP thread (m_radeRxRoutes
+//                replaces the single RADE target and its main-thread
+//                decode and resample). Only the TX slice's channel encodes
+//                (refreshRadeTxSelection). Removing a slice destroys its
+//                RadeChannel. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -6735,33 +6742,26 @@ private:
     void setReceiveLayoutRestoreStatus(const QString& state, const QString& message);
     bool captureReceiveLayout(QString* error);
 
-    struct RadeRxTarget {
-        int sliceId{-1};
-        quint64 ownerSerial{0};
-        quint64 workerGeneration{0};
+    // RADE threads (2026-09-30): one receive route per RADE slice. The
+    // channel decodes on its own thread; the DSP worker feeds it and plays
+    // its speech (RxDspWorker::setRadeRxRoute). `serial` tells a route from
+    // the one that replaced it, so a destroyed channel retires only its own.
+    struct RadeRxRoute {
+        quint64 serial{0};
         QPointer<RadeChannel> channel;
         QPointer<SliceModel> slice;
-        bool admitted{false};
     };
 
-    struct PendingRadeRestore {
-        int sliceId{-1};
-        QPointer<SliceModel> slice;
-    };
-
-    quint64 publishRadeRxTarget(int sliceId, RadeChannel* channel,
-                                SliceModel* slice);
-    void clearRadeRxTarget(quint64 ownerSerial);
+    quint64 installRadeRxRoute(int sliceId, RadeChannel* channel,
+                               SliceModel* slice);
+    void retireRadeRxRoute(int sliceId, quint64 serial);
+    void queueRadeRxRoute(int sliceId, RadeChannel* channel);
+    // Only the TX slice's channel encodes and is handed to the TX worker;
+    // the TX slice's channel stops decoding while keyed. `keyed` is the MOX
+    // edge's own value when one is being handled, else mox().
+    void refreshRadeTxSelection(bool keyed);
     void attachRadeRxWorker(RxDspWorker* worker);
-    void queueRadeRxBinding(int sliceId, quint64 generation);
-    void onRadeRxBindingApplied(RxDspWorker* worker, quint64 generation);
-    void onRadeIqReady(RxDspWorker* worker, const QByteArray& iq,
-                       quint64 generation);
-    void onRadeSpeechReady(RadeChannel* channel, SliceModel* slice,
-                           int sliceId, const QByteArray& pcm);
-    void onRadeMoxStateChanged(bool active);
     bool canAdmitRadeSlice(int sliceId, const SliceModel* slice) const;
-    void resetRadeRxSpeechState();
 
     /// Remote-daemon R2 Task 5: the actual sizing body, shared by
     /// configureStreamPool (gated on Role::Local) and
@@ -6849,13 +6849,8 @@ private:
     QElapsedTimer m_nnrGovernorClock;
     QHash<int, qint64> m_nnrLimitReadbackPending;
     QThread*         m_dspThread{nullptr};
-    QMetaObject::Connection m_radeIqConnection;
-    QMetaObject::Connection m_radeBindingAppliedConnection;
-    RadeRxTarget m_radeRxTarget;
-    QMultiHash<quint64, PendingRadeRestore> m_pendingRadeRestores;
-    quint64 m_nextRadeRxOwnerSerial{0};
-    quint64 m_nextRadeRxWorkerGeneration{0};
-    quint64 m_radeRxCodecGenerationInCall{0};
+    QHash<int, RadeRxRoute> m_radeRxRoutes;
+    quint64 m_nextRadeRxRouteSerial{0};
 
     // Sub-models
     MeterModel    m_meterModel;
@@ -7725,15 +7720,9 @@ private:
     std::vector<float>         m_radeTxMonoScratch;
     std::vector<float>         m_radeTxIqScratch;
 
-    // Phase 3R K-bench (bench feedback): RADE RX speakers-side
-    // upsamplers. RadeChannel emits 24 kHz stereo float; AudioEngine
-    // expects 48 kHz. Without these upsamplers the speech plays at
-    // 2x speed ("chipmunk sounding"). One Resampler per leg so each
-    // channel sees a self-consistent stream.
-    std::unique_ptr<Resampler> m_radeRxSpeechL;
-    std::unique_ptr<Resampler> m_radeRxSpeechR;
-    std::vector<float>         m_radeRxLScratch;
-    std::vector<float>         m_radeRxRScratch;
+    // Phase 3R K-bench (bench feedback): the RADE RX speakers-side
+    // upsamplers (24 -> 48 kHz, one per leg) moved to each RADE route on
+    // the DSP worker (RxDspWorker::RadeRxRoute) with the RADE threads work.
 
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.

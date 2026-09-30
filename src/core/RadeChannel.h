@@ -170,6 +170,15 @@
 //                 resampler, so no modem audio held from one over starts
 //                 the next. NereusSDR-original. AI tooling: Anthropic
 //                 Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE threads: each channel decodes on
+//                 its own thread (RadeRxWorker, "RadeRx<id>"), fed by the
+//                 DSP thread. A mutex guards the codec state that both the
+//                 decoder thread and the main thread (TX, start, stop)
+//                 touch; the flags read across threads are atomic. The
+//                 tick log is per channel and names it. setTxSelected
+//                 keeps TX encoding to the TX slice's channel alone;
+//                 setRxGated stops decoding while that slice transmits.
+//                 NereusSDR-original. AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -178,7 +187,10 @@
 #include <QObject>
 #include <QByteArray>
 #include <QString>
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <mutex>
 
 // Forward-declare the lcRade logging category so other translation
 // units (notably RadioModel.cpp's wireRadeChannel extension at K4)
@@ -204,6 +216,8 @@ namespace NereusSDR {
 // destructors resolve.
 class Resampler;
 class RadeText;
+class RadeRxBridge;
+class RadeRxWorker;
 
 // Host-side wrapper for the RADE v1 codec. Lifecycle is:
 //
@@ -284,6 +298,49 @@ public:
     // The callsign channel (test seam and RadioModel's view).
     RadeText* textChannel() const { return m_textChannel.get(); }
 
+    // ── RADE threads (2026-09-30) ───────────────────────────────────────
+    //
+    // The slice this channel decodes for; named in the tick log and in the
+    // decoder thread's name. -1 until set.
+    void setChannelId(int id) { m_channelId.store(id, std::memory_order_relaxed); }
+    int channelId() const { return m_channelId.load(std::memory_order_relaxed); }
+
+    // Run one receive block through the codec and return the speech (24 kHz
+    // stereo float, one frame out for each frame in). Also emits
+    // rxSpeechReady with it. Thread-safe: the decoder thread calls it.
+    QByteArray decodeRxBlock(const QByteArray& iqSamples);
+
+    // Start this channel's decoder thread, "RadeRx<channelId>" (idempotent),
+    // and stop and join it. stopRxWorker waits for a block being decoded.
+    void startRxWorker();
+    void stopRxWorker();
+    bool rxWorkerRunning() const;
+    // The rings the DSP thread feeds and reads back; null when the decoder
+    // thread is not running.
+    std::shared_ptr<RadeRxBridge> rxBridge() const;
+
+    // While gated, received blocks are taken but not decoded (the slice is
+    // transmitting). Any thread.
+    void setRxGated(bool gated);
+    bool rxGated() const { return m_rxGated.load(std::memory_order_acquire); }
+
+    // Only the selected channel encodes microphone audio: RadioModel selects
+    // the TX slice's channel and deselects every other. Default selected, so
+    // a lone channel behaves as before.
+    void setTxSelected(bool selected) { m_txSelected.store(selected, std::memory_order_release); }
+    bool txSelected() const { return m_txSelected.load(std::memory_order_acquire); }
+
+#ifdef NEREUS_BUILD_TESTS
+    // Until every block handed to the decoder thread has been taken.
+    bool waitRxIdleForTest(int timeoutMs);
+    // Runs on the decoder thread before each block; a test can block in it.
+    void setRxStallHookForTest(std::function<void()> hook);
+    // The decoder thread's id, null when it is not running.
+    Qt::HANDLE rxThreadIdForTest() const;
+    QString rxThreadNameForTest() const;
+    int rxTickCountForTest() const { return m_rxTickCount.load(std::memory_order_relaxed); }
+#endif
+
 public slots:
     // Sideband selection hook.  Set true for RADE_U (upper) and false
     // for RADE_L (lower).  Stored on the channel; not yet consumed by
@@ -353,29 +410,38 @@ private:
     LPCNetEncState*      m_lpcnetEnc{nullptr};
     std::unique_ptr<void, FarganDeleter> m_fargan;
 
-    bool                 m_active{false};
-    bool                 m_synced{false};
+    // RADE threads: guards the codec handles, resamplers and accumulators,
+    // which the decoder thread (RX) and the main thread (TX, start, stop)
+    // both use. Never taken on the audio callback or the DSP thread.
+    mutable std::mutex   m_codecMutex;
+
+    std::atomic<bool>    m_active{false};
+    std::atomic<bool>    m_synced{false};
     bool                 m_farganWarmedUp{false};
+    std::atomic<int>     m_channelId{-1};
+    std::atomic<int>     m_rxTickCount{0};  // per channel, was a static
+    std::atomic<bool>    m_rxGated{false};
+    std::atomic<bool>    m_txSelected{true};
 
     // RADE-U / RADE-L sideband flag.  True for upper (RADE_U, default),
     // false for lower (RADE_L).  Set via setSideband() in SliceModel's
     // mode-swap path; not yet consumed by the I/Q routing layer at
     // v0.5.0.  K-bench follow-up will wire this into any future
     // spectral mirroring at the TX modulator stage.
-    bool                 m_sidebandUpper{true};
+    std::atomic<bool>    m_sidebandUpper{true};
 
     // Test seam counter: incremented every time rade_rx() runs in
     // processIq(). Cleared on start().
-    int                  m_radeRxCallCount{0};
+    std::atomic<int>     m_radeRxCallCount{0};
 
     // Test seam counter: incremented every time rade_tx() runs in
     // txEncode(). Cleared on start() and on resetTx().
-    int                  m_radeTxCallCount{0};
-    int                  m_resetTxCountForTest{0};  // R-R3-49 parity Task 3
+    std::atomic<int>     m_radeTxCallCount{0};
+    std::atomic<int>     m_resetTxCountForTest{0};  // R-R3-49 parity Task 3
 
     // RADE end-of-over callsigns: the EOO frame is queued; txEncode takes
     // no more speech until resetTx().
-    bool                 m_endOfOverQueued{false};
+    std::atomic<bool>    m_endOfOverQueued{false};
 
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the
@@ -413,6 +479,10 @@ private:
     // The end-of-over callsign channel (FreeDV's format). Built in the
     // constructor; its textDecoded leaves as rxTextDecoded(callsign, "").
     std::unique_ptr<RadeText> m_textChannel;
+
+    // RADE threads: the decoder thread. Declared last so it is destroyed
+    // first; the destructor also stops it before stop() runs.
+    std::unique_ptr<RadeRxWorker> m_rxWorker;
 };
 
 }  // namespace NereusSDR
