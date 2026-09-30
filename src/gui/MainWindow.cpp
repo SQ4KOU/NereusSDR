@@ -501,6 +501,13 @@
 //               the Take transmit control asks), then makes it the TX
 //               slice. Nothing keys. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30 - TX badge take fix round 1: only the badge's own take
+//               (its take id, its tx.take command id) makes the slice the TX
+//               slice; the take ends with the link, hosting, a refusal or
+//               another request; a slice answer is matched to the flag that
+//               asked; a remote badge offers a take only when the Core's
+//               refusal is the holder's. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30 - Desktop listening fix 3: a listened slice a layout change
 //               places on a remaining pan is a marker only there
 //               (m_markerOnlyPlacement): its stream is not subscribed to
@@ -2255,13 +2262,27 @@ void MainWindow::setDesktopStationController(DesktopStationController* controlle
         connect(replacement, &DesktopStationController::hostingStateChanged,
                 this, [this](bool enabled) {
             const QPointer<MainWindow> self(this);
+            // TX badge take: a take does not outlive hosting.
+            if (!enabled) { abandonTxBadgeTake(); }
             m_desktopHostStopConfirmed = !enabled;
             if (!desktopHosting() && m_desktopTakeDialog) { m_desktopTakeDialog->close(); }
             if (!self) { return; }
             refreshDesktopStationState();
         });
+        // TX badge take: the badge's take ended after its call.
+        connect(replacement, &DesktopStationController::takeFinished, this,
+                [this](quint64 takeId, bool held) {
+            if (held) {
+                settleTxBadgeHostTake(takeId);
+            } else if (takeId != 0 && takeId == m_txBadgeHostTakeId) {
+                // Not assigned, or replaced by another request: nothing
+                // moves, whoever holds transmit now.
+                abandonTxBadgeTake();
+            }
+        });
         connect(replacement, &QObject::destroyed, this, [this] {
             const QPointer<MainWindow> self(this);
+            abandonTxBadgeTake();
             m_desktopStationController = nullptr;
             m_desktopHostStopConfirmed = true;
             if (m_desktopTakeDialog) { m_desktopTakeDialog->close(); }
@@ -2398,9 +2419,6 @@ void MainWindow::refreshDesktopStationState()
         dialog->notifyReceiverSelectionChanged();
     }
     refreshForeignMarkers();
-    // TX badge take: once the station device holds transmit, the slice a
-    // badge click took it for becomes the TX slice.
-    finishTxBadgeTakeIfHeld();
 }
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
@@ -2450,6 +2468,11 @@ void MainWindow::handleDesktopTakeResult(
             const auto confirmed = controller->confirmTake(question);
             if (!self) { return; }
             handleDesktopTakeResult(confirmed);
+            if (!self) { return; }
+            // TX badge take: the answer may have ended the badge's take.
+            if (question.key == DesktopStationController::Key::Take) {
+                settleTxBadgeHostTake(confirmed.takeId);
+            }
         }
         if (m_txApplet) { m_txApplet->syncDesktopKeyState(); }
         refreshContainerControls();
@@ -2710,6 +2733,8 @@ void MainWindow::wireRemoteDevices()
             &MainWindow::refreshRemoteDeviceScreens);
     connect(m_stationClient, &StationClient::sessionEnded, this, [this]() {
         m_hadSliceThisSession = false;
+        // TX badge take: a take does not outlive the link.
+        abandonTxBadgeTake();
         refreshRemoteDeviceScreens();
     });
     if (m_txApplet) {
@@ -3240,8 +3265,12 @@ void MainWindow::runSliceChooserAction(SliceChooserAction action, int sliceId)
         success = tr("Listening to slice %1.").arg(letter);
         break;
     case SliceChooserAction::TakeControl:
-        success = tr("You control slice %1. Tuning is unchanged. Select transmit separately.")
-                      .arg(letter);
+        // TX badge take: the badge goes on to take transmit, and that
+        // take's own outcome speaks.
+        if (m_txBadgeTakeStage != TxBadgeStage::Slice || m_txBadgeTakeSlice != sliceId) {
+            success = tr("You control slice %1. Tuning is unchanged. Select transmit separately.")
+                          .arg(letter);
+        }
         break;
     case SliceChooserAction::Release:
         success = tr("You released slice %1.").arg(letter);
@@ -3406,7 +3435,7 @@ void MainWindow::refreshRemoteDeviceScreens()
     // TX badge take: each flag's badge follows who holds transmit, and a
     // take the badge started ends on its slice once transmit is here.
     refreshFlagTransmitGates();
-    finishTxBadgeTakeIfHeld();
+    continueTxBadgeTake();
 }
 
 // Parity Task 31 (A11, R-R3-49): display duplex (DUP). The window's
@@ -3493,25 +3522,43 @@ void MainWindow::ensureRemoteSession()
                                                AppSettings::profileOverride()));
         // Slice control plan Task 13: the chooser's answers and inventory.
         connect(m_stationClient, &StationClient::deviceCommandFinished, this,
-                [this](const QByteArray& verb, quint32, bool accepted, const QString& reason,
-                       bool awaitingConfirmation) {
+                [this](const QByteArray& verb, quint32 commandId, bool accepted,
+                       const QString& reason, bool awaitingConfirmation) {
                     const QPointer<MainWindow> self(this);
+                    // TX badge take: the flag request this answer ends, read
+                    // before the chooser clears it.
+                    const bool chooserAnswer = m_sliceChooser
+                        && m_sliceChooser->requestInFlight() == verb;
+                    const int flagSlice = m_flagRequestSlice;
                     finishSliceChooserRequest(verb, accepted, reason);
                     if (!self) { return; }
-                    // TX badge take: the slice take's answer goes on to
-                    // transmit; a take of transmit refused or cancelled
-                    // ends it (the refusal is shown as before).
+                    // TX badge take: the badge's own slice take goes on to
+                    // transmit; its own tx.take granted makes the slice the
+                    // TX slice, refused or cancelled ends it (the refusal
+                    // is shown as before).
                     if (!awaitingConfirmation) {
                         if (verb == QByteArrayLiteral("slice.takeControl")) {
-                            txBadgeSliceAnswered(m_txBadgeTakeSlice, accepted);
-                            if (!self) { return; }
+                            if (chooserAnswer && flagSlice >= 0
+                                && flagSlice == m_txBadgeTakeSlice) {
+                                txBadgeSliceAnswered(flagSlice, accepted);
+                                if (!self) { return; }
+                            }
                         } else if (m_txBadgeTakeStage == TxBadgeStage::Transmit
-                                   && ((verb == QByteArrayLiteral("tx.take") && !accepted)
-                                       || verb == QByteArrayLiteral("confirm.cancel"))) {
+                                   && m_txBadgeCommandId != 0
+                                   && verb == QByteArrayLiteral("tx.take")
+                                   && commandId == m_txBadgeCommandId) {
+                            m_txBadgeCommandId = 0;
+                            if (!accepted) {
+                                abandonTxBadgeTake();
+                            } else {
+                                m_txBadgeGranted = true;
+                                finishTxBadgeTakeIfHeld();
+                                if (!self) { return; }
+                            }
+                        } else if (m_txBadgeTakeStage == TxBadgeStage::Transmit
+                                   && m_txBadgeCommandId != 0
+                                   && verb == QByteArrayLiteral("confirm.cancel")) {
                             abandonTxBadgeTake();
-                        } else if (verb == QByteArrayLiteral("tx.take") && accepted) {
-                            finishTxBadgeTakeIfHeld();
-                            if (!self) { return; }
                         }
                     }
                     // Slice control plan Task 16 (ruling U1): a slice this
@@ -3525,6 +3572,8 @@ void MainWindow::ensureRemoteSession()
                 });
         // A request still waiting when the link drops is not answered.
         connect(m_stationClient, &StationClient::sessionEnded, this, [this](const QString&) {
+            // TX badge take: nothing it waits on is answered now.
+            abandonTxBadgeTake();
             if (m_sliceChooser) {
                 m_sliceChooser->linkLost();
             }
@@ -14661,12 +14710,21 @@ void MainWindow::applyTxBadgeOffer(VfoWidget* flag) const
     // nobody holds it: the take is at once).
     bool takesTransmit = false;
     QString holderName;
+    // Why this window cannot take transmit now, when that is all that
+    // holds the badge (a hosting take refused while transmit changes hands).
+    QString takeRefusal;
     bool sliceTakes = false;
     bool onAir = false;
     if (desktopHosting()) {
         StationServer* server = m_desktopStationController->server();
         TransmitHolder* holder = server ? server->transmitHolder() : nullptr;
-        if (holder && !desktopOwnsTransmit()) {
+        const TransmitHolder::TakeAnswer answer = holder && !desktopOwnsTransmit()
+            ? holder->askTake(SliceOwnership::stationDevice())
+            : TransmitHolder::TakeAnswer{};
+        if (holder && !desktopOwnsTransmit()
+            && answer.verdict == TransmitHolder::TakeVerdict::Refuse) {
+            takeRefusal = answer.refusal.text;
+        } else if (holder && !desktopOwnsTransmit()) {
             takesTransmit = true;
             if (const std::optional<TransmitHolder::Holder> current = holder->holder()) {
                 TakeTransmitDialog::Holder shown;
@@ -14678,11 +14736,16 @@ void MainWindow::applyTxBadgeOffer(VfoWidget* flag) const
         sliceTakes = hostingSlices() != nullptr;
         onAir = server && server->sliceOnAir(id);
     } else if (m_radioModel && !m_radioModel->ownsLocalDsp() && m_stationClient) {
-        // The Core takes this window's keys and tx.take; a refusal for any
-        // other reason than the holder leaves the badge held.
+        // The Core takes this window's keys and tx.take. Only a refusal
+        // that is the holder's (another device holds or is on the air) is
+        // one a take answers; any other (receive only, not paired, not
+        // ready) holds the badge with the Core's words, as before.
         const bool elsewhere = m_stationClient->transmitHeldElsewhere();
+        const QString code = m_stationClient->capabilities().txRefusalCode;
+        const bool holderRefusal = code == QLatin1String(TxRefusals::kOtherDeviceHolds)
+            || code == QLatin1String(TxRefusals::kHolderOnAir);
         if (m_stationClient->transmitTakeAvailable() && !m_stationClient->holdsTransmitHere()
-            && (transmitControlsPermitted() || elsewhere)) {
+            && (transmitControlsPermitted() || (elsewhere && holderRefusal))) {
             takesTransmit = true;
             if (elsewhere) {
                 holderName = TakeTransmitDialog::shortNameOf(
@@ -14702,6 +14765,8 @@ void MainWindow::applyTxBadgeOffer(VfoWidget* flag) const
             offer.heldReason = SliceAccessController::takeWhileTransmittingWords(id);
         } else if (!flag->sliceAccess().takeHeldReason.isEmpty()) {
             offer.heldReason = flag->sliceAccess().takeHeldReason;
+        } else if (sliceTakes && !holds && !takeRefusal.isEmpty()) {
+            offer.heldReason = takeRefusal;
         } else if (sliceTakes && (holds || takesTransmit)) {
             offer.offered = true;
             offer.toolTip = !holds && !holderName.isEmpty()
@@ -14709,6 +14774,9 @@ void MainWindow::applyTxBadgeOffer(VfoWidget* flag) const
                       .arg(holderName)
                 : tr("Take control of this slice and make it the TX slice");
         }
+    } else if (!holds && !takeRefusal.isEmpty() && windowControlsSlice(id)) {
+        // Case 2 while the take is refused for now: held with its reason.
+        offer.heldReason = takeRefusal;
     } else if (!holds && takesTransmit && windowControlsSlice(id)) {
         // Case 2: this window's slice, and it does not hold transmit.
         offer.offered = true;
@@ -14750,7 +14818,54 @@ void MainWindow::txBadgeSliceAnswered(int sliceId, bool accepted)
         abandonTxBadgeTake();
         return;
     }
+    // A remote window: the former controller transmitting on this slice
+    // loses it with the slice (ruling Q8), and the Core's word of that
+    // follows its answer. Wait for it, so the question is asked only of a
+    // holder that still holds.
+    if (!desktopHosting() && m_stationClient && m_stationClient->transmitHeldElsewhere()
+        && m_stationClient->transmitState()->txSliceId() == sliceId) {
+        m_txBadgeTakeStage = TxBadgeStage::Transmit;
+        m_txBadgeAwaitingHolder = true;
+        // Past this, the take goes on with what the Core last said.
+        constexpr int kTxBadgeHolderWaitMs = 1000;
+        const quint64 serial = m_txBadgeSerial;
+        QTimer::singleShot(kTxBadgeHolderWaitMs, this, [this, serial, sliceId]() {
+            if (serial != m_txBadgeSerial || !m_txBadgeAwaitingHolder) { return; }
+            m_txBadgeAwaitingHolder = false;
+            takeTransmitForTxBadge(sliceId);
+        });
+        return;
+    }
     takeTransmitForTxBadge(sliceId);
+}
+
+void MainWindow::continueTxBadgeTake()
+{
+    if (m_txBadgeTakeStage != TxBadgeStage::Transmit || !m_stationClient) { return; }
+    const bool elsewhere = m_stationClient->transmitHeldElsewhere();
+    const int sliceId = m_txBadgeTakeSlice;
+    if (m_txBadgeAwaitingHolder) {
+        if (elsewhere && m_stationClient->transmitState()->txSliceId() == sliceId) { return; }
+        m_txBadgeAwaitingHolder = false;
+        takeTransmitForTxBadge(sliceId);
+        return;
+    }
+    if (m_txBadgeAsk && m_txBadgeCommandId == 0 && !elsewhere) {
+        // Nobody else holds transmit now: the question is not needed, and
+        // the take goes on at once (or is already done).
+        QDialog* ask = m_txBadgeAsk.data();
+        m_txBadgeAsk.clear();
+        disconnect(ask, nullptr, this, nullptr);
+        const QPointer<MainWindow> self(this);
+        ask->reject();
+        if (!self || m_txBadgeTakeStage != TxBadgeStage::Transmit
+            || m_txBadgeTakeSlice != sliceId) {
+            return;
+        }
+        takeTransmitForTxBadge(sliceId);
+        return;
+    }
+    finishTxBadgeTakeIfHeld();
 }
 
 void MainWindow::takeTransmitForTxBadge(int sliceId)
@@ -14758,6 +14873,7 @@ void MainWindow::takeTransmitForTxBadge(int sliceId)
     m_txBadgeTakeSlice = sliceId;
     m_txBadgeTakeStage = TxBadgeStage::Transmit;
     if (windowHoldsTransmit()) {
+        m_txBadgeGranted = true;
         finishTxBadgeTakeIfHeld();
         return;
     }
@@ -14766,19 +14882,23 @@ void MainWindow::takeTransmitForTxBadge(int sliceId)
         // nothing (DesktopStationController::Key::Take).
         const QPointer<MainWindow> self(this);
         if (m_desktopTakeDialog) { m_desktopTakeDialog->close(); }
-        if (!self || !desktopHosting()) { return; }
+        if (!self || !desktopHosting() || m_txBadgeTakeStage != TxBadgeStage::Transmit) {
+            return;
+        }
         const QPointer<DesktopStationController> controller(m_desktopStationController);
         const DesktopStationController::RequestResult result = controller->requestTakeTransmit();
         if (!self) { return; }
+        m_txBadgeHostTakeId = result.takeId;
         handleDesktopTakeResult(result);
         if (!self) { return; }
-        finishTxBadgeTakeIfHeld();
+        settleTxBadgeHostTake(result.takeId);
         return;
     }
     if (!m_stationClient || !m_multiDevice) {
         abandonTxBadgeTake();
         return;
     }
+    const quint64 serial = m_txBadgeSerial;
     if (m_stationClient->transmitHeldElsewhere()) {
         // The pan's TAKE TX pill's question; its answer sends tx.take.
         m_multiDevice->askTakeTransmit();
@@ -14788,27 +14908,64 @@ void MainWindow::takeTransmitForTxBadge(int sliceId)
             abandonTxBadgeTake();
             return;
         }
-        connect(ask, &QDialog::rejected, this, [this]() {
-            if (m_txBadgeTakeStage == TxBadgeStage::Transmit) { abandonTxBadgeTake(); }
+        m_txBadgeAsk = ask;
+        // After the controller's own handler, which sends tx.take.
+        connect(ask, &QDialog::accepted, this, [this, serial]() {
+            if (serial != m_txBadgeSerial || m_txBadgeTakeStage != TxBadgeStage::Transmit) {
+                return;
+            }
+            m_txBadgeAsk.clear();
+            m_txBadgeCommandId = m_multiDevice ? m_multiDevice->lastTakeCommandId() : 0;
+            if (m_txBadgeCommandId == 0) { abandonTxBadgeTake(); }
+        });
+        connect(ask, &QDialog::rejected, this, [this, serial]() {
+            if (serial == m_txBadgeSerial && m_txBadgeTakeStage == TxBadgeStage::Transmit) {
+                abandonTxBadgeTake();
+            }
         });
         return;
     }
     // Nobody holds transmit: the Core takes it at once.
-    if (m_stationClient->requestTakeTransmit(false, 0, false) == 0) {
+    m_txBadgeCommandId = m_stationClient->requestTakeTransmit(false, 0, false);
+    if (m_txBadgeCommandId == 0) {
         abandonTxBadgeTake();
     }
 }
 
+void MainWindow::settleTxBadgeHostTake(quint64 takeId)
+{
+    if (m_txBadgeTakeStage != TxBadgeStage::Transmit || takeId == 0
+        || takeId != m_txBadgeHostTakeId) {
+        return;
+    }
+    // Still waiting: on the question, or on the Core's grant.
+    if (m_desktopStationController && m_desktopStationController->takeInFlight() == takeId) {
+        return;
+    }
+    if (!desktopHosting() || !desktopOwnsTransmit()) {
+        // Refused, not assigned, or replaced by another request.
+        abandonTxBadgeTake();
+        return;
+    }
+    m_txBadgeGranted = true;
+    finishTxBadgeTakeIfHeld();
+}
+
 void MainWindow::finishTxBadgeTakeIfHeld()
 {
-    if (m_txBadgeTakeStage != TxBadgeStage::Transmit || !windowHoldsTransmit()) { return; }
+    if (m_txBadgeTakeStage != TxBadgeStage::Transmit || !m_txBadgeGranted
+        || !windowHoldsTransmit()) {
+        return;
+    }
     const int sliceId = m_txBadgeTakeSlice;
     abandonTxBadgeTake();
+    const quint64 serial = m_txBadgeSerial;
     // Queued: the Core binds a new holder's transmit slice as the take
     // completes (a slice it took is not chosen for it, ruling Q8), and the
     // choice made here must come after that binding, not before it.
-    QTimer::singleShot(0, this, [this, sliceId]() {
-        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !windowHoldsTransmit()) {
+    QTimer::singleShot(0, this, [this, sliceId, serial]() {
+        if (serial != m_txBadgeSerial || !m_radioModel || !m_radioModel->sliceById(sliceId)
+            || !windowHoldsTransmit()) {
             return;
         }
         // Case 1 from here: the arbiter drops MOX before it moves transmit
@@ -14821,6 +14978,12 @@ void MainWindow::abandonTxBadgeTake()
 {
     m_txBadgeTakeSlice = -1;
     m_txBadgeTakeStage = TxBadgeStage::None;
+    m_txBadgeHostTakeId = 0;
+    m_txBadgeCommandId = 0;
+    m_txBadgeGranted = false;
+    m_txBadgeAwaitingHolder = false;
+    m_txBadgeAsk.clear();
+    ++m_txBadgeSerial;
 }
 
 void MainWindow::refreshFlagTransmitGates()

@@ -53,6 +53,9 @@
 //               access entries, naming the hosting desktop for a slice the
 //               station device holds. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: TX badge take fix round 1: lastTakeCommandId(), the
+//               tx.take the window's own take question sent. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -119,6 +122,9 @@ public:
     /// The dialog open now (a question, or the window's own take question),
     /// or null.
     QDialog* openDialog() const { return m_dialog.data(); }
+    /// The tx.take the window's own take question sent when it was last
+    /// accepted (0: none, or the request could not be sent).
+    quint32 lastTakeCommandId() const { return m_lastTakeCommandId; }
     QList<NoticeCard*> noticeCards() const;
 
     /// Take-over parity: why a notice's Take it back is shown off, or empty
@@ -150,6 +156,7 @@ private:
     QPointer<QDialog> m_dialog;
     /// The question the open dialog answers (0 for the window's own ask).
     qint64 m_dialogQuestionId = 0;
+    quint32 m_lastTakeCommandId = 0;
     /// The open dialog is the fifth-device choice.
     bool m_dialogIsHeld = false;
     QHash<qint64, QPointer<NoticeCard>> m_cards;

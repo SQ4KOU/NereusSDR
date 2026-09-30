@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: TX badge take fix round 1: peerInfoFor() counts a token
+//               session as paired under setTokenSessionsMayTransmitForTest()
+//               (tests only). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-30: Shared-input filters (ruling (d)): radio's
 //               rxFilter0LowPassReason and rxFilter0LowPassSlice go to a
 //               peer that declared rxFilterLowPass 1, which is sent
@@ -9367,8 +9371,9 @@ SessionPeerInfo StationServer::peerInfoFor(SessionTransport* transport) const
     info.deviceId = it->sessionDeviceId;
     info.declaresRemoteTx = it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1);
-    info.paired = !it->deviceId.isEmpty() && !it->sessionDeviceId.isEmpty()
-        && !it->sessionDeviceId.startsWith("token:");
+    info.paired = (!it->deviceId.isEmpty() && !it->sessionDeviceId.isEmpty()
+                   && !it->sessionDeviceId.startsWith("token:"))
+        || (m_tokenSessionsMayTransmitForTest && !it->sessionDeviceId.isEmpty());
     info.snapshotComplete = it->snapshotComplete;
     return info;
 }

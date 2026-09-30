@@ -1763,8 +1763,6 @@ private:
     // Slice control plan Task 13: the chooser (a popup), the request it
     // waits on (the verb, or "addSlice"), and the words for its success.
     QPointer<SliceChooser> m_sliceChooser;
-    // Task 14a: the flag whose menu sent the request in flight (-1: none);
-    // it shows the wait and then the Core's answer.
     // TX badge take (JJ's ruling, 2026-09-30): a TX badge click on a slice
     // this window cannot make the TX slice at once takes what it needs, in
     // order: the slice (slice.takeControl, as the flag's Take control),
@@ -1781,13 +1779,40 @@ private:
     // The Core answered the slice take the badge started.
     void txBadgeSliceAnswered(int sliceId, bool accepted);
     void takeTransmitForTxBadge(int sliceId);
-    // Once this window holds transmit, the slice becomes the TX slice.
+    // A hosting take the badge started ended within its call, or later
+    // (DesktopStationController::takeFinished names it).
+    void settleTxBadgeHostTake(quint64 takeId);
+    // A remote window's badge take after a change on the Core's transmit
+    // state: the wait for the holder's change after a slice take ends, a
+    // question no longer needed gives way to the take at once, and a
+    // granted take ends on its slice.
+    void continueTxBadgeTake();
+    // Once this window holds transmit through the badge's own take, the
+    // slice becomes the TX slice.
     void finishTxBadgeTakeIfHeld();
     void abandonTxBadgeTake();
+    // Task 14a: the flag whose menu sent the request in flight (-1: none);
+    // it shows the wait and then the Core's answer.
     int m_flagRequestSlice{-1};
     // TX badge take: the slice a badge click is taking, and its stage.
     int m_txBadgeTakeSlice{-1};
     TxBadgeStage m_txBadgeTakeStage{TxBadgeStage::None};
+    // The badge's own take of transmit: the hosting take's id, the remote
+    // tx.take's command id, and whether it was granted. Only that take's
+    // grant makes the slice the TX slice.
+    quint64 m_txBadgeHostTakeId{0};
+    quint32 m_txBadgeCommandId{0};
+    bool m_txBadgeGranted{false};
+    // Remote case 3: the Core answers slice.takeControl before it sends
+    // the change of holder that take made (ruling Q8 moves or frees the
+    // former controller's transmit), so the badge waits for that change
+    // before it chooses between the question and the take at once.
+    bool m_txBadgeAwaitingHolder{false};
+    // The take question the badge opened (MultiDeviceController's dialog).
+    QPointer<QDialog> m_txBadgeAsk;
+    // Bumped whenever a badge take starts or ends, so a queued TX-slice
+    // choice from an earlier one does nothing.
+    quint64 m_txBadgeSerial{0};
     // Slice control plan Task 16: where this window shows a slice it only
     // listens to, when that slice's own pan key names no pan here (slice id
     // to pan id). Never written to the slice: its pan key belongs to its

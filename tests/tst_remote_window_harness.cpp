@@ -1822,12 +1822,6 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(client->stationLinkReady(), 10000);
         QVERIFY(client->sessionHolderAvailable());
         QVERIFY(client->remoteTransmitAvailable());
-        // The Core's radio is not on the air here, so it says transmit is
-        // permitted as a Core with its radio up would.
-        StationCapabilities granted = h.server().buildCapabilities();
-        granted.txPermitted = true;
-        h.pushCapabilities(granted);
-        QTRY_VERIFY(client->capabilities().txPermitted);
         TxSliceArbiter* arbiter = h.station().txSliceArbiter();
         QVERIFY(arbiter);
 
@@ -1850,8 +1844,16 @@ private slots:
         };
         QTRY_VERIFY(letterB() != nullptr);
 
-        // Another device holds transmit: the letter row is held with the
-        // Core's reason; the badge offers the take.
+        // Refusals stay the Core's (fix round 1): this bench window is not
+        // paired, so the Core refuses its transmit in its own words and the
+        // badge is held with them, whoever holds transmit. A click asks
+        // nothing and sends nothing.
+        const QString notPaired = TxRefusals::deviceNotPaired().text;
+        QSignalSpy finished(client, &StationClient::deviceCommandFinished);
+        QTRY_COMPARE(client->capabilities().txRefusalReason, notPaired);
+        QTRY_VERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), notPaired);
+        flag->simulateTxBadgeClick();
         QObject phoneSession;
         const QByteArray phone = admitPhone(h, phoneSession);
         QVERIFY(!phone.isEmpty());
@@ -1864,6 +1866,23 @@ private slots:
         holder->transferTo(phoneHolder, QStringLiteral("test"));
         QTRY_VERIFY(client->transmitHeldElsewhere());
         QVERIFY(!client->holdsTransmitHere());
+        QTest::qWait(kSettleMs);
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), notPaired);
+        flag->simulateTxBadgeClick();
+        QTest::qWait(kSettleMs);
+        QVERIFY(h.window()->findChild<TakeTransmitDialog*>() == nullptr);
+        QVERIFY(finished.isEmpty());
+        QVERIFY(holder->isHeldBy(phone));
+
+        // A Core that permits this window's transmit (its radio up; the
+        // bench Core has none, so the capability says so for it): another
+        // device holding transmit is what a take answers. The letter row is
+        // held with the Core's reason; the badge offers the take.
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
         QTRY_COMPARE(letterB()->toolTip(), TxRefusals::notHolder().text);
         QVERIFY(!letterB()->isEnabled());
         QTRY_VERIFY(badge->isEnabled());
@@ -1883,7 +1902,6 @@ private slots:
         // Taken: the Core answers. This bench window is a token session,
         // which the Core never lets transmit, so it refuses in its own
         // words; nothing moves and the badge still offers the take.
-        const QString notPaired = TxRefusals::deviceNotPaired().text;
         badge->click();
         QTRY_VERIFY((question = h.window()->findChild<TakeTransmitDialog*>()) != nullptr);
         question->takeButton()->click();
@@ -1898,7 +1916,7 @@ private slots:
         QTRY_COMPARE(badge->toolTip(),
                      QStringLiteral("Take transmit and make this the TX slice"));
         QVERIFY(badge->isEnabled());
-        QSignalSpy finished(client, &StationClient::deviceCommandFinished);
+        finished.clear();
         badge->click();
         QTRY_VERIFY(!finished.isEmpty());
         QCOMPARE(finished.first().at(0).toByteArray(), QByteArrayLiteral("tx.take"));
@@ -1923,6 +1941,191 @@ private slots:
         QTRY_COMPARE(h.txSliceCommands(), QList<int>({1}));
         letterB()->click();
         QTRY_COMPARE(h.txSliceCommands(), QList<int>({1, 1}));
+        QVERIFY(!h.station().mox());
+    }
+
+    // TX badge take fix round 1: a window the Core lets transmit (the
+    // bench window counted as paired). Case 2: the take question's take
+    // brings transmit here and then tx.setTxSlice. Case 3 on the phone's
+    // only slice: the slice take frees transmit (ruling Q8), and the Core
+    // sends the change of holder before its answer to slice.takeControl,
+    // so no question is asked and tx.take goes out at once. Nothing keys.
+    void remoteTxBadgeTakesTransmitOnASessionTheCoreLetsTransmit()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        TransmitHolder::Holder phoneHolder;
+        phoneHolder.deviceId = phone;
+        phoneHolder.name = QStringLiteral("Living room iPhone");
+        phoneHolder.shortName = QStringLiteral("iPhone");
+        phoneHolder.kind = QStringLiteral("phone");
+        TransmitHolder* holder = h.server().transmitHolder();
+        TxSliceArbiter* arbiter = h.station().txSliceArbiter();
+        QVERIFY(arbiter);
+        const QByteArray self = QByteArrayLiteral("token:1");
+
+        // Case 2.
+        holder->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        QTRY_VERIFY(flagFor(h, 1) != nullptr);
+        auto* badge = flagFor(h, 1)->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badge);
+        QTRY_VERIFY(badge->isEnabled());
+        QTRY_COMPARE(badge->toolTip(),
+                     QStringLiteral("Take transmit from iPhone and make this the TX slice"));
+        badge->click();
+        QPointer<TakeTransmitDialog> question;
+        QTRY_VERIFY((question = h.window()->findChild<TakeTransmitDialog*>()) != nullptr);
+        question->takeButton()->click();
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QVERIFY(holder->isHeldBy(self));
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1}));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), 1);
+        QVERIFY(!h.station().mox());
+
+        // Case 3 on the phone's only slice.
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        holder->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        ownership->setOwner(1, phone);
+        // The phone's transmit is on B, the one slice it has.
+        if (arbiter->txBoundSliceId() != 1) {
+            QVERIFY(arbiter->requestHandoff(1, phone));
+        }
+        QTRY_COMPARE(arbiter->txBoundSliceId(), 1);
+        QTRY_VERIFY(flagFor(h, 1) && flagFor(h, 1)->isListening());
+        badge = flagFor(h, 1)->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QTRY_VERIFY(badge->isEnabled());
+        QTRY_COMPARE(badge->toolTip(),
+                     QStringLiteral("Take control of this slice, then take transmit from iPhone"));
+        QSignalSpy finished(client, &StationClient::deviceCommandFinished);
+        int dialogs = 0;
+        QTimer watch;
+        QObject::connect(&watch, &QTimer::timeout, &watch, [&h, &dialogs]() {
+            if (h.window()->findChild<TakeTransmitDialog*>()) { ++dialogs; }
+        });
+        watch.start(5);
+        badge->click();
+        QTRY_COMPARE(ownership->mark(1).owner, self);
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1, 1}));
+        QTest::qWait(kSettleMs);
+        watch.stop();
+        QCOMPARE(dialogs, 0);
+        QVERIFY(h.window()->findChild<TakeTransmitDialog*>() == nullptr);
+        QStringList verbs;
+        for (const QList<QVariant>& answer : finished) {
+            verbs.append(QString::fromLatin1(answer.at(0).toByteArray()));
+        }
+        QCOMPARE(verbs, QStringList({QStringLiteral("slice.takeControl"),
+                                     QStringLiteral("tx.take"),
+                                     QStringLiteral("tx.setTxSlice")}));
+        QVERIFY(!h.station().mox());
+    }
+
+    // TX badge take fix round 1: a badge take does not outlive the link. A
+    // take question open when the link drops, and a slice take sent just
+    // before it drops, are over: after the redial a take of transmit this
+    // window makes by other means selects no slice, and the operator's own
+    // Take control of a slice goes on to nothing. Nothing keys.
+    void remoteTxBadgeTakeDoesNotOutliveTheLink()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        TransmitHolder::Holder phoneHolder;
+        phoneHolder.deviceId = phone;
+        phoneHolder.name = QStringLiteral("Living room iPhone");
+        phoneHolder.shortName = QStringLiteral("iPhone");
+        phoneHolder.kind = QStringLiteral("phone");
+        TransmitHolder* holder = h.server().transmitHolder();
+
+        // The take question open when the link drops.
+        holder->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        QTRY_VERIFY(flagFor(h, 1) != nullptr);
+        auto* badge = flagFor(h, 1)->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QTRY_VERIFY(badge->isEnabled());
+        badge->click();
+        QTRY_VERIFY(h.window()->findChild<TakeTransmitDialog*>() != nullptr);
+        h.dropLink();
+        QTRY_VERIFY_WITH_TIMEOUT(h.acceptedConnections() == 2
+                                 && client->isHandshakeComplete(), 10000);
+        // The bench Core numbers each token session it accepts.
+        client->setTokenSessionHolderForTest(QStringLiteral("token:2"));
+        // The client names itself per session from the handshake and each
+        // capabilities message; one more applies the new token id.
+        h.pushCapabilities(granted);
+        QTRY_VERIFY_WITH_TIMEOUT(client->transmitTakeAvailable(), 10000);
+        holder->release(phone, QStringLiteral("test"));
+        QTRY_VERIFY(!client->transmitHeldElsewhere());
+        QVERIFY(client->requestTakeTransmit(false, 0, false) != 0);
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QTest::qWait(kSettleMs);
+        QVERIFY(h.txSliceCommands().isEmpty());
+
+        // A slice take sent as the link drops.
+        holder->release(QByteArrayLiteral("token:2"), QStringLiteral("test"));
+        QTRY_VERIFY(!client->holdsTransmitHere());
+        // The redialled window is a new token session to the bench Core,
+        // on the slices the Core gave it; the phone takes one of them and
+        // this window listens.
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        QTRY_VERIFY(!ownership->joinedBy(QByteArrayLiteral("token:2")).isEmpty());
+        const int sid = ownership->joinedBy(QByteArrayLiteral("token:2")).constFirst();
+        ownership->setOwner(sid, phone);
+        QTRY_VERIFY(flagFor(h, sid) && flagFor(h, sid)->isListening());
+        badge = flagFor(h, sid)->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QTRY_VERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(),
+                 QStringLiteral("Take control of this slice and make it the TX slice"));
+        badge->click();
+        h.dropLink();
+        QTRY_VERIFY_WITH_TIMEOUT(h.acceptedConnections() == 3
+                                 && client->isHandshakeComplete(), 10000);
+        client->setTokenSessionHolderForTest(QStringLiteral("token:3"));
+        h.pushCapabilities(granted);
+        QTRY_VERIFY_WITH_TIMEOUT(client->remoteSliceAccessAvailable(), 10000);
+        // Again on a slice the Core gave the redialled window, which the
+        // phone takes: the operator's own Take control from the menu.
+        QTRY_VERIFY(!ownership->joinedBy(QByteArrayLiteral("token:3")).isEmpty());
+        const int later = ownership->joinedBy(QByteArrayLiteral("token:3")).constFirst();
+        ownership->setOwner(later, phone);
+        QTRY_VERIFY(flagFor(h, later) && flagFor(h, later)->isListening());
+        auto* chooser = h.window()->findChild<SliceChooser*>();
+        QVERIFY(chooser);
+        QSignalSpy finished(client, &StationClient::deviceCommandFinished);
+        emit chooser->takeControlRequested(later);
+        QTRY_COMPARE(ownership->mark(later).owner, QByteArrayLiteral("token:3"));
+        QTest::qWait(kSettleMs);
+        for (const QList<QVariant>& answer : finished) {
+            QVERIFY(answer.at(0).toByteArray() != QByteArrayLiteral("tx.take"));
+        }
+        QVERIFY(!client->holdsTransmitHere());
+        QVERIFY(h.txSliceCommands().isEmpty());
         QVERIFY(!h.station().mox());
     }
 

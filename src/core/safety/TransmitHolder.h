@@ -72,6 +72,10 @@
 //               releaseStationTake removed (the take replaces it). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: TX badge take fix round 1: hooks(), so a window test can
+//               read MOX as held on and reach a take the Core does not
+//               assign. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -141,6 +145,8 @@ public:
     explicit TransmitHolder(QObject* parent = nullptr);
 
     void setHooks(Hooks hooks);
+    /// The hooks set now (a test replaces one and sets them back).
+    const Hooks& hooks() const { return m_hooks; }
 
     State state() const { return m_state; }
     /// The holder, with its words read now; nullopt while unheld (and

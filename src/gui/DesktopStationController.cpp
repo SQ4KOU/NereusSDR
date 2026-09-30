@@ -11,6 +11,8 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include <utility>
+
 namespace NereusSDR {
 
 DesktopStationController::DesktopStationController(RadioModel* localModel,
@@ -68,6 +70,7 @@ bool DesktopStationController::start(bool profileOwnershipEstablished)
 
 void DesktopStationController::stop()
 {
+    supersedeTake();
     ++m_intentGeneration;
     m_question.reset();
     m_moxRequested = false;
@@ -130,6 +133,7 @@ DesktopStationController::RequestResult DesktopStationController::requestTune(bo
 
 DesktopStationController::RequestResult DesktopStationController::requestTakeTransmit()
 {
+    supersedeTake();
     ++m_intentGeneration;
     m_question.reset();
     if (!m_model || !enabled() || !server()) {
@@ -138,11 +142,39 @@ DesktopStationController::RequestResult DesktopStationController::requestTakeTra
     if (stationHoldsTransmit()) {
         return {RequestState::NoChange, {}, {}};
     }
-    return takeAndKey(Key::Take, std::nullopt, std::nullopt);
+    const quint64 takeId = ++m_nextTakeId;
+    m_takeInFlight = takeId;
+    const QPointer<DesktopStationController> self(this);
+    const RequestResult result = takeAndKey(Key::Take, std::nullopt, std::nullopt);
+    if (!self) { return result; }
+    return settleTake(takeId, result);
+}
+
+void DesktopStationController::supersedeTake()
+{
+    const quint64 takeId = std::exchange(m_takeInFlight, 0);
+    if (takeId != 0) {
+        emit takeFinished(takeId, false);
+    }
+}
+
+DesktopStationController::RequestResult DesktopStationController::settleTake(
+    quint64 takeId, RequestResult result)
+{
+    result.takeId = takeId;
+    // Ended within the call: refused, or held already. A take the Core
+    // grants later, or a question shown, stays in flight.
+    if (m_takeInFlight == takeId
+        && (result.state == RequestState::Refused
+            || (result.state == RequestState::Pending && stationHoldsTransmit()))) {
+        m_takeInFlight = 0;
+    }
+    return result;
 }
 
 DesktopStationController::RequestResult DesktopStationController::request(Key key, bool on)
 {
+    supersedeTake();
     ++m_intentGeneration;
     m_question.reset();
     if (!on) {
@@ -178,12 +210,19 @@ DesktopStationController::RequestResult DesktopStationController::confirmTake(
         || shown.holderShortName != m_question->holderShortName) {
         return {RequestState::Refused, {}, QStringLiteral("That transmit question is no longer current.")};
     }
+    // TX badge take: the answer to a take's question continues that take.
+    const quint64 takeId = shown.key == Key::Take ? m_takeInFlight : 0;
+    if (takeId == 0) { supersedeTake(); }
     ++m_intentGeneration;
     m_question.reset();
     if (!m_model || !enabled() || !server()) {
+        if (takeId != 0) { m_takeInFlight = 0; }
         return {RequestState::Refused, {}, QStringLiteral("This computer is not hosting a Core.")};
     }
-    return takeAndKey(shown.key, shown.holderEpoch, shown.holderKeyed);
+    const QPointer<DesktopStationController> self(this);
+    const RequestResult result = takeAndKey(shown.key, shown.holderEpoch, shown.holderKeyed);
+    if (!self || takeId == 0) { return result; }
+    return settleTake(takeId, result);
 }
 
 DesktopStationController::RequestResult DesktopStationController::takeAndKey(
@@ -204,6 +243,17 @@ DesktopStationController::RequestResult DesktopStationController::takeAndKey(
     const quint64 intent = m_intentGeneration;
     const TransmitHolder::TakeVerdict verdict = stationServer->takeTransmitForStation(
         shownEpoch, shownKeyed, [self, serverRef, modelRef, intent, key](bool assigned) {
+            // TX badge take: the take ends here, held or not.
+            if (key == Key::Take) {
+                if (!self || self->m_intentGeneration != intent || self->m_takeInFlight == 0) {
+                    return;
+                }
+                const quint64 takeId = std::exchange(self->m_takeInFlight, 0);
+                emit self->takeFinished(takeId, assigned && serverRef && modelRef
+                                                    && self->server() == serverRef
+                                                    && self->stationHoldsTransmit());
+                return;
+            }
             if (!self || !serverRef || !modelRef || !assigned
                 || self->m_intentGeneration != intent || self->server() != serverRef
                 || self->m_model != modelRef || !self->stationHoldsTransmit()) {

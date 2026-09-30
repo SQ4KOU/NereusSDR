@@ -2081,6 +2081,139 @@ private slots:
         controller.stop();
     }
 
+    // TX badge take fix round 1: only the badge's own take makes its slice
+    // the TX slice. A keyed holder is unkeyed and taken over through the
+    // badge. A take the Core does not assign (MOX read on past the wait,
+    // stopNotConfirmed) and a take cut off by hosting stopping leave
+    // nothing pending, so a later grant of transmit selects no slice.
+    // Nothing keys: MOX is read as on through the holder's hook only.
+    void hostTxBadgeTakeEndsWithNothingPending()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        const int bId = model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(aId >= 0 && bId >= 0);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        TransmitHolder* holder = server->transmitHolder();
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-tx-badge-04"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        TransmitHolder::KeyRequest key;
+        key.deviceId = phone.deviceId;
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+        TxSliceArbiter* arbiter = model->txSliceArbiter();
+        QVERIFY(arbiter);
+        VfoWidget* flagA = flagFor(window, aId);
+        VfoWidget* flagB = flagFor(window, bId);
+        QVERIFY(flagA && flagB);
+        auto* badgeA = flagA->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        auto* badgeB = flagB->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badgeA && badgeB);
+        const QByteArray station = SliceOwnership::stationDevice();
+
+        // The phone on the air: the badge's question unkeys it and takes
+        // over, and B is the TX slice.
+        holder->setKeyed(true);
+        QTRY_VERIFY(badgeB->isEnabled());
+        badgeB->click();
+        TakeTransmitDialog* question = window.findChild<TakeTransmitDialog*>();
+        QVERIFY(question);
+        QCOMPARE(question->takeButton()->text(), QStringLiteral("Unkey and take over"));
+        QPointer<TakeTransmitDialog> unkeyed(question);
+        question->takeButton()->click();
+        QTRY_VERIFY(unkeyed.isNull());
+        QTRY_VERIFY(holder->isHeldBy(station));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), bId);
+        QTRY_VERIFY(flagB->txSliceShown());
+        QCOMPARE(controller.takeInFlight(), quint64(0));
+        QVERIFY(!model->mox());
+        QVERIFY(!model->isTune());
+
+        // Back to the phone.
+        const auto phoneHolds = [&]() {
+            holder->release(station, QStringLiteral("test hand-back"));
+            return QTest::qWaitFor([holder] {
+                       return holder->state() == TransmitHolder::State::Unheld;
+                   })
+                && holder->askKey(key).verdict == KeyingVerdict::Admit
+                && holder->isHeldBy(phone.deviceId);
+        };
+        QVERIFY(phoneHolds());
+
+        // Not assigned: MOX reads on past the wait, so the Core does not
+        // confirm the stop and the take ends with transmit unheld.
+        const TransmitHolder::Hooks saved = holder->hooks();
+        bool moxReadsOn = true;
+        TransmitHolder::Hooks forced = saved;
+        forced.moxOn = [&moxReadsOn]() { return moxReadsOn; };
+        holder->setHooks(forced);
+        QTRY_VERIFY(badgeA->isEnabled());
+        badgeA->click();
+        question = window.findChild<TakeTransmitDialog*>();
+        QVERIFY(question);
+        QPointer<TakeTransmitDialog> notConfirmed(question);
+        question->takeButton()->click();
+        QTRY_VERIFY(notConfirmed.isNull());
+        QTRY_VERIFY_WITH_TIMEOUT(controller.takeInFlight() == 0,
+                                 TransmitHolder::kMoxOffWaitMs + 3000);
+        QVERIFY(!holder->isHeldBy(station));
+        // While the Core refuses a take for now, the badge is held with
+        // its words.
+        QTRY_VERIFY(!badgeA->isEnabled());
+        QCOMPARE(badgeA->toolTip(), TxRefusals::stopNotConfirmed().text);
+        moxReadsOn = false;
+        holder->setHooks(saved);
+        holder->onMoxReading(false);
+        QTRY_VERIFY(badgeA->isEnabled());
+        QCOMPARE(badgeA->toolTip(), QStringLiteral("Take transmit and make this the TX slice"));
+        // A later grant of transmit to this window selects no slice.
+        QSignalSpy selected(model, &RadioModel::txSliceSelected);
+        QCOMPARE(controller.requestTakeTransmit().state,
+                 DesktopStationController::RequestState::Pending);
+        QTRY_VERIFY(holder->isHeldBy(station));
+        QTest::qWait(300);
+        QVERIFY(selected.isEmpty());
+        QVERIFY(!model->mox());
+
+        // Hosting stops with the question open: nothing is left for a
+        // later host's grant.
+        QVERIFY(phoneHolds());
+        QTRY_VERIFY(badgeA->isEnabled());
+        badgeA->click();
+        question = window.findChild<TakeTransmitDialog*>();
+        QVERIFY(question);
+        QPointer<TakeTransmitDialog> open(question);
+        controller.stop();
+        QTRY_VERIFY(open.isNull() || !open->isVisible());
+        QTemporaryDir directory2;
+        QVERIFY(directory2.isValid());
+        AppSettings settings2(directory2.filePath(QStringLiteral("station.settings")));
+        DesktopStationController controller2(model, optionsFor(settings2, directory2.path()));
+        window.setDesktopStationController(&controller2);
+        QVERIFY(controller2.start(true));
+        selected.clear();
+        QCOMPARE(controller2.requestTakeTransmit().state,
+                 DesktopStationController::RequestState::Pending);
+        QTRY_VERIFY(controller2.server()->transmitHolder()->isHeldBy(station));
+        QTest::qWait(300);
+        QVERIFY(selected.isEmpty());
+        QVERIFY(!model->mox());
+        controller2.stop();
+    }
+
     // TX badge take, case 3 with nothing more to ask: with transmit
     // already here, the slice take alone; and when the phone holds transmit
     // on the one slice it has, the take of that slice frees transmit
