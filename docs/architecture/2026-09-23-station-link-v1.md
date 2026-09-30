@@ -1445,7 +1445,16 @@ When a feature is off, its version is 0:
   `controlTaken` notice. A Core without the feature, and a peer that did
   not declare it, refuse the verbs: "Update this app to listen to and take
   slices on this Core." to the peer, "This Core cannot share slices
-  between devices." from a Core that cannot.
+  between devices." from a Core that cannot. 2 (take-over parity) adds
+  Take it back on the `controlTaken` notice (section 7.4): the notice
+  offers it (`takeBack` true) and `notice.takeBack {id}` takes control of
+  the slice back. The value sent is the lower of the Core's version and
+  the one the peer's hello declared (`sliceAccess` 1 reads 1, `sliceAccess`
+  2 reads 2), so a peer that declared 1 sees exactly what it saw before;
+  nothing is renumbered and `coreBuildInfo` stays last. An app that
+  declared 2 on a Core that sends 1 shows Take it back on the card
+  disabled, with the reason "This Core cannot give control back from here.
+  Updating the Core may help."
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -4447,7 +4456,20 @@ taker's slice and, when one is free, a choice with `sliceId` -1). Its own
 (telling its owner, with Take it back) and recreates the device's closed
 slices at their frequencies, modes and panadapters, with their settings.
 Once taken back, a notice cannot be taken back again ("That can no longer
-be taken back.").
+be taken back."). For a `controlTaken` notice (`sliceAccessVersion` 2)
+there is no question: `notice.takeBack {id}` is `slice.takeControl` the
+other way, with the `sliceId`, `incarnation` and `controlRevision` the
+notice's slice entry carries, under the same checks and the same
+transmit rules (below). Its result is the take's own: accepted with the
+slice's new `controlRevision` in `values` and the objects it reached, or
+refused in the take's words (the slice transmitting, closed, or its
+control moved on since the notice). A notice whose slice was closed or
+whose control moved on is then forgotten ("That can no longer be taken
+back." after). The device that lost control this way is sent its own
+`controlTaken` notice, with Take it back. A peer below
+`sliceAccessVersion` 2 is sent `takeBack` false on `controlTaken` and its
+`notice.takeBack` for one is refused ("That can no longer be taken
+back.").
 
 **Listening and control** (`sliceAccessVersion` 1; the slice control
 and shared listening design, docs/architecture/2026-09-28-slice-control-
@@ -4483,9 +4505,13 @@ object says who controls and who listens. The verbs (section 9.1):
   is transmitting. Take control once it stops."; and when its controller
   cannot stay on as a listener: a session without the feature ("<name>
   needs an update before control of slice <letter> can pass to another
-  device."), or the Core's own position (a slice the Core keeps for a
-  device may be taken, and so may an away device's slice within its 3
-  minutes). When the
+  device."), or the Core's own position with nobody at the hosting
+  desktop ("Slice <letter> is run by the Core itself, so control of it
+  cannot pass to this device."). A slice the Core keeps for a device may
+  be taken, and so may an away device's slice within its 3 minutes. A
+  hosting desktop's own slice passes like any device's (take-over
+  parity): the desktop is the station device, stays on as a listener, and
+  is told with `controlTaken` and Take it back. When the
   former controller holds transmit on the slice, the transmit flag moves
   to another of its slices, or with none transmit is released; its
   remembered transmit choice no longer names the slice, and the new
@@ -4645,9 +4671,13 @@ Take it back; `sliceClosed` also to a closed slice's listeners, above), `receive
 `settingChanged` (section 7.6: `change`, who, no Take it back),
 `transmitTaken` (section 18.9: who took transmit, Take it back),
 `controlTaken` (`sliceAccessVersion` 1: another device took control of
-the device's slice, which it still listens to; who, the slice, no Take
-it back: "<taker's name> took control of slice <letter>. You are still
-listening."),
+the device's slice, which it still listens to; who, the slice: "<taker's
+name> took control of slice <letter>. You are still listening."; with
+`sliceAccessVersion` 2, Take it back, and its slice entry adds
+`incarnation` and `controlRevision`, the slice's control revision after
+the take, so `slices` is `[{sliceId, letter, frequencyHz, mode, band,
+incarnation, controlRevision}]`; a peer below 2 is sent `takeBack` false
+and the same entry, whose extra keys it ignores),
 `graceEnded`, `slicesNotRestored`, `antennaKept` and `tuneEnded` (about
 the device's own state: no `by` keys, no Take it back). `tuneEnded`
 (iPhone app plan Task 77 fix round 4) tells a device that its accepted

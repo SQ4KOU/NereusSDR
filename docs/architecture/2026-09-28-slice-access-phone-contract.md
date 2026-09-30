@@ -11,13 +11,17 @@ where to look and what the phone must not get wrong.
 
 ## What the phone declares and receives
 
-- **Hello feature.** The phone declares `sliceAccess` 1 in the `features` of
-  its hello. It declares it only together with `sessionHolder` 1 (and so
-  `deviceAuth` 1). Without both, the Core treats it as not declared.
-- **Capability.** A phone that declared it is sent `sliceAccessVersion` 1 in
+- **Hello feature.** The phone declares `sliceAccess` 2 in the `features` of
+  its hello (1 before Take it back on `controlTaken`; a phone that still
+  declares 1 keeps exactly the wire it had). It declares it only together
+  with `sessionHolder` 1 (and so `deviceAuth` 1). Without both, the Core
+  treats it as not declared.
+- **Capability.** A phone that declared it is sent `sliceAccessVersion` in
   the Core's capabilities, appended after `radioAntennaRowsVersion` and
-  before `coreBuildInfo`. A Core that does not offer it sends nothing, and
-  the phone reads 0.
+  before `coreBuildInfo`: the lower of the Core's version and the one the
+  phone declared. 2 means the `controlTaken` notice offers Take it back
+  (below); 1 is a Core from before that. A Core that does not offer the
+  feature sends nothing, and the phone reads 0.
 - **Gate.** Two keys, both required (link 6.2): agreed protocol minor 11 or
   later, and `sliceAccessVersion` 1 or more. Every verb below carries
   `minMinor` 11. A phone that lacks either key sees exactly today's wire and
@@ -79,10 +83,63 @@ name (see the refusal words below).
 
 `notice` kind `controlTaken`, sent to a device whose slice another device took
 while it stays listening. It carries who took it (`byDeviceId`, `byName`,
-`byShortName`, `byKind`), the slice in `slices`, no Take it back, and
-this text as sent:
+`byShortName`, `byKind`, `bySource`), the slice in `slices`, and this text
+as sent:
 
 > <taker's name> took control of slice <letter>. You are still listening.
+
+The whole notice, as a phone at `sliceAccessVersion` 2 receives it (the values
+are an example):
+
+```json
+{"type": "notice", "id": 41, "kind": "controlTaken",
+ "reason": "iPad took control of slice A. You are still listening.",
+ "secondsAgo": 0, "takeBack": true,
+ "byDeviceId": "<taker's wire id>", "byName": "iPad", "byShortName": "iPad",
+ "byKind": "tablet", "bySource": "device",
+ "slices": [{"sliceId": 0, "letter": "A", "frequencyHz": 7074000,
+             "mode": 1, "band": 5, "incarnation": 3,
+             "controlRevision": 12}]}
+```
+
+**Take it back, one tap.** With `sliceAccessVersion` 2 and `takeBack` true,
+show Take it back on the notice. The tap sends `notice.takeBack {id}` with
+the notice's `id` (`sessionHolderVersion` 1, as for the other notices). The
+Core runs `slice.takeControl` for the phone with the slice entry's
+`sliceId`, `incarnation` and `controlRevision` (the revision after the
+take), so a phone may equally send `slice.takeControl` with those three
+values itself; the Core treats both the same. There is no question to
+answer. The result:
+
+- accepted, with the slice's new `controlRevision` in `values`
+  (`controlRevision`, `i64`) and the objects it reached; the phone is the
+  controller again and the device that had it is sent its own
+  `controlTaken`, with Take it back;
+- refused in `slice.takeControl`'s words when the slice is transmitting
+  ("Slice <letter> is transmitting. Take control once it stops."; the tap
+  may be tried again), was closed, or its control moved on since the notice
+  (someone else took it). After a closed slice or moved-on control, and after
+  a take-back that worked, the same `id` is refused with "That can no longer
+  be taken back."
+
+Transmit never moves with a take-back: the phone does not hold transmit or
+choose the slice for it by taking control back, and its first key on the
+slice is refused until it picks the slice with `tx.setTxSlice`, exactly as
+after `slice.takeControl`. The device that had the slice loses its transmit
+choice of it as on any take.
+
+On a Core that sends `sliceAccessVersion` 1, `takeBack` is false on this
+notice and `notice.takeBack` for it is refused. Show Take it back disabled,
+never hidden, with the reason "This Core cannot give control back from
+here. Updating the Core may help." A notice that arrives with `takeBack`
+false from a Core at 2 (its take-back ended while the phone was away past
+its 3 minutes) shows it disabled with "That can no longer be taken back."
+
+The hosting desktop's own slices pass the same way: a phone may take a
+slice the desktop controls (the desktop is told and can take it back),
+under the same rules. With nobody at the desktop, the Core's own slice is
+refused: "Slice <letter> is run by the Core itself, so control of it cannot
+pass to this device."
 
 The `sliceClosed` notice (no Take it back) also now reaches a slice's
 listeners when a take or a pan move closes it.
