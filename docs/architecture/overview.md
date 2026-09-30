@@ -71,6 +71,46 @@ Radio (ADC) --UDP--> RadioConnection --signal--> RadioModel
                                           Speakers      SpectrumWidget
 ```
 
+### RX path in detail (P2, CTUN + zoom)
+
+Moved from CLAUDE.md.
+
+```
+Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
+    ↓ iqDataReceived(ddcIndex=2, interleaved float I/Q)
+ReceiverManager::feedIqData(2) → maps DDC2 → receiver 0
+    ↓ iqDataForReceiver(0, samples)
+RadioModel lambda:
+    ├── emit rawIqData(samples) → FFTEngine → SpectrumWidget
+    ├── Deinterleave I/Q, accumulate 238 → 1024 samples
+    └── RxChannel::processIq() → fexchange2() → decoded audio
+        ↓
+    AudioEngine::feedAudio() → float→int16 → m_rxBuffer
+        ↓ 10ms timer drain
+    QAudioSink (48kHz stereo Int16) → Speakers
+
+FFT → Display (with zoom):
+    FFTEngine emits N bins (full DDC bandwidth)
+    → SpectrumWidget::updateSpectrum() stores in m_smoothed
+    → visibleBinRange(N) maps m_centerHz ± m_bandwidthHz/2 to bin indices
+      using m_ddcCenterHz + m_sampleRateHz for bin-to-frequency mapping
+    → GPU/CPU renderer iterates only [firstBin..lastBin], stretched to full display
+    → pushWaterfallRow() writes only visible bin subset to waterfall texture
+
+User zooms (freq scale drag or Ctrl+scroll):
+    m_bandwidthHz changes → visibleBinRange() narrows → immediate visual zoom
+    On mouse release → bandwidthChangeRequested → MainWindow replans FFT size
+    → FFTEngine delivers more bins → sharper resolution at new zoom level
+
+User tunes VFO:
+    VfoWidget (wheel/click/edit) → emit frequencyChanged(hz)
+    → SliceModel::setFrequency(hz)
+    → ReceiverManager::setReceiverFrequency(0, hz)
+      → hardwareFrequencyChanged(DDC2, hz)
+      → P2RadioConnection::setReceiverFrequency(2, hz) + Alex HPF/LPF update
+      → sendCmdHighPriority() → radio retunes DDC NCO
+```
+
 ## Data Flow: TX Path
 
 ```
