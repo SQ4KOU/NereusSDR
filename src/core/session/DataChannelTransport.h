@@ -65,6 +65,9 @@
 //               Anthropic Claude Code.
 //   2026-09-27: setLibraryLogForTest() (R-R3-49). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: logRemoteCandidate(), for the opt-in ICE check log
+//               (IceDiagnostics). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-27: iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08): the
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
@@ -404,6 +407,8 @@ private:
     void gatherIfReady();
     bool admitCandidate(const QString& candidate, bool fromOwnedSource);
     bool acceptOwnedWatchCandidate(const QString& candidate);
+    /// A remote candidate, admitted or refused, to the opt-in ICE check log.
+    void logRemoteCandidate(const QString& candidate, bool fromOwnedSource, bool admitted) const;
     /// Cancels the bridge and closes the connection; with `linger`, an open
     /// channel closes first and the peer after it (closeLink()).
     void stopPeer(bool linger = false);

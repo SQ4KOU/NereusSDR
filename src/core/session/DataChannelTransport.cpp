@@ -30,6 +30,10 @@
 //   2026-09-28: setWatchRelayClockForTest, the clock a watch relay grant's
 //               expiry is read against. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-29: the opt-in ICE check log (IceDiagnostics, NEREUS_ICE_DIAG):
+//               this peer's candidates, the ones it admits, its states and
+//               its selected pair, redacted. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -37,6 +41,7 @@
 
 #include <QDateTime>
 #include "core/session/CandidateSourceLease.h"
+#include "core/session/IceDiagnostics.h"
 
 #include "core/security/OpenSslErrorScope.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -87,6 +92,12 @@ QList<QByteArray> ControlFraming::chunk(const QByteArray& message)
 }
 
 namespace {
+
+// The ICE check log's tag for this peer's lines.
+const char* iceDiagPath(DataChannelTransport::Purpose purpose)
+{
+    return purpose == DataChannelTransport::Purpose::TxWatch ? "watch" : "control";
+}
 
 QByteArray heartbeatFrame(quint8 kind, quint32 id)
 {
@@ -554,6 +565,11 @@ bool DataChannelTransport::start(const Options& options)
             if (value.size() > static_cast<std::size_t>(IMediaTransport::kMaxCandidateBytes)) {
                 return;
             }
+            if (IceDiagnostics::enabled()) {
+                IceDiagnostics::logPath(iceDiagPath(bridge->purpose),
+                                        QStringLiteral("local candidate %1")
+                                            .arg(QString::fromStdString(value)));
+            }
             bridge->post({Event::Kind::Candidate, {}, QString::fromStdString(value), {}, 0});
         });
         peer->onGatheringStateChange([weak](rtc::PeerConnection::GatheringState state) {
@@ -562,10 +578,22 @@ bool DataChannelTransport::start(const Options& options)
                 bridge->post({Event::Kind::GatheringComplete, {}, {}, {}, 0});
             }
         });
+        if (IceDiagnostics::enabled()) {
+            const char* path = iceDiagPath(options.purpose);
+            peer->onIceStateChange([path](rtc::PeerConnection::IceState state) {
+                IceDiagnostics::logPath(path, QStringLiteral("ICE state %1")
+                                                  .arg(IceDiagnostics::stateName(state)));
+            });
+        }
         peer->onStateChange([weak](rtc::PeerConnection::State state) {
             const auto bridge = weak.lock();
             if (!bridge) {
                 return;
+            }
+            if (IceDiagnostics::enabled()) {
+                IceDiagnostics::logPath(iceDiagPath(bridge->purpose),
+                                        QStringLiteral("peer state %1")
+                                            .arg(IceDiagnostics::stateName(state)));
             }
             if (state == rtc::PeerConnection::State::Failed) {
                 bridge->post({Event::Kind::Failed, {},
@@ -716,9 +744,11 @@ bool DataChannelTransport::admitCandidate(const QString& candidate, bool fromOwn
         rtc::Candidate parsed(bytes.toStdString(), std::string());
         if (m_options.ice) {
             if (!m_options.ice->acceptsRemoteCandidate(QString::fromUtf8(bytes))) {
+                logRemoteCandidate(candidate, fromOwnedSource, false);
                 return false;
             }
         } else if (parsed.type() != rtc::Candidate::Type::Host) {
+            logRemoteCandidate(candidate, fromOwnedSource, false);
             return false;
         }
         if (parsed.type() == rtc::Candidate::Type::Relayed) {
@@ -740,6 +770,7 @@ bool DataChannelTransport::admitCandidate(const QString& candidate, bool fromOwn
                     QString::fromStdString(*source.address()), *source.port());
             }
         }
+        logRemoteCandidate(candidate, fromOwnedSource, true);
         m_bridge->peer->addRemoteCandidate(std::move(parsed));
         ++m_acceptedCandidates;
         if (ownedEndpoint && !m_ownedShimEndpoints.contains(*ownedEndpoint)) {
@@ -749,6 +780,20 @@ bool DataChannelTransport::admitCandidate(const QString& candidate, bool fromOwn
     } catch (const std::exception&) {
         return false;
     }
+}
+
+void DataChannelTransport::logRemoteCandidate(const QString& candidate, bool fromOwnedSource,
+                                              bool admitted) const
+{
+    if (!IceDiagnostics::enabled()) {
+        return;
+    }
+    IceDiagnostics::logPath(iceDiagPath(m_options.purpose),
+                            QStringLiteral("remote candidate%1 %2: %3")
+                                .arg(fromOwnedSource ? QStringLiteral(" (tunnel)") : QString(),
+                                     admitted ? QStringLiteral("admitted")
+                                              : QStringLiteral("refused"),
+                                     candidate));
 }
 
 bool DataChannelTransport::acceptOwnedWatchCandidate(const QString& candidate)
@@ -773,6 +818,7 @@ bool DataChannelTransport::acceptOwnedWatchCandidate(const QString& candidate)
     }
     try {
         rtc::Candidate parsed(candidate.toStdString(), std::string());
+        logRemoteCandidate(candidate, true, true);
         m_bridge->peer->addRemoteCandidate(std::move(parsed));
         ++m_acceptedCandidates;
         const auto endpoint = MediaIcePath::loopbackEndpoint(QStringLiteral("127.0.0.1"),
@@ -1386,6 +1432,9 @@ void DataChannelTransport::handleOpen()
         return;
     }
     m_open = true;
+    if (IceDiagnostics::enabled() && m_bridge && m_bridge->peer) {
+        IceDiagnostics::logSelectedPair(iceDiagPath(m_options.purpose), *m_bridge->peer);
+    }
     emit opened();
 }
 

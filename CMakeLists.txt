@@ -1382,6 +1382,7 @@ set(CORE_SOURCES
     src/core/session/StationLanDiscovery.cpp
     src/core/session/StationLanAnnouncer.cpp
     src/core/session/CoreAddresses.cpp
+    src/core/session/IceDiagnostics.cpp
     # iPhone app Task 16 (D36): Bonjour. The platform backend is added by
     # nereus_apply_core_deps().
     src/core/session/DnsSdAdvertiser.cpp

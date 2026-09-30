@@ -121,6 +121,9 @@
 //               sudo nereusd <command> reaches it with no other options
 //               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: read the opt-in ICE check log switch (NEREUS_ICE_DIAG)
+//               before any peer or log line exists. J.J. Boyd (KG4VCF),
+//               with AI assistance via Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -157,6 +160,8 @@
 #include <csignal>
 #include <cstdio>
 #include <memory>
+
+#include "core/session/IceDiagnostics.h"
 
 // A few entry-point tests include this file directly. Only the actual
 // nereusd target receives the generated-header include directory.
@@ -589,6 +594,10 @@ int main(int argc, char* argv[])
     qCInfo(NereusSDR::lcApp) << "nereusd starting, requested slices"
                              << cfg.sliceCount
                              << "requested rate" << cfg.sampleRateHz;
+
+    // The opt-in ICE check log must own libdatachannel's logger before the
+    // first peer exists; each peer takes its log level when it is created.
+    NereusSDR::IceDiagnostics::installFromEnvironment();
 
     // `daemon` is declared after `app` (QCoreApplication), so C++ runs
     // its destructor before app's when main() returns -- teardown still

@@ -7108,6 +7108,14 @@ nereus_add_test(tst_log_category_list)
 # device is told it can dial, and the watcher that follows them.
 nereus_add_test(tst_core_addresses)
 
+# The opt-in ICE check log (NEREUS_ICE_DIAG): its switch, the address
+# redactor every line passes through, and two real peers on this computer
+# whose whole log carries none of its addresses.
+nereus_add_test(tst_ice_diagnostics CORE_ONLY EXTRA_LABELS session)
+target_link_libraries(tst_ice_diagnostics PRIVATE datachannel-static)
+target_include_directories(tst_ice_diagnostics PRIVATE
+    "${libdatachannel_SOURCE_DIR}/include")
+
 # ── Tunable Notch Filter Task 2: RxChannel manual-notch wrappers ──────────
 # The Notch value type plus add / edit / delete / sync / count, the
 # notches-run flag, auto-increase and the minimum-width readback.
