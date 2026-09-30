@@ -12,6 +12,8 @@
 //   2026-09-29: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: the three second-receiver VFO options. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -46,6 +48,56 @@ QByteArray stereoTxFrame(int frames, float left, float right)
         /*length=*/frames * 2,
         /*streamType=*/static_cast<int>(TciStreamType::TxAudioStream),
         /*channels=*/2, samples.data());
+}
+
+// A radio whose receivers have a centre apart from their VFO, so an if
+// line shows which receiver it was read from.
+class CentredMockRadio : public TestMockRadioModel {
+    Q_OBJECT
+public:
+    Q_INVOKABLE qint64 ddsHz(int slice) const { return slice == 0 ? m_centre0 : m_centre1; }
+    qint64 m_centre0 = 0;
+    qint64 m_centre1 = 0;
+};
+
+// Every line the VFO path queued, in order.
+QStringList drainLines(TciProtocol& protocol)
+{
+    protocol.drainCoalescedNotifications();
+    QStringList out;
+    while (protocol.hasPendingNotification()) {
+        out << protocol.takePendingNotification();
+    }
+    return out;
+}
+
+void setOption(const char* key, bool on)
+{
+    AppSettings::instance().setValue(QLatin1String(key),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+}
+
+// Receiver 0 at 7.100 MHz (centre 7.090), receiver 1 at 14.200 MHz
+// (centre 14.150), RX2 on or off.
+void tuneTwoReceivers(CentredMockRadio& radio, bool rx2On)
+{
+    radio.setRx2Enabled(rx2On);
+    radio.setVfoHz(0, 0, 7'100'000);
+    radio.setVfoHz(0, 1, 7'100'000);
+    radio.setVfoHz(1, 0, 14'200'000);
+    radio.setVfoHz(1, 1, 14'200'000);
+    radio.m_centre0 = 7'090'000;
+    radio.m_centre1 = 14'150'000;
+}
+
+// What a receiver's VFO move sent before these options did anything:
+// if and vfo for channel 0, then channel 1.
+QStringList bothChannels(int rx, qint64 hz, int ifHz)
+{
+    return {QStringLiteral("if:%1,0,%2;").arg(rx).arg(ifHz),
+            QStringLiteral("vfo:%1,0,%2;").arg(rx).arg(hz),
+            QStringLiteral("if:%1,1,%2;").arg(rx).arg(ifHz),
+            QStringLiteral("vfo:%1,1,%2;").arg(rx).arg(hz)};
 }
 
 } // namespace
@@ -206,6 +258,190 @@ private slots:
         QTRY_COMPARE(session->audioStreamChannels, other);
         app.close();
         server.stop();
+    }
+
+    // ── The second-receiver VFO options ──────────────────────────────────
+
+    // The defaults (JJ's ruling, 2026-09-29): Copy on and Forget off as in Thetis
+    // (setup.cs:380-382 [v2.10.3.15]); Use RX1 VFO A off, a recorded
+    // divergence (Thetis turns it on).
+    void rx2VfoOptionDefaults()
+    {
+        QCOMPARE(kTciCopyRx2VfobToVfoaDefault, true);
+        QCOMPARE(kTciForgetRx2VfobDefault, false);
+        QCOMPARE(kTciUseRx1VfoaForRx2VfoaDefault, false);
+        QCOMPARE(TciProtocol::copyRx2VfobToVfoaSetting(), true);
+        QCOMPARE(TciProtocol::forgetRx2VfobSetting(), false);
+        QCOMPARE(TciProtocol::useRx1VfoaForRx2VfoaSetting(), false);
+    }
+
+    // Under the defaults an app sees exactly what it saw before: both
+    // channels for each receiver's VFO move, the vfo commands on each
+    // receiver's own slice, and the same first lines.
+    void rx2VfoOptionDefaultsKeepTheWire_data()
+    {
+        QTest::addColumn<bool>("rx2On");
+        QTest::newRow("RX2 on") << true;
+        QTest::newRow("RX2 off") << false;
+    }
+    void rx2VfoOptionDefaultsKeepTheWire()
+    {
+        QFETCH(bool, rx2On);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+
+        protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
+        QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
+        protocol.enqueueLocalBroadcastVfo(1, 14'200'000, false);
+        QCOMPARE(drainLines(protocol), bothChannels(1, 14'200'000, 50'000));
+
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:1,0;")),
+                 QStringLiteral("vfo:1,0,14200000;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:0,0;")),
+                 QStringLiteral("vfo:0,0,7100000;"));
+        protocol.handleCommand(QStringLiteral("vfo:1,0,14210000;"));
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'210'000));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
+        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,0,14210000;")});
+
+        const QStringList burst = protocol.buildInitBurst();
+        // Both channels of a receiver read its slice (channel 0).
+        QVERIFY(burst.contains(QStringLiteral("vfo:1,0,14210000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:1,1,14210000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7100000;")));
+    }
+
+    // Duplicate RX2 VFO B to RX2 VFO A, and Forget RX2 VFO B, from Thetis
+    // TCIServer.cs:7293-7294 and 1385-1398 [v2.10.3.15]: with RX2 on, a
+    // move of the second receiver's VFO goes out on channel 1, plus a
+    // copy on channel 0 with Copy on; Forget (only with Copy on) drops
+    // channel 1 and keeps the copy.
+    void copyAndForgetShapeTheSecondReceiversVfo_data()
+    {
+        QTest::addColumn<bool>("copy");
+        QTest::addColumn<bool>("forget");
+        QTest::addColumn<QStringList>("expected");
+        const QStringList ch0{QStringLiteral("if:1,0,50000;"),
+                              QStringLiteral("vfo:1,0,14200000;")};
+        const QStringList ch1{QStringLiteral("if:1,1,50000;"),
+                              QStringLiteral("vfo:1,1,14200000;")};
+        QTest::newRow("copy off") << false << false << ch1;
+        QTest::newRow("copy off, forget on") << false << true << ch1;
+        QTest::newRow("copy on") << true << false << ch0 + ch1;
+        QTest::newRow("copy on, forget on") << true << true << ch0;
+    }
+    void copyAndForgetShapeTheSecondReceiversVfo()
+    {
+        QFETCH(bool, copy);
+        QFETCH(bool, forget);
+        QFETCH(QStringList, expected);
+        setOption("TciCopyRx2VfobToVfoa", copy);
+        setOption("TciForgetRx2VfoBOnDisconnect", forget);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/true);
+        TciProtocol protocol(&radio);
+        protocol.enqueueLocalBroadcastVfo(1, 14'200'000, false);
+        QCOMPARE(drainLines(protocol), expected);
+        // The first receiver is not touched by either option.
+        protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
+        QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
+    }
+
+    // Use RX1 VFO A for RX2 VFO A, from Thetis TCIServer.cs:7256-7267
+    // [v2.10.3.15]: with RX2 on, the first receiver's VFO goes out as
+    // receiver 1 channel 0 (never vfo:0,0), its if read from receiver 0.
+    // Off, or with RX2 off, nothing changes.
+    void useRx1VfoaSendsTheFirstReceiverAsRx2Vfoa_data()
+    {
+        QTest::addColumn<bool>("on");
+        QTest::addColumn<bool>("rx2On");
+        QTest::addColumn<QStringList>("expected");
+        QTest::newRow("on, RX2 on")
+            << true << true
+            << QStringList{QStringLiteral("if:1,0,10000;"),
+                           QStringLiteral("vfo:1,0,7100000;"),
+                           QStringLiteral("if:0,1,10000;"),
+                           QStringLiteral("vfo:0,1,7100000;")};
+        QTest::newRow("on, RX2 off") << true << false << bothChannels(0, 7'100'000, 10'000);
+        QTest::newRow("off, RX2 on") << false << true << bothChannels(0, 7'100'000, 10'000);
+    }
+    void useRx1VfoaSendsTheFirstReceiverAsRx2Vfoa()
+    {
+        QFETCH(bool, on);
+        QFETCH(bool, rx2On);
+        QFETCH(QStringList, expected);
+        setOption("TciUseRx1VfoaForRx2Vfoa", on);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+        protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
+        QCOMPARE(drainLines(protocol), expected);
+    }
+
+    // ...and on the way in, from Thetis handleVFOMessage,
+    // TCIServer.cs:3858-3967 [v2.10.3.15]: vfo:1,0 sets and reads the
+    // first receiver's VFO, and a query's answer names receiver 1.
+    void useRx1VfoaTakesRx2VfoaCommands_data()
+    {
+        QTest::addColumn<bool>("on");
+        QTest::addColumn<bool>("rx2On");
+        QTest::newRow("on, RX2 on") << true << true;
+        QTest::newRow("on, RX2 off") << true << false;
+        QTest::newRow("off, RX2 on") << false << true;
+    }
+    void useRx1VfoaTakesRx2VfoaCommands()
+    {
+        QFETCH(bool, on);
+        QFETCH(bool, rx2On);
+        setOption("TciUseRx1VfoaForRx2Vfoa", on);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+        const bool acts = on && rx2On;
+
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:1,0;")),
+                 acts ? QStringLiteral("vfo:1,0,7100000;")
+                      : QStringLiteral("vfo:1,0,14200000;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:1,1;")),
+                 QStringLiteral("vfo:1,1,14200000;"));
+        // Thetis relabels every query's answer as receiver 1.
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:0,0;")),
+                 acts ? QStringLiteral("vfo:1,0,7100000;")
+                      : QStringLiteral("vfo:0,0,7100000;"));
+
+        protocol.handleCommand(QStringLiteral("vfo:1,0,7150000;"));
+        QCOMPARE(radio.vfoHz(0, 0), acts ? qint64(7'150'000) : qint64(7'100'000));
+        QCOMPARE(radio.vfoHz(1, 0), acts ? qint64(14'200'000) : qint64(7'150'000));
+        QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,0,7150000;")});
+    }
+
+    // ...and in the first lines, from Thetis sendVFO,
+    // TCIServer.cs:2101-2122 [v2.10.3.15]: vfo:1,0 carries the first
+    // receiver's VFO; vfo:1,1 and the if lines are unchanged.
+    void useRx1VfoaInTheFirstLines_data()
+    {
+        QTest::addColumn<bool>("on");
+        QTest::addColumn<bool>("rx2On");
+        QTest::newRow("on, RX2 on") << true << true;
+        QTest::newRow("on, RX2 off") << true << false;
+        QTest::newRow("off, RX2 on") << false << true;
+    }
+    void useRx1VfoaInTheFirstLines()
+    {
+        QFETCH(bool, on);
+        QFETCH(bool, rx2On);
+        setOption("TciUseRx1VfoaForRx2Vfoa", on);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+        const QStringList burst = protocol.buildInitBurst();
+        const bool acts = on && rx2On;
+        QVERIFY(burst.contains(acts ? QStringLiteral("vfo:1,0,7100000;")
+                                    : QStringLiteral("vfo:1,0,14200000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:1,1,14200000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7100000;")));
+        QVERIFY(burst.contains(QStringLiteral("if:1,0,50000;")));
     }
 };
 

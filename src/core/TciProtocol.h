@@ -47,6 +47,10 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Desktop-host receiver-to-owned-slice mapping.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-29 - The three second-receiver VFO options (copy VFO B to
+//                VFO A, forget VFO B, use RX1 VFO A for RX2 VFO A) act as
+//                Thetis's do; their defaults are named once here.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -86,9 +90,9 @@ namespace NereusSDR {
 // | TciCwBecomesCwuAbove10mhz            | bool   | False   | Compat flag (W2PA #559)
 // | TciIqSwap                            | bool   | True    | Compat flag
 // | TciAlwaysStreamIq                    | bool   | False   | Compat flag
-// | TciForgetRx2VfoBOnDisconnect         | bool   | False   | VFO quirk
-// | TciUseRx1VfoaForRx2Vfoa              | bool   | False   | VFO quirk
-// | TciCopyRx2VfobToVfoa                 | bool   | False   | VFO quirk
+// | TciForgetRx2VfoBOnDisconnect         | bool   | False   | RX2 VFO option (kTciForgetRx2VfobDefault)
+// | TciUseRx1VfoaForRx2Vfoa              | bool   | False   | RX2 VFO option (kTciUseRx1VfoaForRx2VfoaDefault)
+// | TciCopyRx2VfobToVfoa                 | bool   | True    | RX2 VFO option (kTciCopyRx2VfobToVfoaDefault)
 //
 // Additional keys introduced by AudioTciPage (Phase 3J-1 Task 2.7):
 // | TciSliceA_OutputSampleRate           | int    | 48000   | Slice A default audio rate (applied at connect-time)
@@ -104,6 +108,28 @@ namespace NereusSDR {
 // Phases 5+ wire these into compat-flag handling. Phase 20 surfaces them in
 // Setup → Network → TCI Server. See design doc Section 10.
 // ─────────────────────────────────────────────────────────────────────────
+
+// The second-receiver VFO options' defaults. Every reader (TciProtocol, the
+// Setup pages, StationTciModel) takes its fallback from these, so each
+// default is changed in exactly one place.
+//
+// From Thetis setup.cs:380-382 [v2.10.3.15]:
+//   // some default tci server states MW0LGE_21k9d
+//   chkCopyRX2VFObToVFOa.Checked = true;
+//   chkUseRX1vfoaForRX2vfoa.Checked = true;
+// chkForgetRX2VfoBVFOinfo is unchecked in the designer and only enabled
+// while chkCopyRX2VFObToVFOa is checked (setup.cs:22568-22572 [v2.10.3.15]).
+//
+// Copy follows Thetis (on) and Forget follows Thetis (off); JJ's ruling of
+// 2026-09-29 settles all three.
+inline constexpr bool kTciCopyRx2VfobToVfoaDefault    = true;
+inline constexpr bool kTciForgetRx2VfobDefault        = false;
+// DIVERGENCE (JJ's ruling, 2026-09-29): Thetis defaults Use RX1 VFO A for
+// RX2 VFO A ON, from Thetis setup.cs:380-382 [v2.10.3.15]:
+//   // some default tci server states MW0LGE_21k9d
+//   chkUseRX1vfoaForRX2vfoa.Checked = true;
+// NereusSDR defaults it OFF so existing TCI client output is unchanged.
+inline constexpr bool kTciUseRx1VfoaForRx2VfoaDefault = false;
 
 class SliceModel;
 class TciProtocol : public QObject {
@@ -230,6 +256,12 @@ public:
     /// would have to be widened with it.
     static constexpr int kExposedReceiverCount = 2;
 
+    // The second-receiver VFO options, read from AppSettings when used,
+    // each falling back to its kTci...Default above.
+    static bool copyRx2VfobToVfoaSetting();
+    static bool forgetRx2VfobSetting();
+    static bool useRx1VfoaForRx2VfoaSetting();
+
     // Build the post-connect init burst. Stub returns empty list in Phase 3;
     // Phase 4 Task 4.1 replaces with the 8-line wrapper from
     // Thetis TCIServer.cs:2512-2552 [v2.10.3.13].
@@ -320,7 +352,9 @@ private:
     // ── VFO family handlers (Phase 6) ─────────────────────────────────────────
     // From Thetis TCIServer.cs:3724-3833 [v2.10.3.13] — handleVFOMessage.
     // Dispatches set (3 args) or query (2 args) by args.size().
-    // UseRX1VFOaForRX2VFOa quirk deferred to Phase 6+ refinement.
+    // With RX2 on and Use RX1 VFO A for RX2 VFO A set, receiver 1 channel 0
+    // is receiver 0's VFO for set and query (TCIServer.cs:3858-3967
+    // [v2.10.3.15]).
     QString handleVfoCommand(const QStringList& args);
 
     // From Thetis TCIServer.cs:3284-3302 [v2.10.3.13] — handleVFOLock.
@@ -662,6 +696,13 @@ private:
     // The one if builder, for the init burst and the live path alike: reads
     // receiver rx's vfo, centre and RIT and formats the line.
     QString buildIfLineForRx(int rx, int chan) const;
+    // As buildIfLineForRx, labelled rx but read from receiver sourceRx: the
+    // if:1,0 that Use RX1 VFO A for RX2 VFO A sends for receiver 0's VFO.
+    QString buildIfLineFrom(int labelRx, int chan, int sourceRx) const;
+
+    // RX2 is on: receiver 1 has a slice (with a receiver map), else the
+    // radio's rx2Enabled. Thetis console.RX2Enabled.
+    bool rx2EnabledNow() const;
 
     // Receiver rx's dds line, its centre read from the radio. The init burst
     // uses it; the drain reads the same readDdsHz so it can record what it
@@ -851,6 +892,9 @@ private:
     // update gap, runs after it in TciServer (TciUpdateGap, Task 10);
     // Layer 2 is subsumed by it. See TciVfoCoalescer.h.
     TciVfoCoalescer m_vfoCoalescer;
+    // The receiver an if key queued by the VFO path is read from, when it
+    // is not the receiver the key names (Use RX1 VFO A for RX2 VFO A).
+    QHash<QString, int> m_ifSourceReceiver;
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};
     bool m_remoteWindow{false};

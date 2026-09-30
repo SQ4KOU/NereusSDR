@@ -743,19 +743,6 @@ QMap<F, QList<Surface>> surfaces()
                             Surface{QStringLiteral("Spot Hub RBN Rate Limit label"), Host::SpotHub,
                                     [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
     map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
-    // CW to CWU, the TX channel, the sensor intervals and the stream
-    // channels are built (codex/tci-settings-real); the three RX2 VFO
-    // options stay in view, disabled with the reason, until they are.
-    const auto usable = [](const QString& name) {
-        return [name](QWidget* root) { return usableShown(root, name); };
-    };
-    map[F::TciExtras] = {
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("Forget RX2 VFOB"),
-               usable(QStringLiteral("tciForgetRx2VfoBCheck"))),
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("Use RX1 VFOA for RX2 VFOA"),
-               usable(QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck"))),
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("Copy RX2 VFOB to VFOA"),
-               usable(QStringLiteral("tciCopyRx2VfobToVfoaCheck")))};
     map[F::SmallFilter] = {onPage(QStringLiteral("Meter Styles"), QStringLiteral("small filter display"),
                                   named(QStringLiteral("appearanceVfoFlagGroup")))};
     map[F::ApfParams] = {onPage(QStringLiteral("CW"), QStringLiteral("APF bandwidth"), text(QStringLiteral("Bandwidth"))),
@@ -942,6 +929,33 @@ private slots:
             QVERIFY2(page != nullptr, remote ? "remote" : "local");
             QVERIFY2(usableShown(page, QStringLiteral("tciStreamChannelsCombo")),
                      remote ? "remote" : "local");
+        }
+        QVERIFY(sessions.replace({}, false));
+    }
+
+    // The three RX2 VFO options are built (codex/tci-rx2-quirks): shown and
+    // usable on Setup > Network > TCI Server in a local window and a remote
+    // one, with Forget usable only while Duplicate is on, as in Thetis.
+    void builtTciRx2VfoOptionsAreUsable()
+    {
+        GuiSessionCoordinator sessions;
+        for (bool remote : {false, true}) {
+            const char* where = remote ? "remote" : "local";
+            Hosts hosts(sessions, remote);
+            QWidget* page = hosts.page(QStringLiteral("TCI Server"));
+            QVERIFY2(page != nullptr, where);
+            auto* copy = page->findChild<QCheckBox*>(QStringLiteral("tciCopyRx2VfobToVfoaCheck"));
+            QVERIFY2(copy != nullptr, where);
+            copy->setChecked(true);
+            for (const char* name : {"tciForgetRx2VfoBCheck", "tciUseRx1VfoaForRx2VfoaCheck",
+                                     "tciCopyRx2VfobToVfoaCheck"}) {
+                QVERIFY2(usableShown(page, QLatin1String(name)), where);
+            }
+            copy->setChecked(false);
+            QVERIFY2(!usableShown(page, QStringLiteral("tciForgetRx2VfoBCheck")), where);
+            QVERIFY2(usableShown(page, QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck")), where);
+            copy->setChecked(true);
+            QVERIFY2(usableShown(page, QStringLiteral("tciForgetRx2VfoBCheck")), where);
         }
         QVERIFY(sessions.replace({}, false));
     }

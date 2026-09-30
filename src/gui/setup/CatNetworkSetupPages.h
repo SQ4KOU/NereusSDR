@@ -155,8 +155,6 @@ private:
     // the page's settings for the Core's own server, by property name.
     QHash<QByteArray, QWidget*> m_coreSettings;
     QHash<QByteArray, QString> m_coreSettingTips;
-    // The Core's settings the TCI server does not use yet (tci-extras).
-    QSet<QByteArray> m_coreUnbuilt;
     void sendCoreSetting(const QByteArray& name, const QVariant& value);
 
     // Group 2: Compatibility
@@ -181,6 +179,15 @@ private:
     QCheckBox*   m_forgetRx2VfoBCheck{nullptr};
     QCheckBox*   m_useRx1VfoaForRx2Check{nullptr};
     QCheckBox*   m_copyRx2VfobToVfoaCheck{nullptr};
+
+    // The RX2 VFO options' captions and tooltips, shared by this window's
+    // group and the Core's rows.
+    static QString rx2VfoForgetLabel();
+    static QString rx2VfoForgetTip();
+    static QString rx2VfoUseRx1Label();
+    static QString rx2VfoUseRx1Tip();
+    static QString rx2VfoCopyLabel();
+    static QString rx2VfoCopyTip();
 
     void buildUI();
     void buildServerGroup();

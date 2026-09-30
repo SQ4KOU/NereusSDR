@@ -295,15 +295,17 @@ private slots:
         QCOMPARE(state.txChannel(), 2);
         QCOMPARE(state.rxSensorIntervalMs(), 200);
         QCOMPARE(state.txSensorIntervalMs(), 200);
-        QVERIFY(!state.forgetRx2VfoBOnDisconnect());
-        QVERIFY(!state.useRx1VfoaForRx2Vfoa());
-        QVERIFY(!state.copyRx2VfobToVfoa());
+        // The RX2 VFO options' defaults: TciProtocol.h's (Duplicate on).
+        QCOMPARE(state.forgetRx2VfoBOnDisconnect(), kTciForgetRx2VfobDefault);
+        QCOMPARE(state.useRx1VfoaForRx2Vfoa(), kTciUseRx1VfoaForRx2VfoaDefault);
+        QCOMPARE(state.copyRx2VfobToVfoa(), kTciCopyRx2VfobToVfoaDefault);
+        QVERIFY(state.copyRx2VfobToVfoa());
 
         QVERIFY(controller.setSettings({{QStringLiteral("iqSwap"), false},
                                         {QStringLiteral("audioBlockSamples"), 512},
                                         {QStringLiteral("txChannel"), 0},
                                         {QStringLiteral("rateLimitMs"), 0},
-                                        {QStringLiteral("copyRx2VfobToVfoa"), true}},
+                                        {QStringLiteral("copyRx2VfobToVfoa"), false}},
                                        &reason));
         QVERIFY(reason.isEmpty());
         auto& settings = AppSettings::instance();
@@ -313,12 +315,12 @@ private slots:
         QCOMPARE(settings.value(QStringLiteral("TciTxChannel")).toString(), QStringLiteral("Left"));
         QCOMPARE(settings.value(QStringLiteral("TciRateLimitMs")).toString(), QStringLiteral("0"));
         QCOMPARE(settings.value(QStringLiteral("TciCopyRx2VfobToVfoa")).toString(),
-                 QStringLiteral("True"));
+                 QStringLiteral("False"));
         QVERIFY(!state.iqSwap());
         QCOMPARE(state.audioBlockSamples(), 512);
         QCOMPARE(state.txChannel(), 0);
         QCOMPARE(state.rateLimitMs(), 0);
-        QVERIFY(state.copyRx2VfobToVfoa());
+        QVERIFY(!state.copyRx2VfobToVfoa());
 
         // Out of range, the wrong kind, or a name it does not have: refused
         // in plain words, and nothing of the request is kept.

@@ -10,6 +10,8 @@
 // Modification history (NereusSDR).
 //   2026-09-29 - HL2 port part 1: Hl2TxTiming removed (built). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - TciExtras removed (built). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/UnbuiltFeatureList.h"
@@ -122,8 +124,6 @@ const QList<Entry>& all()
          QStringLiteral("Spot Hub RBN rate limit")},
         {F::FreeDvToPsk, QStringLiteral("freedv-psk"),
          QStringLiteral("Spot Hub report FreeDV decodes to PSK Reporter")},
-        {F::TciExtras, QStringLiteral("tci-extras"),
-         QStringLiteral("TCI the three RX2 VFO options")},
         {F::SmallFilter, QStringLiteral("small-filter"),
          QStringLiteral("Setup > Appearance small filter display on the VFO flag")},
         {F::ApfParams, QStringLiteral("apf-params"),

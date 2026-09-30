@@ -8,16 +8,20 @@
 // 2026-09-29 - R-R3-49 / R-IOS-18: Setup description version 15 ids on the
 //              Peripherals rows. J.J. Boyd (KG4VCF), AI-assisted via
 //              Anthropic Claude Code.
+// 2026-09-29 - The three RX2 VFO options work: captions and tooltips say
+//              what Thetis's options do, their defaults come from
+//              TciProtocol.h, and Forget follows Duplicate as in Thetis.
+//              J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
 #include "gui/LanScanDialog.h"
 #include "gui/OperatorReasonText.h"
-#include "gui/UnbuiltFeatures.h"
 #include "core/AppSettings.h"
 #include "core/session/IStationLink.h"
 #include "models/AmplifierModel.h"
 #include "models/StationTciModel.h"
+#include "core/TciProtocol.h"
 #include "core/TciSwitch.h"
 #include "core/TciUpdateGap.h"
 #include "models/RadioModel.h"
@@ -433,10 +437,9 @@ void CatTciServerPage::buildCoreGroup()
     }
     // JJ's ruling of 2026-09-28 (stationTciSettingsVersion 1): the rest of
     // this page's settings, for the Core's server. The captions, ranges and
-    // tooltips are this page's own (the groups below); the ones the TCI
-    // server does not use yet show disabled with the reason, as there.
+    // tooltips are this page's own (the groups below).
     const auto addCheck = [this, form](const char* name, const QString& text,
-                                       const QString& tip, bool unbuilt) {
+                                       const QString& tip) {
         auto* box = new QCheckBox(text, m_coreGroup);
         box->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
         box->setProperty("nereusSetupId",
@@ -448,13 +451,9 @@ void CatTciServerPage::buildCoreGroup()
                 [this, key](bool on) { sendCoreSetting(key, on); });
         form->addRow(QString(), box);
         m_coreSettings.insert(key, box);
-        if (unbuilt && !UnbuiltFeatures::isBuilt(UnbuiltFeature::TciExtras)) {
-            m_coreUnbuilt.insert(key);
-            box->setEnabled(false);
-        }
     };
     const auto addSpin = [this, form](const char* name, const QString& label, int min, int max,
-                                      const QString& suffix, const QString& tip, bool unbuilt) {
+                                      const QString& suffix, const QString& tip) {
         auto* spin = new QSpinBox(m_coreGroup);
         spin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
         spin->setRange(min, max);
@@ -469,31 +468,25 @@ void CatTciServerPage::buildCoreGroup()
                 [this, key](int value) { sendCoreSetting(key, value); });
         form->addRow(label, spin);
         m_coreSettings.insert(key, spin);
-        if (unbuilt && !UnbuiltFeatures::isBuilt(UnbuiltFeature::TciExtras)) {
-            m_coreUnbuilt.insert(key);
-            spin->setEnabled(false);
-        }
         return spin;
     };
     addSpin("rateLimitMs", tr("Rate limit:"), NereusSDR::TciUpdateGap::kMinGapMs,
             NereusSDR::TciUpdateGap::kMaxGapMs, tr(" ms"),
             tr("How long to wait between frequency updates sent to each TCI app. Changes made "
                "faster than this reach the app as the latest frequency once the time has "
-               "passed. Off sends every change."), false)->setSpecialValueText(tr("Off"));
+               "passed. Off sends every change."))->setSpecialValueText(tr("Off"));
     addCheck("cwBecomesCwuAbove10mhz", tr("CW becomes CWU above 10 MHz"),
              tr("On bands above 10 MHz, report mode as \"CWU\" instead of \"CW\" or \"CWL\". "
-                "Required by certain logging apps that follow the ARRL sideband convention."),
-             false);
+                "Required by certain logging apps that follow the ARRL sideband convention."));
     addCheck("iqSwap", tr("Swap I/Q channels"),
              tr("Swap the I and Q samples in the TCI IQ data stream. "
-                "Enabled by default for compatibility with most TCI IQ consumers."), false);
+                "Enabled by default for compatibility with most TCI IQ consumers."));
     addCheck("alwaysStreamIq", tr("Always stream IQ"),
              tr("Stream IQ data to all connected TCI clients continuously, even if no client "
-                "has explicitly subscribed to the IQ stream. Increases CPU and network load."),
-             false);
+                "has explicitly subscribed to the IQ stream. Increases CPU and network load."));
     addSpin("audioBlockSamples", tr("Block size:"), 100, 2048, tr(" samples"),
             tr("Number of audio samples per TCI audio stream block (100 to 2048). "
-               "Larger blocks reduce overhead but increase latency."), false);
+               "Larger blocks reduce overhead but increase latency."));
     {
         auto* combo = new QComboBox(m_coreGroup);
         combo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
@@ -511,19 +504,21 @@ void CatTciServerPage::buildCoreGroup()
     }
     addSpin("rxSensorIntervalMs", tr("RX interval:"), 30, 1000, tr(" ms"),
             tr("How often RX sensor data (signal level, AGC gain, etc.) is pushed to TCI clients "
-               "that subscribe to sensors (30 to 1000 ms)."), false);
+               "that subscribe to sensors (30 to 1000 ms)."));
     addSpin("txSensorIntervalMs", tr("TX interval:"), 30, 1000, tr(" ms"),
             tr("How often TX sensor data (forward power, SWR, ALC, etc.) is pushed to TCI "
-               "clients that subscribe to sensors (30 to 1000 ms)."), false);
-    addCheck("forgetRx2VfoBOnDisconnect", tr("Forget RX2 VFOB on disconnect"),
-             tr("When a TCI client disconnects, reset RX2 VFOB to its default frequency instead "
-                "of keeping the last value set by the client."), true);
-    addCheck("useRx1VfoaForRx2Vfoa", tr("Use RX1 VFOA for RX2 VFOA"),
-             tr("Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. Required by "
-                "clients that do not maintain independent per-receiver VFO state."), true);
-    addCheck("copyRx2VfobToVfoa", tr("Copy RX2 VFOB to VFOA"),
-             tr("Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. Required by "
-                "apps that drive split mode via VFOB but read back VFOA."), true);
+               "clients that subscribe to sensors (30 to 1000 ms)."));
+    // The three RX2 VFO options (TciProtocol.cpp applies them).
+    addCheck("forgetRx2VfoBOnDisconnect", rx2VfoForgetLabel(), rx2VfoForgetTip());
+    addCheck("useRx1VfoaForRx2Vfoa", rx2VfoUseRx1Label(), rx2VfoUseRx1Tip());
+    addCheck("copyRx2VfobToVfoa", rx2VfoCopyLabel(), rx2VfoCopyTip());
+    // Forget works only with Duplicate, so it is enabled only while
+    // Duplicate is on, as on Thetis's page.
+    // From Thetis setup.cs:22568-22572 [v2.10.3.15] (chkCopyRX2VFObToVFOa_CheckedChanged)
+    auto* coreCopy = qobject_cast<QCheckBox*>(m_coreSettings.value("copyRx2VfobToVfoa"));
+    QWidget* coreForget = m_coreSettings.value("forgetRx2VfoBOnDisconnect");
+    connect(coreCopy, &QCheckBox::toggled, coreForget,
+            [coreCopy, coreForget](bool on) { coreForget->setEnabled(on && coreCopy->isEnabled()); });
     m_coreReason = new QLabel(m_coreGroup);
     m_coreReason->setObjectName(QStringLiteral("coreTciReason"));
     m_coreReason->setWordWrap(true);
@@ -593,12 +588,15 @@ void CatTciServerPage::refreshCoreGroup()
                 combo->setCurrentIndex(value.toInt());
             }
         }
-        // Unbuilt: in view, disabled, with the reason.
-        const bool unbuilt = m_coreUnbuilt.contains(it.key());
-        control->setEnabled(settingsAvailable && !onAir && !unbuilt);
-        control->setToolTip(unbuilt ? UnbuiltFeatures::notBuiltReason()
-                            : settingsReason.isEmpty() ? m_coreSettingTips.value(it.key())
-                                                       : settingsReason);
+        control->setEnabled(settingsAvailable && !onAir);
+        control->setToolTip(settingsReason.isEmpty() ? m_coreSettingTips.value(it.key())
+                                                     : settingsReason);
+    }
+    // Forget RX2 VFO B works only with Duplicate: enabled only while
+    // Duplicate is on (Thetis setup.cs chkCopyRX2VFObToVFOa_CheckedChanged).
+    if (auto* copy = qobject_cast<QCheckBox*>(m_coreSettings.value("copyRx2VfobToVfoa"))) {
+        QWidget* forget = m_coreSettings.value("forgetRx2VfoBOnDisconnect");
+        forget->setEnabled(copy->isEnabled() && copy->isChecked());
     }
 }
 
@@ -924,11 +922,45 @@ void CatTciServerPage::buildSensorsGroup()
 
 // ---------------------------------------------------------------------------
 // Group 6: VFO Quirks
-// Controls: Forget RX2 VFOB on disconnect / Use RX1 VFOA for RX2 VFOA /
-//           Copy RX2 VFOB to VFOA.
+// Controls: Forget RX2 VFO B / Use RX1 VFO A for RX2 VFO A /
+//           Duplicate RX2 VFO B to RX2 VFO A.
 // AppSettings: TciForgetRx2VfoBOnDisconnect, TciUseRx1VfoaForRx2Vfoa,
-//              TciCopyRx2VfobToVfoa.
+//              TciCopyRx2VfobToVfoa (the key names predate the port; kept).
+// Defaults: TciProtocol.h kTci...Default. TciProtocol.cpp applies them.
 // ---------------------------------------------------------------------------
+QString CatTciServerPage::rx2VfoForgetLabel()
+{
+    return tr("Forget RX2 VFO B");
+}
+
+QString CatTciServerPage::rx2VfoForgetTip()
+{
+    return tr("While Duplicate RX2 VFO B to RX2 VFO A is on, send RX2's frequency to TCI "
+              "apps only as RX2 VFO A, without its VFO B messages.");
+}
+
+QString CatTciServerPage::rx2VfoUseRx1Label()
+{
+    return tr("Use RX1 VFO A for RX2 VFO A");
+}
+
+QString CatTciServerPage::rx2VfoUseRx1Tip()
+{
+    return tr("While RX2 is on, TCI apps see RX1's frequency as RX2 VFO A, and an app "
+              "that sets RX2 VFO A tunes RX1.");
+}
+
+QString CatTciServerPage::rx2VfoCopyLabel()
+{
+    return tr("Duplicate RX2 VFO B to RX2 VFO A");
+}
+
+QString CatTciServerPage::rx2VfoCopyTip()
+{
+    return tr("RX2 has one frequency, which TCI apps get as RX2 VFO B. This also sends "
+              "it as RX2 VFO A, for apps that follow VFO A.");
+}
+
 void CatTciServerPage::buildVfoQuirksGroup()
 {
     auto* group = new QGroupBox(tr("VFO Quirks"), this);
@@ -937,68 +969,62 @@ void CatTciServerPage::buildVfoQuirksGroup()
     form->setSpacing(6);
 
     auto& s = AppSettings::instance();
+    const auto boolText = [](bool on) {
+        return on ? QStringLiteral("True") : QStringLiteral("False");
+    };
 
-    // Forget RX2 VFOB on disconnect
-    // From Thetis TCIServer.cs [v2.10.3.13] — RX2 VFOB forget-on-disconnect
-    m_forgetRx2VfoBCheck = new QCheckBox(tr("Forget RX2 VFOB on disconnect"), group);
+    // Forget RX2 VFO B
+    // From Thetis setup.designer.cs [v2.10.3.15] (chkForgetRX2VfoBVFOinfo)
+    m_forgetRx2VfoBCheck = new QCheckBox(rx2VfoForgetLabel(), group);
     m_forgetRx2VfoBCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
     m_forgetRx2VfoBCheck->setObjectName(QStringLiteral("tciForgetRx2VfoBCheck"));
-    m_forgetRx2VfoBCheck->setToolTip(
-        tr("When a TCI client disconnects, reset RX2 VFOB to its default frequency "
-           "instead of keeping the last value set by the client."));
+    m_forgetRx2VfoBCheck->setToolTip(rx2VfoForgetTip());
     m_forgetRx2VfoBCheck->setChecked(
-        s.value(QStringLiteral("TciForgetRx2VfoBOnDisconnect"), QStringLiteral("False")).toString()
+        s.value(QStringLiteral("TciForgetRx2VfoBOnDisconnect"),
+                boolText(kTciForgetRx2VfobDefault)).toString()
         == QStringLiteral("True"));
-    connect(m_forgetRx2VfoBCheck, &QCheckBox::toggled, this, [](bool on) {
+    connect(m_forgetRx2VfoBCheck, &QCheckBox::toggled, this, [boolText](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciForgetRx2VfoBOnDisconnect"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+                                          boolText(on));
     });
     form->addRow(QString(), m_forgetRx2VfoBCheck);
 
-    // Use RX1 VFOA for RX2 VFOA
-    // From Thetis TCIServer.cs [v2.10.3.13] — shared-VFOA quirk
-    m_useRx1VfoaForRx2Check = new QCheckBox(tr("Use RX1 VFOA for RX2 VFOA"), group);
+    // Use RX1 VFO A for RX2 VFO A
+    // From Thetis setup.designer.cs [v2.10.3.15] (chkUseRX1vfoaForRX2vfoa)
+    m_useRx1VfoaForRx2Check = new QCheckBox(rx2VfoUseRx1Label(), group);
     m_useRx1VfoaForRx2Check->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
     m_useRx1VfoaForRx2Check->setObjectName(QStringLiteral("tciUseRx1VfoaForRx2VfoaCheck"));
-    m_useRx1VfoaForRx2Check->setToolTip(
-        tr("Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. "
-           "Required by clients that do not maintain independent per-receiver VFO state."));
+    m_useRx1VfoaForRx2Check->setToolTip(rx2VfoUseRx1Tip());
     m_useRx1VfoaForRx2Check->setChecked(
-        s.value(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), QStringLiteral("False")).toString()
+        s.value(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"),
+                boolText(kTciUseRx1VfoaForRx2VfoaDefault)).toString()
         == QStringLiteral("True"));
-    connect(m_useRx1VfoaForRx2Check, &QCheckBox::toggled, this, [](bool on) {
+    connect(m_useRx1VfoaForRx2Check, &QCheckBox::toggled, this, [boolText](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+                                          boolText(on));
     });
     form->addRow(QString(), m_useRx1VfoaForRx2Check);
 
-    // Copy RX2 VFOB to VFOA
-    // From Thetis TCIServer.cs [v2.10.3.13] — VFOB→VFOA copy quirk
-    m_copyRx2VfobToVfoaCheck = new QCheckBox(tr("Copy RX2 VFOB to VFOA"), group);
+    // Duplicate RX2 VFO B to RX2 VFO A
+    // From Thetis setup.designer.cs [v2.10.3.15] (chkCopyRX2VFObToVFOa)
+    m_copyRx2VfobToVfoaCheck = new QCheckBox(rx2VfoCopyLabel(), group);
     m_copyRx2VfobToVfoaCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
     m_copyRx2VfobToVfoaCheck->setObjectName(QStringLiteral("tciCopyRx2VfobToVfoaCheck"));
-    m_copyRx2VfobToVfoaCheck->setToolTip(
-        tr("Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. "
-           "Required by apps that drive split mode via VFOB but read back VFOA."));
+    m_copyRx2VfobToVfoaCheck->setToolTip(rx2VfoCopyTip());
     m_copyRx2VfobToVfoaCheck->setChecked(
-        s.value(QStringLiteral("TciCopyRx2VfobToVfoa"), QStringLiteral("False")).toString()
+        s.value(QStringLiteral("TciCopyRx2VfobToVfoa"),
+                boolText(kTciCopyRx2VfobToVfoaDefault)).toString()
         == QStringLiteral("True"));
-    connect(m_copyRx2VfobToVfoaCheck, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("TciCopyRx2VfobToVfoa"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+    // Forget works only with Duplicate: enabled only while Duplicate is on.
+    // From Thetis setup.cs:22568-22572 [v2.10.3.15] (chkCopyRX2VFObToVFOa_CheckedChanged)
+    m_forgetRx2VfoBCheck->setEnabled(m_copyRx2VfobToVfoaCheck->isChecked());
+    connect(m_copyRx2VfobToVfoaCheck, &QCheckBox::toggled, this, [this, boolText](bool on) {
+        AppSettings::instance().setValue(QStringLiteral("TciCopyRx2VfobToVfoa"), boolText(on));
+        m_forgetRx2VfoBCheck->setEnabled(on);
     });
     form->addRow(QString(), m_copyRx2VfobToVfoaCheck);
 
     contentLayout()->addWidget(group);
-    // R-R3-49: the three RX2 VFO options are not applied yet; hidden until
-    // they are.
-    // Unbuilt: in view, disabled, with the reason (JJ's rule
-    // "disabled, never hidden").
-    for (QCheckBox* quirk : {m_forgetRx2VfoBCheck, m_useRx1VfoaForRx2Check,
-                             m_copyRx2VfobToVfoaCheck}) {
-        UnbuiltFeatures::disableUnlessBuilt(quirk, UnbuiltFeature::TciExtras,
-                                            UnbuiltFeatures::notBuiltReason());
-    }
 }
 
 // ---------------------------------------------------------------------------

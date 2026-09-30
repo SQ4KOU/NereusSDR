@@ -35,6 +35,9 @@
 //                band edges and 6m/ByPass on RX select the low-pass
 //                (radioHardwareVersion 10). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - TciExtras leaves the list: the three RX2 VFO options
+//                reach the TCI wire as Thetis sends them. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -91,8 +94,6 @@ enum class UnbuiltFeature {
     WsjtxFilters,     // Spot Hub WSJT-X filters (three) (built after R4)
     RbnRateLimit,     // Spot Hub RBN rate limit (built after R4)
     FreeDvToPsk,      // Spot Hub report FreeDV decodes to PSK Reporter (built after R4)
-    TciExtras,        // TCI RX2 VFO options (three),
-                      // stream channels (built after R4)
     SmallFilter,      // Setup > Appearance small filter display on the VFO flag
     ApfParams,        // Setup > DSP > CW peak filter bandwidth and gain (built after R4)
     AmSquelchTail,    // Setup > DSP > AM/SAM maximum squelch tail (built after R4)

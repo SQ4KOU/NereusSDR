@@ -37,6 +37,8 @@
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
+#include "core/TciProtocol.h"
+
 #include <QByteArray>
 #include <QJsonObject>
 #include <QList>
@@ -120,9 +122,10 @@ public:
         int txChannel{2};   // 0 Left, 1 Right, 2 Both (TciTxChannel's text)
         int rxSensorIntervalMs{200};
         int txSensorIntervalMs{200};
-        bool forgetRx2VfoBOnDisconnect{false};
-        bool useRx1VfoaForRx2Vfoa{false};
-        bool copyRx2VfobToVfoa{false};
+        // The three RX2 VFO options' defaults live in core/TciProtocol.h.
+        bool forgetRx2VfoBOnDisconnect{kTciForgetRx2VfobDefault};
+        bool useRx1VfoaForRx2Vfoa{kTciUseRx1VfoaForRx2VfoaDefault};
+        bool copyRx2VfobToVfoa{kTciCopyRx2VfobToVfoaDefault};
         bool operator==(const State& other) const = default;
     };
 

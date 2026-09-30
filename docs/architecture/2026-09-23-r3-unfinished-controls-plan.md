@@ -94,7 +94,7 @@ goes.
 | rbn-rate | Spot Hub RBN rate limit | Hide; after R4 |
 | freedv-psk | Spot Hub report FreeDV decodes to PSK Reporter | Hide; after R4 |
 | spot-auto-bg | Spot display automatic background colour | Remove |
-| tci-extras | TCI rate limit, CW to CWU, TX channel, sensor intervals, the three RX2 VFO options, stream channels | Hide; after R4 |
+| tci-extras | TCI rate limit, CW to CWU, TX channel, sensor intervals, the three RX2 VFO options, stream channels | Built (2026-09-29, codex/tci-rx2-quirks); left the unbuilt list |
 | tci-sliceb | TCI Slice B rate | Remove |
 | small-filter | Setup > Appearance small filter display on the VFO flag (the flag stores the setting but draws nothing with it) | Hide |
 | apf-params | Setup > DSP > CW peak filter bandwidth and gain (no setting behind them; the peak filter's on and off works) | Hide; after R4 |
