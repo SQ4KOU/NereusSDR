@@ -38,6 +38,12 @@ timeout, or one that crashed, runs no destructor to stop its helper, and
 before this the helper was left running with parent 1 for as long as the
 computer stayed up (tst_path_racer's, found 22 hours on). POSIX only; on
 Windows the option is accepted and does nothing.
+
+A datagram it cannot send (a peer address the loopback-bound relay socket
+cannot reach, such as another interface's address routed off this computer:
+EADDRNOTAVAIL on macOS) is dropped, as a relay drops what it cannot deliver,
+and counted with UNSENT n at 1, 2, 4, 8 ... of them. Before 2026-09-30 the
+error ended the whole process, so every later release went unanswered.
 """
 
 from __future__ import annotations
@@ -178,6 +184,8 @@ class Server:
         self.relayed_out = 0
         # iPhone app plan Task 28: allocations given back with LIFETIME 0.
         self.released = 0
+        # Datagrams dropped because the socket refused to send them.
+        self.unsent = 0
 
     def port(self) -> int:
         return self.sock.getsockname()[1]
@@ -195,8 +203,21 @@ class Server:
         if total & (total - 1) == 0:
             self.say(f"RELAYED {direction} {total}")
 
+    def send(self, sock: socket.socket, data: bytes, addr) -> bool:
+        # A send the operating system refuses drops that one datagram; the
+        # server, and every allocation it holds, carries on.
+        try:
+            sock.sendto(data, addr)
+            return True
+        except OSError:
+            self.unsent += 1
+            if self.unsent & (self.unsent - 1) == 0:
+                self.say(f"UNSENT {self.unsent}")
+            return False
+
     def to_peer(self, allocation: Allocation, data: bytes, peer) -> None:
-        allocation.relay.sendto(data, peer)
+        if not self.send(allocation.relay, data, peer):
+            return
         self.relayed_out += 1
         self.count("OUT", self.relayed_out)
 
@@ -207,7 +228,10 @@ class Server:
             timeout = PARENT_POLL_S if parent_pid is not None else None
             for key, _ in self.selector.select(timeout):
                 sock = key.fileobj
-                data, addr = sock.recvfrom(65535)
+                try:
+                    data, addr = sock.recvfrom(65535)
+                except OSError:
+                    continue
                 if key.data is None:
                     self.from_client(data, addr[:2])
                 else:
@@ -220,12 +244,12 @@ class Server:
         self.count("IN", self.relayed)
         number = allocation.peers.get(peer)
         if number is not None:
-            self.sock.sendto(struct.pack("!HH", number, len(data)) + data, allocation.client)
+            self.send(self.sock, struct.pack("!HH", number, len(data)) + data, allocation.client)
             return
         txid = os.urandom(12)
         message = build(DATA, INDICATION, txid,
                         [(XOR_PEER_ADDRESS, xor_address(peer, txid)), (DATA_ATTR, data)], None)
-        self.sock.sendto(message, allocation.client)
+        self.send(self.sock, message, allocation.client)
 
     def from_client(self, data: bytes, client) -> None:
         if data and 0x40 <= data[0] <= 0x7F:
@@ -242,7 +266,7 @@ class Server:
             return
         method, cls, txid, attrs, raw = parsed
         if method == BINDING and cls == REQUEST:
-            self.sock.sendto(build(BINDING, SUCCESS, txid,
+            self.send(self.sock, build(BINDING, SUCCESS, txid,
                                    [(XOR_MAPPED_ADDRESS, xor_address(client, txid))], None),
                              client)
             return
@@ -275,14 +299,14 @@ class Server:
 
     def challenge(self, method, txid, client) -> None:
         error = struct.pack("!HBB", 0, 4, 1) + b"Unauthorized"
-        self.sock.sendto(build(method, ERROR, txid,
+        self.send(self.sock, build(method, ERROR, txid,
                                [(ERROR_CODE, error), (REALM_ATTR, REALM), (NONCE, self.nonce)], None),
                          client)
 
     def allocate(self, txid, client, key) -> None:
         if self.quota_full:
             error = struct.pack("!HBB", 0, 4, 86) + b"Allocation Quota Reached"
-            self.sock.sendto(build(ALLOCATE, ERROR, txid, [(ERROR_CODE, error)], key), client)
+            self.send(self.sock, build(ALLOCATE, ERROR, txid, [(ERROR_CODE, error)], key), client)
             self.say("QUOTA 486")
             return
         allocation = self.allocations.get(client)
@@ -294,7 +318,7 @@ class Server:
             self.selector.register(relay, selectors.EVENT_READ, allocation)
             self.say(f"ALLOCATED {len(self.allocations)}")
         relayed = allocation.relay.getsockname()[:2]
-        self.sock.sendto(build(ALLOCATE, SUCCESS, txid, [
+        self.send(self.sock, build(ALLOCATE, SUCCESS, txid, [
             (XOR_RELAYED_ADDRESS, xor_address(relayed, txid)),
             (XOR_MAPPED_ADDRESS, xor_address(client, txid)),
             (LIFETIME, struct.pack("!I", 600)),
@@ -309,7 +333,7 @@ class Server:
             allocation.relay.close()
             self.released += 1
             self.say(f"RELEASED {self.released}")
-        self.sock.sendto(build(REFRESH, SUCCESS, txid,
+        self.send(self.sock, build(REFRESH, SUCCESS, txid,
                                [(LIFETIME, struct.pack("!I", min(seconds, 600)))], key), client)
 
     def permit(self, txid, client, attrs, key) -> None:
@@ -319,7 +343,7 @@ class Server:
         for atype, value, _ in attrs:
             if atype == XOR_PEER_ADDRESS:
                 allocation.permissions.add(read_xor_address(value, txid)[0])
-        self.sock.sendto(build(CREATE_PERMISSION, SUCCESS, txid, [], key), client)
+        self.send(self.sock, build(CREATE_PERMISSION, SUCCESS, txid, [], key), client)
 
     def bind_channel(self, txid, client, attrs, key) -> None:
         allocation = self.allocations.get(client)
@@ -331,7 +355,7 @@ class Server:
         allocation.channels[number] = peer
         allocation.peers[peer] = number
         allocation.permissions.add(peer[0])
-        self.sock.sendto(build(CHANNEL_BIND, SUCCESS, txid, [], key), client)
+        self.send(self.sock, build(CHANNEL_BIND, SUCCESS, txid, [], key), client)
 
 
 # How often the server looks for its parent while nothing arrives.

@@ -26,6 +26,13 @@
 //               closes or fails, stops at its bound (QTRY_* runs on for
 //               twice its timeout after it expires) and says why. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: turnReport(): the fake relay's output with its standard
+//               error and whether it is still running, so a test that
+//               waits on the relay says when the relay itself stopped;
+//               EndWatch::watch(LocalService&) ends a wait when the fake
+//               relay exits; turnSecret() and turnPort() for a test that
+//               speaks to the fake relay itself. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -306,6 +313,34 @@ public:
         return m_turnLog;
     }
 
+    /// For a failure message: what the fake relay printed, whether it is
+    /// still running (and how it ended if not) and its standard error, so
+    /// a relay that stopped is told apart from a release never sent.
+    QString turnReport()
+    {
+        // A short look, so an exit and its last output are seen even when
+        // the caller has not run the event loop (a blocking probe).
+        if (m_turn && m_turn->state() == QProcess::Running) {
+            m_turn->waitForFinished(kTurnReportLookMs);
+        }
+        const QString output = turnOutput();
+        QString state = QStringLiteral("not started");
+        if (m_turn) {
+            m_turnErrors += QString::fromUtf8(m_turn->readAllStandardError());
+            state = m_turn->state() == QProcess::Running
+                ? QStringLiteral("running")
+                : QStringLiteral("exited (code %1)").arg(m_turn->exitCode());
+        }
+        return QStringLiteral("fake TURN server %1\n--- its output:\n%2--- its errors:\n%3")
+            .arg(state, output, m_turnErrors);
+    }
+
+    /// The fake relay's process (null before start()), its shared secret
+    /// and its UDP port, for a test that speaks to it directly.
+    QProcess* turnProcess() const { return m_turn.get(); }
+    QByteArray turnSecret() const { return m_secret; }
+    quint16 turnPort() const { return m_turnPort; }
+
     QUrl url() const { return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_port)); }
     quint16 port() const { return m_port; }
 
@@ -356,6 +391,8 @@ private:
         }
     }
 
+    // How long turnReport() looks for the fake relay's exit.
+    static constexpr int kTurnReportLookMs = 200;
     bool m_stun = true;
     bool m_relay = true;
     bool m_relayFull = false;
@@ -372,6 +409,7 @@ private:
     QString m_startFailure;
     qint64 m_readyMs = -1;
     QString m_turnLog;
+    QString m_turnErrors;
 };
 
 // One Core with its StationServer, as the pairing tests stand it up.
@@ -476,6 +514,22 @@ public:
         m_connections.append(QObject::connect(client, &RendezvousClient::connectionLost, [this] {
             note(QStringLiteral("the Core lost the remote access service"));
         }));
+    }
+
+    // The fake relay stopping ends a wait on anything that goes through it
+    // (a connection through the relay, an allocation given back). Its
+    // output and errors are in LocalService::turnReport().
+    void watch(LocalService& service)
+    {
+        QProcess* turn = service.turnProcess();
+        if (turn == nullptr || turn->state() != QProcess::Running) {
+            note(QStringLiteral("the fake TURN server was not running"));
+            return;
+        }
+        m_connections.append(QObject::connect(
+            turn, &QProcess::finished, [this](int code, QProcess::ExitStatus) {
+                note(QStringLiteral("the fake TURN server exited (code %1)").arg(code));
+            }));
     }
 
     bool ended() const { return !m_reason.isEmpty(); }
