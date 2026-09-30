@@ -790,9 +790,10 @@ private slots:
     }
 
     // Thetis re-sends the RX2 lines when RX2 is turned on or off
-    // (RX2EnabledChangedHandlers, TCIServer.cs:6741 and 7451-7462
-    // [v2.10.3.15]). On the Core RX2 is slice 1, so adding and removing it
-    // sends them, once per change.
+    // (RX2EnabledChangedHandlers, TCIServer.cs:6741 and 842-847
+    // [v2.10.3.15]): rx_enable:1 and tx_enable:1 only. On the Core RX2 is
+    // slice 1, so adding and removing it sends them, once per change; the
+    // Core's server refuses transmit, so tx_enable:1 stays false.
     void stationRx2LinesFollowSlice1()
     {
         const quint16 port = freePort();
@@ -803,23 +804,33 @@ private slots:
         QVERIFY(station.setStationTciForStation(true, port, &reason));
         TciApp app(port);
         QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
-        QVERIFY(app.has(QStringLiteral("rx_channel_enable:1,0,false;")));
         QTest::qWait(150);
+        const auto rx2Lines = [&app]() {
+            QStringList lines;
+            for (const QString& f : app.frames) {
+                if (f.startsWith(QStringLiteral("rx_enable:1,"))
+                    || f.startsWith(QStringLiteral("tx_enable:1,"))
+                    || f.startsWith(QStringLiteral("rx_channel_enable:1,"))
+                    || f.startsWith(QStringLiteral("lock:1,"))) {
+                    lines.append(f);
+                }
+            }
+            return lines;
+        };
 
         app.frames.clear();
         QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
-        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,0,true;")), 3000);
-        QVERIFY(app.has(QStringLiteral("rx_enable:1,true;")));
-        QVERIFY(app.has(QStringLiteral("lock:1,false;")));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("tx_enable:1,false;")), 3000);
         QTest::qWait(150);
-        QCOMPARE(app.frames.count(QStringLiteral("rx_channel_enable:1,0,true;")), 1);
+        QCOMPARE(rx2Lines(), (QStringList{QStringLiteral("rx_enable:1,true;"),
+                                          QStringLiteral("tx_enable:1,false;")}));
 
         app.frames.clear();
         station.removeSlice(1);
-        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,0,false;")), 3000);
-        QVERIFY(app.has(QStringLiteral("rx_enable:1,false;")));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,false;")), 3000);
         QTest::qWait(150);
-        QCOMPARE(app.frames.count(QStringLiteral("rx_channel_enable:1,0,false;")), 1);
+        QCOMPARE(rx2Lines(), (QStringList{QStringLiteral("rx_enable:1,false;"),
+                                          QStringLiteral("tx_enable:1,false;")}));
         app.socket.close();
     }
 

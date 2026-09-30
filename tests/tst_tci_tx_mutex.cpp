@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "core/TciServer.h"
+#include "core/TciProtocol.h"
 #include "core/TciBinaryFrame.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
@@ -96,6 +97,7 @@ private slots:
     void wsjtx_sequence_still_sees_trx_true_without_suffix();
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
+    void stopped_server_queues_no_rx2_lines();
     void desktop_host_reentrant_stop_cannot_take_audio();
     void desktop_host_reentrant_destruction_releases_original_key();
     void desktop_host_release_callback_may_destroy_server_data();
@@ -208,12 +210,8 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
     QVERIFY(connected.wait(2000));
     QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
     text.clear();
-    radio.setLock(3, true);
-    QTest::qWait(200);
-    text.clear();
-    // RX2 turns on when the station device gains a second slice: the RX2
-    // lines go out once, with slice 3 named as receiver 1 (the
-    // physical-to-logical broadcast seam).
+    // RX2 turns on when the station device gains a second slice: Thetis's
+    // RX2EnabledChange lines go out (TCIServer.cs:842-847 [v2.10.3.15]).
     radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
     const auto hasLine = [&text](const QString& line) {
         for (const auto& call : text) {
@@ -221,8 +219,66 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
         }
         return false;
     };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("tx_enable:1,true;")), 3000);
+    QVERIFY(hasLine(QStringLiteral("rx_enable:1,true;")));
+    // Slice 3 is named as receiver 1 (the physical-to-logical seam).
+    text.clear();
+    radio.setLock(3, true);
     QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("lock:1,true;")), 3000);
     QVERIFY(!hasLine(QStringLiteral("lock:0,true;")));
+    app.close();
+    server.stop();
+}
+
+// A stopped server queues no RX2 lines (its ownership hook goes with the
+// rest of its model wiring), and sends them again once restarted.
+void TestTciTxMutex::stopped_server_queues_no_rx2_lines()
+{
+    RadioModel radio;
+    for (int i = 0; i < 4; ++i) {
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
+        radio.sliceOwnership()->setOwner(i, i != 2 ? QByteArray("phone")
+                                   : SliceOwnership::stationDevice());
+    }
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    server.stop();
+    TciProtocol* protocol = server.protocolForTest();
+    protocol->drainCoalescedNotifications();
+    while (protocol->hasPendingNotification()) { protocol->takePendingNotification(); }
+
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
+    QTest::qWait(50);
+    protocol->drainCoalescedNotifications();
+    QStringList queued;
+    while (protocol->hasPendingNotification()) { queued << protocol->takePendingNotification(); }
+    for (const QString& line : queued) {
+        QVERIFY2(!line.startsWith(QStringLiteral("rx_enable:1,"))
+                     && !line.startsWith(QStringLiteral("tx_enable:1,")),
+                 qPrintable(line));
+    }
+
+    // Back to one station slice, restart, and flip RX2 on again: sent.
+    radio.sliceOwnership()->setOwner(3, QByteArray("phone"));
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
+    QTest::qWait(150);
+    text.clear();
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:1,true;")), 3000);
+    QVERIFY(hasLine(QStringLiteral("tx_enable:1,true;")));
     app.close();
     server.stop();
 }

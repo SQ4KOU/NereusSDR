@@ -487,6 +487,25 @@ private slots:
         QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
     }
 
+    // Only receivers 0 and 1 are Thetis's (TCIServer.cs:3884-3918
+    // [v2.10.3.15]): with RX2 on, channel 1 of another receiver is not
+    // RX2's VFO B and tunes nothing.
+    void otherReceiversChannel1IsNotRx2()
+    {
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/true);
+        TciProtocol protocol(&radio);
+        for (const QString& set : {QStringLiteral("vfo:2,1,3500000;"),
+                                   QStringLiteral("vfo:-1,1,3500000;"),
+                                   QStringLiteral("vfo:7,1,3500000;")}) {
+            protocol.handleCommand(set);
+        }
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'200'000));
+        QCOMPARE(radio.vfoHz(1, 1), qint64(14'200'000));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
+        QCOMPARE(radio.vfoHz(0, 1), qint64(7'100'000));
+    }
+
     // The ownership gate checks the slice a vfo set actually writes: with
     // Use RX1 VFO A, vfo:1,0 writes receiver 0's slice, and with RX2 on
     // vfo:0,1 writes receiver 1's. A refused set changes nothing and the

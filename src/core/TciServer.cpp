@@ -1421,10 +1421,9 @@ void TciServer::hookGlobalBroadcasts()
                 }
             });
 
-    // ── RX2 enabled (rx_enable:1 + rx_channel_enable:1,0 + lock:1) ────────
+    // ── RX2 enabled (rx_enable:1 + tx_enable:1) ───────────────────────────
     // Source: Thetis RX2EnabledChangedHandlers at TCIServer.cs:6741
-    // [v2.10.3.15] routed to OnRX2EnabledChanged.  Thetis re-emits the
-    // initial state for the rx==1 lines that depend on bRX2Enabled.
+    // [v2.10.3.15] routed to OnRX2EnabledChanged -> RX2EnabledChange.
     // RX2 is on when receiver 1 has a slice (TciProtocol::rx2EnabledNow), so
     // the lines follow every event that can change that: a slice added or
     // removed, the receiver map moving with slice ownership while hosting,
@@ -1451,32 +1450,28 @@ void TciServer::hookGlobalBroadcasts()
 
 void TciServer::refreshRx2Enabled()
 {
-    if (!m_model || !m_protocol) { return; }
+    // A stopped server queues nothing (stop() also drops the ownership
+    // hook; the singleShot after a slice removal can still land here).
+    if (!m_model || !m_protocol || !m_globalBroadcastsWired) { return; }
     const bool en = m_protocol->rx2EnabledNow();
     if (en == m_rx2EnabledSent) { return; }
     m_rx2EnabledSent = en;
-    const QString boolStr = en ? QStringLiteral("true") : QStringLiteral("false");
+    // From Thetis TCIServer.cs:842-847 [v2.10.3.15] (RX2EnabledChange):
+    //   sendRXEnable(1, enabled);
+    //   sendTXEnable(1, enabled && !consoleThreadSafe.MOX);
+    // Only those two lines: rx_channel_enable and lock are not re-sent on
+    // this path (console.cs:37522 fires RX2EnabledChangedHandlers alone).
+    // tx_enable also follows transmitRefused(), as the first lines do.
     bool mox = false;
     QMetaObject::invokeMethod(m_model, "mox",
                               Qt::DirectConnection,
                               Q_RETURN_ARG(bool, mox));
-    m_protocol->enqueueLocalBroadcast(
-        QStringLiteral("rx_enable:1,%1;")
-            .arg((en && !mox) ? QStringLiteral("true") : QStringLiteral("false")));
-    m_protocol->enqueueLocalBroadcast(
-        QStringLiteral("rx_channel_enable:1,0,%1;").arg(boolStr));
-    if (en) {
-        const int slice1 = m_desktopHostMode ? desktopSliceForReceiver(1) : 1;
-        bool lock1 = false;
-        QMetaObject::invokeMethod(m_model, "lock",
-                                  Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, lock1),
-                                  Q_ARG(int, slice1));
-        m_protocol->enqueueLocalBroadcast(
-            QStringLiteral("lock:%1,%2;")
-                .arg(slice1)
-                .arg(lock1 ? QStringLiteral("true") : QStringLiteral("false")));
-    }
+    const auto flag = [](bool on) {
+        return on ? QStringLiteral("true") : QStringLiteral("false");
+    };
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("rx_enable:1,%1;").arg(flag(en)));
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("tx_enable:1,%1;")
+        .arg(flag(en && !mox && !m_protocol->transmitRefused())));
 }
 
 TciServer::~TciServer()
@@ -1883,6 +1878,9 @@ void TciServer::stop()
         // / connection-state subscribers (all rooted on m_model and its
         // sub-models).  Reset the guard so start() re-arms them.
         m_globalBroadcastsWired = false;
+        // SliceOwnership is not m_model, so its RX2 hook needs its own
+        // disconnect; hookGlobalBroadcasts reconnects it on start().
+        QObject::disconnect(m_rx2OwnershipConnection);
     }
     // 2026-05-17 crash fix: m_audioTapSources is now QSet<QPointer<RxChannel>>
     // (see TciServer.h).  Skip entries whose underlying RxChannel was

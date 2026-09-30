@@ -1369,7 +1369,10 @@ bool TciProtocol::rx2EnabledNow() const
 // 0's, and VFOBFreq otherwise. With RX2 off each receiver is its own.
 TciProtocol::VfoTarget TciProtocol::vfoTarget(int rx, int chan) const
 {
-    if (!rx2EnabledNow()) { return {rx, chan}; }
+    // Thetis acts on receivers 0 and 1 only (TCIServer.cs:3884-3918
+    // [v2.10.3.15]); any other receiver keeps its own number and is
+    // dropped as before.
+    if (rx < 0 || rx >= kExposedReceiverCount || !rx2EnabledNow()) { return {rx, chan}; }
     if (chan == 1) { return {1, 0}; }
     if (rx == 1 && chan == 0 && useRx1VfoaForRx2VfoaSetting()) { return {0, 0}; }
     return {rx, chan};
