@@ -1,4 +1,6 @@
 // no-port-check: NereusSDR-original Setup description transport.
+// 2026-09-29: setOnAirState, one revision per on-air edge. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
@@ -3100,32 +3102,47 @@ void SetupDescription::rebuild()
     }
 }
 
-void SetupDescription::setDspOnAirState(bool onAir)
+bool SetupDescription::applyDspOnAir(bool onAir)
 {
-    if (onAir == m_dspOnAir) { return; }
+    if (onAir == m_dspOnAir) { return false; }
     m_dspOnAir = onAir;
     const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
                                                        m_radioInfo),
                                           m_dspOnAir);
-    if (dsp == m_dsp) { return; }
+    if (dsp == m_dsp) { return false; }
     m_dsp = dsp;
-    ++m_revision;
-    emit dspDescriptionChanged();
-    // The revision's notify: a peer sees the new revision with the lock.
-    emit paDescriptionChanged();
+    return true;
 }
 
-void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+bool SetupDescription::applyPaOnAir(bool onAir, int transmittingBand)
 {
     const int band = onAir ? transmittingBand : -1;
-    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return; }
+    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return false; }
     m_paOnAir = onAir;
     m_paTransmittingBand = band;
     const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
                                                      m_radioInfo),
                                         m_paOnAir, m_paTransmittingBand);
-    if (pa == m_pa) { return; }
+    if (pa == m_pa) { return false; }
     m_pa = pa;
+    return true;
+}
+
+void SetupDescription::setOnAirState(bool onAir, int transmittingBand)
+{
+    const bool paChanged = applyPaOnAir(onAir, transmittingBand);
+    const bool dspChanged = applyDspOnAir(onAir);
+    if (!paChanged && !dspChanged) { return; }
+    // One edge, one revision: PA and DSP are sent again together, and PA
+    // carries the revision (its notify), so a peer sees one new revision.
+    ++m_revision;
+    if (dspChanged) { emit dspDescriptionChanged(); }
+    emit paDescriptionChanged();
+}
+
+void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+{
+    if (!applyPaOnAir(onAir, transmittingBand)) { return; }
     ++m_revision;
     emit paDescriptionChanged();
 }

@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: One setup description revision per on-air edge (PA and the
+//               DSP RX buffer lock together). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: Setup description version 20 (R-R3-49, R-IOS-18): PA Gain
 //               publishes its on-the-air lock per row, the transmitting band
 //               open to the transmit holder only. J.J. Boyd (KG4VCF),
@@ -2641,11 +2644,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // why, with the transmitting band open to the transmit holder only.
         const auto applyPaOnAir = [this](bool onAir) {
             if (m_radioModel && m_setupDescription) {
-                m_setupDescription->setPaOnAirState(
-                    onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
                 // Version 22: and DSP > Options' RX buffer sizes (Thetis
-                // setup.cs:5159 [v2.10.3.15], grpDSPBufferSize).
-                m_setupDescription->setDspOnAirState(onAir);
+                // setup.cs:5159 [v2.10.3.15], grpDSPBufferSize), in the
+                // same revision.
+                m_setupDescription->setOnAirState(
+                    onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
             }
         };
         applyPaOnAir(radioModel->isCoreOnAir());

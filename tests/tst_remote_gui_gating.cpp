@@ -150,6 +150,9 @@
 //                                    transmit settings stay live keyed;
 //                                    Region still waits. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The local RX buffer size lock follows
+//                                    TUNE and the two-tone test too. AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -202,6 +205,8 @@
 #include "core/MoxController.h"
 #include "core/RadioDiscovery.h"
 #include "core/StepAttenuatorFacade.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/SessionTransport.h"
@@ -1048,6 +1053,32 @@ private slots:
         QTRY_VERIFY(!model.isCoreOnAir());
         QVERIFY(phoneRx->isEnabled());
         QVERIFY(phoneTx->isEnabled());
+
+        // TUNE, both edges (the transmit model's, state only).
+        model.transmitModel().setTune(true);
+        QTRY_VERIFY(model.isCoreOnAir());
+        QVERIFY(!phoneRx->isEnabled());
+        QCOMPARE(phoneRx->toolTip(), RadioModel::dspBufferOnAirLockedReason());
+        model.transmitModel().setTune(false);
+        QTRY_VERIFY(!model.isCoreOnAir());
+        QVERIFY(phoneRx->isEnabled());
+
+        // The two-tone test, both edges (no radio, no RF).
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = model.twoToneController();
+        QVERIFY(twoTone != nullptr);
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTRY_VERIFY(twoTone->isActive());
+        QTRY_VERIFY(model.isCoreOnAir());
+        QVERIFY(!phoneRx->isEnabled());
+        QCOMPARE(phoneRx->toolTip(), RadioModel::dspBufferOnAirLockedReason());
+        twoTone->setActive(false);
+        QTRY_VERIFY(!twoTone->isActive());
+        QTRY_VERIFY(!model.isCoreOnAir());
+        QVERIFY(phoneRx->isEnabled());
+        twoTone->setTxChannel(nullptr);
     }
 
     void remoteModelRefusesMoxWithAnOperatorReason()

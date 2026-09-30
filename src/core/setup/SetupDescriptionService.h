@@ -84,10 +84,11 @@ public:
     /// The device that holds transmit changed: on the air PA is sent again
     /// so each peer's projection opens or locks the transmitting band.
     void noteTransmitHolderChanged();
-    /// Version 22: the Core is on the air (isCoreOnAir). DSP > Options'
-    /// four RX buffer size rows then carry their lock and its reason, as
-    /// Thetis greys grpDSPBufferSize while MOX is on.
-    void setDspOnAirState(bool onAir);
+    /// Version 22: an on-the-air edge (isCoreOnAir). PA Gain's rows as
+    /// setPaOnAirState, and DSP > Options' four RX buffer size rows carry
+    /// their lock and its reason, as Thetis greys grpDSPBufferSize while
+    /// MOX is on. One revision per edge; PA is sent once.
+    void setOnAirState(bool onAir, int transmittingBand);
     void setBoardCapabilities(const BoardCapabilities& caps);
     void setRadioContext(const BoardCapabilities& caps, HPSDRModel model);
     /// Version 13: also the radio Radio Info describes (its name, protocol,
@@ -113,11 +114,15 @@ signals:
     /// on a rebuild, and alone for the on-the-air lock.
     void paDescriptionChanged();
     /// DSP (version 22). Emitted with descriptionsChanged on a rebuild, and
-    /// with paDescriptionChanged (the revision) for the on-the-air lock.
+    /// with one paDescriptionChanged (the revision) for the on-the-air lock.
     void dspDescriptionChanged();
 
 private:
     void rebuild();
+    /// Set the on-air state of one category; true if its text changed.
+    /// The caller bumps the revision and emits.
+    bool applyDspOnAir(bool onAir);
+    bool applyPaOnAir(bool onAir, int transmittingBand);
     BoardCapabilities m_caps{};
     HPSDRModel m_model = HPSDRModel::FIRST;
     RadioInfo m_radioInfo{};

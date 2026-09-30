@@ -1430,16 +1430,20 @@ private slots:
                                        .value("gate").toObject();
         QCOMPARE(txGate.value("offAir"), QJsonValue(true));
 
-        // On the air: DSP and the revision are sent again, nothing else.
+        // On the air (the Core's on-air edge, PA's lock with it): DSP is
+        // sent again and PA once with the revision, one revision for the
+        // edge; the other categories are not sent.
         const quint32 before = service.revision();
+        const QString paOffAir = service.pa();
         QSignalSpy dspSpy(&service, &SetupDescriptionService::dspDescriptionChanged);
         QSignalSpy paSpy(&service, &SetupDescriptionService::paDescriptionChanged);
         QSignalSpy allSpy(&service, &SetupDescriptionService::descriptionsChanged);
-        service.setDspOnAirState(true);
+        service.setOnAirState(true, 5);
         QCOMPARE(dspSpy.count(), 1);
         QCOMPARE(paSpy.count(), 1);
         QCOMPARE(allSpy.count(), 0);
-        QVERIFY(service.revision() > before);
+        QCOMPARE(service.revision(), before + 1);
+        QVERIFY(service.pa() != paOffAir);
         const QJsonObject onAir = projectedCategory(service.dsp(), 22);
         int lockedRows = 0;
         for (const QJsonValue& page : onAir.value("pages").toArray()) {
@@ -1463,13 +1467,18 @@ private slots:
         QCOMPARE(SetupDescriptionService::fitCategoryForVersion(service.dsp(), 21), olderOffAir);
 
         // The same state again sends nothing.
-        service.setDspOnAirState(true);
+        const quint32 onAirRevision = service.revision();
+        service.setOnAirState(true, 5);
         QCOMPARE(dspSpy.count(), 1);
+        QCOMPARE(paSpy.count(), 1);
+        QCOMPARE(service.revision(), onAirRevision);
 
-        // Back on receive: the lock is gone.
-        service.setDspOnAirState(false);
+        // Back on receive: the lock is gone, again in one revision.
+        service.setOnAirState(false, -1);
         QCOMPARE(dspSpy.count(), 2);
         QCOMPARE(paSpy.count(), 2);
+        QCOMPARE(service.revision(), onAirRevision + 1);
+        QCOMPARE(service.pa(), paOffAir);
         for (const QString& id : rxIds) {
             QVERIFY2(!controlById(projectedCategory(service.dsp(), 22), id).contains("availability"),
                      qPrintable(id));

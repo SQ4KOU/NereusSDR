@@ -1,4 +1,6 @@
 // no-port-check: NereusSDR-original live-apply checks for described settings.
+// 2026-09-29: the RX buffer size lock follows TUNE and the two-tone test.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 
 #include <tuple>
@@ -20,6 +22,8 @@
 #include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TxAnalyzer.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/session/TransmitStateFacade.h"
 #include "MultiDeviceHarness.h"
@@ -827,6 +831,94 @@ private slots:
         listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
             key, QStringLiteral("512"), QStringLiteral("phone"))));
         QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("512"));
+    }
+
+    // The same lock follows TUNE and the two-tone test, the Core's other
+    // ways onto the air (isCoreOnAir), both edges: locked with its reason
+    // and the write refused while keyed, open and taken again after.
+    void onAirRxBufferSizeLockFollowsTuneAndTwoTone_data()
+    {
+        QTest::addColumn<bool>("twoToneKey");
+        QTest::newRow("tune") << false;
+        QTest::newRow("two-tone") << true;
+    }
+
+    void onAirRxBufferSizeLockFollowsTuneAndTwoTone()
+    {
+        QFETCH(bool, twoToneKey);
+        Core core(true);
+        Device listener(QStringLiteral("Buffer edge iPad"), QStringLiteral("tablet"));
+        core.pair(listener);
+        QHash<QByteArray, int> receiveOnly = kHolder;
+        receiveOnly.insert("setupDescription", 22);
+        auto* app = core.signIn(listener, receiveOnly);
+        QVERIFY(admitted(app));
+
+        const QString id = QStringLiteral("dsp.options.DspOptionsBufferSizeCwRx");
+        const QString key = QStringLiteral("DspOptionsBufferSizeCwRx");
+        const auto rowLock = [app, &id]() {
+            const QJsonObject dsp = QJsonDocument::fromJson(
+                latest(app->received(), QStringLiteral("setup"), QStringLiteral("dsp"))
+                    .toString().toUtf8()).object();
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue(id)) {
+                            return raw.toObject().value("availability");
+                        }
+                    }
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const auto rejectReason = [app, &key]() {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::dspBufferOnAirLockedReason()}};
+        QCOMPARE(rowLock(), QJsonValue(QJsonValue::Undefined));
+
+        // State only: no radio, no RF.
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = core.model->twoToneController();
+        QVERIFY(twoTone);
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        core.model->moxController()->setMoxCheck({});
+        const auto setKeyed = [&](bool on) {
+            if (twoToneKey) {
+                twoTone->setActive(on);
+                QTRY_COMPARE(twoTone->isActive(), on);
+            } else {
+                core.model->transmitModel().setTune(on);
+            }
+        };
+
+        setKeyed(true);
+        QTRY_VERIFY(core.model->isCoreOnAir());
+        QTRY_COMPARE(rowLock(), QJsonValue(locked));
+        app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("cw"))));
+        QTRY_COMPARE(rejectReason(), RadioModel::dspBufferOnAirLockedReason());
+        QVERIFY(core.settings->value(key).toString() != QStringLiteral("512"));
+
+        setKeyed(false);
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        QTRY_VERIFY(!core.model->stationOnAirRefusal(nullptr));
+        QTRY_COMPARE(rowLock(), QJsonValue(QJsonValue::Undefined));
+        app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("cw"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("512"));
+        twoTone->setTxChannel(nullptr);
     }
 
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()
