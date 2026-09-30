@@ -3,7 +3,9 @@
 // =================================================================
 //
 // Ported from Thetis source:
-//   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/console.cs,
+//   Project Files/Source/Console/enums.cs [v2.10.3.15],
+//   original licences from Thetis source are included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -45,6 +47,22 @@
 //                 ADC, the other ADC's own value following the band of the
 //                 first slice on it, both equal while diversity links them.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: PreampMode carries all ten Thetis modes
+//                 (enums.cs:236-251 [v2.10.3.15], SA_MINUS10/20/30 added;
+//                 that file's header is now carried below) and
+//                 setBoardIdentity feeds the stored-mode move. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: each preamp mode drives the step attenuator,
+//                 the preamp bit and the Alex attenuator as Thetis does
+//                 (console.cs:19218-19330 [v2.10.3.15]), and above 31 dB an
+//                 Alex board switches in the Alex attenuator and sends the
+//                 value + 2 (console.cs:11027-11065). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's own preamp mode with its band
+//                memory and drive (console.cs:19413-19520 [v2.10.3.15]),
+//                and the HPSDR MOX path turns RX1's step attenuator off and
+//                holds RX2's mode (console.cs:29598-29608, 29688-29692).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -98,16 +116,60 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+// --- From enums.cs ---
+/*  enums.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2000-2025 Original authors
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+
 #pragma once
 
 #include "models/Band.h"
 #include "core/WdspTypes.h"
+#include "core/HpsdrModel.h"
 
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
 
 #include <array>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -132,16 +194,40 @@ enum class AutoAttMode {
     Adaptive    // NereusSDR attack/hold/decay with per-band memory
 };
 
-// Preamp mode (Thetis PreampMode enum, console.cs:21574-21586).
-// Used by classic auto-att when step-att is disabled.
+// Preamp mode: the ten Thetis modes, in Thetis's order (the integer is
+// what a band's stored mode and the link carry).
+// From Thetis enums.cs:236-251 [v2.10.3.15]:
+//   public enum PreampMode
+//   {
+//       FIRST = -1,
+//       HPSDR_OFF,
+//       HPSDR_ON,
+//       HPSDR_MINUS10,
+//       HPSDR_MINUS20,
+//       HPSDR_MINUS30,
+//       HPSDR_MINUS40,
+//       HPSDR_MINUS50,
+//       SA_MINUS10,
+//       SA_MINUS20,  //MW0LGE_21d
+//       SA_MINUS30,
+//       // STEP_ATTEN,
+//       LAST,
+//   }
+// Off..Minus50 are the HPSDR modes (the preamp switch and the Alex
+// attenuator); SaMinus10..SaMinus30 put 10, 20 or 30 dB on the step
+// attenuator. Values stored before the SA modes existed are moved once by
+// loadSettings (BoardCapsTable::preampModeFromV1).
 enum class PreampMode {
-    Off,
-    On,
-    Minus10,
-    Minus20,    // MW0LGE_21d step atten [Thetis enums.cs:246]
-    Minus30,
-    Minus40,
-    Minus50
+    Off,        // HPSDR_OFF
+    On,         // HPSDR_ON
+    Minus10,    // HPSDR_MINUS10
+    Minus20,    // HPSDR_MINUS20
+    Minus30,    // HPSDR_MINUS30
+    Minus40,    // HPSDR_MINUS40
+    Minus50,    // HPSDR_MINUS50
+    SaMinus10,  // SA_MINUS10
+    SaMinus20,  // SA_MINUS20  //MW0LGE_21d
+    SaMinus30   // SA_MINUS30
 };
 
 // --- Controller ---
@@ -271,6 +357,16 @@ public:
     void setRx2AutoAttUndo(bool on);
     int rx2AutoUndoDelaySec() const noexcept { return m_rx2AutoUndoDelaySec; }
     void setRx2AutoUndoDelaySec(int sec);
+
+    // Level Cal: RX2's own preamp mode (Thetis RX2PreampMode,
+    // console.cs:19413-19520 [v2.10.3.15]) with its band memory
+    // (rx2_preamp_by_band), saved for the radio. With RX2's step attenuator
+    // off it puts the mode's attenuation on the other ADC on the boards in
+    // Thetis's list; on the HPSDR it sends the second preamp bit
+    // (NetworkIO.SetRX2Preamp). While RX2 shares slice A's ADC, or diversity
+    // links them, the two modes are one, as Thetis links them.
+    PreampMode rx2PreampMode() const noexcept { return m_rx2PreampMode; }
+    void setRx2PreampMode(PreampMode mode);
 
     // R-R3-46 / R-R3-11: save this radio's settings a short while after an
     // operator change, not only at teardown.  Off by default; the Core
@@ -467,12 +563,18 @@ public:
     // previously-loaded different radio.
     void saveSettings(const QString& mac);
     void loadSettings(const QString& mac);
+
+    // The connected board, its Thetis model and Alex presence. Set before
+    // loadSettings: the preamp modes stored before the SA modes existed
+    // are moved to the new numbering only once the board is known.
+    void setBoardIdentity(HPSDRHW board, HPSDRModel model, bool alexPresent);
     // R-R3-46: also drops the band memory, which is the unloaded radio's.
     void markSettingsUnloaded()
     {
         m_loadedMac.clear();
         m_bandState.clear();
         m_rx2BandAttDb.clear();
+        m_rx2BandPreamp.clear();
     }
     bool settingsLoaded() const { return !m_loadedMac.isEmpty(); }
 
@@ -578,6 +680,8 @@ signals:
     void rx2AutoAttEnabledChanged(bool on);
     void rx2AutoAttUndoChanged(bool on);
     void rx2AutoUndoDelayChanged(int seconds);
+    // Level Cal: rx2PreampMode() changed.
+    void rx2PreampModeChanged(NereusSDR::PreampMode mode);
 
 private:
     static constexpr int kMaxAdcs = 3;
@@ -616,6 +720,9 @@ private:
     PreampMode m_preampMode = PreampMode::Off;
     bool m_stepAttEnabled = true;
     int m_maxAttDb = kDefaultMaxAttDb;
+    // The range the caller set; m_maxAttDb is it, held at 31 on a known
+    // board outside Thetis's Alex list (recomputeMaxAtt).
+    int m_rawMaxAttDb = kDefaultMaxAttDb;
     int m_minAttDb = kDefaultMinAttDb;
 
     // Issue #259 — guards saveSettings against pre-load clobber.
@@ -634,6 +741,12 @@ private:
     // markSettingsUnloaded() so a different-MAC connect doesn't reuse
     // a stale load tag from a prior radio.)
     QString m_loadedMac;
+
+    // setBoardIdentity(); m_boardKnown stays false until it is called.
+    HPSDRHW m_board{HPSDRHW::Unknown};
+    HPSDRModel m_hpsdrModel{HPSDRModel::FIRST};
+    bool m_alexPresent{false};
+    bool m_boardKnown{false};
 
     // Auto-att configuration.
     bool m_autoAttEnabled = false;
@@ -793,7 +906,29 @@ private:
     // Send each ADC in use whose value or use differs from `before`.
     void sendAdcAttenuatorChanges(const AdcAttSnapshot& before);
     // Send RX1's value to slice A's ADC, and to the other ADC while linked.
+    // On a known board: nothing while the step attenuator is off, and the
+    // Alex attenuator plus the value + 2 above 31 dB on an Alex board.
     void sendRx1Attenuation(int dB);
+    // Level Cal: what one preamp mode sends (Thetis RX1PreampMode setter).
+    struct PreampDrive {
+        int attDb{0};
+        bool mercPreamp{false};
+        int alexAtten{0};
+    };
+    static PreampDrive preampDriveFor(PreampMode mode) noexcept;
+    bool isHpsdrModel() const noexcept;
+    // Thetis's Alex list for the step attenuator above 31 dB.
+    bool stepAttAlexEligible() const noexcept;
+    // Alex settings become Off on a known board without Alex.
+    PreampMode clampPreampForBoard(PreampMode mode) const noexcept;
+    void recomputeMaxAtt();
+    // The step attenuator value RX1's ADC receives for dB.
+    int rx1WireAttDbFor(int dB) const noexcept;
+    // attenuatorDbForAdc as it goes on the wire.
+    int wireAttDbForAdc(int adc) const noexcept;
+    // Send the current preamp mode's drive.
+    void applyPreampDrive();
+    void sendAlexAtten(int bits);
     // Send the other ADC's own value to it (nothing while linked or unused).
     void sendRx2Attenuation();
     void sendAttenuatorToAdc(int adc, int dB);
@@ -803,8 +938,14 @@ private:
     void runRx2AutoAtt(bool overloaded);
     // Drop the other ADC's auto-attenuate state, restoring its value.
     // RX2's auto-attenuate history (Thetis _historic_attenuator_readings_rx2):
-    // the value before each raise, unwound one per undo.
-    std::vector<int> m_rx2AutoAttHistory;
+    // the value before each raise, unwound one per undo. Thetis's
+    // HistoricAttenuatorReading: stepAttenuator -1 and preampMode FIRST
+    // (empty here) when not taken.
+    struct Rx2AttReading {
+        int stepAttenuator{-1};
+        std::optional<PreampMode> preampMode;
+    };
+    std::vector<Rx2AttReading> m_rx2AutoAttHistory;
     qint64 m_rx2LastAutoAttTimeMs{0};
     // RX2's own enable and auto-attenuate settings (Thetis
     // _rx2_step_att_enabled, _auto_att_rx2, _auto_att_undo_rx2,
@@ -815,6 +956,28 @@ private:
     int m_rx2AutoUndoDelaySec{5};
     // Whether RX2 is on an ADC of its own (not slice A's, not linked).
     bool rx2OnItsOwnAdc() const noexcept;
+
+    // Level Cal: RX2's preamp mode (Thetis rx2_preamp_mode) and its band
+    // memory (rx2_preamp_by_band, HPSDR_ON on every band at start,
+    // console.cs:1814 [v2.10.3.15]).
+    PreampMode m_rx2PreampMode{PreampMode::On};
+    std::unordered_map<int, PreampMode> m_rx2BandPreamp;
+    // Thetis temp_mode2: RX2's mode held over an HPSDR transmit.
+    PreampMode m_savedRx2PreampMode{PreampMode::On};
+    // Thetis _setFromOtherAttenuator: one mode setting the other.
+    bool m_setFromOtherPreamp{false};
+    // What one RX2 preamp mode sends (the RX2PreampMode setter's switch).
+    struct Rx2PreampDrive {
+        int attDb{0};
+        bool preamp{false};
+    };
+    static Rx2PreampDrive rx2PreampDriveFor(PreampMode mode) noexcept;
+    // The models whose RX2 mode drives the other ADC's step attenuator.
+    bool rx2PreampDrivesAdc() const noexcept;
+    // Thetis _rx2_preamp_present for the connected model.
+    bool rx2PreampPresent() const noexcept;
+    // Send RX2's mode drive (the RX2PreampMode setter's sends).
+    void applyRx2PreampDrive();
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);
@@ -846,6 +1009,7 @@ private slots:
 public:
     // Test seams — expose internal TX-path state for white-box unit tests.
     PreampMode savedPreampModeForTest() const noexcept { return m_savedPreampMode; }
+    PreampMode savedRx2PreampModeForTest() const noexcept { return m_savedRx2PreampMode; }
     int txAttByBandForTest(Band band) const { return applyTxAttenuationForBand(band); }
     // Expose the last TX ATT value pushed to hardware (via m_lastTxStepAttDb).
     int lastTxStepAttForTest() const noexcept { return m_lastTxStepAttDb; }

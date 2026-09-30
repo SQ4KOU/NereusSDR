@@ -1854,6 +1854,9 @@ target_compile_definitions(tst_oc_outputs_hf_no_n2adr_writer PRIVATE NEREUS_BUIL
 nereus_add_test(tst_preamp_combo)
 target_compile_definitions(tst_preamp_combo PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Level Cal: the ten Thetis preamp modes, label map and stored-mode move ──
+nereus_add_test(tst_preamp_mode)
+
 # ── Phase 3P-D Task 1: OcMatrix model + per-MAC persistence ──────────────────
 # Verifies per-band × per-pin × {RX,TX} bit assignments, TXPinAction mapping
 # (Thetis enums.cs:443 TXPinActions [@501e3f5]), and AppSettings round-trip
@@ -2091,6 +2094,7 @@ nereus_add_test(tst_disable_hf_pa)
 # do (console.cs:6839-7175). NereusSDR-original tests.
 nereus_add_test(tst_alex_hpf_rows)
 nereus_add_test(tst_alex_lpf_rows)
+nereus_add_test(tst_alex_atten_wire)
 # Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window
@@ -3019,6 +3023,20 @@ nereus_add_test(tst_rx_meter_offset)
 nereus_add_test(tst_rx_6m_lna_offset)
 target_compile_definitions(tst_rx_6m_lna_offset PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Level calibration: meter + display offset storage, reset, TCI report ─────
+# RX1_MeterCalOffsetDb / RX1_DisplayCalOffsetDb with the Thetis per-model
+# defaults, ResetLevelCalibration, and calibration_ex (TciProtocol /
+# TciServer when WebSockets is present).
+nereus_add_test(tst_level_calibration)
+target_compile_definitions(tst_level_calibration PRIVATE NEREUS_BUILD_TESTS)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(tst_level_calibration PRIVATE Qt6::WebSockets)
+endif()
+
+# Level calibration procedure (Thetis CalibrateLevel) against a fake meter
+# and a fake spectrum: offsets, refusals, cancel and full restore.
+nereus_add_test(tst_level_calibration_run)
+
 # ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
 # Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged
 # and tunePowerByBandChanged signals, MoxController default states,
@@ -3873,7 +3891,7 @@ target_compile_definitions(tst_general_options_time_out PRIVATE NEREUS_BUILD_TES
 #   5. CWU mode → force 31 dB
 #   6. USB mode + PS on → applies stored TX ATT (no force)
 #   7. isTx=false → clears TX ATT to 0 dB (TX→RX restore)
-#   8. HPSDR board, isTx=true → saves preamp, forces Minus20 (HPSDR_OFF)
+#   8. HPSDR board, isTx=true → saves preamp, forces Off (HPSDR_OFF)
 #   9. HPSDR board, isTx=false → restores saved preamp
 #  10. shouldForce31Db predicate table-driven (12 cases)
 #  11. TX ATT per-band storage round-trip (14 bands)
@@ -8202,6 +8220,15 @@ target_compile_definitions(tst_radio_bound_antenna_rows PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+
+# Level Cal as a Core procedure: a paired device starts and cancels it,
+# progress comes back on the wire, a remote window makes the same calls.
+nereus_add_test(tst_level_calibration_station
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# Level Cal: the window's grid stops following the noise floor while a run
+# goes and is put back after (Thetis CalibrateLevel).
+nereus_add_test(tst_level_cal_grid_follow_guard)
 # Slice control and shared listening plan Task 10: the hosting desktop's
 # slice requests run as the station device (HostingSliceActions).
 nereus_add_test(tst_hosting_slice_operations

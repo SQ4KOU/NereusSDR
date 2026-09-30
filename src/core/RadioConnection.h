@@ -278,6 +278,20 @@ public slots:
         }
     }
     virtual void setPreamp(bool enabled) = 0;
+    // Level Cal: the second receiver's preamp bit (prn->rx[1].preamp), which
+    // Thetis's RX2PreampMode sends on the HPSDR alone.
+    // From Thetis ChannelMaster/netInterface.c:758-767 [v2.10.3.15]:
+    //   void SetRX2Preamp(int bits)
+    //   {
+    //   	if (prn->rx[1].preamp != bits)
+    //   	{
+    //   		prn->rx[1].preamp = bits;
+    //   		if (listenSock != INVALID_SOCKET && prn->sendHighPriority != 0)
+    //   			CmdHighPriority();
+    //   	}
+    //   }
+    // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
+    virtual void setRx2Preamp(bool /*enabled*/) {}
     virtual void setTxDrive(int level) = 0;
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
@@ -294,6 +308,20 @@ public slots:
     //
     // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
     virtual void setAlexRxBpf(AlexRxBpf /*bpf*/) {}
+
+    // Level Cal: the Alex receive attenuator, 0 (none), 1 (10 dB), 2 (20 dB)
+    // or 3 (30 dB). The preamp settings and the step attenuator above 31 dB
+    // drive it (StepAttenuatorController).
+    // From Thetis ChannelMaster/netInterface.c:421-432 [v2.10.3.15]:
+    //   void SetAlexAtten(int bits)
+    //   {
+    //   	if (mkiibpf) return;
+    //   	if ((prbpfilter->_20_dB_Atten | prbpfilter->_10_dB_Atten) != bits)
+    //   	{
+    //   		prbpfilter->_20_dB_Atten = (bits & 0x2) == 0x2;
+    //   		prbpfilter->_10_dB_Atten = bits & 0x1;
+    // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
+    virtual void setAlexAtten(int /*bits*/) {}
 
     // Push TX-side step attenuator value to hardware.
     //

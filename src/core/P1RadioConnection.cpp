@@ -102,6 +102,15 @@
 //                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
 //                 wireFrequencyHz). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1477,12 +1486,40 @@ void P1RadioConnection::setAttenuator(int dB)
     // Source: specHPSDR.cs per-HPSDRHW branches + BoardCapabilities registry.
     // Clamp to board-reported range so UI callers can't exceed hardware limits.
     if (m_caps && m_caps->attenuator.present) {
-        if (dB > m_caps->attenuator.maxDb) { dB = m_caps->attenuator.maxDb; }
+        // Level Cal: an Alex board's wire range reaches the Alex range + 2
+        // (console.cs:11044-11056 [v2.10.3.15]).
+        const int wireMax = BoardCapsTable::stepAttWireMaxDb(*m_caps);
+        if (dB > wireMax) { dB = wireMax; }
         if (dB < m_caps->attenuator.minDb) { dB = m_caps->attenuator.minDb; }
     } else if (m_caps && !m_caps->attenuator.present) {
         dB = 0;
     }
     m_stepAttn[0] = dB;
+}
+
+void P1RadioConnection::setAlexAtten(int bits)
+{
+    // Level Cal: the Alex receive attenuator, bank 0 C3 bits 0-1.
+    // From Thetis ChannelMaster/netInterface.c:421-432 [v2.10.3.15]:
+    //   void SetAlexAtten(int bits)
+    //   {
+    //       if (mkiibpf) return;
+    //
+    //       if ((prbpfilter->_20_dB_Atten | prbpfilter->_10_dB_Atten) != bits)
+    //       {
+    //           prbpfilter->_20_dB_Atten = (bits & 0x2) == 0x2;
+    //           prbpfilter->_10_dB_Atten = bits & 0x1;
+    // (The OR compare drops a change to 1 from 2 or 3, as in Thetis.)
+    if (m_hardwareProfile.mkiiBpf) {
+        return;
+    }
+    const int current = (m_alex20dB ? 1 : 0) | (m_alex10dB ? 1 : 0);
+    if (current == bits) {
+        return;
+    }
+    m_alex20dB = (bits & 0x2) == 0x2;
+    m_alex10dB = (bits & 0x1) != 0;
+    m_forceBank0Next = true;
 }
 // ---------------------------------------------------------------------------
 // setHl2BandVolts / setHl2PsSync
@@ -2025,7 +2062,10 @@ void P1RadioConnection::setAttenuatorForAdc(int adc, int dB)
     }
     // The same board range as ADC 0.
     if (m_caps && m_caps->attenuator.present) {
-        if (dB > m_caps->attenuator.maxDb) { dB = m_caps->attenuator.maxDb; }
+        // Level Cal: an Alex board's wire range reaches the Alex range + 2
+        // (console.cs:11044-11056 [v2.10.3.15]).
+        const int wireMax = BoardCapsTable::stepAttWireMaxDb(*m_caps);
+        if (dB > wireMax) { dB = wireMax; }
         if (dB < m_caps->attenuator.minDb) { dB = m_caps->attenuator.minDb; }
     } else if (m_caps && !m_caps->attenuator.present) {
         dB = 0;
@@ -2040,6 +2080,17 @@ void P1RadioConnection::setPreamp(bool enabled)
     // setAttenuator above; matches peer-setter parity.
     m_forceBank11Next = true;
     m_rxPreamp[0] = enabled;
+}
+
+void P1RadioConnection::setRx2Preamp(bool enabled)
+{
+    // Level Cal: Thetis SetRX2Preamp sets prn->rx[1].preamp
+    // (ChannelMaster/netInterface.c:758-767 [v2.10.3.15]), which
+    // networkproto1.c:595 [v2.10.3.15] sends as C1 bit 1:
+    //   C1 = (prn->rx[0].preamp & 1) | ((prn->rx[1].preamp & 1) << 1) |
+    // Flushed on the next frame, as setPreamp is.
+    m_forceBank11Next = true;
+    m_rxPreamp[1] = enabled;
 }
 // ---------------------------------------------------------------------------
 // setTxDrive — 3M-1c follow-up (HL2 bench triage 2026-04-29)
@@ -3291,7 +3342,8 @@ void P1RadioConnection::applyBoardQuirks()
     // Clamp attenuator to board range.
     // Source: specHPSDR.cs — per-HPSDRHW min/max dB ranges enforced at setup.
     if (m_caps->attenuator.present) {
-        if (m_stepAttn[0] > m_caps->attenuator.maxDb) { m_stepAttn[0] = m_caps->attenuator.maxDb; }
+        const int wireMax = BoardCapsTable::stepAttWireMaxDb(*m_caps);
+        if (m_stepAttn[0] > wireMax) { m_stepAttn[0] = wireMax; }
         if (m_stepAttn[0] < m_caps->attenuator.minDb) { m_stepAttn[0] = m_caps->attenuator.minDb; }
     } else {
         m_stepAttn[0] = 0;
@@ -3592,6 +3644,8 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.antennaIdx     = m_antennaIdx;
     ctx.rxOnlyAnt      = m_rxOnlyAnt;
     ctx.rxOut          = m_rxOut;
+    // Level Cal: the Alex attenuator (bank 0 C3 bits 0-1).
+    ctx.alexAttenBits  = (m_alex20dB ? 0x2 : 0) | (m_alex10dB ? 0x1 : 0);
 
     // Source OC byte from OcMatrix per current band + MOX state.  Falls
     // through to legacy m_ocOutput when matrix is unset (e.g. tests that
@@ -5293,6 +5347,8 @@ void P1RadioConnection::composeCcBank0Full(quint8 out[5]) const
            | (m_random[0]   ? 0x10 : 0);
     // RX input select: default Rx_1_In (networkproto1.c:458)
     out[3] |= 0x20;
+    // Level Cal: the Alex attenuator (networkproto1.c:453 [v2.10.3.15]).
+    out[3] |= (m_alex10dB ? 0x01 : 0) | (m_alex20dB ? 0x02 : 0);
 
     // C4: antenna, duplex, NDDCs, diversity (networkproto1.c:463-471)
     out[4] = static_cast<quint8>(m_antennaIdx & 0x03);

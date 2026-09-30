@@ -18,6 +18,11 @@
 //                 maxSampleRateFor and widebandAdcsFor, per board row and
 //                 protocol, by J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -679,8 +684,21 @@ namespace BoardCapsTable {
     // Preamp combo item: display text + underlying PreampMode-like index.
     struct PreampItem {
         const char* label;   // e.g. "0dB", "-10dB", "-20db" (case from Thetis)
-        int         modeInt; // index into NereusSDR PreampMode (0=Off..6=Minus50)
+        int         modeInt; // NereusSDR PreampMode value, numbered as Thetis
+                             // PreampMode (0=HPSDR_OFF .. 9=SA_MINUS30)
     };
+
+    // The PreampMode Thetis picks when the operator selects this label, or
+    // -1 for a label it does not know. hpsdrModel is Model == HPSDR, which
+    // NereusSDR reaches as the Atlas board.
+    // From Thetis console.cs:28401-28466 comboPreamp_SelectedIndexChanged [v2.10.3.15].
+    int preampModeForLabel(const char* label, bool hpsdrModel) noexcept;
+
+    // Moves a preamp mode stored before the SA modes existed (numbered
+    // 0=Off..6=Minus50 on every board) to the mode the same combo label
+    // now carries. Off becomes SA_MINUS20 away from Atlas, the 20 dB
+    // attenuation it stood for. Unknown values come back unchanged.
+    int preampModeFromV1(HPSDRHW hw, bool alexPresent, int stored) noexcept;
 
     // Returns the RX1 preamp combo items for a given board + ALEX presence.
     // From Thetis console.cs:40755 SetComboPreampForHPSDR.
@@ -698,6 +716,16 @@ namespace BoardCapsTable {
     // ALEX-equipped boards not in the exclusion list (OrionMKII/Saturn/HL2).
     // Exception: HL2 returns 63 (6-bit LNA range, mi0bot [@c26a8a4]).
     int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept;
+
+    // Level Cal: the highest step attenuator value a connection sends.
+    // Above 31 dB an Alex board's step attenuator carries the value + 2
+    // (the Alex attenuator taking 30 dB), so a board with the 61 dB range
+    // accepts up to 63; every other board keeps its own attenuator.maxDb.
+    // From Thetis console.cs:11044-11056 [v2.10.3.15] (the Alex list just
+    // above it ends //DH1KLM):
+    //   NetworkIO.SetAlexAtten(3); // -30dB Alex Attenuator
+    //   if (nRX1ADCinUse == 0) NetworkIO.SetADC1StepAttenData(_rx1_attenuator_data + 2);
+    int stepAttWireMaxDb(const BoardCapabilities& caps) noexcept;
 }
 
 } // namespace NereusSDR

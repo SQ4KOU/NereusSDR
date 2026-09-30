@@ -51,6 +51,9 @@
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Desktop-host receiver-to-owned-slice mapping.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-29 - Level Cal: calibration_ex carries the meter and display
+//                calibration and goes to apps when either changes. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include <QSet>
@@ -3792,6 +3795,14 @@ QString TciProtocol::handleCalibrationExCommand(const QStringList& args)
     const int rx = args.at(0).trimmed().toInt(&ok);
     if (!ok || rx < 0 || rx > 1) { return {}; }
 
+    m_pendingNotifications << calibrationExLineFor(rx);
+    return {};
+}
+
+// From Thetis TCIServer.cs:1160-1176 [v2.10.3.15] (CalibrationChanged): the
+// five values read for the receiver, then sendCalibration.
+QString TciProtocol::calibrationExLineFor(int rx) const
+{
     // From Thetis TCIServer.cs:1152-1170 [v2.10.3.13] — CalibrationChanged queries each value.
     double meter = 0.0;
     double display = 0.0;
@@ -3808,8 +3819,7 @@ QString TciProtocol::handleCalibrationExCommand(const QStringList& args)
                               Q_RETURN_ARG(double, sixMeter), Q_ARG(int, receiverSlice(rx)));
     QMetaObject::invokeMethod(m_radio, "calibrationTxDisplay", Qt::DirectConnection,
                               Q_RETURN_ARG(double, txDisplay),Q_ARG(int, receiverSlice(rx)));
-    m_pendingNotifications << buildCalibrationExLine(rx, meter, display, xvtr, sixMeter, txDisplay);
-    return {};
+    return buildCalibrationExLine(rx, meter, display, xvtr, sixMeter, txDisplay);
 }
 
 // From Thetis TCIServer.cs:5190 [v2.10.3.13] — shutdown_ex case in 1-arg query switch.

@@ -281,7 +281,7 @@ void PaCalibrationGroup::onSpinChanged(int idx, double v)
     // Persist immediately. Mirrors CalibrationTab's groups 1-4 pattern --
     // every UI-driven setter call is followed by an explicit save(); the
     // model-layer setters intentionally do NOT auto-save (see
-    // CalibrationController::setLevelOffsetDb / setFreqCorrectionFactor
+    // CalibrationController::setFreqCorrectionFactor
     // which only emit changed()). Pre-Phase-3A migration this lived in the
     // CalibrationTab spinbox lambda; lost during the move to PaWattMeterPage
     // and surfaced by Codex review on PR #165.

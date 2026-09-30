@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Level Cal fix wave: the grid follow
+//                guard holds the saved follow at the user's value while a
+//                run holds it off. The step attenuator's ceiling is the
+//                Core's (BoardCapsTable::stepAttMaxDb). AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). A regained RADE lock repaints the VFO
 //                flag from the slice's SNR, which a remote window's Core
 //                does not resend when it is unchanged. AI-assisted via
@@ -678,6 +683,7 @@ warren@wpratt.com
 #include "gui/multidevice/MultiDeviceController.h"
 #include "gui/multidevice/NoticeCard.h"
 #include "gui/HostingSliceActions.h"
+#include "gui/LevelCalGridFollowGuard.h"
 #include "core/session/RemoteDevicesState.h"
 #include "ConnectionPanel.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -1039,6 +1045,24 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             }
         }
     });
+    // A level calibration turns the grid's noise-floor follow off while it
+    // runs and puts it back after, for a run started here or one this
+    // window's Core runs.
+    {
+        auto* gridGuard = new LevelCalGridFollowGuard(m_radioModel, this);
+        gridGuard->setAccess(
+            [this]() {
+                SpectrumWidget* w = activeSpectrumWidget();
+                return w != nullptr && w->adjustGridMinToNoiseFloor();
+            },
+            [this](bool on) {
+                if (SpectrumWidget* w = activeSpectrumWidget()) {
+                    w->setAdjustGridMinToNoiseFloor(on);
+                }
+            },
+            // Level Cal: a quit or a crash mid-run saves the user's value.
+            [](std::optional<bool> saved) { SpectrumWidget::setGridFollowSaveHold(saved); });
+    }
     // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
     // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
     // (called from buildUI), gated on `if (m_tciServer)`. The original Phase
@@ -15632,7 +15656,15 @@ void MainWindow::onConnectionStateChanged()
             m_stepAttController->setRadioConnection(conn);
             const auto& caps = BoardCapsTable::forBoard(
                 conn->radioInfo().boardType);
-            m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+            // Level Cal fix wave: the same ceiling the Core gives the board
+            // (DaemonApp::applyStepAttenuatorConnection and the RX applet,
+            // BoardCapsTable::stepAttMaxDb): 61 dB on the Alex boards, the
+            // board row's own maximum otherwise.
+            {
+                const auto& modelCaps = m_radioModel->boardCapabilities();
+                m_stepAttController->setMaxAttenuation(
+                    BoardCapsTable::stepAttMaxDb(modelCaps.board, modelCaps.hasAlexFilters));
+            }
             // Wire HPSDR-board flag — Atlas/Metis kit uses preamp save/restore on
             // MOX rather than per-band TX ATT (Thetis console.cs:29548 [v2.10.3.13]:
             //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
@@ -15653,6 +15685,13 @@ void MainWindow::onConnectionStateChanged()
             // persisted "Adaptive" string is clamped to Classic when the
             // connected board lacks the feature.
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+            // Before loadSettings: the stored preamp modes move to the ten
+            // Thetis modes by the label this board shows (the RX applet's
+            // preamp combo uses the same board and Alex flag).
+            m_stepAttController->setBoardIdentity(
+                conn->radioInfo().boardType,
+                m_radioModel->hardwareProfile().model,
+                caps.hasAlexFilters);
             // R-R3-46: select slice A's band first, because
             // loadSettings restores the per-band slot for the current band
             // (DaemonApp::applyStepAttenuatorConnection does the same).

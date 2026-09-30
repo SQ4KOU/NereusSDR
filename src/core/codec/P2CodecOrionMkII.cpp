@@ -52,6 +52,11 @@
 //                 (whole corrected Hz, then integer Freq2PhaseWord;
 //                 NetworkIO.cs [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/console.cs header (lines 1-50) ===
@@ -502,6 +507,16 @@ quint32 P2CodecOrionMkII::buildAlex0(const CodecContext& ctx) const
                 reg |= (1u << 11);  // _Rx_1_Out [network.h:282 @501e3f5]
             }
         }
+    }
+
+    // Level Cal: the Alex attenuator (Thetis SetAlexAtten, which returns on
+    // a Mk II BPF board, where bit 14 is the RX master input select).
+    // From Thetis network.h:284-285 [v2.10.3.15]:
+    //   _20_dB_Atten : 1, // bit 13
+    //   _10_dB_Atten : 1, // bit 14 (RX MASTER IN SEL RL22)
+    if (!ctx.mkiiBpf) {
+        if (ctx.alexAttenBits & 0x2) { reg |= (1u << 13); }
+        if (ctx.alexAttenBits & 0x1) { reg |= (1u << 14); }
     }
 
     // LPF bits — from Thetis netInterface.c:682-726 [@501e3f5]

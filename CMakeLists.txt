@@ -1047,6 +1047,8 @@ set(CORE_SOURCES
     src/core/ClarityController.cpp
     src/core/StepAttenuatorController.cpp
     src/core/StepAttenuatorFacade.cpp
+    src/core/LevelCalibrationRun.cpp
+    src/core/LevelCalibrationService.cpp
     src/core/CalibrationController.cpp
     src/core/PaCalProfile.cpp
     src/core/PaGainProfile.cpp
@@ -1807,6 +1809,7 @@ set(GUI_SOURCES
     src/gui/setup/hardware/OcOutputsSwlTab.cpp
     src/gui/setup/hardware/XvtrTab.cpp
     src/gui/setup/hardware/CalibrationTab.cpp
+    src/gui/LevelCalGridFollowGuard.cpp
     src/gui/setup/hardware/PaCalibrationGroup.cpp
     src/gui/setup/hardware/Hl2IoBoardTab.cpp
     src/gui/setup/hardware/Hl2OptionsTab.cpp

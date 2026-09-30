@@ -484,6 +484,12 @@ struct CodecContext {
     // Source: Thetis networkproto1.c:455 [v2.10.3.13 @501e3f5]
     bool    rxOut{false};
 
+    // Alex receive attenuator as Thetis SetAlexAtten holds it: bit 1
+    // _20_dB_Atten, bit 0 _10_dB_Atten. P1 bank 0 C3 bits 1/0
+    // (networkproto1.c:453 [v2.10.3.15]); P2 Alex0 bits 13/14 (network.h:
+    // 284-285 [v2.10.3.15]). Always 0 on a Mk II BPF board.
+    int     alexAttenBits{0};
+
     // Mk II BPF board flag — true for ORIONMKII / ANAN-7000D / ANAN-8000D /
     // ANAN_G2 / ANAN_G2_1K / ANVELINAPRO3 (anything routed through the Mk II
     // band-pass-filter board). Drives the rx-only relay encoding split in

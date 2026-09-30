@@ -451,6 +451,23 @@
 //                change moves only slices this window controls.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration, levelCalibrationResetAvailable,
+//                requestResetLevelCalibration and levelCalibrationChanged.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress as
+//                levelCalRunning / levelCalPercent / levelCalMessage /
+//                levelCalSucceeded, and the start and cancel calls a
+//                local and a remote window both make.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal: rx2PreampModeAvailable, whether a slice on the
+//                other ADC can change RX2's own preamp mode.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -591,6 +608,7 @@ namespace NereusSDR { class VoltsAmpsLog; }
 namespace NereusSDR {
 
 class AppSettings;
+enum class PreampMode;
 
 class ReceiverManager;
 class RemoteDevicesState;
@@ -809,6 +827,15 @@ class RadioModel : public QObject {
     // window opens and locks this row, not its own slice's. Declared last
     // so every earlier property keeps its wire ordinal.
     Q_PROPERTY(int paTransmitBand READ paTransmitBand NOTIFY paTransmitBandChanged)
+    // Level Cal (levelCalibrationVersion 1): the Core's calibration run.
+    // Running, its percent done, the sentence it ended with (empty while
+    // it runs or before one ran) and whether it finished. Core to window
+    // only, and only to a peer that declared levelCalibration. Declared
+    // last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(bool levelCalRunning READ levelCalRunning NOTIFY levelCalStateChanged)
+    Q_PROPERTY(int levelCalPercent READ levelCalPercent NOTIFY levelCalStateChanged)
+    Q_PROPERTY(QString levelCalMessage READ levelCalMessage NOTIFY levelCalStateChanged)
+    Q_PROPERTY(bool levelCalSucceeded READ levelCalSucceeded NOTIFY levelCalStateChanged)
 
 
 public:
@@ -3802,8 +3829,82 @@ public:
     // The meter cal term of the receive calibration: Setup's value
     // (RX1_MeterCalOffsetDb) or the radio's factory default.
     double rxMeterCalOffsetDb() const;
+    // Level Cal: the RX1 display calibration (RX1_DisplayCalOffsetDb) or
+    // the radio's factory default, Thetis RX1DisplayCalOffset
+    // (console.cs:21113-21122 [v2.10.3.15]). As in Thetis it reaches TCI
+    // calibration_ex only (TCIServer.cs:1160-1176 [v2.10.3.15]); the
+    // panadapter follows the meter cal (console.cs:12305-12311
+    // [v2.10.3.15], rxMeterOffsetDb), so this never moves it.
+    double rxDisplayCalOffsetDb() const;
+    // Level Cal: the connected model's own saved meter or display
+    // calibration (RxMeterCalOffsetDbByRadio / RxDisplayCalOffsetDbByRadio,
+    // Thetis rx_meter_cal_offset_by_radio and rx_display_cal_offset_by_radio,
+    // console.cs:196-197 [v2.10.3.15]); nullopt reads the factory default.
+    // The setters change only the connected model's entry.
+    std::optional<double> rxMeterCalOverrideDb() const;
+    std::optional<double> rxDisplayCalOverrideDb() const;
+    void setRxMeterCalOverrideDb(std::optional<double> db);
+    void setRxDisplayCalOverrideDb(std::optional<double> db);
+    // Level Cal: `key` is RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb
+    // (just written or removed): refresh the meter offset and emit
+    // levelCalibrationChanged, as Thetis's setters fire their changed
+    // handlers (console.cs:21091-21122 [v2.10.3.15]). Returns false for any
+    // other key. The Core calls it for a window's write too.
+    bool applyLevelCalibrationSetting(const QString& key);
+    // Level Cal Reset, Thetis ResetLevelCalibration (console.cs:46868-46886
+    // [v2.10.3.15]): the meter and display offsets return to the radio's
+    // defaults (both keys removed). Nothing else changes.
+    void resetLevelCalibration();
+    // Whether this window can reset the level calibration: always locally,
+    // in a remote window when its Core offers resetLevelCalibration.
+    bool levelCalibrationResetAvailable() const;
+    // The one call both windows make for Setup's Reset. Empty when it was
+    // done (locally) or sent (remote); otherwise the reason it was not.
+    QString requestResetLevelCalibration();
+    // Level Cal, Thetis CalibrateLevel (console.cs:9856-10232
+    // [v2.10.3.15]) run by the Core on one slice (Thetis RX1 and VFO A;
+    // -1 the active slice). Whether this window can start one: always
+    // locally, in a remote window when its Core offers
+    // startLevelCalibration.
+    bool levelCalibrationRunAvailable() const;
+    // Whether a slice on the other ADC can change RX2's own preamp mode
+    // (Thetis RX2PreampMode): always locally, in a remote window when its
+    // Core carries stepAtt's rx2PreampMode (radioHardwareVersion 12).
+    bool rx2PreampModeAvailable() const;
+    // The calls both windows make. Empty when it started or was sent;
+    // otherwise the reason it was not. A refusal the Core sends later
+    // arrives as levelCalibrationRefused.
+    QString requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId);
+    QString requestCancelLevelCalibration();
+    bool levelCalRunning() const;
+    int levelCalPercent() const;
+    QString levelCalMessage() const;
+    bool levelCalSucceeded() const;
+    // Remote window: a levelCal* value from the Core. False on a local
+    // model or for any other name.
+    bool applyStationLevelCalValue(const QByteArray& name, const QVariant& value);
+    // Remote window: the session ended, nothing is known about a run.
+    void clearStationLevelCal();
+    // The Core's run (created on first use). Null on a Remote model.
+    class LevelCalibrationService* levelCalibrationServiceForTest();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
+    // Level Cal: moves a one-value calibration of an earlier build to the
+    // connected model's entry. True when a key moved.
+    bool foldLegacyLevelCal();
+    void writeLevelCalOverride(bool meter, std::optional<double> db);
+    // Level Cal: the receive offset of each preamp setting, Thetis
+    // rx1_preamp_offset[] (console.cs:1999-2009 [v2.10.3.15]), which
+    // CalibrateLevel measures (console.cs:10026-10140 [v2.10.3.15]). RX1's
+    // ten are saved under RX1_PreampOffsetsDb as ten values at three
+    // decimals separated by '|' (Thetis saves them the same way,
+    // console.cs:3202-3203 [v2.10.3.15]); absent, or not ten numbers, they
+    // read Thetis's defaults. RX2's are held while the program runs, as
+    // Thetis never saves rx2_preamp_offset. Setting one refreshes the meter.
+    float rx1PreampOffsetDbFor(PreampMode mode) const;
+    float rx2PreampOffsetDbFor(PreampMode mode) const;
+    void setRx1PreampOffsetDb(PreampMode mode, float db);
+    void setRx2PreampOffsetDb(PreampMode mode, float db);
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
     // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
     // receiver: the TX Display Cal Offset, plus with display duplex on the
@@ -3821,6 +3922,11 @@ signals:
     void bandOutputsChanged();
     // alexLpfBits() changed.
     void alexLpfBitsChanged();
+    // levelCalRunning / levelCalPercent / levelCalMessage /
+    // levelCalSucceeded changed.
+    void levelCalStateChanged();
+    // Remote window: the Core refused a start this window sent.
+    void levelCalibrationRefused(const QString& reason);
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -3830,6 +3936,10 @@ signals:
     // moved: the other ADC's attenuator or preamp, or which ADC carries
     // which attenuator. Emitted with rxMeterOffsetChanged too.
     void rxAdcMeterOffsetsChanged();
+    // Level Cal: the meter or display calibration changed (a write, a
+    // Reset, or in a remote window the Core's copy). TCI sends
+    // calibration_ex on it.
+    void levelCalibrationChanged();
 
 public:
 
@@ -5084,11 +5194,11 @@ public slots:
     Q_INVOKABLE QString     txProfile() const;
     Q_INVOKABLE QStringList txProfilesList() const;
 
-    // ── Calibration (getter-only stubs returning 0.0) ────────────────────
-    // No calibration model in RadioModel yet.  Mock semantics: set/get pair;
-    // production has setters absent (caller side never sets these), so
-    // getters return 0.0.  Real calibration data would live in a future
-    // CalibrationModel + per-slice persistence.
+    // ── Calibration (TCI calibration_ex) ─────────────────────────────────
+    // calibrationMeter is rxMeterCalOffsetDb() and calibrationDisplay is
+    // rxDisplayCalOffsetDb(), for either rx: NereusSDR keeps one receive
+    // calibration, which Thetis starts RX2 from too (console.cs:999
+    // [v2.10.3.15]). The XVTR, 6 m and TX display terms still return 0.0.
     Q_INVOKABLE double calibrationMeter(int rx) const;
     Q_INVOKABLE double calibrationDisplay(int rx) const;
     Q_INVOKABLE double calibrationXvtr(int rx) const;
@@ -7015,6 +7125,14 @@ private:
     std::unique_ptr<TxDisplayFeed> m_txDisplayFeed;
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
+    // Level Cal: Thetis rx2_preamp_offset[] (console.cs:2011-2019
+    // [v2.10.3.15]), never saved; NaN reads the default.
+    std::array<float, 10> m_rx2PreampOffsetDb{
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
     // R-R3-46: followReceiveSliceWithStepAttenuator() has wired its connects.
     bool m_stepAttFollowsSlices{false};
 
@@ -7209,6 +7327,16 @@ private:
     codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
     // alexLpfBits(): -1 until the connection (or the Core) reports one.
     int m_alexLpfBits{-1};
+    // Level Cal: the Core's run (local role), created on first use.
+    class LevelCalibrationService* levelCalibrationService();
+    class LevelCalibrationService* m_levelCalService{nullptr};
+    // A remote window's copy of the Core's run.
+    bool m_stationLevelCalRunning{false};
+    int m_stationLevelCalPercent{0};
+    QString m_stationLevelCalMessage;
+    bool m_stationLevelCalSucceeded{false};
+    // The start this window sent, whose refusal it reports.
+    quint32 m_levelCalStartCommandId{0};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;

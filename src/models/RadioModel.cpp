@@ -775,6 +775,34 @@
 //                requestTxHandoffToSlice checks the station's access, as
 //                the remote tx.setTxSlice does. NereusSDR-original. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration (console.cs:46868-46886 [v2.10.3.15]),
+//                requestResetLevelCalibration and levelCalibrationChanged;
+//                TCI calibration_ex reads the meter and display offsets.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress properties and
+//                the start and cancel calls of both windows.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: meter and display calibration kept per radio
+//                model (rx_meter_cal_offset_by_radio /
+//                rx_display_cal_offset_by_radio, console.cs:196-197,
+//                3183-3193, 4974-5000, 10182, 10190, 14892-14895,
+//                46868-46886 [v2.10.3.15]); a one-value calibration of an
+//                earlier build moves to the connected model.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's meter offset reads
+//                rx2_preamp_offset[rx2_preamp_mode] from RX2's own mode
+//                (console.cs:21052 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal fix wave: rx2PreampModeAvailable; the step
+//                attenuator's ceiling on connect is the Core's
+//                (BoardCapsTable::stepAttMaxDb).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1015,6 +1043,7 @@ warren@wpratt.com
 #include "core/IoBoardHl2Facade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
+#include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "core/TxAnalyzer.h"
@@ -2318,6 +2347,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RxOnly")) {
                     applyRxOnlySetting(rxOnlySetting());
+                }
+            });
+    // Level Cal: a remote window follows the Core's meter and display
+    // calibration (an empty key is a snapshot), so its TCI and Setup read
+    // the Core's values.
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (key.isEmpty() || key == QLatin1String("RX1_MeterCalOffsetDb")
+                    || key == QLatin1String("RX1_DisplayCalOffsetDb")
+                    || key == QLatin1String("RxMeterCalOffsetDbByRadio")
+                    || key == QLatin1String("RxDisplayCalOffsetDbByRadio")) {
+                    emit levelCalibrationChanged();
                 }
             });
     // D79 (R-IOS-11, R-R3-49): the band plan is the station's. A remote
@@ -4861,6 +4902,8 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
                 this, [this](int) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx1PreampChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx2PreampModeChanged,
+                this, [this](PreampMode) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx2StepAttEnabledChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::adcRoutingChanged,
@@ -9720,6 +9763,13 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // Follow-up 3: the command is over, so no page's claim on it remains
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
+    // Level Cal: the Core refused the start this window sent.
+    if (commandId != 0 && commandId == m_levelCalStartCommandId) {
+        m_levelCalStartCommandId = 0;
+        if (!accepted) {
+            emit levelCalibrationRefused(reason);
+        }
+    }
     emit stationCommandFinished(commandId, accepted, reason);
 }
 
@@ -9797,23 +9847,252 @@ double RadioModel::rxMeterOffsetDb() const
     return rxPreampOffsetDb() + rxMeterCalOffsetDb() + rx6mGainOffsetDb();
 }
 
+namespace {
+const QString kRx1MeterCalOffsetKey = QStringLiteral("RX1_MeterCalOffsetDb");
+const QString kRx1DisplayCalOffsetKey = QStringLiteral("RX1_DisplayCalOffsetDb");
+// Thetis rx_meter_cal_offset_by_radio[] and rx_display_cal_offset_by_radio[]
+// (console.cs:196-197 [v2.10.3.15]): one entry per HPSDRModel, `|` joined
+// as Thetis saves them (console.cs:3183-3193 [v2.10.3.15]). An empty
+// entry reads the model's factory default.
+const QString kRxMeterCalByRadioKey = QStringLiteral("RxMeterCalOffsetDbByRadio");
+const QString kRxDisplayCalByRadioKey = QStringLiteral("RxDisplayCalOffsetDbByRadio");
+constexpr int kModelCount = static_cast<int>(HPSDRModel::LAST);
+
+using CalByRadio = std::array<std::optional<float>, static_cast<size_t>(HPSDRModel::LAST)>;
+
+CalByRadio readCalByRadio(const QString& key)
+{
+    CalByRadio out{};
+    const QStringList list = AppSettings::instance().value(key).toString().split(QLatin1Char('|'));
+    // From Thetis console.cs:4974-4986 [v2.10.3.15]:
+    //   //[2.10.3.7]MW0LGE changed to <= from == so that if a new radio model is added, we will still use the data for the existing radios.
+    //   //This assumes the new radio model is added to the end of the HPSDRModel list. If a model is remove this will cause issues.
+    //   if (numVals <= (int)HPSDRModel.LAST)  //-W2PA  The number of rig types in the imported DB matches the number in this version
+    //   }  //-W2PA  else the number has changed so don't import, leave the defaults alone
+    if (list.size() > kModelCount) {
+        return out;
+    }
+    for (int i = 0; i < list.size(); ++i) {
+        bool ok = false;
+        const float v = list.at(i).toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            out[static_cast<size_t>(i)] = v;
+        }
+    }
+    return out;
+}
+
+void writeCalByRadio(const QString& key, const CalByRadio& values)
+{
+    QStringList parts;
+    parts.reserve(kModelCount);
+    bool any = false;
+    for (const std::optional<float>& v : values) {
+        parts.append(v.has_value() ? QString::number(static_cast<double>(*v), 'f', 6) : QString());
+        any = any || v.has_value();
+    }
+    if (any) {
+        AppSettings::instance().setValue(key, parts.join(QLatin1Char('|')));
+    } else {
+        AppSettings::instance().remove(key);
+    }
+}
+
+int modelSlot(HPSDRModel model)
+{
+    const int i = static_cast<int>(model);
+    return (i >= 0 && i < kModelCount) ? i : -1;
+}
+
+// The model's own entry; before the per-model keys exist (a value saved by
+// an earlier build, or an older Core's), the one saved value.
+std::optional<float> calOverrideFor(const QString& byRadioKey, const QString& legacyKey,
+                                    HPSDRModel model)
+{
+    AppSettings& s = AppSettings::instance();
+    if (s.contains(byRadioKey)) {
+        const int slot = modelSlot(model);
+        return slot < 0 ? std::nullopt : readCalByRadio(byRadioKey)[static_cast<size_t>(slot)];
+    }
+    if (s.contains(legacyKey)) {
+        bool ok = false;
+        const float v = s.value(legacyKey).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            return v;
+        }
+    }
+    return std::nullopt;
+}
+}  // namespace
+
+std::optional<double> RadioModel::rxMeterCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
+std::optional<double> RadioModel::rxDisplayCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
 double RadioModel::rxMeterCalOffsetDb() const
 {
-    const HPSDRModel model = m_hardwareProfile.model;
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1MeterCalOffset = rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // The connected model's entry, or its factory default
+    // (RXMeterCalbrationOffsetDefaults, clsHardwareSpecific.cs:408-423
+    // [v2.10.3.15]).
+    const std::optional<double> saved = rxMeterCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxMeterCalOffsetDefaultFor(m_hardwareProfile.model));
+}
 
-    // Per-radio factory cal default + user override (AppSettings key
-    // RX1_MeterCalOffsetDb).  Default = Thetis factory value per model.
-    const float factoryDefault = ::NereusSDR::rxMeterCalOffsetDefaultFor(model);
-    bool keyOk = false;
-    const double userOverride = AppSettings::instance()
-        .value(QStringLiteral("RX1_MeterCalOffsetDb"),
-               QString::number(static_cast<double>(factoryDefault), 'f', 6))
-        .toString()
-        .toDouble(&keyOk);
-    const float meterCalOffset = keyOk
-        ? static_cast<float>(userOverride)
-        : factoryDefault;
-    return static_cast<double>(meterCalOffset);
+double RadioModel::rxDisplayCalOffsetDb() const
+{
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1DisplayCalOffset = rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // absent, the model's factory default (RXDisplayCalbrationOffsetDefauls,
+    // clsHardwareSpecific.cs:424-440 [v2.10.3.15]).
+    const std::optional<double> saved = rxDisplayCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxDisplayCalOffsetDefaultFor(m_hardwareProfile.model));
+}
+
+void RadioModel::writeLevelCalOverride(bool meter, std::optional<double> db)
+{
+    const QString& key = meter ? kRxMeterCalByRadioKey : kRxDisplayCalByRadioKey;
+    const QString& legacy = meter ? kRx1MeterCalOffsetKey : kRx1DisplayCalOffsetKey;
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return;
+    }
+    // Start from what the model reads now, so a value saved by an earlier
+    // build stays with the model that was connected.
+    foldLegacyLevelCal();
+    CalByRadio values = readCalByRadio(key);
+    // From Thetis console.cs:10182 and 10190 [v2.10.3.15]:
+    //   rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt] = _rx1_meter_cal_offset;  // MW0LGE_[2.9.0.7] re-instated
+    //   rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt] = RX1DisplayCalOffset;
+    values[static_cast<size_t>(slot)] = db.has_value()
+        ? std::optional<float>(static_cast<float>(*db)) : std::nullopt;
+    writeCalByRadio(key, values);
+    AppSettings::instance().remove(legacy);
+}
+
+void RadioModel::setRxMeterCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(true, db);
+    applyLevelCalibrationSetting(kRxMeterCalByRadioKey);
+}
+
+void RadioModel::setRxDisplayCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(false, db);
+    applyLevelCalibrationSetting(kRxDisplayCalByRadioKey);
+}
+
+bool RadioModel::foldLegacyLevelCal()
+{
+    // A value saved under the one key of an earlier build (or written by an
+    // older window) belongs to the model connected now: move it to that
+    // model's entry, keeping every other model's.
+    if (m_role == Role::Remote) {
+        return false;
+    }
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return false;
+    }
+    AppSettings& s = AppSettings::instance();
+    bool moved = false;
+    for (const auto& [byRadio, legacy] : { std::pair{ kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey },
+                                           std::pair{ kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey } }) {
+        if (!s.contains(legacy)) {
+            continue;
+        }
+        bool ok = false;
+        const float v = s.value(legacy).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            CalByRadio values = readCalByRadio(byRadio);
+            values[static_cast<size_t>(slot)] = v;
+            writeCalByRadio(byRadio, values);
+        }
+        s.remove(legacy);
+        moved = true;
+    }
+    return moved;
+}
+
+bool RadioModel::applyLevelCalibrationSetting(const QString& key)
+{
+    // From Thetis console.cs:21089-21099 [v2.10.3.15]:
+    //   // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
+    //   public float RX1MeterCalOffset { ... set { ...
+    //       if (_rx1_meter_cal_offset != oldData) MeterCalOffsetChangedHandlers?.Invoke(1, ...); } }
+    // and RX1DisplayCalOffset (console.cs:21113-21122 [v2.10.3.15]) fires
+    // DisplayOffsetChangedHandlers the same way. The meter offset moves
+    // the meter and the panadapter (refreshRxMeterOffset); the display
+    // offset reaches TCI only (levelCalibrationChanged).
+    if (key != kRx1MeterCalOffsetKey && key != kRx1DisplayCalOffsetKey
+        && key != kRxMeterCalByRadioKey && key != kRxDisplayCalByRadioKey) {
+        return false;
+    }
+    // A window that writes the one-value key of an earlier build: the
+    // value goes to the connected model's entry.
+    if (key == kRx1MeterCalOffsetKey || key == kRx1DisplayCalOffsetKey) {
+        foldLegacyLevelCal();
+    }
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+    return true;
+}
+
+void RadioModel::resetLevelCalibration()
+{
+    // From Thetis console.cs:46868-46886 [v2.10.3.15] (ResetLevelCalibration):
+    //   rx_meter_cal_offset_by_radio[i] = HardwareSpecific.RXMeterCalbrationOffsetDefaults((HPSDRModel)i);
+    //   rx_display_cal_offset_by_radio[i] = HardwareSpecific.RXDisplayCalbrationOffsetDefauls((HPSDRModel)i);
+    //   RX1MeterCalOffset = ...; RX1DisplayCalOffset = ...;
+    //   UpdateRX1DisplayOffsets(); UpdateRX2DisplayOffsets();
+    // Every model's entry goes back to its default: removing the keys does
+    // that, since an absent entry reads the model's factory default.
+    AppSettings& settings = AppSettings::instance();
+    settings.remove(kRxMeterCalByRadioKey);
+    settings.remove(kRxDisplayCalByRadioKey);
+    settings.remove(kRx1MeterCalOffsetKey);
+    settings.remove(kRx1DisplayCalOffsetKey);
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+}
+
+bool RadioModel::levelCalibrationResetAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationResetAvailable();
+}
+
+QString RadioModel::requestResetLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        resetLevelCalibration();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration reset"));
+    }
+    if (!m_station->levelCalibrationResetAvailable()) {
+        return IStationLink::levelCalibrationResetUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestResetLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
 }
 
 double RadioModel::rxPreampOffsetDbForAdc(int adc) const
@@ -9837,15 +10116,117 @@ double RadioModel::rxPreampOffsetDbForAdc(int adc) const
     //       {
     //           fOffset = _rx2_step_att_enabled ? (float)rx2_attenuator_data : rx2_preamp_offset[(int)rx2_preamp_mode];
     //       }
-    // RX2 has its own step attenuator enable (_rx2_step_att_enabled). The
-    // second ADC's preamp is one switch (rx1Preamp): rx2_preamp_offset
-    // HPSDR_ON 0 dB, HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the
-    // same two entries rxPreampOffsetDbFor holds for RX1.
+    // RX2 has its own step attenuator enable (_rx2_step_att_enabled) and,
+    // since the Level Cal fix wave, its own preamp mode (rx2_preamp_mode).
     if (m_stepAttController->rx2StepAttEnabled()) {
         return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
     }
-    const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;
-    return static_cast<double>(::NereusSDR::rxPreampOffsetDbFor(static_cast<int>(rx2Preamp)));
+    const PreampMode rx2Preamp = m_stepAttController->rx2PreampMode();
+    // Level Cal: rx2_preamp_offset[] as CalibrateLevel left it.
+    return static_cast<double>(rx2PreampOffsetDbFor(rx2Preamp));
+}
+
+namespace {
+const QString kRx1PreampOffsetsKey = QStringLiteral("RX1_PreampOffsetsDb");
+constexpr int kPreampModeCount = 10;
+
+// Thetis rx2_preamp_offset[] defaults.
+// From Thetis console.cs:2011-2019 [v2.10.3.15]:
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_OFF] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_ON] = 0.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS10] = 10.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS20] = 20.0f;  //MW0LGE_21d step atten
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS30] = 30.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS10] = 10.0f;  //MW0LGE_21d SA stuff
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS20] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS30] = 30.0f;
+// HPSDR_MINUS40 and HPSDR_MINUS50 are never set, so they stay 0.
+float rx2PreampOffsetDefault(int idx)
+{
+    if (idx == static_cast<int>(PreampMode::Minus40)
+        || idx == static_cast<int>(PreampMode::Minus50)) {
+        return 0.0f;
+    }
+    return ::NereusSDR::rxPreampOffsetDbFor(idx);
+}
+
+// The saved RX1 list, or Thetis's defaults when it is absent or is not
+// ten numbers.
+std::array<float, kPreampModeCount> readRx1PreampOffsets()
+{
+    std::array<float, kPreampModeCount> out{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        out[static_cast<size_t>(i)] = ::NereusSDR::rxPreampOffsetDbFor(i);
+    }
+    const QString raw = AppSettings::instance().value(kRx1PreampOffsetsKey).toString();
+    if (raw.isEmpty()) {
+        return out;
+    }
+    const QStringList parts = raw.split(QLatin1Char('|'));
+    if (parts.size() != kPreampModeCount) {
+        return out;
+    }
+    std::array<float, kPreampModeCount> saved{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        bool ok = false;
+        const double v = parts.at(i).trimmed().toDouble(&ok);
+        if (!ok || !std::isfinite(v)) {
+            return out;
+        }
+        saved[static_cast<size_t>(i)] = static_cast<float>(v);
+    }
+    return saved;
+}
+}  // namespace
+
+float RadioModel::rx1PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    return readRx1PreampOffsets()[static_cast<size_t>(idx)];
+}
+
+float RadioModel::rx2PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    const float held = m_rx2PreampOffsetDb[static_cast<size_t>(idx)];
+    return std::isnan(held) ? rx2PreampOffsetDefault(idx) : held;
+}
+
+void RadioModel::setRx1PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    // From Thetis console.cs:3202-3203 [v2.10.3.15]:
+    //   for (int i = (int)PreampMode.FIRST + 1; i < (int)PreampMode.LAST; i++)
+    //       a.Add("rx1_preamp_offset[" + i.ToString() + "]/" + rx1_preamp_offset[i].ToString("f3"));
+    // and the load rounds to three places (console.cs:4781-4785 [v2.10.3.15]).
+    std::array<float, kPreampModeCount> values = readRx1PreampOffsets();
+    values[static_cast<size_t>(idx)] = db;
+    QStringList parts;
+    parts.reserve(kPreampModeCount);
+    for (float v : values) {
+        parts.append(QString::number(static_cast<double>(v), 'f', 3));
+    }
+    AppSettings::instance().setValue(kRx1PreampOffsetsKey, parts.join(QLatin1Char('|')));
+    refreshRxMeterOffset();
+}
+
+void RadioModel::setRx2PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    m_rx2PreampOffsetDb[static_cast<size_t>(idx)] = db;
+    refreshRxMeterOffset();
 }
 
 double RadioModel::rxMeterOffsetDbForAdc(int adc) const
@@ -9912,7 +10293,8 @@ double RadioModel::rxPreampOffsetDb() const
             // Preamp-mode path: lookup table per console.cs:1991-2001.
             const int modeIdx = static_cast<int>(
                 m_stepAttController->preampMode());
-            preampOffset = ::NereusSDR::rxPreampOffsetDbFor(modeIdx);
+            // Level Cal: rx1_preamp_offset[] as CalibrateLevel left it.
+            preampOffset = rx1PreampOffsetDbFor(static_cast<PreampMode>(modeIdx));
         }
     }
 
@@ -15948,6 +16330,168 @@ void RadioModel::clearStationAlexLpf()
     emit alexLpfBitsChanged();
 }
 
+// --- Level Cal: the calibration run ---
+
+LevelCalibrationService* RadioModel::levelCalibrationService()
+{
+    if (m_role == Role::Remote) {
+        return nullptr;
+    }
+    if (m_levelCalService == nullptr) {
+        m_levelCalService = new LevelCalibrationService(this, this);
+        connect(m_levelCalService, &LevelCalibrationService::stateChanged,
+                this, &RadioModel::levelCalStateChanged);
+    }
+    return m_levelCalService;
+}
+
+LevelCalibrationService* RadioModel::levelCalibrationServiceForTest()
+{
+    return levelCalibrationService();
+}
+
+bool RadioModel::levelCalibrationRunAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationRunAvailable();
+}
+
+bool RadioModel::rx2PreampModeAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->rx2PreampModeAvailable();
+}
+
+QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)
+{
+    if (m_role != Role::Remote) {
+        return levelCalibrationService()->start(levelDbm, frequencyHz, sliceId);
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+    if (!outcome.sent) {
+        return outcome.reason;
+    }
+    m_levelCalStartCommandId = outcome.commandId;
+    return {};
+}
+
+QString RadioModel::requestCancelLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        levelCalibrationService()->cancel();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration cancel"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestCancelLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
+}
+
+bool RadioModel::levelCalRunning() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalRunning;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->running();
+}
+
+int RadioModel::levelCalPercent() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalPercent;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->percent() : 0;
+}
+
+QString RadioModel::levelCalMessage() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalMessage;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->message() : QString();
+}
+
+bool RadioModel::levelCalSucceeded() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalSucceeded;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->succeeded();
+}
+
+bool RadioModel::applyStationLevelCalValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) {
+        return false;
+    }
+    if (name == "levelCalRunning") {
+        if (m_stationLevelCalRunning != value.toBool()) {
+            m_stationLevelCalRunning = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalPercent") {
+        bool ok = false;
+        const int percent = value.toInt(&ok);
+        if (!ok || percent < 0 || percent > 100) {
+            return false;
+        }
+        if (m_stationLevelCalPercent != percent) {
+            m_stationLevelCalPercent = percent;
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalMessage") {
+        if (m_stationLevelCalMessage != value.toString()) {
+            m_stationLevelCalMessage = value.toString();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalSucceeded") {
+        if (m_stationLevelCalSucceeded != value.toBool()) {
+            m_stationLevelCalSucceeded = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    return false;
+}
+
+void RadioModel::clearStationLevelCal()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    m_levelCalStartCommandId = 0;
+    if (!m_stationLevelCalRunning && m_stationLevelCalPercent == 0
+        && m_stationLevelCalMessage.isEmpty() && !m_stationLevelCalSucceeded) {
+        return;
+    }
+    m_stationLevelCalRunning = false;
+    m_stationLevelCalPercent = 0;
+    m_stationLevelCalMessage.clear();
+    m_stationLevelCalSucceeded = false;
+    emit levelCalStateChanged();
+}
+
 
 // --- Connection ---
 
@@ -16067,9 +16611,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // the spinbox UI clamps any negative dB the user types back to 0 even
     // though BoardCapabilities advertises the wider range.
     if (m_stepAttController) {
-        const auto& atten = boardCapabilities().attenuator;
-        m_stepAttController->setMinAttenuation(atten.minDb);
-        m_stepAttController->setMaxAttenuation(atten.maxDb);
+        const auto& caps = boardCapabilities();
+        m_stepAttController->setMinAttenuation(caps.attenuator.minDb);
+        // Level Cal fix wave: the Core's ceiling (BoardCapsTable::
+        // stepAttMaxDb, as DaemonApp and the RX applet use): 61 dB on the
+        // Alex boards, the board row's own maximum otherwise.
+        m_stepAttController->setMaxAttenuation(
+            BoardCapsTable::stepAttMaxDb(caps.board, caps.hasAlexFilters));
     }
 
     // Load per-MAC OC matrix state so the codec layer (P1/P2 buildCodecContext)
@@ -23312,6 +23860,10 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
     // The volt calibration's factory values follow the model (Thetis
     // GetDefaultVoltCalibration).
     m_calController.setHardwareModel(m_hardwareProfile.model);
+    // Level Cal: a meter or display calibration saved by an earlier build
+    // belongs to this model (Thetis keeps one per model,
+    // rx_meter_cal_offset_by_radio, console.cs:14892-14895 [v2.10.3.15]).
+    foldLegacyLevelCal();
     // The 6 m LNA gain offset depends on the model.
     refreshRxMeterOffset();
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
@@ -25521,12 +26073,13 @@ QStringList RadioModel::txProfilesList() const
     return {};
 }
 
-// ── Calibration (getter-only stubs) ─────────────────────────────────────────
-// No calibration model exists yet.  All getters return 0.0 = "no calibration
-// applied".  Real implementation lands when CalibrationModel + per-slice
-// persistence are added.
-double RadioModel::calibrationMeter(int rx) const     { (void)rx; return 0.0; }
-double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return 0.0; }
+// ── Calibration (TCI calibration_ex) ────────────────────────────────────────
+// From Thetis TCIServer.cs:1160-1176 [v2.10.3.15] (CalibrationChanged): the
+// meter and display terms are the receiver's RXnMeterCalOffset and
+// RXnDisplayCalOffset. One receive calibration serves both receivers here.
+// The XVTR, 6 m and TX display terms still return 0.0.
+double RadioModel::calibrationMeter(int rx) const     { (void)rx; return rxMeterCalOffsetDb(); }
+double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return rxDisplayCalOffsetDb(); }
 double RadioModel::calibrationXvtr(int rx) const      { (void)rx; return 0.0; }
 double RadioModel::calibrationSixMeter(int rx) const  { (void)rx; return 0.0; }
 double RadioModel::calibrationTxDisplay(int rx) const { (void)rx; return 0.0; }

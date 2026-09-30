@@ -55,6 +55,17 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - Level Cal: Reset asks first (setup.cs:24332-24341
+//                 [v2.10.3.15]) and resets the meter and display offsets
+//                 through RadioModel; Start is shown disabled with its reason
+//                 and no longer writes cal/triggerLevelCal. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: Start runs the level calibration on the Core
+//                 (setup.cs:6516-6567 [v2.10.3.15]): it asks first, shows
+//                 the run's progress with a Cancel, says when it is
+//                 complete, and is disabled with its reason where the
+//                 Core cannot run it. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -164,6 +175,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
 #include "core/RadioDiscovery.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -172,6 +184,8 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -275,11 +289,13 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // Source: setup.cs udGeneralCalFreq2 -- default 14 100 000 Hz (14.1 MHz) [@501e3f5]
     m_levelCalFreqSpin = makeSpinBox(0.0, 30e6, 14.1e6, 1000.0, 0, levelCalGroup);
     m_levelCalFreqSpin->setSuffix(tr(" Hz"));
+    m_levelCalFreqSpin->setObjectName(QStringLiteral("levelCalFrequencySpin"));
     levelCalForm->addRow(tr("Frequency:"), m_levelCalFreqSpin);
 
     // Source: setup.cs udGeneralCalLevel -- default -73 dBm [@501e3f5]
     m_levelCalLevelSpin = makeSpinBox(-200.0, 0.0, -73.0, 1.0, 1, levelCalGroup);
     m_levelCalLevelSpin->setSuffix(tr(" dBm"));
+    m_levelCalLevelSpin->setObjectName(QStringLiteral("levelCalLevelSpin"));
     levelCalForm->addRow(tr("Level (dBm):"), m_levelCalLevelSpin);
 
     // Source: setup.cs:17243-17248 ud6mLNAGainOffset -> console.RX6mGainOffset_RX1 [@501e3f5]
@@ -305,17 +321,38 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     levelCalForm->addRow(tr("Rx2 6m LNA:"), m_rx2LnaSpin);
 
     auto* levelBtnRow = new QHBoxLayout;
-    // Source: setup.cs:6482-6521 btnGeneralCalLevelStart_Click [@501e3f5]
+    // From Thetis setup.cs:6516-6538 [v2.10.3.15] btnGeneralCalLevelStart_Click:
+    // the run (console.cs CalibrateLevel) goes on the Core that owns the
+    // radio (LevelCalibrationService); refreshLevelCalControls() sets
+    // whether it can start and why not.
     m_levelCalStartBtn = new QPushButton(tr("Start"), levelCalGroup);
-    m_levelCalStartBtn->setToolTip(
-        tr("Start level calibration. Requires calibrated signal at the specified frequency."));
+    m_levelCalStartBtn->setObjectName(QStringLiteral("levelCalStartButton"));
     levelBtnRow->addWidget(m_levelCalStartBtn);
-    // Source: setup.cs:24226 btnResetLevelCal_Click -- resets calibration offset to 0 [@501e3f5]
+    // From Thetis setup.cs:24332-24341 [v2.10.3.15] btnResetLevelCal_Click:
+    // asks first, then console.ResetLevelCalibration() puts the meter and
+    // display offsets back to the radio's defaults.
     m_levelCalResetBtn = new QPushButton(tr("Reset"), levelCalGroup);
-    m_levelCalResetBtn->setToolTip(tr("Reset level calibration offset to 0 dB."));
+    m_levelCalResetBtn->setObjectName(QStringLiteral("levelCalResetButton"));
+    m_levelCalResetBtn->setToolTip(
+        tr("Put the receive level calibration back to this radio's defaults."));
     levelBtnRow->addWidget(m_levelCalResetBtn);
+    // Thetis shows the run in its progress window (progress.cs, a bar and
+    // Abort); here the bar and Cancel sit in the group, with the run's
+    // last word under them.
+    m_levelCalCancelBtn = new QPushButton(tr("Cancel"), levelCalGroup);
+    m_levelCalCancelBtn->setObjectName(QStringLiteral("levelCalCancelButton"));
+    levelBtnRow->addWidget(m_levelCalCancelBtn);
     levelBtnRow->addStretch();
     levelCalForm->addRow(levelBtnRow);
+    m_levelCalProgress = new QProgressBar(levelCalGroup);
+    m_levelCalProgress->setObjectName(QStringLiteral("levelCalProgressBar"));
+    m_levelCalProgress->setRange(0, 100);
+    m_levelCalProgress->setValue(0);
+    levelCalForm->addRow(m_levelCalProgress);
+    m_levelCalStatusLabel = new QLabel(levelCalGroup);
+    m_levelCalStatusLabel->setObjectName(QStringLiteral("levelCalStatusLabel"));
+    m_levelCalStatusLabel->setWordWrap(true);
+    levelCalForm->addRow(m_levelCalStatusLabel);
 
     leftCol->addWidget(levelCalGroup);
     leftCol->addStretch();
@@ -465,14 +502,59 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
                             m_freqCalFreqSpin->value());
     });
 
-    // Level Cal: Start / Reset
-    connect(m_levelCalStartBtn, &QPushButton::clicked, this, [this]() {
-        emit settingChanged(QStringLiteral("cal/triggerLevelCal"),
-                            m_levelCalFreqSpin->value());
+    // Level Cal: the question and messages, as message boxes.
+    m_levelCalConfirm = [this]() {
+        return QMessageBox::question(
+                   this, tr("Level Calibration Check"),
+                   tr("Is the calibrated signal present at the correct frequency?"),
+                   QMessageBox::Yes | QMessageBox::No)
+               == QMessageBox::Yes;
+    };
+    m_levelCalTell = [this](const QString& title, const QString& text, bool warning) {
+        if (warning) {
+            QMessageBox::warning(this, title, text);
+        } else {
+            QMessageBox::information(this, title, text);
+        }
+    };
+
+    // Level Cal: Start / Cancel / Reset
+    connect(m_levelCalStartBtn, &QPushButton::clicked,
+            this, &CalibrationTab::startLevelCalibration);
+    connect(m_levelCalCancelBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_model) { return; }
+        const QString reason = m_model->requestCancelLevelCalibration();
+        if (!reason.isEmpty() && m_levelCalTell) {
+            m_levelCalTell(tr("Level Calibration"), reason, true);
+        }
     });
+    if (m_model) {
+        connect(m_model, &RadioModel::levelCalStateChanged,
+                this, &CalibrationTab::refreshLevelCalControls);
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &CalibrationTab::refreshLevelCalControls);
+        // The Core refused a start this window sent.
+        connect(m_model, &RadioModel::levelCalibrationRefused, this, [this](const QString& reason) {
+            m_levelCalStartedHere = false;
+            if (m_levelCalTell) {
+                m_levelCalTell(tr("Level Calibration"), reason, true);
+            }
+        });
+    }
+    // From Thetis setup.cs:24332-24341 [v2.10.3.15]: a Yes/No question with
+    // No as the default; Yes runs console.ResetLevelCalibration()
+    // (console.cs:46868-46886), which RadioModel ports.
     connect(m_levelCalResetBtn, &QPushButton::clicked, this, [this]() {
-        if (m_calCtrl) { m_calCtrl->setLevelOffsetDb(0.0); m_calCtrl->save(); }
-        emit settingChanged(QStringLiteral("cal/levelOffset"), 0.0);
+        if (!m_model) { return; }
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            this, tr("Level Defaults"),
+            tr("Do you want to reset Level Calibration back to defaults?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) { return; }
+        const QString reason = m_model->requestResetLevelCalibration();
+        if (!reason.isEmpty()) {
+            QMessageBox::warning(this, tr("Level Defaults"), reason);
+        }
     });
 
     // 6m LNA offsets
@@ -591,6 +673,7 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     if (m_calCtrl) {
         syncFromController();
     }
+    refreshLevelCalControls();
 
     // Note: the PaCalibrationGroup live-rebuild on paCalProfileChanged was moved
     // to PaWattMeterPage on 2026-05-02 (Setup IA reshape Phase 3A) when the
@@ -689,6 +772,9 @@ void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& ca
         m_calCtrl->setMacAddress(info.macAddress);
         m_calCtrl->load();
     }
+    // A remote window resets and runs through its Core; a Core that cannot
+    // take the request leaves the button disabled with the reason.
+    refreshLevelCalControls();
     // Load per-radio calibration settings from controller (set by RadioModel at connect).
     if (m_calCtrl) {
         syncFromController();
@@ -711,6 +797,79 @@ void CalibrationTab::restoreSettings(const QMap<QString, QVariant>& /*settings*/
 {
     // Calibration settings are loaded via CalibrationController::load() on connect.
     // Nothing to do here — kept for API parity with other tab types.
+}
+
+// -- Level Cal: the run -------------------------------------------------------
+
+void CalibrationTab::refreshLevelCalControls()
+{
+    if (!m_model) {
+        const QString noRadio = tr("No radio to calibrate.");
+        for (QPushButton* b : {m_levelCalStartBtn, m_levelCalCancelBtn, m_levelCalResetBtn}) {
+            b->setEnabled(false);
+            b->setToolTip(noRadio);
+        }
+        return;
+    }
+    const bool runAvailable = m_model->levelCalibrationRunAvailable();
+    const bool resetAvailable = m_model->levelCalibrationResetAvailable();
+    const bool running = m_model->levelCalRunning();
+    const QString runningReason = tr("A level calibration is running.");
+
+    // From Thetis setup.cs:6525-6526 and 6557-6558 [v2.10.3.15]: Start and
+    // Reset are off while the run goes and back on when it ends.
+    m_levelCalStartBtn->setEnabled(runAvailable && !running);
+    m_levelCalStartBtn->setToolTip(
+        !runAvailable ? IStationLink::levelCalibrationRunUnavailableReason()
+        : running     ? runningReason
+                      : tr("Measure a signal of the level and frequency above and "
+                           "set the receive level calibration from it."));
+    m_levelCalResetBtn->setEnabled(resetAvailable && !running);
+    m_levelCalResetBtn->setToolTip(
+        !resetAvailable ? IStationLink::levelCalibrationResetUnavailableReason()
+        : running       ? runningReason
+                        : tr("Put the receive level calibration back to this radio's defaults."));
+    m_levelCalCancelBtn->setEnabled(runAvailable && running);
+    m_levelCalCancelBtn->setToolTip(
+        !runAvailable ? IStationLink::levelCalibrationRunUnavailableReason()
+        : running     ? tr("Stop the level calibration and put the receiver back.")
+                      : tr("Nothing to stop: no level calibration is running."));
+
+    m_levelCalProgress->setValue(m_model->levelCalPercent());
+    m_levelCalStatusLabel->setText(running ? QString() : m_model->levelCalMessage());
+
+    const bool ended = m_levelCalWasRunning && !running;
+    m_levelCalWasRunning = running;
+    if (ended && m_levelCalStartedHere) {
+        m_levelCalStartedHere = false;
+        // From Thetis setup.cs:6556 and 6561-6567 [v2.10.3.15]:
+        // showCalibrateDone("Level Calibration complete.") under
+        // "Calibration", only when the run finished.
+        if (m_model->levelCalSucceeded() && m_levelCalTell) {
+            m_levelCalTell(tr("Calibration"), tr("Level Calibration complete."), false);
+        }
+    }
+}
+
+void CalibrationTab::startLevelCalibration()
+{
+    if (!m_model || !m_model->levelCalibrationRunAvailable() || m_model->levelCalRunning()) {
+        return;
+    }
+    // From Thetis setup.cs:6518-6523 [v2.10.3.15]
+    if (!m_levelCalConfirm()) {
+        return; //MW0LGE_[2.9.0.6] double check we want to do this, prevents accidental click from changing config
+    }
+    // Thetis calibrates RX1 on VFO A; here the active slice (-1).
+    m_levelCalStartedHere = true;
+    const QString reason = m_model->requestStartLevelCalibration(
+        static_cast<float>(m_levelCalLevelSpin->value()), m_levelCalFreqSpin->value(), -1);
+    if (!reason.isEmpty()) {
+        m_levelCalStartedHere = false;
+        if (m_levelCalTell) {
+            m_levelCalTell(tr("Level Calibration"), reason, true);
+        }
+    }
 }
 
 // -- groupBoxCountForTest ------------------------------------------------------
@@ -737,6 +896,14 @@ int CalibrationTab::groupBoxCountForTest() const
         }
     }
     return count;
+}
+
+void CalibrationTab::setLevelCalPromptsForTest(
+    std::function<bool()> confirm,
+    std::function<void(const QString& title, const QString& text, bool warning)> tell)
+{
+    m_levelCalConfirm = std::move(confirm);
+    m_levelCalTell = std::move(tell);
 }
 #endif
 

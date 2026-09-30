@@ -279,6 +279,12 @@ QString preampWords(int mode)
         return QStringLiteral("-40 dB");
     case PreampMode::Minus50:
         return QStringLiteral("-50 dB");
+    case PreampMode::SaMinus10:
+        return QStringLiteral("-10 dB");
+    case PreampMode::SaMinus20:
+        return QStringLiteral("-20 dB");
+    case PreampMode::SaMinus30:
+        return QStringLiteral("-30 dB");
     }
     return QString::number(mode);
 }
@@ -542,7 +548,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 const bool adc1 = n == "rx1Preamp";
                 // RX2's value, enable and auto-attenuate settings reach RX2's ADC.
                 const bool rx2Att = n == "rx2AttenuationDb" || n == "rx2StepAttEnabled"
-                    || n.startsWith("rx2AutoAtt");
+                    || n.startsWith("rx2AutoAtt") || n == "rx2PreampMode";
                 const bool known = n == "attenuationDb" || n == "enabled" || n == "preampMode"
                     || adc1 || rx2Att || n.startsWith("autoAtt");
                 if (!known) {
@@ -577,7 +583,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 } else if (n == "enabled" || n == "rx2StepAttEnabled") {
                     words(QStringLiteral("Attenuator, %1").arg(adc), currentWords(u, {}),
                           valueWords(u.value, u.kind));
-                } else if (n == "preampMode") {
+                } else if (n == "preampMode" || n == "rx2PreampMode") {
                     words(QStringLiteral("Preamp, %1").arg(adc),
                           preampWords(current.value(n).value.toInt()),
                           preampWords(u.value.toInt()));

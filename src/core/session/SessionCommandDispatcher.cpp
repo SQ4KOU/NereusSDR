@@ -6,6 +6,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -513,6 +520,12 @@ QString notRepresentableReason()
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
 //   setRadioSampleRate     radioHardwareVersion 9 (requestRadioSampleRate)
+//   resetLevelCalibration  radioHardwareVersion 12
+//                          (requestResetLevelCalibration)
+//   startLevelCalibration, cancelLevelCalibration
+//                          radioHardwareVersion 12
+//                          (requestStartLevelCalibration,
+//                          requestCancelLevelCalibration)
 //   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
 //   records.subscribe, records.unsubscribe, spots.connect, spots.disconnect,
 //   spots.sendCommand, spots.clearAll
@@ -803,6 +816,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // Parity ruling C4: the radio's sample rate, every receiver and the
         // radio's own rate, as a local window's Radio Info change.
         {"setRadioSampleRate", {arg("rateHz", kInt)}, "radioHardwareVersion", 9,
+         kRadioIdentitySessionProtocolMinor},
+        // Level Cal: Setup's Reset, the meter and display calibration back
+        // to the radio's defaults.
+        {"resetLevelCalibration", {}, "radioHardwareVersion", 12,
+         kRadioIdentitySessionProtocolMinor},
+        // Level Cal: the Core's calibration run on one slice, and its stop.
+        {"startLevelCalibration",
+         {arg("levelDbm", kDouble), arg("frequencyHz", kDouble), arg("sliceId", kInt)},
+         "radioHardwareVersion", 12, kRadioIdentitySessionProtocolMinor},
+        {"cancelLevelCalibration", {}, "radioHardwareVersion", 12,
          kRadioIdentitySessionProtocolMinor},
         // The filter graph's curve (R-R3-49, parity Task 16).
         {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
@@ -1411,6 +1434,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetIoBoardOutput(invoke);
     } else if (invoke.commandVerb == "setRadioSampleRate") {
         handleSetRadioSampleRate(invoke);
+    } else if (invoke.commandVerb == "resetLevelCalibration") {
+        handleResetLevelCalibration(invoke);
+    } else if (invoke.commandVerb == "startLevelCalibration") {
+        handleStartLevelCalibration(invoke);
+    } else if (invoke.commandVerb == "cancelLevelCalibration") {
+        handleCancelLevelCalibration(invoke);
     } else if (invoke.commandVerb == "dsp.filterResponse") {
         handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "records.subscribe"
@@ -4407,6 +4436,61 @@ void SessionCommandDispatcher::handleSetIoBoardOutput(const SessionMessage& invo
                                        refusal = reason;
                                    });
     emitResult(invoke.commandVerb, invoke.commandId, accepted, refusal, {});
+}
+
+// Level Cal (radioHardwareVersion 12): a remote window's Setup > Hardware >
+// Calibration Reset, the call a local window's Reset makes
+// (RadioModel::resetLevelCalibration, Thetis ResetLevelCalibration,
+// console.cs:46868-46886 [v2.10.3.15]). Thetis has no MOX check there, so
+// it is taken on the air too. The removed keys reach every window as
+// settings.value with no entry.
+void SessionCommandDispatcher::handleResetLevelCalibration(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    m_radioModel->resetLevelCalibration();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// Level Cal (radioHardwareVersion 12): a remote window's Setup > Hardware >
+// Calibration Start, the call a local window makes
+// (RadioModel::requestStartLevelCalibration): the Core runs Thetis
+// CalibrateLevel (console.cs:9856-10232 [v2.10.3.15]) on the slice named.
+// StationServer has already refused a window signed in with the pairing
+// token and a radio on the air. The run's own refusals come back as the
+// result; its progress reaches the window as the levelCal* properties.
+void SessionCommandDispatcher::handleStartLevelCalibration(const SessionMessage& invoke)
+{
+    double levelDbm = 0.0;
+    double frequencyHz = 0.0;
+    int sliceId = -1;
+    if (!hasExactlyArguments(invoke.arguments, {"levelDbm", "frequencyHz", "sliceId"})
+        || !findFiniteDoubleArgument(invoke.arguments, "levelDbm", &levelDbm)
+        || !findFiniteDoubleArgument(invoke.arguments, "frequencyHz", &frequencyHz)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    const QString refusal = m_radioModel->requestStartLevelCalibration(
+        static_cast<float>(levelDbm), frequencyHz, sliceId);
+    emitResult(invoke.commandVerb, invoke.commandId, refusal.isEmpty(), refusal, {});
+}
+
+// Level Cal: Cancel, Thetis closing the progress window. It only stops a
+// run, so any window may send it; with nothing running it does nothing.
+void SessionCommandDispatcher::handleCancelLevelCalibration(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    m_radioModel->requestCancelLevelCalibration();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 // Parity ruling C4 (radioHardwareVersion 8): a remote window's Setup >

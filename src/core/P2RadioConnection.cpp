@@ -108,6 +108,11 @@
 //                board row (a wire value; Thetis keeps the radio's
 //                reported receiver count for its radio list only). J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1182,8 +1187,39 @@ void P2RadioConnection::setAttenuator(int dB)
     // Saturn/SaturnMKII: minDb=0, maxDb=31, stepDb=1 (kSaturn in BoardCapabilities.cpp).
     // Fallback to [0, 31] if m_caps is not yet set (should not occur in normal flow).
     const int minDb = m_caps ? m_caps->attenuator.minDb : 0;
-    const int maxDb = m_caps ? m_caps->attenuator.maxDb : 31;
+    // Level Cal: an Alex board's wire range reaches the Alex range + 2
+    // (console.cs:11044-11056 [v2.10.3.15]).
+    const int maxDb = m_caps ? BoardCapsTable::stepAttWireMaxDb(*m_caps) : 31;
     m_adc[0].rxStepAttn = qBound(minDb, dB, maxDb);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+void P2RadioConnection::setAlexAtten(int bits)
+{
+    // Level Cal: the Alex receive attenuator, Alex0 bits 13 / 14.
+    // From Thetis ChannelMaster/netInterface.c:421-432 [v2.10.3.15]:
+    //   void SetAlexAtten(int bits)
+    //   {
+    //       if (mkiibpf) return;
+    //
+    //       if ((prbpfilter->_20_dB_Atten | prbpfilter->_10_dB_Atten) != bits)
+    //       {
+    //           prbpfilter->_20_dB_Atten = (bits & 0x2) == 0x2;
+    //           prbpfilter->_10_dB_Atten = bits & 0x1;
+    //           if (listenSock != INVALID_SOCKET)
+    //               CmdHighPriority();
+    // (The OR compare drops a change to 1 from 2 or 3, as in Thetis.)
+    if (m_hardwareProfile.mkiiBpf) {
+        return;
+    }
+    const int current = (m_alex.atten20dB ? 1 : 0) | (m_alex.atten10dB ? 1 : 0);
+    if (current == bits) {
+        return;
+    }
+    m_alex.atten20dB = (bits & 0x2) == 0x2;
+    m_alex.atten10dB = (bits & 0x1) != 0;
     if (m_running) {
         sendCmdHighPriority();
     }
@@ -1209,7 +1245,9 @@ void P2RadioConnection::setAttenuatorForAdc(int adc, int dB)
         return;
     }
     const int minDb = m_caps ? m_caps->attenuator.minDb : 0;
-    const int maxDb = m_caps ? m_caps->attenuator.maxDb : 31;
+    // Level Cal: an Alex board's wire range reaches the Alex range + 2
+    // (console.cs:11044-11056 [v2.10.3.15]).
+    const int maxDb = m_caps ? BoardCapsTable::stepAttWireMaxDb(*m_caps) : 31;
     m_adc[static_cast<size_t>(adc)].rxStepAttn = qBound(minDb, dB, maxDb);
     if (m_running) {
         sendCmdHighPriority();
@@ -3718,6 +3756,8 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // [v2.10.3.13 @501e3f5]. Consumed by P2CodecOrionMkII::buildAlex0().
     ctx.rxOnlyAnt = m_alex.rxOnlyAnt;
     ctx.rxOut     = m_alex.rxOut;
+    // Level Cal: the Alex attenuator (Alex0 bits 13 / 14).
+    ctx.alexAttenBits = (m_alex.atten20dB ? 0x2 : 0) | (m_alex.atten10dB ? 0x1 : 0);
 
     // Mk II BPF board flag — drives the rx-only relay encoding split in
     // P2CodecOrionMkII::buildAlex0(). True for ORIONMKII / ANAN-7000D /
@@ -4661,6 +4701,14 @@ quint32 P2RadioConnection::buildAlex0() const
     if (lpf0 & 0x10) { reg |= (1 << 29); }  // 6m
     if (lpf0 & 0x20) { reg |= (1 << 30); }  // 12/10m
     if (lpf0 & 0x40) { reg |= (1 << 31); }  // 17/15m
+
+    // Level Cal: the Alex attenuator, network.h:284-285 [v2.10.3.15]
+    //   _20_dB_Atten : 1, // bit 13
+    //   _10_dB_Atten : 1, // bit 14 (RX MASTER IN SEL RL22)
+    if (!m_hardwareProfile.mkiiBpf) {
+        if (m_alex.atten20dB) { reg |= (1u << 13); }
+        if (m_alex.atten10dB) { reg |= (1u << 14); }
+    }
 
     // HPF bits — from Thetis netInterface.c:605-621
     // Bits map: 13MHz[1], 20MHz[2], 6M_preamp[3], 9.5MHz[4], 6.5MHz[5], 1.5MHz[6]

@@ -855,6 +855,14 @@ rest, as a local window's does, even when the transmit slice is retuned
 to another band while keyed. On a Core that sends neither, the window
 opens the row for its own transmit slice's band, as before.
 
+**`levelCalibration` 1** (Level Cal): the client shows the Core's level
+calibration run. A peer that declares it is sent `radio`'s
+`levelCalRunning`, `levelCalPercent`, `levelCalMessage` and
+`levelCalSucceeded` (section 7.1); a peer that does not sees exactly the
+wire it was built for, without them. The station does not declare it.
+The desktop's remote window declares it: Setup > Hardware > Calibration
+shows the run's progress and its result as a local window does.
+
 **`txEqCurve` 2** (R-IOS-13, R-R3-49): the client also changes the curve,
 with `txEq.setCurve` and `txEq.resetCurve` (section 9.1). A peer that
 declares it at minor 11 is sent `txEqCurveVersion` 2 and `transmit`'s
@@ -1041,7 +1049,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 11 |
+| `radioHardwareVersion` | 12 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -1242,6 +1250,27 @@ When a feature is off, its version is 0:
   lower shows the three rows disabled with "This Core cannot change its
   radio's clock settings for this app. Updating the Core may help.", since
   that Core stores them without sending them.
+  12 (Level Cal) adds `resetLevelCalibration` (section 9.1), Setup >
+  Hardware > Calibration's level calibration Reset from a window, and
+  applies a window's `RX1_MeterCalOffsetDb` or `RX1_DisplayCalOffsetDb`
+  (section 8; the Core moves the value to the connected model's entry of
+  `RxMeterCalOffsetDbByRadio` or `RxDisplayCalOffsetDbByRadio`, which keep
+  one calibration per radio model as Thetis's
+  `rx_meter_cal_offset_by_radio` does: `|` joined in HPSDRModel order, an
+  empty entry reading that model's default) to the Core's meter and TCI `calibration_ex` when it is
+  written or removed, on and off the air, as Thetis's setters and its
+  reset have no MOX check. 12 also carries `startLevelCalibration` and
+  `cancelLevelCalibration` (section 9.1), the Core's run of Thetis's
+  `CalibrateLevel` on a slice, and `stepAtt`'s `rx2PreampMode` (section
+  7.1, RX2's own preamp mode); the number was extended, not raised, as no
+  Core shipped 12 without them. A station no longer sends 11; 12 serves
+  every earlier version's command and property. A window of a station at
+  11 or lower shows Reset disabled with "This Core cannot reset the level
+  calibration for this app. Updating the Core may help.", Start
+  disabled with "This Core cannot run the level calibration for this app.
+  Updating the Core may help." and, for a slice on the other ADC, the
+  preamp choice disabled with "This Core cannot change the preamp of this
+  slice's receiver input for this app. Updating the Core may help.".
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with
@@ -2523,7 +2552,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (31 properties)
+**RadioModel** (35 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2558,6 +2587,10 @@ An enum property lists the values its domain allows.
 | 28 | `txInhibitReason` | `utf8` | outbound |  |
 | 29 | `alexLpfBits` | `i64` | outbound |  |
 | 30 | `paTransmitBand` | `i64` | outbound |  |
+| 31 | `levelCalRunning` | `bool` | outbound |  |
+| 32 | `levelCalPercent` | `i64` | outbound |  |
+| 33 | `levelCalMessage` | `utf8` | outbound |  |
+| 34 | `levelCalSucceeded` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -2887,7 +2920,7 @@ An enum property lists the values its domain allows.
 | 16 | `txSlice` | `utf8` | outbound |  |
 | 17 | `txGain` | `f64` | bidirectional |  |
 
-**StepAttenuatorFacade** (24 properties)
+**StepAttenuatorFacade** (25 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2915,6 +2948,7 @@ An enum property lists the values its domain allows.
 | 21 | `rx2AutoAttEnabled` | `bool` | bidirectional |  |
 | 22 | `rx2AutoAttUndo` | `bool` | bidirectional |  |
 | 23 | `rx2AutoAttUndoDelayMs` | `i64` | bidirectional |  |
+| 24 | `rx2PreampMode` | `i64` | bidirectional |  |
 
 **TransmitModel** (89 properties)
 
@@ -3496,6 +3530,15 @@ Notes on the keys:
   Sent only to a peer that declared `paTransmitBand` 1. A window clears
   its copy when the session ends and falls back to its own transmit
   slice's band.
+- **`radio`'s level calibration run** (Level Cal; `radioHardwareVersion`
+  12). Outbound, no WRITE, declared last in `RadioModel` after
+  `paTransmitBand`: `levelCalRunning` (bool, true while a run holds the
+  receiver), `levelCalPercent` (i64, 0 to 100, Thetis's progress bar),
+  `levelCalMessage` (utf8, how the last run ended, such as "Level
+  calibration finished." or why it stopped; empty while running) and `levelCalSucceeded` (bool, the last run
+  stored new offsets). A write is refused "The Core sets this itself; it
+  cannot be changed from here." Sent only to a peer that declared
+  `levelCalibration` 1. A window clears its copies when the session ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -3633,7 +3676,20 @@ Notes on the keys:
   raise stays when the overload clears. While every slice is on slice A's
   ADC, or diversity links them, the two enables are one: a write of either
   sets both. Declared after `forceAttWhenPsOff`; sent only to a peer
-  that declared `adcAttenuators` 1.
+  that declared `adcAttenuators` 1. At `radioHardwareVersion` 12
+  `rx2PreampMode` (i64, two-way, declared last, the same gate) is RX2's own
+  preamp mode (Thetis `RX2PreampMode`, console.cs:19413-19520
+  [v2.10.3.15]), a `PreampMode` integer like `preampMode`, which the slices
+  on the other ADC show and set. The Core takes only the items its radio's
+  RX2 list offers (Thetis `comboRX2Preamp`: `0dB`, `-10dB`, `-20dB`,
+  `-30dB` on the two-ADC ANAN models, the Saturn boards and the Red
+  Pitaya; `0dB`, `-20dB` on the rest) and otherwise settles "This radio
+  does not offer that preamp setting.". With RX2's step attenuator off it
+  sets the other ADC's attenuator (0, 10, 20 or 30 dB) on the models
+  Thetis lists, and on an HPSDR the second receiver's preamp bit. While
+  every slice is on slice A's ADC it follows `preampMode`, and each
+  follows the other, as Thetis links the two on one ADC. The Core keeps it
+  per band of the other ADC, like `rx2AttenuationDb`, and saves it.
 - **`transmit`'s `txEqCurve`** (R-IOS-13, R-R3-49; `txEqCurveVersion`
   1). Outbound, `utf8`, declared last in `TransmitModel`: the parametric
   curve of the TX EQ dialog, read from `txEqParaEqData` into a documented
@@ -5123,6 +5179,10 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `Nr3ModelPath` | station |
 | 3. whole key | `StationCallsign` | station |
 | 3. whole key | `RX1_MeterCalOffsetDb` | station |
+| 3. whole key | `RX1_DisplayCalOffsetDb` | station |
+| 3. whole key | `RxMeterCalOffsetDbByRadio` | station |
+| 3. whole key | `RxDisplayCalOffsetDbByRadio` | station |
+| 3. whole key | `RX1_PreampOffsetsDb` | station |
 | 3. whole key | `PeripheralsMigrationDone` | station |
 | 3. whole key | `SwrProtectionEnabled` | station |
 | 3. whole key | `SwrProtectionLimit` | station |
@@ -5482,6 +5542,9 @@ letter, controllerDeviceId}`) in its `values` (section 7.5).
 | `requestIoBoardI2c` | `bus` i64, `address` i64, `register` i64, `write` bool, `value` i64 | `radioHardwareVersion` | 7 | 11 |
 | `setIoBoardOutput` | `pin` i64, `on` bool | `radioHardwareVersion` | 7 | 11 |
 | `setRadioSampleRate` | `rateHz` i64 | `radioHardwareVersion` | 9 | 11 |
+| `resetLevelCalibration` | none | `radioHardwareVersion` | 12 | 11 |
+| `startLevelCalibration` | `levelDbm` f64, `frequencyHz` f64, `sliceId` i64 | `radioHardwareVersion` | 12 | 11 |
+| `cancelLevelCalibration` | none | `radioHardwareVersion` | 12 | 11 |
 | `dsp.filterResponse` | `sliceId` i64, `highResolution` bool | `dspInfoVersion` | 1 | 11 |
 | `records.subscribe` | `stream` utf8, `backlog` i64 | `recordStreamVersion` | 1 | 11 |
 | `records.unsubscribe` | `stream` utf8 | `recordStreamVersion` | 1 | 11 |
@@ -5871,6 +5934,42 @@ These command groups need a sentence beyond the table:
   arguments it does not take. The window also saves the rate on the Core
   as the radio's default for its next connect (`hardware/<mac>/radioInfo/
   sampleRate`, section 8), as before.
+- **The level calibration reset** (Level Cal, `radioHardwareVersion`
+  12). `resetLevelCalibration` (no arguments) is Setup > Hardware >
+  Calibration's level calibration Reset from a window, after the window
+  has asked "Do you want to reset Level Calibration back to defaults?"
+  (Thetis setup.cs:24332-24341 [v2.10.3.15]). The Core runs Thetis's
+  `ResetLevelCalibration` (console.cs:46868-46886 [v2.10.3.15]): it
+  removes `RxMeterCalOffsetDbByRadio` and `RxDisplayCalOffsetDbByRadio`
+  (and the one-value `RX1_MeterCalOffsetDb` and `RX1_DisplayCalOffsetDb`
+  of earlier builds), so every model reads its defaults again, and each
+  window is sent the removals (`settings.value` with no entry). Like Thetis it has no MOX
+  check and no paired-device rule. "The Core could not read this
+  request." answers arguments it does not take. The display offset feeds
+  only TCI `calibration_ex`; the panadapter follows the meter offset, as
+  Thetis's does (console.cs:12311 [v2.10.3.15]).
+- **The level calibration run** (Level Cal, `radioHardwareVersion` 12).
+  `startLevelCalibration` (`levelDbm` f64, the generator's level;
+  `frequencyHz` f64, its frequency; `sliceId` i64, the slice to calibrate,
+  -1 for the Core's active slice) runs Thetis's `CalibrateLevel`
+  (console.cs:9856-10232 [v2.10.3.15]) on the Core. The slice stands in
+  for Thetis's RX1 and VFO A: the Core saves its frequency, RIT and mode,
+  the phone receive buffer, the step attenuators and the preamp setting,
+  tunes to the carrier in AM with a 16384 buffer and the step attenuators
+  off, searches the spectrum for the peak, averages 50 readings for each
+  preamp setting the radio has, stores each setting's offset and the
+  meter and display offsets, and puts everything back. It is taken only
+  from a paired device and only while the radio is off the air ("Calibrate
+  the receive level from a paired device.", or the Core's on-the-air
+  reason). The run's own refusals come back in the result: "Turn the
+  radio on before calibrating the receive level.", "Stop transmitting
+  before calibrating the receive level.", "Level calibration is already
+  running.", "Open a slice before calibrating the receive level." and
+  "The slice to calibrate is not open."; a run that stops early sets
+  `levelCalMessage`. `cancelLevelCalibration` (no arguments) stops a run
+  and puts the receiver back; it is taken from any window and is accepted
+  when nothing runs. "The Core could not read this request." answers
+  arguments either verb does not take.
 - **The amp's and tuner's own settings.** `setPgxlName`,
   `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and
   `readPgxlSettings`, and `setTgxlName`, `setTgxlNetwork`,
@@ -7253,7 +7352,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-radio-sample-rate` (which requires `radioHardwareVersion` 9, run by the station only) invokes `setRadioSampleRate` as a paired device, refused on the static station, which has no radio connection ("The radio is not connected, so its sample rate cannot change."), and with its argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled); `verbs-support` (which requires `supportBundleVersion` 1) invokes `support.collect` (taken, its `bundle` matched as any text) and with an argument it does not take (refused "The Core could not read this request."), `support.setLogCategories` with one category and then with none (each taken, then the `radio` delta carrying `logCategories`) and with its argument renamed, and subscribes to `coreLog` with a backlog of 0 (taken, then an empty reset) and unsubscribes. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, a key (section 18.6) refused on that receive-only Core "This Core is set to receive only." (`refusalCode` `stationReceiveOnly`), and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-radio-sample-rate` (which requires `radioHardwareVersion` 9, run by the station only) invokes `setRadioSampleRate` as a paired device, refused on the static station, which has no radio connection ("The radio is not connected, so its sample rate cannot change."), and with its argument renamed; `verbs-level-calibration` (which requires `radioHardwareVersion` 12, run by the station only) invokes `resetLevelCalibration` (taken) and with an argument it does not take (refused "The Core could not read this request."); `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled); `verbs-support` (which requires `supportBundleVersion` 1) invokes `support.collect` (taken, its `bundle` matched as any text) and with an argument it does not take (refused "The Core could not read this request."), `support.setLogCategories` with one category and then with none (each taken, then the `radio` delta carrying `logCategories`) and with its argument renamed, and subscribes to `coreLog` with a backlog of 0 (taken, then an empty reset) and unsubscribes. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

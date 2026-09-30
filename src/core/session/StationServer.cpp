@@ -4,6 +4,14 @@
 //   2026-09-29: One setup description revision per on-air edge (PA and the
 //               DSP RX buffer lock together). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: Level Cal: startLevelCalibration (a paired device, off the
+//               air) and cancelLevelCalibration, and the run's progress to
+//               a peer that declared levelCalibration. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: Level Cal: radioHardwareVersion 12, resetLevelCalibration,
+//               and a window's level calibration write reaches the Core's
+//               meter and TCI. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: Setup description version 20 (R-R3-49, R-IOS-18): PA Gain
 //               publishes its on-the-air lock per row, the transmitting band
 //               open to the transmit holder only. J.J. Boyd (KG4VCF),
@@ -1381,6 +1389,12 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The Alex-1 low-pass in use, for the Alex tab's lamps (alexLpf 1,
     // radioHardwareVersion 10).
     {"RadioModel", "radio", false, "alexLpfBits", "alexLpf"},
+    // The Core's level calibration run (levelCalibration 1,
+    // radioHardwareVersion 12).
+    {"RadioModel", "radio", false, "levelCalRunning", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalPercent", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalMessage", "levelCalibration"},
+    {"RadioModel", "radio", false, "levelCalSucceeded", "levelCalibration"},
     // The CFC dialog's band editor (transmitSettingsVersion 15).
     {"TransmitModel", "transmit", false, "cfcProfile", "cfcProfile"},
 };
@@ -5514,6 +5528,26 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 break;
             }
         }
+        // Level Cal (radioHardwareVersion 12): the calibration run retunes
+        // a slice, switches the preamp and step attenuator and rewrites the
+        // station's calibration, so it is for a paired device, and it
+        // waits while the radio is on the air, like the Core's other radio
+        // verbs (NereusSDR's rule: Thetis runs it from its own console,
+        // which is not transmitting while the calibration holds it). Cancel
+        // only stops a run and is taken from anyone.
+        if (message.commandVerb == "startLevelCalibration") {
+            QString refusal;
+            if (!peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+                refusal = QStringLiteral("Calibrate the receive level from a paired device.");
+            } else if (!m_radioModel.isNull()) {
+                m_radioModel->stationOnAirRefusal(&refusal);
+            }
+            if (!refusal.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, refusal, {}));
+                break;
+            }
+        }
         {
             // A revoke of the requester's own device, or a token session
             // retiring the token, ends this connection only after its
@@ -7860,6 +7894,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // Parity ruling C12: a band's grid dB max or min reaches the Core's
         // pans at once; on that band the new range goes to every window.
         m_radioModel->applyPanGridSetting(key);
+        // Level Cal (radioHardwareVersion 12): the meter or display
+        // calibration reaches the Core's meter and TCI at once.
+        m_radioModel->applyLevelCalibrationSetting(key);
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
@@ -8009,6 +8046,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyModMonitorSetting(key, QVariant());
         // Parity ruling C12: the band's default grid range.
         m_radioModel->applyPanGridSetting(key);
+        // Level Cal: the radio's default meter or display calibration.
+        m_radioModel->applyLevelCalibrationSetting(key);
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);
@@ -8970,7 +9009,8 @@ bool StationServer::fitAdcAttenuatorsToPeer(SessionTransport* transport,
     const auto added = [](const QByteArray& name) {
         return name == "rx2AttenuationDb" || name == "rx2SliceMask"
             || name == "rx2StepAttEnabled" || name == "rx2AutoAttEnabled"
-            || name == "rx2AutoAttUndo" || name == "rx2AutoAttUndoDelayMs";
+            || name == "rx2AutoAttUndo" || name == "rx2AutoAttUndoDelayMs"
+            || name == "rx2PreampMode";
     };
     switch (message.kind) {
     case SessionMessageKind::Schema:
@@ -12060,7 +12100,19 @@ int StationServer::radioHardwareVersion() const
     // and off the air, as mi0bot's handlers write the clock chip with no
     // MOX check (mi0bot setup.cs:21732-21756 [@c26a8a4]). A Core below 11
     // stores them without sending them, so a window keeps the rows closed.
-    return m_radioModel->ioBoardFacade()->isBound() ? 11 : 2;
+    //
+    // 12 (Level Cal): resetLevelCalibration, Setup's Reset (the meter and
+    // display calibration back to the radio's defaults), and a window's
+    // RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb reaches the Core's
+    // meter and TCI calibration_ex at once, on and off the air, as
+    // Thetis's setters and ResetLevelCalibration have no MOX check
+    // (console.cs:21089-21122, 46868-46886 [v2.10.3.15]). It also carries
+    // startLevelCalibration and cancelLevelCalibration, the Core's run of
+    // Thetis CalibrateLevel (console.cs:9856-10232 [v2.10.3.15]) on a
+    // slice, whose progress reaches a peer that declared levelCalibration.
+    // The number was extended, not raised: no Core shipped 12 without
+    // these verbs.
+    return m_radioModel->ioBoardFacade()->isBound() ? 12 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

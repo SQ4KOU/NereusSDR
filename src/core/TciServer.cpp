@@ -116,6 +116,9 @@
 //                receivers are the slices SliceAccessPolicy lets the
 //                station device change. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: calibration_ex carries the meter and display
+//                calibration and goes to apps when either changes. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1217,6 +1220,19 @@ void TciServer::hookGlobalBroadcasts()
             }
         });
     }
+
+    // ── Level Cal (calibration_ex: line) ───────────────────────────────────
+    // From Thetis TCIServer.cs:6785-6786 [v2.10.3.15]:
+    //   console.MeterCalOffsetChangedHandlers += OnCalibrationChanged;
+    //   console.DisplayOffsetChangedHandlers += OnCalibrationChanged;
+    // OnCalibrationChanged (TCIServer.cs:7770-7781 [v2.10.3.15]) calls
+    // CalibrationChanged(rx) with the handler's 1-based rx. NereusSDR keeps
+    // one receive calibration for both receivers, so it sends the line for
+    // receiver 0 and receiver 1 on every change.
+    connect(m_model, &RadioModel::levelCalibrationChanged, this, [this]() {
+        m_protocol->enqueueLocalBroadcast(m_protocol->calibrationExLineFor(0));
+        m_protocol->enqueueLocalBroadcast(m_protocol->calibrationExLineFor(1));
+    });
 
     // ── MOX (trx: line) ────────────────────────────────────────────────────
     // Source: Thetis MoxChangeHandlers at TCIServer.cs:6727 [v2.10.3.15]

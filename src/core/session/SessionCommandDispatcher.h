@@ -85,6 +85,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: command
 //                                    dispatch (addSlice / removeSlice /
 //                                    requestSliceSampleRate /
@@ -608,6 +614,14 @@ private:
     // Parity ruling C4 (radioHardwareVersion 8): the radio's sample rate,
     // as a local window's Radio Info change makes it.
     void handleSetRadioSampleRate(const NereusSDR::SessionMessage& invoke);
+    // Level Cal (radioHardwareVersion 12): Setup's Reset
+    // (RadioModel::resetLevelCalibration).
+    void handleResetLevelCalibration(const NereusSDR::SessionMessage& invoke);
+    // Level Cal: start the Core's calibration run on a slice, and stop it
+    // (RadioModel::requestStartLevelCalibration /
+    // requestCancelLevelCalibration).
+    void handleStartLevelCalibration(const NereusSDR::SessionMessage& invoke);
+    void handleCancelLevelCalibration(const NereusSDR::SessionMessage& invoke);
     // Parity Task 16 (dspInfoVersion 1): the filter graph's curve for a
     // slice's receiver (RadioModel::filterResponseForStation).
     void handleFilterResponse(const NereusSDR::SessionMessage& invoke);

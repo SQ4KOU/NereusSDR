@@ -46,6 +46,18 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -641,6 +653,38 @@ public:
     { return QStringLiteral("This Core changes the sample rate of this window's receivers only. Updating the Core may help."); }
     virtual CommandOutcome requestRadioSampleRate(int /*rateHz*/)
     { return { false, radioSampleRateUnavailableReason() }; }
+
+    // Level Cal, verb "resetLevelCalibration" (radioHardwareVersion 12):
+    // Setup's Reset, the meter and display calibration back to the radio's
+    // defaults on the Core (RadioModel::resetLevelCalibration). The default
+    // refuses, and the window shows Reset disabled with the reason.
+    virtual bool levelCalibrationResetAvailable() const { return false; }
+    static QString levelCalibrationResetUnavailableReason()
+    { return QStringLiteral("This Core cannot reset the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestResetLevelCalibration()
+    { return { false, levelCalibrationResetUnavailableReason() }; }
+
+    // Level Cal, verbs "startLevelCalibration" and "cancelLevelCalibration"
+    // (radioHardwareVersion 12): Setup's Start and Cancel, the calibration
+    // run on the Core (RadioModel::requestStartLevelCalibration). Its
+    // progress comes back as the radio's levelCal* properties (feature
+    // "levelCalibration"). The default refuses, and the window shows Start
+    // disabled with the reason.
+    virtual bool levelCalibrationRunAvailable() const { return false; }
+    static QString levelCalibrationRunUnavailableReason()
+    { return QStringLiteral("This Core cannot run the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestStartLevelCalibration(float /*levelDbm*/, double /*frequencyHz*/,
+                                                        int /*sliceId*/)
+    { return { false, levelCalibrationRunUnavailableReason() }; }
+    virtual CommandOutcome requestCancelLevelCalibration()
+    { return { false, levelCalibrationRunUnavailableReason() }; }
+    // Level Cal (radioHardwareVersion 12): the Core's stepAtt carries
+    // rx2PreampMode, RX2's own preamp mode, which a slice on the other ADC
+    // uses. The default says no, and the window shows that slice's preamp
+    // choice disabled with the reason.
+    virtual bool rx2PreampModeAvailable() const { return false; }
+    static QString rx2PreampModeUnavailableReason()
+    { return QStringLiteral("This Core cannot change the preamp of this slice's receiver input for this app. Updating the Core may help."); }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The
