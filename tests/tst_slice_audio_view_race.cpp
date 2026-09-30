@@ -29,6 +29,10 @@
 //   2026-09-29 - Slice control plan Task 6: the AF level in the view and the
 //                listen churn stress. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Load finding: both stress cases wait for the feeder's first
+//                block before the churn starts, so the churn overlaps real
+//                block flow on a busy computer too. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -51,6 +55,27 @@ namespace {
 
 constexpr int kTestFrames = 2;
 const std::array<float, kTestFrames * 2> kTestSamples = {0.10f, 0.20f, -0.30f, -0.40f};
+
+// How long a stress case waits for its feeder thread's first block before
+// the churn starts. The test's own bound (no product deadline applies): the
+// feeder only has to be scheduled once, which takes microseconds on a quiet
+// computer and was not done within the main thread's whole churn at a load
+// of 41 to 98.
+constexpr int kFeederFirstBlockMs = 10000;
+
+// Stops and joins a stress case's feeder however the case leaves, so a
+// failed wait cannot destroy a joinable std::thread.
+struct FeederStop {
+    std::atomic<bool>& stop;
+    std::thread& feeder;
+    ~FeederStop()
+    {
+        stop.store(true, std::memory_order_release);
+        if (feeder.joinable()) {
+            feeder.join();
+        }
+    }
+};
 
 struct Harness {
     std::unique_ptr<RadioModel> radio;
@@ -159,6 +184,10 @@ private slots:
                 }
             }
         });
+        FeederStop feederStop{stop, feeder};
+        // The churn must overlap real block flow; without this the main
+        // thread could finish every round before the feeder ran once.
+        QTRY_VERIFY_WITH_TIMEOUT(blocks.load() > 0, kFeederFirstBlockMs);
 
         constexpr int kRounds = 300;
         for (int round = 0; round < kRounds; ++round) {
@@ -228,6 +257,10 @@ private slots:
                 blocks.fetch_add(1, std::memory_order_relaxed);
             }
         });
+        FeederStop feederStop{stop, feeder};
+        // The churn must overlap real block flow; without this the main
+        // thread could finish all 2000 rounds before the feeder ran once.
+        QTRY_VERIFY_WITH_TIMEOUT(blocks.load() > 0, kFeederFirstBlockMs);
 
         constexpr int kRounds = 2000;
         for (int round = 0; round < kRounds; ++round) {
