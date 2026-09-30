@@ -54,6 +54,10 @@
 //                                    changeRefusal replaces sliceRefusal;
 //                                    a listener's refusal words scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal 2: the dispatcher's active-
+//                                    slice check forwards changeRefusal;
+//                                    levelCalHostSlice is the desktop's own.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
@@ -1048,6 +1052,10 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 73: StationServer::changeRefusal (slice control plan
           // Task 2; was sliceRefusal), scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
+          // Level Cal 2: Start with no slice named checks the Core's active
+          // slice the same way (StationServer::changeRefusal, scanned there).
+          QStringLiteral("active != nullptr ? m_sliceAccess(m_requester, active->sliceIndex()) : "
+                         "QString()"),
           // Fix wave 2: the same, re-run when a rate change is applied, and
           // StationSharedSettings' kTargetChangedReason, handed over with
           // the rate change's closes (scanned there).
@@ -1629,6 +1637,12 @@ const QList<AppSideReason>& appSideReasons()
          "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
+        // Level Cal 2: the hosting desktop's own Calibration tab shows it on
+        // a disabled Start; no verb sends it. Its sentences are
+        // StationServer's ownedElsewhereReason and listenerChangeReason
+        // words (scanned there) with "another device" for the name.
+        {"src/models/RadioModel.cpp", "levelCalHostSlice",
+         "the hosting desktop's own reason its Level Cal Start is disabled"},
         // R-R3-49 (parity Task 16, trunk merge): why DFNR or MNR is
         // disabled on a Core too old to say, the window's own words.
         {"src/models/RadioModel.cpp", "noiseReductionNotSaidReason",
