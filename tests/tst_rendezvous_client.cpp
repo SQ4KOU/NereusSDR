@@ -3066,9 +3066,12 @@ private slots:
         window.disconnectFromStation(QStringLiteral("test done"));
         QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
         // Both allocations, the Core's and the computer's, given back at
-        // once rather than held for their lifetime.
-        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
-                                 15000);
+        // once rather than held for their lifetime. On a failure, what the
+        // relay saw: which allocations were made and which came back.
+        QTRY_VERIFY2_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
+                                  qPrintable(QStringLiteral("fake TURN server output:\n%1")
+                                                 .arg(service.turnOutput())),
+                                  15000);
     }
 
     // Task 29 (R-IOS-16): a Core with `relay = deny` settles its relay
