@@ -6,6 +6,11 @@
 // waits on 150 ms DSP blocks, and the lane leaves WDSP with the last values
 // set.
 //
+// Modification history: 2026-09-30 J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code: the loaded phase's idle reference also ticks on its
+// own thread while the lane works, so a neighbour's load that starts after
+// the idle phase is in both.
+//
 // REALTIME: the timer-gap bound is wall-clock time while two real channels
 // run slow blocks and a feeder thread hands them I/Q.
 #include <QtTest/QtTest>
@@ -24,10 +29,15 @@
 #include <cmath>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <numbers>
 #include <thread>
 #include <vector>
+
+#ifdef Q_OS_MAC
+#include <pthread/qos.h>
+#endif
 
 #include "core/DspControlThread.h"
 #include "core/P1RadioConnection.h"
@@ -85,6 +95,72 @@ double msBetween(Clock::time_point a, Clock::time_point b)
 {
     return std::chrono::duration<double, std::milli>(b - a).count();
 }
+
+// An idle event loop on its own thread, ticking every kTimerIntervalMs at the
+// calling thread's QoS class (macOS) until stopped: the idle reference that
+// runs at the same time as the loop it is compared with, so both see the
+// same machine. Nothing else runs on it.
+class IdleTwinLoop {
+public:
+    IdleTwinLoop()
+    {
+#ifdef Q_OS_MAC
+        qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+        int relative = 0;
+        pthread_get_qos_class_np(pthread_self(), &qos, &relative);
+#endif
+        m_thread.reset(QThread::create([this
+#ifdef Q_OS_MAC
+                                        , qos, relative
+#endif
+        ] {
+#ifdef Q_OS_MAC
+            if (qos != QOS_CLASS_UNSPECIFIED) {
+                pthread_set_qos_class_self_np(qos, relative);
+            }
+#endif
+            QEventLoop loop;
+            QTimer ticker;
+            ticker.setTimerType(Qt::PreciseTimer);
+            ticker.setInterval(kTimerIntervalMs);
+            Clock::time_point previous = Clock::now();
+            QObject::connect(&ticker, &QTimer::timeout, &loop, [&] {
+                const Clock::time_point now = Clock::now();
+                if (m_ticks > 0) {
+                    m_worstGapMs = std::max(m_worstGapMs, msBetween(previous, now));
+                }
+                previous = now;
+                ++m_ticks;
+                if (m_quit.load()) {
+                    loop.quit();
+                }
+            });
+            ticker.start();
+            m_running.store(true);
+            loop.exec();
+        }));
+        m_thread->start();
+        while (!m_running.load()) {
+            std::this_thread::yield();
+        }
+    }
+    ~IdleTwinLoop() { stop(); }
+    void stop()
+    {
+        m_quit.store(true);
+        m_thread->wait();
+    }
+    // Valid after stop().
+    double worstGapMs() const { return m_worstGapMs; }
+    int ticks() const { return m_ticks; }
+
+private:
+    std::unique_ptr<QThread> m_thread;
+    std::atomic<bool> m_running{false};
+    std::atomic<bool> m_quit{false};
+    double m_worstGapMs{0.0};
+    int m_ticks{0};
+};
 
 // Hands every channel one input block per round, looking each one up in
 // the engine every time, the way RxDspWorker does. pause() returns once the
@@ -266,7 +342,6 @@ private slots:
             idleTicker.start();
             idleLoop.exec();
         }
-        const double gapBoundMs = std::max(kMaxTimerGapMs, idleWorstGapMs + kIdleAllowanceMs);
 
         WdspThreadCheck::install(QThread::currentThread());
 
@@ -281,6 +356,9 @@ private slots:
         double actionsMs = 0.0;
         int ticks = 0;
         bool posted = false;
+        // The idle reference also ticks while the lane works, so load that
+        // starts after the idle phase is charged to both loops, not the lane.
+        IdleTwinLoop idleTwin;
         Clock::time_point lastTick = Clock::now();
         QEventLoop loop;
         QObject answers;
@@ -358,6 +436,9 @@ private slots:
         ticker.start();
         loop.exec();
         ticker.stop();
+        idleTwin.stop();
+        const double idleReferenceMs = std::max(idleWorstGapMs, idleTwin.worstGapMs());
+        const double gapBoundMs = std::max(kMaxTimerGapMs, idleReferenceMs + kIdleAllowanceMs);
         const quint64 eventLoopCalls = WdspThreadCheck::eventLoopEntries();
         WdspThreadCheck::uninstall();
 
@@ -382,15 +463,18 @@ private slots:
 
         qInfo("%d setters, an off and on, a rate change and a destroy and recreate in "
               "%.2f ms on the event loop; lane busy %.0f ms; %d ticks; worst %d ms timer "
-              "gap %.2f ms (limit %.1f: idle worst %.2f ms over %d ticks); feeder parked "
-              "%d times; WDSP calls on the event loop %llu",
+              "gap %.2f ms (limit %.1f: idle worst %.2f ms over %d ticks, idle twin worst "
+              "%.2f ms over %d ticks); feeder parked %d times; WDSP calls on the event "
+              "loop %llu",
               kSetters, actionsMs, laneMs, ticks, kTimerIntervalMs, worstGapMs,
-              gapBoundMs, idleWorstGapMs, idleTicks, feeder.pauses(),
+              gapBoundMs, idleWorstGapMs, idleTicks, idleTwin.worstGapMs(),
+              idleTwin.ticks(), feeder.pauses(),
               static_cast<unsigned long long>(eventLoopCalls));
 
         QCOMPARE(eventLoopCalls, quint64(0));
         QVERIFY2(laneMs >= kSlowBlockUs / 2000.0, "the lane never waited on a slow block");
         QCOMPARE(idleTicks, kIdleTicks);
+        QVERIFY2(idleTwin.ticks() >= ticks / 2, "the idle twin loop never ran");
         QVERIFY2(worstGapMs <= gapBoundMs, "the event loop's 10 ms timer gapped");
         QVERIFY(rateAnswered);
         QVERIFY(rateOk);
