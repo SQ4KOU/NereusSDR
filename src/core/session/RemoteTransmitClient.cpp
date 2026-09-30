@@ -32,6 +32,13 @@
 //               the Core's confirmation is on its way, so the next press
 //               keys. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-30: TX rulings review (I-1): the memory lasts at most
+//               kReleaseConfirmGraceMs from the release, is forgotten when a
+//               release is refused or cannot be sent, and never counts while
+//               anything else of this window keeps the radio on the air
+//               (VOX, two-tone, TUNE, a program key, MOX for TUNE). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -82,16 +89,14 @@ RemoteTransmitClient::RemoteTransmitClient(Sender sender, QObject* parent)
     m_keepaliveTimer.setInterval(kKeepaliveIntervalMs);
     m_keepaliveTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_keepaliveTimer, &QTimer::timeout, this, &RemoteTransmitClient::keepaliveTick);
-    // TX rulings (item 1): a release the Core accepted, with no late
-    // `transmitting` from its key within the grace, is confirmed.
+    // TX rulings (item 1, review I-1): the memory of a release is short.
+    // Past the grace from the release (or from the Core's acceptance of
+    // it), whatever the Core still reads is not the key let go, and a
+    // press is the button's plain toggle again.
     m_releaseGraceTimer.setSingleShot(true);
     m_releaseGraceTimer.setInterval(kReleaseConfirmGraceMs);
-    connect(&m_releaseGraceTimer, &QTimer::timeout, this, [this]() {
-        if (!m_coreTransmitting) {
-            m_screenReleasePending = false;
-            m_tuneReleasePending = false;
-        }
-    });
+    connect(&m_releaseGraceTimer, &QTimer::timeout, this,
+            &RemoteTransmitClient::forgetReleases);
 }
 
 void RemoteTransmitClient::setVoxArmed(bool armed)
@@ -239,6 +244,9 @@ quint32 RemoteTransmitClient::send(const QByteArray& verb, const QList<MirrorUpd
         }
     } else if (releaseIntent) {
         m_releaseFailureSticky = true;
+        // TX rulings review (I-1): a release that never went leaves the
+        // radio as it was; the next press is the unkey again.
+        forgetReleases();
         if (!m_releaseFailureNotified) {
             m_releaseFailureNotified = true;
             emit refused(QString::fromLatin1(kReleaseFailedReason), QString(), QString());
@@ -298,6 +306,7 @@ void RemoteTransmitClient::setScreenKey(bool down)
     // TX rulings (item 1): until the Core says it stopped, a `transmitting`
     // that still reads true is this key's, and a press is a new key.
     m_screenReleasePending = true;
+    m_releaseGraceTimer.start();
     // The program's key is the same key at the Core; the operator's
     // release ends it too, as the MOX button's off does locally.
     if (m_program.phase == Phase::On) {
@@ -307,6 +316,36 @@ void RemoteTransmitClient::setScreenKey(bool down)
     release(epoch);
     if (!self) { return; }
     publish();
+}
+
+void RemoteTransmitClient::forgetReleases()
+{
+    m_screenReleasePending = false;
+    m_tuneReleasePending = false;
+    m_releaseGraceTimer.stop();
+}
+
+bool RemoteTransmitClient::othersKeepTransmitting(bool forTune) const
+{
+    // TX rulings review (I-1): what else of this window's own may be
+    // keeping the radio on the air after a release. While any is, the
+    // Core's `transmitting` is not the key let go, and a press stops it.
+    if (m_voxArmed || m_twoToneAsked || m_program.phase != Phase::Idle) {
+        return true;
+    }
+    return forTune ? m_screen.phase != Phase::Idle : m_tuneAsked;
+}
+
+bool RemoteTransmitClient::screenReleasePending() const
+{
+    return m_screenReleasePending && !m_releaseFailureSticky
+        && !othersKeepTransmitting(/*forTune=*/false);
+}
+
+bool RemoteTransmitClient::tuneReleasePending() const
+{
+    return m_tuneReleasePending && !m_releaseFailureSticky
+        && !othersKeepTransmitting(/*forTune=*/true);
 }
 
 void RemoteTransmitClient::release(quint32 epoch)
@@ -320,6 +359,9 @@ void RemoteTransmitClient::setTune(bool on)
 {
     // TX rulings (item 1): TUNE let go, as MOX above.
     m_tuneReleasePending = !on && (m_tuneAsked || m_tuneReleasePending);
+    if (m_tuneReleasePending) {
+        m_releaseGraceTimer.start();
+    }
     const QPointer<RemoteTransmitClient> self(this);
     const quint32 id = send(QByteArrayLiteral("tx.tune"), {boolArgument("on", on)}, Kind::Tune,
                             /*releaseIntent=*/!on);
@@ -440,12 +482,14 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
         --m_pendingReleases;
         // TX rulings (item 1): the Core took the release; a `transmitting`
         // still on its way from the key arrives within the grace.
-        if (accepted && (m_screenReleasePending || m_tuneReleasePending)
-            && !m_coreTransmitting) {
+        if (accepted && (m_screenReleasePending || m_tuneReleasePending)) {
             m_releaseGraceTimer.start();
         }
         if (!accepted) {
             m_releaseFailureSticky = true;
+            // TX rulings review (I-1): a refused release stopped nothing;
+            // the next press is the unkey again.
+            forgetReleases();
             m_releaseFailureNotified = true;  // The Core's refusal is emitted below.
         }
         // Acceptance proves only this off reached the primary in order.
@@ -532,19 +576,13 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
 void RemoteTransmitClient::setCoreTransmitting(bool on)
 {
     m_coreTransmitting = on;
-    if (on) {
-        // TX rulings (item 1): a late `transmitting` from a key let go
-        // holds its release open until the Core reads not transmitting.
-        m_releaseGraceTimer.stop();
-    }
     if (!on) {
         // The Core stopped transmitting: a TUNE or two-tone this window
         // asked for is over too.
         m_tuneAsked = false;
         m_twoToneAsked = false;
         // TX rulings (item 1): and a key let go has stopped.
-        m_screenReleasePending = false;
-        m_tuneReleasePending = false;
+        forgetReleases();
     }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
@@ -578,8 +616,7 @@ void RemoteTransmitClient::coreStopped(quint32 stopSerial, bool coreKeyed, quint
     // `transmitting`). While it still reads true the tail runs on, and
     // the release waits for its false.
     if (!m_coreTransmitting) {
-        m_screenReleasePending = false;
-        m_tuneReleasePending = false;
+        forgetReleases();
     }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
@@ -622,9 +659,7 @@ void RemoteTransmitClient::reset()
     m_program = Key{};
     m_tuneAsked = false;
     m_twoToneAsked = false;
-    m_screenReleasePending = false;
-    m_tuneReleasePending = false;
-    m_releaseGraceTimer.stop();
+    forgetReleases();
     m_pending.clear();
     m_pendingReleases = 0;
     m_releaseDispatches = 0;

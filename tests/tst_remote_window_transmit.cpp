@@ -79,6 +79,9 @@
 //               and TUNE; a normal toggle still works and nothing keys
 //               without a press. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: TX rulings review (I-1): with this window's VOX armed the
+//               lit MOX's press after a release unkeys. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -883,6 +886,52 @@ private slots:
         window.tune->click();
         QTRY_VERIFY(!h.station.isTune());
         QTRY_VERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX rulings review (I-1a): the window's VOX may keep the Core
+    // transmitting after MOX is let go. The lit button's press then stops
+    // the radio (the MOX off's "unkey whatever keys"), never a new key.
+    void withVoxArmedAPressAfterAReleaseUnkeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        MoxController* coreMox = h.station.moxController();
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+
+        window.mox->click();
+        QTRY_VERIFY(coreMox->isMox());
+        QTRY_VERIFY(h.remote.isTransmitting());
+        // As StationClient reports the Core's VOX armed by this window.
+        tx->setVoxArmed(true);
+        window.mox->click();
+        QVERIFY(!tx->screenKeyDown());
+        QVERIFY(!tx->screenReleasePending());
+        QVERIFY(h.remote.isTransmitting());
+        {
+            QSignalBlocker blocker(window.mox);
+            window.mox->setChecked(true);
+        }
+        QVERIFY(!h.remote.moxPressAsksOn(false));
+
+        // The press: the release's unkey and this one go (the link sends
+        // each as copies, after this returns); the only key is the first.
+        window.mox->click();
+        QVERIFY(!tx->screenKeyDown());
+        QVERIFY(!window.mox->isChecked());
+        QTRY_COMPARE(commandsOf(h.stationLink, QStringLiteral("tx.unkey")).size(),
+                     2 * RemoteTransmitClient::kCopies);
+        QTest::qWait(200);
+        QCOMPARE(commandsOf(h.stationLink, QStringLiteral("tx.key")).size(),
+                 RemoteTransmitClient::kCopies);
+        QVERIFY(!coreMox->isMox());
+        tx->setVoxArmed(false);
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

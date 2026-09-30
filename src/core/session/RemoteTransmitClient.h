@@ -66,6 +66,11 @@
 //               the Core's confirmation is on its way, so the next press
 //               keys. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-30: TX rulings review (I-1): the release memory is bounded,
+//               forgotten on a failed release, and ignored while anything
+//               else of this window keeps the radio on the air. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -122,7 +127,7 @@ public:
     /// window does not read it transmitting, how long a late `transmitting`
     /// from the key let go may still arrive: a few of the Core's delta
     /// flushes (StationServer::kDefaultDeltaFlushMs, 50 ms), after which
-    /// the release counts as confirmed.
+    /// the memory of the release is forgotten.
     static constexpr int kReleaseConfirmGraceMs = 250;
     /// The session's tx.keepalive (sent once, never three times).
     void setSessionKeepalive(KeepaliveSender sender) { m_sessionKeepalive = std::move(sender); }
@@ -199,14 +204,18 @@ public:
     /// been refused): its off must go even before the Core's TUNE shows.
     bool tuneAsked() const { return m_tuneAsked; }
     /// TX rulings (item 1): the operator let go of MOX (or TUNE) and the
-    /// Core has not yet said it stopped: its `transmitting` may still read
+    /// Core has not said it stopped: its `transmitting` may still read
     /// true, from this key, for a moment. The next press is a new key.
-    /// It ends when the Core reads not transmitting: its `transmitting`
-    /// going false, a key refused, a stop while not transmitting, or
-    /// kReleaseConfirmGraceMs after the release was accepted with no
-    /// `transmitting` read true since.
-    bool screenReleasePending() const { return m_screenReleasePending; }
-    bool tuneReleasePending() const { return m_tuneReleasePending; }
+    /// It ends when the Core reads not transmitting (its `transmitting`
+    /// going false, a key refused, a stop while not transmitting), when
+    /// the release is refused or cannot be sent, or kReleaseConfirmGraceMs
+    /// after the release or its acceptance, whatever the Core reads.
+    /// Review I-1: never while a release failed (the sticky failure), and
+    /// never while anything else of this window may keep the radio on the
+    /// air (VOX armed, two-tone, a program key, TUNE for MOX, MOX for
+    /// TUNE): then a press is the plain toggle, which unkeys.
+    bool screenReleasePending() const;
+    bool tuneReleasePending() const;
 
 signals:
     /// The Core refused the operator's press (or a release), in its words.
@@ -252,6 +261,9 @@ private:
     bool m_releaseFailureNotified{false};
     quint64 m_sessionGeneration{0};
     bool m_tuneAsked{false};
+    // TX rulings (item 1, review I-1).
+    void forgetReleases();
+    bool othersKeepTransmitting(bool forTune) const;
     // TX rulings (item 1).
     bool m_screenReleasePending{false};
     bool m_tuneReleasePending{false};
