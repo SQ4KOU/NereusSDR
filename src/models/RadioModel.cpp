@@ -33,6 +33,10 @@
 //               republishReceiverVfoFrequencies; an OC pin edit on the HL2
 //               recomputes the reason at once. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Shared-input filters, review fix: on the HL2 a bypassed
+//               band-pass (the N2ADR pins sent as 0x00) clears the low-pass
+//               hold, so the reason describes only what is on the wire.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -22269,14 +22273,22 @@ void RadioModel::republishAlexAdcSlices()
     // row selection where no pins are set. With 6m/ByPass on RX on, the
     // receive low-pass is the 6 m filter for every slice
     // (codec::alex::setAlexLpf) and nothing is held.
+    //
+    // On the HL2 the reason describes only what is on the wire. When chain
+    // 0's band-pass is bypassed (hpfBitsAdc0 == 0x20, the Auto multi-band
+    // bypass), P1RadioConnection sends the N2ADR board's receive pins as
+    // 0x00 (the hasIoBoardHl2 block in the OC byte build), so no low-pass
+    // is set for any slice and nothing is held.
     {
         const bool hl2 = m_hardwareProfile.model == HPSDRModel::HERMESLITE;
         const bool lowPassPresent = boardCapabilities().hasAlexFilters || hl2;
+        constexpr int kAlexBypassSentinel = 0x20;  // AlexRxBpf.hpfBitsAdc0 bypass encoding
+        const bool hl2PinsCleared = hl2 && bpf.hpfBitsAdc0 == kAlexBypassSentinel;
         int forcing = -1;
         QString lowPassReason;
         const QList<SliceModel*>& onInput = countedSlices[0];
-        if (lowPassPresent && !m_alexLpfBypassSwitch && onInput.size() >= 2
-            && m_receiverManager != nullptr) {
+        if (lowPassPresent && !hl2PinsCleared && !m_alexLpfBypassSwitch
+            && onInput.size() >= 2 && m_receiverManager != nullptr) {
             const SharedInputLowPass::Rule rule = hl2
                 ? SharedInputLowPass::Rule::HighestVfoBand
                 : SharedInputLowPass::Rule::HighestCentre;

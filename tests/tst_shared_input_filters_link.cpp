@@ -16,16 +16,23 @@
 // Modification history (NereusSDR):
 //   2026-09-30 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - Review fix: the hold is set up with the band-pass forced
+//                and the N2ADR pins on the wire, since the HL2's Auto
+//                bypass now clears the reason. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include <QSignalSpy>
 
+#include "core/OcMatrix.h"
 #include "core/ReceiverManager.h"
+#include "core/accessories/AlexController.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/StationClient.h"
 #include "core/settings/SettingsProxy.h"
+#include "models/Band.h"
 
 namespace {
 
@@ -34,6 +41,12 @@ namespace {
 // own republish holds the low-pass for the 20 m slice. Returns that slice.
 int holdOnTwoBands(RadioModel& model)
 {
+    // On the HL2: different receive pins for 80 m and 20 m, and the
+    // band-pass forced so the pins stay on the wire (in Auto the two bands
+    // bypass the band-pass, the pins go to 0x00, and nothing is held).
+    model.ocMatrixMutable().setPin(Band::Band80m, 2, /*tx=*/false, true);
+    model.ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/false, true);
+    model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
     model.configureStreamPool(2, 5, 192000);
     for (int i = 0; i < 2; ++i) {
         model.receiverManager()->createReceiver();
@@ -170,10 +183,17 @@ private slots:
 
     // A remote window (which declares rxFilterLowPass) shows what the Core
     // holds; the optional fields leave the chain available as before.
+    //
+    // The WIDE tooltip carries the low-pass sentence only when the chain is
+    // bypassed, and on the HL2 a bypass clears the pins and the hold, so
+    // this Core is an Alex board (Hermes) in Auto: the band-pass bypasses
+    // for the two bands while the Alex low-pass is held for the 20 m slice.
     void remoteWindow_showsTheHeldReason()
     {
         Core core(/*upgradedWithToken=*/true);
+        core.model->setBoardForTest(HPSDRHW::Hermes);
         const int second = holdOnTwoBands(*core.model);
+        core.model->alexControllerMutable().setBpfMode(0, AlexController::BpfMode::Auto);
         QVERIFY(second > 0);
         const QString held = core.model->rxFilter0LowPassReason();
         QVERIFY(!held.isEmpty());

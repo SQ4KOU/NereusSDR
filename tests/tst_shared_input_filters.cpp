@@ -36,6 +36,10 @@
 //                                    slice); an HL2 pin edit refreshes
 //                                    the held reason. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Review fix: the HL2 Auto bypass
+//                                    clears the reason; P2 away rule;
+//                                    6m/ByPass on RX empties the reason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -137,6 +141,13 @@ quint8 p2Alex0Lpf(P2RadioConnection& conn)
     quint8 buf[1444] = {};
     conn.composeCmdHighPriorityForTest(buf);
     return lpfMaskFromReg(readBE32(buf, kAlex0Offset));
+}
+
+quint32 p2Alex0Reg(P2RadioConnection& conn)
+{
+    quint8 buf[1444] = {};
+    conn.composeCmdHighPriorityForTest(buf);
+    return readBE32(buf, kAlex0Offset);
 }
 
 // A Protocol 1 radio with an injected, Connected connection and the
@@ -372,6 +383,80 @@ private slots:
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
     }
 
+    // The same on Protocol 2 (ANAN-G2): the away slice leaves the Alex0
+    // register, band-pass and low-pass together, where slice A puts it.
+    void g2_anAwaySlice_changesNeitherFilter()
+    {
+        G2Session s;
+        const int a = s.add(k80mHz);
+        const int b = s.add(k20mHz);
+        SliceOwnership* ownership = s.model.sliceOwnership();
+        QVERIFY(ownership != nullptr);
+        const QByteArray devA = QByteArrayLiteral("device-a");
+        ownership->setOwner(a, QByteArrayLiteral("device-b"));
+        ownership->setOwner(b, devA);
+        s.model.requestDdcAssignment();
+        QCOMPARE(p2Alex0Lpf(s.conn), codec::alex::computeLpf(k20mHz / 1e6));
+        QCOMPARE(s.model.filterChainState(0).effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+
+        ownership->setAwayDevices({devA});
+        QVERIFY(ownership->isAwaySlice(b));
+        QCOMPARE(p2Alex0Lpf(s.conn), codec::alex::computeLpf(k80mHz / 1e6));
+        QCOMPARE(s.model.filterChainState(0).effective, AlexController::BpfEffective::Filtered);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+        QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
+        const quint32 aloneReg = p2Alex0Reg(s.conn);
+
+        // Retuning the away slice moves neither filter.
+        s.model.sliceById(b)->setFrequency(k10mHz);
+        QCOMPARE(p2Alex0Reg(s.conn), aloneReg);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+
+        // Back: B counts again at once.
+        ownership->setAwayDevices({});
+        QCOMPARE(p2Alex0Lpf(s.conn), codec::alex::computeLpf(k10mHz / 1e6));
+        QCOMPARE(s.model.filterChainState(0).effective, AlexController::BpfEffective::Bypass);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+    }
+
+    // ── 6m/ByPass on RX: one low-pass for every slice, nothing held ──────
+    //
+    // With the switch on, the receive low-pass is the 6 m filter whatever
+    // the slices are tuned to (codec::alex::setAlexLpf), so no slice is
+    // held behind another's and the reason is empty.
+    void lpfBypassOnRx_leavesTheReasonEmpty()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:5F");
+        P1Session s(HPSDRHW::Hermes);
+        RadioInfo info;
+        info.macAddress = mac;
+        info.boardType = HPSDRHW::Hermes;
+        s.model.setLastRadioInfoForTest(info);
+        s.model.setConnectionStateForTest(ConnectionState::Connected);
+
+        const int a = s.add(k80mHz);
+        const int b = s.add(k20mHz);
+        QCOMPARE(s.model.sliceChainIndex(a), 0);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+        QVERIFY(!s.model.filterChainState(0).lowPassReason.isEmpty());
+
+        AppSettings::instance().setHardwareValue(mac, QStringLiteral("alex/master/lpfBypass"),
+                                                 QStringLiteral("True"));
+        s.model.applyAlexHpfSwitchSettings();
+        QTRY_COMPARE(p1LpfBits(s.conn), codec::alex::computeLpf(k6mHz / 1e6));
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+        QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
+        QVERIFY(s.model.rxFilter0LowPassReason().isEmpty());
+
+        // Off again: B holds A once more.
+        AppSettings::instance().setHardwareValue(mac, QStringLiteral("alex/master/lpfBypass"),
+                                                 QStringLiteral("False"));
+        s.model.applyAlexHpfSwitchSettings();
+        QTRY_COMPARE(p1LpfBits(s.conn), codec::alex::computeLpf(k20mHz / 1e6));
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+    }
+
     // ── The HL2 follows mi0bot's high-band rule ─────────────────────────
     //
     // The N2ADR board's receive pins are the HL2's filter. With the policy
@@ -400,14 +485,17 @@ private slots:
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
     }
 
-    // In Auto the multi-band bypass still clears the pins, as it did.
+    // In Auto the multi-band bypass still clears the pins, as it did. With
+    // the pins cleared no low-pass is on the wire, so nothing is held and
+    // the reason is empty (the reason describes only what is on the wire).
     void hl2_autoBypassStillClearsThePins()
     {
         P1Session s(HPSDRHW::HermesLite);
         s.add(k80mHz);
-        const int b = s.add(k20mHz);
+        s.add(k20mHz);
         QCOMPARE(p1OcByte(s.conn), quint8(0x00));
-        QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
+        QCOMPARE(s.model.filterChainState(0).lowPassSlice, -1);
+        QVERIFY(s.model.filterChainState(0).lowPassReason.isEmpty());
     }
 
     // The band order mi0bot compares (enums.cs [@c26a8a4]).
@@ -500,7 +588,9 @@ private slots:
     // The N2ADR pins are the HL2's receive low-pass. With 20 m and 17 m on
     // the same pin the two slices share one filter and nothing is held;
     // giving 17 m its own pin in Setup holds the 20 m slice behind the
-    // 17 m filter straight away, with no slice or band change.
+    // 17 m filter straight away, with no slice or band change. The policy
+    // forces a filter so the pins stay on the wire (in Auto, two pin sets
+    // bypass the band-pass and clear the pins, and nothing is held).
     void hl2_pinEditRefreshesTheHeldReason()
     {
         P1Session s(HPSDRHW::HermesLite);
@@ -508,6 +598,7 @@ private slots:
         s.conn.setOcMatrix(&oc);
         oc.setPin(Band::Band20m, 0, /*tx=*/false, true);
         oc.setPin(Band::Band17m, 0, /*tx=*/false, true);
+        s.model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
 
         const int a = s.add(k20mHz);
         const int b = s.add(k17mHz);
@@ -518,6 +609,7 @@ private slots:
 
         QSignalSpy changed(&s.model, &RadioModel::filterStateChanged);
         oc.setPin(Band::Band17m, 1, /*tx=*/false, true);
+        QCOMPARE(p1OcByte(s.conn), oc.maskFor(Band::Band17m, /*tx=*/false));
         QCOMPARE(s.model.filterChainState(0).lowPassSlice, b);
         QVERIFY2(s.model.filterChainState(0).lowPassReason.contains(letterOn(s.model, a, "20m")),
                  qPrintable(s.model.filterChainState(0).lowPassReason));

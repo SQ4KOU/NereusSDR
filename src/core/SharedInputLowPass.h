@@ -23,25 +23,28 @@
 //    chosen from the receiver's DDS frequency, Thetis's rx1_dds_freq_mhz /
 //    rx2_dds_freq_mhz (console.cs:15487-15498 UpdateAlexTXFilter
 //    [v2.10.3.15]). Both protocols go through the same setAlexLPF. Under
-//    click-tune that is the DDC centre, not the VFO
-//    (console.cs:31894-31910 [v2.10.3.15]: `if (!_click_tune_display)
-//    RX1DDSFreq = rx_freq;` and otherwise `RX1DDSFreq = dTmpFreq;` from
-//    CentreFrequency). Here: the receiver's DDC centre.
+//    click-tune that is the DDC centre, not the VFO: RX1's DDS frequency
+//    takes the VFO only with click-tune off, and the centre frequency
+//    otherwise (console.cs:31894-31910 [v2.10.3.15]). Here: the receiver's
+//    DDC centre.
 //  - The HL2's receive filter is the N2ADR board, chosen by the OC pins of
 //    a band, and that band is the VFO's (console.cs:29101-29106
 //    [v2.10.3.15] BandByFreq(VFOAFreq) into UpdateExtCtrl; mi0bot
-//    Penny.cs:183-189 [@c26a8a4] takes the higher band, `idxb > idx`, in
-//    the Band enum's order, OcMatrix::extCtrlBandIndex). Here: the VFO of
+//    Penny.cs:183-189 [@c26a8a4] takes the higher band index when RX2 is
+//    on, in the Band enum's order, OcMatrix::extCtrlBandIndex). Here: the VFO of
 //    the slice the connection knows the receiver by, its centre when no VFO
 //    was told.
 //
 // Candidates are one per hardware receiver slot, in slot order. On a tie
-// the earlier candidate keeps it, as `idxb > idx` keeps RX1.
+// the earlier candidate keeps it, as mi0bot's strict compare keeps RX1.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-30 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - Review fix: the notes describe the upstream rules and
+//                cite them, with no upstream text quoted. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QList>

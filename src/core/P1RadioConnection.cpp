@@ -130,6 +130,9 @@
 //                DDC centre for the Alex low-pass, the VFO's band for the
 //                HL2 pins), the call RadioModel's reason makes. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Review fix: ocBandFrequencyHz notes the out-of-range RX1
+//                band divergence from mi0bot. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2561,6 +2564,10 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 // choice is SharedInputLowPass::Rule::HighestVfoBand, the one RadioModel
 // names in the low-pass reason. With nothing counted RX1 decides alone, as
 // before.
+// Divergence: when RX1's band is out of range (GEN and the like, idx < 0),
+// mi0bot sends bits = 0 (Penny.cs:161-164 [@c26a8a4]), but here an
+// out-of-range band ranks below every band (extCtrlBandIndex -1), so the
+// other counted slice's band is taken.
 // ---------------------------------------------------------------------------
 quint64 P1RadioConnection::ocBandFrequencyHz() const
 {
