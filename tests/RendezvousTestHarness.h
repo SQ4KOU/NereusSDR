@@ -321,9 +321,14 @@ private:
         const QString portFile = m_dir.filePath(QStringLiteral("turn-port"));
         m_turn = std::make_unique<QProcess>();
         m_turn->setProcessEnvironment(pythonEnvironment());
+        // The destructor stops the helper on a pass, a failure and an early
+        // return; --parent-pid also ends it when this test process is
+        // killed or crashes, when no destructor runs.
         QStringList arguments{QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/fake_turn_server.py"),
                               QStringLiteral("--secret-file"), secret.fileName(),
-                              QStringLiteral("--port-file"), portFile};
+                              QStringLiteral("--port-file"), portFile,
+                              QStringLiteral("--parent-pid"),
+                              QString::number(QCoreApplication::applicationPid())};
         if (m_relayFull) {
             arguments.append(QStringLiteral("--quota-full"));
         }
