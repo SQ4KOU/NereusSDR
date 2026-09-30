@@ -806,6 +806,10 @@
 //   2026-09-30 - Level Cal 2: a remote window's Level Cal Start names its
 //                own active slice, as the phone does, not the Core's (-1).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: levelCalHostSlice, the slice the
+//                hosting desktop's Start names, or the ownership words when
+//                it may change none. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -16367,6 +16371,42 @@ bool RadioModel::rx2PreampModeAvailable() const
         return true;
     }
     return m_station != nullptr && m_station->rx2PreampModeAvailable();
+}
+
+int RadioModel::levelCalHostSlice(QString* refusal) const
+{
+    if (refusal != nullptr) {
+        refusal->clear();
+    }
+    if (m_role == Role::Remote || m_sliceOwnership == nullptr || m_activeSlice == nullptr) {
+        return -1;
+    }
+    const SliceOwnership& owners = *m_sliceOwnership;
+    const QByteArray& station = SliceOwnership::stationDevice();
+    const int active = m_activeSlice->sliceIndex();
+    // The station changes a slice it controls, or one with no controller
+    // and no listeners (SliceAccessPolicy), as StationServer::changeRefusal
+    // holds a device to.
+    if (SliceAccessPolicy::mayChange(owners, station, active)
+        || SliceAccessPolicy::stationMayChangeUnclaimed(owners, active)) {
+        return -1;
+    }
+    const int own = owners.activeFor(station);
+    if (own >= 0) {
+        return own;
+    }
+    if (refusal != nullptr) {
+        // The words StationServer gives a device for a slice it may not
+        // change (ownedElsewhereReason, listenerChangeReason), without the
+        // device's name, which the desktop's model does not hold.
+        if (owners.mark(active).subject().isEmpty()) {
+            *refusal = QStringLiteral("Nobody controls slice %1. Take control to change it.")
+                           .arg(QChar(QLatin1Char('A').unicode() + active));
+        } else {
+            *refusal = QStringLiteral("That slice belongs to another device. It can be changed only there.");
+        }
+    }
+    return -1;
 }
 
 QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)
