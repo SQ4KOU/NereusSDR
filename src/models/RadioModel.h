@@ -3826,6 +3826,15 @@ public:
     // panadapter follows the meter cal (console.cs:12305-12311
     // [v2.10.3.15], rxMeterOffsetDb), so this never moves it.
     double rxDisplayCalOffsetDb() const;
+    // Level Cal: the connected model's own saved meter or display
+    // calibration (RxMeterCalOffsetDbByRadio / RxDisplayCalOffsetDbByRadio,
+    // Thetis rx_meter_cal_offset_by_radio and rx_display_cal_offset_by_radio,
+    // console.cs:196-197 [v2.10.3.15]); nullopt reads the factory default.
+    // The setters change only the connected model's entry.
+    std::optional<double> rxMeterCalOverrideDb() const;
+    std::optional<double> rxDisplayCalOverrideDb() const;
+    void setRxMeterCalOverrideDb(std::optional<double> db);
+    void setRxDisplayCalOverrideDb(std::optional<double> db);
     // Level Cal: `key` is RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb
     // (just written or removed): refresh the meter offset and emit
     // levelCalibrationChanged, as Thetis's setters fire their changed
@@ -3866,6 +3875,10 @@ public:
     class LevelCalibrationService* levelCalibrationServiceForTest();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
+    // Level Cal: moves a one-value calibration of an earlier build to the
+    // connected model's entry. True when a key moved.
+    bool foldLegacyLevelCal();
+    void writeLevelCalOverride(bool meter, std::optional<double> db);
     // Level Cal: the receive offset of each preamp setting, Thetis
     // rx1_preamp_offset[] (console.cs:1999-2009 [v2.10.3.15]), which
     // CalibrateLevel measures (console.cs:10026-10140 [v2.10.3.15]). RX1's

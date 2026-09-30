@@ -785,6 +785,13 @@
 //                (LevelCalibrationService), its progress properties and
 //                the start and cancel calls of both windows.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: meter and display calibration kept per radio
+//                model (rx_meter_cal_offset_by_radio /
+//                rx_display_cal_offset_by_radio, console.cs:196-197,
+//                3183-3193, 4974-5000, 10182, 10190, 14892-14895,
+//                46868-46886 [v2.10.3.15]); a one-value calibration of an
+//                earlier build moves to the connected model.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2337,7 +2344,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(this, &RadioModel::stationSettingChanged, this,
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RX1_MeterCalOffsetDb")
-                    || key == QLatin1String("RX1_DisplayCalOffsetDb")) {
+                    || key == QLatin1String("RX1_DisplayCalOffsetDb")
+                    || key == QLatin1String("RxMeterCalOffsetDbByRadio")
+                    || key == QLatin1String("RxDisplayCalOffsetDbByRadio")) {
                     emit levelCalibrationChanged();
                 }
             });
@@ -9812,45 +9821,186 @@ double RadioModel::rxMeterOffsetDb() const
     return rxPreampOffsetDb() + rxMeterCalOffsetDb() + rx6mGainOffsetDb();
 }
 
-double RadioModel::rxMeterCalOffsetDb() const
-{
-    const HPSDRModel model = m_hardwareProfile.model;
-
-    // Per-radio factory cal default + user override (AppSettings key
-    // RX1_MeterCalOffsetDb).  Default = Thetis factory value per model.
-    const float factoryDefault = ::NereusSDR::rxMeterCalOffsetDefaultFor(model);
-    bool keyOk = false;
-    const double userOverride = AppSettings::instance()
-        .value(QStringLiteral("RX1_MeterCalOffsetDb"),
-               QString::number(static_cast<double>(factoryDefault), 'f', 6))
-        .toString()
-        .toDouble(&keyOk);
-    const float meterCalOffset = keyOk
-        ? static_cast<float>(userOverride)
-        : factoryDefault;
-    return static_cast<double>(meterCalOffset);
-}
-
 namespace {
 const QString kRx1MeterCalOffsetKey = QStringLiteral("RX1_MeterCalOffsetDb");
 const QString kRx1DisplayCalOffsetKey = QStringLiteral("RX1_DisplayCalOffsetDb");
+// Thetis rx_meter_cal_offset_by_radio[] and rx_display_cal_offset_by_radio[]
+// (console.cs:196-197 [v2.10.3.15]): one entry per HPSDRModel, `|` joined
+// as Thetis saves them (console.cs:3183-3193 [v2.10.3.15]). An empty
+// entry reads the model's factory default.
+const QString kRxMeterCalByRadioKey = QStringLiteral("RxMeterCalOffsetDbByRadio");
+const QString kRxDisplayCalByRadioKey = QStringLiteral("RxDisplayCalOffsetDbByRadio");
+constexpr int kModelCount = static_cast<int>(HPSDRModel::LAST);
+
+using CalByRadio = std::array<std::optional<float>, static_cast<size_t>(HPSDRModel::LAST)>;
+
+CalByRadio readCalByRadio(const QString& key)
+{
+    CalByRadio out{};
+    const QStringList list = AppSettings::instance().value(key).toString().split(QLatin1Char('|'));
+    // From Thetis console.cs:4974-4986 [v2.10.3.15]:
+    //   //[2.10.3.7]MW0LGE changed to <= from == so that if a new radio model is added, we will still use the data for the existing radios.
+    //   //This assumes the new radio model is added to the end of the HPSDRModel list. If a model is remove this will cause issues.
+    //   if (numVals <= (int)HPSDRModel.LAST)  //-W2PA  The number of rig types in the imported DB matches the number in this version
+    //   }  //-W2PA  else the number has changed so don't import, leave the defaults alone
+    if (list.size() > kModelCount) {
+        return out;
+    }
+    for (int i = 0; i < list.size(); ++i) {
+        bool ok = false;
+        const float v = list.at(i).toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            out[static_cast<size_t>(i)] = v;
+        }
+    }
+    return out;
+}
+
+void writeCalByRadio(const QString& key, const CalByRadio& values)
+{
+    QStringList parts;
+    parts.reserve(kModelCount);
+    bool any = false;
+    for (const std::optional<float>& v : values) {
+        parts.append(v.has_value() ? QString::number(static_cast<double>(*v), 'f', 6) : QString());
+        any = any || v.has_value();
+    }
+    if (any) {
+        AppSettings::instance().setValue(key, parts.join(QLatin1Char('|')));
+    } else {
+        AppSettings::instance().remove(key);
+    }
+}
+
+int modelSlot(HPSDRModel model)
+{
+    const int i = static_cast<int>(model);
+    return (i >= 0 && i < kModelCount) ? i : -1;
+}
+
+// The model's own entry; before the per-model keys exist (a value saved by
+// an earlier build, or an older Core's), the one saved value.
+std::optional<float> calOverrideFor(const QString& byRadioKey, const QString& legacyKey,
+                                    HPSDRModel model)
+{
+    AppSettings& s = AppSettings::instance();
+    if (s.contains(byRadioKey)) {
+        const int slot = modelSlot(model);
+        return slot < 0 ? std::nullopt : readCalByRadio(byRadioKey)[static_cast<size_t>(slot)];
+    }
+    if (s.contains(legacyKey)) {
+        bool ok = false;
+        const float v = s.value(legacyKey).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            return v;
+        }
+    }
+    return std::nullopt;
+}
 }  // namespace
+
+std::optional<double> RadioModel::rxMeterCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
+std::optional<double> RadioModel::rxDisplayCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
+double RadioModel::rxMeterCalOffsetDb() const
+{
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1MeterCalOffset = rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // The connected model's entry, or its factory default
+    // (RXMeterCalbrationOffsetDefaults, clsHardwareSpecific.cs:408-423
+    // [v2.10.3.15]).
+    const std::optional<double> saved = rxMeterCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxMeterCalOffsetDefaultFor(m_hardwareProfile.model));
+}
 
 double RadioModel::rxDisplayCalOffsetDb() const
 {
-    // RX1DisplayCalOffset (console.cs:21113-21122 [v2.10.3.15]), stored as
-    // RX1_DisplayCalOffsetDb; absent, the radio's factory default
-    // (RXDisplayCalbrationOffsetDefauls, clsHardwareSpecific.cs:424-440
-    // [v2.10.3.15]). Read as the meter cal is.
-    const float factoryDefault =
-        ::NereusSDR::rxDisplayCalOffsetDefaultFor(m_hardwareProfile.model);
-    bool keyOk = false;
-    const double saved = AppSettings::instance()
-        .value(kRx1DisplayCalOffsetKey,
-               QString::number(static_cast<double>(factoryDefault), 'f', 6))
-        .toString()
-        .toDouble(&keyOk);
-    return static_cast<double>(keyOk ? static_cast<float>(saved) : factoryDefault);
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1DisplayCalOffset = rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // absent, the model's factory default (RXDisplayCalbrationOffsetDefauls,
+    // clsHardwareSpecific.cs:424-440 [v2.10.3.15]).
+    const std::optional<double> saved = rxDisplayCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxDisplayCalOffsetDefaultFor(m_hardwareProfile.model));
+}
+
+void RadioModel::writeLevelCalOverride(bool meter, std::optional<double> db)
+{
+    const QString& key = meter ? kRxMeterCalByRadioKey : kRxDisplayCalByRadioKey;
+    const QString& legacy = meter ? kRx1MeterCalOffsetKey : kRx1DisplayCalOffsetKey;
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return;
+    }
+    // Start from what the model reads now, so a value saved by an earlier
+    // build stays with the model that was connected.
+    foldLegacyLevelCal();
+    CalByRadio values = readCalByRadio(key);
+    // From Thetis console.cs:10182 and 10190 [v2.10.3.15]:
+    //   rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt] = _rx1_meter_cal_offset;  // MW0LGE_[2.9.0.7] re-instated
+    //   rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt] = RX1DisplayCalOffset;
+    values[static_cast<size_t>(slot)] = db.has_value()
+        ? std::optional<float>(static_cast<float>(*db)) : std::nullopt;
+    writeCalByRadio(key, values);
+    AppSettings::instance().remove(legacy);
+}
+
+void RadioModel::setRxMeterCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(true, db);
+    applyLevelCalibrationSetting(kRxMeterCalByRadioKey);
+}
+
+void RadioModel::setRxDisplayCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(false, db);
+    applyLevelCalibrationSetting(kRxDisplayCalByRadioKey);
+}
+
+bool RadioModel::foldLegacyLevelCal()
+{
+    // A value saved under the one key of an earlier build (or written by an
+    // older window) belongs to the model connected now: move it to that
+    // model's entry, keeping every other model's.
+    if (m_role == Role::Remote) {
+        return false;
+    }
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return false;
+    }
+    AppSettings& s = AppSettings::instance();
+    bool moved = false;
+    for (const auto& [byRadio, legacy] : { std::pair{ kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey },
+                                           std::pair{ kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey } }) {
+        if (!s.contains(legacy)) {
+            continue;
+        }
+        bool ok = false;
+        const float v = s.value(legacy).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            CalByRadio values = readCalByRadio(byRadio);
+            values[static_cast<size_t>(slot)] = v;
+            writeCalByRadio(byRadio, values);
+        }
+        s.remove(legacy);
+        moved = true;
+    }
+    return moved;
 }
 
 bool RadioModel::applyLevelCalibrationSetting(const QString& key)
@@ -9863,8 +10013,14 @@ bool RadioModel::applyLevelCalibrationSetting(const QString& key)
     // DisplayOffsetChangedHandlers the same way. The meter offset moves
     // the meter and the panadapter (refreshRxMeterOffset); the display
     // offset reaches TCI only (levelCalibrationChanged).
-    if (key != kRx1MeterCalOffsetKey && key != kRx1DisplayCalOffsetKey) {
+    if (key != kRx1MeterCalOffsetKey && key != kRx1DisplayCalOffsetKey
+        && key != kRxMeterCalByRadioKey && key != kRxDisplayCalByRadioKey) {
         return false;
+    }
+    // A window that writes the one-value key of an earlier build: the
+    // value goes to the connected model's entry.
+    if (key == kRx1MeterCalOffsetKey || key == kRx1DisplayCalOffsetKey) {
+        foldLegacyLevelCal();
     }
     refreshRxMeterOffset();
     emit levelCalibrationChanged();
@@ -9878,10 +10034,11 @@ void RadioModel::resetLevelCalibration()
     //   rx_display_cal_offset_by_radio[i] = HardwareSpecific.RXDisplayCalbrationOffsetDefauls((HPSDRModel)i);
     //   RX1MeterCalOffset = ...; RX1DisplayCalOffset = ...;
     //   UpdateRX1DisplayOffsets(); UpdateRX2DisplayOffsets();
-    // NereusSDR keeps one value of each, so removing the keys returns them
-    // to the radio's defaults (the per-model defaults are what an absent
-    // key reads).
+    // Every model's entry goes back to its default: removing the keys does
+    // that, since an absent entry reads the model's factory default.
     AppSettings& settings = AppSettings::instance();
+    settings.remove(kRxMeterCalByRadioKey);
+    settings.remove(kRxDisplayCalByRadioKey);
     settings.remove(kRx1MeterCalOffsetKey);
     settings.remove(kRx1DisplayCalOffsetKey);
     refreshRxMeterOffset();
@@ -23667,6 +23824,10 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
     // The volt calibration's factory values follow the model (Thetis
     // GetDefaultVoltCalibration).
     m_calController.setHardwareModel(m_hardwareProfile.model);
+    // Level Cal: a meter or display calibration saved by an earlier build
+    // belongs to this model (Thetis keeps one per model,
+    // rx_meter_cal_offset_by_radio, console.cs:14892-14895 [v2.10.3.15]).
+    foldLegacyLevelCal();
     // The 6 m LNA gain offset depends on the model.
     refreshRxMeterOffset();
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass

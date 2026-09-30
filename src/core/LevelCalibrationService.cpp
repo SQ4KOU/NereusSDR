@@ -7,6 +7,9 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29 - Reads and writes the connected model's own meter and
+//                display calibration. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/LevelCalibrationService.h"
@@ -25,23 +28,10 @@ namespace NereusSDR {
 
 namespace {
 
-const QString kMeterCalKey = QStringLiteral("RX1_MeterCalOffsetDb");
-const QString kDisplayCalKey = QStringLiteral("RX1_DisplayCalOffsetDb");
 // The phone receive buffer (Thetis SetupForm.DSPPhoneRXBuffer), the key
 // RxChannel reads for the SSB/AM group, default 64.
 const QString kPhoneRxBufferKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
 constexpr int kPhoneRxBufferDefault = 64;
-
-std::optional<double> storedDouble(const QString& key)
-{
-    const AppSettings& s = AppSettings::instance();
-    if (!s.contains(key)) {
-        return std::nullopt;
-    }
-    bool ok = false;
-    const double v = s.value(key).toString().toDouble(&ok);
-    return ok ? std::optional<double>(v) : std::nullopt;
-}
 
 } // namespace
 
@@ -176,12 +166,13 @@ public:
         }
     }
 
-    std::optional<double> meterCalOverride() const override { return storedDouble(kMeterCalKey); }
-    std::optional<double> displayCalOverride() const override { return storedDouble(kDisplayCalKey); }
+    // The connected model's own entries (Thetis keeps one per model).
+    std::optional<double> meterCalOverride() const override { return m_model->rxMeterCalOverrideDb(); }
+    std::optional<double> displayCalOverride() const override { return m_model->rxDisplayCalOverrideDb(); }
     double meterCalDb() const override { return m_model->rxMeterCalOffsetDb(); }
     double displayCalDb() const override { return m_model->rxDisplayCalOffsetDb(); }
-    void setMeterCalOverride(std::optional<double> db) override { writeCal(kMeterCalKey, db); }
-    void setDisplayCalOverride(std::optional<double> db) override { writeCal(kDisplayCalKey, db); }
+    void setMeterCalOverride(std::optional<double> db) override { m_model->setRxMeterCalOverrideDb(db); }
+    void setDisplayCalOverride(std::optional<double> db) override { m_model->setRxDisplayCalOverrideDb(db); }
     float rx1PreampOffsetDb(PreampMode mode) const override
     {
         return m_model->rx1PreampOffsetDbFor(mode);
@@ -228,17 +219,6 @@ private:
         c.sampleRateHz = m_model->streamSampleRateHz(m_stream);
         c.maxPendingIqFloats = c.fft.fftSize * 4;
         return c;
-    }
-
-    void writeCal(const QString& key, std::optional<double> db)
-    {
-        AppSettings& s = AppSettings::instance();
-        if (db.has_value()) {
-            s.setValue(key, QString::number(*db, 'f', 6));
-        } else {
-            s.remove(key);
-        }
-        m_model->applyLevelCalibrationSetting(key);
     }
 
     RadioModel* m_model = nullptr;

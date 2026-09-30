@@ -8485,6 +8485,8 @@
             "StationCallsign",
             "RX1_MeterCalOffsetDb",
             "RX1_DisplayCalOffsetDb",
+            "RxMeterCalOffsetDbByRadio",
+            "RxDisplayCalOffsetDbByRadio",
             "RX1_PreampOffsetsDb",
             "PeripheralsMigrationDone",
             "SwrProtectionEnabled",

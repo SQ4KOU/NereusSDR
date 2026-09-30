@@ -17,6 +17,9 @@
 //   - Reset (console.cs:46868-46886 [v2.10.3.15], ResetLevelCalibration)
 //     returns the meter and display offsets to the model's defaults and
 //     touches no other calibration.
+//   - Both are kept per radio model (rx_meter_cal_offset_by_radio,
+//     console.cs:196-197 [v2.10.3.15]); a one-value calibration saved by an
+//     earlier build moves to the model connected when it is first loaded.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -46,6 +49,8 @@ const QString kMac = QStringLiteral("AA:BB:CC:DD:1C:01");
 const QString kMeterKey = QStringLiteral("RX1_MeterCalOffsetDb");
 const QString kDisplayKey = QStringLiteral("RX1_DisplayCalOffsetDb");
 const QString kPreampKey = QStringLiteral("RX1_PreampOffsetsDb");
+const QString kMeterByRadioKey = QStringLiteral("RxMeterCalOffsetDbByRadio");
+const QString kDisplayByRadioKey = QStringLiteral("RxDisplayCalOffsetDbByRadio");
 
 void setUpLocal(RadioModel& model, HPSDRModel radio)
 {
@@ -78,8 +83,98 @@ private slots:
         QCOMPARE(model.calibrationMeter(1), -3.0);
         QCOMPARE(model.rxMeterOffsetDb(),
                  model.rxPreampOffsetDb() - 3.0 + model.rx6mGainOffsetDb());
-        QCOMPARE(AppSettings::instance().value(kMeterKey).toString(),
-                 QStringLiteral("-3.000000"));
+        // It now lives in the connected model's entry.
+        QVERIFY(!AppSettings::instance().contains(kMeterKey));
+        QVERIFY(AppSettings::instance().contains(kMeterByRadioKey));
+    }
+
+    // Thetis keeps the meter and display calibration per model
+    // (rx_meter_cal_offset_by_radio, console.cs:196-197, 10182, 10190,
+    // 14892-14895 [v2.10.3.15]): calibrating one radio leaves another's.
+    void perModel_twoModelsKeepSeparateValues()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN_G2);
+        model.setRxMeterCalOverrideDb(-2.5);
+        model.setRxDisplayCalOverrideDb(3.0);
+
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        QCOMPARE(model.rxMeterCalOffsetDb(),
+                 static_cast<double>(rxMeterCalOffsetDefaultFor(HPSDRModel::ANAN7000D)));
+        QCOMPARE(model.rxDisplayCalOffsetDb(),
+                 static_cast<double>(rxDisplayCalOffsetDefaultFor(HPSDRModel::ANAN7000D)));
+        model.setRxMeterCalOverrideDb(1.25);
+
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(), -2.5);
+        QCOMPARE(model.rxDisplayCalOffsetDb(), 3.0);
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        QCOMPARE(model.rxMeterCalOffsetDb(), 1.25);
+        // Clearing one model's entry leaves the other's.
+        model.setRxMeterCalOverrideDb(std::nullopt);
+        QCOMPARE(model.rxMeterCalOffsetDb(),
+                 static_cast<double>(rxMeterCalOffsetDefaultFor(HPSDRModel::ANAN7000D)));
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(), -2.5);
+    }
+
+    // A calibration saved by an earlier build (one value) belongs to the
+    // model connected when it is first loaded; another model reads its own
+    // default, and the user's value is never lost.
+    void perModel_earlierValueMovesToConnectedModel()
+    {
+        AppSettings::instance().setValue(kMeterKey, QStringLiteral("-3.000000"));
+        AppSettings::instance().setValue(kDisplayKey, QStringLiteral("7.500000"));
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(), -3.0);
+        QCOMPARE(model.rxDisplayCalOffsetDb(), 7.5);
+
+        model.setHpsdrModelForTest(HPSDRModel::HERMES);
+        QCOMPARE(model.rxMeterCalOffsetDb(),
+                 static_cast<double>(rxMeterCalOffsetDefaultFor(HPSDRModel::HERMES)));
+        QCOMPARE(model.rxDisplayCalOffsetDb(),
+                 static_cast<double>(rxDisplayCalOffsetDefaultFor(HPSDRModel::HERMES)));
+
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(), -3.0);
+        QCOMPARE(model.rxDisplayCalOffsetDb(), 7.5);
+    }
+
+    // A window of an earlier build that writes the one-value key: the value
+    // goes to the connected model.
+    void perModel_earlierWindowWriteGoesToConnectedModel()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN_G2);
+        model.setRxMeterCalOverrideDb(-2.0);
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        AppSettings::instance().setValue(kMeterKey, QStringLiteral("4.000000"));
+        QVERIFY(model.applyLevelCalibrationSetting(kMeterKey));
+        QCOMPARE(model.rxMeterCalOffsetDb(), 4.0);
+        QVERIFY(!AppSettings::instance().contains(kMeterKey));
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(), -2.0);
+    }
+
+    // Reset returns every model's entry to its default, as Thetis's
+    // ResetLevelCalibration loops over every model (console.cs:46870-46874
+    // [v2.10.3.15]).
+    void reset_returnsEveryModelToDefault()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN_G2);
+        model.setRxMeterCalOverrideDb(-2.0);
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        model.setRxDisplayCalOverrideDb(5.0);
+        model.resetLevelCalibration();
+        QVERIFY(!AppSettings::instance().contains(kMeterByRadioKey));
+        QVERIFY(!AppSettings::instance().contains(kDisplayByRadioKey));
+        QCOMPARE(model.rxDisplayCalOffsetDb(),
+                 static_cast<double>(rxDisplayCalOffsetDefaultFor(HPSDRModel::ANAN7000D)));
+        model.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+        QCOMPARE(model.rxMeterCalOffsetDb(),
+                 static_cast<double>(rxMeterCalOffsetDefaultFor(HPSDRModel::ANAN_G2)));
     }
 
     // With nothing saved, each model reads its Thetis default.
@@ -292,8 +387,12 @@ private slots:
         QCOMPARE(calSpy.count(), 2);
         remote.reportStationSettingChanged(QString());
         QCOMPARE(calSpy.count(), 3);
+        remote.reportStationSettingChanged(kMeterByRadioKey);
+        QCOMPARE(calSpy.count(), 4);
+        remote.reportStationSettingChanged(kDisplayByRadioKey);
+        QCOMPARE(calSpy.count(), 5);
         remote.reportStationSettingChanged(QStringLiteral("BandPlanName"));
-        QCOMPARE(calSpy.count(), 3);
+        QCOMPARE(calSpy.count(), 5);
     }
 
     // With no Core, a remote window cannot reset and says why.

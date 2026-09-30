@@ -92,6 +92,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: RX1_DisplayCalOffsetDb is a
 //                                    station key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: the per-model meter and
+//                                    display calibration keys. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-06  J.J. Boyd / KG4VCF  Remote daemon R2 Task 14:
 //                                    classifySettingsKey and its
 //                                    completeness gate. AI-assisted
@@ -567,6 +570,13 @@ const Rule kWholeKeys[] = {
     // Level Cal: the RX1 display calibration (RadioModel::
     // rxDisplayCalOffsetDb), the same kind of constant as the meter's.
     { "RX1_DisplayCalOffsetDb", SettingsScope::Station },
+
+    // Level Cal: the meter and display calibrations kept per radio model,
+    // as Thetis's rx_meter_cal_offset_by_radio and
+    // rx_display_cal_offset_by_radio. The two keys above are the one-value
+    // form of earlier builds; a Core moves them here for the connected model.
+    { "RxMeterCalOffsetDbByRadio", SettingsScope::Station },
+    { "RxDisplayCalOffsetDbByRadio", SettingsScope::Station },
 
     // Level Cal: the ten preamp settings' receive offsets that the level
     // calibration measures (RadioModel::rx1PreampOffsetDbFor).

@@ -1243,7 +1243,11 @@ When a feature is off, its version is 0:
   12 (Level Cal) adds `resetLevelCalibration` (section 9.1), Setup >
   Hardware > Calibration's level calibration Reset from a window, and
   applies a window's `RX1_MeterCalOffsetDb` or `RX1_DisplayCalOffsetDb`
-  (section 8) to the Core's meter and TCI `calibration_ex` when it is
+  (section 8; the Core moves the value to the connected model's entry of
+  `RxMeterCalOffsetDbByRadio` or `RxDisplayCalOffsetDbByRadio`, which keep
+  one calibration per radio model as Thetis's
+  `rx_meter_cal_offset_by_radio` does: `|` joined in HPSDRModel order, an
+  empty entry reading that model's default) to the Core's meter and TCI `calibration_ex` when it is
   written or removed, on and off the air, as Thetis's setters and its
   reset have no MOX check. 12 also carries `startLevelCalibration` and
   `cancelLevelCalibration` (section 9.1), the Core's run of Thetis's
@@ -5130,6 +5134,8 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `StationCallsign` | station |
 | 3. whole key | `RX1_MeterCalOffsetDb` | station |
 | 3. whole key | `RX1_DisplayCalOffsetDb` | station |
+| 3. whole key | `RxMeterCalOffsetDbByRadio` | station |
+| 3. whole key | `RxDisplayCalOffsetDbByRadio` | station |
 | 3. whole key | `RX1_PreampOffsetsDb` | station |
 | 3. whole key | `PeripheralsMigrationDone` | station |
 | 3. whole key | `SwrProtectionEnabled` | station |
@@ -5888,9 +5894,10 @@ These command groups need a sentence beyond the table:
   has asked "Do you want to reset Level Calibration back to defaults?"
   (Thetis setup.cs:24332-24341 [v2.10.3.15]). The Core runs Thetis's
   `ResetLevelCalibration` (console.cs:46868-46886 [v2.10.3.15]): it
-  removes `RX1_MeterCalOffsetDb` and `RX1_DisplayCalOffsetDb`, so both
-  read the radio model's defaults again, and each window is sent the
-  removals (`settings.value` with no entry). Like Thetis it has no MOX
+  removes `RxMeterCalOffsetDbByRadio` and `RxDisplayCalOffsetDbByRadio`
+  (and the one-value `RX1_MeterCalOffsetDb` and `RX1_DisplayCalOffsetDb`
+  of earlier builds), so every model reads its defaults again, and each
+  window is sent the removals (`settings.value` with no entry). Like Thetis it has no MOX
   check and no paired-device rule. "The Core could not read this
   request." answers arguments it does not take. The display offset feeds
   only TCI `calibration_ex`; the panadapter follows the meter offset, as

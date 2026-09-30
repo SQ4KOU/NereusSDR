@@ -316,7 +316,8 @@ constexpr int paMaxWattsFor(HPSDRModel m) noexcept {
 //   _RX1MeterValues[Reading.SIGNAL_MAX_BIN] =
 //       WDSP.GetDetectMaxBin(0) + offset;
 //
-// User may override via the AppSettings key "RX1_MeterCalOffsetDb" (same
+// Level Cal keeps the user's value per model (RxMeterCalOffsetDbByRadio;
+// "RX1_MeterCalOffsetDb" is the one-value form of earlier builds) (same
 // Thetis convention as RX1MeterCalOffset, console.cs:21051).  The default
 // is hidden from the UI in 0.4.x; only Setup -> Multimeter exposes it (no
 // page yet, deferred to follow-up).
