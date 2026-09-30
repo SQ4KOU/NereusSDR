@@ -89,6 +89,10 @@
 //               sent controlTaken without the slice entry's incarnation and
 //               controlRevision. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane: Take it back of a slice released
+//               or taken again since the notice answers "That can no
+//               longer be taken back." J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2048,6 +2052,18 @@ SessionMessage StationServer::takeBackControl(SessionTransport* transport,
         static_cast<quint64>(entry.value(QStringLiteral("incarnation")).toInteger(0));
     const quint64 revision =
         static_cast<quint64>(entry.value(QStringLiteral("controlRevision")).toInteger(0));
+    // The same slice, but its control moved since the notice: the device
+    // that took it released it, or it was taken again. Nothing is left to
+    // take back, so the record is void and the answer says so, not the
+    // stale-revision words slice.takeControl keeps for a real race.
+    const SliceOwnership* current =
+        m_radioModel.isNull() ? nullptr : m_radioModel->sliceOwnership();
+    if (current != nullptr && current->matches(ref)
+        && current->controlRevision(ref.sliceId) != revision) {
+        m_confirm->forgetTakeBack(device, record.id);
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
+                                              QString::fromLatin1(kNoTakeBackReason), {});
+    }
     // The same checks and change as slice.takeControl: refused while the
     // slice transmits; the taker's transmit selection of it is cleared and
     // its transmit binding does not pick it up (ruling Q8).

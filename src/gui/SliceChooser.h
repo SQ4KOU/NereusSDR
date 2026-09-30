@@ -27,6 +27,9 @@
 //               implementation via Anthropic Claude Code.
 //   2026-09-30: core-slice take-over: Row::takeRefusal. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane: Row::controllerName names the
+//               hosting desktop for CoreDesktop. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QColor>
@@ -54,7 +57,7 @@ class SliceChooser : public QWidget {
 public:
     enum class Controller {
         ThisWindow,   ///< this window controls it
-        CoreDesktop,  ///< the Core's own desktop (a window on the Core's computer)
+        CoreDesktop,  ///< the station device: the desktop hosting the Core, or the Core itself
         OtherDevice,  ///< another device, named in controllerName
         Nobody,       ///< nobody controls it
     };
@@ -67,7 +70,9 @@ public:
         QString filter;
         Controller controller = Controller::Nobody;
         /// The Core's name for the controlling device (numbered by the Core
-        /// when two share a name), for OtherDevice.
+        /// when two share a name), for OtherDevice. For CoreDesktop, the
+        /// name of the desktop that hosts the Core (its connectedDevices
+        /// entry with hostsCore), or empty on a Core no desktop hosts.
         QString controllerName;
         /// The controlling device is away (or the Core keeps the slice for
         /// a device that is not here).

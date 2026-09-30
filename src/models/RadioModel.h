@@ -2548,9 +2548,9 @@ public:
 
     /// The listened slices in `scope` whose placement is not one of
     /// `panIds`, in slice order. A layout change that returns any of these
-    /// has taken them out of view, and a device hears only slices it can
-    /// see, so the caller stops listening to each one. Nothing about the
-    /// slice itself changes here.
+    /// has retired the pan showing them. Listening ends only when the
+    /// operator ends it, so the caller places each one on a pan that
+    /// remains. Nothing about the slice itself changes here.
     QList<int> listenedOffPans(const QStringList& panIds, const PanScope& scope) const;
 
     /// Which of `panIds` currently host no slice, in the order given.

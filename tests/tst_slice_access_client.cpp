@@ -40,6 +40,10 @@
 //               3 and learns whether the Core's own slice may be taken.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: desktop listening lane: Take it back of a slice taken
+//               again answers "That can no longer be taken back." J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -703,12 +707,12 @@ private slots:
         QTRY_COMPARE(w.access().entry(own)->controllerDeviceId, c.id());
 
         card->takeBackButton()->click();
-        const QString letter = QString(QChar(QLatin1Char('A').unicode() + own));
         QTRY_COMPARE(refusals.count(), 1);
+        // Desktop listening lane (JJ, 2026-09-30): C took the slice again,
+        // so the take-back record is void and the first tap says so (it
+        // used to answer with slice.takeControl's stale-revision words).
         QCOMPARE(refusals.first().at(0).toString(),
-                 QStringLiteral("Someone else changed who controls slice %1. Look again and "
-                                "try once more.")
-                     .arg(letter));
+                 QStringLiteral("That can no longer be taken back."));
         QTRY_COMPARE(controller.noticeCards().size(), 0);
         QCOMPARE(core.model->sliceOwnership()->mark(own).owner, c.key.fingerprint());
     }

@@ -183,6 +183,31 @@ Core's own slice. The phone learns this from the Core, never by guessing:
 The `sliceClosed` notice (no Take it back) also now reaches a slice's
 listeners when a take or a pan move closes it.
 
+## Naming the station device
+
+JJ, 2026-09-30: when a person is at the Core's desktop, every client names
+the id `station` by the desktop's own device name, for example "Shack
+desktop". "The Core" (or "the Core itself") is only for a headless Core.
+
+- **The rule.** When `controllerDeviceId` of `access:<id>`, or an entry of
+  its `listenerDeviceIds`, is `station`, show the `name` (or `shortName`)
+  of the `connectedDevices` entry with `hostsCore: true`. With no such
+  entry, say the Core.
+- **Select it by `hostsCore`, never by id.** That entry's `deviceId` on the
+  wire is base64url("station"), `c3RhdGlvbg`, not `station`, so looking the
+  id `station` up in `connectedDevices` never matches.
+- **The station marker.** A `marker:<id>` for a slice the station device
+  holds sends no `ownerDeviceId`, only `ownerKind` `station`; it is the
+  Core's desktop, named the same way.
+- **A slice kept for an away device.** Its `access:<id>` names `station`
+  and its `marker:<id>` names the away device: name that device, never the
+  Core.
+- **The same words as the Core.** The Core's own refusals name the
+  hosting desktop the same way (the device's name, and "the Core" only with
+  nobody at its desktop).
+
+Nothing on the wire changes, and no version moves.
+
 ## Capacity results
 
 - **A refused `addSlice` or `addSliceOnPan`.** From a phone with the feature it
@@ -364,11 +389,17 @@ receive-slice UI follows the same actions and states.
 - **U6.** Flag text: "You control" (menu: Release); "Listening · controlled by
   <device>" (menu: Take control, Stop listening; tuning disabled with
   "<device> controls this slice"); "TX" as today, red on air.
-- **U7.** A device hears only slices it can see. A listened slice that loses
-  its pan in a layout change stops being listened to on that device, with a
-  plain notice. Controlled slices keep today's rehoming into a remaining pan.
-  On the phone this is the Core-side leave: when the phone's UI stops showing
-  a listened slice, it sends `slice.stopListening` for it and says so.
+- **U7.** Listening ends only when the operator ends it: Stop listening,
+  Release, or a close (JJ, 2026-09-30, replacing the earlier "a device hears
+  only slices it can see"). The phone does not send `slice.stopListening`
+  when it leaves a slice's band; the edge marker and the Slice list row
+  count as showing the slice. On the desktop, a listened slice whose pan a
+  layout change removes moves onto a pan that remains and keeps listening,
+  shown as its flag, or as an edge marker when it is off that pan's span,
+  and its slice chooser row keeps Stop listening. Controlled slices keep
+  today's rehoming into a remaining pan. The Core never ends a listening
+  claim on a pan, layout or band change; only the verbs, a claims drop or
+  the slice closing end it.
 - **U8.** JJ's words: "2 but for only slices tgat are activatyed show in the
   applet." The transmit applet shows a row of slice letter buttons, only for
   slices active on this device, meaning the slices it controls. Pressing one
@@ -403,9 +434,7 @@ These are not settled. Do not build them as decided.
   and the disabled look for controls a listener cannot change. ATT and preamp
   are held on a listened slice (JJ, 2026-09-30).
 - Task 16 (placement) items owed to JJ: the order the main window grows in
-  (1 to 2v, 2 to 3v, 3 to 2x2, 4 to 3h2), the wording and duration of the
-  "Stopped listening to Slice B: it is no longer shown in this window" notice,
-  the look and wording of the destination menu, floating pans re-docking when
+  (1 to 2v, 2 to 3v, 3 to 2x2, 4 to 3h2), the look and wording of the destination menu, floating pans re-docking when
   the layout grows, whether a listened slice follows its controller's pan
   move, and whether taking control makes this window's placement the slice's
   pan for every device.

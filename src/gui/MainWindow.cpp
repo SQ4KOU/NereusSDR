@@ -471,6 +471,11 @@
 //   2026-09-30 - TX rulings (item 3): refreshOverlayAttAccess, each pan's
 //               ATT flyout held on a slice this window only listens to.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Desktop listening: a layout change that retires the pan
+//               of a slice this window listens to places it on a pan that
+//               remains and keeps listening; stopListeningOffWindow and its
+//               toast are gone. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): a remote window's VAX
 //                applet gains the "Station computer" section, the Core
 //                computer's VAX through the Core's `vax` object, its TX row
@@ -1952,27 +1957,6 @@ void MainWindow::reconcileListenPlacements()
     }
     if (changed) { rebuildFftRouting(); }
     m_reconcilingPlacements = false;
-}
-
-void MainWindow::stopListeningOffWindow(int sliceId)
-{
-    if (!m_radioModel) { return; }
-    m_listenPlacement.remove(sliceId);
-    if (desktopHosting()) {
-        if (HostingSliceActions* actions = hostingSlices()) {
-            actions->stopListening(sliceId);
-        } else if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
-            ownership->leave(SliceOwnership::stationDevice(), sliceId);
-        }
-    } else if (StationClient* client = sliceAccessClient()) {
-        const std::optional<SliceAccessMirror::Entry> entry =
-            client->sliceAccess() ? client->sliceAccess()->entry(sliceId) : std::nullopt;
-        client->requestStopListening(sliceId, entry ? entry->incarnation : 0);
-    }
-    const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
-    showToast(tr("Stopped listening to Slice %1: it is no longer shown in this window.")
-                  .arg(letter),
-              ToastSeverity::Info, 5000);
 }
 
 StationServer* MainWindow::sliceAccessServer() const
@@ -15424,6 +15408,17 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             qCInfo(lcContainer) << "Layout: rehomed" << rehomed
                                 << "controlled slice(s) onto" << ids.value(0);
         }
+        // Listening ends only when the operator ends it (Stop listening,
+        // Release or a close). A listened slice whose pan the layout
+        // retired moves onto a pan that remains, the way a controlled slice
+        // is rehomed, and keeps listening. Only this window's placement
+        // changes; the slice's pan for its controller stays put.
+        const QString survivor = ids.value(0);
+        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
+            scope.listenedOn.insert(off, survivor);
+            m_listenPlacement.insert(off, survivor);
+            m_panStack->moveSliceToPan(off, survivor);
+        }
         // Flags on a pan the layout retired move to a pan that remains.
         for (SliceModel* slice : m_radioModel->slices()) {
             if (!slice) { continue; }
@@ -15432,11 +15427,6 @@ void MainWindow::applyPanLayout(const QString& layoutId)
                 m_listenPlacement.remove(slice->sliceIndex());
             }
             rehostSliceView(slice);
-        }
-        // A device hears only the slices it can see.
-        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
-            scope.listenedOn.remove(off);
-            stopListeningOffWindow(off);
         }
         m_radioModel->spreadSlicesOntoEmptyPans(ids, &scope);
         // populatePanSlices' rule, counting only what this window shows.

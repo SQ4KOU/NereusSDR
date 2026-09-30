@@ -14,6 +14,9 @@
 //   2026-09-28: session.held (iPhone app plan Task 78 item 7, G-53). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: sliceHolderDevice() (desktop listening lane). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteDevicesState.h"
@@ -260,6 +263,20 @@ RemoteDevicesState::connectedDevice(const QString& deviceId) const
         }
     }
     return std::nullopt;
+}
+
+std::optional<RemoteConnectedDevice>
+RemoteDevicesState::sliceHolderDevice(const QString& wireId) const
+{
+    if (wireId == QLatin1String("station")) {
+        for (const RemoteConnectedDevice& d : m_connected) {
+            if (d.hostsCore) {
+                return d;
+            }
+        }
+        return std::nullopt;
+    }
+    return connectedDevice(wireId);
 }
 
 void RemoteDevicesState::clear()

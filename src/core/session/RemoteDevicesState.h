@@ -39,6 +39,9 @@
 //               page). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: sliceHolderDevice(), the hosting desktop for the id
+//               "station" (desktop listening lane). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -214,6 +217,12 @@ public:
     std::optional<RemoteSliceMarker> marker(int sliceId) const;
     QList<RemoteConnectedDevice> connectedDevices() const { return m_connected; }
     std::optional<RemoteConnectedDevice> connectedDevice(const QString& deviceId) const;
+    /// The entry a slice-access id names (`controllerDeviceId`, a
+    /// `listenerDeviceIds` entry). The id "station" is the Core's own
+    /// position: it names the desktop that hosts the Core, the entry with
+    /// `hostsCore`, never matched by id (its wire id is base64url of
+    /// "station"). Nothing for "station" on a Core no desktop hosts.
+    std::optional<RemoteConnectedDevice> sliceHolderDevice(const QString& wireId) const;
     int deviceLimit() const { return m_deviceLimit; }
     /// This window's own device id as the Core sends ids (for "this
     /// window" in the lists); set by StationClient per session.

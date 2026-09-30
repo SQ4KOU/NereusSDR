@@ -708,11 +708,11 @@ private slots:
         QList<QVariant> answer = answered.takeFirst();
         QCOMPARE(answer.at(0).toByteArray(), QByteArrayLiteral("notice.takeBack"));
         QVERIFY(!answer.at(2).toBool());
-        // The first tap meets the moved control revision, as
-        // slice.takeControl does, and the Core forgets the take-back.
-        QCOMPARE(answer.at(3).toString(),
-                 QStringLiteral("Someone else changed who controls slice A. Look again and try "
-                                "once more."));
+        // Desktop listening lane (JJ, 2026-09-30): the phone released the
+        // slice, so the take-back record is void and the first tap says so
+        // (it used to answer with slice.takeControl's stale-revision
+        // words). The Core forgets the take-back.
+        QCOMPARE(answer.at(3).toString(), QStringLiteral("That can no longer be taken back."));
         QTRY_COMPARE(ended.size(), 1);
         QVERIFY(ended.first().at(1).toBool());
         QTRY_COMPARE(cards().size(), 0);
@@ -1216,12 +1216,16 @@ private slots:
         QCOMPARE(tx->tuneButton()->isChecked(), model->isTune());
     }
 
-    // Slice control plan Task 16 (ruling U7): a layout change that takes
-    // away the pan showing a slice this window listens to (another device
-    // controls it) stops listening to it with a notice, and changes nothing
-    // about the slice: no slice is added or removed, and its stream, its
-    // receiver, its tuning and its pan for the controller all stay.
-    void layoutChangeStopsListeningToASliceItNoLongerShows()
+    // Desktop listening lane (JJ, 2026-09-30; it replaces Task 16's
+    // auto-stop): listening ends only when the operator ends it. A layout
+    // change that takes away the pan showing a slice this window listens to
+    // (another device controls it) places the slice on a pan that remains
+    // and keeps listening, with no stopListening and no notice. Nothing
+    // about the slice changes: no slice is added or removed, and its
+    // stream, its receiver, its tuning and its pan for the controller all
+    // stay. A slice this window controls on the retired pan rehomes as
+    // before.
+    void layoutChangeKeepsListeningToASliceOnARemainingPan()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
         QTemporaryDir directory;
@@ -1239,6 +1243,10 @@ private slots:
         QVERIFY(stack);
         QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
         QCOMPARE(model->slices().size(), 2);
+        // A slice this window controls, on the pan the layout retires.
+        const int cId = model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(cId >= 0);
+        QCOMPARE(model->slices().size(), 3);
         SliceModel* b = model->sliceById(bId);
         QVERIFY(b);
         DesktopStationController controller(model, optionsFor(settings, directory.path()));
@@ -1255,13 +1263,17 @@ private slots:
         ownership->setOwner(bId, phone.deviceId);
         QVERIFY(ownership->isListening(station, bId));
         QVERIFY(flagFor(window, bId) && flagFor(window, bId)->isListening());
+        QCOMPARE(ownership->mark(cId).owner, station);
 
         QHash<int, int> ddcs;
         QHash<int, int> streams;
         for (SliceModel* slice : model->slices()) {
+            if (slice->sliceIndex() == cId) { continue; }
             streams.insert(slice->sliceIndex(), slice->streamIndex());
             ddcs.insert(slice->sliceIndex(), model->ddcForStream(slice->streamIndex()));
         }
+        const QList<QByteArray> listenersOfB = ownership->listenersOf(bId);
+        QSignalSpy bListeners(ownership, &SliceOwnership::listenersChanged);
         const int bDdc = b->ddcIndex();
         const double frequency = b->frequency();
         QSignalSpy added(model, &RadioModel::sliceAdded);
@@ -1271,28 +1283,63 @@ private slots:
 
         QVERIFY(applyLayout(window, QStringLiteral("1")));
         QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
-        QVERIFY(!ownership->isListening(station, bId));
+        // Still listening: no stopListening went out, and no notice.
+        QVERIFY(ownership->isListening(station, bId));
+        QCOMPARE(ownership->listenersOf(bId), listenersOfB);
+        for (const QList<QVariant>& change : std::as_const(bListeners)) {
+            QVERIFY(change.first().toInt() != bId);
+        }
         QCOMPARE(ownership->mark(bId).subject(), phone.deviceId);
         QCOMPARE(toastsSaying(window, QStringLiteral(
-                     "Stopped listening to Slice B: it is no longer shown in this window.")), 1);
+                     "Stopped listening to Slice B: it is no longer shown in this window.")), 0);
+        for (StatusToast* toast : window.findChildren<StatusToast*>()) {
+            QVERIFY2(!toast->message().startsWith(QStringLiteral("Stopped listening")),
+                     qPrintable(toast->message()));
+        }
         QCOMPARE(added.count(), 0);
         QCOMPARE(removed.count(), 0);
-        QCOMPARE(model->slices().size(), 2);
+        QCOMPARE(model->slices().size(), 3);
         for (SliceModel* slice : model->slices()) {
+            if (slice->sliceIndex() == cId) { continue; }
             QCOMPARE(slice->streamIndex(), streams.value(slice->sliceIndex()));
             QCOMPARE(model->ddcForStream(slice->streamIndex()), ddcs.value(slice->sliceIndex()));
         }
         QCOMPARE(b->ddcIndex(), bDdc);
         QCOMPARE(b->frequency(), frequency);
         QCOMPARE(tuned.count(), 0);
+        // Its pan for its controller stays; this window places it.
         QCOMPARE(moved.count(), 0);
         QCOMPARE(b->panKey(), QStringLiteral("pan-1"));
         QCOMPARE(model->sliceById(aId)->panKey(), QStringLiteral("pan-0"));
-        // The flag survives its pan and shows nothing for this window.
+        // The controlled slice on the retired pan rehomes as before.
+        QCOMPARE(model->sliceById(cId)->panKey(), QStringLiteral("pan-0"));
+        // B is shown on the pan that remains, listening, as its flag.
         VfoWidget* flagB = flagFor(window, bId);
         QVERIFY(flagB);
-        QVERIFY(!flagB->stationPresentationAllowed());
+        QVERIFY(flagB->stationPresentationAllowed());
+        QVERIFY(flagB->isListening());
+        QCOMPARE(flagB->parentWidget(), stack->spectrum(QStringLiteral("pan-0")));
         QCOMPARE(flagCountFor(window, bId), 1);
+        QVERIFY(stack->panadapter(QStringLiteral("pan-0"))->associatedSlices().contains(bId));
+        // Its row still offers Stop listening.
+        const QList<SliceChooser::Row> rows =
+            SliceChooser::rowsForHostingDesktop(*model, *server);
+        const auto rowB = std::find_if(rows.cbegin(), rows.cend(),
+                                       [bId](const SliceChooser::Row& r) { return r.sliceId == bId; });
+        QVERIFY(rowB != rows.cend());
+        QVERIFY(rowB->listeningHere);
+        QCOMPARE(rowB->controller, SliceChooser::Controller::OtherDevice);
+        SliceChooser chooser;
+        chooser.setInventory(rows);
+        chooser.selectSlice(bId);
+        bool stopOffered = false;
+        for (QPushButton* action :
+             chooser.findChildren<QPushButton*>(QStringLiteral("sliceChooserAction"))) {
+            if (action->text() == QStringLiteral("Stop listening") && action->isEnabled()) {
+                stopOffered = true;
+            }
+        }
+        QVERIFY(stopOffered);
         controller.stop();
     }
 

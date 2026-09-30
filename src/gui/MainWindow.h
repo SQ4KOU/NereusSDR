@@ -102,6 +102,9 @@
 //   2026-09-30 - J.J. Boyd (KG4VCF). TX rulings review:
 //                hostingSliceActionsForTest. AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). Desktop listening: listening ends only
+//                when the operator ends it; stopListeningOffWindow removed.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1307,9 +1310,6 @@ private:
     // A placement for a slice this window no longer only listens to is
     // dropped; one it now controls takes the placement as its pan.
     void reconcileListenPlacements();
-    // Ruling U7: stop listening to a slice a layout change took out of
-    // view, and say so.
-    void stopListeningOffWindow(int sliceId);
     // Slice control plan Task 15 fix round 1: the server this window hosts
     // and the Core link it shares slices over (each null when it does not),
     // from which the chooser, the flags and the RX applet say who controls
