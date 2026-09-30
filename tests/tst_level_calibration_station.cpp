@@ -29,6 +29,10 @@
 //                its own active slice; rx2AttenuatorVersion reaches
 //                only a peer that declared it. J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - Radio codec lane: radioMicVersion, after
+//                rx2AttenuatorVersion and before coreBuildInfo, only to a
+//                peer that declared radioMic. J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -414,6 +418,48 @@ private slots:
         QCOMPARE(StationCapabilities::fromUpdates(sent.toUpdates()).rx2AttenuatorVersion, 1);
         QCOMPARE(StationCapabilities::fromUpdates(StationCapabilities{}.toUpdates())
                      .rx2AttenuatorVersion, 0);
+    }
+
+    // Radio codec lane: radioMicVersion 1 (the catalogue's board.radioMic
+    // and radioMicNote) reaches a peer that declared radioMic, after
+    // rx2AttenuatorVersion and before coreBuildInfo, which stays last; a
+    // peer that did not is sent none. The entry reads back.
+    void radioMicVersion_onlyToADeclaringPeer()
+    {
+        const QString savedVersion = QCoreApplication::applicationVersion();
+        const auto restore = qScopeGuard([&savedVersion]() {
+            QCoreApplication::setApplicationVersion(savedVersion);
+        });
+        QCoreApplication::setApplicationVersion(QStringLiteral("0.5.2"));
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        QHash<QByteArray, int> asks = kHolder;
+        asks.insert(QByteArrayLiteral("rx2Attenuator"), 1);
+        asks.insert(QByteArrayLiteral("radioMic"), 1);
+        asks.insert(QByteArrayLiteral("coreBuildInfo"), 1);
+        LoopbackTransport* appA = core.signIn(a, asks);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(capability(appA->received(), QStringLiteral("radioMicVersion")), 1);
+        QVERIFY(!capability(appB->received(), QStringLiteral("radioMicVersion")).has_value());
+        const QJsonArray caps = firstOfType(appA->received(), QStringLiteral("capabilities"))
+                                    .value(QStringLiteral("properties")).toArray();
+        QVERIFY(caps.size() >= 3);
+        QCOMPARE(caps.at(caps.size() - 3).toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("rx2AttenuatorVersion"));
+        QCOMPARE(caps.at(caps.size() - 2).toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("radioMicVersion"));
+        QCOMPARE(caps.last().toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("coreBuildInfo"));
+
+        StationCapabilities sent;
+        sent.radioMicVersion = 1;
+        QCOMPARE(StationCapabilities::fromUpdates(sent.toUpdates()).radioMicVersion, 1);
+        QCOMPARE(StationCapabilities::fromUpdates(StationCapabilities{}.toUpdates())
+                     .radioMicVersion, 0);
     }
 
     // Level Cal 2 (remote parity): a paired remote window's Start names

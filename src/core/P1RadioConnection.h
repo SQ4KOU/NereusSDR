@@ -249,8 +249,9 @@ public:
     // does fill the zone; mi0bot has no HL2 mic lock. The gateware's
     // discovery reply carries no AK4951 field (Hermes-Lite2
     // usopenhpsdr1.v:254-314 @7472bd1), so NereusSDR cannot tell the two
-    // apart. The PC mic lock (BoardCapabilities hasMicJack=false for HL2)
-    // still stands; lifting it is the pending HL2 Radio Mic item.
+    // apart, so the HL2 keeps Radio Mic open with a note that it needs the
+    // add-on board (BoardCapabilities::radioMicNeedsAddOn) and no PC mic
+    // lock.
     void setTxMicSource(TxMicSource* src);
 
 public slots:

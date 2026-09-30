@@ -12,6 +12,10 @@
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the connect-load seam locks the mic source
+//                 on radioMicSelectable; orionMicPanelAvailable and the HL2
+//                 add-on note. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-29 - Radio Status PTT source: a remote window reads a key from
 //                 a device that does not hold transmit as Remote, as the
 //                 Core's window does; both keep the key's source through a
@@ -1187,6 +1191,16 @@ public:
     static constexpr const char* kDisableHfPaKey = "DisableHfPa";
     static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
     static QString hfPaSwitchUnavailableReason();
+    // Setup > Audio > TX Input's radio mic groups (radio codec lane).
+    // Thetis greys out the whole ORION mic panel (Tip/Ring, PTT, Bias) on
+    // the Red Pitaya (orionMicPanelAvailable); the desktop's Orion group and
+    // the Setup description's Orion rows are shown disabled with this
+    // reason. The Hermes Lite 2 takes the radio mic only with its AK4951
+    // audio add-on board, which the gateware cannot report, so Radio Mic
+    // stays open there with radioMicAddOnNote beside it.
+    static bool orionMicPanelAvailable(HPSDRModel model) noexcept;
+    static QString orionMicPanelUnavailableReason();
+    static QString radioMicAddOnNote();
     // Alex-1 Filters' "6m/ByPass on RX" on a radio Thetis hides it on
     // (codec::alex::lpfBypassAvailable): the desktop's box and the Setup
     // description's row are shown disabled with this reason.
@@ -4556,7 +4570,7 @@ public:
     // reflect the HL2 (or non-HL2) post-connect state.
     void simulateConnectLoadForTest(const QString& mac) {
         m_transmitModel.loadFromSettings(mac);
-        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().radioMicSelectable());
     }
 
     // Release the lock, mirroring teardownConnection()'s setMicSourceLocked(false).

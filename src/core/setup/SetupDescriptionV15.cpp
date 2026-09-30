@@ -9,6 +9,11 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Created. J.J. Boyd (KG4VCF), with AI-assisted
 //                implementation via Anthropic Claude Code.
+//   2026-09-30 - Radio codec lane: availableOn "orionMicPanel" (the Red
+//                Pitaya's Orion mic rows, disabled with a reason); the
+//                Hermes rows on the Hermes Lite 2 with its audio add-on
+//                note. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/setup/SetupDescriptionV15.h"
@@ -409,7 +414,9 @@ bool validateControl(const QString& categoryId, const QJsonObject& control, QStr
         return fail(why, QStringLiteral("%1: telemetryFor").arg(id));
     }
     if (control.contains(QStringLiteral("availableOn"))
-        && control.value(QStringLiteral("availableOn")) != QJsonValue(QStringLiteral("hfPaSwitch"))) {
+        && control.value(QStringLiteral("availableOn")) != QJsonValue(QStringLiteral("hfPaSwitch"))
+        && control.value(QStringLiteral("availableOn"))
+            != QJsonValue(QStringLiteral("orionMicPanel"))) {
         return fail(why, QStringLiteral("%1: availableOn").arg(id));
     }
     if (control.contains(QStringLiteral("choices"))) {
@@ -679,6 +686,16 @@ bool projectForRadio(QJsonObject* control, const BoardCapabilities& caps, HPSDRM
                 {QStringLiteral("reason"), RadioModel::hfPaSwitchUnavailableReason()}});
         }
     }
+    if (control->value(QStringLiteral("availableOn")) == QJsonValue(QStringLiteral("orionMicPanel"))) {
+        // AudioTxInputPage's Orion group: Thetis greys out the ORION mic
+        // panel on the Red Pitaya (RadioModel::orionMicPanelAvailable).
+        control->remove(QStringLiteral("availableOn"));
+        if (!RadioModel::orionMicPanelAvailable(model)) {
+            control->insert(QStringLiteral("availability"), QJsonObject{
+                {QStringLiteral("enabled"), false},
+                {QStringLiteral("reason"), RadioModel::orionMicPanelUnavailableReason()}});
+        }
+    }
     return true;
 }
 
@@ -692,6 +709,20 @@ bool keepSectionForRadio(QJsonObject* section, const BoardCapabilities& caps)
     // AudioTxInputPage::updateRadioMicGroupVisibility's board families.
     const HPSDRHW hw = caps.board;
     if (family == QLatin1String("hermes")) {
+        // The Hermes Lite 2 with its audio add-on board takes the same rows
+        // (P1CodecHl2); the gateware cannot report the board, so each row
+        // carries the note the desktop shows beside Radio Mic.
+        if (hw == HPSDRHW::HermesLite && caps.radioMicNeedsAddOn) {
+            section->insert(QStringLiteral("title"), QStringLiteral("Radio Mic (Hermes Lite 2)"));
+            QJsonArray controls = section->value(QStringLiteral("controls")).toArray();
+            for (int c = 0; c < controls.size(); ++c) {
+                QJsonObject control = controls.at(c).toObject();
+                control.insert(QStringLiteral("tooltip"), RadioModel::radioMicAddOnNote());
+                controls[c] = control;
+            }
+            section->insert(QStringLiteral("controls"), controls);
+            return true;
+        }
         return hw == HPSDRHW::Hermes || hw == HPSDRHW::HermesII || hw == HPSDRHW::Angelia
             || hw == HPSDRHW::Atlas;
     }

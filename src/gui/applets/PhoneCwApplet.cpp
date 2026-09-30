@@ -53,6 +53,10 @@
 //                 setTxProfilePermitted; in a remote window it picks the
 //                 Core's profiles. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Radio codec lane: the Hermes Lite 2's Mic and Line
+//                 items open (radioMicSelectable) with the audio add-on
+//                 note as their tooltip. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1452,8 +1456,12 @@ bool isHermesFamily(HPSDRHW hw)
 {
     // The boards Setup > Audio > TX Input shows its Mic In / Line In
     // choice for (AudioTxInputPage::updateRadioMicGroupVisibility).
+    // The Hermes Lite 2 is one of them with its audio add-on board (the
+    // Mic and Line items are open only when the board can take the radio
+    // mic, BoardCapabilities::radioMicSelectable).
     return hw == HPSDRHW::Hermes || hw == HPSDRHW::HermesII
-        || hw == HPSDRHW::Angelia || hw == HPSDRHW::Atlas;
+        || hw == HPSDRHW::Angelia || hw == HPSDRHW::Atlas
+        || hw == HPSDRHW::HermesLite;
 }
 
 bool isSaturnFamily(HPSDRHW hw)
@@ -1473,21 +1481,26 @@ void PhoneCwApplet::refreshMicSourceItems()
     const BoardCapabilities& caps = m_model->boardCapabilities();
     const HPSDRHW hw = caps.board;
     const QString noJack = tr("This radio has no microphone jack.");
-    struct Row { MicInput input; bool available; QString why; };
+    // Radio codec lane: a mic jack, or the HL2's audio add-on board.
+    const bool radioMic = caps.radioMicSelectable();
+    // The HL2's gateware cannot report the add-on board: its items stay
+    // open with the note (RadioModel::radioMicAddOnNote).
+    const QString note = caps.radioMicNeedsAddOn ? RadioModel::radioMicAddOnNote() : QString();
+    struct Row { MicInput input; bool available; QString why; QString note; };
     const Row rows[] = {
-        {MicInput::Mic, caps.hasMicJack, noJack},
-        {MicInput::Balanced, caps.hasMicJack && isSaturnFamily(hw),
-         caps.hasMicJack ? tr("This radio has no balanced XLR input.") : noJack},
-        {MicInput::Line, caps.hasMicJack && isHermesFamily(hw),
-         caps.hasMicJack ? tr("This radio has no line input.") : noJack},
-        {MicInput::Accessory, false, tr("This radio has no accessory audio input.")},
-        {MicInput::Pc, true, QString()},
+        {MicInput::Mic, radioMic, noJack, note},
+        {MicInput::Balanced, radioMic && isSaturnFamily(hw),
+         radioMic ? tr("This radio has no balanced XLR input.") : noJack, QString()},
+        {MicInput::Line, radioMic && isHermesFamily(hw),
+         radioMic ? tr("This radio has no line input.") : noJack, note},
+        {MicInput::Accessory, false, tr("This radio has no accessory audio input."), QString()},
+        {MicInput::Pc, true, QString(), QString()},
     };
     for (const Row& row : rows) {
         QStandardItem* item = items->item(static_cast<int>(row.input));
         if (!item) { continue; }
         item->setEnabled(row.available);
-        item->setToolTip(row.available ? QString() : row.why);
+        item->setToolTip(row.available ? row.note : row.why);
     }
     showMicSourceFromModel();
 }

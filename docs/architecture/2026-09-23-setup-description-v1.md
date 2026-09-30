@@ -1,4 +1,4 @@
-# Setup description versions 1–23
+# Setup description versions 1–24
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,7 +165,7 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 23. PA has a version-20 ceiling (version 14
+future declaration at version 24. PA has a version-20 ceiling (version 14
 for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-23 ceiling
 (version 18 for V18–V22, version 17
 for V17, version 16 for V16, version 13
@@ -173,8 +173,9 @@ for V13–V15, version 6 for V6–V12; see Versions 16, 17, 18 and 23); Display 
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
 later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19)
-and version 15 to a V15 to V18 peer; Transmit, Audio and Diagnostics are
-version 15 to a V15 or later peer (see Version 15); CAT & Network is version
+and version 15 to a V15 to V18 peer; Audio is version 24 to a V24 or later
+peer (see Version 24) and version 15 to a V15 to V23 peer; Transmit and
+Diagnostics are version 15 to a V15 or later peer (see Version 15); CAT & Network is version
 21 to a V21 or later peer (see Version 21) and version 15 to a V15 to V20
 peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
 a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
@@ -1130,6 +1131,40 @@ its receive calibration through the "cal" reload, once the radio is back on
 receive if it is on the air. A V18 to V22 peer receives Hardware at version
 18 without the row or its section. This version adds no mirror field,
 ordinal or verb; the Core caps a declaration at 23.
+
+Version 24 changes Audio > TX Input's radio microphone groups (the radio
+codec lane). Two rows are closed as the version 23 row is:
+
+- `audio.txInput.hermesLineInGain` moves in the 1.5 dB steps of Thetis's
+  udLineInBoost with one decimal (setup.designer.cs:47006-47034
+  [v2.10.3.15]): `kind:"decimal"`, `min` -34.5, `max` 12, `step` 1.5,
+  `decimals` 1, `unit` `dB`, bound to transmit's `lineInBoost`, gate
+  `transmitSettingsVersion` 3 with `transmit`, `requiresDescriptionVersion:24`.
+  Before, the row said whole decibels from -34, which are not the radio's
+  steps. A V15 to V23 peer keeps the version 15 row: `min` -34, `step` 1, no
+  `decimals`.
+- `audio.txInput.saturnMicTipRing`, "Mic Tip-Ring (Tip is Mic)", a toggle
+  second in the Radio Mic (Saturn G2) section, bound to transmit's
+  `micTipRing` as the Orion group's row is, with the same gate. Thetis
+  enables the ORION Tip / Ring panel on the G2 and G2-1K (setup.cs:20292,
+  20343). A V15 to V23 peer does not receive it.
+
+Two changes follow the connected radio and reach every peer from version
+15, which already reads `availability` and the section's rows:
+
+- On the Red Pitaya the four Radio Mic (Orion-MkII) rows carry
+  `availability:{enabled:false, reason:"These mic settings do not apply to
+  the Red Pitaya."}`: Thetis greys out the ORION mic panel there
+  (setup.cs:20440-20445, //DH1KLM). Elsewhere they carry none.
+- On the Hermes Lite 2 the Radio Mic (Hermes / Atlas) section is sent,
+  titled `Radio Mic (Hermes Lite 2)`, each of its three rows with the
+  tooltip "Needs the Hermes Lite 2 audio add-on board. A stock Hermes Lite
+  2 sends no mic audio." The HL2 takes those settings through its AK4951
+  audio add-on board, which its gateware cannot report; mi0bot leaves them
+  open on every model. The HL2 receive-only kit has no such section.
+
+A V15 to V23 peer receives Audio at version 15. This version adds no mirror
+field, ordinal or verb; the Core caps a declaration at 24.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

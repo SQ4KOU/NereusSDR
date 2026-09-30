@@ -21,6 +21,10 @@
 //               out (connectRadioSpeakerOutput), and the HL2's Swap audio
 //               channels reaches the connection. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Radio codec: the HL2 is no longer locked to the PC mic; the
+//               lock follows radioMicSelectable (the AK4951 add-on board).
+//               orionMicPanelAvailable (Red Pitaya) and radioMicAddOnNote.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: A remote RX DSP > Options apply waits while the radio is on
 //               the air, as the TX half does. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -9670,6 +9674,28 @@ QString RadioModel::hfPaSwitchUnavailableReason()
     return QStringLiteral("This radio cannot switch off its HF PA from here.");
 }
 
+bool RadioModel::orionMicPanelAvailable(HPSDRModel model) noexcept
+{
+    // From Thetis setup.cs:20440-20445 [v2.10.3.15]
+    //   case HPSDRModel.REDPITAYA: //DH1KLM
+    //       ...
+    //       pnlGeneralHardwareORION.Enabled = false;
+    // Every other model with the ORION panel enables it (setup.cs:20146,
+    // 20187, 20238, 20292, 20343, 20394).
+    return model != HPSDRModel::REDPITAYA;
+}
+
+QString RadioModel::orionMicPanelUnavailableReason()
+{
+    return QStringLiteral("These mic settings do not apply to the Red Pitaya.");
+}
+
+QString RadioModel::radioMicAddOnNote()
+{
+    return QStringLiteral("Needs the Hermes Lite 2 audio add-on board. "
+                          "A stock Hermes Lite 2 sends no mic audio.");
+}
+
 QString RadioModel::lpfBypassUnavailableReason()
 {
     return QStringLiteral("This radio does not have the 6m low-pass bypass on receive.");
@@ -16849,7 +16875,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // The UI side (AudioTxInputPage) already disables the Radio Mic radio
         // button when !hasMicJack; this completes the model-side lock.
         // setMicSourceLocked also coerces any existing Radio state to Pc immediately.
-        m_transmitModel.setMicSourceLocked(!boardCapabilities().hasMicJack);
+        // Radio codec lane (2026-09-30): the HL2 is not locked. An HL2 with
+        // the AK4951 audio add-on board has a mic input, the gateware cannot
+        // say so, and mi0bot has no lock (BoardCapabilities
+        // radioMicNeedsAddOn); the lock stays for a board with neither.
+        m_transmitModel.setMicSourceLocked(!boardCapabilities().radioMicSelectable());
     }
 
     m_name = info.displayName();
@@ -17414,8 +17444,10 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // composite router via setVaxSource() so MicSource::Vax
             // selection routes to it.
             m_vaxTxMicSource = std::make_unique<VaxTxMicSource>(m_audioEngine);
+            // Radio codec lane: an add-on mic (HL2 AK4951) counts as a jack
+            // here (BoardCapabilities::radioMicSelectable).
             const bool hasMicJack = m_hardwareProfile.caps
-                                        ? m_hardwareProfile.caps->hasMicJack
+                                        ? m_hardwareProfile.caps->radioMicSelectable()
                                         : true;  // safe default: assume mic jack present
             m_compositeMicRouter = std::make_unique<CompositeTxMicRouter>(
                 m_pcMicSource.get(), m_radioMicSource.get(), hasMicJack);

@@ -52,6 +52,10 @@
 //   2026-09-30: board.rx2Attenuator and rx2AttenuatorReason among the keys
 //               the G2 and HL2 differ in (Level Cal 2). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: board.radioMic and radioMicNote (radio codec lane): both
+//               take the radio mic, the HL2 with the add-on note. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -845,7 +849,19 @@ private slots:
                                 QStringLiteral("sampleRates"), QStringLiteral("paRatingW"),
                                 QStringLiteral("micJack"), QStringLiteral("transmit"),
                                 QStringLiteral("relays"), QStringLiteral("rx2Attenuator"),
-                                QStringLiteral("rx2AttenuatorReason")}));
+                                QStringLiteral("rx2AttenuatorReason"),
+                                QStringLiteral("radioMicNote")}));
+        // Both take the radio's own mic; the HL2 through its audio add-on
+        // board, which its gateware cannot report, so it carries the note.
+        QCOMPARE(g2.value(QStringLiteral("board")).toObject().value(QStringLiteral("radioMic")),
+                 QJsonValue(true));
+        QCOMPARE(hl2.value(QStringLiteral("board")).toObject().value(QStringLiteral("radioMic")),
+                 QJsonValue(true));
+        QCOMPARE(g2.value(QStringLiteral("board")).toObject().value(QStringLiteral("radioMicNote")),
+                 QJsonValue(QJsonValue::Null));
+        QCOMPARE(hl2.value(QStringLiteral("board")).toObject().value(QStringLiteral("radioMicNote")),
+                 QJsonValue(QStringLiteral("Needs the Hermes Lite 2 audio add-on board. "
+                                           "A stock Hermes Lite 2 sends no mic audio.")));
         // Neither has the RX1 preamp (tst_catalogue_ranges holds the
         // transmit ranges and the relays against the widgets).
         QCOMPARE(g2.value(QStringLiteral("board")).toObject().value(QStringLiteral("rx1Preamp")),
