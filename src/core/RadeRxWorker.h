@@ -173,8 +173,9 @@ public:
     std::shared_ptr<RadeRxBridge> bridge() const { return m_bridge; }
 
     // Start the thread (idempotent). `name` is the thread's name as the OS
-    // shows it (top -H), for example "RadeRx1".
-    void start(const QString& name);
+    // shows it (top -H), for example "RadeRx1". `placementChannel` is the
+    // channel it registers under with ThreadPlacement (RadeDecoder role).
+    void start(const QString& name, int placementChannel = -1);
     // Stop and join. Waits for the block being decoded, if any.
     void stop();
     bool isRunning() const;
@@ -205,6 +206,7 @@ private:
     std::shared_ptr<RadeRxBridge> m_bridge;
     std::unique_ptr<QThread> m_thread;
     QString m_threadName;
+    int m_placementChannel{-1};
     std::atomic<bool> m_stopping{false};
     std::atomic<bool> m_gated{false};
     std::atomic<Qt::HANDLE> m_threadId{nullptr};

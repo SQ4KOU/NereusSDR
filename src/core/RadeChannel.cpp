@@ -505,7 +505,7 @@ void RadeChannel::startRxWorker()
             [this](const QByteArray& iq) { return decodeRxBlock(iq); });
     }
     m_rxWorker->setGated(m_rxGated.load(std::memory_order_acquire));
-    m_rxWorker->start(QStringLiteral("RadeRx%1").arg(channelId()));
+    m_rxWorker->start(QStringLiteral("RadeRx%1").arg(channelId()), channelId());
 }
 
 void RadeChannel::stopRxWorker()

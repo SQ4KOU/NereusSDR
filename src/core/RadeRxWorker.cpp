@@ -15,6 +15,11 @@
 //                 ThreadPlacement as a DspThread, so nereusd places it
 //                 with the DSP thread. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd (KG4VCF)  Registers as a RadeDecoder for its
+//                 channel instead, so nereusd puts it on the least busy
+//                 fast core, not the DSP thread's (JJ's ruling of
+//                 2026-09-30). AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/RadeRxWorker.h"
@@ -184,13 +189,14 @@ RadeRxWorker::~RadeRxWorker()
     stop();
 }
 
-void RadeRxWorker::start(const QString& name)
+void RadeRxWorker::start(const QString& name, int placementChannel)
 {
     if (m_thread) {
         return;
     }
     m_stopping.store(false, std::memory_order_release);
     m_threadName = name;
+    m_placementChannel = placementChannel;
     m_thread.reset(QThread::create([this] { run(); }));
     m_thread->setObjectName(name);
     m_thread->start();
@@ -229,12 +235,13 @@ void RadeRxWorker::wake(RadeRxBridge& bridge)
 void RadeRxWorker::run()
 {
     m_threadId.store(QThread::currentThreadId(), std::memory_order_release);
-    // In nereusd on Linux the decoder runs where the DSP thread that feeds
-    // it runs (a fast core, raised priority), not on the housekeeping cores
-    // with spectrum and networking. Elsewhere this does nothing.
+    // In nereusd on Linux the decoder runs on the least busy fast core
+    // (raised priority), not on the housekeeping cores with spectrum and
+    // networking. Elsewhere this does nothing.
     const bool placed = ThreadPlacement::managesThreadPriority();
     if (placed) {
-        ThreadPlacement::instance().registerCurrentThread(ThreadRole::DspThread);
+        ThreadPlacement::instance().registerCurrentThread(ThreadRole::RadeDecoder,
+                                                          m_placementChannel);
     }
     RadeRxBridge& bridge = *m_bridge;
     RadeRxBridge::Header header;

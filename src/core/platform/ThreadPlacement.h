@@ -32,6 +32,10 @@
 //               the governor judges by where threads actually run. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code (R-R3-40, R-R3-41).
+//   2026-09-30: RADE decoder role: each RADE decoder thread shares the
+//               least busy fast core, judged from the plan (JJ's ruling
+//               of 2026-09-30). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -82,6 +86,7 @@ enum class ThreadRole {
     TxWorker,        ///< the transmit channel's WDSP worker
     TxWorkerThread,  ///< TxWorkerThread, the transmit audio pump
     TxIqSender,      ///< the Protocol 2 transmit I/Q send thread
+    RadeDecoder,     ///< a RADE slice's decoder thread (RadeRx<id>), per channel
 };
 
 /// Which signal processing threads are busy.
@@ -91,6 +96,7 @@ struct PlacementDemand {
     bool txWorker{false};         ///< transmit channel active
     bool txWorkerThread{false};   ///< transmit pump running while transmitting
     bool txIqSender{false};       ///< transmit I/Q sender running while transmitting
+    QList<int> radeDecoders;      ///< running RADE decoder threads, by channel, placed in this order
 };
 
 struct RoleAssignment {
@@ -109,7 +115,8 @@ struct PlacementPlan {
 
     /// The dedicated core of a role, or -1 when it runs on housekeeping.
     int cpuFor(ThreadRole role, int channel = -1) const;
-    /// Every core given to a thread, ascending.
+    /// Every core given to a thread, ascending, each once (RADE decoders
+    /// share cores).
     QList<int> signalCores() const;
 };
 
@@ -130,6 +137,18 @@ struct PlacementPlan {
 /// channel), the DSP thread, the transmit worker, the transmit pump, the
 /// transmit I/Q sender, then the other active receive workers (G-06). A
 /// role left without a core runs on the housekeeping cores.
+///
+/// RADE decoders come after every other role and share a core rather
+/// than own one: each goes to the signal processing core with the fewest
+/// threads that run while receiving (receive workers, the DSP thread,
+/// decoders already placed). Ties go to the core with fewer decoders,
+/// then to a core without the DSP thread,
+/// then to one without a transmit role (idle while receiving, so light),
+/// then to the earlier core in signalPool (fastest first). Decoders so
+/// spread across cores before any core takes a second one. Decoders are
+/// placed in the order given, so a later one never moves an earlier one.
+/// Judged from the
+/// plan only: nothing moves on live load.
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
                                   const PlacementDemand& demand);
 

@@ -10,6 +10,9 @@
 // Modification history (NereusSDR):
 //   2026-09-27: the transmit I/Q sender role (R-IOS-13, R-R3-42). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: the RADE decoder role (JJ's ruling of 2026-09-30: the
+//               least busy fast core, judged from the plan). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -94,6 +97,15 @@ void layOutRk3588s(SysfsFixture& f)
     f.policy(0, "0 1 2 3");
     f.policy(4, "4 5");
     f.policy(6, "6 7");
+}
+
+// RK3588S as read on the Rock on 2026-09-30: all four fast cores report
+// 1024 (the 982 fixture above is the older kernel reading).
+void layOutRk3588sAsRead(SysfsFixture& f)
+{
+    layOutRk3588s(f);
+    f.capacity(6, 1024);
+    f.capacity(7, 1024);
 }
 
 PlacementDemand demand(QList<int> rx, bool dsp, bool tx = false, bool txThread = false)
@@ -226,6 +238,31 @@ private:
     static inline QStringList s_warnings;
     QtMessageHandler m_previous{nullptr};
 };
+
+// Collects the RADE decoder placement lines.
+class DecoderLineCatcher {
+public:
+    DecoderLineCatcher() { s_lines.clear(); m_previous = qInstallMessageHandler(&handler); }
+    ~DecoderLineCatcher() { qInstallMessageHandler(m_previous); }
+    QStringList lines() const { return s_lines; }
+
+private:
+    static void handler(QtMsgType, const QMessageLogContext&, const QString& text)
+    {
+        if (text.startsWith(QLatin1String("Thread placement: the RADE decoder"))) {
+            s_lines.append(text);
+        }
+    }
+    static inline QStringList s_lines;
+    QtMessageHandler m_previous{nullptr};
+};
+
+PlacementDemand radeDemand(QList<int> rx, QList<int> decoders)
+{
+    PlacementDemand d = demand(std::move(rx), true);
+    d.radeDecoders = std::move(decoders);
+    return d;
+}
 
 int niceCalls(const QList<Call>& calls)
 {
@@ -979,6 +1016,187 @@ private slots:
         const PlacementPlan three = planThreadPlacement(rk, busy);
         QCOMPARE(three.cpuFor(ThreadRole::TxIqSender), -1);
         QCOMPARE(three.housekeeping, (QList<int>{0, 1, 2, 3}));
+    }
+
+    // ---------------------------------------------------------- RADE decoders
+    // JJ's ruling of 2026-09-30: each RADE decoder shares the least busy
+    // fast core, judged from the plan, never the housekeeping cores while
+    // there is a fast core.
+
+    void rk3588sOneAndTwoRadeDecoders()
+    {
+        for (bool asRead : {true, false}) {
+            SysfsFixture f;
+            if (asRead) {
+                layOutRk3588sAsRead(f);
+            } else {
+                layOutRk3588s(f);
+            }
+            const CpuTopology rk = f.read();
+            // Receiving with two pans: rx0 on 4, DSP on 5, rx1 on 6, 7 free.
+            const PlacementPlan none = planThreadPlacement(rk, radeDemand({0, 1}, {}));
+            QCOMPARE(none.cpuFor(ThreadRole::RxWorker, 0), 4);
+            QCOMPARE(none.cpuFor(ThreadRole::DspThread), 5);
+            QCOMPARE(none.cpuFor(ThreadRole::RxWorker, 1), 6);
+            QCOMPARE(none.signalCores(), (QList<int>{4, 5, 6}));
+
+            // One RADE pan: the free core.
+            const PlacementPlan one = planThreadPlacement(rk, radeDemand({0, 1}, {1}));
+            QCOMPARE(one.cpuFor(ThreadRole::RxWorker, 0), 4);
+            QCOMPARE(one.cpuFor(ThreadRole::DspThread), 5);
+            QCOMPARE(one.cpuFor(ThreadRole::RxWorker, 1), 6);
+            QCOMPARE(one.cpuFor(ThreadRole::RadeDecoder, 1), 7);
+            QCOMPARE(one.housekeeping, (QList<int>{0, 1, 2, 3}));
+            QCOMPARE(one.signalCores(), (QList<int>{4, 5, 6, 7}));
+
+            // Two RADE pans: the second avoids the other decoder and the
+            // DSP thread's core; of 4 and 6, the earlier in the pool.
+            const PlacementPlan two = planThreadPlacement(rk, radeDemand({0, 1}, {0, 1}));
+            QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 0), 7);
+            QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 1), 4);
+            QCOMPARE(two.cpuFor(ThreadRole::DspThread), 5);
+            QCOMPARE(two.housekeeping, (QList<int>{0, 1, 2, 3}));
+            // Each core once in the startup line's list.
+            QCOMPARE(two.signalCores(), (QList<int>{4, 5, 6, 7}));
+
+            // Keyed on pan 0 (its receiver stops, the transmit roles take
+            // 6 and 7): the transmit roles weigh light, so the decoder
+            // shares one of them rather than a receiving core.
+            PlacementDemand keyed = demand({1}, true, true, true);
+            keyed.txIqSender = true;
+            keyed.radeDecoders = {1};
+            const PlacementPlan tx = planThreadPlacement(rk, keyed);
+            QCOMPARE(tx.cpuFor(ThreadRole::RxWorker, 1), 4);
+            QCOMPARE(tx.cpuFor(ThreadRole::DspThread), 5);
+            QCOMPARE(tx.cpuFor(ThreadRole::TxWorker), 6);
+            QCOMPARE(tx.cpuFor(ThreadRole::TxWorkerThread), 7);
+            QCOMPARE(tx.cpuFor(ThreadRole::RadeDecoder, 1), 6);
+        }
+    }
+
+    void moreRadeDecodersThanFastCores()
+    {
+        SysfsFixture f;
+        layOutRk3588sAsRead(f);
+        const PlacementPlan plan =
+            planThreadPlacement(f.read(), radeDemand({0, 1}, {0, 1, 2, 3, 4}));
+        QVERIFY(plan.active);
+        // Spread first (7, 4, 6), the DSP core only when it is the least
+        // busy (5), then a second decoder on 7, the one core holding a
+        // single thread.
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 0), 7);
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 1), 4);
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 2), 6);
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 3), 5);
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 4), 7);
+        // Never onto the housekeeping cores while a fast core exists.
+        QCOMPARE(plan.housekeeping, (QList<int>{0, 1, 2, 3}));
+        QCOMPARE(plan.signalCores(), (QList<int>{4, 5, 6, 7}));
+    }
+
+    void radeDecodersOnEqualCores()
+    {
+        // Pi 4 and Pi 5: two reserved cores, both busy.
+        SysfsFixture f;
+        f.online("0-3");
+        for (int cpu = 0; cpu < 4; ++cpu) {
+            f.capacity(cpu, 1024);
+        }
+        f.policy(0, "0 1 2 3");
+        const CpuTopology pi = f.read();
+        const PlacementPlan one = planThreadPlacement(pi, radeDemand({0}, {0}));
+        QCOMPARE(one.cpuFor(ThreadRole::RxWorker, 0), 3);
+        QCOMPARE(one.cpuFor(ThreadRole::DspThread), 2);
+        QCOMPARE(one.cpuFor(ThreadRole::RadeDecoder, 0), 3);
+        QCOMPARE(one.housekeeping, (QList<int>{0, 1}));
+        const PlacementPlan two = planThreadPlacement(pi, radeDemand({0}, {0, 1}));
+        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 0), 3);
+        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 1), 2);
+        QCOMPARE(two.housekeeping, (QList<int>{0, 1}));
+    }
+
+    void radeDecodersWithUnknownCoreSpeeds()
+    {
+        // x86 without capacity data: six reserved cores, two in use, so
+        // each decoder takes a free reserved core, highest first, and
+        // that core leaves housekeeping.
+        SysfsFixture f;
+        f.online("0-7");
+        const CpuTopology x86 = f.read();
+        QVERIFY(x86.capacity.isEmpty());
+        const PlacementPlan one = planThreadPlacement(x86, radeDemand({0}, {0}));
+        QCOMPARE(one.cpuFor(ThreadRole::RxWorker, 0), 7);
+        QCOMPARE(one.cpuFor(ThreadRole::DspThread), 6);
+        QCOMPARE(one.cpuFor(ThreadRole::RadeDecoder, 0), 5);
+        QCOMPARE(one.housekeeping, (QList<int>{0, 1, 2, 3, 4}));
+        const PlacementPlan two = planThreadPlacement(x86, radeDemand({0}, {0, 1}));
+        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 0), 5);
+        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 1), 4);
+        QCOMPARE(two.housekeeping, (QList<int>{0, 1, 2, 3}));
+    }
+
+    void radeDecoderWithoutAFastCoreIsNotPlaced()
+    {
+        SysfsFixture f;
+        f.online("0");
+        const PlacementPlan plan = planThreadPlacement(f.read(), radeDemand({0}, {0}));
+        QVERIFY(!plan.active);
+        QCOMPARE(plan.cpuFor(ThreadRole::RadeDecoder, 0), -1);
+    }
+
+    void radeDecoderThreadsArePlacedAndLoggedOnce()
+    {
+        SysfsFixture f;
+        layOutRk3588sAsRead(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0, 1}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        current = 102;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 1);
+        placement.setChannelActive(ThreadRole::RxWorker, 1, true);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+        QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+        QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+
+        DecoderLineCatcher lines;
+        const quint64 before = placement.planRevision();
+        current = 400;
+        placement.registerCurrentThread(ThreadRole::RadeDecoder, 1);
+        QVERIFY(placement.planRevision() != before);
+        QCOMPARE(lastCpus(calls, 400), QList<int>{7});
+        QCOMPARE(lastNice(calls, 400), kDspNice);
+        QCOMPARE(placement.appliedPlan().cpuFor(ThreadRole::RadeDecoder, 1), 7);
+
+        // A second decoder, on a lower channel, never moves the first.
+        current = 401;
+        placement.registerCurrentThread(ThreadRole::RadeDecoder, 0);
+        QCOMPARE(lastCpus(calls, 401), QList<int>{4});
+        QCOMPARE(lastCpus(calls, 400), QList<int>{7});
+        // The receive workers and the DSP thread keep their cores.
+        QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+        QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+        QCOMPARE(lastCpus(calls, 102), QList<int>{6});
+
+        // A decoder removed: recomputed, the other one stays where it is.
+        placement.deregisterCurrentThread();
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::RadeDecoder, 0), -1);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::RadeDecoder, 1), 7);
+        QCOMPARE(lastCpus(calls, 400), QList<int>{7});
+
+        // One line per choice, none for the recomputes that moved nothing.
+        QCOMPARE(lines.lines(),
+                 (QStringList{
+                     QStringLiteral("Thread placement: the RADE decoder for channel 1"
+                                    " runs on core 7."),
+                     QStringLiteral("Thread placement: the RADE decoder for channel 0"
+                                    " runs on core 4.")}));
     }
 
     void refusalsAreWarnedOnce()
