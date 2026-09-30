@@ -169,6 +169,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <QHash>
+#include <QSet>
 #include <QMap>
 #include <QVector>
 
@@ -334,6 +335,8 @@ signals:
     void setupDialogCreated(NereusSDR::SetupDialog* dialog);
 
 public:
+    /// Ruling U1 and U2's reveal (revealSliceInWindow), for tests.
+    void revealSliceInWindowForTest(int sliceId) { revealSliceInWindow(sliceId); }
 
     // ── Phase 3M-0 Task 14 test accessors ────────────────────────────────
     // TX Inhibit no longer has a label of its own. It paints onto the TX
@@ -1310,6 +1313,14 @@ private:
     // A placement for a slice this window no longer only listens to is
     // dropped; one it now controls takes the placement as its pan.
     void reconcileListenPlacements();
+    // A layout change placed this slice (m_markerOnlyPlacement) and this
+    // window still shows it there.
+    bool markerOnlyPlacement(int sliceId) const;
+    // True when `host` (the pan spectrumForSlice gives the slice) is not a
+    // pan of the slice's own: a listened slice this window placed, or one
+    // whose own pan is gone. Its demodulator shift then comes from its own
+    // stream's centre, never from that pan's view.
+    bool hostIsNotSlicesOwnPan(const SliceModel* slice) const;
     // Slice control plan Task 15 fix round 1: the server this window hosts
     // and the Core link it shares slices over (each null when it does not),
     // from which the chooser, the flags and the RX applet say who controls
@@ -1756,6 +1767,11 @@ private:
     // to pan id). Never written to the slice: its pan key belongs to its
     // controller.
     QHash<int, QString> m_listenPlacement;
+    // The placements a layout change made (not a reveal): on that pan the
+    // slice is its flag and its own edge marker only. Its stream is not
+    // subscribed there, and its tunes never move that pan's VFO, view or
+    // DDC centre (JJ's desktop listening ruling, 2026-09-30).
+    QSet<int> m_markerOnlyPlacement;
     // A remote window's listen or take-control request whose slice is shown
     // once the Core accepts it (-1: none).
     int m_pendingRevealSlice{-1};

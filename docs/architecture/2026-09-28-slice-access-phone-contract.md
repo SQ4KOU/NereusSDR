@@ -399,9 +399,14 @@ receive-slice UI follows the same actions and states.
   when it leaves a slice's band; the edge marker and the Slice list row
   count as showing the slice. On the desktop, a listened slice whose pan a
   layout change removes moves onto a pan that remains and keeps listening.
-  That pan's view stays where the operator had it: the slice shows as its
-  flag inside the span, or as the pan's edge marker outside it. Its slice
-  chooser row keeps Stop listening. Controlled slices keep
+  On that pan it is a marker only: its flag inside the span, or its own edge
+  marker outside it, which stays while it is off the span whatever the
+  other slices do. Its stream is not shown on that pan, and neither its
+  tunes nor its DDC moves change that pan's view, VFO or DDC centre, with
+  CTUN on or off; its demodulator shift comes from its own stream. Its
+  slice chooser row keeps Stop listening. A reveal ("Show Slice X on", or
+  a pan the window opens for it) shows the slice as before, centred on its
+  stream. Controlled slices keep
   today's rehoming into a remaining pan. The Core never ends a listening
   claim on a pan, layout or band change; only the verbs, a claims drop or
   the slice closing end it.

@@ -2,6 +2,7 @@
 #include "gui/HostingSliceActions.h"
 #include "gui/MainWindow.h"
 
+#include "core/FFTRouter.h"
 #include "core/TxSliceArbiter.h"
 #include "core/AppSettings.h"
 #include "core/SliceOwnership.h"
@@ -143,6 +144,120 @@ bool applyLayout(MainWindow& window, const QString& layoutId)
 {
     return QMetaObject::invokeMethod(&window, "applyPanLayout", Q_ARG(QString, layoutId));
 }
+}
+
+// A layout change that retires the pan of a slice this window listens to:
+// A and C (controlled here) share pan-0's stream, B (the phone's) sits
+// 1 MHz above on its own stream and pan-1. Going to layout "1" places B on
+// pan-0, the pan that remains.
+struct PlacedListen
+{
+    QTemporaryDir directory;
+    std::unique_ptr<AppSettings> settings;
+    std::unique_ptr<MainWindow> window;
+    std::unique_ptr<DesktopStationController> controller;
+    QObject phoneSession;
+    RadioModel* model{nullptr};
+    PanadapterStack* stack{nullptr};
+    SpectrumWidget* remaining{nullptr};
+    QByteArray phone;
+    int aId{-1};
+    int bId{-1};
+    int cId{-1};
+    double viewCentre{0.0};
+    double viewSpan{0.0};
+
+    ~PlacedListen()
+    {
+        if (controller) { controller->stop(); }
+    }
+};
+
+// Everything up to the layout change; placeListenedSlice() makes it.
+void prepareListenedSlice(PlacedListen& f, bool ctun)
+{
+    QVERIFY(f.directory.isValid());
+    f.settings = std::make_unique<AppSettings>(
+        f.directory.filePath(QStringLiteral("station.settings")));
+    f.window = std::make_unique<MainWindow>(RemoteStationOptions{}, nullptr,
+                                            MainWindow::ConnectionStartup::Deferred);
+    f.model = f.window->radioModel();
+    f.model->setBoardForTest(HPSDRHW::Saturn);
+    f.model->configureStreamPool(5, 5, 192000);
+    f.model->setConnectionStateForTest(ConnectionState::Connected);
+    f.aId = f.model->addSlice(QStringLiteral("pan-0"));
+    f.bId = f.model->addSlice(QStringLiteral("pan-1"));
+    QVERIFY(applyLayout(*f.window, QStringLiteral("2v")));
+    f.stack = f.window->findChild<PanadapterStack*>();
+    QVERIFY(f.stack);
+    f.cId = f.model->addSlice(QStringLiteral("pan-1"));
+    QVERIFY(f.cId >= 0);
+    SliceModel* b = f.model->sliceById(f.bId);
+    QVERIFY(b);
+    b->setFrequency(f.model->sliceById(f.aId)->frequency() + 1'000'000.0);
+    QVERIFY(b->streamIndex() != f.model->sliceById(f.aId)->streamIndex());
+    f.controller = std::make_unique<DesktopStationController>(
+        f.model, optionsFor(*f.settings, f.directory.path()));
+    f.window->setDesktopStationController(f.controller.get());
+    QVERIFY(f.controller->start(true));
+    QVERIFY(f.controller->server());
+    f.phone = admitPhone(*f.controller->server(), f.phoneSession,
+                         QByteArrayLiteral("phone-device-id-for-layouts-0002")).deviceId;
+    QVERIFY(!f.phone.isEmpty());
+    f.model->sliceOwnership()->setOwner(f.bId, f.phone);
+    QVERIFY(f.model->sliceOwnership()->isListening(SliceOwnership::stationDevice(), f.bId));
+    f.remaining = f.stack->spectrum(QStringLiteral("pan-0"));
+    QVERIFY(f.remaining);
+    if (!ctun) {
+        f.remaining->setCtunEnabled(false);
+        QVERIFY(!f.remaining->ctunEnabled());
+    }
+    f.viewCentre = f.remaining->centerFrequency();
+    f.viewSpan = f.remaining->bandwidth();
+}
+
+void placeListenedSlice(PlacedListen& f)
+{
+    QVERIFY(applyLayout(*f.window, QStringLiteral("1")));
+    QCOMPARE(f.stack->currentLayoutId(), QStringLiteral("1"));
+    QCOMPARE(f.stack->spectrum(QStringLiteral("pan-0")), f.remaining);
+    QVERIFY(f.model->sliceOwnership()->isListening(SliceOwnership::stationDevice(), f.bId));
+}
+
+// The flag the pan that remains shows for `id`.
+VfoWidget* flagOn(SpectrumWidget* pan, int id)
+{
+    VfoWidget* found = nullptr;
+    for (VfoWidget* flag : pan->findChildren<VfoWidget*>()) {
+        if (flag->sliceIndex() == id) { found = flag; }
+    }
+    return found;
+}
+
+// Pixels of `id`'s colour in the pan's edge-marker layer, on one side.
+int edgeMarkerPixels(SpectrumWidget* pan, int id, bool rightSide)
+{
+    QImage image(800, 400, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::black);
+    {
+        QPainter painter(&image);
+        pan->drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                           QRect(0, 200, 800, 180));
+    }
+    const QRgb colour = VfoWidget::sliceColor(id).rgb();
+    int pixels = 0;
+    for (int y = 0; y < 180; ++y) {
+        for (int x = rightSide ? 400 : 0; x < (rightSide ? 800 : 400); ++x) {
+            if (image.pixel(x, y) == colour) { ++pixels; }
+        }
+    }
+    return pixels;
+}
+
+// The shift a slice's demodulator needs: from its own stream's centre.
+double ownStreamShift(RadioModel* model, SliceModel* slice)
+{
+    return slice->frequency() - model->streamCentreHz(slice->streamIndex());
 }
 
 class TstDesktopStationWindow final : public QObject {
@@ -1395,6 +1510,184 @@ private slots:
         }
         QVERIFY(stopOffered);
         controller.stop();
+    }
+
+    void aPlacedListenedSliceTunedByItsControllerKeepsItsShiftAndThePansView()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        SliceModel* b = f.model->sliceById(f.bId);
+        FFTRouter* router = f.model->fftRouter();
+        QVERIFY(router);
+        // Its controller tunes it inside its DDC, then well away.
+        for (const double step : {5'000.0, 30'000.0, 400'000.0}) {
+            b->setFrequency(b->frequency() + step);
+            QCOMPARE(b->shiftOffsetHz(), ownStreamShift(f.model, b));
+            QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
+            QCOMPARE(f.remaining->bandwidth(), f.viewSpan);
+            QVERIFY(!router->pansForReceiver(b->streamIndex()).contains(QStringLiteral("pan-0")));
+            QVERIFY(flagOn(f.remaining, f.bId));
+            QVERIFY(flagOn(f.remaining, f.bId)->isHidden());
+            QVERIFY(edgeMarkerPixels(f.remaining, f.bId, true) > 0);
+        }
+        // A and C keep their own shifts from their stream.
+        for (const int own : {f.aId, f.cId}) {
+            SliceModel* slice = f.model->sliceById(own);
+            QCOMPARE(slice->shiftOffsetHz(), ownStreamShift(f.model, slice));
+        }
+    }
+
+    void aPlacedListenedSlicesEdgeMarkerStaysWhileTheOperatorTunes()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        SliceModel* b = f.model->sliceById(f.bId);
+        const double bShift = b->shiftOffsetHz();
+        for (const int own : {f.aId, f.cId, f.aId}) {
+            SliceModel* slice = f.model->sliceById(own);
+            slice->setFrequency(slice->frequency() + 2'000.0);
+            QVERIFY(flagOn(f.remaining, f.bId)->isHidden());
+            QVERIFY2(edgeMarkerPixels(f.remaining, f.bId, true) > 0,
+                     qPrintable(QStringLiteral("B's edge marker went after slice %1 tuned")
+                                    .arg(own)));
+            QCOMPARE(edgeMarkerPixels(f.remaining, f.bId, false), 0);
+            QCOMPARE(b->shiftOffsetHz(), bShift);
+        }
+    }
+
+    void aPlacedListenedSliceNeverScrollsAPanWithCtunOff()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, false);
+        if (QTest::currentTestFailed()) { return; }
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        QVERIFY(!f.remaining->ctunEnabled());
+        QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
+        QCOMPARE(f.remaining->bandwidth(), f.viewSpan);
+        SliceModel* b = f.model->sliceById(f.bId);
+        for (const double step : {5'000.0, 400'000.0}) {
+            b->setFrequency(b->frequency() + step);
+            QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
+            QCOMPARE(f.remaining->bandwidth(), f.viewSpan);
+            QCOMPARE(b->shiftOffsetHz(), ownStreamShift(f.model, b));
+            QVERIFY(edgeMarkerPixels(f.remaining, f.bId, true) > 0);
+        }
+    }
+
+    void aPlacedListenedSliceChangingStreamLeavesNoStaleWindow()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        // D shares B's stream and is the phone's too, so B is not alone on
+        // its stream and a far tune moves it to another stream index.
+        SliceModel* b = f.model->sliceById(f.bId);
+        const int dId = f.model->addSlice(QStringLiteral("pan-1"));
+        QVERIFY(dId >= 0);
+        SliceModel* d = f.model->sliceById(dId);
+        d->setFrequency(b->frequency() + 10'000.0);
+        QCOMPARE(d->streamIndex(), b->streamIndex());
+        f.model->sliceOwnership()->setOwner(dId, f.phone);
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        FFTRouter* router = f.model->fftRouter();
+        QVERIFY(router);
+        const int before = b->streamIndex();
+        b->setFrequency(b->frequency() + 3'000'000.0);
+        QVERIFY(b->streamIndex() >= 0);
+        QVERIFY(b->streamIndex() != before);
+        QCOMPARE(b->shiftOffsetHz(), ownStreamShift(f.model, b));
+        QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
+        QCOMPARE(f.remaining->bandwidth(), f.viewSpan);
+        for (const int stream : {before, b->streamIndex()}) {
+            QVERIFY2(router->pansForReceiver(stream).isEmpty(),
+                     qPrintable(QStringLiteral("stream %1 still feeds a pan").arg(stream)));
+        }
+        QVERIFY(edgeMarkerPixels(f.remaining, f.bId, true) > 0);
+    }
+
+    void aRevealStillCentresThePanItOpensOnTheSlice()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        // E: the phone's, on its own stream 2 MHz up, on no pan of this
+        // window's.
+        const int eId = f.model->addSlice(QStringLiteral("pan-7"));
+        QVERIFY(eId >= 0);
+        SliceModel* e = f.model->sliceById(eId);
+        e->setFrequency(f.model->sliceById(f.aId)->frequency() + 2'000'000.0);
+        f.model->sliceOwnership()->setOwner(eId, f.phone);
+        QVERIFY(f.model->sliceOwnership()->isListening(SliceOwnership::stationDevice(), eId));
+        f.window->revealSliceInWindowForTest(eId);
+        // The window grows, and the pan the reveal opens centres on E's
+        // stream as it did before this lane.
+        QCOMPARE(f.stack->currentLayoutId(), QStringLiteral("2v"));
+        SpectrumWidget* opened = f.stack->spectrum(QStringLiteral("pan-1"));
+        QVERIFY(opened);
+        QVERIFY(f.stack->panadapter(QStringLiteral("pan-1"))->associatedSlices().contains(eId));
+        QCOMPARE(opened->centerFrequency(), f.model->streamCentreHz(e->streamIndex()));
+        QVERIFY(f.model->fftRouter()->pansForReceiver(e->streamIndex())
+                    .contains(QStringLiteral("pan-1")));
+        QVERIFY(!opened->isEdgeMarkedSlice(eId));
+        // The pan B was placed on is left alone.
+        QCOMPARE(f.remaining->centerFrequency(), f.viewCentre);
+    }
+
+    void aPlacedListenedSliceIsNeverTheRemainingPansActiveSlice()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        // pan-0 is left with no slice listed, so the first slice added to it
+        // would be its active slice.
+        PanadapterApplet* kept = f.stack->panadapter(QStringLiteral("pan-0"));
+        QVERIFY(kept);
+        for (int id : kept->associatedSlices()) { kept->removeSlice(id); }
+        QVERIFY(kept->associatedSlices().isEmpty());
+        QCOMPARE(kept->activeSliceIndex(), -1);
+        placeListenedSlice(f);
+        if (QTest::currentTestFailed()) { return; }
+        QVERIFY(kept->associatedSlices().contains(f.bId));
+        QVERIFY(kept->associatedSlices().contains(f.cId));
+        QVERIFY(kept->activeSliceIndex() != f.bId);
+        QCOMPARE(kept->activeSliceIndex(), f.cId);
+    }
+
+    void aListenedSliceWhosePanIsGoneKeepsItsOwnShift()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        PlacedListen f;
+        prepareListenedSlice(f, true);
+        if (QTest::currentTestFailed()) { return; }
+        // B's pan goes without a layout change, so nothing places it and
+        // its flag falls back to the active pan.
+        f.stack->removePanadapter(QStringLiteral("pan-1"));
+        QVERIFY(!f.stack->panadapter(QStringLiteral("pan-1")));
+        SliceModel* b = f.model->sliceById(f.bId);
+        QCOMPARE(b->panKey(), QStringLiteral("pan-1"));
+        // Its DDC holds still (CTUN), so a tune inside it is a shift.
+        f.model->setStreamCtunPinned(b->streamIndex(), true);
+        QVERIFY(f.model->streamCtunPinned(b->streamIndex()));
+        for (const double step : {5'000.0, 30'000.0, 400'000.0}) {
+            b->setFrequency(b->frequency() + step);
+            QCOMPARE(b->shiftOffsetHz(), ownStreamShift(f.model, b));
+        }
     }
 
     // Slice control plan Task 16 (ruling U1): listening to a slice this

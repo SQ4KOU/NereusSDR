@@ -1980,6 +1980,15 @@ private slots:
         QCOMPARE(remaining->spectrumWidget()->bandwidth(), viewSpan);
         QVERIFY(bHz > viewCentre + viewSpan / 2.0);
         QVERIFY(flagFor(h, 1)->isHidden());
+        // A marker only there: its own edge marker, never the pan's VFO.
+        QVERIFY(remaining->spectrumWidget()->isEdgeMarkedSlice(1));
+        // Its controller tunes it: that pan's view still does not move.
+        h.station().sliceById(1)->setFrequency(bHz + 400'000.0);
+        QTRY_COMPARE(h.remoteModel()->sliceById(1)->frequency(), bHz + 400'000.0);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(remaining->spectrumWidget()->centerFrequency(), viewCentre);
+        QCOMPARE(remaining->spectrumWidget()->bandwidth(), viewSpan);
+        QVERIFY(remaining->spectrumWidget()->isEdgeMarkedSlice(1));
         QVERIFY(ownership->isListening(QByteArrayLiteral("token:1"), 1));
         QVERIFY(h.sliceAccessCommands().isEmpty());
         QCOMPARE(ownership->mark(1).subject(), phone);
