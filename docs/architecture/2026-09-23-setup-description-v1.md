@@ -1,4 +1,4 @@
-# Setup description versions 1–20
+# Setup description versions 1–21
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,15 +165,16 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 20. PA has a version-20 ceiling (version 14
+future declaration at version 21. PA has a version-20 ceiling (version 14
 for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
 for V17, version 16 for V16, version 13
 for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP is version 19 to a V19 or
 later peer (see Version 19) and version 15 to a V15 to V18 peer; Transmit,
-Audio, Diagnostics and CAT & Network are version 15 to a V15 or later peer
-(see Version 15); Transmit is version 13 to a V13 or V14 peer and version 3 to
+Audio and Diagnostics are version 15 to a V15 or later peer (see Version
+15); CAT & Network is version 21 to a V21 or later peer (see Version 21) and
+version 15 to a V15 to V20 peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
 a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
 Audio, Diagnostics and CAT & Network are version 3 to a V3 to V14 peer.
 General and Test retain version 3.
@@ -1063,6 +1064,21 @@ off the air, and a change of the device holding transmit while on the
 air, advance `revision` and resend `pa` alone (`revision` and `pa` share
 their own notify). V19 and older peers keep the exact closed version-14
 rows, the table's `offAir` gate included.
+
+Version 21 greys out CAT & Network > TCI Server's Forget row
+(`catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect`) while Duplicate
+(`copyRx2VfobToVfoa`) is off, as the desktop does and as Thetis does
+(Forget acts only while Duplicate is on). The row gains one closed
+dependency, exactly
+`"enabledWhen":{"property":{"object":"stationTci","name":"copyRx2VfobToVfoa"},"oneOf":[true]}`.
+The renderer reads that value from the `stationTci` mirror object it already
+reads for the row's own `valueProperty`; a missing or non-boolean value
+disables Forget. The row keeps its `stationTciSettingsVersion` gate and has
+no `requiresDescriptionVersion`: a V20 or older peer receives the same row
+without `enabledWhen` (always enabled, as before), and CAT & Network at
+version 15. The Core rejects `enabledWhen` on any other CAT & Network row
+and any altered dependency. This version adds no mirror field, ordinal or
+verb.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "core/TciServer.h"
+#include "core/TciProtocol.h"
 #include "core/TciBinaryFrame.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
@@ -96,6 +97,10 @@ private slots:
     void wsjtx_sequence_still_sees_trx_true_without_suffix();
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
+    void stopped_server_queues_no_rx2_lines();
+    void desktop_host_answers_rx2_off_queries_without_receiver_1();
+    void desktop_host_notch_reads_the_receiver_not_the_slice();
+    void desktop_host_first_lines_never_carry_receiver_0_as_receiver_1();
     void desktop_host_reentrant_stop_cannot_take_audio();
     void desktop_host_reentrant_destruction_releases_original_key();
     void desktop_host_release_callback_may_destroy_server_data();
@@ -195,7 +200,7 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
     RadioModel radio;
     for (int i = 0; i < 4; ++i) {
         QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
-        radio.sliceOwnership()->setOwner(i, i < 2 ? QByteArray("phone")
+        radio.sliceOwnership()->setOwner(i, i != 2 ? QByteArray("phone")
                                    : SliceOwnership::stationDevice());
     }
     TciServer server(&radio);
@@ -208,20 +213,234 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
     QVERIFY(connected.wait(2000));
     QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
     text.clear();
-    radio.setLock(3, true);
-    QTest::qWait(200);
-    text.clear();
-    // This model signal is normally emitted by live RX reconfiguration.
-    // Emit it here to exercise the physical-to-logical broadcast seam.
-    emit radio.activeRxCountChanged(2);
+    // RX2 turns on when the station device gains a second slice: Thetis's
+    // RX2EnabledChange lines go out (TCIServer.cs:842-847 [v2.10.3.15]).
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
     const auto hasLine = [&text](const QString& line) {
         for (const auto& call : text) {
             if (call.at(0).toString().contains(line)) { return true; }
         }
         return false;
     };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("tx_enable:1,true;")), 3000);
+    QVERIFY(hasLine(QStringLiteral("rx_enable:1,true;")));
+    // Slice 3 is named as receiver 1 (the physical-to-logical seam).
+    text.clear();
+    radio.setLock(3, true);
     QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("lock:1,true;")), 3000);
     QVERIFY(!hasLine(QStringLiteral("lock:0,true;")));
+    app.close();
+    server.stop();
+}
+
+// A stopped server queues no RX2 lines (its ownership hook goes with the
+// rest of its model wiring), and sends them again once restarted.
+void TestTciTxMutex::stopped_server_queues_no_rx2_lines()
+{
+    RadioModel radio;
+    for (int i = 0; i < 4; ++i) {
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
+        radio.sliceOwnership()->setOwner(i, i != 2 ? QByteArray("phone")
+                                   : SliceOwnership::stationDevice());
+    }
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    server.stop();
+    TciProtocol* protocol = server.protocolForTest();
+    protocol->drainCoalescedNotifications();
+    while (protocol->hasPendingNotification()) { protocol->takePendingNotification(); }
+
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
+    QTest::qWait(50);
+    protocol->drainCoalescedNotifications();
+    QStringList queued;
+    while (protocol->hasPendingNotification()) { queued << protocol->takePendingNotification(); }
+    for (const QString& line : queued) {
+        QVERIFY2(!line.startsWith(QStringLiteral("rx_enable:1,"))
+                     && !line.startsWith(QStringLiteral("tx_enable:1,")),
+                 qPrintable(line));
+    }
+
+    // Back to one station slice, restart, and flip RX2 on again: sent.
+    radio.sliceOwnership()->setOwner(3, QByteArray("phone"));
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
+    QTest::qWait(150);
+    text.clear();
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:1,true;")), 3000);
+    QVERIFY(hasLine(QStringLiteral("tx_enable:1,true;")));
+    app.close();
+    server.stop();
+}
+
+// With the desktop hosting and no slice for receiver 1, the queries Thetis
+// answers with RX2 off whose value is not receiver 1's own state are
+// answered, not dropped: rx_enable:1 is false (TCIServer.cs:4624-4627
+// [v2.10.3.15]), rx_nf_enable:1 is the global notch and split_enable:1 is
+// VFOSplit. Queries of receiver 1's own state and every set stay dropped.
+void TestTciTxMutex::desktop_host_answers_rx2_off_queries_without_receiver_1()
+{
+    RadioModel radio;
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 0);
+    QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), 1);
+    radio.sliceOwnership()->setOwner(0, SliceOwnership::stationDevice());
+    radio.sliceOwnership()->setOwner(1, QByteArray("phone"));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(!text.isEmpty(), 3000);
+    QTest::qWait(150);
+    const auto hasLine = [&text](const QString& line) {
+        for (const auto& call : text) {
+            if (call.at(0).toString().contains(line)) { return true; }
+        }
+        return false;
+    };
+
+    text.clear();
+    app.sendTextMessage(QStringLiteral("rx_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("rx_nf_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_nf_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("split_enable:1;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("split_enable:1,false;")), 3000);
+    app.sendTextMessage(QStringLiteral("rx_channel_enable:1,0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_channel_enable:1,0,false;")), 3000);
+
+    text.clear();
+    app.sendTextMessage(QStringLiteral("modulation:1;"));
+    app.sendTextMessage(QStringLiteral("rx_enable:1,true;"));
+    app.sendTextMessage(QStringLiteral("split_enable:1,true;"));
+    app.sendTextMessage(QStringLiteral("rx_enable:0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(hasLine(QStringLiteral("rx_enable:0,true;")), 3000);
+    QTest::qWait(150);
+    QVERIFY(!hasLine(QStringLiteral("modulation:1,")));
+    QVERIFY(!hasLine(QStringLiteral("rx_enable:1,")));
+    QVERIFY(!hasLine(QStringLiteral("split_enable:1,")));
+    QCOMPARE(radio.sliceOwnership()->ownedBy(SliceOwnership::stationDevice()), QList<int>{0});
+    QVERIFY(radio.sliceById(1) != nullptr);
+    app.close();
+    server.stop();
+}
+
+namespace {
+// A desktop host whose receiver 0 is slice 2 and whose receiver 1 has no
+// slice: slices 0 and 1 belong to a phone.
+void hostOnSlice2(RadioModel& radio)
+{
+    for (int i = 0; i < 3; ++i) {
+        QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
+        radio.sliceOwnership()->setOwner(i, i == 2 ? SliceOwnership::stationDevice()
+                                                   : QByteArray("phone"));
+    }
+}
+
+// Every frame the app received, split into lines.
+QStringList framesOf(const QSignalSpy& text)
+{
+    QStringList out;
+    for (const auto& call : text) {
+        for (const QString& part : call.at(0).toString().split(QLatin1Char(';'),
+                                                                Qt::SkipEmptyParts)) {
+            out << part.trimmed() + QLatin1Char(';');
+        }
+    }
+    return out;
+}
+} // namespace
+
+// rx_nf_enable reads the global notch through RadioModel::rxNf, which
+// takes the receiver index (GetMNF, console.cs:52317-52330 [v2.10.3.15]).
+// Receiver 0 as slice 2 must still answer the notch.
+void TestTciTxMutex::desktop_host_notch_reads_the_receiver_not_the_slice()
+{
+    RadioModel radio;
+    hostOnSlice2(radio);
+    radio.setRxNf(0, true);
+    QVERIFY(radio.rxNf(0));
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(framesOf(text).contains(QStringLiteral("ready;")), 3000);
+    QVERIFY(framesOf(text).contains(QStringLiteral("rx_nf_enable:0,true;")));
+    QVERIFY(framesOf(text).contains(QStringLiteral("rx_nf_enable:1,true;")));
+    text.clear();
+    app.sendTextMessage(QStringLiteral("rx_nf_enable:0;"));
+    QTRY_VERIFY_WITH_TIMEOUT(framesOf(text).contains(QStringLiteral("rx_nf_enable:0,true;")), 3000);
+    app.sendTextMessage(QStringLiteral("rx_nf_enable:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!radio.rxNf(0), 3000);
+    app.close();
+    server.stop();
+}
+
+// Thetis sends receiver 1's lines with RX2 off from RX2's own state
+// (sendInitialRadioState, TCIServer.cs:2486-2651 [v2.10.3.15]). With no
+// slice for receiver 1 the desktop host has none, and must not send
+// receiver 0's slice as receiver 1: only the lines whose value is not
+// receiver 1's own state are sent.
+void TestTciTxMutex::desktop_host_first_lines_never_carry_receiver_0_as_receiver_1()
+{
+    RadioModel radio;
+    hostOnSlice2(radio);
+    radio.sliceById(2)->setFrequency(7074000.0);
+    radio.sliceById(0)->setFrequency(3573000.0);
+    radio.sliceById(1)->setFrequency(21074000.0);
+    TciServer server(&radio);
+    server.setDesktopHostMode(true);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    QTRY_VERIFY_WITH_TIMEOUT(framesOf(text).contains(QStringLiteral("ready;")), 3000);
+    const QStringList frames = framesOf(text);
+    QVERIFY(frames.contains(QStringLiteral("vfo:0,0,7074000;")));
+    const QStringList allowed{
+        QStringLiteral("rx_enable"), QStringLiteral("rx_nf_enable"),
+        QStringLiteral("calibration_ex"), QStringLiteral("split_enable"),
+        QStringLiteral("tx_enable"), QStringLiteral("rx_channel_enable"),
+        QStringLiteral("trx"), QStringLiteral("tune"), QStringLiteral("iq_stop"),
+    };
+    QStringList receiver1;
+    for (const QString& f : frames) {
+        const int colon = f.indexOf(QLatin1Char(':'));
+        if (colon < 0 || !f.mid(colon + 1).startsWith(QStringLiteral("1,"))) { continue; }
+        receiver1 << f;
+        QVERIFY2(allowed.contains(f.left(colon)), qPrintable(f));
+    }
+    QVERIFY(receiver1.contains(QStringLiteral("rx_enable:1,false;")));
+    QVERIFY(receiver1.contains(QStringLiteral("rx_channel_enable:1,0,false;")));
+    QVERIFY(receiver1.contains(QStringLiteral("split_enable:1,false;")));
+    // No line anywhere carries a phone slice's frequency.
+    for (const QString& f : frames) {
+        QVERIFY2(!f.contains(QStringLiteral("3573000"))
+                     && !f.contains(QStringLiteral("21074000")),
+                 qPrintable(f));
+    }
     app.close();
     server.stop();
 }

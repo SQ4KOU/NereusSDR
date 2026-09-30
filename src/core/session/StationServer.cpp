@@ -8503,8 +8503,9 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // rows (radioHardwareVersion 10). 18: HL2 Options' clock rows
             // (radioHardwareVersion 11). 19: DSP > CFC's band editor
             // (cfcProfile, cfc.setProfile). 20: PA Gain's on-the-air lock
-            // per row.
-            const int version = qMin(declared, 20);
+            // per row. 21: CAT & Network's TCI Forget row greys out while
+            // Duplicate is off.
+            const int version = qMin(declared, 21);
             // Version 20: the transmit holder's own PA band stays live.
             const QByteArray deviceId = peerInfoFor(transport).deviceId;
             const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
@@ -12170,7 +12171,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 20) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 21) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

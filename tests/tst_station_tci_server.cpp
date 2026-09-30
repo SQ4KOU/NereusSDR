@@ -295,15 +295,17 @@ private slots:
         QCOMPARE(state.txChannel(), 2);
         QCOMPARE(state.rxSensorIntervalMs(), 200);
         QCOMPARE(state.txSensorIntervalMs(), 200);
-        QVERIFY(!state.forgetRx2VfoBOnDisconnect());
-        QVERIFY(!state.useRx1VfoaForRx2Vfoa());
-        QVERIFY(!state.copyRx2VfobToVfoa());
+        // The RX2 VFO options' defaults: TciProtocol.h's (Duplicate on).
+        QCOMPARE(state.forgetRx2VfoBOnDisconnect(), kTciForgetRx2VfobDefault);
+        QCOMPARE(state.useRx1VfoaForRx2Vfoa(), kTciUseRx1VfoaForRx2VfoaDefault);
+        QCOMPARE(state.copyRx2VfobToVfoa(), kTciCopyRx2VfobToVfoaDefault);
+        QVERIFY(state.copyRx2VfobToVfoa());
 
         QVERIFY(controller.setSettings({{QStringLiteral("iqSwap"), false},
                                         {QStringLiteral("audioBlockSamples"), 512},
                                         {QStringLiteral("txChannel"), 0},
                                         {QStringLiteral("rateLimitMs"), 0},
-                                        {QStringLiteral("copyRx2VfobToVfoa"), true}},
+                                        {QStringLiteral("copyRx2VfobToVfoa"), false}},
                                        &reason));
         QVERIFY(reason.isEmpty());
         auto& settings = AppSettings::instance();
@@ -313,12 +315,12 @@ private slots:
         QCOMPARE(settings.value(QStringLiteral("TciTxChannel")).toString(), QStringLiteral("Left"));
         QCOMPARE(settings.value(QStringLiteral("TciRateLimitMs")).toString(), QStringLiteral("0"));
         QCOMPARE(settings.value(QStringLiteral("TciCopyRx2VfobToVfoa")).toString(),
-                 QStringLiteral("True"));
+                 QStringLiteral("False"));
         QVERIFY(!state.iqSwap());
         QCOMPARE(state.audioBlockSamples(), 512);
         QCOMPARE(state.txChannel(), 0);
         QCOMPARE(state.rateLimitMs(), 0);
-        QVERIFY(state.copyRx2VfobToVfoa());
+        QVERIFY(!state.copyRx2VfobToVfoa());
 
         // Out of range, the wrong kind, or a name it does not have: refused
         // in plain words, and nothing of the request is kept.
@@ -661,6 +663,292 @@ private slots:
         app.socket.sendTextMessage(QStringLiteral("trx:1,true;"));
         QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("trx:1,false;")), 3000);
         QVERIFY(!station.mox());
+        app.socket.close();
+    }
+
+    // The three RX2 VFO options on the Core's own server. The Core has no
+    // receiver map, so RX2 is on when slice 1 exists (trx:N is slice N),
+    // not when the connection's active RX count says so. Thetis
+    // TCIServer.cs:7256-7269 and 7295-7296 [v2.10.3.15]: slice 1 (RX2 VFO
+    // B) goes out on channel 1, then copied to channel 0 unless replaced;
+    // with Use RX1 VFO A, slice 0 goes out as receiver 1 channel 0 only.
+    void stationRx2VfoOptions_data()
+    {
+        QTest::addColumn<bool>("copy");
+        QTest::addColumn<bool>("forget");
+        QTest::addColumn<bool>("useRx1");
+        QTest::addColumn<QStringList>("slice1Lines");
+        const QString b1 = QStringLiteral("vfo:1,1,14100000;");
+        const QString b0 = QStringLiteral("vfo:1,0,14100000;");
+        QTest::newRow("copy, keep channel 1") << true << false << false << QStringList{b1, b0};
+        QTest::newRow("copy, forget channel 1") << true << true << false << QStringList{b0};
+        QTest::newRow("no copy") << false << false << false << QStringList{b1};
+        QTest::newRow("no copy, forget has no effect") << false << true << false << QStringList{b1};
+        QTest::newRow("copy, use RX1 VFO A") << true << false << true << QStringList{b1, b0};
+    }
+    void stationRx2VfoOptions()
+    {
+        QFETCH(bool, copy);
+        QFETCH(bool, forget);
+        QFETCH(bool, useRx1);
+        QFETCH(QStringList, slice1Lines);
+        auto& s = AppSettings::instance();
+        const auto flag = [](bool on) { return on ? QStringLiteral("True") : QStringLiteral("False"); };
+        s.setValue(QStringLiteral("TciCopyRx2VfobToVfoa"), flag(copy));
+        s.setValue(QStringLiteral("TciForgetRx2VfoBOnDisconnect"), flag(forget));
+        s.setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), flag(useRx1));
+
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceById(1)->setFrequency(14074000.0);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->hold(0, QByteArray(32, '\x42'));
+        ownership->hold(1, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+        const auto vfoLines = [&app]() {
+            QStringList lines;
+            for (const QString& f : app.frames) {
+                if (f.startsWith(QStringLiteral("vfo:"))) { lines.append(f); }
+            }
+            return lines;
+        };
+
+        // Slice 1 moves: RX2 VFO B's lines.
+        app.frames.clear();
+        station.sliceById(1)->setFrequency(14100000.0);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(slice1Lines.last()), 3000);
+        QTest::qWait(150);
+        QCOMPARE(vfoLines(), slice1Lines);
+
+        // Slice 0 moves: with Use RX1 VFO A it is receiver 1 channel 0 only.
+        app.frames.clear();
+        station.sliceById(0)->setFrequency(7100000.0);
+        if (useRx1) {
+            QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:1,0,7100000;")), 3000);
+            QTest::qWait(150);
+            QCOMPARE(vfoLines(), QStringList{QStringLiteral("vfo:1,0,7100000;")});
+            // And a set of receiver 1 channel 0 tunes slice 0.
+            app.socket.sendTextMessage(QStringLiteral("vfo:1,0,7110000;"));
+            QTRY_COMPARE_WITH_TIMEOUT(station.sliceById(0)->frequency(), 7110000.0, 3000);
+            QCOMPARE(station.sliceById(1)->frequency(), 14100000.0);
+        } else {
+            // With RX2 on, Thetis's VFO A handler sends channel 0 alone
+            // (TCIServer.cs:7266-7269 [v2.10.3.15]).
+            QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,0,7100000;")), 3000);
+            QTest::qWait(150);
+            QCOMPARE(vfoLines(), QStringList{QStringLiteral("vfo:0,0,7100000;")});
+            // And vfo:0,1 is VFO B, RX2's: it tunes slice 1.
+            app.socket.sendTextMessage(QStringLiteral("vfo:0,1,14120000;"));
+            QTRY_COMPARE_WITH_TIMEOUT(station.sliceById(1)->frequency(), 14120000.0, 3000);
+            QCOMPARE(station.sliceById(0)->frequency(), 7100000.0);
+        }
+        app.socket.close();
+    }
+
+    // A vfo set is gated on the slice it writes, not the receiver it names:
+    // with Use RX1 VFO A on, vfo:1,0 writes slice 0, and a slice another
+    // device owns (the phone's) is not retuned; the app hears its value.
+    void stationRx1VfoaSetRespectsTheOwnerOfSlice0()
+    {
+        AppSettings::instance().setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"),
+                                         QStringLiteral("True"));
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceById(1)->setFrequency(14074000.0);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->setOwner(0, QByteArray(32, '\x41'));
+        ownership->hold(1, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,0,7100000;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:1,0,7074000;")), 3000);
+        QTest::qWait(150);
+        QCOMPARE(station.sliceById(0)->frequency(), 7074000.0);
+        QCOMPARE(station.sliceById(1)->frequency(), 14074000.0);
+
+        // Slice 1 is the station device's: vfo:1,1 still tunes it.
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,1,14100000;"));
+        QTRY_COMPARE_WITH_TIMEOUT(station.sliceById(1)->frequency(), 14100000.0, 3000);
+        app.socket.close();
+    }
+
+    // rx_channel_enable on the Core's server (Thetis handleRxChannelEnable,
+    // TCIServer.cs:6252-6291 [v2.10.3.15]): receiver 1 is slice 1, owned
+    // by another device here, so a set changes nothing and answers what
+    // slice 1 holds. Slice 0 is the station device's own.
+    void stationRxChannelEnableRespectsTheOwnerOfSlice1()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->hold(0, QByteArray(32, '\x42'));
+        ownership->setOwner(1, QByteArray(32, '\x41'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:1,0,false;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,0,true;")), 3000);
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:1,1,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,1,false;")), 3000);
+        QTest::qWait(150);
+        QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,0,false;")));
+        QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,1,true;")));
+        QVERIFY(station.sliceById(1) != nullptr);
+
+        // Slice 0 is writable: its set is echoed.
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:0,1,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:0,1,true;")), 3000);
+        app.socket.close();
+    }
+
+    // rx_enable on the Core's server (Thetis handleRXEnable,
+    // TCIServer.cs:4595-4629 [v2.10.3.15]): receiver 1 answers true while
+    // slice 1 is there and false without it. A set sends nothing to any app
+    // and opens or closes no slice.
+    void stationRxEnableFollowsSlice1()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        TciApp other(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(other.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,true;")), 3000);
+
+        app.frames.clear();
+        other.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1,false;"));
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:0,false;"));
+        QTest::qWait(300);
+        const auto rxEnableLines = [](const TciApp& a) {
+            QStringList out;
+            for (const QString& f : a.frames) {
+                if (f.startsWith(QStringLiteral("rx_enable:"))) { out << f; }
+            }
+            return out;
+        };
+        QCOMPARE(rxEnableLines(app), QStringList{});
+        QCOMPARE(rxEnableLines(other), QStringList{});
+        QVERIFY(station.sliceById(1) != nullptr);
+
+        station.removeSlice(1);
+        QTRY_VERIFY_WITH_TIMEOUT(other.has(QStringLiteral("rx_enable:1,false;")), 3000);
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,false;")), 3000);
+        app.socket.close();
+        other.socket.close();
+    }
+
+    // Thetis re-sends the RX2 lines when RX2 is turned on or off
+    // (RX2EnabledChangedHandlers, TCIServer.cs:6741 and 842-847
+    // [v2.10.3.15]): rx_enable:1 and tx_enable:1 only. On the Core RX2 is
+    // slice 1, so adding and removing it sends them, once per change; the
+    // Core's server refuses transmit, so tx_enable:1 stays false.
+    void stationRx2LinesFollowSlice1()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+        const auto rx2Lines = [&app]() {
+            QStringList lines;
+            for (const QString& f : app.frames) {
+                if (f.startsWith(QStringLiteral("rx_enable:1,"))
+                    || f.startsWith(QStringLiteral("tx_enable:1,"))
+                    || f.startsWith(QStringLiteral("rx_channel_enable:1,"))
+                    || f.startsWith(QStringLiteral("lock:1,"))) {
+                    lines.append(f);
+                }
+            }
+            return lines;
+        };
+
+        app.frames.clear();
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("tx_enable:1,false;")), 3000);
+        QTest::qWait(150);
+        QCOMPARE(rx2Lines(), (QStringList{QStringLiteral("rx_enable:1,true;"),
+                                          QStringLiteral("tx_enable:1,false;")}));
+
+        app.frames.clear();
+        station.removeSlice(1);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,false;")), 3000);
+        QTest::qWait(150);
+        QCOMPARE(rx2Lines(), (QStringList{QStringLiteral("rx_enable:1,false;"),
+                                          QStringLiteral("tx_enable:1,false;")}));
+        app.socket.close();
+    }
+
+    // A Core with one slice has RX2 off: a set of receiver 1 is ignored
+    // (Thetis TCIServer.cs:3897-3899 [v2.10.3.15]), and slice 0 goes out on
+    // both of its own channels even with every option on.
+    void stationWithOneSliceHasRx2Off()
+    {
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("TciCopyRx2VfobToVfoa"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("TciUseRx1VfoaForRx2Vfoa"), QStringLiteral("True"));
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        station.sliceById(0)->setFrequency(7074000.0);
+        station.sliceOwnership()->hold(0, QByteArray(32, '\x42'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,0,14100000;"));
+        app.socket.sendTextMessage(QStringLiteral("vfo:1,1,14100000;"));
+        app.socket.sendTextMessage(QStringLiteral("vfo:0,0,7100000;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,0,7100000;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("vfo:0,1,7100000;")), 3000);
+        QTest::qWait(150);
+        QCOMPARE(station.sliceById(0)->frequency(), 7100000.0);
+        for (const QString& f : app.frames) {
+            QVERIFY2(!f.startsWith(QStringLiteral("vfo:1,")), qPrintable(f));
+        }
         app.socket.close();
     }
 

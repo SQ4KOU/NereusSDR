@@ -5028,13 +5028,6 @@ public slots:
     Q_INVOKABLE void setRxNf(int rx, bool on);
     Q_INVOKABLE bool rxNf(int rx) const;
 
-    // ── Stub categories: SliceModel doesn't expose these as Q_PROPERTYs yet ─
-    // Each stub stores the requested value in a small per-slice array so
-    // round-trip (set then get) returns the operator's last value.  Real
-    // wiring to WDSP comes when the underlying feature lands.
-    Q_INVOKABLE void setRxEnable(int rx, bool on);
-    Q_INVOKABLE bool rxEnable(int rx) const;
-
     // ── Per-slice AF gain (rx_volume: query source) ──────────────────────
     // Distinct from afLinear() below: afLinear is the single radio-global
     // master volume slider (Thetis console AF field, handleVolume /
@@ -7385,7 +7378,7 @@ private:
     // values so the production path passes the existing matrix tests.
     //
     // Per-slice stub state for DSP toggles SliceModel doesn't yet expose
-    // as Q_PROPERTYs: rxCtun / rxEnable.  Sized to the max RX count
+    // as Q_PROPERTYs: rxCtun.  Sized to the max RX count
     // NereusSDR supports today (4 for the four-DDC SKUs); the setter clamps
     // the index so an out-of-range slice silently no-ops.
     // rxNf left this set in TNF section 6.4: it is the global notch master
@@ -7426,7 +7419,6 @@ private:
     // reads. NF followed them out in TNF section 6.4, onto
     // NotchModel::globalEnabled -- see the setRxNf comment in RadioModel.cpp.
     std::array<bool, kTciStubSliceMax> m_tciStubRxCtun{};
-    std::array<bool, kTciStubSliceMax> m_tciStubRxEnable{ {true, false, false, false} };
 
     // Non-owning view of the WDSP TX channel (WdspEngine::kTxChannelId,
     // == WDSP.id(1, 0)).

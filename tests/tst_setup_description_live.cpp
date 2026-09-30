@@ -34,7 +34,8 @@ private slots:
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
     // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
     // clock rows) opens the clock rows and is Hardware's cap; the
-    // description's own cap is version 20 (PA's on-air lock per row).
+    // description's own cap is version 21 (CAT & Network's Forget row follows
+    // Duplicate).
     void pairedV16PhoneReadsHl2Options()
     {
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
@@ -51,7 +52,7 @@ private slots:
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
             {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
-            {99, 20, 18}, {15, 15, 13}};
+            {21, 21, 18}, {99, 21, 18}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
             Core core;
