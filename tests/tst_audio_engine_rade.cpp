@@ -32,6 +32,10 @@
 //                 instead of spying the retired radeIqReady hop. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - RADE threads review: the decoder's own blocks reach the
+//                 speakers (playedSlots), past the late bound. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -39,6 +43,7 @@
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"
 #include "core/RadeChannel.h"
+#include "core/RadeRxWorker.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
@@ -137,19 +142,26 @@ private slots:
         const int baselinePushes = speakersRaw->pushCount();
         QCOMPARE(baselinePushes, 0);
 
+        const std::shared_ptr<RadeRxBridge> bridge = channel.rxBridge();
+        QVERIFY(bridge);
+
         QVector<float> iq(128, 0.05f);
         // Two resamplers warm here: worker 48 -> 24 kHz and the returned
         // speech 24 -> 48 kHz adapter. The latter's high-attenuation filter
         // can retain more than the 3,072 24-kHz frames produced by the old
         // 96-block bound on some platforms. 256 blocks remain a bounded
         // 341-ms input while clearing that documented filter history.
+        // RADE threads review: and past the late bound (105 blocks of 64),
+        // so the decoder's own output fills a slot rather than silence.
         constexpr int kMaxInputBlocks = 256;
+        QVERIFY(kMaxInputBlocks > radeLateBoundBlocks(64));
         // RADE threads: the codec runs on the channel's decoder thread; wait
         // for it to take each block so the loop's count is deterministic.
         for (int rep = 0;
              rep < kMaxInputBlocks
              && (speakersRaw->pushCount() == baselinePushes
-                 || speech.count() == 0);
+                 || speech.count() == 0
+                 || bridge->playedSlots() == 0);
              ++rep) {
             worker.processIqBatch(0, iq);
             QVERIFY(channel.waitRxIdleForTest(5000));
@@ -157,13 +169,18 @@ private slots:
         }
 
         const QString evidence = QStringLiteral(
-            "speech=%1 speakers=%2 after at most %3 blocks")
+            "speech=%1 speakers=%2 played=%3 silent=%4 after at most %5 blocks")
             .arg(speech.count())
             .arg(speakersRaw->pushCount() - baselinePushes)
+            .arg(bridge->playedSlots())
+            .arg(bridge->silentSlots())
             .arg(kMaxInputBlocks);
         QVERIFY2(speakersRaw->pushCount() > baselinePushes
                      && speech.count() > 0,
                  qPrintable(evidence));
+        // The decoded blocks themselves reached the speakers, not only the
+        // silence of slots with nothing due.
+        QVERIFY2(bridge->playedSlots() > 0, qPrintable(evidence));
     }
 };
 

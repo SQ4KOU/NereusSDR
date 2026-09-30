@@ -833,6 +833,12 @@
 //                (refreshRadeTxSelection). Removing a slice destroys its
 //                RadeChannel. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - RADE threads review: the TX worker hands the microphone to
+//                RADE only while keyed (setRadeMicKeyed at the MOX edges),
+//                and refreshRadeTxSelection connects the selected channel
+//                to the current TX worker, so a worker made again after a
+//                reconnect reaches a slice the transmitter moves to. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -7802,6 +7808,10 @@ void RadioModel::wireTxWorkerRade(TxWorkerThread* worker)
     }
     connect(m_moxController, &MoxController::moxStateChanged,
             worker, [this, worker](bool active) {
+                // RADE threads (2026-09-30): the microphone reaches the RADE
+                // encoder only while keyed; the path itself stays latched
+                // for the end-of-over checks.
+                worker->setRadeMicKeyed(active);
                 if (!active) {
                     return;   // released; pump will idle anyway
                 }
@@ -14754,6 +14764,13 @@ void RadioModel::refreshRadeTxSelection(bool keyed)
     }
     if (m_txWorker) {
         m_txWorker->setRadeChannel(txChannel);
+        // A TX worker made again after a reconnect or a recovery has none of
+        // the channels' old connections; the selected one hears it here.
+        if (txChannel != nullptr) {
+            connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
+                    txChannel, &RadeChannel::txEncode,
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
+        }
     }
 }
 
@@ -14981,8 +14998,9 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 }
             });
     // Phase 3R L2: freq-offset re-emit for the RadeApplet readout. The
-    // codec sends the offset on every processIq tick while locked, right
-    // after the SNR, whether or not it changed (RadeChannel::processIq);
+    // codec sends the offset right after the SNR while locked, whenever
+    // either changes and every 100 blocks otherwise (RadeChannel::
+    // decodeRxBlock, RADE threads review);
     // the flag re-appends it to each fresh SNR text. It is re-emitted
     // here without de-dup; the slice's setRadeFreqOffsetHz keeps the
     // mirrored value change-only. The captured sliceId routes the

@@ -162,6 +162,14 @@
 //                 per channel ("channel=<id> tick=<n>"). txEncode encodes
 //                 only on the selected (TX slice's) channel.
 //                 NereusSDR-original. AI tooling: Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE threads review: txEncode takes the
+//                 codec with try_lock and holds a block that finds it busy
+//                 for the next call, so the main thread never waits for a
+//                 decode; the SNR and offset go out when they change (and
+//                 every kRadeMetricsRefreshTicks blocks); the tick log adds
+//                 the bridge's silentSlots, playedSlots, lateDrops,
+//                 inputDrops and outputDrops. NereusSDR-original. AI
+//                 tooling: Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadeChannel.h"
@@ -228,6 +236,21 @@ constexpr int kRadeResamplerMaxBlock = 16384;
 // to a PC) may not need as long.
 constexpr int NUM_SAMPLES_SILENCE = 200 * RADE_MODEM_SAMPLE_RATE / 1000;
 
+// RADE threads review (NereusSDR-original): the most microphone audio
+// txEncode holds while the codec is busy decoding, 1 s at 16 kHz int16. A
+// decode takes tens of milliseconds, so this is only reached if the codec
+// stays busy far longer than one decode; past it a block is dropped and
+// counted (txHeldDrops).
+constexpr qsizetype kTxHeldMaxBytes = 16000 * qsizetype(sizeof(int16_t));
+
+// RADE threads review (NereusSDR-original): snrChanged and freqOffsetChanged
+// go out when either value changes, and otherwise once in this many blocks,
+// the tick log's cadence, so a view that starts listening (the applet on a
+// newly active slice) still hears the current values. rade_rx runs once per
+// modem frame, about every hundred blocks, so the values rarely change
+// between two blocks.
+constexpr int kRadeMetricsRefreshTicks = 100;
+
 }  // namespace
 
 // From AetherSDR src/core/RADEEngine.cpp:18-25 [@0cd4559]
@@ -242,6 +265,12 @@ RadeChannel::RadeChannel(QObject* parent)
 {
     // RADE end-of-over callsigns: FreeDV's end-of-over frame carries a
     // callsign and no grid square.
+    //
+    // RADE threads: this connection must stay queued. textDecoded is
+    // emitted on the decoder thread inside decodeRxBlock while it holds
+    // m_codecMutex (processRxEooBits); `this` lives on the main thread, so
+    // AutoConnection queues it and rxTextDecoded's receivers never run
+    // under the codec lock. A direct connection would run them there.
     connect(m_textChannel.get(), &RadeText::textDecoded, this,
             [this](const QString& callsign) { emit rxTextDecoded(callsign, QString()); });
 }
@@ -360,6 +389,7 @@ bool RadeChannel::start(const QString& modelPath)
     m_radeRxCallCount = 0;
     m_radeTxCallCount = 0;
     m_endOfOverQueued = false;
+    m_metricsSent = false;  // RADE threads review
 
     // From AetherSDR src/core/RADEEngine.cpp:68-72 [@0cd4559]
     const int n_features = rade_n_features_in_out(m_rade);
@@ -411,6 +441,8 @@ void RadeChannel::stop()
     m_rxFeatAccum.clear();
     m_rxOutAccum.clear();
 
+    m_txHeld.clear();  // RADE threads review
+    m_metricsSent = false;
     m_active = false;
     m_synced = false;
     m_farganWarmedUp = false;
@@ -515,6 +547,12 @@ void RadeChannel::setRxStallHookForTest(std::function<void()> hook)
     }
 }
 
+void RadeChannel::setRxDecodeLockedHookForTest(std::function<void()> hook)
+{
+    std::lock_guard<std::mutex> lock(m_rxLockedHookMutex);
+    m_rxLockedHook = std::move(hook);
+}
+
 Qt::HANDLE RadeChannel::rxThreadIdForTest() const
 {
     return m_rxWorker ? m_rxWorker->threadIdForTest() : nullptr;
@@ -590,6 +628,18 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
     if (!m_active || !m_rade || !m_fargan) {
         return QByteArray();
     }
+#ifdef NEREUS_BUILD_TESTS
+    {
+        std::function<void()> hook;
+        {
+            std::lock_guard<std::mutex> hookLock(m_rxLockedHookMutex);
+            hook = m_rxLockedHook;
+        }
+        if (hook) {
+            hook();  // the codec is held busy while this runs
+        }
+    }
+#endif
 
     auto* fargan = static_cast<FARGANState*>(m_fargan.get());
 
@@ -763,13 +813,25 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
     if (tick % 100 == 1) {
         const float snr = static_cast<float>(rade_snrdB_3k_est(m_rade));
         const float foff = static_cast<float>(rade_freq_offset(m_rade));
+        // RADE threads review: the decoder's slot and drop counters, to
+        // watch a slow decoder on the Rock. The worker runs this, so its
+        // bridge is there; a direct processIq caller has none.
+        const std::shared_ptr<RadeRxBridge> bridge =
+            m_rxWorker ? m_rxWorker->bridge() : nullptr;
         qCInfo(lcRade).noquote()
-            << QString("RadeChannel: channel=%1 tick=%2 synced=%3 SNR=%4 dB "
-                       "freqOff=%5 Hz sideband=%6")
+            << QString("RadeChannel: channel=%1 tick=%2 silentSlots=%3 "
+                       "playedSlots=%4 lateDrops=%5 inputDrops=%6 "
+                       "outputDrops=%7 synced=%8 SNR=%9 dB")
                 .arg(channelId())
                 .arg(tick)
+                .arg(bridge ? bridge->silentSlots() : 0)
+                .arg(bridge ? bridge->playedSlots() : 0)
+                .arg(bridge ? bridge->lateDrops() : 0)
+                .arg(bridge ? bridge->inputDrops() : 0)
+                .arg(bridge ? bridge->outputDrops() : 0)
                 .arg(synced ? "YES" : "no")
                 .arg(snr, 0, 'f', 1)
+            << QString("freqOff=%1 Hz sideband=%2")
                 .arg(foff, 0, 'f', 0)
                 .arg(m_sidebandUpper ? "USB" : "LSB");
     }
@@ -784,7 +846,17 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
     if (synced) {
         snrOut = static_cast<float>(rade_snrdB_3k_est(m_rade));
         foffOut = static_cast<float>(rade_freq_offset(m_rade));
-        haveMetrics = true;
+        // RADE threads review: only a changed pair, a new lock, or the
+        // refresh cadence sends them; an unsent pair equals the last sent.
+        haveMetrics = !m_metricsSent || syncEdge
+            || snrOut != m_lastSnrSent || foffOut != m_lastFoffSent
+            || tick - m_lastMetricsTick >= kRadeMetricsRefreshTicks;
+        if (haveMetrics) {
+            m_metricsSent = true;
+            m_lastSnrSent = snrOut;
+            m_lastFoffSent = foffOut;
+            m_lastMetricsTick = tick;
+        }
     }
     }  // RADE threads: m_codecMutex released
 
@@ -793,6 +865,7 @@ QByteArray RadeChannel::decodeRxBlock(const QByteArray& iqSamples)
         emit syncChanged(syncedNow);
     }
     if (haveMetrics) {
+        m_snrEmitCount.fetch_add(1, std::memory_order_relaxed);
         emit snrChanged(snrOut);
         emit freqOffsetChanged(foffOut);
     }
@@ -826,11 +899,32 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
     if (!m_txSelected.load(std::memory_order_acquire)) {
         return;
     }
+    // RADE end-of-over callsigns: once the end-of-over frame is queued the
+    // over is ending; FreeDV takes no more microphone audio then
+    // (freedv-gui src/main.cpp:3986 [@a4ae053], `if (!endingTx...)`).
+    // RADE threads review: read before the codec is taken (it is atomic).
+    if (m_endOfOverQueued.load(std::memory_order_acquire) || speechSamples.isEmpty()) {
+        return;
+    }
     // RADE threads: modem chunks leave after m_codecMutex is released, in
     // order, before this call returns (as before).
     std::vector<QByteArray> modemOut;
     {
-    std::lock_guard<std::mutex> lock(m_codecMutex);
+    // RADE threads review: never wait for the decoder thread. The same
+    // rade handle serves rade_rx and rade_tx, so the two never run at once;
+    // a block that finds the codec busy is held, in order, for the next
+    // call rather than waiting out the decode (tens of milliseconds on the
+    // Rock).
+    std::unique_lock<std::mutex> lock(m_codecMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        m_txCodecBusyCount.fetch_add(1, std::memory_order_relaxed);
+        if (m_txHeld.size() + speechSamples.size() <= kTxHeldMaxBytes) {
+            m_txHeld.append(speechSamples);
+        } else {
+            m_txHeldDrops.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
     // BENCH DEBUG: one-shot first-receive log + gate-rejection trace so
     // we can see (a) whether the queued radeMicBlockReady is reaching
     // txEncode at all, and (b) why it might bail out (m_active /
@@ -847,15 +941,7 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
     }
 
     if (!m_active || !m_rade || !m_lpcnetEnc) {
-        return;
-    }
-    if (speechSamples.isEmpty()) {
-        return;
-    }
-    // RADE end-of-over callsigns: once the end-of-over frame is queued the
-    // over is ending; FreeDV takes no more microphone audio then
-    // (freedv-gui src/main.cpp:3986 [@a4ae053], `if (!endingTx...)`).
-    if (m_endOfOverQueued) {
+        m_txHeld.clear();
         return;
     }
 
@@ -863,6 +949,11 @@ void RadeChannel::txEncode(const QByteArray& speechSamples)
     // TX accumulator. NereusSDR divergence vs AetherSDR (which
     // converts 24 kHz stereo float -> 16 kHz mono int16 at :139-152);
     // our input is already in the LPCNet-ready format.
+    // RADE threads review: blocks held while the codec was busy go first.
+    if (!m_txHeld.isEmpty()) {
+        m_txAccum.append(m_txHeld);
+        m_txHeld.clear();
+    }
     m_txAccum.append(speechSamples);
 
     // Step 2: process LPCNet 10 ms frames (LPCNET_FRAME_SIZE = 160
@@ -956,6 +1047,7 @@ void RadeChannel::dropTxAudio()
 {
     std::lock_guard<std::mutex> lock(m_codecMutex);  // RADE threads
     m_txAccum.clear();
+    m_txHeld.clear();  // RADE threads review: same thread as txEncode
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
     m_endOfOverQueued = false;  // RADE end-of-over callsigns: a new over

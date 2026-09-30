@@ -179,6 +179,12 @@
 //                 keeps TX encoding to the TX slice's channel alone;
 //                 setRxGated stops decoding while that slice transmits.
 //                 NereusSDR-original. AI tooling: Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE threads review: txEncode never
+//                 waits for a decode (a busy codec holds the block for the
+//                 next call); snrChanged and freqOffsetChanged are sent
+//                 when a value changes and every 100 blocks otherwise; the
+//                 tick log carries the decoder's slot and drop counters.
+//                 NereusSDR-original. AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -339,7 +345,20 @@ public:
     Qt::HANDLE rxThreadIdForTest() const;
     QString rxThreadNameForTest() const;
     int rxTickCountForTest() const { return m_rxTickCount.load(std::memory_order_relaxed); }
+    // Runs on the decoder thread inside decodeRxBlock while it holds the
+    // codec; a test can block in it to hold the codec busy.
+    void setRxDecodeLockedHookForTest(std::function<void()> hook);
+    // How many txEncode calls found the codec busy and held their block
+    // instead of waiting, and the bytes held now.
+    int txCodecBusyCountForTest() const { return m_txCodecBusyCount.load(std::memory_order_relaxed); }
+    int txHeldBytesForTest() const { return static_cast<int>(m_txHeld.size()); }
+    // How many times snrChanged has been emitted.
+    int snrEmitCountForTest() const { return m_snrEmitCount.load(std::memory_order_relaxed); }
 #endif
+
+    // RADE threads review: microphone blocks dropped because the codec was
+    // busy for longer than kTxHeldMaxBytes of speech. Any thread.
+    quint64 txHeldDrops() const { return m_txHeldDrops.load(std::memory_order_relaxed); }
 
 public slots:
     // Sideband selection hook.  Set true for RADE_U (upper) and false
@@ -355,6 +374,10 @@ public slots:
     // TX path: feed mic samples (16 kHz mono int16) for LPCNet
     // feature extraction and rade_tx encoding. Conversion + encoder
     // path lands at I3.
+    //
+    // RADE threads review: never waits for the decoder thread. When the
+    // codec is busy decoding, the block is held (in order) and encoded
+    // with the next call. Call it on one thread only (the main thread).
     void txEncode(const QByteArray& speechSamples);
 
     // Flush TX encoder state on MOX release to prevent stale audio
@@ -422,6 +445,25 @@ private:
     std::atomic<int>     m_rxTickCount{0};  // per channel, was a static
     std::atomic<bool>    m_rxGated{false};
     std::atomic<bool>    m_txSelected{true};
+
+    // RADE threads review: microphone blocks that arrived while the codec
+    // was busy decoding, in order; only txEncode's thread (and dropTxAudio
+    // and stop, on the same thread) touch it. At most kTxHeldMaxBytes.
+    QByteArray           m_txHeld;
+    std::atomic<int>     m_txCodecBusyCount{0};
+    std::atomic<quint64> m_txHeldDrops{0};
+    std::atomic<int>     m_snrEmitCount{0};
+
+    // RADE threads review: the last SNR and offset sent, and the block they
+    // were sent on; decoder side, under m_codecMutex.
+    bool                 m_metricsSent{false};
+    float                m_lastSnrSent{0.0f};
+    float                m_lastFoffSent{0.0f};
+    int                  m_lastMetricsTick{0};
+    // Test seam state (setRxDecodeLockedHookForTest). Present in every
+    // build so the class has one layout whatever defines a unit sees.
+    std::mutex           m_rxLockedHookMutex;
+    std::function<void()> m_rxLockedHook;
 
     // RADE-U / RADE-L sideband flag.  True for upper (RADE_U, default),
     // false for lower (RADE_L).  Set via setSideband() in SliceModel's

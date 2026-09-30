@@ -33,6 +33,11 @@
 //                 the remote microphone ring (RemoteMicFeed), its own
 //                 branch ahead of the VAX and PC branches in the normal and
 //                 the RADE paths. AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : RADE threads by J.J. Boyd (KG4VCF): setRadeMicKeyed. The
+//                 RADE branch hands the microphone to the encoder only
+//                 while the transmitter is keyed, so an unkeyed worker no
+//                 longer posts a block to the main thread every tick.
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -179,6 +184,10 @@ public:
     /// same atomic.
     TxPath currentTxPath() const { return m_currentTxPath.load(std::memory_order_acquire); }
 
+    /// RADE threads: whether the RADE branch hands microphone blocks to
+    /// the encoder (setRadeMicKeyed).
+    bool radeMicKeyed() const { return m_radeMicKeyed.load(std::memory_order_acquire); }
+
 #ifdef NEREUS_BUILD_TESTS
     /// Test seam — drive one pump tick synchronously without standing up
     /// the QThread + semaphore wait infrastructure.  Drains one block
@@ -258,6 +267,12 @@ public slots:
     //
     // Idempotent: setting to the current value is a cheap no-op store.
     void setCurrentTxPath(TxPath path);
+
+    // RADE threads (2026-09-30): the RADE branch emits radeMicBlockReady
+    // only while this is set. RadioModel sets it at MOX-on and clears it at
+    // MOX-off (moxStateChanged, the same edge that latches the path), as
+    // FreeDV runs its transmit pipeline only while transmitting. Any thread.
+    void setRadeMicKeyed(bool keyed);
 
     // ── Phase 3R K-bench (source-first reframe): RADE mic substitute ────
     //
@@ -501,6 +516,11 @@ private:
     // it up with acquire, and the C++ memory model guarantees no
     // tearing or stale read.
     std::atomic<TxPath> m_currentTxPath{TxPath::Wdsp};
+
+    // RADE threads (2026-09-30): the path stays latched at Rade after a
+    // RADE over, and the pump runs unkeyed, so without this every mic block
+    // (about 750 a second) was posted to the main thread's txEncode.
+    std::atomic<bool> m_radeMicKeyed{false};
 };
 
 } // namespace NereusSDR
