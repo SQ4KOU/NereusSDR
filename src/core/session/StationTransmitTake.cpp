@@ -58,6 +58,13 @@
 //               (keyerSharesSlices), on any other device's slice; the flag
 //               moves only once the key is admitted. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (item 4): a key in the TX-to-RX tail, or
+//               while the flag is frozen, with a slice of the keyer's own,
+//               is refused as radioOnAir, not noTransmitSlice. Ruling
+//               8.11 on a hosting desktop: radioPttKeyRefusal, the radio's
+//               own PTT keys the desktop's active slice. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -702,19 +709,77 @@ TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device, int* mo
     }
     // With a slice of its own it may transmit on, the unkeyed flag moves
     // there once the key is admitted (N-2); the caller moves it. A move
-    // that could not happen now (keyed, or the flag frozen) is refused.
-    MoxController* mox = m_radioModel->moxController();
-    if ((mox == nullptr || !mox->isMox()) && !arbiter->isFrozen()) {
-        for (int id : ownership->ownedBy(device)) {
-            if (mayTransmit(id)) {
-                if (moveTo != nullptr) {
-                    *moveTo = id;
-                }
-                return {};
-            }
+    // that could not happen now is refused. TX rulings (item 4): "unkeyed"
+    // is the radio back in receive, as requestHandoff reads it, so a key
+    // in the TX-to-RX tail or while the flag is frozen is told the radio
+    // is on the air, not that it has no slice.
+    int own = -1;
+    for (int id : ownership->ownedBy(device)) {
+        if (mayTransmit(id)) {
+            own = id;
+            break;
         }
     }
-    return TxRefusals::noTransmitSlice();
+    if (own < 0) {
+        return TxRefusals::noTransmitSlice();
+    }
+    MoxController* mox = m_radioModel->moxController();
+    const bool inReceive = mox == nullptr || (!mox->isMox() && mox->state() == MoxState::Rx);
+    if (!inReceive || arbiter->isFrozen()) {
+        return TxRefusals::radioOnAir();
+    }
+    if (moveTo != nullptr) {
+        *moveTo = own;
+    }
+    return {};
+}
+
+TxRefusal StationServer::radioPttKeyRefusal(int* moveTo)
+{
+    if (moveTo != nullptr) {
+        *moveTo = -1;
+    }
+    const QByteArray station = SliceOwnership::stationDevice();
+    // A Core with no hosting desktop keeps ruling 8.11 as it is: the
+    // radio's own PTT transmits where the flag is.
+    if (m_radioModel.isNull() || m_radioModel->txSliceArbiter() == nullptr
+        || !keyerSharesSlices(station)) {
+        return {};
+    }
+    const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    const int flag = arbiter->txBoundSliceId();
+    if (flag < 0 || m_radioModel->sliceById(flag) == nullptr) {
+        return {};
+    }
+    // TX rulings (JJ, 2026-09-30, ruling 8.11 for a hosting desktop): its
+    // footswitch and mic PTT key the desktop's active slice, wherever it
+    // is, even one another device controls. The flag on a slice the
+    // desktop controls, or on one nobody controls, is its own choice of
+    // transmit slice and stays.
+    const QByteArray subject = ownership->mark(flag).subject();
+    if (subject.isEmpty() || subject == station) {
+        return {};
+    }
+    const int active = ownership->activeRxFor(station);
+    if (active < 0 || m_radioModel->sliceById(active) == nullptr) {
+        return TxRefusals::noTransmitSlice();
+    }
+    if (active == flag) {
+        return {};
+    }
+    // The move happens only once the key is admitted, never while the
+    // radio is on the air or the flag is frozen; a key that cannot move
+    // it is refused rather than keying another device's slice.
+    MoxController* mox = m_radioModel->moxController();
+    const bool inReceive = mox == nullptr || (!mox->isMox() && mox->state() == MoxState::Rx);
+    if (!inReceive || arbiter->isFrozen()) {
+        return TxRefusals::radioOnAir();
+    }
+    if (moveTo != nullptr) {
+        *moveTo = active;
+    }
+    return {};
 }
 
 void StationServer::onSliceClosedForHolder(int sliceId)

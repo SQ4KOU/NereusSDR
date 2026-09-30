@@ -877,6 +877,16 @@
 //               N-2): or, for a keyer that shares slices, on any other
 //               device's slice; the flag moves after askKey admits. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (JJ's ruling 8.11 for a hosting desktop): the
+//               radio's own PTT on a hosting desktop moves the flag to the
+//               desktop's active slice after askKey admits, and keys there
+//               (radioPttKeyRefusal). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (listened slice): a device's attenuator and
+//               preamp writes are refused while the slice it is shown is
+//               one it only listens to (listenerChangeReason). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1597,6 +1607,15 @@ constexpr const char* kOutboundWriteReason =
 bool isTunerTransmitPathProperty(const QByteArray& name)
 {
     return name == "isOperate" || name == "isBypass" || name == "antennaA";
+}
+
+// TX rulings (JJ, 2026-09-30): the stepAtt properties the RX applet's
+// attenuator and preamp controls write, for either ADC. A listener of the
+// slice it is shown may not change them.
+bool isListenedAttProperty(const QByteArray& name)
+{
+    return name == "attenuationDb" || name == "preampMode" || name == "rx1Preamp"
+        || name == "rx2AttenuationDb" || name == "rx2PreampMode";
 }
 
 // DSP > Options TX combos persist to DspOptions<Setting><Mode>Tx
@@ -2454,7 +2473,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // Slice control plan Task 11 (ruling Q8): a key that would land
             // on a slice the device took from another device and has not
             // chosen, with no other slice it may transmit on, is refused.
-            // The radio's own PTT transmits where the flag is (ruling 8.11).
+            // The radio's own PTT transmits where the flag is (ruling 8.11)
+            // on a Core with no desktop; on a hosting desktop it keys the
+            // desktop's active slice (radioPttKeyRefusal, below).
             // Asked after the holder's own refusals, so another device's
             // hold is still named first.
             // Take-over re-review (N-2): the slice of its own the flag moves
@@ -2471,12 +2492,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 // hold transmit (the hosting desktop included). Re-review
                 // (N-1): nor, for a keyer that shares slices, on any other
                 // device's slice. The radio's own PTT (RadioPtt) is not
-                // asked: today it transmits where the flag is, and whether
-                // a hosting desktop's PTT may key a slice it lost is open
-                // for JJ's ruling (8.11 covers a Core with no desktop).
+                // asked this; it has its own rule, below.
                 if (const TxRefusal others = othersSliceKeyRefusal(request.deviceId, &moveTo);
                     !others.isEmpty()) {
                     return {KeyingVerdict::Refuse, others};
+                }
+            } else if (request.source == TransmitHolder::Source::RadioPtt
+                       && m_transmitHolder->keyRefusalFor(request.deviceId, request.program)
+                              .isEmpty()) {
+                // TX rulings (JJ, 2026-09-30, ruling 8.11 for a hosting
+                // desktop): the desktop's footswitch and mic PTT key the
+                // desktop's active slice, even one another device
+                // controls: the flag moves there once the key is admitted,
+                // in the N-2 order. A Core with no desktop keeps 8.11 as it
+                // is, transmitting where the flag is.
+                if (const TxRefusal ptt = radioPttKeyRefusal(&moveTo); !ptt.isEmpty()) {
+                    return {KeyingVerdict::Refuse, ptt};
                 }
             }
             const quint64 epochBefore = m_transmitHolder->epoch();
@@ -2487,8 +2518,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // made is released as an unstarted one.
             if (moveTo >= 0 && answer.verdict == KeyingVerdict::Admit) {
                 TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
-                if (arbiter == nullptr || !arbiter->requestHandoff(moveTo, request.deviceId)
-                    || arbiter->txBoundSliceId() != moveTo) {
+                // The radio's own PTT moves the flag to a slice the desktop
+                // may only listen to (ruling 8.11 for a hosting desktop), so
+                // it asks without a requester, whose slices it would check.
+                const bool moved = arbiter != nullptr
+                    && (request.source == TransmitHolder::Source::RadioPtt
+                            ? arbiter->requestHandoff(moveTo)
+                            : arbiter->requestHandoff(moveTo, request.deviceId));
+                if (!moved || arbiter->txBoundSliceId() != moveTo) {
                     qCWarning(lcStation) << "The transmit flag could not move to the keyer's slice;"
                                             " the key is refused";
                     if (m_transmitHolder->isTakeUnstarted()
@@ -7349,6 +7386,20 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         // their commands, which the Core sends to the device.
         stepAttRefusal = AccessorySettingsModel::readOnlyReason();
     }
+    // TX rulings (JJ, 2026-09-30): the attenuator and preamp act on the
+    // slice the writer is shown. On a slice it only listens to, which
+    // another device controls, they are that controller's to change, as
+    // the RX applet greys them. Read once for the batch.
+    QString listenedAttRefusal;
+    if (stepAttWrite && !m_radioModel.isNull()) {
+        const QByteArray writer = peerFor(transport).sessionDeviceId;
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const int shown = writer.isEmpty() ? -1 : ownership->activeRxFor(writer);
+        if (shown >= 0 && ownership->isLive(shown) && ownership->isListening(writer, shown)
+            && !SliceAccessPolicy::mayChange(*ownership, writer, shown)) {
+            listenedAttRefusal = listenerChangeReason(shown);
+        }
+    }
     // R-R3-47: the RF-Kit switch is the Core's, changed by setRfKitEnabled.
     const bool radioWrite = message.objectKey == QByteArray(kRadioKey);
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
@@ -7460,6 +7511,10 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
 
         if (!stepAttRefusal.isEmpty()) {
             refusals.insert(update.name, stepAttRefusal);
+            continue;
+        }
+        if (!listenedAttRefusal.isEmpty() && isListenedAttProperty(update.name)) {
+            refusals.insert(update.name, listenedAttRefusal);
             continue;
         }
         if (stepAttWrite && StepAttenuatorFacade::isTransmitSetting(update.name)) {
@@ -10157,10 +10212,10 @@ void StationServer::clearTransmitSelection(const QByteArray& former, int sliceId
     // flag parked on this slice loses that selection as well, the taker
     // included (taking control grants no transmit). The radio's own PTT
     // keeps ruling 8.11: it transmits where the flag is.
-    // Take-over re-review: ruling 8.11 covers a Core with no desktop. On a
+    // TX rulings (JJ, 2026-09-30): that is a Core with no desktop. On a
     // hosting desktop that lost this slice to a take, its footswitch or mic
-    // PTT today still transmits where the flag is; that case is open for
-    // JJ's ruling, not settled.
+    // PTT moves the flag to the desktop's active slice once the key is
+    // admitted and keys there (radioPttKeyRefusal).
     const SliceModel* txSlice = m_radioModel->txBoundSlice();
     // Take-over fix wave (I-2): the flag stays on this slice when nobody
     // holds transmit (or the radio's own PTT does), so the former

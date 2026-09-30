@@ -38,12 +38,18 @@
 //               (M-1); exact refusal words and a take-back of a slice made
 //               again (M-2). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (item 3): the Core refuses a listener's
+//               attenuator and preamp writes while its shown slice is one
+//               it listens to. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include "core/session/SliceAccessController.h"
 #include "core/session/SliceAccessPolicy.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 
 #include <QSignalSpy>
 
@@ -385,6 +391,64 @@ private slots:
         QCOMPARE(core.model->sliceOwnership()->stationActiveSlice(), stationSlice);
         QTRY_COMPARE(idList(accessOf(appB, 0, "activeRxDeviceIds")),
                      (QStringList{a.id(), b.id()}));
+    }
+
+    // TX rulings (item 3, JJ): the attenuator and preamp act on the slice a
+    // device is shown. While that is a slice it only listens to, the Core
+    // refuses its writes in the listener's words; on its own slice they
+    // apply, and the controller's always do.
+    void aListenerIsRefusedTheAttenuatorAndPreamp()
+    {
+        Core core;
+        StepAttenuatorController stepAtt;
+        stepAtt.setTickTimerEnabled(false);
+        core.model->setStepAttController(&stepAtt);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        LoopbackTransport* appB = core.signIn(b, kShares);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QTRY_VERIFY(holds(appB, QStringLiteral("stepAtt")));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        QTRY_VERIFY(holds(appB, QStringLiteral("slice:0")));
+        const QByteArray bId = b.key.fingerprint();
+        const int bOwn = core.model->sliceOwnership()->activeFor(bId);
+        QVERIFY(bOwn >= 0 && bOwn != 0);
+        QVERIFY(accepted(core.invoke(appB, "setActiveSliceById", {int64("sliceId", 0)})));
+        QCOMPARE(core.model->sliceOwnership()->activeRxFor(bId), 0);
+
+        StepAttenuatorFacade* facade = core.model->stepAttFacade();
+        const int dB = facade->attenuationDb();
+        const int mode = facade->preampMode();
+        const QString words = listenerWords(QStringLiteral("A"), QStringLiteral("iPhone"));
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "stepAtt", {int64("attenuationDb", dB + 5), int64("preampMode", mode == 0 ? 1 : 0)},
+            701)));
+        QTRY_VERIFY(!propertyResult(appB, 701).isEmpty());
+        const QJsonArray refused =
+            propertyResult(appB, 701).value(QStringLiteral("results")).toArray();
+        QCOMPARE(refused.size(), 2);
+        for (const QJsonValue& r : refused) {
+            QCOMPARE(r.toObject().value(QStringLiteral("accepted")).toBool(true), false);
+            QCOMPARE(r.toObject().value(QStringLiteral("reason")).toString(), words);
+        }
+        QCOMPARE(facade->attenuationDb(), dB);
+        QCOMPARE(facade->preampMode(), mode);
+
+        // The controller of slice A changes it.
+        appA->sendText(SessionMessages::encode(
+            SessionMessages::propertyWrite("stepAtt", {int64("attenuationDb", dB + 5)}, 702)));
+        QTRY_COMPARE(facade->attenuationDb(), dB + 5);
+
+        // Shown its own slice again, the listener changes it too.
+        QVERIFY(accepted(core.invoke(appB, "setActiveSliceById", {int64("sliceId", bOwn)})));
+        QCOMPARE(core.model->sliceOwnership()->activeRxFor(bId), bOwn);
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::propertyWrite("stepAtt", {int64("attenuationDb", dB + 7)}, 703)));
+        QTRY_COMPARE(facade->attenuationDb(), dB + 7);
     }
 
     // ── Stop listening ───────────────────────────────────────────────────
