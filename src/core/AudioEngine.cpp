@@ -19,6 +19,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec: setRadioOutputTap, the
+//                                    station's program at the master
+//                                    volume for the radio's own speaker
+//                                    out. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6: the AF
 //                                    level is applied in the mix to the
 //                                    controller's sums (JJ's ruling, a
@@ -1846,6 +1851,27 @@ void AudioEngine::invokeMixTap(MixTapGate& gate, const float* samples, int frame
     }
 }
 
+void AudioEngine::setRadioOutputTap(MasterMixAudioTap* tap)
+{
+    std::lock_guard<std::mutex> lock(m_radioOutputControlMutex);
+    closeAndDrainMixTap(m_radioOutputTap);
+    m_radioOutputTap.tap.store(tap, std::memory_order_seq_cst);
+    m_radioOutputTap.admissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+void AudioEngine::clearRadioOutputTap(MasterMixAudioTap* tap)
+{
+    if (tap == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_radioOutputControlMutex);
+    closeAndDrainMixTap(m_radioOutputTap);
+    MasterMixAudioTap* expected = tap;
+    m_radioOutputTap.tap.compare_exchange_strong(expected, nullptr, std::memory_order_seq_cst,
+                                                 std::memory_order_seq_cst);
+    m_radioOutputTap.admissionClosed.store(false, std::memory_order_seq_cst);
+}
+
 int AudioEngine::acquireOwnerMix()
 {
     std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
@@ -2619,6 +2645,39 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
         for (int i = 0; i < stereoFloats; ++i) {
             mix[i] *= vol;
         }
+    }
+
+    // Radio codec (2026-09-30): the radio's own speaker out. Thetis hands
+    // the receive audio mixer's output, every receiver and MON, to the
+    // radio when the codec is the radio's (netInterface.c:1571-1575
+    // [v2.10.3.15]):
+    //   switch (pcm->audioCodecId)
+    //   {
+    //   case HERMES:
+    //       SendpOutboundRx(OutBound);
+    //       break;
+    // which makes OutBound the output of audio mixer 0 (cmaster.c:408-412
+    // [v2.10.3.15]: SetAAudioMixOutputPointer (0, 0, pcm->OutboundRx);),
+    // at the AF volume, the mixer's own volume (cmaster.cs:954-957
+    // [v2.10.3.15]):
+    //   public static void CMSetAudioVolume(double volume)
+    //   {
+    //       cmaster.SetAAudioMixVolume((void*)0, 0, volume);
+    //   }
+    // Here: the station's program (the speakers' mix, already at master
+    // volume above, plus the headphones' at master volume), or silence
+    // while the master is muted, so the radio's stream never stops.
+    if (m_radioOutputTap.tap.load(std::memory_order_acquire) != nullptr) {
+        std::vector<float>& radioOut = m_programScratch;
+        if (m_masterMuted.load(std::memory_order_acquire)) {
+            std::fill(radioOut.begin(), radioOut.begin() + stereoFloats, 0.0f);
+        } else {
+            for (int i = 0; i < stereoFloats; ++i) {
+                radioOut[static_cast<size_t>(i)] =
+                    mix[static_cast<size_t>(i)] + hpMix[static_cast<size_t>(i)] * vol;
+            }
+        }
+        invokeMixTap(m_radioOutputTap, radioOut.data(), mixed);
     }
 
     // Same snapshot idiom as the VAX tap: one load into a local so the

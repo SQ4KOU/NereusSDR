@@ -90,6 +90,9 @@
 //   2026-09-30 - Radio codec: byte 50 starts with mic boost on (0x22), as
 //                Thetis mic_boost = true (console.cs:13259 [v2.10.3.15]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the receive audio stream to port 1028
+//                (serviceRadioAudioSend). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -270,6 +273,10 @@ class P2RadioConnection : public RadioConnection {
 public:
     explicit P2RadioConnection(QObject* parent = nullptr);
     ~P2RadioConnection() override;
+
+    // Radio codec (2026-09-30): the receive audio goes to the radio's own
+    // speaker out on port 1028 (base + 4), from the send thread.
+    bool carriesRadioAudio() const noexcept override { return true; }
 
     int getAdcForDdc(int ddc) const override;
 
@@ -855,6 +862,32 @@ private:
     void txIqSenderMain();
     void resetTxSendStats();
 
+    // Radio codec (2026-09-30): the receive audio stream to the radio's
+    // speaker out. Thetis sends it from the same outbound path as the
+    // transmit I/Q, one packet per 64 L/R samples (netInterface.c:1531
+    // [v2.10.3.15]: prn->audio[i].spp = 64; // LR-samples per packet):
+    // a 4-byte big-endian sequence number, then 64 16-bit big-endian L/R
+    // pairs, to base_outbound_port + 4 (network.c:1276-1294, 1363-1376
+    // [v2.10.3.15]). The send thread sends a packet whenever the radio's
+    // audio buffer, estimated from elapsed time at 48 kHz, is below the
+    // target lead and the ring has one due (takeRadioAudio).
+    static constexpr int kRadioAudioSpp = 64;
+    static constexpr int kRadioAudioPacketBytes = 4 + kRadioAudioSpp * 4;
+    static constexpr int kRadioAudioTargetLeadFrames = 960;  // 20 ms at 48 kHz
+    // Composes one packet of `lr` (kRadioAudioSpp pairs) into buf and
+    // advances m_rxOutSeqNo.
+    void composeRadioAudioPacket(const float* lr, char* buf);
+    // One pass of the send thread at nowNs: sends every audio packet due.
+    // Returns the packets sent. Send thread (or the caller's, in tests).
+    int serviceRadioAudioSend(qint64 nowNs, TxIqFrameSink sink, void* ctx);
+    quint32 m_rxOutSeqNo{0};                  // prn->rx[0].rx_out_seq_no; send thread
+    double m_radioAudioLead{0.0};             // radio's buffer, estimated; send thread
+    qint64 m_radioAudioLastNs{-1};            // send thread
+    std::atomic<bool> m_radioAudioSwap{false};  // prn->lr_audio_swap, set at sender start
+    quint16 m_radioAudioDestPort{0};
+    std::atomic<quint64> m_radioAudioPacketsSent{0};
+    std::atomic<quint64> m_radioAudioSendErrors{0};
+
     std::unique_ptr<QThread> m_txIqSender;
     std::atomic<bool> m_txIqSenderRun{false};
     qintptr m_txIqSocketFd{-1};
@@ -1198,6 +1231,21 @@ public:
         }, capture);
     }
     double txIqRadioLeadForTest() const { return m_txIqPacer.estimate; }
+    // Radio codec: one pass of the audio send at nowNs, packets captured.
+    // The send thread must not be running.
+    int serviceRadioAudioSendForTest(qint64 nowNs, TxIqCapture* capture) {
+        Q_ASSERT(!m_txIqSender);
+        return serviceRadioAudioSend(nowNs, [](void* ctx, const char* frame, int len) {
+            auto* c = static_cast<TxIqCapture*>(ctx);
+            if (c->refuse > 0) {
+                --c->refuse;
+                return TxIqSinkResult::Retry;
+            }
+            c->frames.append(QByteArray(frame, len));
+            return TxIqSinkResult::Sent;
+        }, capture);
+    }
+    void setLrAudioSwapForTest(bool swap) { m_radioAudioSwap.store(swap); }
     // Runs the real send thread against `radio` (a loopback receiver in
     // tests) on the socket init() bound, without SendStart.
     void startTxIqSenderForTest(const QHostAddress& radio) {

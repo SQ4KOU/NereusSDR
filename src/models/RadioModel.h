@@ -9,8 +9,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam.
-//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
+//                 the radio speaker output tap. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - Radio Status PTT source: a remote window reads a key from
 //                 a device that does not hold transmit as Remote, as the
 //                 Core's window does; both keep the key's source through a
@@ -615,6 +616,7 @@ enum class PreampMode;
 class ReceiverManager;
 class RemoteDevicesState;
 class AudioEngine;
+class MasterMixAudioTap;
 class WdspEngine;
 class RxDspWorker;
 class DspControlThread;
@@ -4334,6 +4336,8 @@ public:
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
     // Radio codec lane: the mic codec wiring alone, for an injected connection.
     void wireMicCodecForTest() { connectMicCodecSignals(); }
+    void wireRadioSpeakerOutputForTest() { connectRadioSpeakerOutput(); }
+    void unwireRadioSpeakerOutputForTest() { disconnectRadioSpeakerOutput(); }
     // Task 13: wire the injected connection's user digital inputs to the
     // TX inhibit monitor, and undo it, without the full connect pipeline.
     void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
@@ -6171,6 +6175,13 @@ private:
     // and bias reach the connection on connect and on every change (Thetis
     // SetMicGain and the Setup mic panel). Called from wireConnectionSignals.
     void connectMicCodecSignals();
+    // Radio codec (2026-09-30): the station's program to the radio's own
+    // speaker out (AudioEngine::setRadioOutputTap into
+    // RadioConnection::pushRadioAudio), for a connection that carries it.
+    // Called from wireConnectionSignals; teardownConnection removes it
+    // before the connection goes.
+    void connectRadioSpeakerOutput();
+    void disconnectRadioSpeakerOutput();
     // Task 13: the radio's user digital inputs reach TxInhibitMonitor
     // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
     // wireConnectionSignals.
@@ -7616,6 +7627,9 @@ private:
     //
     // Plan: 3M-1b Task L.1. Pre-code review §0.3 + master design §5.2.4.
     std::unique_ptr<PcMicSource>           m_pcMicSource;
+    // Radio codec (2026-09-30): the audio engine's radio output tap,
+    // forwarding to the connection (connectRadioSpeakerOutput).
+    std::unique_ptr<MasterMixAudioTap>     m_radioSpeakerTap;
     std::unique_ptr<RadioMicSource>        m_radioMicSource;
     // VAX TX consumer (added 2026-05-06, eager-borg-d64bed).  Pulls
     // audio from /nereussdr-vax-tx shared memory via AudioEngine and

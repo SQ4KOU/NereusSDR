@@ -17,7 +17,10 @@
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
-//               do. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//               do. The station's program goes to the radio's own speaker
+//               out (connectRadioSpeakerOutput), and the HL2's Swap audio
+//               channels reaches the connection. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: A remote RX DSP > Options apply waits while the radio is on
 //               the air, as the TX half does. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -9702,14 +9705,19 @@ void RadioModel::applyHl2Options()
     const bool ext10MHz = m_hl2Options.ext10MHz();
     const bool cl2Enabled = m_hl2Options.cl2Enabled();
     const int cl2FreqKHz = m_hl2Options.cl2FreqKHz();
+    // Radio codec (2026-09-30): Swap audio channels, mi0bot
+    // setup.cs:38065 chkSwapAudioChannels [@c26a8a4].
+    const bool swapAudio = m_hl2Options.swapAudioChannels();
     QMetaObject::invokeMethod(p1, [p1, bandVolts, psSync, txLatencyMs, pttHangMs,
-                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqKHz]() {
+                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqKHz,
+                                   swapAudio]() {
         p1->setHl2BandVolts(bandVolts);
         p1->setHl2PsSync(psSync);
         p1->setHl2TxLatency(txLatencyMs);
         p1->setHl2PttHang(pttHangMs);
         p1->setHl2ResetOnDisconnect(resetOnDisconnect);
         p1->setHl2Clock(ext10MHz, cl2Enabled, cl2FreqKHz);
+        p1->setHl2SwapAudioChannels(swapAudio);
     });
 }
 
@@ -18992,6 +19000,9 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // the radio on connect and on every change (Thetis SetMicGain and the
     // Setup mic panel handlers). See connectMicCodecSignals.
     connectMicCodecSignals();
+    // Radio codec (2026-09-30): the receive audio to the radio's own
+    // speaker out.
+    connectRadioSpeakerOutput();
 
     // ── Task 2.5 of P1 full-parity epic: pureSig → setPuresignalRun ─────────
     // Wire the user PureSignal-enable toggle to the wire-bit setter added in
@@ -19383,6 +19394,54 @@ void RadioModel::connectMicPttDisabledSignal()
 // RadioConnection::setMicTipRing takes "tip is mic" and writes the inverted
 // wire bit itself, so the model value passes straight through.
 // ---------------------------------------------------------------------------
+namespace {
+
+// Radio codec (2026-09-30): the audio engine's radio output tap. Runs on
+// the DSP thread and only hands the block to the connection's lock-free
+// ring. The engine's clear returns once no call into it runs, so the
+// connection outlives every call.
+class RadioSpeakerOutputTap final : public MasterMixAudioTap {
+public:
+    explicit RadioSpeakerOutputTap(RadioConnection* connection) : m_connection(connection) {}
+    void consume(const float* samples, int frames, int sampleRateHz) noexcept override
+    {
+        if (sampleRateHz != RadioConnection::kRadioAudioRateHz) {
+            return;
+        }
+        m_connection->pushRadioAudio(samples, frames);
+    }
+
+private:
+    RadioConnection* m_connection;
+};
+
+} // namespace
+
+void RadioModel::connectRadioSpeakerOutput()
+{
+    disconnectRadioSpeakerOutput();
+    if (m_connection == nullptr || m_audioEngine == nullptr
+        || !m_connection->carriesRadioAudio()) {
+        return;
+    }
+    // Thetis always sends the receive audio to the radio's codec when the
+    // radio is the audio device (netInterface.c:1571-1575 [v2.10.3.15]);
+    // there is no switch for it.
+    m_radioSpeakerTap = std::make_unique<RadioSpeakerOutputTap>(m_connection);
+    m_audioEngine->setRadioOutputTap(m_radioSpeakerTap.get());
+}
+
+void RadioModel::disconnectRadioSpeakerOutput()
+{
+    if (!m_radioSpeakerTap) {
+        return;
+    }
+    if (m_audioEngine != nullptr) {
+        m_audioEngine->clearRadioOutputTap(m_radioSpeakerTap.get());
+    }
+    m_radioSpeakerTap.reset();
+}
+
 void RadioModel::connectMicCodecSignals()
 {
     if (!m_connection) {
@@ -23319,6 +23378,9 @@ void RadioModel::teardownConnection()
     if (!m_connection) {
         return;
     }
+    // Radio codec (2026-09-30): no more audio into the connection's ring
+    // from the DSP thread; returns once no call into it runs.
+    disconnectRadioSpeakerOutput();
     // Detach the extra mini analyzer from the TX siphon before WDSP queues
     // its channel-close barrier. DestroyAnalyzer follows detach on the
     // transmit lane; a reconnect cannot feed the old display slot.

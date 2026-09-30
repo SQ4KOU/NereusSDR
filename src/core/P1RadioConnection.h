@@ -68,6 +68,12 @@
 //                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the EP2 L/R bytes carry the receive audio
+//                for the radio's own speaker out, swapped as Thetis
+//                sendProtocol1Samples does (networkproto1.c:726-731
+//                [v2.10.3.15]); on the HL2 only when Swap audio channels is
+//                on, as mi0bot (networkproto1.c:1231-1239 [@c26a8a4]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -125,6 +131,9 @@ class P1RadioConnection : public RadioConnection {
 public:
     explicit P1RadioConnection(QObject* parent = nullptr);
     ~P1RadioConnection() override;
+
+    // Radio codec (2026-09-30): the EP2 L/R bytes carry the receive audio.
+    bool carriesRadioAudio() const noexcept override { return true; }
 
     int getAdcForDdc(int ddc) const override;
 
@@ -353,6 +362,12 @@ public slots:
     // From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
     //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
     void setHl2ResetOnDisconnect(bool on);
+
+    // HL2 only: Swap audio channels. mi0bot swaps the L/R audio bytes only
+    // while this is on (default off), where Thetis always swaps them.
+    // From mi0bot ChannelMaster/networkproto1.c:1231 [@c26a8a4]:
+    //   if (prn->swap_audio_channels)				// To cater for different firmware at the hardware, allow control of audio channels swapping
+    void setHl2SwapAudioChannels(bool on);
 
     // HL2 only: the clock options External 10 MHz (CL1 input), Enable CL2
     // and the CL2 frequency (kHz, clamped to 1000..200000: mi0bot's box
@@ -894,6 +909,9 @@ private:
     // HL2 bank 18: reset on Ethernet disconnect, off as mi0bot's
     // create_rnet leaves it (netInterface.c:1724 [@c26a8a4]).
     bool    m_hl2ResetOnDisconnect{false};
+    // HL2 Swap audio channels (setHl2SwapAudioChannels), off as mi0bot's
+    // prn->swap_audio_channels starts. Connection thread.
+    bool    m_hl2SwapAudioChannels{false};
     // HL2 clock options (setHl2Clock): off, off and 116 MHz as mi0bot's
     // designer leaves them (setup.designer.cs:11159 udCl2Freq.Value = 116
     // [@c26a8a4]) until the saved options arrive.
@@ -1109,6 +1127,10 @@ private:
     // Float→int16 + EP2 zone fill helper.
     // Returns true if 63 samples were available and written, false if underrun.
     bool fillTxZone(quint8* zone63) noexcept;
+    // Radio codec (2026-09-30): writes 63 samples of the radio's receive
+    // audio into the L/R bytes (0-3) of each 8-byte slot of an EP2 zone,
+    // after fillTxZone. Leaves them zero while the audio ring has none due.
+    void fillRadioAudioZone(quint8* zone63) noexcept;
     // G-05 follow-up: setMox(false) drops whatever is still queued (and an
     // unused key cushion), so none of it leads the next key.
     void discardTxIqOnUnkey() noexcept;
@@ -1398,8 +1420,10 @@ public:
         frame[8] = 0x7F; frame[9] = 0x7F; frame[10] = 0x7F;
         // C&C bytes: zeros in test context (no codec wired)
         fillTxZone(frame + 16);
+        fillRadioAudioZone(frame + 16);
         frame[520] = 0x7F; frame[521] = 0x7F; frame[522] = 0x7F;
         fillTxZone(frame + 528);
+        fillRadioAudioZone(frame + 528);
         return QByteArray(reinterpret_cast<const char*>(frame), 1032);
     }
 

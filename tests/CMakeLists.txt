@@ -4830,6 +4830,12 @@ target_compile_definitions(tst_radio_model_mic_ptt_wire PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_radio_model_mic_codec_wire)
 target_compile_definitions(tst_radio_model_mic_codec_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# Radio codec lane (2026-09-30): the receive audio reaches the radio's own
+# speaker out (P1 EP2 L/R bytes, P2 port 1028 packets, the engine's radio
+# output tap at master volume and mute).
+nereus_add_test(tst_radio_codec_speaker_out)
+target_compile_definitions(tst_radio_codec_speaker_out PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
 # 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
 # Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.
