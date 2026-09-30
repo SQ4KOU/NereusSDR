@@ -3033,6 +3033,10 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_level_calibration PRIVATE Qt6::WebSockets)
 endif()
 
+# Level calibration procedure (Thetis CalibrateLevel) against a fake meter
+# and a fake spectrum: offsets, refusals, cancel and full restore.
+nereus_add_test(tst_level_calibration_run)
+
 # ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
 # Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged
 # and tunePowerByBandChanged signals, MoxController default states,
