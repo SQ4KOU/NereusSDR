@@ -308,6 +308,10 @@
 //                 curve already holds keeps the curve unchanged, so a late
 //                 Core answer cannot overwrite a newer unsent curve.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - CFC echo fix round 1: that write goes on to the setter's
+//                 own equal-value check, so an integer mirror a restore
+//                 held apart from the curve still follows it. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -3784,12 +3788,15 @@ bool TransmitModel::updatePairedCfcArray(CfcField field, const std::array<int, 1
     CfcProfile::Profile p;
     if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
     if (p.f.size() != 10) { return true; }
-    // The curve already holds these values (as its ten-band mirrors read
-    // them): no change, so the saved curve is kept as it is. Re-encoding
-    // it would change a curve nobody edited, and a late answer from the
-    // Core that repeats a value would then overwrite a newer curve still
-    // waiting to be sent (the cfcPhaseRotatorAndCessbRoundTrip load
-    // failure).
+    // The curve already holds these values (rounded, as its ten-band
+    // mirrors read them): no change to the curve, which is kept as it is.
+    // Re-encoding it would change a curve nobody edited, and a late answer
+    // from the Core that repeats a value would then overwrite a newer
+    // curve still waiting to be sent (the cfcPhaseRotatorAndCessbRoundTrip
+    // load failure). False, not true: the per-band setters then run, each
+    // finds its band unchanged in the curve too, and its own equal-value
+    // check decides the integer mirror, which a restored Thetis profile
+    // can hold apart from the curve.
     bool unchanged = true;
     for (int i = 0; i < 10 && unchanged; ++i) {
         const auto k = static_cast<std::size_t>(i);
@@ -3798,7 +3805,7 @@ bool TransmitModel::updatePairedCfcArray(CfcField field, const std::array<int, 1
                                                           : p.e[k];
         unchanged = std::lround(held) == values[k];
     }
-    if (unchanged) { return true; }
+    if (unchanged) { return false; }
     for (int i = 0; i < 10; ++i) {
         const double value = values[static_cast<std::size_t>(i)];
         if (field == CfcField::Frequency) {
@@ -3823,8 +3830,11 @@ bool TransmitModel::updatePairedCfc(CfcField field, int index, double value)
 {
     CfcProfile::Profile p;
     if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
-    // As updatePairedCfcArray: a value the curve already holds (as its
-    // integer mirror reads it) is no change, and the curve is kept.
+    // As updatePairedCfcArray: a value the curve already holds (rounded,
+    // as its integer mirror reads it) is no change to the curve, which is
+    // kept. False hands the write to the setter's own mirror path and its
+    // equal-value check: the mirror can differ from the curve after a
+    // restore, and must still follow a real write.
     const auto held = [&p, field, index]() -> std::optional<double> {
         if (field == CfcField::Precomp) { return p.precompDb; }
         if (field == CfcField::PostEqGlobal) { return p.postEqGainDb; }
@@ -3834,7 +3844,7 @@ bool TransmitModel::updatePairedCfc(CfcField field, int index, double value)
         if (field == CfcField::Compression) { return p.g[k]; }
         return p.e[k];
     }();
-    if (held && std::lround(*held) == std::lround(value)) { return true; }
+    if (held && std::lround(*held) == std::lround(value)) { return false; }
     if (field == CfcField::Precomp) { p.precompDb = value; }
     else if (field == CfcField::PostEqGlobal) { p.postEqGainDb = value; }
     else {

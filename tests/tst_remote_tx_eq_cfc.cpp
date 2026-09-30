@@ -688,8 +688,14 @@ void TstRemoteTxEqCfc::lateResultKeepsTheNewerCfcCurve()
     QCOMPARE(windowTx.cfcPrecompDb(), 6);
 
     // The pre-comp answer lands before the window's next send.
+    QSignalSpy completed(s.client.get(), &StationClient::propertyWriteCompleted);
     s.coreEnd->setHoldsOutgoing(false);
     QCoreApplication::sendPostedEvents();
+    int precompAnswers = 0;
+    for (const QList<QVariant>& args : completed) {
+        if (args.at(1).toByteArray() == QByteArrayLiteral("cfcPrecompDb")) { ++precompAnswers; }
+    }
+    QCOMPARE(precompAnswers, 1);
     QCOMPARE(windowTx.cfcParaEqData(), cfcCurve);
 
     QTRY_COMPARE(coreTx.cfcParaEqData(), cfcCurve);
