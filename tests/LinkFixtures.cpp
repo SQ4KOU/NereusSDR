@@ -73,6 +73,10 @@
 //               and coreInterfaces, and the coreInterfaces step. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: The connect hook returns why a client's connection did not
+//               open, and the connect and openOwnConnection steps report it
+//               before waiting for the station. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -325,9 +329,9 @@ std::function<bool()>& settleCheck()
     return check;
 }
 
-std::function<void(LoopbackTransport*, StationServer&)>& connectClientHook()
+std::function<QString(LoopbackTransport*, StationServer&)>& connectClientHook()
 {
-    static std::function<void(LoopbackTransport*, StationServer&)> hook;
+    static std::function<QString(LoopbackTransport*, StationServer&)> hook;
     return hook;
 }
 
@@ -1266,7 +1270,7 @@ void LinkFixtures::setSettleCheck(std::function<bool()> settled)
 }
 
 void LinkFixtures::setConnectClient(
-    std::function<void(LoopbackTransport* client, StationServer& server)> connect)
+    std::function<QString(LoopbackTransport* client, StationServer& server)> connect)
 {
     connectClientHook() = std::move(connect);
 }
@@ -1825,7 +1829,10 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             {
                 const LinkVirtualClock::Hold connecting(clock);
                 if (connectClientHook()) {
-                    connectClientHook()(&transport, server);
+                    const QString failure = connectClientHook()(&transport, server);
+                    if (!failure.isEmpty()) {
+                        return QStringLiteral("%1: %2").arg(describe(index), failure);
+                    }
                 } else {
                     auto* stationEnd =
                         new LoopbackTransport(QStringLiteral("conformance"), &server);
@@ -1872,8 +1879,13 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 QStringLiteral("conformance-%1-client").arg(client->name));
             client->transport = client->owned.get();
             if (connectClientHook()) {
-                // Task 28: over a control channel of its own.
-                connectClientHook()(client->transport, server);
+                // Task 28: over a control channel of its own. A channel that
+                // did not open says so here, with its stage, rather than as
+                // a missing greeting after the reply wait.
+                const QString failure = connectClientHook()(client->transport, server);
+                if (!failure.isEmpty()) {
+                    return QStringLiteral("%1: %2").arg(describe(index), failure);
+                }
             } else {
                 auto* stationEnd = new LoopbackTransport(
                     QStringLiteral("conformance-%1").arg(client->name), &server);
