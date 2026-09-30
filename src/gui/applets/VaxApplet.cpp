@@ -41,6 +41,12 @@
 //                 on each of its controls, instead of hidden. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - JJ's ruling: a window that runs the radio directly hides
+//                 the section (it can never have one); a remote window
+//                 keeps it, disabled with its reason while the Core shares
+//                 no VAX. Its labels grey when it is disabled. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "VaxApplet.h"
@@ -146,6 +152,17 @@ constexpr auto kSavedStationTooltip = "VaxSavedStationTooltip";
 // While the Core computer section cannot be used, each of its controls
 // shows the reason in place of its own tooltip; the tooltip comes back
 // when the section can be used again (the TX row's pattern below).
+// A label in the Core computer section: its own color, and the disabled
+// text color while the section is disabled, as the title has.
+QString stationLabelStyle(const char* color, int pixelSize)
+{
+    return QStringLiteral("QLabel { color: %1; font-size: %2px; }"
+                          "QLabel:disabled { color: %3; }")
+        .arg(QLatin1String(color))
+        .arg(pixelSize)
+        .arg(QLatin1String(Style::kDisabledText));
+}
+
 void showStationReason(QWidget* w, bool available, const QString& reason)
 {
     if (w == nullptr) {
@@ -417,12 +434,12 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
         row->setSpacing(4);
 
         auto* chLabel = new QLabel(QStringLiteral("VAX %1:").arg(channel), m_stationSection);
-        chLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(Style::kTextSecondary));
+        chLabel->setStyleSheet(stationLabelStyle(Style::kTextSecondary, 11));
         chLabel->setFixedWidth(44);
         row->addWidget(chLabel);
 
         m_stationTagsLbl[i] = new QLabel(QStringLiteral("\u2014"), m_stationSection);
-        m_stationTagsLbl[i]->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 11px; }"));
+        m_stationTagsLbl[i]->setStyleSheet(stationLabelStyle("#506070", 11));
         m_stationTagsLbl[i]->setFixedWidth(56);
         row->addWidget(m_stationTagsLbl[i]);
 
@@ -452,7 +469,7 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
         devRow->setContentsMargins(48, 0, 0, 0);
         devRow->setSpacing(0);
         m_stationDeviceLbl[i] = new QLabel(QString(), m_stationSection);
-        m_stationDeviceLbl[i]->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 10px; }"));
+        m_stationDeviceLbl[i]->setStyleSheet(stationLabelStyle("#506070", 10));
         devRow->addWidget(m_stationDeviceLbl[i]);
         devRow->addStretch();
         box->addLayout(devRow);
@@ -462,11 +479,11 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(4);
     auto* txLabel = new QLabel(QStringLiteral("TX:"), m_stationSection);
-    txLabel->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(Style::kTextSecondary));
+    txLabel->setStyleSheet(stationLabelStyle(Style::kTextSecondary, 11));
     txLabel->setFixedWidth(44);
     row->addWidget(txLabel);
     m_stationTxTagsLbl = new QLabel(QStringLiteral("\u2014"), m_stationSection);
-    m_stationTxTagsLbl->setStyleSheet(QStringLiteral("QLabel { color: #506070; font-size: 11px; }"));
+    m_stationTxTagsLbl->setStyleSheet(stationLabelStyle("#506070", 11));
     m_stationTxTagsLbl->setFixedWidth(56);
     row->addWidget(m_stationTxTagsLbl);
     m_stationTxMeter = new MeterSlider(m_stationSection);
@@ -482,16 +499,18 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
     box->addLayout(row);
 
     vbox->addWidget(m_stationSection);
-    // Disabled with its reason, never hidden, until a Core sends its VAX.
+    // A window that runs the radio directly can never have the section:
+    // its own rows above are the Core computer's, so it is hidden there.
+    // In a remote window it stays in place, disabled with its reason,
+    // until the Core sends its VAX.
+    m_stationSection->setVisible(m_model != nullptr && !m_model->ownsLocalDsp());
     applyStationAvailability();
     setStationTransmitPermitted(false, QString());
 }
 
 QString VaxApplet::stationUnavailableReason() const
 {
-    if (m_model == nullptr || m_model->ownsLocalDsp()) {
-        return QStringLiteral("This computer runs the Core, so its VAX channels are the rows above.");
-    }
+    // Only a remote window shows the section (a local one hides it).
     return QStringLiteral("The Core computer is not sharing its VAX channels.");
 }
 

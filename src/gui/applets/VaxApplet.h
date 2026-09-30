@@ -42,6 +42,11 @@
 //                 not apply, is disabled with a plain reason instead of
 //                 hidden. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30: JJ's ruling: hidden in a window that runs the radio
+//                 directly (it can never have the section); in a remote
+//                 window disabled with its reason while the Core shares no
+//                 VAX, its labels greyed. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -107,7 +112,9 @@ public:
     // and transmit row, each control changing the Core's through the
     // object. Usable only while `shown` (the Core sends the object);
     // otherwise, and with a null `vax`, it stays in place disabled, each
-    // control showing the plain reason (never hidden).
+    // control showing the plain reason. A window that runs the radio
+    // directly can never have the section (its own rows are the Core
+    // computer's), so there it is hidden.
     void setStationVax(StationVax* vax, bool shown);
     /// The section's TX row follows this device's transmit permission, as
     /// the Core takes the transmit level only from a device that may

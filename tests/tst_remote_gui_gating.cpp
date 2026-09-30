@@ -3732,12 +3732,10 @@ private slots:
             ownRows(localApplet, static_cast<MeterSlider*>(nullptr));
         QCOMPARE(localSliders.size(), 5);
         QVERIFY(localSliders.constLast()->isEnabled());
+        // JJ's ruling (2026-09-30): a window that runs the radio directly
+        // can never have the section, so it is hidden there.
         QVERIFY(localApplet.stationSectionForTest() != nullptr);
-        QVERIFY(localApplet.stationSectionForTest()->isVisibleTo(&localApplet));
-        QVERIFY(!localApplet.stationSectionForTest()->isEnabled());
-        QCOMPARE(localApplet.stationSectionForTest()->toolTip(),
-                 QStringLiteral("This computer runs the Core, so its VAX channels are the rows "
-                                "above."));
+        QVERIFY(!localApplet.stationSectionForTest()->isVisibleTo(&localApplet));
 
         // VFO flag's VAX tab selector: a pick moves the remote slice.
         VfoWidget remoteFlag;

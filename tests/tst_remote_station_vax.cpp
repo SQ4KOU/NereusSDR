@@ -11,6 +11,11 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Created (iPhone app plan Task 25,
 //                                    R-IOS-18). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  JJ's ruling: a local window hides the
+//                                    section; a remote one shows it disabled
+//                                    with its reason, labels greyed, while
+//                                    the Core shares no VAX. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -145,10 +150,11 @@ private slots:
         QFile::remove(path + QStringLiteral(".bak"));
     }
 
-    // A local window's own rows are the Core computer's, so its "Core
-    // computer" section cannot be used: it stays in place, disabled, and
-    // each of its controls says why in plain words (disabled, never hidden).
-    void aLocalWindowShowsTheSectionDisabled()
+    // JJ's ruling (2026-09-30): a window that runs the radio directly can
+    // never have a "Core computer" section (its own rows are the Core
+    // computer's), so the section is hidden there; a remote window keeps
+    // it, disabled with its reason while the Core shares no VAX.
+    void aLocalWindowHidesTheSection()
     {
         RadioModel local;
         AudioEngine audio;
@@ -156,12 +162,9 @@ private slots:
         applet.show();
         QWidget* const section = applet.stationSectionForTest();
         QVERIFY(section != nullptr);
-        QVERIFY(section->isVisibleTo(&applet));
+        QVERIFY(!section->isVisibleTo(&applet));
         QVERIFY(!section->isEnabled());
         QVERIFY(!applet.stationLevelsWanted());
-        verifyDisabledWithReason(applet, QStringLiteral(
-            "This computer runs the Core, so its VAX channels are the rows above."));
-        QVERIFY(!QTest::currentTestFailed());
     }
 
     // The window declares vax, holds the Core's object and shows the
@@ -181,6 +184,9 @@ private slots:
         wire(applet, *s.client);
         QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
         QVERIFY(applet.stationSectionForTest()->isEnabled());
+        for (QLabel* label : applet.stationSectionForTest()->findChildren<QLabel*>()) {
+            QVERIFY2(label->isEnabled(), qPrintable(label->text()));
+        }
         // Built disabled with the reason, the controls get their own
         // tooltips back once the Core sends its VAX.
         QCOMPARE(applet.stationMuteButtonForTest(3)->toolTip(),
@@ -301,8 +307,9 @@ private slots:
         QTRY_VERIFY(!s.server->vaxLevelsPollingForTest());
     }
 
-    // A Core that publishes no VAX devices (nereusd): the section stays in
-    // place, disabled, with the plain reason on each control.
+    // A remote window whose Core publishes no VAX devices (nereusd): the
+    // section stays in place, disabled, with the plain reason on each
+    // control and its labels greyed.
     void aHeadlessCoreShowsTheSectionDisabled()
     {
         Session s(m_securityDir.path(), this);
@@ -426,6 +433,17 @@ private:
             }
         }
         QVERIFY(titled);
+        // Every label greys with the section, as the title does: the VAX
+        // and TX labels, the tag labels and the device labels.
+        const QString greyed =
+            QStringLiteral("QLabel:disabled { color: %1; }").arg(QLatin1String(Style::kDisabledText));
+        const QList<QLabel*> labels = section->findChildren<QLabel*>();
+        QCOMPARE(labels.size(), 1 + 4 * 3 + 2);
+        for (QLabel* label : labels) {
+            QVERIFY2(!label->isEnabled(), qPrintable(label->text()));
+            QVERIFY2(label->styleSheet().contains(greyed),
+                     qPrintable(label->text() + QStringLiteral(": ") + label->styleSheet()));
+        }
         for (int channel = 1; channel <= 4; ++channel) {
             QCOMPARE(applet.stationRxMeterForTest(channel)->toolTip(), reason);
             QCOMPARE(applet.stationMuteButtonForTest(channel)->toolTip(), reason);
