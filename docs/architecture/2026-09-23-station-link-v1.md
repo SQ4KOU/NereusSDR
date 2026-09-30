@@ -7657,7 +7657,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `notHolder` | Take transmit on this device first. | `takeTransmit` |
 | `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
 | `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
-| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice; and a device's key, the hosting desktop's included, whose transmit binding would land on the slice it lost, the one the flag was on when another device took control of it, while the device has no slice of its own it may transmit on; with one, its unkeyed flag moves there and the key goes ahead) | |
+| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice; and a device's key, the hosting desktop's included, whose transmit binding would land on another device's slice (for a device on sliceAccess or the hosting desktop; for any other device, only the slice it lost when another device took control of it) while the device has no slice of its own it may transmit on; with one, its unkeyed flag moves there and the key goes ahead) | |
 | `chooseTransmitSlice` | You took this slice from another device. Choose it for transmit first with its TX button. (a key whose transmit binding would land on a slice this device took from another device and has not chosen with `tx.setTxSlice`, or the hosting desktop's TX button, while it has no other slice it may transmit on) | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two
