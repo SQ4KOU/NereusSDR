@@ -19,6 +19,7 @@
 #include <QSignalSpy>
 #include <QVector>
 #include <cmath>
+#include <optional>
 
 #ifdef Q_OS_MAC
 #include <malloc/malloc.h>
@@ -33,7 +34,7 @@ namespace {
 // Frames to warm up (pipelines, textures, the 3D ring's first uploads), then
 // frames to measure over. At about 1000 display pixels the leak was about
 // 72 KB a frame in 3D (line and fill) and 48 KB with pan fill off, so the
-// measured run leaked 14 to 22 MB before the fix.
+// measured run leaked 15 to 23 MB before the fix.
 constexpr int kWarmupFrames = 40;
 constexpr int kMeasuredFrames = 300;
 // Steady-state rendering allocates and frees per frame; what it keeps must
@@ -80,22 +81,22 @@ private:
         return QTest::qWaitFor([&] { return submitted.count() > before; }, 2000);
     }
 
-    // Returns the heap growth across kMeasuredFrames GPU frames, or -1 when
-    // the platform gave the widget no QRhi (no frame is ever submitted, and
-    // the caller skips).
-    static qint64 measureGrowth(SpectrumWidget& w)
+    // Returns the heap growth across kMeasuredFrames GPU frames (negative
+    // when the heap shrank), or nothing when the platform gave the widget no
+    // QRhi (no frame is ever submitted, and the caller skips).
+    static std::optional<qint64> measureGrowth(SpectrumWidget& w)
     {
         QSignalSpy submitted(&w, &QRhiWidget::frameSubmitted);
         const QVector<float> bins = syntheticBins();
         for (int i = 0; i < kWarmupFrames; ++i) {
             if (!renderOneFrame(w, submitted, bins)) {
-                return -1;
+                return std::nullopt;
             }
         }
         const qint64 before = heapInUse();
         for (int i = 0; i < kMeasuredFrames; ++i) {
             if (!renderOneFrame(w, submitted, bins)) {
-                return -1;
+                return std::nullopt;
             }
         }
         const qint64 after = heapInUse();
@@ -130,10 +131,11 @@ private slots:
         SpectrumWidget w;
         showWidget(w);
         w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
-        const qint64 growth = measureGrowth(w);
-        if (growth < 0) {
+        const std::optional<qint64> measured = measureGrowth(w);
+        if (!measured) {
             QSKIP("no QRhi on this platform; the GPU frame path did not run");
         }
+        const qint64 growth = *measured;
         QVERIFY2(growth < kGrowthBudgetBytes,
                  qPrintable(QStringLiteral("heap grew %1 bytes over %2 3D frames")
                                 .arg(growth).arg(kMeasuredFrames)));
@@ -146,10 +148,11 @@ private slots:
         showWidget(w);
         w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode2D));
         w.setPanFillEnabled(false);
-        const qint64 growth = measureGrowth(w);
-        if (growth < 0) {
+        const std::optional<qint64> measured = measureGrowth(w);
+        if (!measured) {
             QSKIP("no QRhi on this platform; the GPU frame path did not run");
         }
+        const qint64 growth = *measured;
         QVERIFY2(growth < kGrowthBudgetBytes,
                  qPrintable(QStringLiteral("heap grew %1 bytes over %2 2D fill-off frames")
                                 .arg(growth).arg(kMeasuredFrames)));
@@ -163,10 +166,11 @@ private slots:
         w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode2D));
         w.setPanFillEnabled(true);
         w.setPeakHoldEnabled(true);
-        const qint64 growth = measureGrowth(w);
-        if (growth < 0) {
+        const std::optional<qint64> measured = measureGrowth(w);
+        if (!measured) {
             QSKIP("no QRhi on this platform; the GPU frame path did not run");
         }
+        const qint64 growth = *measured;
         QVERIFY2(growth < kGrowthBudgetBytes,
                  qPrintable(QStringLiteral("heap grew %1 bytes over %2 2D frames")
                                 .arg(growth).arg(kMeasuredFrames)));
