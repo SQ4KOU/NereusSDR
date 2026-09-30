@@ -8,6 +8,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 J.J. Boyd / KG4VCF : GUI memory leak: renderGpuFrame writes
+//                 the 2D trace's line, fill and peak vertex buffers only in
+//                 a frame that binds them. A 3D pan (and a 2D pan with pan
+//                 fill off, for the fill) wrote them every frame unbound,
+//                 and Qt's Metal backend kept every write pending: 23 GB in
+//                 2.5 hours. AI-assisted via Anthropic Claude Code.
 //   2026-09-30 J.J. Boyd / KG4VCF : desktop listening fix 3: the edge
 //                 arrow is drawn by drawOffScreenArrow, for the pan's VFO
 //                 and, one row each, for a slice shown here only as its
@@ -11789,6 +11795,45 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         }
     }
 
+    // ---- 3DSS mesh resource updates (only when 3D is the active mode) ----
+    // Queued alongside the FFT vertex updates below so a single
+    // cb->resourceUpdate(batch) submits everything for this frame. dpr is
+    // computed locally here (rather than reusing the post-beginPass
+    // declaration below) because renderTarget()->pixelSize() does not
+    // require an active pass, and these batch writes must be recorded
+    // before cb->resourceUpdate(batch) consumes the batch.
+    if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
+        rebuildDssMeshIfNeeded(batch);
+        uploadDssPaletteLut(batch);
+        uploadDssHeightRows(batch);
+        const QSize dssOutputSize = renderTarget()->pixelSize();
+        const float dssDpr =
+            dssOutputSize.width() / static_cast<float>(qMax(1, w));
+        writeDssMeshUbo(batch, specRect, dssDpr);
+        // Task 10: CPU fallback surface, built/uploaded only when the mesh
+        // pipeline never came up (RGBA16F unsupported at
+        // initDssMeshPipeline() time -- see its warning log). Skipped
+        // whenever the mesh is live: no point paying for a QImage rebuild
+        // the draw-call chain below will never composite.
+        if (!m_dssMeshReady) {
+            uploadDssFallbackImage(batch, specRect, dssDpr);
+        }
+    }
+
+    // ---- Spectrum-region draw selection ----
+    // Which of the three spectrum-region draws this frame makes, decided
+    // once, after the 3DSS updates above (they can clear m_dssMeshReady or
+    // size the fallback texture), so the trace uploads below write only the
+    // buffers the draw binds. Same conditions as before the split.
+    const bool is3D =
+        (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) && m_dssMeshReady;
+    const bool drawsDssMesh = is3D && m_dss.rowCount() > 0;
+    const bool drawsDssFallback = !drawsDssMesh
+        && m_spectrumRenderMode == SpectrumRenderMode::Mode3D
+        && m_ovPipeline && m_dssFallbackSrb && m_dssFallbackTexW > 0;
+    const bool fftTraceBound = !drawsDssMesh && !drawsDssFallback && !is3D
+        && m_fftFillPipeline && m_fftLinePipeline;
+
     // ---- FFT spectrum vertices ----
     // GPU vertex generation -- one vertex per display pixel.  Mirrors
     // Thetis Display.cs:5249-5378 [v2.10.3.13] per-pixel render loop
@@ -11799,7 +11844,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     //   - m_panFill (skips fill VBO update when disabled)
     //   - m_fillColor / m_fillAlpha (used for the flat-fill path)
     //   - m_peakHoldEnabled (generates a second line VBO for peak hold)
-    if (!m_renderedPixels.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
+    //
+    // Written only when this frame binds them (fftTraceBound, above). Qt's
+    // Metal backend keeps a partial dynamic-buffer write in the buffer's
+    // pending list until the buffer is next bound
+    // (QRhiMetal::executeBufferHostWritesForSlot, qrhimetal.mm, Qt 6.11);
+    // a buffer written every frame and never bound -- the 2D trace under a
+    // 3D pan, the fill with pan fill off -- kept every frame's vertex copy,
+    // 23 GB in 2.5 hours on the desktop window.
+    if (fftTraceBound && !m_renderedPixels.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
         const int n = qMin(m_renderedPixels.size(), kMaxFftBins);
         m_visibleBinCount = n;
         const float minDbm = m_refLevel - m_dynamicRange;
@@ -11816,7 +11869,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const float flatB = m_fillColor.blueF();
 
         QVector<float> lineVerts(n * kFftVertStride);
-        QVector<float> fillVerts(n * 2 * kFftVertStride);
+        const bool buildFill = m_panFill;
+        QVector<float> fillVerts(buildFill ? n * 2 * kFftVertStride : 0);
 
         for (int j = 0; j < n; ++j) {
             float x = (n > 1) ? 2.0f * j / (n - 1) - 1.0f : 0.0f;
@@ -11854,6 +11908,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             lineVerts[li + 5] = 0.9f;
 
             // Fill vertices (top at signal, bottom at base).
+            if (!buildFill) {
+                continue;
+            }
             int fi = j * 2 * kFftVertStride;
             fillVerts[fi]     = x;
             fillVerts[fi + 1] = y;
@@ -11871,8 +11928,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
         batch->updateDynamicBuffer(m_fftLineVbo, 0,
             n * kFftVertStride * sizeof(float), lineVerts.constData());
-        batch->updateDynamicBuffer(m_fftFillVbo, 0,
-            n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
+        m_fftFillHasData = buildFill;
+        if (buildFill) {
+            batch->updateDynamicBuffer(m_fftFillVbo, 0,
+                n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
+        }
 
         // Peak hold VBO lives alongside the line VBO -- generated here,
         // drawn in the render pass after the main line. When peak hold
@@ -11899,31 +11959,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 n * kFftVertStride * sizeof(float), peakVerts.constData());
             m_peakHoldHasData = true;
         }
-    }
-
-    // ---- 3DSS mesh resource updates (only when 3D is the active mode) ----
-    // Queued alongside the FFT vertex updates above so a single
-    // cb->resourceUpdate(batch) submits everything for this frame. dpr is
-    // computed locally here (rather than reusing the post-beginPass
-    // declaration below) because renderTarget()->pixelSize() does not
-    // require an active pass, and these batch writes must be recorded
-    // before cb->resourceUpdate(batch) consumes the batch.
-    if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
-        rebuildDssMeshIfNeeded(batch);
-        uploadDssPaletteLut(batch);
-        uploadDssHeightRows(batch);
-        const QSize dssOutputSize = renderTarget()->pixelSize();
-        const float dssDpr =
-            dssOutputSize.width() / static_cast<float>(qMax(1, w));
-        writeDssMeshUbo(batch, specRect, dssDpr);
-        // Task 10: CPU fallback surface, built/uploaded only when the mesh
-        // pipeline never came up (RGBA16F unsupported at
-        // initDssMeshPipeline() time -- see its warning log). Skipped
-        // whenever the mesh is live: no point paying for a QImage rebuild
-        // the draw-call chain below will never composite.
-        if (!m_dssMeshReady) {
-            uploadDssFallbackImage(batch, specRect, dssDpr);
-        }
+    } else if (!fftTraceBound) {
+        // Nothing this frame binds the trace buffers, so nothing was written
+        // to them: they no longer hold a trace to redraw later.
+        m_visibleBinCount = 0;
+        m_peakHoldHasData = false;
+        m_fftFillHasData = false;
     }
 
     cb->resourceUpdate(batch);
@@ -11955,10 +11996,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // normal 2D positions. Everything below is identical to 2D except the
     // FFT trace is swapped for the 3DSS surface quad inside specRect.
     // From AetherSDR SpectrumWidget.cpp:13304-13307 [@1872028c].
-    const bool is3D =
-        (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) && m_dssMeshReady;
-
-    if (is3D && m_dss.rowCount() > 0) {
+    // is3D, drawsDssMesh, drawsDssFallback and fftTraceBound are decided
+    // above, before the resource updates.
+    if (drawsDssMesh) {
         const float specVpX = static_cast<float>(specRect.x()) * dpr;
         const float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         const float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -11982,8 +12022,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QRhiCommandBuffer::VertexInput lineVbuf(m_dssMeshLineVbo, 0);
         cb->setVertexInput(0, 1, &lineVbuf);
         cb->draw(rows * dssLineVerticesPerRow(m_dssMeshCols));
-    } else if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D
-               && m_ovPipeline && m_dssFallbackSrb && m_dssFallbackTexW > 0) {
+    } else if (drawsDssFallback) {
         // Task 10: CPU cached-image fallback (mesh pipeline unavailable --
         // is3D is false here precisely because m_dssMeshReady is false, so
         // this branch is Mode3D's ONLY remaining path; it must win over the
@@ -12007,8 +12046,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
-    } else if (!is3D && m_fftFillPipeline && m_fftLinePipeline
-               && m_visibleBinCount > 0 && drawsSpectrumTrace()) {
+    } else if (fftTraceBound && m_visibleBinCount > 0 && drawsSpectrumTrace()) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -12016,7 +12054,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         QRhiViewport specVp(specVpX, specVpY, specVpW, specVpH);
 
         // Fill pass — Phase 3G-8 commit 10: skip when fill is disabled.
-        if (m_panFill) {
+        if (m_panFill && m_fftFillHasData) {
             cb->setGraphicsPipeline(m_fftFillPipeline);
             cb->setShaderResources(m_fftSrb);
             cb->setViewport(specVp);

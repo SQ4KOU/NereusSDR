@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 : m_fftFillHasData, whether the fill buffer holds the current
+//                 trace's fill now that the fill is written only while pan
+//                 fill is on (GUI memory leak). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-30 : setEdgeMarkedSlice, refreshSliceFlags and
 //                 drawOffScreenArrow: a listened slice a layout change
 //                 placed here draws its own edge marker, never through the
@@ -3529,6 +3533,10 @@ private:
     // false between peak decay resets so we skip the draw call.
     QRhiBuffer*                 m_fftPeakVbo{nullptr};
     bool                        m_peakHoldHasData{false};
+    // Whether m_fftFillVbo holds the fill for the trace m_fftLineVbo holds.
+    // The fill is written only while pan fill is on, so turning it on draws
+    // no fill left over from an earlier trace.
+    bool                        m_fftFillHasData{false};
     // From AetherSDR: kMaxFftBins = 8192, kFftVertStride = 6
     static constexpr int kMaxFftBins = 65536;
     static constexpr int kFftVertStride = 6;  // x, y, r, g, b, a
