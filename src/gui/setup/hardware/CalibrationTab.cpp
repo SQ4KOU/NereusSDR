@@ -68,6 +68,10 @@
 //                 Anthropic Claude Code.
 //   2026-09-30 - Rx1 6m LNA carries its Setup description id (version 23).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: at the hosting desktop, Start names the
+//                 desktop's own active slice when another device owns the
+//                 station's. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -177,8 +181,10 @@
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
 #include "core/RadioDiscovery.h"
+#include "core/SliceOwnership.h"
 #include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -865,9 +871,25 @@ void CalibrationTab::startLevelCalibration()
         return; //MW0LGE_[2.9.0.6] double check we want to do this, prevents accidental click from changing config
     }
     // Thetis calibrates RX1 on VFO A; here the active slice (-1).
+    // Level Cal 2: a remote window names its own active slice
+    // (RadioModel::requestStartLevelCalibration). At the hosting desktop -1
+    // is the station's active slice; when another device owns that one,
+    // the desktop names its own active slice instead.
+    int sliceId = -1;
+    if (m_model->role() == RadioModel::Role::Local) {
+        if (const SliceOwnership* owners = m_model->sliceOwnership()) {
+            const SliceModel* active = m_model->activeSlice();
+            if (active != nullptr) {
+                const QByteArray owner = owners->mark(active->sliceIndex()).owner;
+                if (!owner.isEmpty() && owner != SliceOwnership::stationDevice()) {
+                    sliceId = owners->activeFor(SliceOwnership::stationDevice());
+                }
+            }
+        }
+    }
     m_levelCalStartedHere = true;
     const QString reason = m_model->requestStartLevelCalibration(
-        static_cast<float>(m_levelCalLevelSpin->value()), m_levelCalFreqSpin->value(), -1);
+        static_cast<float>(m_levelCalLevelSpin->value()), m_levelCalFreqSpin->value(), sliceId);
     if (!reason.isEmpty()) {
         m_levelCalStartedHere = false;
         if (m_levelCalTell) {

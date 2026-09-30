@@ -25,7 +25,8 @@
 //   2026-09-29 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-30 - Level Cal 2: another device's slice is refused, the
-//                device's own slice runs. J.J. Boyd (KG4VCF), with
+//                device's own slice runs; a paired remote window names
+//                its own active slice. J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -33,10 +34,12 @@
 
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 
 #include "FakeLevelCalibrationHost.h"
 #include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "core/settings/SettingsProxy.h"
 
@@ -371,6 +374,78 @@ private slots:
         QVERIFY(!remote.levelCalSucceeded());
         QVERIFY(remote.levelCalMessage().isEmpty());
         QCOMPARE(remote.levelCalPercent(), 0);
+    }
+
+    // Level Cal 2 (remote parity): a paired remote window's Start names
+    // its own active slice, as the phone does. With the station's active
+    // slice another device's, the run goes on the window's own slice
+    // instead of being refused (-1 would have named the other device's).
+    void remoteWindow_namesItsOwnSlice()
+    {
+        Core core;
+        StepAttenuatorController stepAtt;
+        core.model->setStepAttController(&stepAtt);
+        const auto unbind = qScopeGuard([&core]() { core.model->setStepAttController(nullptr); });
+        FakeHost fake;
+        QVERIFY(fakeReceiver(core, fake) != nullptr);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, withLevelCal());
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+
+        QTemporaryDir keyDir;
+        const auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        PairedDevice record;
+        record.id = key->fingerprint();
+        record.publicKeySpki = key->publicKeySpki();
+        record.name = QStringLiteral("Shack MacBook");
+        record.kind = QStringLiteral("computer");
+        QVERIFY(core.server->deviceStore()->add(record));
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setDeviceIdentity(key, QStringLiteral("Shack MacBook"), QStringLiteral("MacBook"));
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+        auto* windowEnd = new LoopbackTransport(QStringLiteral("window"), this);
+        stationEnd->setPeerAddress(QStringLiteral("192.0.2.30"));
+        windowEnd->setPeerCertificateSha256(core.certSha256());
+        stationEnd->linkTo(windowEnd);
+        client.startSession(windowEnd, QString(), QString(),
+                            core.server->stationIdentity().fingerprint());
+        core.server->acceptTransport(stationEnd);
+        QVERIFY(QTest::qWaitFor([&client]() { return client.stationLinkReady(); }, 5000));
+        QTRY_VERIFY(remote.levelCalibrationRunAvailable());
+
+        const QList<int> own = core.model->sliceOwnership()->ownedBy(key->fingerprint());
+        QCOMPARE(own.size(), 1);
+        QVERIFY(own.first() != 0);
+        QTRY_VERIFY(remote.activeSlice() != nullptr
+                    && remote.activeSlice()->sliceIndex() == own.first());
+        core.model->setActiveSliceById(0);
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 0);
+
+        QSignalSpy refused(&remote, &RadioModel::levelCalibrationRefused);
+        QCOMPARE(remote.requestStartLevelCalibration(-50.0f, kCentre + 1000.0, -1), QString());
+        QTRY_VERIFY(remote.levelCalSucceeded());
+        QCOMPARE(refused.count(), 0);
+        QVERIFY(fake.meterReads > 0);
+        // The window sent its own slice's id.
+        QList<QJsonObject> starts;
+        for (const QJsonObject& o : ofType(stationEnd->received(), QStringLiteral("command.invoke"))) {
+            if (o.value(QStringLiteral("verb")).toString() == QStringLiteral("startLevelCalibration")) {
+                starts.append(o);
+            }
+        }
+        QCOMPARE(starts.size(), 1);
+        qint64 sentSlice = -2;
+        for (const QJsonValue& arg : starts.first().value(QStringLiteral("args")).toArray()) {
+            if (arg.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("sliceId")) {
+                sentSlice = arg.toObject().value(QStringLiteral("value")).toInteger();
+            }
+        }
+        QCOMPARE(sentSlice, qint64(own.first()));
     }
 };
 

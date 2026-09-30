@@ -803,6 +803,9 @@
 //                attenuator's ceiling on connect is the Core's
 //                (BoardCapsTable::stepAttMaxDb).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: a remote window's Level Cal Start names its
+//                own active slice, as the phone does, not the Core's (-1).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -16377,8 +16380,16 @@ QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequenc
     if (!m_station->levelCalibrationRunAvailable()) {
         return IStationLink::levelCalibrationRunUnavailableReason();
     }
+    // Level Cal 2 (remote parity): -1 at the Core is the station's active
+    // slice, which may be another device's, and the Core refuses a slice
+    // this window may not change. A window's "active slice" is its own, so
+    // it names that one, as the phone does.
+    int target = sliceId;
+    if (target < 0 && m_activeSlice != nullptr) {
+        target = m_activeSlice->sliceIndex();
+    }
     const IStationLink::CommandOutcome outcome =
-        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, target);
     if (!outcome.sent) {
         return outcome.reason;
     }
