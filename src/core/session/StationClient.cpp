@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
 //                                    cancelLevelCalibration, and the
 //                                    levelCalibration feature for the run's
@@ -5029,6 +5033,11 @@ StationClient::CommandOutcome StationClient::requestResetLevelCalibration()
 }
 
 bool StationClient::levelCalibrationRunAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+bool StationClient::rx2PreampModeAvailable() const
 {
     return radioHardwareAvailable(12);
 }

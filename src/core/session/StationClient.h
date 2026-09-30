@@ -205,6 +205,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
 //                                    cancelLevelCalibration, and the
 //                                    levelCalibration feature for the run's
@@ -1357,6 +1361,9 @@ public:
     CommandOutcome requestStartLevelCalibration(float levelDbm, double frequencyHz,
                                                 int sliceId) override;
     CommandOutcome requestCancelLevelCalibration() override;
+    /// Level Cal: the Core's stepAtt carries rx2PreampMode
+    /// (radioHardwareVersion 12).
+    bool rx2PreampModeAvailable() const override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;

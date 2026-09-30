@@ -59,6 +59,12 @@
 //                 auto-attenuate; the preamp choice (slice A's input's) is
 //                 disabled with the reason for a slice on the other ADC.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal fix wave: a slice on the other ADC shows and
+//                 sets RX2's own preamp mode from RX2's list (Thetis
+//                 comboRX2Preamp, RX2PreampMode, console.cs:19413-19520,
+//                 40883-40889 [v2.10.3.15]), local and remote; a remote
+//                 window of an older Core shows it disabled with the reason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -297,7 +303,12 @@ void RxApplet::wireRemoteStepAtt()
     connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, stepAtt](int idx) {
         if (idx < 0) { return; }  // guard during clear/repopulate
-        stepAtt->setPreampMode(m_preampCombo->itemData(idx).toInt());
+        const int mode = m_preampCombo->itemData(idx).toInt();
+        if (m_preampShowsRx2) {
+            stepAtt->setRx2PreampMode(mode);
+        } else {
+            stepAtt->setPreampMode(mode);
+        }
     });
 
     // The Core's values.
@@ -313,7 +324,8 @@ void RxApplet::wireRemoteStepAtt()
                         &StepAttenuatorFacade::minDbChanged,
                         &StepAttenuatorFacade::maxDbChanged,
                         &StepAttenuatorFacade::rx2AttenuationDbChanged,
-                        &StepAttenuatorFacade::rx2SliceMaskChanged}) {
+                        &StepAttenuatorFacade::rx2SliceMaskChanged,
+                        &StepAttenuatorFacade::rx2PreampModeChanged}) {
         connect(stepAtt, signal, this, [this](int) { showRemoteStepAttValues(); });
     }
     connect(stepAtt, &StepAttenuatorFacade::windowAvailabilityChanged,
@@ -337,13 +349,7 @@ void RxApplet::showRemoteStepAttValues()
         m_stepAttSpin->setRange(stepAtt->minDb(), stepAtt->maxDb());
     }
     showStepAttValueForSlice();
-    if (m_preampCombo) {
-        const int at = m_preampCombo->findData(stepAtt->preampMode());
-        if (at >= 0) {
-            QSignalBlocker blk(m_preampCombo);
-            m_preampCombo->setCurrentIndex(at);
-        }
-    }
+    showPreampModeForSlice();
     if (m_rx1PreampToggle) {
         QSignalBlocker blk(m_rx1PreampToggle);
         m_rx1PreampToggle->setChecked(stepAtt->rx1Preamp());
@@ -356,7 +362,8 @@ void RxApplet::showRemoteStepAttValues()
 // enable and auto-attenuate, or for a slice on the other ADC RX2's own
 // (Thetis _rx2_step_att_enabled, _auto_att_rx2), local and remote. The
 // preamp choice is slice A's input's (RX1's preamp mode); on the other ADC
-// it is disabled with that reason.
+// it is RX2's own (Thetis comboRX2Preamp and RX2PreampMode), disabled with
+// the reason in a remote window whose Core does not carry it.
 void RxApplet::refreshAttForSlice()
 {
     if (!m_model || !m_attLabel || !m_attStack) {
@@ -386,14 +393,72 @@ void RxApplet::refreshAttForSlice()
     m_attLabel->setText(remoteAttLabelText(stepOn, autoOn));
     m_attStack->setCurrentIndex(stepOn ? 1 : 0);
     if (m_preampCombo) {
+        if (rx2 != m_preampShowsRx2) {
+            fillPreampCombo(rx2);
+        }
+        showPreampModeForSlice();
         const bool remoteBlocked = !m_model->ownsLocalDsp() && m_model->stepAttFacade()
             && !m_model->stepAttFacade()->windowAvailable();
         if (!remoteBlocked) {
-            m_preampCombo->setEnabled(!rx2);
-            m_preampCombo->setToolTip(rx2
-                ? tr("The preamp setting here is for slice A's receiver input.")
+            const bool rx2Unavailable = rx2 && !m_model->rx2PreampModeAvailable();
+            m_preampCombo->setEnabled(!rx2Unavailable);
+            m_preampCombo->setToolTip(rx2Unavailable
+                ? IStationLink::rx2PreampModeUnavailableReason()
                 : QString());
         }
+    }
+}
+
+// Level Cal: RX1's list (Thetis SetComboPreampForHPSDR) or RX2's own.
+// From Thetis console.cs:40883-40889 [v2.10.3.15] (comboRX2Preamp's list
+// by model; BoardCapsTable::rx2PreampItemsForBoard).
+//   ... || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+//       comboRX2Preamp.Items.AddRange(anan100d_preamp_settings);
+// [original inline comment from console.cs:40878, RX1's list]
+//   // case HPSDRModel.REDPITAYA: // DH1KLM: removed for compatibility reasons
+void RxApplet::fillPreampCombo(bool rx2)
+{
+    if (!m_preampCombo) {
+        return;
+    }
+    // A board rebuild keeps the choice; a switch between the two lists
+    // starts from the first item, and the caller shows that list's mode.
+    const QVariant current = rx2 == m_preampShowsRx2 ? m_preampCombo->currentData() : QVariant();
+    QSignalBlocker blk(m_preampCombo);
+    m_preampCombo->clear();
+    const auto items = rx2 ? BoardCapsTable::rx2PreampItemsForBoard(m_preampBoard)
+                           : BoardCapsTable::preampItemsForBoard(m_preampBoard, m_preampAlex);
+    for (const auto& item : items) {
+        m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
+    }
+    m_preampShowsRx2 = rx2;
+    const int keep = current.isValid() ? m_preampCombo->findData(current) : -1;
+    m_preampCombo->setCurrentIndex(keep >= 0 ? keep : 0);
+}
+
+void RxApplet::showPreampModeForSlice()
+{
+    if (!m_preampCombo || !m_model) {
+        return;
+    }
+    int mode = 0;
+    if (m_model->ownsLocalDsp()) {
+        const StepAttenuatorController* c = m_model->stepAttController();
+        if (!c) {
+            return;
+        }
+        mode = static_cast<int>(m_preampShowsRx2 ? c->rx2PreampMode() : c->preampMode());
+    } else {
+        const StepAttenuatorFacade* stepAtt = m_model->stepAttFacade();
+        if (!stepAtt) {
+            return;
+        }
+        mode = m_preampShowsRx2 ? stepAtt->rx2PreampMode() : stepAtt->preampMode();
+    }
+    const int at = m_preampCombo->findData(mode);
+    if (at >= 0) {
+        QSignalBlocker blk(m_preampCombo);
+        m_preampCombo->setCurrentIndex(at);
     }
 }
 
@@ -943,6 +1008,8 @@ void RxApplet::buildUi()
             const bool initAlex = m_model
                 ? m_model->boardCapabilities().hasAlexFilters
                 : false;
+            m_preampBoard = initBoard;
+            m_preampAlex = initAlex;
             const auto initItems = BoardCapsTable::preampItemsForBoard(initBoard, initAlex);
             for (const auto& item : initItems) {
                 m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
@@ -1789,16 +1856,9 @@ void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
 // current preamp choice when the new board offers it.
 void RxApplet::rebuildPreampAndAttRangeForBoard(HPSDRHW board, bool alexFilters, int minDb)
 {
-    if (m_preampCombo) {
-        const QVariant current = m_preampCombo->currentData();
-        QSignalBlocker blk(m_preampCombo);
-        m_preampCombo->clear();
-        for (const auto& item : BoardCapsTable::preampItemsForBoard(board, alexFilters)) {
-            m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
-        }
-        const int keep = current.isValid() ? m_preampCombo->findData(current) : -1;
-        m_preampCombo->setCurrentIndex(keep >= 0 ? keep : 0);
-    }
+    m_preampBoard = board;
+    m_preampAlex = alexFilters;
+    fillPreampCombo(m_preampShowsRx2);
     if (m_stepAttSpin) {
         QSignalBlocker blk(m_stepAttSpin);
         m_stepAttSpin->setRange(minDb, BoardCapsTable::stepAttMaxDb(board, alexFilters));
@@ -2044,14 +2104,11 @@ void RxApplet::connectSlice(SliceModel* s)
         if (m_model->connection() && m_model->connection()->isConnected()) {
             const auto& info = m_model->connection()->radioInfo();
             const auto& caps = BoardCapsTable::forBoard(info.boardType);
-            const auto preampItems = BoardCapsTable::preampItemsForBoard(
-                info.boardType, caps.hasAlexFilters);
-
-            QSignalBlocker blk(m_preampCombo);
-            m_preampCombo->clear();
-            for (const auto& item : preampItems) {
-                m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
-            }
+            // Level Cal: RX1's list, or RX2's own for a slice on the
+            // other ADC (fillPreampCombo).
+            m_preampBoard = info.boardType;
+            m_preampAlex = caps.hasAlexFilters;
+            fillPreampCombo(m_preampShowsRx2);
 
             // Set step att spinbox range from board capabilities.
             // From Thetis setup.cs:15765 udHermesStepAttenuatorData max.
@@ -2081,7 +2138,13 @@ void RxApplet::connectSlice(SliceModel* s)
                 this, [this, attCtrl](int idx) {
             if (idx < 0) { return; }  // guard during clear/repopulate
             int modeInt = m_preampCombo->itemData(idx).toInt();
-            attCtrl->setPreampMode(static_cast<PreampMode>(modeInt));
+            // Level Cal: a slice on the other ADC sets RX2's own mode
+            // (Thetis comboRX2Preamp_SelectedIndexChanged, RX2PreampMode).
+            if (m_preampShowsRx2) {
+                attCtrl->setRx2PreampMode(static_cast<PreampMode>(modeInt));
+            } else {
+                attCtrl->setPreampMode(static_cast<PreampMode>(modeInt));
+            }
         });
 
         connect(attCtrl, &StepAttenuatorController::attenuationChanged,
@@ -2092,16 +2155,9 @@ void RxApplet::connectSlice(SliceModel* s)
                 this, [this]() { showStepAttValueForSlice(); });
 
         connect(attCtrl, &StepAttenuatorController::preampModeChanged,
-                this, [this](PreampMode mode) {
-            QSignalBlocker blk(m_preampCombo);
-            int modeInt = static_cast<int>(mode);
-            for (int i = 0; i < m_preampCombo->count(); ++i) {
-                if (m_preampCombo->itemData(i).toInt() == modeInt) {
-                    m_preampCombo->setCurrentIndex(i);
-                    return;
-                }
-            }
-        });
+                this, [this](PreampMode) { showPreampModeForSlice(); });
+        connect(attCtrl, &StepAttenuatorController::rx2PreampModeChanged,
+                this, [this](PreampMode) { showPreampModeForSlice(); });
 
         // Helper: pick label text for the current (stepOn, autoOn) tuple.
         //
@@ -2148,16 +2204,7 @@ void RxApplet::connectSlice(SliceModel* s)
         // Sync initial state from controller
         refreshAttLabel();
         showStepAttValueForSlice();
-        {
-            QSignalBlocker blk(m_preampCombo);
-            int modeInt = static_cast<int>(attCtrl->preampMode());
-            for (int i = 0; i < m_preampCombo->count(); ++i) {
-                if (m_preampCombo->itemData(i).toInt() == modeInt) {
-                    m_preampCombo->setCurrentIndex(i);
-                    break;
-                }
-            }
-        }
+        showPreampModeForSlice();
 
         // Phase 3P-B Task 10: wire per-ADC OVL badges to overloadStatusChanged.
         // The signal is already per-ADC (index 0..2); we drive each badge

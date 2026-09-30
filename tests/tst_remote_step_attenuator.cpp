@@ -404,6 +404,24 @@ private slots:
         controller->setRx2AutoAttUndo(false);
         QTRY_VERIFY(!remote->rx2AutoAttUndo());
 
+        // Level Cal: RX2's own preamp mode, for the slice on the other ADC,
+        // leaves slice A's mode alone; a mode RX2's list lacks is refused
+        // with its reason.
+        const int rx1Mode = remote->preampModeForSlice(0);
+        remote->setPreampModeForSlice(1, static_cast<int>(PreampMode::SaMinus20));
+        QTRY_VERIFY(lastResultFor(results, "rx2PreampMode").seen);
+        QVERIFY(lastResultFor(results, "rx2PreampMode").accepted);
+        QTRY_COMPARE(controller->rx2PreampMode(), PreampMode::SaMinus20);
+        QCOMPARE(static_cast<int>(controller->preampMode()), rx1Mode);
+        QCOMPARE(remote->preampModeForSlice(1), static_cast<int>(PreampMode::SaMinus20));
+        controller->setRx2PreampMode(PreampMode::SaMinus10);
+        QTRY_COMPARE(remote->rx2PreampMode(), static_cast<int>(PreampMode::SaMinus10));
+        results.clear();
+        remote->setRx2PreampMode(static_cast<int>(PreampMode::Minus40));
+        QTRY_VERIFY(lastResultFor(results, "rx2PreampMode").seen);
+        QCOMPARE(controller->rx2PreampMode(), PreampMode::SaMinus10);
+        QTRY_COMPARE(remote->rx2PreampMode(), static_cast<int>(PreampMode::SaMinus10));
+
         // Back on one ADC: every slice reads attenuationDb again.
         controller->setAdcRouting(0, -1, Band::Band40m, false);
         QTRY_COMPARE(remote->rx2SliceMask(), 0);
@@ -481,7 +499,7 @@ private slots:
                     for (const SessionSchemaField& f : m.fields) {
                         sawSchemaField = sawSchemaField || f.name == "rx2AttenuationDb"
                             || f.name == "rx2SliceMask" || f.name == "rx2StepAttEnabled"
-                            || f.name == "rx2AutoAttEnabled";
+                            || f.name == "rx2AutoAttEnabled" || f.name == "rx2PreampMode";
                     }
                 } else if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "stepAtt") {
                     sawStepAtt = true;

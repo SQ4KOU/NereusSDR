@@ -346,6 +346,13 @@ private:
     // R-R3-46 / R-R3-11: label, shown control and preamp availability of
     // the slice's own ADC.
     void refreshAttForSlice();
+    // Level Cal: the preamp items of slice A's input (RX1's list) or, for a
+    // slice on the other ADC, RX2's own (Thetis comboRX2Preamp's list),
+    // keeping the current choice when the list offers it.
+    void fillPreampCombo(bool rx2);
+    // Level Cal: selects the preamp mode the combo's list belongs to
+    // (RX1's, or RX2's own for a slice on the other ADC), local or remote.
+    void showPreampModeForSlice();
     // Builds the RX1 preamp toggle (dual-ADC boards) into the OVL row once;
     // later calls return the existing one. R-R3-46: a remote window learns
     // its board only when the Core's radio arrives, so it builds it then.
@@ -425,6 +432,11 @@ private:
     QLabel*         m_attLabel{nullptr};
     QStackedWidget* m_attStack{nullptr};
     QComboBox*      m_preampCombo{nullptr};   // Page 0: ATT mode
+    // Level Cal: the board the preamp lists come from, and whether the
+    // combo holds RX2's list (a slice on the other ADC).
+    NereusSDR::HPSDRHW m_preampBoard{NereusSDR::HPSDRHW::Hermes};
+    bool            m_preampAlex{false};
+    bool            m_preampShowsRx2{false};
     QSpinBox*       m_stepAttSpin{nullptr};   // Page 1: S-ATT mode
 
     // Controls 9 + 10: AGC

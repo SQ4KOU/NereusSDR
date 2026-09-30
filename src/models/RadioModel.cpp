@@ -796,6 +796,8 @@
 //                rx2_preamp_offset[rx2_preamp_mode] from RX2's own mode
 //                (console.cs:21052 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal fix wave: rx2PreampModeAvailable.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -16336,6 +16338,14 @@ bool RadioModel::levelCalibrationRunAvailable() const
         return true;
     }
     return m_station != nullptr && m_station->levelCalibrationRunAvailable();
+}
+
+bool RadioModel::rx2PreampModeAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->rx2PreampModeAvailable();
 }
 
 QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)

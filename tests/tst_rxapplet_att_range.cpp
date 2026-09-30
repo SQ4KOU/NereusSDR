@@ -11,11 +11,15 @@
 //
 // R-R3-46 / R-R3-21 (2026-09-23): in a remote window the range is the one
 // the Core reports for its own radio, once the Core offers its attenuator.
+//
+// Level Cal fix wave (2026-09-30): a slice on the other ADC shows and sets
+// RX2's own preamp mode from RX2's list.
 
 #include <QtTest/QtTest>
 #include <QApplication>
 
 #include "core/StepAttenuatorController.h"
+#include "core/session/IStationLink.h"
 #include "core/StepAttenuatorFacade.h"
 #include "models/Band.h"
 #include "models/SliceModel.h"
@@ -89,7 +93,7 @@ private slots:
     // R-R3-46 / R-R3-11: the ATT / S-ATT / A-ATT label and which control
     // shows follow the step attenuator of the slice's own ADC (Thetis RX2's
     // enable and auto-attenuate for a slice on the other ADC). The preamp
-    // choice there is slice A's input's, so it is disabled with the reason.
+    // choice there is RX2's own (Thetis comboRX2Preamp, RX2PreampMode).
     void localLabelFollowsTheSlicesAdc()
     {
         RadioModel model;
@@ -103,6 +107,7 @@ private slots:
         ctrl->setAdcRouting(0, 1, Band::Band20m, false, 1u << b->sliceIndex());
         ctrl->setStepAttEnabled(true);
         ctrl->setRx2StepAttEnabled(false);
+        ctrl->setPreampMode(PreampMode::SaMinus20);
         RxApplet applet(nullptr, &model);
         auto* label = applet.findChild<QLabel*>(QStringLiteral("RxAttLabel"));
         auto* stack = applet.findChild<QStackedWidget*>(QStringLiteral("RxAttenuatorStack"));
@@ -116,8 +121,21 @@ private slots:
         applet.setSlice(b);
         QCOMPARE(label->text(), QStringLiteral("ATT"));
         QCOMPARE(stack->currentIndex(), 0);
-        QVERIFY(!combo->isEnabled());
-        QVERIFY(!combo->toolTip().isEmpty());
+        QVERIFY(combo->isEnabled());
+        QVERIFY(combo->toolTip().isEmpty());
+        // RX2's list and RX2's mode; a choice sets RX2's mode only.
+        QStringList labels;
+        for (int i = 0; i < combo->count(); ++i) {
+            labels.append(combo->itemText(i));
+        }
+        QCOMPARE(labels, (QStringList{QStringLiteral("0dB"), QStringLiteral("-10dB"),
+                                      QStringLiteral("-20dB"), QStringLiteral("-30dB")}));
+        const PreampMode rx1Mode = ctrl->preampMode();
+        ctrl->setRx2PreampMode(PreampMode::SaMinus30);
+        QCOMPARE(combo->currentData().toInt(), static_cast<int>(PreampMode::SaMinus30));
+        combo->setCurrentIndex(combo->findData(static_cast<int>(PreampMode::SaMinus10)));
+        QCOMPARE(ctrl->rx2PreampMode(), PreampMode::SaMinus10);
+        QCOMPARE(ctrl->preampMode(), rx1Mode);
 
         ctrl->setRx2StepAttEnabled(true);
         QCOMPARE(label->text(), QStringLiteral("S-ATT"));
@@ -128,6 +146,7 @@ private slots:
         applet.setSlice(a);
         QCOMPARE(label->text(), QStringLiteral("S-ATT"));
         QVERIFY(combo->isEnabled());
+        QCOMPARE(combo->currentData().toInt(), static_cast<int>(ctrl->preampMode()));
     }
 
     void remoteLabelFollowsTheSlicesAdc()
@@ -144,6 +163,11 @@ private slots:
         SliceModel b(1);
         applet.setSlice(&b);
         QCOMPARE(label->text(), QStringLiteral("ATT"));
+        // No Core that carries RX2's own preamp mode: disabled with the reason.
+        auto* combo = applet.findChild<QComboBox*>(QStringLiteral("RxPreampCombo"));
+        QVERIFY(combo);
+        QVERIFY(!combo->isEnabled());
+        QCOMPARE(combo->toolTip(), IStationLink::rx2PreampModeUnavailableReason());
         stepAtt->setRx2StepAttEnabled(true);
         QCOMPARE(label->text(), QStringLiteral("S-ATT"));
         QCOMPARE(stack->currentIndex(), 1);

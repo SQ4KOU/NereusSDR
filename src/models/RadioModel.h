@@ -465,6 +465,9 @@
 //                levelCalSucceeded, and the start and cancel calls a
 //                local and a remote window both make.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal: rx2PreampModeAvailable, whether a slice on the
+//                other ADC can change RX2's own preamp mode.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3857,6 +3860,10 @@ public:
     // locally, in a remote window when its Core offers
     // startLevelCalibration.
     bool levelCalibrationRunAvailable() const;
+    // Whether a slice on the other ADC can change RX2's own preamp mode
+    // (Thetis RX2PreampMode): always locally, in a remote window when its
+    // Core carries stepAtt's rx2PreampMode (radioHardwareVersion 12).
+    bool rx2PreampModeAvailable() const;
     // The calls both windows make. Empty when it started or was sent;
     // otherwise the reason it was not. A refusal the Core sends later
     // arrives as levelCalibrationRefused.

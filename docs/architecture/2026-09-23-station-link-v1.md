@@ -1251,13 +1251,16 @@ When a feature is off, its version is 0:
   written or removed, on and off the air, as Thetis's setters and its
   reset have no MOX check. 12 also carries `startLevelCalibration` and
   `cancelLevelCalibration` (section 9.1), the Core's run of Thetis's
-  `CalibrateLevel` on a slice; the number was extended, not raised, as no
+  `CalibrateLevel` on a slice, and `stepAtt`'s `rx2PreampMode` (section
+  7.1, RX2's own preamp mode); the number was extended, not raised, as no
   Core shipped 12 without them. A station no longer sends 11; 12 serves
   every earlier version's command and property. A window of a station at
   11 or lower shows Reset disabled with "This Core cannot reset the level
-  calibration for this app. Updating the Core may help." and Start
+  calibration for this app. Updating the Core may help.", Start
   disabled with "This Core cannot run the level calibration for this app.
-  Updating the Core may help.".
+  Updating the Core may help." and, for a slice on the other ADC, the
+  preamp choice disabled with "This Core cannot change the preamp of this
+  slice's receiver input for this app. Updating the Core may help.".
 - `radioAntennaRowsVersion`: optional and appended after
   `accessoryTxVersion` only at agreed minor 11 for a peer that declared
   `radioAntennaRows` exactly 1, while the Core has a connected radio with
@@ -2888,7 +2891,7 @@ An enum property lists the values its domain allows.
 | 16 | `txSlice` | `utf8` | outbound |  |
 | 17 | `txGain` | `f64` | bidirectional |  |
 
-**StepAttenuatorFacade** (24 properties)
+**StepAttenuatorFacade** (25 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2916,6 +2919,7 @@ An enum property lists the values its domain allows.
 | 21 | `rx2AutoAttEnabled` | `bool` | bidirectional |  |
 | 22 | `rx2AutoAttUndo` | `bool` | bidirectional |  |
 | 23 | `rx2AutoAttUndoDelayMs` | `i64` | bidirectional |  |
+| 24 | `rx2PreampMode` | `i64` | bidirectional |  |
 
 **TransmitModel** (89 properties)
 
@@ -3643,7 +3647,20 @@ Notes on the keys:
   raise stays when the overload clears. While every slice is on slice A's
   ADC, or diversity links them, the two enables are one: a write of either
   sets both. Declared after `forceAttWhenPsOff`; sent only to a peer
-  that declared `adcAttenuators` 1.
+  that declared `adcAttenuators` 1. At `radioHardwareVersion` 12
+  `rx2PreampMode` (i64, two-way, declared last, the same gate) is RX2's own
+  preamp mode (Thetis `RX2PreampMode`, console.cs:19413-19520
+  [v2.10.3.15]), a `PreampMode` integer like `preampMode`, which the slices
+  on the other ADC show and set. The Core takes only the items its radio's
+  RX2 list offers (Thetis `comboRX2Preamp`: `0dB`, `-10dB`, `-20dB`,
+  `-30dB` on the two-ADC ANAN models, the Saturn boards and the Red
+  Pitaya; `0dB`, `-20dB` on the rest) and otherwise settles "This radio
+  does not offer that preamp setting.". With RX2's step attenuator off it
+  sets the other ADC's attenuator (0, 10, 20 or 30 dB) on the models
+  Thetis lists, and on an HPSDR the second receiver's preamp bit. While
+  every slice is on slice A's ADC it follows `preampMode`, and each
+  follows the other, as Thetis links the two on one ADC. The Core keeps it
+  per band of the other ADC, like `rx2AttenuationDb`, and saves it.
 - **`transmit`'s `txEqCurve`** (R-IOS-13, R-R3-49; `txEqCurveVersion`
   1). Outbound, `utf8`, declared last in `TransmitModel`: the parametric
   curve of the TX EQ dialog, read from `txEqParaEqData` into a documented

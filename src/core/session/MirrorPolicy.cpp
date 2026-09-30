@@ -694,6 +694,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StepAttenuatorFacade", "rx2AutoAttEnabled", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "rx2AutoAttUndo", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "rx2AutoAttUndoDelayMs", MirrorDirection::Bidirectional },
+    // Level Cal (radioHardwareVersion 12): RX2's own preamp mode, two-way,
+    // same gate.
+    { "StepAttenuatorFacade", "rx2PreampMode", MirrorDirection::Bidirectional },
 
     // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
     // The receive settings are two-way; the Core applies each through its

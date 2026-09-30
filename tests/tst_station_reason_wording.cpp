@@ -1698,6 +1698,10 @@ const QList<AppSideReason>& appSideReasons()
         // without startLevelCalibration.
         {"src/core/session/IStationLink.h", "levelCalibrationRunUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal fix wave: a slice on the other ADC's preamp choice on a
+        // Core without stepAtt's rx2PreampMode.
+        {"src/core/session/IStationLink.h", "rx2PreampModeUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

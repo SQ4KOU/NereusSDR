@@ -46,6 +46,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
 //                                    cancelLevelCalibration, and the
 //                                    levelCalibration feature for the run's
@@ -674,6 +678,13 @@ public:
     { return { false, levelCalibrationRunUnavailableReason() }; }
     virtual CommandOutcome requestCancelLevelCalibration()
     { return { false, levelCalibrationRunUnavailableReason() }; }
+    // Level Cal (radioHardwareVersion 12): the Core's stepAtt carries
+    // rx2PreampMode, RX2's own preamp mode, which a slice on the other ADC
+    // uses. The default says no, and the window shows that slice's preamp
+    // choice disabled with the reason.
+    virtual bool rx2PreampModeAvailable() const { return false; }
+    static QString rx2PreampModeUnavailableReason()
+    { return QStringLiteral("This Core cannot change the preamp of this slice's receiver input for this app. Updating the Core may help."); }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The

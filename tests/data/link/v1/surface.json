@@ -7331,6 +7331,12 @@
                     "kind": "i64",
                     "name": "rx2AutoAttUndoDelayMs",
                     "ordinal": 23
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rx2PreampMode",
+                    "ordinal": 24
                 }
             ]
         },
