@@ -366,14 +366,6 @@ public:
     bool sendRawTextForTest(const QByteArray& frame);
     bool openUnexpectedChannelForTest(const QString& label, bool unordered);
 
-    /// Test seam (R-R3-49): each line libdatachannel and libjuice log, at
-    /// every level, goes to `sink` with the logging thread's id, on
-    /// that thread, until the sink is set empty (logging off, as it is by
-    /// default). Process-wide. The sink must not block or call into the
-    /// library: the library holds its log lock while it runs.
-    static void setLibraryLogForTest(
-        std::function<void(quintptr thread, const QString& line)> sink);
-
 signals:
     /// This end's description, for the far end (through the service: the
     /// offer of `introduce`, or the Core's `answer`).

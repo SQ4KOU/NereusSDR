@@ -35,11 +35,21 @@
 // signals. The meters are not properties: they travel as the `vaxLevels`
 // record stream, 5 times a second while a device subscribes.
 //
+// In a remote window (StationClient) the same class, unbound, is the
+// window's copy of the Core's: the station's values land through the
+// writable properties' setters and applyStationValue(), and a window's own
+// change through a setter is sent to the Core as a property write. The
+// window's VAX applet shows it in its "Station computer" section.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-28: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 25 (R-IOS-18), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: the unbound copy a remote window holds (stored values,
+//               applyStationValue, clearStationValues, levels). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -113,10 +123,13 @@ public:
     bool ch2Muted() const { return muted(2); }
     bool ch3Muted() const { return muted(3); }
     bool ch4Muted() const { return muted(4); }
-    QString ch1Device() const { return deviceName(1); }
-    QString ch2Device() const { return deviceName(2); }
-    QString ch3Device() const { return deviceName(3); }
-    QString ch4Device() const { return deviceName(4); }
+    QString ch1Device() const { return device(1); }
+    QString ch2Device() const { return device(2); }
+    QString ch3Device() const { return device(3); }
+    QString ch4Device() const { return device(4); }
+    /// Channel 1..4's device name: this computer's on the Core, the Core's
+    /// in a window's copy.
+    QString device(int channel) const;
     QString txSlice() const { return m_txSlice; }
     double txGain() const;
 
@@ -135,11 +148,26 @@ public:
     void setRxGain(int channel, double gain);
     void setMuted(int channel, bool on);
 
+    // ---- A remote window's copy (unbound) ----
+
+    /// The Core's value for an outbound property (the slices, the device
+    /// names, the transmit slice). False for a name it does not hold.
+    bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
+    /// Back to the values of a Core that sent nothing.
+    void clearStationValues();
+    /// The levels of channels 1..4 and the transmit level as the Core's
+    /// vaxLevels stream last said (a window's copy only).
+    void setStationLevels(const double* rx, double tx);
+    double stationLevel(int channel) const;
+    double stationTxLevel() const { return m_txLevel; }
+
 signals:
     void slicesChanged();
     void gainsChanged();
     void mutesChanged();
     void devicesChanged();
+    /// A window's copy: new levels from the Core's vaxLevels stream.
+    void levelsChanged();
 
 private:
     void watchSlice(QObject* slice);
@@ -151,6 +179,13 @@ private:
     AppSettings* m_settings{nullptr};
     QString m_slices[kChannels];
     QString m_txSlice;
+    // The window's copy: the values while unbound.
+    double m_rxGain[kChannels]{1.0, 1.0, 1.0, 1.0};
+    bool m_muted[kChannels]{};
+    double m_txGainCopy{1.0};
+    QString m_devices[kChannels];
+    double m_levels[kChannels]{};
+    double m_txLevel{0.0};
 };
 
 } // namespace NereusSDR

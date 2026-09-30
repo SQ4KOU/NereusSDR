@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 24,
   "category": {
     "id": "audio",
     "title": "Audio",
@@ -105,15 +105,16 @@
                 }
               },
               "applies": "live",
-              "requiresDescriptionVersion": 15,
+              "requiresDescriptionVersion": 24,
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
                 "transmit": true
               },
-              "min": -34,
+              "min": -34.5,
               "max": 12,
-              "step": 1,
+              "step": 1.5,
+              "decimals": 1,
               "unit": "dB"
             }
           ]
@@ -139,7 +140,8 @@
                 "capability": "transmitSettingsVersion",
                 "min": 3,
                 "transmit": true
-              }
+              },
+              "availableOn": "orionMicPanel"
             },
             {
               "id": "audio.txInput.orionMicBias",
@@ -158,7 +160,8 @@
                 "capability": "transmitSettingsVersion",
                 "min": 3,
                 "transmit": true
-              }
+              },
+              "availableOn": "orionMicPanel"
             },
             {
               "id": "audio.txInput.orionMicPttDisabled",
@@ -177,7 +180,8 @@
                 "capability": "transmitSettingsVersion",
                 "min": 3,
                 "transmit": true
-              }
+              },
+              "availableOn": "orionMicPanel"
             },
             {
               "id": "audio.txInput.orionMicBoost",
@@ -196,7 +200,8 @@
                 "capability": "transmitSettingsVersion",
                 "min": 3,
                 "transmit": true
-              }
+              },
+              "availableOn": "orionMicPanel"
             }
           ]
         },
@@ -232,6 +237,25 @@
                   "label": "XLR"
                 }
               ]
+            },
+            {
+              "id": "audio.txInput.saturnMicTipRing",
+              "label": "Mic Tip-Ring (Tip is Mic)",
+              "tooltip": "",
+              "kind": "toggle",
+              "binding": {
+                "property": {
+                  "object": "transmit",
+                  "name": "micTipRing"
+                }
+              },
+              "applies": "live",
+              "requiresDescriptionVersion": 24,
+              "gate": {
+                "capability": "transmitSettingsVersion",
+                "min": 3,
+                "transmit": true
+              }
             },
             {
               "id": "audio.txInput.saturnMicPttDisabled",

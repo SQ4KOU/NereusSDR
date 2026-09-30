@@ -485,6 +485,7 @@ class RemoteDevicesState;
 class SliceAccessMirror;
 class SettingsProxy;
 class TransmitState;
+class StationVax;
 class TxWatchClient;
 
 /// R-R3-21 / R-R3-23 / R-R3-38: how the last session ended, as far as it
@@ -1031,6 +1032,20 @@ public:
     /// the Core does not send it (txStateVersion 0) and after a session
     /// ends; its stop fields keep the last stop until the next snapshot.
     TransmitState* transmitState() const { return m_transmitState; }
+    /// iPhone app plan Task 25 (R-IOS-18): the window's copy of the Core
+    /// computer's VAX channels (the `vax` object; never null). Its values
+    /// are the idle ones while the Core does not send it.
+    StationVax* stationVax() const { return m_stationVax; }
+    /// The Core sends its computer's VAX channels (vaxVersion 1): a Core the
+    /// desktop hosts.
+    bool stationVaxAvailable() const;
+    /// The window holds the Core's `vax` object now (this session's snapshot
+    /// carried it): what the VAX applet's "Station computer" section follows.
+    bool stationVaxHeld() const { return m_stationVaxHeld; }
+    /// Whether this window shows the Core computer's VAX meters. While true
+    /// (and the Core sends them) the window subscribes to the vaxLevels
+    /// stream, again after each reconnect; false unsubscribes.
+    void setStationVaxLevelsWanted(bool wanted);
     /// Parity Task 33 (R-R3-49, R-R3-32): the Core sends its transmit
     /// readings (txReadingsVersion 1): `txState`'s forwardAdcRaw and
     /// reflectedAdcRaw, and the txCfcCompression stream.
@@ -1543,6 +1558,9 @@ signals:
     /// (TxChannel::kCfcDisplayBinCount, in dB to a tenth), read at
     /// `atMs` on the Core's clock.
     void cfcCompressionReceived(const QList<double>& binsDb, qint64 atMs);
+    /// iPhone app plan Task 25: whether the Core's `vax` object is held
+    /// (stationVaxAvailable()) changed.
+    void stationVaxAvailabilityChanged();
     /// iPhone app plan Task 78: a several-devices verb was answered
     /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack; slice
     /// control plan Task 5: slice.listen, slice.stopListening,
@@ -1904,6 +1922,12 @@ private:
     StateMirror* m_outboundMirror = nullptr;
     // iPhone app plan Task 39: the Core's `txState` (Qt-parented to this).
     TransmitState* m_transmitState = nullptr;
+    // iPhone app plan Task 25: the Core computer's VAX, and whether this
+    // window shows its meters.
+    StationVax* m_stationVax = nullptr;
+    bool m_stationVaxHeld = false;
+    bool m_stationVaxLevelsWanted = false;
+    void sendStationVaxLevelsSubscription(bool subscribe);
     MirrorCoalescer m_outboundCoalescer;
 
     /// True for the duration of one inbound apply. See the class comment's

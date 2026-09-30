@@ -14,6 +14,9 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec lane: the HL2 window's
+//                                    Radio Mic and Line In Gain steps.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
 //                                    (transmitSettingsVersion 13): the
 //                                    microphone settings are taken keyed;
@@ -212,6 +215,7 @@ private slots:
     void microphoneSettingsReachTheCore();
     void microphoneSettingsAreTakenOnTheAir();
     void txInputPageGatesTheMicrophoneOnVersion3();
+    void hl2RadioMicAndLineInStepsFromTheWindow();
 
 private:
     QTemporaryDir m_securityDir;
@@ -723,6 +727,28 @@ void TstRemoteTxProfiles::txInputPageGatesTheMicrophoneOnVersion3()
     // Other versions do not touch them.
     page.setTransmitSettingsPermittedAt(2, false, kOnAir);
     QVERIFY(gain->isEnabled());
+}
+
+// Radio codec lane: the window's TX Input on the HL2 Core has Radio Mic
+// open with the audio add-on note and the Hermes group, and its Line In
+// Gain slider's 1.5 dB step reaches the Core.
+void TstRemoteTxProfiles::hl2RadioMicAndLineInStepsFromTheWindow()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QTRY_COMPARE(s.window.boardCapabilities().board, HPSDRHW::HermesLite);
+    QVERIFY(s.window.boardCapabilities().radioMicNeedsAddOn);
+    AudioTxInputPage page(&s.window);
+    QVERIFY(page.radioMicButton()->isEnabled());
+    QCOMPARE(page.radioMicButton()->toolTip(), RadioModel::radioMicAddOnNote());
+    QCOMPARE(page.hermesRadioMicGroup()->title(), QStringLiteral("Radio Mic (Hermes Lite 2)"));
+
+    QSlider* const gain = page.hermesLineInGainSlider();
+    QVERIFY(gain);
+    const int next = gain->value() == -9 ? -12 : -9;
+    gain->setValue(next);
+    QTRY_COMPARE(s.core->transmitModel().lineInBoost(), next / 2.0);
+    QTRY_COMPARE(s.window.transmitModel().lineInBoost(), next / 2.0);
 }
 
 QTEST_MAIN(TstRemoteTxProfiles)

@@ -786,9 +786,11 @@ Core, and its transmit meters read `txState`.
 **`vax` 1** (iPhone app plan Task 25, R-IOS-18): the client shows the VAX
 channels of the computer the Core runs on (its VAX tool). A peer that
 declares it at minor 11 is sent `vaxVersion` (section 6.3) and, when that is
-1, the `vax` object (section 7.1). The station does not declare it, and the
-desktop's remote window does not: its VAX applet runs that computer's own
-VAX channels (R-R3-44).
+1, the `vax` object (section 7.1). The station does not declare it. The
+desktop's remote window declares it: its VAX applet runs that computer's
+own VAX channels (R-R3-44) and, below them, shows the Core computer's in a
+"Station computer" section from this object, subscribing to `vaxLevels`
+only while the applet is shown.
 
 **`txEqCurve` 1** (R-IOS-13, R-R3-49): the client reads the TX EQ
 parametric curve in the form section 7.1 documents ("The TX EQ curve"). A
@@ -931,6 +933,13 @@ control from the catalogue's `board` (`rx2Attenuator`, `rx2PreampItems`,
 capabilities it was built for. Neither the station nor the desktop's remote
 window declares it; the phone does.
 
+**`radioMic` 1** (the radio codec lane): the client reads whether the
+radio's own mic input can be chosen, and the note that goes with it, from
+the catalogue's `board` (`radioMic`, `radioMicNote`). A peer that declares
+it is sent `radioMicVersion` (section 6.3); a peer that does not sees
+exactly the capabilities it was built for. Neither the station nor the
+desktop's remote window declares it; the phone does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1056,7 +1065,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 12 |
+| `radioHardwareVersion` | 13 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 2 |
@@ -1112,6 +1121,7 @@ change shows as surface drift and as a change to this table.
 | `sliceAccessVersion` | 2 |
 | `mediaDirectVersion` | 1 |
 | `rx2AttenuatorVersion` | 1 |
+| `radioMicVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2132,6 +2142,14 @@ At 1 the catalogue's `board` carries `rx2Attenuator`, `rx2PreampItems` and
 the feature is sent no entry; the catalogue keys are sent to every peer,
 and an app that does not know them ignores them.
 
+**The radio's mic input.** A client that declared `radioMic` 1 is sent
+`radioMicVersion`, an `i64`, 1, after `rx2AttenuatorVersion` (or after the
+last entry before it when that is absent) and before `coreBuildInfo`. At 1
+the catalogue's `board` carries `radioMic` and `radioMicNote` (section
+"Catalogue"). A peer that did not declare the feature is sent no entry; the
+catalogue keys are sent to every peer, and an app that does not know them
+ignores them.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2356,7 +2374,8 @@ older window sees only the values it was built for.
 | 100 | `mediaDirectVersion` | `i64` |
 | 101 | `mediaStunUrls` | `utf8` |
 | 102 | `rx2AttenuatorVersion` | `i64` |
-| 103 | `coreBuildInfo` | `utf8` |
+| 103 | `radioMicVersion` | `i64` |
+| 104 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -4904,6 +4923,8 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `rx2Attenuator` | `{min, max, step}` in dB for RX2's own input attenuator, 0 to 31 in 1 dB steps on the radios with a second ADC (ANAN-100D, 200D, OrionMKII, 7000D, 8000D, Anvelina Pro3, G2, G2 1K), or `null`. An app draws a slider and writes `stepAtt`'s `rx2AttenuationDb` with `rx2StepAttEnabled` true (`adcAttenuatorVersion` 1) |
 | `rx2PreampItems` | `[{id, label}]`: RX2's preamp choices where RX2's input has two states instead (the HPSDR's second Mercury: `0dB`, `-20dB`), `id` the `stepAtt` object's `rx2PreampMode`; empty elsewhere |
 | `rx2AttenuatorReason` | Why RX2 has no input control of its own, in operator words, when `rx2Attenuator` is `null` and `rx2PreampItems` is empty (RX2 shares RX1's input, or the radio's second input is not known); `null` otherwise |
+| `radioMic` | Whether the operator can choose the radio's own mic input (Radio Mic) on this radio. True on every board with a mic jack, and on the Hermes Lite 2, which takes mic audio through its audio add-on board; false on the receive-only kits |
+| `radioMicNote` | What the radio's mic input needs, in operator words, when it depends on hardware the radio cannot report: on the Hermes Lite 2, "Needs the Hermes Lite 2 audio add-on board. A stock Hermes Lite 2 sends no mic audio."; `null` otherwise |
 
 `board.transmit`: each key is `{min, max, step}` in the property's own
 units, as the desktop's control ranges it (the TX applet's RF Power and Tune
@@ -7151,7 +7172,12 @@ A client step may carry `"client": "<name>"` and a station step
 without matching), and `{"close": "<name>"}` closes its connection;
 `expectClosed` may carry `"client"` too. The station's messages are
 matched per client, in that client's own arrival order. `otherConnections`
-stays for sockets that never sign in. **An app's runner** plays only its
+stays for sockets that never sign in. With `stationSetup.deferOwnConnection`
+true the fixture's own client is not connected before the first step: a
+step `{"openOwnConnection": true}`, exactly once, connects it, and its
+sign-in deadline starts there, so a fixture can pass more virtual time than
+that deadline before its own client signs in; no step of the own client may
+come before it, and such a fixture runs on the station alone. **An app's runner** plays only its
 own client: it skips other clients' steps and the station messages sent
 to them, and a `connect` or `close` step names nothing it plays. A fixture
 where the own client shares the Core names the features its `hello`
@@ -7326,6 +7352,7 @@ role.
 | `alexRxAntennas` | iPhone app plan Task 75: the static radio's receive antenna per band, 14 numbers 1 to 3 in `Band` order (160 m to XVTR), and band tracking on (the per-band antenna switch of section 7.6) as though a radio were connected; only with `"radio": "static"` | none (no band tracking) |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `coreListener`, `coreInterfaces` | the phone's direct addresses: the Core's control listener (`{"address", "port"}`, the address read as `remote_bind` is) and its interfaces (above), in place of the runner's computer's; an app's runner ignores them | the Core does not listen: `coreAddresses` is `{"addresses":[]}` |
+| `deferOwnConnection` | the fixture's own client connects at its `openOwnConnection` step instead of before the first step (above); station fixtures only | false |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
 The station runner starts every fixture from an empty settings profile,
@@ -7356,6 +7383,7 @@ same on every machine.
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
+| `place-freed` | The device (`otherClients` `"self"`) signs in and drops; its 3 minutes run out, freeing its place; four other devices fill the Core; 20 s later the device's own connection opens (`deferOwnConnection`) and signs in: it is let through `auth.result` and sent `session.held` with `placeFreed` `{secondsAgo: 20}`. Runs on the station alone |
 | `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later.", `retryable` true, no code. Runs on the station alone |
 | `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |

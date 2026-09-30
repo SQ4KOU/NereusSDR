@@ -3,6 +3,7 @@
 #pragma once
 
 #include "DataChannelPair.h"
+#include "core/session/DataChannelLibraryLogTestHook.h"
 
 #include <QElapsedTimer>
 #include <QMutex>
@@ -62,7 +63,7 @@ public:
     DataChannelStartupEvidence() : m_state(std::make_shared<State>())
     {
         m_state->elapsed.start();
-        DataChannelTransport::setLibraryLogForTest(
+        testhooks::setDataChannelLibraryLog(
             [state = m_state](quintptr thread, const QString& line) {
                 const QString stage = safeRtcStage(line);
                 if (stage.isEmpty()) { return; }
@@ -73,7 +74,7 @@ public:
             });
     }
 
-    ~DataChannelStartupEvidence() { DataChannelTransport::setLibraryLogForTest({}); }
+    ~DataChannelStartupEvidence() { testhooks::setDataChannelLibraryLog({}); }
     DataChannelStartupEvidence(const DataChannelStartupEvidence&) = delete;
     DataChannelStartupEvidence& operator=(const DataChannelStartupEvidence&) = delete;
 

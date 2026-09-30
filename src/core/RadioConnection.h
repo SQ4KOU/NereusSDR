@@ -11,6 +11,7 @@
 #include "HardwareProfile.h"
 #include "RadioLinkStats.h"
 #include "codec/AlexFilterMap.h"
+#include "audio/AudioRingSpsc.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -18,6 +19,7 @@
 #include <QObject>
 #include <QVector>
 
+#include <algorithm>
 #include <atomic>
 #include <array>
 #include <memory>
@@ -712,6 +714,81 @@ public:
     /// drain. Zero or negative when this connection has no send ring.
     virtual double txIqRingLengthMs() const { return -1.0; }
 
+    // Radio codec (2026-09-30): the receive audio for the radio's own
+    // speaker / headphone out (the P1 EP2 L/R bytes, the P2 audio stream
+    // to port 1028). The audio engine hands each block of the station's
+    // program to pushRadioAudio on the DSP thread, as interleaved stereo
+    // float at kRadioAudioRateHz; the protocol's own sender takes it with
+    // takeRadioAudio. Single producer, single consumer, lock-free: a block
+    // that does not fit is dropped and counted, never waited for.
+    static constexpr int kRadioAudioRateHz = 48000;
+    /// True for a connection that sends the radio's audio out.
+    virtual bool carriesRadioAudio() const noexcept { return false; }
+    /// DSP thread only. `stereo` holds `frames` L/R pairs.
+    void pushRadioAudio(const float* stereo, int frames) noexcept
+    {
+        if (stereo == nullptr || frames <= 0) {
+            return;
+        }
+        // The largest block is held over two windows of about a second of
+        // pushed audio, so one oversized block raises the cushion for a
+        // second or two, not for the rest of the connection.
+        m_radioAudioWindowMax = std::max(m_radioAudioWindowMax, frames);
+        m_radioAudioWindowFrames += frames;
+        const int largest = std::max(m_radioAudioPrevWindowMax, m_radioAudioWindowMax);
+        if (m_radioAudioWindowFrames >= kRadioAudioLargestWindowFrames) {
+            m_radioAudioPrevWindowMax = m_radioAudioWindowMax;
+            m_radioAudioWindowMax = 0;
+            m_radioAudioWindowFrames = 0;
+        }
+        m_radioAudioLargestBlock.store(largest, std::memory_order_relaxed);
+        const qint64 bytes = qint64(frames) * kRadioAudioFrameBytes;
+        if (m_radioAudioRing.tryPushCopy(reinterpret_cast<const uint8_t*>(stereo), bytes)
+            != bytes) {
+            m_radioAudioDroppedFrames.fetch_add(quint64(frames), std::memory_order_relaxed);
+        }
+    }
+    /// Frames the full ring refused, since the connection was made. Any thread.
+    quint64 radioAudioDroppedFrames() const noexcept
+    {
+        return m_radioAudioDroppedFrames.load(std::memory_order_relaxed);
+    }
+    /// The radio output's counters, for the diagnostics log. Any thread.
+    struct RadioAudioStats {
+        bool valid{false};             // the connection sends radio audio
+        quint64 droppedFrames{0};      // refused by the full ring
+        quint64 underruns{0};          // the ring ran dry and primed again
+        quint64 trimmedFrames{0};      // cut back to the cushion (drift)
+        int cushionFrames{0};          // the cushion now
+        bool hasPackets{false};        // P2: the port 1028 stream's counters
+        quint64 packetsSent{0};
+        quint64 sendErrors{0};
+    };
+    virtual RadioAudioStats radioAudioStats() const
+    {
+        RadioAudioStats st;
+        st.valid = carriesRadioAudio();
+        st.droppedFrames = radioAudioDroppedFrames();
+        st.underruns = m_radioAudioUnderruns.load(std::memory_order_relaxed);
+        st.trimmedFrames = m_radioAudioTrimmedFrames.load(std::memory_order_relaxed);
+        st.cushionFrames = radioAudioCushionFrames();
+        return st;
+    }
+    /// One log fragment ("radioOut dropped=... underruns=..."). Log only.
+    static QString radioAudioStatsText(const RadioAudioStats& st)
+    {
+        if (!st.valid) {
+            return QStringLiteral("radioOut=none");
+        }
+        QString text = QStringLiteral("radioOut dropped=%1 underruns=%2 trimmed=%3 cushion=%4")
+                           .arg(st.droppedFrames).arg(st.underruns)
+                           .arg(st.trimmedFrames).arg(st.cushionFrames);
+        if (st.hasPackets) {
+            text += QStringLiteral(" sent=%1 sendErrors=%2").arg(st.packetsSent).arg(st.sendErrors);
+        }
+        return text;
+    }
+
 public slots:
 
     // --- Watchdog ---
@@ -839,6 +916,13 @@ signals:
     /// (typically 48 kHz on HPSDR family).
     ///
     /// Plan: 3M-1b F.4. Pre-code review §6.4.
+    ///
+    /// Radio codec lane (2026-09-30): no connection emits this signal (only
+    /// test doubles do), so RadioMicSource and CompositeTxMicRouter's radio
+    /// branch receive nothing in a running app. The radio mic reaches the
+    /// TX channel another way: P1/P2 decode the mic bytes into
+    /// TxMicSource::inbound() (setTxMicSource), which also paces the TX
+    /// pump. The branch is left in place, unused, rather than removed.
     void micFrameDecoded(const float* samples, int frames);
 
     // --- Meters ---
@@ -932,6 +1016,26 @@ signals:
     void alexLpfBitsComposed(quint8 bits);
 
 private:
+    // Radio codec (2026-09-30): pushRadioAudio's ring, 16384 stereo frames
+    // (341 ms at 48 kHz), and its counters. m_radioAudioFlowing belongs to
+    // the consumer thread alone.
+    static constexpr int kRadioAudioFrameBytes = 2 * int(sizeof(float));
+    static constexpr size_t kRadioAudioRingBytes = 131072;
+    static constexpr int kRadioAudioRingFrames = int(kRadioAudioRingBytes) / kRadioAudioFrameBytes;
+    static constexpr int kRadioAudioMarginFrames = 960;  // 20 ms at 48 kHz
+    static constexpr int kRadioAudioLargestWindowFrames = 48000;  // 1 s at 48 kHz
+    AudioRingSpsc<kRadioAudioRingBytes> m_radioAudioRing;
+    std::atomic<int> m_radioAudioLargestBlock{0};
+    // pushRadioAudio's (the producer's) own: the largest block in this
+    // window and the one before, and the frames pushed in this window.
+    int m_radioAudioWindowMax{0};
+    int m_radioAudioPrevWindowMax{0};
+    int m_radioAudioWindowFrames{0};
+    std::atomic<quint64> m_radioAudioDroppedFrames{0};
+    std::atomic<quint64> m_radioAudioUnderruns{0};
+    std::atomic<quint64> m_radioAudioTrimmedFrames{0};
+    bool m_radioAudioFlowing{false};
+
     struct ByteSample { qint64 ms; qint64 bytes; };
     mutable QList<ByteSample> m_txSamples;
     mutable QList<ByteSample> m_rxSamples;
@@ -968,6 +1072,57 @@ private:
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
 
 protected:
+    // Radio codec (2026-09-30): the consumer side of pushRadioAudio, on one
+    // thread (the protocol's sender). Fills `stereo` with `frames` L/R
+    // pairs and returns true, or returns false with nothing taken while the
+    // ring builds its cushion: at the start, and again after it runs dry.
+    // The cushion is the largest block the producer has pushed plus 20 ms,
+    // so a whole producer block is always in hand. The sender's clock and
+    // the radio's (which paces the producer) drift apart, so a ring deeper
+    // than the cushion plus another block and 20 ms is cut back to the
+    // cushion, dropping the oldest audio.
+    bool takeRadioAudio(float* stereo, int frames) noexcept
+    {
+        const int cushion = radioAudioCushionFrames();
+        int queued = int(m_radioAudioRing.usedBytes() / kRadioAudioFrameBytes);
+        const int highWater = cushion + m_radioAudioLargestBlock.load(std::memory_order_relaxed)
+            + kRadioAudioMarginFrames;
+        if (queued > highWater) {
+            m_radioAudioRing.dropOldest(size_t(queued - cushion) * kRadioAudioFrameBytes);
+            m_radioAudioTrimmedFrames.fetch_add(quint64(queued - cushion),
+                                                std::memory_order_relaxed);
+            queued = cushion;
+        }
+        if (!m_radioAudioFlowing) {
+            if (queued < cushion) {
+                return false;
+            }
+            m_radioAudioFlowing = true;
+        }
+        if (queued < frames) {
+            m_radioAudioFlowing = false;
+            m_radioAudioUnderruns.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+        m_radioAudioRing.popInto(reinterpret_cast<uint8_t*>(stereo),
+                                 qint64(frames) * kRadioAudioFrameBytes);
+        return true;
+    }
+    int radioAudioCushionFrames() const noexcept
+    {
+        const int cushion = m_radioAudioLargestBlock.load(std::memory_order_relaxed)
+            + kRadioAudioMarginFrames;
+        return std::min(cushion, kRadioAudioRingFrames / 2);
+    }
+    quint64 radioAudioUnderruns() const noexcept
+    {
+        return m_radioAudioUnderruns.load(std::memory_order_relaxed);
+    }
+    quint64 radioAudioTrimmedFrames() const noexcept
+    {
+        return m_radioAudioTrimmedFrames.load(std::memory_order_relaxed);
+    }
+
     // The band-output byte last reported by publishBandOutputs, or -1.
     int publishedOcByte() const noexcept { return m_publishedOcByte; }
 
@@ -1054,7 +1209,11 @@ protected:
     // P1: emitted to case 10 (C0=0x12) C2 bit 0 (0x01).
     // P2: emitted to transmit_specific_buffer[50] bit 1 (0x02).
     // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1484-1486 [@120188f].
-    bool m_micBoost{false};
+    // Default on, as Thetis: From Thetis console.cs:13259 [v2.10.3.15] —
+    //   private bool mic_boost = true;
+    // (TransmitModel::m_micBoost carries the same default; RadioModel pushes
+    // the model value on connect, so this only covers the frames before it.)
+    bool m_micBoost{true};
 
     // Shared state for setLineIn (3M-1b G.2).
     // P1: emitted to case 10 (C0=0x12) C2 bit 1 (0x02).

@@ -55,6 +55,9 @@
 //               rx2AttenuatorReason, RX2's own input control per model
 //               (rx2AttenuatorVersion 1). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: Radio codec lane: board.radioMic and radioMicNote
+//               (radioMicVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -721,6 +724,12 @@ QJsonObject boardObject(const StationCatalog::Inputs& inputs)
         {QStringLiteral("rx2Attenuator"), rx2Attenuator},
         {QStringLiteral("rx2PreampItems"), rx2PreampItems},
         {QStringLiteral("rx2AttenuatorReason"), rx2AttenuatorReason},
+        // Radio codec lane (radioMicVersion 1): whether the TX mic source
+        // can be the radio's own mic, and the note beside it (the Hermes
+        // Lite 2's audio add-on board, which its gateware cannot report).
+        {QStringLiteral("radioMic"), caps.radioMicSelectable()},
+        {QStringLiteral("radioMicNote"), caps.radioMicNeedsAddOn
+             ? QJsonValue(RadioModel::radioMicAddOnNote()) : QJsonValue(QJsonValue::Null)},
     };
 }
 

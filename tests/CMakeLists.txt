@@ -4824,6 +4824,18 @@ target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_radio_model_mic_ptt_wire)
 target_compile_definitions(tst_radio_model_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# Radio codec lane (2026-09-30): mic boost, line in, tip/ring, bias and XLR
+# reach P1 bank 10/11 and P2 byte 50 on connect and on change; the line-in
+# dB value maps to Thetis's lineinboost index.
+nereus_add_test(tst_radio_model_mic_codec_wire)
+target_compile_definitions(tst_radio_model_mic_codec_wire PRIVATE NEREUS_BUILD_TESTS)
+
+# Radio codec lane (2026-09-30): the receive audio reaches the radio's own
+# speaker out (P1 EP2 L/R bytes, P2 port 1028 packets, the engine's radio
+# output tap at master volume and mute).
+nereus_add_test(tst_radio_codec_speaker_out)
+target_compile_definitions(tst_radio_codec_speaker_out PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
 # 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
 # Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.
@@ -8350,6 +8362,11 @@ nereus_add_test(tst_tx_eq_set_curve
 nereus_add_test(tst_cfc_set_profile
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 25 (R-IOS-18): a remote window's VAX applet, its
+# "Station computer" section from the Core's `vax` object. Loopback only.
+nereus_add_test(tst_remote_station_vax
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS gui session)
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.
@@ -8995,6 +9012,12 @@ endif()
 # real FFT/display production, stale control rejection, and slice cleanup.
 nereus_add_test(tst_daemon_media_controller
     fakes/LoopbackTransport.cpp)
+
+# iPhone app plan Task 24 (R-IOS-10): a session with no display endpoint
+# keeps its audio, metrics and S-meter readings and gets no display.
+nereus_add_test(tst_sound_only_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 
 # Remote-window parity Task 28 (R-R3-49, A11): the Core sends the transmit
 # analyzer's display for the transmitting pan while keyed, to a media peer

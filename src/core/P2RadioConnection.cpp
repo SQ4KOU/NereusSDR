@@ -113,6 +113,11 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: the receive audio stream to port 1028 for the
+//                radio's own speaker out (Thetis sendOutbound id 0 and
+//                WriteUDPFrame case 0, network.c:1276-1294, 1363-1373
+//                [v2.10.3.15]), from the transmit I/Q send thread.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - onReadyRead brackets each socket drain with iqBatchStarted /
 //                iqBatchFinished so ReceiverManager posts the drain's I/Q to
 //                the DSP worker once per stream, and frameReceived is posted
@@ -340,6 +345,7 @@ warren@wpratt.com
 #include <QtEndian>
 
 #include <algorithm>
+#include <cmath>
 #include <bit>
 #include <cerrno>
 #include <chrono>
@@ -2298,6 +2304,96 @@ int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* c
     return sent;
 }
 
+// ---------------------------------------------------------------------------
+// Radio codec (2026-09-30): the receive audio stream to the radio's own
+// speaker out, port 1028.
+//
+// Porting from Thetis ChannelMaster/network.c:1276-1294 [v2.10.3.15]
+// (sendOutbound, the receive audio, id 0):
+//   if (prn->lr_audio_swap)
+//   {
+//       double swap;
+//       for (i = 0; i < 2 * prn->audio[0].spp; i += 2)
+//       {
+//           swap       = out[i + 0];
+//           out[i + 0] = out[i + 1];
+//           out[i + 1] = swap;
+//       }
+//   }
+//   for (i = 0; i < 2 * prn->audio[0].spp; i++)
+//   {
+//       temp = out[i] >= 0.0 ? (short)floor(out[i] * 32767.0 + 0.5) :
+//           (short)ceil(out[i] * 32767.0 - 0.5);
+//       prn->OutBufp[i * 2] = (char)((temp >> 8) & 0xff);
+//       prn->OutBufp[i * 2 + 1] = (char)(temp & 0xff);
+//   }
+//   WriteUDPFrame(id, prn->OutBufp, prn->audio[0].spp * 4);
+// and network.c:1363-1373 [v2.10.3.15] (WriteUDPFrame):
+//   case 0: // receiver audio
+//       p = (unsigned char*)&prn->rx[0].rx_out_seq_no;
+//       framebuf[0] = p[3];
+//       framebuf[1] = p[2];
+//       framebuf[2] = p[1];
+//       framebuf[3] = p[0];
+//       ++prn->rx[0].rx_out_seq_no;
+//       memcpy(framebuf + 4, bufp, buflen);
+//       ...
+//           sendPacket(listenSock, framebuf, buflen + 4, prn->base_outbound_port + 4);// 1028);
+//
+// NereusSDR: the value is held to +/-32767 before the conversion, where
+// Thetis's (short) cast of a sample past full scale is undefined in C++.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::composeRadioAudioPacket(const float* lr, char* buf)
+{
+    const quint32 seq = m_rxOutSeqNo++;
+    buf[0] = static_cast<char>((seq >> 24) & 0xFF);
+    buf[1] = static_cast<char>((seq >> 16) & 0xFF);
+    buf[2] = static_cast<char>((seq >> 8) & 0xFF);
+    buf[3] = static_cast<char>(seq & 0xFF);
+    const bool swap = m_radioAudioSwap.load(std::memory_order_relaxed);
+    for (int i = 0; i < 2 * kRadioAudioSpp; ++i) {
+        // The swap exchanges each pair's L and R (i ^ 1 is the other one).
+        const float x = swap ? lr[i ^ 1] : lr[i];
+        const double scaled = x >= 0.0f ? std::floor(double(x) * 32767.0 + 0.5)
+                                        : std::ceil(double(x) * 32767.0 - 0.5);
+        const auto temp = static_cast<int16_t>(std::clamp(scaled, -32767.0, 32767.0));
+        buf[4 + i * 2] = static_cast<char>((temp >> 8) & 0xFF);
+        buf[4 + i * 2 + 1] = static_cast<char>(temp & 0xFF);
+    }
+}
+
+int P2RadioConnection::serviceRadioAudioSend(qint64 nowNs, TxIqFrameSink sink, void* ctx)
+{
+    // The radio's audio buffer drains at 48 kHz between passes.
+    if (m_radioAudioLastNs >= 0 && nowNs > m_radioAudioLastNs) {
+        m_radioAudioLead -= double(nowNs - m_radioAudioLastNs) * double(kRadioAudioRateHz) / 1.0e9;
+        if (m_radioAudioLead < 0.0) {
+            m_radioAudioLead = 0.0;
+        }
+    }
+    m_radioAudioLastNs = nowNs;
+
+    int sent = 0;
+    float lr[2 * kRadioAudioSpp];
+    char packet[kRadioAudioPacketBytes];
+    while (m_radioAudioLead + kRadioAudioSpp <= kRadioAudioTargetLeadFrames
+           && takeRadioAudio(lr, kRadioAudioSpp)) {
+        composeRadioAudioPacket(lr, packet);
+        // A packet the socket refuses is not retried: the next one follows
+        // in its time slot, as the receive audio never waits.
+        if (sink(ctx, packet, kRadioAudioPacketBytes) == TxIqSinkResult::Sent) {
+            ++sent;
+        } else {
+            m_radioAudioSendErrors.fetch_add(1, std::memory_order_relaxed);
+        }
+        m_radioAudioLead += kRadioAudioSpp;
+    }
+    if (sent > 0) {
+        m_radioAudioPacketsSent.fetch_add(quint64(sent), std::memory_order_relaxed);
+    }
+    return sent;
+}
+
 namespace {
 
 // The native send on the connection socket's descriptor (the same source
@@ -2408,6 +2504,18 @@ void P2RadioConnection::startTxIqSender()
     m_txIqDestPort = static_cast<quint16>(m_baseOutboundPort + 5);
     m_txIqPacer = TxIqPacer{};
     m_txIqPending = false;
+    // Radio codec (2026-09-30): the receive audio to the radio's speaker
+    // out goes to base + 4 (1028). From Thetis network.c:1373 [v2.10.3.15]:
+    //   sendPacket(listenSock, framebuf, buflen + 4, prn->base_outbound_port + 4);// 1028);
+    // Its sequence number starts at 0 once (netInterface.c:1492
+    // [v2.10.3.15]: prn->rx[i].rx_out_seq_no = 0;, in create_rnet, which
+    // cmaster.cs:547 calls once), so a restart of the stream carries on
+    // from the last number (m_rxOutSeqNo's initialiser). The L/R swap is
+    // the model's (LRAudioSwap, netInterface.c:1409-1413 [v2.10.3.15]).
+    m_radioAudioDestPort = static_cast<quint16>(m_baseOutboundPort + 4);
+    m_radioAudioSwap.store(m_hardwareProfile.lrAudioSwap, std::memory_order_relaxed);
+    m_radioAudioLead = 0.0;
+    m_radioAudioLastNs = -1;
     m_txIqSenderRun.store(true, std::memory_order_release);
     m_txIqSender.reset(QThread::create([this]() { txIqSenderMain(); }));
     m_txIqSender->setObjectName(QStringLiteral("P2TxIqSender"));
@@ -2442,6 +2550,9 @@ void P2RadioConnection::txIqSenderMain()
     if (!fillTxIqNativeDest(&dest, m_txIqSocketFd, m_txIqDestIpv4, m_txIqDestPort)) {
         qCWarning(lcConnection) << "P2: the transmit I/Q socket has no usable address; the stream is not sent";
     }
+    TxIqNativeDest audioDest;
+    const bool audioDestOk =
+        fillTxIqNativeDest(&audioDest, m_txIqSocketFd, m_txIqDestIpv4, m_radioAudioDestPort);
     quint64 errorsLogged = 0;
     qint64 errorLogNs = 0;
 
@@ -2464,6 +2575,9 @@ void P2RadioConnection::txIqSenderMain()
         const qint64 nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         serviceTxIqSend(nowNs, &sendTxIqNative, &dest);
+        if (audioDestOk) {
+            serviceRadioAudioSend(nowNs, &sendTxIqNative, &audioDest);
+        }
         // A socket that refuses the stream: a warning at most once a second.
         const quint64 errors = m_txIqSendErrors.load(std::memory_order_relaxed);
         if (errors > errorsLogged && nowNs - errorLogNs >= 1'000'000'000LL) {

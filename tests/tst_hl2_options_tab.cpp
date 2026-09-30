@@ -249,10 +249,10 @@ private slots:
         QCOMPARE(tab.txLatencyMsForTest(), 33);
     }
 
-    // Swap audio channels is stored but never reaches the radio
-    // (NereusSDR sends the radio no audio of its own over P1, so there is
-    // nothing to swap): it shows disabled with a plain reason. The eight
-    // that do reach the radio are enabled, the clock options among them,
+    // Swap audio channels reaches the radio (the radio codec lane sends the
+    // receive audio in P1's L/R bytes), so it is enabled with mi0bot's
+    // tooltip (setup.designer.cs:11119 [@c26a8a4]). All nine options
+    // reach the radio and are enabled, the clock options among them,
     // except that CL2 frequency follows Enable CL2 (mi0bot ControlCl2 sets
     // udCl2Freq.Enabled = enable, setup.cs:21694-21729 [@c26a8a4]). The
     // same tab is the remote window's.
@@ -262,10 +262,8 @@ private slots:
         Hl2OptionsTab tab(&model);
         auto* swap = tab.findChild<QWidget*>(QStringLiteral("hl2SwapAudioChannels"));
         QVERIFY(swap != nullptr);
-        QVERIFY(!swap->isEnabled());
-        QCOMPARE(swap->toolTip(),
-                 QStringLiteral("NereusSDR does not send the radio audio of its own, "
-                                "so there is nothing to swap."));
+        QVERIFY(swap->isEnabled());
+        QCOMPARE(swap->toolTip(), QStringLiteral("Swap the audio channels sent to the HL2"));
         const QStringList live{
             QStringLiteral("hl2TxBufferLatency"), QStringLiteral("hl2PttHang"),
             QStringLiteral("hl2DisconnectReset"), QStringLiteral("hl2DisablePsSync"),

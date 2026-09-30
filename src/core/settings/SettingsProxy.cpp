@@ -49,6 +49,11 @@
 //                                    is structural. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  hasNonEmptySnapshot() counts only
+//                                    keys the Core sent (m_coreKeys), not
+//                                    this window's own writes. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -211,6 +216,7 @@ void SettingsProxy::applySnapshot(const QMap<QString, QString>& data)
         }
         m_cache.insert(it.key(), it.value());
         m_provenUnset.remove(it.key());
+        m_coreKeys.insert(it.key());
     }
     if (notClaimed > 0) {
         qCWarning(lcSettingsProxy)
@@ -258,10 +264,11 @@ bool SettingsProxy::hasNonEmptySnapshot() const
     // setupDialogAllowed() below, also requires m_ready, which nothing but
     // a completed handshake sets and which necessarily follows a snapshot.
     // Made structural rather than left resting on that ordering.
+    //
+    // The same holds after a snapshot: counting m_cache let this window's
+    // own write, made over an empty or marker-only snapshot, read as station
+    // content. Only keys the Core itself sent (m_coreKeys) count.
     if (!m_snapshotEverApplied) {
-        return false;
-    }
-    if (m_cache.isEmpty()) {
         return false;
     }
     // The seed marker alone does not count as "real" station content --
@@ -269,11 +276,12 @@ bool SettingsProxy::hasNonEmptySnapshot() const
     // Without this carve-out, EVERY snapshot (which always carries the
     // marker once the daemon has seeded it) would trivially satisfy
     // "non-empty" and the OR-fallback below would never do anything.
-    if (m_cache.size() == 1 &&
-        m_cache.contains(QLatin1String(AppSettings::kDaemonProfileSeededKey))) {
-        return false;
+    for (const QString& key : m_coreKeys) {
+        if (key != QLatin1String(AppSettings::kDaemonProfileSeededKey)) {
+            return true;
+        }
     }
-    return true;
+    return false;
 }
 
 bool SettingsProxy::setupDialogAllowed() const
@@ -292,6 +300,7 @@ void SettingsProxy::applyRemoteValue(const QString& key, const QVariant& value, 
     Q_UNUSED(originTag); // see the class comment's origin-tag paragraph: applied unconditionally here
     m_cache.insert(key, value.toString());
     m_provenUnset.remove(key);
+    m_coreKeys.insert(key);
 }
 
 void SettingsProxy::applyRemoteRemoval(const QString& key)
@@ -306,6 +315,7 @@ void SettingsProxy::applyRemoteRemoval(const QString& key)
     // uses for an invalid restored value.
     m_cache.remove(key);
     m_provenUnset.insert(key);
+    m_coreKeys.remove(key);
 }
 
 void SettingsProxy::applyRejection(const QString& key, const QVariant& restoredValue)
@@ -313,11 +323,13 @@ void SettingsProxy::applyRejection(const QString& key, const QVariant& restoredV
     if (restoredValue.isValid()) {
         m_cache.insert(key, restoredValue.toString());
         m_provenUnset.remove(key);
+        m_coreKeys.insert(key);
     } else {
         // The daemon has nothing for this key either -- revert to
         // proven-unset, not to an empty string (see the class comment).
         m_cache.remove(key);
         m_provenUnset.insert(key);
+        m_coreKeys.remove(key);
     }
     emit valueRejected(key, restoredValue);
 }

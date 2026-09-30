@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Radio codec lane: radioMicVersion, after
+//               rx2AttenuatorVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Level Cal 2: rx2AttenuatorVersion, after the direct media
 //               ladder and before coreBuildInfo. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -569,6 +572,12 @@ struct StationCapabilities {
     /// Sent after the direct media ladder and before coreBuildInfo, only
     /// to a peer whose hello declared `rx2Attenuator` 1; 0 otherwise.
     int rx2AttenuatorVersion = 0;
+    /// Radio codec lane: 1 means the catalogue's board carries radioMic
+    /// and radioMicNote (whether the radio's own mic can be chosen, and the
+    /// note that goes with it). Sent after rx2AttenuatorVersion and before
+    /// coreBuildInfo, only to a peer whose hello declared `radioMic` 1; 0
+    /// otherwise.
+    int radioMicVersion = 0;
     /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
     static constexpr int kMaxMediaStunUrls = 8;
     static constexpr int kMaxMediaStunUrlBytes = 512;

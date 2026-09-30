@@ -76,6 +76,10 @@
 //                 stale audio in its buffer before). NereusSDR-original.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-30 -- Radio codec (JJ's ruling): tryDrain's radioOut, the
+//                 radio's own speaker out, every receiving slice as
+//                 Thetis's mixer 0. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -367,7 +371,14 @@ public:
                  std::uint32_t localMask, OwnerOutput* owners, int ownerCount,
                  bool localOutOfMask = true, bool onlyWithoutMembers = false,
                  std::uint32_t localListenMask = 0,
-                 const float* localListenLevels = nullptr);
+                 const float* localListenLevels = nullptr,
+                 float* radioOut = nullptr);
+    // Radio codec (JJ's ruling 2026-09-30): `radioOut`, when not null, is
+    // the radio's own speaker out, as Thetis's audio mixer 0: every
+    // receiving slice whatever localMask says, each at its own gain, pan
+    // and mute, both routes summed, plus the transmit monitor's slot
+    // exactly while it is in the local sums (localOutOfMask). maxFrames * 2
+    // floats; same ramps and up-slew as the other sums.
 
     // Test seam: ramp length in frames (default kDefaultRampFrames).
     void setRampFrames(int frames);

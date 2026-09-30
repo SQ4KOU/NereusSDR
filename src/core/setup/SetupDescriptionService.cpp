@@ -3,6 +3,9 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-30: Hardware version 23, Calibration's Rx1 6m LNA row. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-30: Audio version 24 (radio codec lane): Line In Gain in 1.5 dB
+// steps, the Saturn G2's Mic Tip-Ring row. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
@@ -162,8 +165,13 @@ constexpr char kHardwareV13Controls[] =
 // keys (Hl2OptionsModel, hardware/<mac>/hl2/...). Ranges and defaults are
 // Hl2OptionsModel's (mi0bot setup.designer.cs). The Core sends the radio TX
 // latency, PTT hang, reset on disconnect, power supply sync and Band Volts;
-// the other four are stored only, so they carry availability disabled with
-// the desktop's own reason. Closed as the version 13 rows are.
+// the three clock rows are stored only here, so they carry availability
+// disabled with the desktop's own reason (version 18 opens them). Swap audio
+// channels is open at every version from 16: the radio codec lane
+// (2026-09-30) sends the HL2 its receive audio and honors the option, and
+// the row's shape did not change, so no peer needs a new version to use it.
+// Tooltip from mi0bot setup.designer.cs:11119 [@c26a8a4]. Closed as the
+// version 13 rows are.
 constexpr char kHardwareV16Controls[] =
     R"json([)json"
     R"json({"id":"hardware.hl2Io.txLatency","label":"TX buffer latency:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/txLatencyMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":70,"step":1,"unit":"ms","default":20},)json"
@@ -174,7 +182,7 @@ constexpr char kHardwareV16Controls[] =
     R"json({"id":"hardware.hl2Io.disconnectReset","label":"Reset on Ethernet disconnect","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/disconnectReset"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
     R"json({"id":"hardware.hl2Io.psSync","label":"Disable power supply sync","tooltip":"Stops the radio synchronizing its power supply clock.","kind":"toggle","binding":{"radioSetting":"hl2/psSync"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
     R"json({"id":"hardware.hl2Io.bandVolts","label":"Band Volts (PWM out 0\u20133.3 V)","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/bandVolts"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
-    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not send the radio audio of its own, so there is nothing to swap."}})json"
+    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"Swap the audio channels sent to the HL2","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false})json"
     R"json(])json";
 
 // Hardware version 18: HL2 Options' Enable CL2, CL2 frequency and External
@@ -205,6 +213,20 @@ constexpr char kHardwareV18Controls[] =
 constexpr char kHardwareV23Controls[] =
     R"json([)json"
     R"json({"id":"hardware.calibration.rx1_6mLna","label":"Rx1 6m LNA:","tooltip":"","kind":"decimal","binding":{"radioSetting":"cal/rx1_6mLna"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":1},"requiresDescriptionVersion":23,"min":0,"max":25,"step":1,"decimals":1,"unit":"dB","default":13})json"
+    R"json(])json";
+
+// Audio version 24 (radio codec lane): TX Input's Line In Gain moves in the
+// 1.5 dB steps of Thetis's udLineInBoost with one decimal
+// (From Thetis setup.designer.cs:47006-47034 [v2.10.3.15]: Increment 1.5,
+// Minimum -34.5, Maximum 12, DecimalPlaces 1), the values the Core's
+// TransmitModel::lineInBoost takes; and the Saturn G2 group's Mic Tip-Ring,
+// the ORION panel's Tip / Ring that Thetis enables on the G2 and G2-1K
+// (setup.cs:20292, 20343 [v2.10.3.15]), bound to transmit's micTipRing as
+// the Orion group's row is. Closed as the version 23 row is.
+constexpr char kAudioV24Controls[] =
+    R"json([)json"
+    R"json({"id":"audio.txInput.hermesLineInGain","label":"Line In Gain:","tooltip":"","kind":"decimal","binding":{"property":{"object":"transmit","name":"lineInBoost"}},"applies":"live","requiresDescriptionVersion":24,"gate":{"capability":"transmitSettingsVersion","min":3,"transmit":true},"min":-34.5,"max":12,"step":1.5,"decimals":1,"unit":"dB"},)json"
+    R"json({"id":"audio.txInput.saturnMicTipRing","label":"Mic Tip-Ring (Tip is Mic)","tooltip":"","kind":"toggle","binding":{"property":{"object":"transmit","name":"micTipRing"}},"applies":"live","requiresDescriptionVersion":24,"gate":{"capability":"transmitSettingsVersion","min":3,"transmit":true}})json"
     R"json(])json";
 
 // Transmit version 13 (R-R3-49): Power's PA Control group, "Disable HF PA",
@@ -455,6 +477,12 @@ const QHash<QString, QJsonObject>& hardwareV18Controls()
 const QHash<QString, QJsonObject>& hardwareV23Controls()
 {
     static const QHash<QString, QJsonObject> table = controlsById(kHardwareV23Controls);
+    return table;
+}
+
+const QHash<QString, QJsonObject>& audioV24Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kAudioV24Controls);
     return table;
 }
 
@@ -730,6 +758,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
          // Version 23: Calibration's Rx1 6m LNA row.
          && !(id == QLatin1String("hardware")
               && root.value(QStringLiteral("version")) == QJsonValue(23))
+         // Version 24: TX Input's Line In Gain steps and Saturn Mic Tip-Ring.
+         && !(id == QLatin1String("audio")
+              && root.value(QStringLiteral("version")) == QJsonValue(24))
          // Version 21: CAT & Network's TCI Forget row greys out with Duplicate.
          && !(id == QLatin1String("catNetwork")
               && root.value(QStringLiteral("version")) == QJsonValue(21))
@@ -779,7 +810,22 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                             && !(id == QLatin1String("dsp")
                                  && root.value(QStringLiteral("version")) == QJsonValue(19))
                             && !(id == QLatin1String("catNetwork")
-                                 && root.value(QStringLiteral("version")) == QJsonValue(21)))) {
+                                 && root.value(QStringLiteral("version")) == QJsonValue(21))
+                            && !(id == QLatin1String("audio")
+                                 && root.value(QStringLiteral("version")) == QJsonValue(24)))) {
+                        return {};
+                    }
+                    ids.insert(controlId);
+                    continue;
+                }
+                // Version 24: TX Input's two rows, accepted only as the exact
+                // closed rows (validateAudioV24Control).
+                if (id == QLatin1String("audio")
+                    && control.value(QStringLiteral("requiresDescriptionVersion"))
+                        == QJsonValue(24)) {
+                    if (controlId.isEmpty() || ids.contains(controlId)
+                        || root.value(QStringLiteral("version")) != QJsonValue(24)
+                        || !SetupDescription::validateAudioV24Control(control)) {
                         return {};
                     }
                     ids.insert(controlId);
@@ -2268,6 +2314,13 @@ bool SetupDescription::validateHardwareV18Control(const QJsonObject& control)
     return row != hardwareV18Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateAudioV24Control(const QJsonObject& control)
+{
+    const auto row = audioV24Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != audioV24Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateHardwareV23Control(const QJsonObject& control)
 {
     const auto row = hardwareV23Controls().constFind(
@@ -2898,6 +2951,20 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                         control = *older;
                     }
                 }
+                // Audio 24 moved Line In Gain to 1.5 dB steps: a peer below
+                // 24 keeps the version 15 row it was built for (whole
+                // decibels from -34).
+                if (categoryId == QLatin1String("audio") && version < 24
+                    && control.value(QStringLiteral("id"))
+                        == QJsonValue(QStringLiteral("audio.txInput.hermesLineInGain"))
+                    && control.value(QStringLiteral("requiresDescriptionVersion"))
+                        == QJsonValue(24)) {
+                    control.insert(QStringLiteral("requiresDescriptionVersion"),
+                                   SetupDescriptionV15::kVersion);
+                    control.insert(QStringLiteral("min"), -34);
+                    control.insert(QStringLiteral("step"), 1);
+                    control.remove(QStringLiteral("decimals"));
+                }
                 // CAT & Network 21 greys TCI's Forget row out while Duplicate
                 // is off: a peer below 21 keeps the row, always enabled.
                 if (categoryId == QLatin1String("catNetwork") && version < 21) {
@@ -3007,6 +3074,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             ? kDspOnAirLockVersion
         : categoryId == QLatin1String("dsp") && version >= 19 ? 19
         : categoryId == QLatin1String("catNetwork") && version >= 21 ? 21
+        // Audio changed at 15 and 24 (Line In Gain's steps, Saturn Mic
+        // Tip-Ring): 15 to 23 see 15.
+        : categoryId == QLatin1String("audio") && version >= 24 ? 24
         : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
         // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
@@ -3054,7 +3124,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
     }
     // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17, 18 and 23;
     // transmit at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at
-    // 15; DSP at 19; CAT & Network at 21.
+    // 15; DSP at 19; CAT & Network at 21; Audio at 24.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {

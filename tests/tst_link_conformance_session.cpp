@@ -255,6 +255,10 @@
 //               one that stalls names the stage it stalled at; the 15 s
 //               bound is unchanged. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: stationSetup.deferOwnConnection: the own client connects
+//               at the fixture's openOwnConnection step (addendum G-53,
+//               the place-freed fixture). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-29: The phone's direct addresses: coreListener and
 //               coreInterfaces are known stationSetup keys. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
@@ -332,7 +336,7 @@ const QStringList kSetupKeys{
     QStringLiteral("lanScanWindowMs"), QStringLiteral("remoteTransmit"),
     QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
     QStringLiteral("unkeyWalkMs"),
-    QStringLiteral("stationRadios"),
+    QStringLiteral("stationRadios"),   QStringLiteral("deferOwnConnection"),
     QStringLiteral("coreListener"),    QStringLiteral("coreInterfaces"),
 };
 
@@ -1097,6 +1101,7 @@ private slots:
     void theConformanceCheckCatchesWhatAnAppCannotSend();
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
+    void aDeferredOwnConnectionOpensAtItsStep();
     void jsonStringsMatchTheirShape();
     void theVirtualClockKeepsALongTimersDueAsRealTimePasses();
     void theVirtualClockAloneFiresTheStationsTimers();
@@ -1196,11 +1201,19 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
     // Declared after the station, so it goes first; the server owns the
     // station end once it accepts it.
     LoopbackTransport client(QStringLiteral("conformance-client"));
+    // stationSetup.deferOwnConnection: the fixture's openOwnConnection step
+    // connects the runner's own client instead (LinkFixtures::runSession).
+    const bool deferOwn = fixture.value(QStringLiteral("stationSetup"))
+                              .toObject()
+                              .value(QStringLiteral("deferOwnConnection"))
+                              .toBool(false);
     if (!overDataChannel) {
-        auto* stationEnd =
-            new LoopbackTransport(QStringLiteral("conformance"), station.server.get());
-        stationEnd->linkTo(&client);
-        station.server->acceptTransport(stationEnd);
+        if (!deferOwn) {
+            auto* stationEnd =
+                new LoopbackTransport(QStringLiteral("conformance"), station.server.get());
+            stationEnd->linkTo(&client);
+            station.server->acceptTransport(stationEnd);
+        }
         const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
         writeTrace(id, client);
         return failure.isEmpty() ? failure : QStringLiteral("%1: %2").arg(id, failure);
@@ -1249,7 +1262,7 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
         return didOpen;
     };
     QString openDiagnostic;
-    if (!join(&client, &openDiagnostic)) {
+    if (!deferOwn && !join(&client, &openDiagnostic)) {
         return QStringLiteral("%1: the data channel %2").arg(id, openDiagnostic);
     }
     LinkFixtures::setSettleCheck([&bridges] {
@@ -1941,6 +1954,71 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     failure = run(QStringLiteral("altered-connect-deadline"), early);
     QVERIFY2(failure.contains(QStringLiteral("the station sent nothing more")),
              qPrintable(failure));
+}
+
+// Addendum G-53: the place-freed fixture passes 200 s of virtual time
+// before its own client signs in, past the station's sign-in deadline, so
+// its own connection opens at an openOwnConnection step instead of before
+// the first step.
+void TstLinkConformanceSession::aDeferredOwnConnectionOpensAtItsStep()
+{
+    const QJsonObject placeFreed = fixture(QStringLiteral("session-place-freed"));
+    QVERIFY(!placeFreed.isEmpty());
+    QVERIFY2(LinkFixtures::checkSessionFormat(placeFreed).isEmpty(),
+             qPrintable(LinkFixtures::checkSessionFormat(placeFreed)));
+    QJsonArray steps = placeFreed.value(QStringLiteral("steps")).toArray();
+    int open = -1;
+    for (int i = 0; i < steps.size(); ++i) {
+        if (steps.at(i).toObject().contains(QStringLiteral("openOwnConnection"))) {
+            open = i;
+        }
+    }
+    QVERIFY(open > 0 && open + 1 < steps.size());
+
+    // The same fixture with its own connection opened first, as before: the
+    // sign-in deadline ends it during the 200 s, before the client's hello.
+    QJsonObject eager = placeFreed;
+    QJsonObject setup = eager.value(QStringLiteral("stationSetup")).toObject();
+    setup.remove(QStringLiteral("deferOwnConnection"));
+    eager.insert(QStringLiteral("stationSetup"), setup);
+    QJsonArray eagerSteps = steps;
+    eagerSteps.removeAt(open);
+    eager.insert(QStringLiteral("steps"), eagerSteps);
+    QVERIFY2(LinkFixtures::checkSessionFormat(eager).isEmpty(),
+             qPrintable(LinkFixtures::checkSessionFormat(eager)));
+    QString failure = run(QStringLiteral("eager-place-freed"), eager);
+    QVERIFY2(failure.contains(QStringLiteral("(client hello): the link is already closed")),
+             qPrintable(failure));
+
+    // The format check: an own-client step before the connection opens, a
+    // deferred fixture that never opens it, and the step without the setup.
+    QJsonObject early = placeFreed;
+    QJsonArray earlySteps = steps;
+    const QJsonValue opening = earlySteps.at(open);
+    earlySteps.replace(open, earlySteps.at(open + 1));
+    earlySteps.replace(open + 1, opening);
+    early.insert(QStringLiteral("steps"), earlySteps);
+    QVERIFY2(LinkFixtures::checkSessionFormat(early).contains(
+                 QStringLiteral("has no connection before the openOwnConnection step")),
+             qPrintable(LinkFixtures::checkSessionFormat(early)));
+
+    QJsonObject neverOpened = placeFreed;
+    QJsonArray closedSteps;
+    for (int i = 0; i < open; ++i) {
+        closedSteps.append(steps.at(i));
+    }
+    neverOpened.insert(QStringLiteral("steps"), closedSteps);
+    QVERIFY2(LinkFixtures::checkSessionFormat(neverOpened).contains(
+                 QStringLiteral("no step opens the runner's own connection")),
+             qPrintable(LinkFixtures::checkSessionFormat(neverOpened)));
+
+    QJsonObject stray = eager;
+    QJsonArray straySteps = eagerSteps;
+    straySteps.insert(0, QJsonObject{{QStringLiteral("openOwnConnection"), true}});
+    stray.insert(QStringLiteral("steps"), straySteps);
+    QVERIFY2(LinkFixtures::checkSessionFormat(stray).contains(
+                 QStringLiteral("openOwnConnection must be true, once")),
+             qPrintable(LinkFixtures::checkSessionFormat(stray)));
 }
 
 void TstLinkConformanceSession::jsonStringsMatchTheirShape()

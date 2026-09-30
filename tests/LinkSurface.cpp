@@ -16,6 +16,10 @@
 //                                    declares paTransmitBand, so
 //                                    paTransmitBandVersion and radio's
 //                                    paTransmitBand are captured.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec lane: the capture
+//                                    declares radioMic, so radioMicVersion
+//                                    is captured. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Level Cal 2: the capture declares
 //                                    rx2Attenuator, so rx2AttenuatorVersion
 //                                    is captured. AI-assisted via Anthropic
@@ -671,7 +675,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"mediaDirect", 1},
                                   // Level Cal 2: rx2AttenuatorVersion,
                                   // the catalogue's RX2 input control.
-                                  {"rx2Attenuator", 1}})));
+                                  {"rx2Attenuator", 1},
+                                  // Radio codec lane: radioMicVersion,
+                                  // the catalogue's radio mic keys.
+                                  {"radioMic", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -747,6 +754,8 @@ QJsonArray captureCapabilities()
     caps.mediaStunUrls = {QStringLiteral("stun:stun.example.test:3478")};
     // Level Cal 2: sent to a peer that declared rx2Attenuator.
     caps.rx2AttenuatorVersion = 1;
+    // Radio codec lane: sent to a peer that declared radioMic.
+    caps.radioMicVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

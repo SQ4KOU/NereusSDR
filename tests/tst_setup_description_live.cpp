@@ -1,6 +1,9 @@
 // no-port-check: NereusSDR-original live-apply checks for described settings.
 // 2026-09-29: the RX buffer size lock follows TUNE and the two-tone test.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-30: the cap is 24 (Audio > TX Input's Line In Gain steps and
+// Saturn Mic Tip-Ring); the HL2 Core's Hermes rows. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 
 #include <tuple>
@@ -38,9 +41,9 @@ private slots:
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
     // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
     // clock rows) opens the clock rows; version 23 (Calibration's Rx1 6m
-    // LNA row) is Hardware's cap and the description's own (21: CAT &
-    // Network's Forget row follows Duplicate; 22: DSP's RX buffer size
-    // lock).
+    // LNA row) is Hardware's cap; 24 (Audio > TX Input) is the
+    // description's own (21: CAT & Network's Forget row follows Duplicate;
+    // 22: DSP's RX buffer size lock).
     void pairedV16PhoneReadsHl2Options()
     {
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
@@ -57,7 +60,8 @@ private slots:
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
             {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
-            {21, 21, 18}, {22, 22, 18}, {23, 23, 23}, {99, 23, 23}, {15, 15, 13}};
+            {21, 21, 18}, {22, 22, 18}, {23, 23, 23}, {24, 24, 23}, {99, 24, 23},
+            {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
             Core core;
@@ -80,8 +84,9 @@ private slots:
             if (received >= 16) {
                 const QJsonObject swap = rows.last().toObject();
                 QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
-                QCOMPARE(swap.value("availability").toObject().value("enabled"),
-                         QJsonValue(false));
+                // Open at every version from 16: the Core sends the HL2
+                // its receive audio (radio codec lane).
+                QVERIFY(!swap.contains("availability"));
                 // The clock rows are open from version 18; a version 16 or
                 // 17 phone keeps them closed.
                 const QJsonObject cl2 = rows.at(2).toObject();
@@ -146,6 +151,68 @@ private slots:
         app->sendText(SessionMessages::encode(
             SessionMessages::settingsWrite(key, QStringLiteral("7"), QStringLiteral("phone"))));
         QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("7"));
+    }
+
+    // Version 24 (radio codec lane): on the HL2 Core a version 24 phone
+    // reads TX Input's Hermes rows, titled for the HL2 with the audio add-on
+    // note, Line In Gain in 1.5 dB steps; a version 23 phone reads version
+    // 15's whole decibels. Both reach the Core's Line In Gain.
+    void pairedV24PhoneReadsHl2LineInGainSteps()
+    {
+        Core core;
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model,
+                                                         core.model->currentRadioInfo());
+        QVERIFY(core.model->boardCapabilities().radioMicNeedsAddOn);
+        Device current(QStringLiteral("Line V24 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("Line V23 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v24 = kHolder;
+        v24.insert("setupDescription", 24);
+        QHash<QByteArray, int> v23 = kHolder;
+        v23.insert("setupDescription", 23);
+        auto* app = core.signIn(current, v24);
+        auto* olderApp = core.signIn(older, v23);
+        QVERIFY(admitted(app) && admitted(olderApp));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(24));
+
+        const auto hermesOf = [](LoopbackTransport* peer, QJsonValue* version) {
+            const QJsonObject audio = QJsonDocument::fromJson(latest(peer->received(),
+                QStringLiteral("setup"), QStringLiteral("audio")).toString().toUtf8()).object();
+            *version = audio.value("version");
+            for (const QJsonValue& page : audio.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    if (section.toObject().value("title")
+                        == QJsonValue("Radio Mic (Hermes Lite 2)")) {
+                        return section.toObject().value("controls").toArray();
+                    }
+                }
+            }
+            return QJsonArray{};
+        };
+        QJsonValue version;
+        const QJsonArray rows = hermesOf(app, &version);
+        QCOMPARE(version, QJsonValue(24));
+        QCOMPARE(rows.size(), 3);
+        const QJsonObject gain = rows.at(2).toObject();
+        QCOMPARE(gain.value("id"), QJsonValue("audio.txInput.hermesLineInGain"));
+        QCOMPARE(gain.value("step"), QJsonValue(1.5));
+        QCOMPARE(gain.value("min"), QJsonValue(-34.5));
+        QCOMPARE(gain.value("tooltip"), QJsonValue(
+            "Needs the Hermes Lite 2 audio add-on board. A stock Hermes Lite 2 sends no mic audio."));
+        // Without the HL2's note it is the published row.
+        QJsonObject published = gain;
+        published.insert("tooltip", QString());
+        QVERIFY(SetupDescriptionService::validateAudioV24Control(published));
+
+        const QJsonArray olderRows = hermesOf(olderApp, &version);
+        QCOMPARE(version, QJsonValue(15));
+        QCOMPARE(olderRows.size(), 3);
+        QCOMPARE(olderRows.at(2).toObject().value("step"), QJsonValue(1));
+        QCOMPARE(olderRows.at(2).toObject().value("min"), QJsonValue(-34));
+        QVERIFY(!olderRows.at(2).toObject().contains("decimals"));
     }
 
     // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
@@ -1084,7 +1151,7 @@ private slots:
         QCOMPARE(pageIds(category(v15, "dsp")).size(), 10);
         QCOMPARE(pageIds(category(v15, "transmit")),
                  (QStringList{"transmit.power", "transmit.speechProcessor", "transmit.dexpVox"}));
-        // The HL2 has no radio microphone jack group; Mic Gain is its TX Input.
+        // TX Input and TX Profile (the radio mic rows follow the board).
         QCOMPARE(pageIds(category(v15, "audio")), (QStringList{"audio.txInput", "audio.txProfile"}));
         QCOMPARE(pageIds(category(v15, "diagnostics")),
                  (QStringList{"diagnostics.radioStatus", "diagnostics.connectionQuality",

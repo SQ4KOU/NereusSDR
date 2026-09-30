@@ -46,6 +46,10 @@
 //                 to other slices at its own level with a continuous
 //                 hand-off. NereusSDR-original. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 -- Radio codec (JJ's ruling): tryDrain's radioOut, the
+//                 radio's own speaker out, every receiving slice as
+//                 Thetis's mixer 0. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -319,7 +323,8 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
 int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
                           std::uint32_t localMask, OwnerOutput* owners, int ownerCount,
                           bool localOutOfMask, bool onlyWithoutMembers,
-                          std::uint32_t localListenMask, const float* localListenLevels) {
+                          std::uint32_t localListenMask, const float* localListenLevels,
+                          float* radioOut) {
     // `out` is the speakers sum, `hpOut` the headphones sum (R-R3-45).
     if ((out == nullptr && hpOut == nullptr) || maxFrames <= 0) { return 0; }
     if (owners == nullptr) { ownerCount = 0; }
@@ -399,6 +404,9 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
     if (hpOut != nullptr) {
         std::fill(hpOut, hpOut + static_cast<size_t>(n) * 2, 0.0f);
     }
+    if (radioOut != nullptr) {
+        std::fill(radioOut, radioOut + static_cast<size_t>(n) * 2, 0.0f);
+    }
     // Task 76: each owner's sums start silent too. Slice control plan
     // Task 6: every owner's, since a listening owner may control nothing
     // (a skipped one handed its tap whatever the buffer last held).
@@ -438,6 +446,12 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
         const bool local = inMask ? (localMask & bit) != 0 : localOutOfMask;
         float* const sliceOut = local ? out : nullptr;
         float* const sliceHpOut = local ? hpOut : nullptr;
+        // Radio codec (JJ's ruling 2026-09-30): the radio's speaker out
+        // takes every receiving slice, as Thetis's mixer 0 takes RX1, RX1S
+        // and RX2 whoever listens (console.cs:27650-27664 [v2.10.3.15]),
+        // and the monitor slot (MON, the same mixer, audio.cs:417-418) as
+        // the local sums take it.
+        float* const sliceRadioOut = (inMask || localOutOfMask) ? radioOut : nullptr;
 
         // Target gains. Mute is a ramp target, not a hard gate, so a
         // muted slice fades out over m_rampFrames instead of clicking.
@@ -543,6 +557,10 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
                 sliceHpOut[o + 0] += hpL;
                 sliceHpOut[o + 1] += hpR;
             }
+            if (sliceRadioOut != nullptr) {
+                sliceRadioOut[o + 0] += spkL + hpL;
+                sliceRadioOut[o + 1] += spkR + hpR;
+            }
             for (int k = 0; k < ownerCount; ++k) {
                 OwnerOutput& owner = owners[k];
                 if (!inMask) {
@@ -631,6 +649,10 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
             if (hpOut != nullptr) {
                 hpOut[o + 0] *= g;
                 hpOut[o + 1] *= g;
+            }
+            if (radioOut != nullptr) {
+                radioOut[o + 0] *= g;
+                radioOut[o + 1] *= g;
             }
             // And every owner's sums with them (Task 76).
             for (int k = 0; k < ownerCount; ++k) {

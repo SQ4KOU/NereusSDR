@@ -89,6 +89,10 @@
 //               this device listens to at its own level and mute
 //               (SliceAccessController::listenLevel), centered.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: radio codec review: the periodic audio diagnostics line
+//               carries the radio speaker out's counters
+//               (RadioConnection::radioAudioStatsText). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -5936,7 +5940,13 @@ void DaemonMediaController::maybeLogAudioDiagnostics(bool final)
         << " sendUnresolvedAtRetirement=" << snapshot.sendUnresolvedAtRetirement
         << " hasLastPacket=" << snapshot.sender.hasLastEmittedPacket
         << " lastSequence=" << snapshot.sender.lastEmittedSequence
-        << " lastTimestamp=" << snapshot.sender.lastEmittedTimestamp;
+        << " lastTimestamp=" << snapshot.sender.lastEmittedTimestamp
+        // Radio codec: the radio's own speaker out (the P1 L/R bytes, the P2
+        // port 1028 stream), its ring's drift counters.
+        << " " << qPrintable(RadioConnection::radioAudioStatsText(
+               m_radioModel && m_radioModel->connection() != nullptr
+                   ? m_radioModel->connection()->radioAudioStats()
+                   : RadioConnection::RadioAudioStats{}));
     m_audioDiagnosticsLastLogMs = elapsedMs;
 }
 

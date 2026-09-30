@@ -1655,8 +1655,10 @@ private slots:
     {
         QTest::addColumn<int>("board");
         QTest::addColumn<int>("radioMicRows");
-        QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn) << 4;
-        QTest::newRow("HL2") << int(HPSDRHW::HermesLite) << 0;
+        // Radio codec lane: the G2's Mic Tip-Ring (version 24), and the
+        // HL2's Hermes rows through its audio add-on board.
+        QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn) << 5;
+        QTest::newRow("HL2") << int(HPSDRHW::HermesLite) << 3;
         QTest::newRow("Hermes") << int(HPSDRHW::Hermes) << 3;
         QTest::newRow("Orion-MkII") << int(HPSDRHW::OrionMKII) << 4;
     }
