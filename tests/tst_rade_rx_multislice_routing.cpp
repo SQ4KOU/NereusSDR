@@ -31,6 +31,12 @@
 //                 after a reconnect reaches the slice the transmitter moves
 //                 to. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-30 -- RADE gaps: a RADE slice with no sync plays silence, never
+//                 its sideband; a slice created locally or by a phone
+//                 (addSlice, addSliceOnPan) never disturbs a decoding RADE
+//                 slice; two RADE slices on one pan both decode. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -50,13 +56,18 @@
 #include "core/TxSliceArbiter.h"
 #include "core/TxWorkerThread.h"
 #include "core/WdspEngine.h"
+#include "core/session/MirrorSchema.h"
+#include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SessionMessages.h"
 #include "fakes/FakeAudioBus.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/RxDspWorker.h"
 #include "models/SliceModel.h"
 
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -256,6 +267,219 @@ struct TwoSliceRig {
             && on == channel->rxThreadIdForTest();
     }
 };
+
+// RADE gaps (2026-09-30). A loud tone 1 kHz above the dial: the USB
+// sideband plays it loudly, and RADE's decoder never locks to it.
+struct Tone {
+    double phase{0.0};
+    QVector<float> next(int frames)
+    {
+        constexpr double kTwoPi = 6.283185307179586;
+        constexpr double kStep = kTwoPi * 1000.0 / 48000.0;
+        QVector<float> iq(frames * 2);
+        for (int i = 0; i < frames; ++i) {
+            iq[2 * i] = 0.5f * static_cast<float>(std::cos(phase));
+            iq[2 * i + 1] = 0.5f * static_cast<float>(std::sin(phase));
+            phase += kStep;
+            if (phase > kTwoPi) {
+                phase -= kTwoPi;
+            }
+        }
+        return iq;
+    }
+};
+
+// The largest magnitude a bus was given from byte `from` on.
+float peakSince(const FakeAudioBus* bus, qsizetype from)
+{
+    const QByteArray& buffer = bus->buffer();
+    const auto* samples = reinterpret_cast<const float*>(buffer.constData());
+    const qsizetype count = buffer.size() / qsizetype(sizeof(float));
+    float peak = 0.0f;
+    for (qsizetype i = from / qsizetype(sizeof(float)); i < count; ++i) {
+        peak = std::max(peak, std::fabs(samples[i]));
+    }
+    return peak;
+}
+
+constexpr float kAudible = 1.0e-3f;
+
+// RADE gaps: receiver A alone on a pool of `streams` DDCs, with WDSP
+// channels open for every id a new slice can take, so a slice made later
+// (locally, or by a phone through the session verbs) takes the model's own
+// path: the seed, the stream bind and the binding republished to the
+// worker. Each slice's VAX channel is its own, so a VAX bus holds exactly
+// that slice's blocks.
+struct GrowRig {
+    RadioModel radio;
+    int a{-1};
+    SliceModel* sliceA{nullptr};
+    WdspEngine* wdsp{nullptr};
+    std::array<FakeAudioBus*, 4> vax{};
+    RxDspWorker worker;
+    std::unique_ptr<DspWorkerDetach> detach;
+    Tone tone;
+
+    bool setUp(int streams, int maxSlices = 3)
+    {
+        radio.configureStreamPool(/*userDdcCount=*/streams, /*maxSlices=*/maxSlices,
+                                  /*defaultRateHz=*/48000);
+        a = radio.addSlice();
+        sliceA = radio.sliceById(a);
+        if (!sliceA || sliceA->streamIndex() < 0) {
+            return false;
+        }
+        sliceA->setDspMode(DSPMode::USB);
+        sliceA->setVaxChannel(1);
+        AudioEngine* const audio = radio.audioEngine();
+        wdsp = radio.wdspEngine();
+        wdsp->setSynchronousInitForTest(true);
+        if (!wdsp->initialize(QStandardPaths::writableLocation(
+                QStandardPaths::AppConfigLocation))) {
+            return false;
+        }
+        BusView spk = makeOpenBus(QStringLiteral("speakers"));
+        if (!spk.view) {
+            return false;
+        }
+        audio->setSpeakersBusForTest(std::move(spk.owned));
+        for (int ch = 1; ch <= 4; ++ch) {
+            BusView bus = makeOpenBus(QStringLiteral("vax-%1").arg(ch));
+            if (!bus.view) {
+                return false;
+            }
+            vax[size_t(ch - 1)] = bus.view;
+            audio->setVaxBusForTest(ch, std::move(bus.owned));
+        }
+        for (int id = 0; id < maxSlices; ++id) {
+            RxChannel* const rx =
+                wdsp->createRxChannel(id, kFrames, 4096, 48000, 48000, 48000);
+            if (!rx) {
+                return false;
+            }
+            rx->setMode(DSPMode::USB);
+            rx->setActive(true);
+        }
+        worker.setEngines(wdsp, audio);
+        worker.setBufferSizes(kFrames, kFrames);
+        worker.setStreamSlices(sliceA->streamIndex(), QVector<int>{a});
+        radio.attachDspWorkerForTest(&worker);
+        detach = std::make_unique<DspWorkerDetach>();
+        detach->radio = &radio;
+        return true;
+    }
+
+    FakeAudioBus* vaxOf(const SliceModel* slice) const
+    {
+        const int ch = slice->vaxChannel();
+        return ch >= 1 && ch <= 4 ? vax[size_t(ch - 1)] : nullptr;
+    }
+
+    // One tone block into every stream a slice is on, through `w`.
+    void feedOnce(RxDspWorker& w)
+    {
+        const QVector<float> iq = tone.next(kFrames);
+        QVector<int> fed;
+        for (const SliceModel* s : radio.slices()) {
+            const int stream = s ? s->streamIndex() : -1;
+            if (stream >= 0 && !fed.contains(stream)) {
+                fed.append(stream);
+                w.processIqBatch(stream, iq);
+            }
+        }
+    }
+
+    // `blocks` tone blocks; each waits for every RADE decoder to go idle so
+    // the run is paced by blocks, not by this machine's load.
+    bool feed(int blocks)
+    {
+        for (int i = 0; i < blocks; ++i) {
+            feedOnce(worker);
+            for (const SliceModel* s : radio.slices()) {
+                RadeChannel* const ch = s ? wdsp->radeChannel(s->sliceIndex()) : nullptr;
+                if (ch && !ch->waitRxIdleForTest(5000)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Feeds until `bus` has had audible audio since byte `from` (WDSP's
+    // buffering and AGC first). The blocks it took, or -1 if none in
+    // `maxBlocks`.
+    int feedUntilAudible(const FakeAudioBus* bus, qsizetype from, int maxBlocks = 2048)
+    {
+        for (int i = 1; i <= maxBlocks; ++i) {
+            if (!feed(1)) {
+                return -1;
+            }
+            if (peakSince(bus, from) > kAudible) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    bool decodesOnItsOwnThread(RadeChannel* channel, QString* evidence)
+    {
+        std::atomic<Qt::HANDLE> decodedOn{nullptr};
+        const QMetaObject::Connection probe = QObject::connect(
+            channel, &RadeChannel::rxSpeechReady, channel,
+            [&decodedOn](const QByteArray&) {
+                decodedOn.store(QThread::currentThreadId());
+            }, Qt::DirectConnection);
+        const int callsBefore = channel->radeRxCallCountForTest();
+        const bool idle = feed(512);  // past both resamplers and one rade_rx
+        QObject::disconnect(probe);
+        const Qt::HANDLE on = decodedOn.load();
+        *evidence = QStringLiteral("idle=%1 radeRx=%2 decodedOnDecoderThread=%3 onMain=%4")
+            .arg(idle)
+            .arg(channel->radeRxCallCountForTest() - callsBefore)
+            .arg(on != nullptr && on == channel->rxThreadIdForTest())
+            .arg(on == QThread::currentThreadId());
+        return idle && channel->radeRxCallCountForTest() > callsBefore
+            && on != nullptr && on != QThread::currentThreadId()
+            && on == channel->rxThreadIdForTest();
+    }
+};
+
+MirrorUpdate utf8Arg(const QByteArray& name, const QString& value)
+{
+    return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(value)};
+}
+
+// The way a slice is made: this computer's own +RX (addSliceOnPan), or a
+// phone's session verb through the Core's dispatcher.
+enum class CreatePath { LocalOnPan, PhoneAddSlice, PhoneAddSliceOnPan };
+
+int createSlice(RadioModel& radio, CreatePath path, const QString& panId)
+{
+    if (path == CreatePath::LocalOnPan) {
+        QSignalSpy added(&radio, &RadioModel::sliceAdded);
+        radio.addSliceOnPan(panId);
+        return added.isEmpty() ? -1 : added.last().at(0).toInt();
+    }
+    SessionCommandDispatcher dispatcher(&radio);
+    dispatcher.setRequester(QByteArrayLiteral("phone"));
+    bool succeeded = false;
+    QObject::connect(&dispatcher, &SessionCommandDispatcher::commandResultReady,
+                     &dispatcher, [&succeeded](const SessionMessage& result) {
+                         succeeded = result.accepted;
+                     });
+    QSignalSpy added(&radio, &RadioModel::sliceAdded);
+    if (path == CreatePath::PhoneAddSlice) {
+        dispatcher.dispatch(SessionMessages::commandInvoke(
+            "addSlice", 1, {utf8Arg("initialPanId", panId)}));
+    } else {
+        dispatcher.dispatch(SessionMessages::commandInvoke(
+            "addSliceOnPan", 1, {utf8Arg("panId", panId)}));
+    }
+    if (!succeeded || added.isEmpty()) {
+        return -1;
+    }
+    return added.last().at(0).toInt();
+}
 
 }  // namespace
 
@@ -773,6 +997,203 @@ private slots:
         QCOMPARE(rig.radio.sliceById(restored)->dspMode(), DSPMode::LSB);
         QVERIFY(rig.wdsp->radeChannel(restored) == nullptr);
         QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+    }
+
+    // ── RADE gaps (2026-09-30) ──────────────────────────────────────────
+
+    // Item A. A routed RADE slice whose decoder never syncs plays silence,
+    // every block, and never its WDSP sideband; a USB slice beside it plays.
+    // freedv-gui does the same: RADEReceiveStep::execute outputs only FARGAN
+    // speech, none while rade_rx returns no features (RADEReceiveStep.cpp:
+    // 196-270 [@77e793a]); the demodulated audio is heard only when the
+    // operator picks Analog (TxRxThread.cpp:483-495 [@77e793a]).
+    void aRadeSliceWithoutSyncPlaysSilenceNeverItsSideband()
+    {
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/2));
+        const int b = createSlice(rig.radio, CreatePath::LocalOnPan, QStringLiteral("pan-b"));
+        QVERIFY(b >= 0);
+        QCoreApplication::processEvents();  // B's stream binding reaches the worker
+        SliceModel* const sliceB = rig.radio.sliceById(b);
+        QVERIFY(sliceB && sliceB->streamIndex() != rig.sliceA->streamIndex());
+        sliceB->setDspMode(DSPMode::USB);
+        sliceB->setVaxChannel(2);
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        FakeAudioBus* const vaxB = rig.vaxOf(sliceB);
+
+        // The tone is loud on A's sideband while A is in USB.
+        QVERIFY2(rig.feedUntilAudible(vaxA, 0) > 0,
+                 qPrintable(QStringLiteral("usbPeakA=%1").arg(peakSince(vaxA, 0))));
+
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();  // the route reaches the worker
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA && radeA->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+
+        const qsizetype fromA = vaxA->buffer().size();
+        const qsizetype fromB = vaxB->buffer().size();
+        const int blocks = 640;  // past both resamplers, several rade_rx calls and the late bound
+        QVERIFY(blocks > 3 * radeLateBoundBlocks(kFrames));
+        QVERIFY(rig.feed(blocks));
+        const qsizetype bytesA = vaxA->buffer().size() - fromA;
+        const QString evidence = QStringLiteral(
+            "blocks=%1 bytesA=%2 peakA=%3 peakB=%4 synced=%5 radeRx=%6 played=%7 silent=%8")
+            .arg(blocks).arg(bytesA).arg(peakSince(vaxA, fromA)).arg(peakSince(vaxB, fromB))
+            .arg(radeA->isSynced()).arg(radeA->radeRxCallCountForTest())
+            .arg(radeA->rxBridge()->playedSlots()).arg(radeA->rxBridge()->silentSlots());
+        // The decoder ran and never locked to the tone.
+        QVERIFY2(radeA->radeRxCallCountForTest() > 0 && !radeA->isSynced(),
+                 qPrintable(evidence));
+        // A block every tick, and every sample of it silent.
+        QVERIFY2(bytesA == qsizetype(blocks) * kFrames * 2 * qsizetype(sizeof(float)),
+                 qPrintable(evidence));
+        QVERIFY2(peakSince(vaxA, fromA) == 0.0f, qPrintable(evidence));
+        // The USB slice beside it still plays.
+        QVERIFY2(peakSince(vaxB, fromB) > kAudible, qPrintable(evidence));
+    }
+
+    // Item C. With A in RADE and decoding, a new slice B, made locally or
+    // by a phone, in USB or in RADE, on A's pan or a new one, leaves A
+    // routed, on the same decoder and channel, silent (no sideband), and
+    // decoding on its own thread. B in RADE decodes on its own thread too.
+    void addingASliceNeverDisturbsADecodingRadeSlice_data()
+    {
+        QTest::addColumn<int>("path");
+        QTest::addColumn<bool>("newPan");
+        QTest::addColumn<bool>("bInRade");
+        const struct {
+            const char* name;
+            CreatePath path;
+            bool newPan;
+        } paths[] = {
+            {"local +RX on A's pan", CreatePath::LocalOnPan, false},
+            {"local new pan", CreatePath::LocalOnPan, true},
+            {"phone addSlice on A's pan", CreatePath::PhoneAddSlice, false},
+            {"phone addSliceOnPan on A's pan", CreatePath::PhoneAddSliceOnPan, false},
+            {"phone addSliceOnPan new pan", CreatePath::PhoneAddSliceOnPan, true},
+        };
+        for (const auto& p : paths) {
+            QTest::newRow(qPrintable(QStringLiteral("%1, B in USB").arg(p.name)))
+                << int(p.path) << p.newPan << false;
+            QTest::newRow(qPrintable(QStringLiteral("%1, B in RADE").arg(p.name)))
+                << int(p.path) << p.newPan << true;
+        }
+    }
+
+    void addingASliceNeverDisturbsADecodingRadeSlice()
+    {
+        QFETCH(int, path);
+        QFETCH(bool, newPan);
+        QFETCH(bool, bInRade);
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/2));
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA && radeA->isActive());
+        const std::shared_ptr<RadeRxBridge> bridgeA = radeA->rxBridge();
+        RxChannel* const rxA = rig.wdsp->rxChannel(rig.a);
+        const int streamA = rig.sliceA->streamIndex();
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+        const Qt::HANDLE threadA = radeA->rxThreadIdForTest();
+
+        const QString panId = newPan ? QStringLiteral("pan-new") : rig.sliceA->panKey();
+        const int b = createSlice(rig.radio, CreatePath(path), panId);
+        QVERIFY2(b >= 0 && b != rig.a, qPrintable(QStringLiteral("b=%1").arg(b)));
+        QCoreApplication::processEvents();
+        SliceModel* const sliceB = rig.radio.sliceById(b);
+        QVERIFY(sliceB && sliceB->streamIndex() >= 0);
+        QCOMPARE(sliceB->streamIndex() != streamA, newPan);
+        sliceB->setDspMode(bInRade ? DSPMode::RADE_U : DSPMode::USB);
+        sliceB->setVaxChannel(2);
+        // A phone's slice is left out of this computer's VAX (ruling 5.14);
+        // the phone hears the same block through its receiver tap. VAX is
+        // only this test's window onto each slice's block, so carry all.
+        rig.radio.audioEngine()->setVaxSliceMask(0xFFFFFFFFu);
+        QCoreApplication::processEvents();
+
+        // A is untouched: its id, stream, mode, WDSP channel, decoder and
+        // rings are the ones it had, and its route is still on the worker.
+        QCOMPARE(rig.radio.sliceById(rig.a), rig.sliceA);
+        QCOMPARE(rig.sliceA->streamIndex(), streamA);
+        QCOMPARE(rig.sliceA->dspMode(), DSPMode::RADE_U);
+        QCOMPARE(rig.wdsp->rxChannel(rig.a), rxA);
+        QCOMPARE(rig.wdsp->radeChannel(rig.a), radeA);
+        QCOMPARE(radeA->rxBridge(), bridgeA);
+        QVERIFY(radeA->isActive() && radeA->rxWorkerRunning());
+        QCOMPARE(rig.worker.radeRxRouteCount(), bInRade ? 2 : 1);
+
+        const qsizetype fromA = vaxA->buffer().size();
+        FakeAudioBus* const vaxB = rig.vaxOf(sliceB);
+        const qsizetype fromB = vaxB->buffer().size();
+        const quint64 playedA = bridgeA->playedSlots();
+        // A still decodes, on the same thread, and its speech still plays.
+        QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+        QCOMPARE(radeA->rxThreadIdForTest(), threadA);
+        evidence = QStringLiteral("playedA=%1->%2 peakA=%3 peakB=%4")
+            .arg(playedA).arg(bridgeA->playedSlots())
+            .arg(peakSince(vaxA, fromA)).arg(peakSince(vaxB, fromB));
+        QVERIFY2(bridgeA->playedSlots() > playedA, qPrintable(evidence));
+        // JJ's report 2: A never falls back to its sideband.
+        QVERIFY2(peakSince(vaxA, fromA) == 0.0f, qPrintable(evidence));
+
+        if (bInRade) {
+            RadeChannel* const radeB = rig.wdsp->radeChannel(b);
+            QVERIFY(radeB && radeB != radeA && radeB->isActive());
+            QVERIFY2(rig.decodesOnItsOwnThread(radeB, &evidence), qPrintable(evidence));
+            QVERIFY(radeB->rxThreadIdForTest() != threadA);
+            QVERIFY2(peakSince(vaxB, fromB) == 0.0f, qPrintable(evidence));
+        } else {
+            QVERIFY(rig.wdsp->radeChannel(b) == nullptr);
+            QVERIFY2(peakSince(vaxB, fromB) > kAudible, qPrintable(evidence));
+        }
+    }
+
+    // Item D, JJ's report 1: two RADE slices on one pan (one DDC) are both
+    // routed and both decode; neither plays USB.
+    void twoRadeSlicesOnOnePanBothDecodeAndNeitherPlaysUsb()
+    {
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        const int b = createSlice(rig.radio, CreatePath::LocalOnPan, rig.sliceA->panKey());
+        QVERIFY(b >= 0);
+        QCoreApplication::processEvents();
+        SliceModel* const sliceB = rig.radio.sliceById(b);
+        QVERIFY(sliceB);
+        QCOMPARE(sliceB->streamIndex(), rig.sliceA->streamIndex());
+        sliceB->setDspMode(DSPMode::RADE_U);
+        sliceB->setVaxChannel(2);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        RadeChannel* const radeB = rig.wdsp->radeChannel(b);
+        QVERIFY(radeA && radeB && radeA != radeB);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 2);
+
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        FakeAudioBus* const vaxB = rig.vaxOf(sliceB);
+        const qsizetype fromA = vaxA->buffer().size();
+        const qsizetype fromB = vaxB->buffer().size();
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+        QVERIFY2(rig.decodesOnItsOwnThread(radeB, &evidence), qPrintable(evidence));
+        QVERIFY(radeA->rxThreadIdForTest() != radeB->rxThreadIdForTest());
+        evidence = QStringLiteral("bytesA=%1 bytesB=%2 peakA=%3 peakB=%4 playedA=%5 playedB=%6")
+            .arg(vaxA->buffer().size() - fromA).arg(vaxB->buffer().size() - fromB)
+            .arg(peakSince(vaxA, fromA)).arg(peakSince(vaxB, fromB))
+            .arg(radeA->rxBridge()->playedSlots()).arg(radeB->rxBridge()->playedSlots());
+        QVERIFY2(vaxA->buffer().size() - fromA == vaxB->buffer().size() - fromB
+                     && vaxA->buffer().size() > fromA, qPrintable(evidence));
+        QVERIFY2(radeA->rxBridge()->playedSlots() > 0 && radeB->rxBridge()->playedSlots() > 0,
+                 qPrintable(evidence));
+        QVERIFY2(peakSince(vaxA, fromA) == 0.0f && peakSince(vaxB, fromB) == 0.0f,
+                 qPrintable(evidence));
     }
 };
 
