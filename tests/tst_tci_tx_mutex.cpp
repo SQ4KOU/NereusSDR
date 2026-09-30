@@ -195,7 +195,7 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
     RadioModel radio;
     for (int i = 0; i < 4; ++i) {
         QCOMPARE(radio.addSlice(QStringLiteral("pan-0")), i);
-        radio.sliceOwnership()->setOwner(i, i < 2 ? QByteArray("phone")
+        radio.sliceOwnership()->setOwner(i, i != 2 ? QByteArray("phone")
                                    : SliceOwnership::stationDevice());
     }
     TciServer server(&radio);
@@ -211,9 +211,10 @@ void TestTciTxMutex::desktop_host_owned_two_three_broadcasts_logical_receivers()
     radio.setLock(3, true);
     QTest::qWait(200);
     text.clear();
-    // This model signal is normally emitted by live RX reconfiguration.
-    // Emit it here to exercise the physical-to-logical broadcast seam.
-    emit radio.activeRxCountChanged(2);
+    // RX2 turns on when the station device gains a second slice: the RX2
+    // lines go out once, with slice 3 named as receiver 1 (the
+    // physical-to-logical broadcast seam).
+    radio.sliceOwnership()->setOwner(3, SliceOwnership::stationDevice());
     const auto hasLine = [&text](const QString& line) {
         for (const auto& call : text) {
             if (call.at(0).toString().contains(line)) { return true; }

@@ -263,7 +263,7 @@ private slots:
     // ── The second-receiver VFO options ──────────────────────────────────
 
     // The defaults (JJ's ruling, 2026-09-29): Copy on and Forget off as in Thetis
-    // (setup.cs:380-382 [v2.10.3.15]); Use RX1 VFO A off, a recorded
+    // (setup.cs:381-382 [v2.10.3.15]); Use RX1 VFO A off, a recorded
     // divergence (Thetis turns it on).
     void rx2VfoOptionDefaults()
     {
@@ -275,12 +275,14 @@ private slots:
         QCOMPARE(TciProtocol::useRx1VfoaForRx2VfoaSetting(), false);
     }
 
-    // Under the defaults an app sees what it saw before, with two Thetis
-    // corrections: with RX2 on, the second receiver's move goes out as
-    // channel 1 then channel 0 (TCIServer.cs:1385-1393 [v2.10.3.15]); with
-    // RX2 off, a set for the second receiver is ignored and not echoed
-    // (TCIServer.cs:3897-3899 [v2.10.3.15]). The vfo commands act on each
-    // receiver's own slice, and the first lines are unchanged.
+    // Under the defaults, with RX2 off an app sees what it saw before,
+    // except that a set for the second receiver is ignored and not echoed
+    // (TCIServer.cs:3897-3899 [v2.10.3.15]). With RX2 on, as Thetis: the
+    // second receiver's move goes out as channel 1 then channel 0
+    // (TCIServer.cs:1385-1393 [v2.10.3.15]); the first receiver's move is
+    // channel 0 alone (TCIServer.cs:7266-7269 [v2.10.3.15]); and the first
+    // lines' vfo:0,1 is VFO B, RX2's (TCIServer.cs:2113-2114,
+    // console.cs:32951-32954 [v2.10.3.15]).
     void rx2VfoOptionDefaultsKeepTheWire_data()
     {
         QTest::addColumn<bool>("rx2On");
@@ -295,7 +297,8 @@ private slots:
         TciProtocol protocol(&radio);
 
         protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
-        QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
+        const QStringList rx0Both = bothChannels(0, 7'100'000, 10'000);
+        QCOMPARE(drainLines(protocol), rx2On ? rx0Both.mid(0, 2) : rx0Both);
         protocol.enqueueLocalBroadcastVfo(1, 14'200'000, false);
         const QStringList rx1Both = bothChannels(1, 14'200'000, 50'000);
         QCOMPARE(drainLines(protocol),
@@ -317,6 +320,7 @@ private slots:
         QVERIFY(burst.contains(QStringLiteral("vfo:1,0,%1;").arg(rx1Hz)));
         QVERIFY(burst.contains(QStringLiteral("vfo:1,1,%1;").arg(rx1Hz)));
         QVERIFY(burst.contains(QStringLiteral("vfo:0,0,7100000;")));
+        QVERIFY(burst.contains(QStringLiteral("vfo:0,1,%1;").arg(rx2On ? rx1Hz : 7'100'000)));
     }
 
     // Duplicate RX2 VFO B to RX2 VFO A, and Forget RX2 VFO B, from Thetis
@@ -353,9 +357,10 @@ private slots:
         TciProtocol protocol(&radio);
         protocol.enqueueLocalBroadcastVfo(1, 14'200'000, false);
         QCOMPARE(drainLines(protocol), expected);
-        // The first receiver is not touched by either option.
+        // The first receiver is not touched by either option: channel 0
+        // alone, as always with RX2 on.
         protocol.enqueueLocalBroadcastVfo(0, 7'100'000, false);
-        QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000));
+        QCOMPARE(drainLines(protocol), bothChannels(0, 7'100'000, 10'000).mid(0, 2));
     }
 
     // Use RX1 VFO A for RX2 VFO A, from Thetis TCIServer.cs:7256-7269
@@ -374,7 +379,8 @@ private slots:
             << QStringList{QStringLiteral("if:1,0,10000;"),
                            QStringLiteral("vfo:1,0,7100000;")};
         QTest::newRow("on, RX2 off") << true << false << bothChannels(0, 7'100'000, 10'000);
-        QTest::newRow("off, RX2 on") << false << true << bothChannels(0, 7'100'000, 10'000);
+        QTest::newRow("off, RX2 on") << false << true
+                                     << bothChannels(0, 7'100'000, 10'000).mid(0, 2);
     }
     void useRx1VfoaSendsTheFirstReceiverAsRx2Vfoa()
     {
@@ -447,11 +453,68 @@ private slots:
         QCOMPARE(radio.vfoHz(0, 0), qint64(7'120'000));
         QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:0,0,7120000;")});
 
-        // With RX2 on the same set acts.
+        // With RX2 on the same set acts, on the second receiver's one
+        // frequency (VFO B is RX2's).
         tuneTwoReceivers(radio, /*rx2On=*/true);
         protocol.handleCommand(QStringLiteral("vfo:1,1,14210000;"));
-        QCOMPARE(radio.vfoHz(1, 1), qint64(14'210'000));
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'210'000));
         QCOMPARE(drainLines(protocol), QStringList{QStringLiteral("vfo:1,1,14210000;")});
+    }
+
+    // vfo:0,1 is VFOBFreq in Thetis handleVFOMessage (TCIServer.cs:3891-3895
+    // and 3934-3937 [v2.10.3.15]), and with RX2 on VFO B is RX2's
+    // (console.cs:32951-32954 [v2.10.3.15]): the query reads and the set
+    // writes the second receiver's slice, its one frequency (channel 0).
+    // With RX2 off it is the first receiver's channel 1.
+    void firstReceiverChannel1IsRx2WhileRx2On_data()
+    {
+        QTest::addColumn<bool>("rx2On");
+        QTest::newRow("RX2 on") << true;
+        QTest::newRow("RX2 off") << false;
+    }
+    void firstReceiverChannel1IsRx2WhileRx2On()
+    {
+        QFETCH(bool, rx2On);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:0,1;")),
+                 rx2On ? QStringLiteral("vfo:0,1,14200000;")
+                       : QStringLiteral("vfo:0,1,7100000;"));
+        protocol.handleCommand(QStringLiteral("vfo:0,1,14250000;"));
+        QCOMPARE(radio.vfoHz(1, 0), rx2On ? qint64(14'250'000) : qint64(14'200'000));
+        QCOMPARE(radio.vfoHz(0, 1), rx2On ? qint64(7'100'000) : qint64(14'250'000));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
+    }
+
+    // The ownership gate checks the slice a vfo set actually writes: with
+    // Use RX1 VFO A, vfo:1,0 writes receiver 0's slice, and with RX2 on
+    // vfo:0,1 writes receiver 1's. A refused set changes nothing and the
+    // app hears the value the slice holds.
+    void vfoSetIsGatedOnTheSliceItWrites()
+    {
+        setOption("TciUseRx1VfoaForRx2Vfoa", true);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/true);
+        TciProtocol protocol(&radio);
+        int refused = 0;
+        protocol.setSliceWriteGate([&refused](int slice) { return slice != refused; });
+
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:1,0,7150000;")),
+                 QStringLiteral("vfo:1,0,7100000;"));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'100'000));
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'200'000));
+
+        refused = 1;
+        QCOMPARE(protocol.handleCommand(QStringLiteral("vfo:0,1,14250000;")),
+                 QStringLiteral("vfo:1,1,14200000;"));
+        QCOMPARE(radio.vfoHz(1, 0), qint64(14'200'000));
+        // The slice the set names is not the one it writes: slice 0 is
+        // writable here, and still untouched.
+        QCOMPARE(radio.vfoHz(0, 1), qint64(7'100'000));
+        // Receiver 1 channel 0 now writes slice 0, which is allowed.
+        protocol.handleCommand(QStringLiteral("vfo:1,0,7150000;"));
+        QCOMPARE(radio.vfoHz(0, 0), qint64(7'150'000));
     }
 
     // ...and in the first lines, from Thetis sendVFO,

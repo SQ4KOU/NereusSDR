@@ -598,6 +598,12 @@ private:
     std::function<bool(int)> m_externalSliceWriteGate;
     void refreshSliceWriteGate();
     int desktopSliceForReceiver(int receiver) const;
+    // Re-sends the RX2-dependent lines (rx_enable:1, rx_channel_enable:1,0,
+    // lock:1) when TciProtocol::rx2EnabledNow() flips (Thetis
+    // OnRX2EnabledChanged, TCIServer.cs:7451-7462 [v2.10.3.15]).
+    void refreshRx2Enabled();
+    bool m_rx2EnabledSent{false};
+    QMetaObject::Connection m_rx2OwnershipConnection;
     int desktopReceiverForSlice(int sliceId) const;
     void releaseDesktopProgramKey();
     void refreshLocalAudioReceiverMap();

@@ -145,8 +145,8 @@ Public API mirrors AetherSDR's seam at `TciProtocol.cpp:1-17 [@0cd4559]`:
 | `SendInitialFrequencyStateOnConnect` | `TciSendInitialFrequencyStateOnConnect` | True | Gates VFO/IF/DDS sends in init burst per `TCIServer.cs:2365` |
 | `RateLimit` | `TciRateLimitMsgsPerSec` | 60 | Per-client message rate cap |
 | `ForgetRX2VfoBVFOinfo` | `TciForgetRx2VfoBOnDisconnect` | False | Sends RX2's frequency only as VFO A while Copy is on (Thetis `replace_if_duplicated`; the key name predates the port) |
-| `UseRX1vfoaForRX2vfoa` | `TciUseRx1VfoaForRx2Vfoa` | False | Reports RX1 VFO A as RX2 VFO A while RX2 is on. Thetis defaults this on (setup.cs:380-382 [v2.10.3.15], MW0LGE_21k9d); NereusSDR keeps it off per JJ's ruling (2026-09-29), so existing TCI client output is unchanged |
-| `CopyRX2VFObToVFOa` | `TciCopyRx2VfobToVfoa` | True | Duplicates RX2 VFO B as RX2 VFO A while RX2 is on (Thetis default, setup.cs:380-382 [v2.10.3.15], MW0LGE_21k9d) |
+| `UseRX1vfoaForRX2vfoa` | `TciUseRx1VfoaForRx2Vfoa` | False | Reports RX1 VFO A as RX2 VFO A while RX2 is on. Thetis defaults this on (setup.cs:381-382 [v2.10.3.15], MW0LGE_21k9d); NereusSDR keeps it off, a deliberate divergence per JJ's ruling (2026-09-29), so existing TCI client output is unchanged |
+| `CopyRX2VFObToVFOa` | `TciCopyRx2VfobToVfoa` | True | Duplicates RX2 VFO B as RX2 VFO A while RX2 is on (Thetis default, setup.cs:381-382 [v2.10.3.15], MW0LGE_21k9d) |
 | (per-client) `m_seenModernTxAudioNegotiation` | n/a (runtime) | n/a | Modern vs legacy TX audio header detection |
 
 Estimated size: 2,400 to 2,800 LOC (revised upward from 2,000-2,400 estimate after Sweep D enumerated 12 flags + 49 per-client fields).

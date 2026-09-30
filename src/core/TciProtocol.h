@@ -113,7 +113,7 @@ namespace NereusSDR {
 // Setup pages, StationTciModel) takes its fallback from these, so each
 // default is changed in exactly one place.
 //
-// From Thetis setup.cs:380-382 [v2.10.3.15]:
+// From Thetis setup.cs:381-382 [v2.10.3.15]:
 //   // some default tci server states MW0LGE_21k9d
 //   chkCopyRX2VFObToVFOa.Checked = true;
 //   chkUseRX1vfoaForRX2vfoa.Checked = true;
@@ -125,7 +125,7 @@ namespace NereusSDR {
 inline constexpr bool kTciCopyRx2VfobToVfoaDefault    = true;
 inline constexpr bool kTciForgetRx2VfobDefault        = false;
 // DIVERGENCE (JJ's ruling, 2026-09-29): Thetis defaults Use RX1 VFO A for
-// RX2 VFO A ON, from Thetis setup.cs:380-382 [v2.10.3.15]:
+// RX2 VFO A ON, from Thetis setup.cs:381-382 [v2.10.3.15]:
 //   // some default tci server states MW0LGE_21k9d
 //   chkUseRX1vfoaForRX2vfoa.Checked = true;
 // NereusSDR defaults it OFF so existing TCI client output is unchanged.
@@ -267,6 +267,12 @@ public:
     // station server, a plain desktop) it is slice 1, since trx:N is slice N.
     // A test radio that is not a RadioModel answers through rx2Enabled().
     bool rx2EnabledNow() const;
+    // The receiver whose slice vfo:rx,chan reads and writes, and the slice
+    // VFO (chan) it uses: with RX2 on, channel 1 of either receiver is RX2's
+    // VFO B, receiver 1's slice frequency; with Use RX1 VFO A for RX2 VFO A,
+    // receiver 1 channel 0 is receiver 0's VFO A.
+    struct VfoTarget { int rx; int chan; };
+    VfoTarget vfoTarget(int rx, int chan) const;
 
     // Build the post-connect init burst. Stub returns empty list in Phase 3;
     // Phase 4 Task 4.1 replaces with the 8-line wrapper from
