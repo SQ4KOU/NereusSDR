@@ -2557,7 +2557,7 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     }
     // Level Cal: RX2's preamp mode and band memory, HPSDR_ON where none is
     // saved (rx2_preamp_by_band starts HPSDR_ON on every band,
-    // console.cs:1797 [v2.10.3.15]).
+    // console.cs:1814 [v2.10.3.15]).
     const auto validMode = [](int v) {
         return v >= static_cast<int>(PreampMode::Off)
             && v <= static_cast<int>(PreampMode::SaMinus30);

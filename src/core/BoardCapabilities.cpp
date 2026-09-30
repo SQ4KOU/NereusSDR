@@ -1746,9 +1746,11 @@ std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
     //       comboRX2Preamp.Items.AddRange(on_off_preamp_settings);
     // By board: Angelia is the ANAN-100D, Orion the ANAN-200D, OrionMKII the
     // 7000D, 8000D, OrionMKII, AnvelinaPro3 and Red Pitaya, Saturn the G2
-    // and G2 1K. SaturnMKII is the G2's later board revision (no Thetis
-    // model resolves to it), so it takes the G2's list. HermesC10 (the
-    // G2E) is not in the list.
+    // and G2 1K. HermesC10 (the G2E) is not in the list.
+    // SaturnMKII is a NereusSDR mapping, not Thetis's: no Thetis model
+    // resolves to HPSDRHW.SaturnMKII, so Thetis never reaches this list for
+    // it. It is the G2's later board revision with the same two ADCs, so
+    // NereusSDR gives it the G2's list rather than on_off.
     switch (hw) {
     case HPSDRHW::Angelia:
     case HPSDRHW::Orion:

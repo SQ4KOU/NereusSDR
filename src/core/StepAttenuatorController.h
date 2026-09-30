@@ -959,7 +959,7 @@ private:
 
     // Level Cal: RX2's preamp mode (Thetis rx2_preamp_mode) and its band
     // memory (rx2_preamp_by_band, HPSDR_ON on every band at start,
-    // console.cs:1797 [v2.10.3.15]).
+    // console.cs:1814 [v2.10.3.15]).
     PreampMode m_rx2PreampMode{PreampMode::On};
     std::unordered_map<int, PreampMode> m_rx2BandPreamp;
     // Thetis temp_mode2: RX2's mode held over an HPSDR transmit.
