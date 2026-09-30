@@ -46,6 +46,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -641,6 +644,16 @@ public:
     { return QStringLiteral("This Core changes the sample rate of this window's receivers only. Updating the Core may help."); }
     virtual CommandOutcome requestRadioSampleRate(int /*rateHz*/)
     { return { false, radioSampleRateUnavailableReason() }; }
+
+    // Level Cal, verb "resetLevelCalibration" (radioHardwareVersion 12):
+    // Setup's Reset, the meter and display calibration back to the radio's
+    // defaults on the Core (RadioModel::resetLevelCalibration). The default
+    // refuses, and the window shows Reset disabled with the reason.
+    virtual bool levelCalibrationResetAvailable() const { return false; }
+    static QString levelCalibrationResetUnavailableReason()
+    { return QStringLiteral("This Core cannot reset the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestResetLevelCalibration()
+    { return { false, levelCalibrationResetUnavailableReason() }; }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The

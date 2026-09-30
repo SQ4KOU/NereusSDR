@@ -772,6 +772,11 @@
 //                requestTxHandoffToSlice checks the station's access, as
 //                the remote tx.setTxSlice does. NereusSDR-original. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration (console.cs:46868-46886 [v2.10.3.15]),
+//                requestResetLevelCalibration and levelCalibrationChanged;
+//                TCI calibration_ex reads the meter and display offsets.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2315,6 +2320,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RxOnly")) {
                     applyRxOnlySetting(rxOnlySetting());
+                }
+            });
+    // Level Cal: a remote window follows the Core's meter and display
+    // calibration (an empty key is a snapshot), so its TCI and Setup read
+    // the Core's values.
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (key.isEmpty() || key == QLatin1String("RX1_MeterCalOffsetDb")
+                    || key == QLatin1String("RX1_DisplayCalOffsetDb")) {
+                    emit levelCalibrationChanged();
                 }
             });
     // D79 (R-IOS-11, R-R3-49): the band plan is the station's. A remote
@@ -9798,6 +9813,87 @@ double RadioModel::rxMeterCalOffsetDb() const
         ? static_cast<float>(userOverride)
         : factoryDefault;
     return static_cast<double>(meterCalOffset);
+}
+
+namespace {
+const QString kRx1MeterCalOffsetKey = QStringLiteral("RX1_MeterCalOffsetDb");
+const QString kRx1DisplayCalOffsetKey = QStringLiteral("RX1_DisplayCalOffsetDb");
+}  // namespace
+
+double RadioModel::rxDisplayCalOffsetDb() const
+{
+    // RX1DisplayCalOffset (console.cs:21113-21122 [v2.10.3.15]), stored as
+    // RX1_DisplayCalOffsetDb; absent, the radio's factory default
+    // (RXDisplayCalbrationOffsetDefauls, clsHardwareSpecific.cs:424-440
+    // [v2.10.3.15]). Read as the meter cal is.
+    const float factoryDefault =
+        ::NereusSDR::rxDisplayCalOffsetDefaultFor(m_hardwareProfile.model);
+    bool keyOk = false;
+    const double saved = AppSettings::instance()
+        .value(kRx1DisplayCalOffsetKey,
+               QString::number(static_cast<double>(factoryDefault), 'f', 6))
+        .toString()
+        .toDouble(&keyOk);
+    return static_cast<double>(keyOk ? static_cast<float>(saved) : factoryDefault);
+}
+
+bool RadioModel::applyLevelCalibrationSetting(const QString& key)
+{
+    // From Thetis console.cs:21089-21099 [v2.10.3.15]:
+    //   // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
+    //   public float RX1MeterCalOffset { ... set { ...
+    //       if (_rx1_meter_cal_offset != oldData) MeterCalOffsetChangedHandlers?.Invoke(1, ...); } }
+    // and RX1DisplayCalOffset (console.cs:21113-21122 [v2.10.3.15]) fires
+    // DisplayOffsetChangedHandlers the same way. The meter offset moves
+    // the meter and the panadapter (refreshRxMeterOffset); the display
+    // offset reaches TCI only (levelCalibrationChanged).
+    if (key != kRx1MeterCalOffsetKey && key != kRx1DisplayCalOffsetKey) {
+        return false;
+    }
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+    return true;
+}
+
+void RadioModel::resetLevelCalibration()
+{
+    // From Thetis console.cs:46868-46886 [v2.10.3.15] (ResetLevelCalibration):
+    //   rx_meter_cal_offset_by_radio[i] = HardwareSpecific.RXMeterCalbrationOffsetDefaults((HPSDRModel)i);
+    //   rx_display_cal_offset_by_radio[i] = HardwareSpecific.RXDisplayCalbrationOffsetDefauls((HPSDRModel)i);
+    //   RX1MeterCalOffset = ...; RX1DisplayCalOffset = ...;
+    //   UpdateRX1DisplayOffsets(); UpdateRX2DisplayOffsets();
+    // NereusSDR keeps one value of each, so removing the keys returns them
+    // to the radio's defaults (the per-model defaults are what an absent
+    // key reads).
+    AppSettings& settings = AppSettings::instance();
+    settings.remove(kRx1MeterCalOffsetKey);
+    settings.remove(kRx1DisplayCalOffsetKey);
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+}
+
+bool RadioModel::levelCalibrationResetAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationResetAvailable();
+}
+
+QString RadioModel::requestResetLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        resetLevelCalibration();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration reset"));
+    }
+    if (!m_station->levelCalibrationResetAvailable()) {
+        return IStationLink::levelCalibrationResetUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestResetLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
 }
 
 double RadioModel::rxPreampOffsetDbForAdc(int adc) const
@@ -25516,12 +25612,13 @@ QStringList RadioModel::txProfilesList() const
     return {};
 }
 
-// ── Calibration (getter-only stubs) ─────────────────────────────────────────
-// No calibration model exists yet.  All getters return 0.0 = "no calibration
-// applied".  Real implementation lands when CalibrationModel + per-slice
-// persistence are added.
-double RadioModel::calibrationMeter(int rx) const     { (void)rx; return 0.0; }
-double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return 0.0; }
+// ── Calibration (TCI calibration_ex) ────────────────────────────────────────
+// From Thetis TCIServer.cs:1160-1176 [v2.10.3.15] (CalibrationChanged): the
+// meter and display terms are the receiver's RXnMeterCalOffset and
+// RXnDisplayCalOffset. One receive calibration serves both receivers here.
+// The XVTR, 6 m and TX display terms still return 0.0.
+double RadioModel::calibrationMeter(int rx) const     { (void)rx; return rxMeterCalOffsetDb(); }
+double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return rxDisplayCalOffsetDb(); }
 double RadioModel::calibrationXvtr(int rx) const      { (void)rx; return 0.0; }
 double RadioModel::calibrationSixMeter(int rx) const  { (void)rx; return 0.0; }
 double RadioModel::calibrationTxDisplay(int rx) const { (void)rx; return 0.0; }

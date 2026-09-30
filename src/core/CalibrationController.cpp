@@ -39,6 +39,9 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - Level Cal: the unused level offset (cal/levelOffset) is
+//                 removed; the meter and display offsets live on RadioModel.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -207,25 +210,6 @@ void CalibrationController::setUsing10MHzRef(bool on)
 double CalibrationController::effectiveFreqCorrectionFactor() const
 {
     return m_using10MHzRef ? m_freqCorrectionFactor10M : m_freqCorrectionFactor;
-}
-
-// ── Level calibration offset ──────────────────────────────────────────────────
-
-// Source: console.cs:21074-21086 _rx1_display_cal_offset
-//   RXCalibrationOffset(int rx) [@501e3f5]
-// Upstream inline attribution preserved verbatim:
-//   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-//   :21090  // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
-double CalibrationController::levelOffsetDb() const
-{
-    return m_levelOffsetDb;
-}
-
-void CalibrationController::setLevelOffsetDb(double db)
-{
-    if (m_levelOffsetDb == db) { return; }
-    m_levelOffsetDb = db;
-    emit changed();
 }
 
 // ── RX1 / RX2 6m LNA gain offsets ────────────────────────────────────────────
@@ -463,7 +447,6 @@ void CalibrationController::load()
     m_freqCorrectionFactor   = s.value(base + QStringLiteral("freqFactor"),   QStringLiteral("1.0")).toDouble();
     m_freqCorrectionFactor10M = s.value(base + QStringLiteral("freqFactor10M"), QStringLiteral("1.0")).toDouble();
     m_using10MHzRef          = s.value(base + QStringLiteral("using10M"),      QStringLiteral("False")).toString() == QStringLiteral("True");
-    m_levelOffsetDb          = s.value(base + QStringLiteral("levelOffset"),   QStringLiteral("0.0")).toDouble();
     // Thetis's 13 dB where nothing is stored (setup.designer.cs:12070-12074,
     // 12112-12116 [v2.10.3.15]); a stored value, 0 included, is kept.
     m_rx1_6mLnaOffset        = s.value(base + QStringLiteral("rx1_6mLna"),     QStringLiteral("13")).toDouble();
@@ -565,7 +548,6 @@ void CalibrationController::save()
           QString::number(1.0, 'g', 15));
     store(base + QStringLiteral("using10M"),        m_using10MHzRef ? QStringLiteral("True") : QStringLiteral("False"),
           QStringLiteral("False"));
-    store(base + QStringLiteral("levelOffset"),     QString::number(m_levelOffsetDb),       QString::number(0.0));
     store(base + QStringLiteral("rx1_6mLna"),       QString::number(m_rx1_6mLnaOffset),     QString::number(13.0));
     store(base + QStringLiteral("rx2_6mLna"),       QString::number(m_rx2_6mLnaOffset),     QString::number(13.0));
     store(base + QStringLiteral("txDisplayOffset"), QString::number(m_txDisplayOffsetDb),   QString::number(0.0));

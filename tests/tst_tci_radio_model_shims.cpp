@@ -618,20 +618,26 @@ private slots:
             "BIN on one receiver must not follow onto another");
     }
 
-    void calibration_getters_return_zero() {
+    void calibration_getters_report_level_calibration() {
         RadioModel m;
         setupOneSlice(m);
-        // No CalibrationModel exists yet; all five getters return 0.0.
-        for (const QByteArray name :
-             {"calibrationMeter", "calibrationDisplay",
-              "calibrationXvtr", "calibrationSixMeter",
-              "calibrationTxDisplay"})
-        {
-            double out = 1.0;  // poison value to verify it gets overwritten
+        // The meter and display offsets are the level calibration's
+        // (TCIServer.cs:1160-1176 [v2.10.3.15]); tst_level_calibration pins
+        // their defaults and stored values.
+        const QList<QPair<QByteArray, double>> expected = {
+            {"calibrationMeter",     m.rxMeterCalOffsetDb()},
+            {"calibrationDisplay",   m.rxDisplayCalOffsetDb()},
+            // The XVTR, 6 m and TX display terms are not reported (0.0).
+            {"calibrationXvtr",      0.0},
+            {"calibrationSixMeter",  0.0},
+            {"calibrationTxDisplay", 0.0},
+        };
+        for (const auto& [name, want] : expected) {
+            double out = 12345.0;  // poison value to verify it gets overwritten
             QMetaObject::invokeMethod(&m, name.constData(),
                                       Q_RETURN_ARG(double, out),
                                       Q_ARG(int, 0));
-            QCOMPARE(out, 0.0);
+            QCOMPARE(out, want);
         }
     }
 

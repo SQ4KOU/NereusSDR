@@ -47,6 +47,9 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - Desktop-host receiver-to-owned-slice mapping.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-29 - Level Cal: calibration_ex carries the meter and display
+//                calibration and goes to apps when either changes. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -116,6 +119,12 @@ public:
     // (empty for commands with no reply, or for the silent-error invariant
     // — unknown commands produce zero outbound traffic per design doc §4.1).
     QString handleCommand(const QString& command);
+
+    // Level Cal: the calibration_ex line for receiver `rx` (0 or 1) with
+    // the radio's calibration now, Thetis CalibrationChanged
+    // (TCIServer.cs:1160-1176 [v2.10.3.15]). TciServer broadcasts it when
+    // the calibration changes; the client query sends it too.
+    QString calibrationExLineFor(int rx) const;
 
     // Notification queue — drained by TciServer after each handleCommand.
     bool hasPendingNotification() const;

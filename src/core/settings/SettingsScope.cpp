@@ -89,6 +89,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: RX1_DisplayCalOffsetDb is a
+//                                    station key. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-08-06  J.J. Boyd / KG4VCF  Remote daemon R2 Task 14:
 //                                    classifySettingsKey and its
 //                                    completeness gate. AI-assisted
@@ -560,6 +563,10 @@ const Rule kWholeKeys[] = {
     // constant for the connected board, same kind of fact as anything
     // under hardware/, just predating that convention.
     { "RX1_MeterCalOffsetDb", SettingsScope::Station },
+
+    // Level Cal: the RX1 display calibration (RadioModel::
+    // rxDisplayCalOffsetDb), the same kind of constant as the meter's.
+    { "RX1_DisplayCalOffsetDb", SettingsScope::Station },
 
     // One-shot migration marker for legacy global peripherals/* keys
     // moving to per-MAC hardware/<mac>/peripherals/* scope

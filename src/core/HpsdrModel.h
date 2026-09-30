@@ -5,6 +5,7 @@
 // Ported from Thetis sources:
 //   Project Files/Source/Console/enums.cs, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/network.h, original licence from Thetis source is included below
+//   Project Files/Source/Console/clsHardwareSpecific.cs, original licence from Thetis source is included below
 //
 // =================================================================
 // Additional copyright holders whose code is preserved in this file via
@@ -35,6 +36,12 @@
 //                 integer division for the fixed tune spinbox, and the
 //                 PowerShownRule the catalogue sends. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29 - rxDisplayCalOffsetDefaultFor ports the per-model RX
+//                 display calibration defaults from clsHardwareSpecific.cs
+//                 RXDisplayCalbrationOffsetDefauls [v2.10.3.15]; that file's
+//                 header is now carried below alongside the existing
+//                 rxMeterCalOffsetDefaultFor cite. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -99,6 +106,47 @@ along with this program; if not, write to the Free Software
 Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 */
+
+// --- From clsHardwareSpecific.cs ---
+/*  clsHardwareSpecific.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
 
 #pragma once
 
@@ -308,6 +356,52 @@ constexpr float rxMeterCalOffsetDefaultFor(HPSDRModel m) noexcept {
         case HPSDRModel::LAST:         return  0.98f;
     }
     return 0.98f;  // unreachable; matches Thetis default
+}
+
+// Per-radio RX display calibration default (dB), the level calibration's
+// display offset.  From Thetis clsHardwareSpecific.cs:424-440 [v2.10.3.15]
+// (RXDisplayCalbrationOffsetDefauls):
+//   case HPSDRModel.ANAN7000D:
+//   case HPSDRModel.ANAN8000D:
+//   case HPSDRModel.ORIONMKII:
+//   case HPSDRModel.ANVELINAPRO3:
+//   case HPSDRModel.REDPITAYA: //DH1KLM
+//       return 5.259f;
+//   case HPSDRModel.ANAN_G2:
+//   case HPSDRModel.ANAN_G2_1K:
+//       return -4.4005f;
+//   default:
+//       return -2.1f;
+//
+// User value under the AppSettings key "RX1_DisplayCalOffsetDb" (Thetis
+// RX1DisplayCalOffset, console.cs:21113-21122 [v2.10.3.15]).  It reaches
+// TCI calibration_ex only; the panadapter follows the meter offset
+// (console.cs:12305-12311 [v2.10.3.15], UpdateRX1DisplayOffsets).
+constexpr float rxDisplayCalOffsetDefaultFor(HPSDRModel m) noexcept {
+    switch (m) {
+        case HPSDRModel::ANAN7000D:
+        case HPSDRModel::ANAN8000D:
+        case HPSDRModel::ORIONMKII:
+        case HPSDRModel::ANVELINAPRO3:
+        case HPSDRModel::REDPITAYA:    return  5.259f;  //DH1KLM
+        case HPSDRModel::ANAN_G2:
+        case HPSDRModel::ANAN_G2_1K:   return -4.4005f;
+        // The default branch.  As in RXMeterCalbrationOffsetDefaults, the
+        // switch has no ANAN_G2E case, so the G2E takes the default.
+        case HPSDRModel::HPSDR:
+        case HPSDRModel::HERMES:
+        case HPSDRModel::ANAN10:
+        case HPSDRModel::ANAN10E:
+        case HPSDRModel::ANAN100:
+        case HPSDRModel::ANAN100B:
+        case HPSDRModel::ANAN100D:
+        case HPSDRModel::ANAN200D:
+        case HPSDRModel::HERMESLITE:
+        case HPSDRModel::ANAN_G2E:
+        case HPSDRModel::FIRST:
+        case HPSDRModel::LAST:         return -2.1f;
+    }
+    return -2.1f;  // unreachable; matches Thetis default
 }
 
 // Per-preamp-mode RX offset (dB), applied when step-att is DISABLED.

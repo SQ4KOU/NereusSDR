@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -513,6 +516,8 @@ QString notRepresentableReason()
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
 //   setRadioSampleRate     radioHardwareVersion 9 (requestRadioSampleRate)
+//   resetLevelCalibration  radioHardwareVersion 12
+//                          (requestResetLevelCalibration)
 //   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
 //   records.subscribe, records.unsubscribe, spots.connect, spots.disconnect,
 //   spots.sendCommand, spots.clearAll
@@ -803,6 +808,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // Parity ruling C4: the radio's sample rate, every receiver and the
         // radio's own rate, as a local window's Radio Info change.
         {"setRadioSampleRate", {arg("rateHz", kInt)}, "radioHardwareVersion", 9,
+         kRadioIdentitySessionProtocolMinor},
+        // Level Cal: Setup's Reset, the meter and display calibration back
+        // to the radio's defaults.
+        {"resetLevelCalibration", {}, "radioHardwareVersion", 12,
          kRadioIdentitySessionProtocolMinor},
         // The filter graph's curve (R-R3-49, parity Task 16).
         {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
@@ -1411,6 +1420,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetIoBoardOutput(invoke);
     } else if (invoke.commandVerb == "setRadioSampleRate") {
         handleSetRadioSampleRate(invoke);
+    } else if (invoke.commandVerb == "resetLevelCalibration") {
+        handleResetLevelCalibration(invoke);
     } else if (invoke.commandVerb == "dsp.filterResponse") {
         handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "records.subscribe"
@@ -4407,6 +4418,23 @@ void SessionCommandDispatcher::handleSetIoBoardOutput(const SessionMessage& invo
                                        refusal = reason;
                                    });
     emitResult(invoke.commandVerb, invoke.commandId, accepted, refusal, {});
+}
+
+// Level Cal (radioHardwareVersion 12): a remote window's Setup > Hardware >
+// Calibration Reset, the call a local window's Reset makes
+// (RadioModel::resetLevelCalibration, Thetis ResetLevelCalibration,
+// console.cs:46868-46886 [v2.10.3.15]). Thetis has no MOX check there, so
+// it is taken on the air too. The removed keys reach every window as
+// settings.value with no entry.
+void SessionCommandDispatcher::handleResetLevelCalibration(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    m_radioModel->resetLevelCalibration();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 // Parity ruling C4 (radioHardwareVersion 8): a remote window's Setup >

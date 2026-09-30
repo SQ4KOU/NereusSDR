@@ -34,6 +34,9 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - Level Cal: the unused level offset (cal/levelOffset) is
+//                 removed; the meter and display offsets live on RadioModel.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -160,7 +163,7 @@ namespace NereusSDR {
 //   console.cs:21022-21086 RXCalibrationOffset / _rx1_display_cal_offset / _rx2_display_cal_offset [@501e3f5]
 //
 // Per-MAC persistence: hardware/<mac>/cal/{freqFactor, freqFactor10M, using10M,
-//   levelOffset, rx1_6mLna, rx2_6mLna, txDisplayOffset, paSens, paOffset}
+//   rx1_6mLna, rx2_6mLna, txDisplayOffset, paSens, paOffset}
 class CalibrationController : public QObject {
     Q_OBJECT
 
@@ -191,15 +194,6 @@ public:
     //     NetworkIO.FreqCorrectionFactor = udHPSDRFreqCorrectFactor10MHz.Value;
     //   [@501e3f5]
     double effectiveFreqCorrectionFactor() const;
-
-    // ── Level calibration offset ──────────────────────────────────────────────
-    // Source: console.cs:21074-21086 _rx1_display_cal_offset / _rx2_display_cal_offset
-    //   RXCalibrationOffset(int rx) [@501e3f5]
-    // Upstream inline attribution preserved verbatim:
-    //   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-    //   :21090  // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
-    double levelOffsetDb() const;
-    void   setLevelOffsetDb(double db);
 
     // ── RX1 / RX2 6m LNA gain offsets ────────────────────────────────────────
     // Source: setup.cs:17243-17248 ud6mLNAGainOffset → console.RX6mGainOffset_RX1 [@501e3f5]
@@ -310,10 +304,6 @@ private:
     double m_freqCorrectionFactor10M{1.0};
     // Source: setup.cs:22690 chkUsing10MHzRef default unchecked [@501e3f5]
     bool   m_using10MHzRef{false};
-    // Source: console.cs:21074 _rx1_display_cal_offset default 0 [@501e3f5]
-    // Upstream inline attribution preserved verbatim:
-    //   console.cs:21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-    double m_levelOffsetDb{0.0};
     // From Thetis setup.designer.cs:12112-12116 [v2.10.3.15]:
     //   this.ud6mLNAGainOffset.Value = new decimal(new int[] { 13, 0, 0, 0});
     // (console.cs:11812 _rx_6m_gain_offset_rx1 = 13 agrees.) An earlier

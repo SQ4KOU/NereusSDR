@@ -205,6 +205,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the GUI half
 //                                    of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -1339,6 +1342,10 @@ public:
     /// (radioHardwareVersion 9).
     bool radioSampleRateAvailable() const override;
     CommandOutcome requestRadioSampleRate(int rateHz) override;
+    /// Level Cal: the Core offers resetLevelCalibration
+    /// (radioHardwareVersion 12).
+    bool levelCalibrationResetAvailable() const override;
+    CommandOutcome requestResetLevelCalibration() override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;

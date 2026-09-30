@@ -451,6 +451,10 @@
 //                change moves only slices this window controls.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration, levelCalibrationResetAvailable,
+//                requestResetLevelCalibration and levelCalibrationChanged.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3795,6 +3799,29 @@ public:
     // The meter cal term of the receive calibration: Setup's value
     // (RX1_MeterCalOffsetDb) or the radio's factory default.
     double rxMeterCalOffsetDb() const;
+    // Level Cal: the RX1 display calibration (RX1_DisplayCalOffsetDb) or
+    // the radio's factory default, Thetis RX1DisplayCalOffset
+    // (console.cs:21113-21122 [v2.10.3.15]). As in Thetis it reaches TCI
+    // calibration_ex only (TCIServer.cs:1160-1176 [v2.10.3.15]); the
+    // panadapter follows the meter cal (console.cs:12305-12311
+    // [v2.10.3.15], rxMeterOffsetDb), so this never moves it.
+    double rxDisplayCalOffsetDb() const;
+    // Level Cal: `key` is RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb
+    // (just written or removed): refresh the meter offset and emit
+    // levelCalibrationChanged, as Thetis's setters fire their changed
+    // handlers (console.cs:21091-21122 [v2.10.3.15]). Returns false for any
+    // other key. The Core calls it for a window's write too.
+    bool applyLevelCalibrationSetting(const QString& key);
+    // Level Cal Reset, Thetis ResetLevelCalibration (console.cs:46868-46886
+    // [v2.10.3.15]): the meter and display offsets return to the radio's
+    // defaults (both keys removed). Nothing else changes.
+    void resetLevelCalibration();
+    // Whether this window can reset the level calibration: always locally,
+    // in a remote window when its Core offers resetLevelCalibration.
+    bool levelCalibrationResetAvailable() const;
+    // The one call both windows make for Setup's Reset. Empty when it was
+    // done (locally) or sent (remote); otherwise the reason it was not.
+    QString requestResetLevelCalibration();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
@@ -3823,6 +3850,10 @@ signals:
     // moved: the other ADC's attenuator or preamp, or which ADC carries
     // which attenuator. Emitted with rxMeterOffsetChanged too.
     void rxAdcMeterOffsetsChanged();
+    // Level Cal: the meter or display calibration changed (a write, a
+    // Reset, or in a remote window the Core's copy). TCI sends
+    // calibration_ex on it.
+    void levelCalibrationChanged();
 
 public:
 
@@ -5084,11 +5115,11 @@ public slots:
     Q_INVOKABLE QString     txProfile() const;
     Q_INVOKABLE QStringList txProfilesList() const;
 
-    // ── Calibration (getter-only stubs returning 0.0) ────────────────────
-    // No calibration model in RadioModel yet.  Mock semantics: set/get pair;
-    // production has setters absent (caller side never sets these), so
-    // getters return 0.0.  Real calibration data would live in a future
-    // CalibrationModel + per-slice persistence.
+    // ── Calibration (TCI calibration_ex) ─────────────────────────────────
+    // calibrationMeter is rxMeterCalOffsetDb() and calibrationDisplay is
+    // rxDisplayCalOffsetDb(), for either rx: NereusSDR keeps one receive
+    // calibration, which Thetis starts RX2 from too (console.cs:999
+    // [v2.10.3.15]). The XVTR, 6 m and TX display terms still return 0.0.
     Q_INVOKABLE double calibrationMeter(int rx) const;
     Q_INVOKABLE double calibrationDisplay(int rx) const;
     Q_INVOKABLE double calibrationXvtr(int rx) const;

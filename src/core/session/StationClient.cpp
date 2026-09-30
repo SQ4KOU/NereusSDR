@@ -9,6 +9,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The older-Core reason for the 2 m band
 //                                    no longer says "yet". AI-assisted via
 //                                    Anthropic Claude Code.
@@ -4997,6 +5000,20 @@ StationClient::CommandOutcome StationClient::requestRadioSampleRate(int rateHz)
     }
     return sendCommand("setRadioSampleRate", -1, { intArgument("rateHz", rateHz) },
                        QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000));
+}
+
+bool StationClient::levelCalibrationResetAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+StationClient::CommandOutcome StationClient::requestResetLevelCalibration()
+{
+    if (!levelCalibrationResetAvailable()) {
+        return IStationLink::requestResetLevelCalibration();
+    }
+    return sendCommand("resetLevelCalibration", -1, {},
+                       QStringLiteral("the level calibration reset"));
 }
 
 bool StationClient::dspInfoAvailable() const

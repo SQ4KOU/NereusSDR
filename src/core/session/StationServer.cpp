@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: Level Cal: radioHardwareVersion 12, resetLevelCalibration,
+//               and a window's level calibration write reaches the Core's
+//               meter and TCI. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: Setup description version 20 (R-R3-49, R-IOS-18): PA Gain
 //               publishes its on-the-air lock per row, the transmitting band
 //               open to the transmit holder only. J.J. Boyd (KG4VCF),
@@ -7842,6 +7846,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // Parity ruling C12: a band's grid dB max or min reaches the Core's
         // pans at once; on that band the new range goes to every window.
         m_radioModel->applyPanGridSetting(key);
+        // Level Cal (radioHardwareVersion 12): the meter or display
+        // calibration reaches the Core's meter and TCI at once.
+        m_radioModel->applyLevelCalibrationSetting(key);
     }
     // D79: the Core's own band plan follows BandPlanName.
     applyBandPlanSetting(key);
@@ -7991,6 +7998,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyModMonitorSetting(key, QVariant());
         // Parity ruling C12: the band's default grid range.
         m_radioModel->applyPanGridSetting(key);
+        // Level Cal: the radio's default meter or display calibration.
+        m_radioModel->applyLevelCalibrationSetting(key);
     }
     // D79: removing BandPlanName returns the Core to ARRL (US).
     applyBandPlanSetting(key);
@@ -11975,7 +11984,14 @@ int StationServer::radioHardwareVersion() const
     // and off the air, as mi0bot's handlers write the clock chip with no
     // MOX check (mi0bot setup.cs:21732-21756 [@c26a8a4]). A Core below 11
     // stores them without sending them, so a window keeps the rows closed.
-    return m_radioModel->ioBoardFacade()->isBound() ? 11 : 2;
+    //
+    // 12 (Level Cal): resetLevelCalibration, Setup's Reset (the meter and
+    // display calibration back to the radio's defaults), and a window's
+    // RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb reaches the Core's
+    // meter and TCI calibration_ex at once, on and off the air, as
+    // Thetis's setters and ResetLevelCalibration have no MOX check
+    // (console.cs:21089-21122, 46868-46886 [v2.10.3.15]).
+    return m_radioModel->ioBoardFacade()->isBound() ? 12 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

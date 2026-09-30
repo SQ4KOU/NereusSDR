@@ -3019,6 +3019,16 @@ nereus_add_test(tst_rx_meter_offset)
 nereus_add_test(tst_rx_6m_lna_offset)
 target_compile_definitions(tst_rx_6m_lna_offset PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Level calibration: meter + display offset storage, reset, TCI report ─────
+# RX1_MeterCalOffsetDb / RX1_DisplayCalOffsetDb with the Thetis per-model
+# defaults, ResetLevelCalibration, and calibration_ex (TciProtocol /
+# TciServer when WebSockets is present).
+nereus_add_test(tst_level_calibration)
+target_compile_definitions(tst_level_calibration PRIVATE NEREUS_BUILD_TESTS)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(tst_level_calibration PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3M-1a H.3: TxApplet wiring model-layer contracts ───────────────────
 # Verifies TransmitModel::setPower/tunePowerForBand round-trips, powerChanged
 # and tunePowerByBandChanged signals, MoxController default states,

@@ -32,7 +32,6 @@ private slots:
     void setUsing10MHzRef_emitsChanged();
     void effectiveFreqCorrectionFactor_normalMode();
     void effectiveFreqCorrectionFactor_10MHzMode();
-    void setLevelOffsetDb_emitsChanged();
     void setRx1_6mLnaOffset_emitsChanged();
     void setRx2_6mLnaOffset_emitsChanged();
     void setTxDisplayOffsetDb_emitsChanged();
@@ -60,10 +59,6 @@ void TstCalibrationController::defaults_allCorrect()
     // Source: setup.cs:22690 chkUsing10MHzRef default unchecked [@501e3f5]
     QCOMPARE(ctrl.using10MHzRef(), false);
     QCOMPARE(ctrl.effectiveFreqCorrectionFactor(), 1.0);
-    // Source: console.cs:21074 _rx1_display_cal_offset default 0 [@501e3f5]
-    // Upstream inline attribution preserved verbatim:
-    //   :21075  HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
-    QCOMPARE(ctrl.levelOffsetDb(), 0.0);
     // From Thetis setup.designer.cs:12070-12074 and 12112-12116 [v2.10.3.15]:
     // ud6mRx2LNAGainOffset.Value = 13; ud6mLNAGainOffset.Value = 13.
     QCOMPARE(ctrl.rx1_6mLnaOffset(), 13.0);
@@ -137,15 +132,6 @@ void TstCalibrationController::effectiveFreqCorrectionFactor_10MHzMode()
     QCOMPARE(ctrl.effectiveFreqCorrectionFactor(), 0.999998);
 }
 
-void TstCalibrationController::setLevelOffsetDb_emitsChanged()
-{
-    NereusSDR::CalibrationController ctrl;
-    QSignalSpy spy(&ctrl, &NereusSDR::CalibrationController::changed);
-    ctrl.setLevelOffsetDb(-3.5);
-    QCOMPARE(spy.count(), 1);
-    QCOMPARE(ctrl.levelOffsetDb(), -3.5);
-}
-
 void TstCalibrationController::setRx1_6mLnaOffset_emitsChanged()
 {
     NereusSDR::CalibrationController ctrl;
@@ -202,7 +188,6 @@ void TstCalibrationController::persistence_roundTrip()
         ctrl.setFreqCorrectionFactor(1.000003);
         ctrl.setFreqCorrectionFactor10M(0.999997);
         ctrl.setUsing10MHzRef(true);
-        ctrl.setLevelOffsetDb(-1.0);
         ctrl.setRx1_6mLnaOffset(3.0);
         ctrl.setRx2_6mLnaOffset(-2.0);
         ctrl.setTxDisplayOffsetDb(0.25);
@@ -220,7 +205,6 @@ void TstCalibrationController::persistence_roundTrip()
         QCOMPARE(ctrl.freqCorrectionFactor(), 1.000003);
         QCOMPARE(ctrl.freqCorrectionFactor10M(), 0.999997);
         QCOMPARE(ctrl.using10MHzRef(), true);
-        QCOMPARE(ctrl.levelOffsetDb(), -1.0);
         QCOMPARE(ctrl.rx1_6mLnaOffset(), 3.0);
         QCOMPARE(ctrl.rx2_6mLnaOffset(), -2.0);
         QCOMPARE(ctrl.txDisplayOffsetDb(), 0.25);

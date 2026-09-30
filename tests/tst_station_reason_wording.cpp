@@ -1671,6 +1671,10 @@ const QList<AppSideReason>& appSideReasons()
         // Parity ruling C4: the rate box on a Core without setRadioSampleRate.
         {"src/core/session/IStationLink.h", "radioSampleRateUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal: Setup's level calibration Reset on a Core without
+        // resetLevelCalibration.
+        {"src/core/session/IStationLink.h", "levelCalibrationResetUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

@@ -55,6 +55,11 @@
 //                 RadioModel logs through VoltsAmpsLog (Thetis console.cs
 //                 LogVA). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-29 - Level Cal: Reset asks first (setup.cs:24332-24341
+//                 [v2.10.3.15]) and resets the meter and display offsets
+//                 through RadioModel; Start is shown disabled with its reason
+//                 and no longer writes cal/triggerLevelCal. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -164,6 +169,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
 #include "core/RadioDiscovery.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -172,6 +178,7 @@
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -306,13 +313,19 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
 
     auto* levelBtnRow = new QHBoxLayout;
     // Source: setup.cs:6482-6521 btnGeneralCalLevelStart_Click [@501e3f5]
+    // The measuring run is not built, so Start is shown disabled with the
+    // reason rather than hidden.
     m_levelCalStartBtn = new QPushButton(tr("Start"), levelCalGroup);
+    m_levelCalStartBtn->setEnabled(false);
     m_levelCalStartBtn->setToolTip(
-        tr("Start level calibration. Requires calibrated signal at the specified frequency."));
+        tr("Level calibration will run here in a later update."));
     levelBtnRow->addWidget(m_levelCalStartBtn);
-    // Source: setup.cs:24226 btnResetLevelCal_Click -- resets calibration offset to 0 [@501e3f5]
+    // From Thetis setup.cs:24332-24341 [v2.10.3.15] btnResetLevelCal_Click:
+    // asks first, then console.ResetLevelCalibration() puts the meter and
+    // display offsets back to the radio's defaults.
     m_levelCalResetBtn = new QPushButton(tr("Reset"), levelCalGroup);
-    m_levelCalResetBtn->setToolTip(tr("Reset level calibration offset to 0 dB."));
+    m_levelCalResetBtn->setToolTip(
+        tr("Put the receive level calibration back to this radio's defaults."));
     levelBtnRow->addWidget(m_levelCalResetBtn);
     levelBtnRow->addStretch();
     levelCalForm->addRow(levelBtnRow);
@@ -466,13 +479,20 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     });
 
     // Level Cal: Start / Reset
-    connect(m_levelCalStartBtn, &QPushButton::clicked, this, [this]() {
-        emit settingChanged(QStringLiteral("cal/triggerLevelCal"),
-                            m_levelCalFreqSpin->value());
-    });
+    // From Thetis setup.cs:24332-24341 [v2.10.3.15]: a Yes/No question with
+    // No as the default; Yes runs console.ResetLevelCalibration()
+    // (console.cs:46868-46886), which RadioModel ports.
     connect(m_levelCalResetBtn, &QPushButton::clicked, this, [this]() {
-        if (m_calCtrl) { m_calCtrl->setLevelOffsetDb(0.0); m_calCtrl->save(); }
-        emit settingChanged(QStringLiteral("cal/levelOffset"), 0.0);
+        if (!m_model) { return; }
+        const QMessageBox::StandardButton answer = QMessageBox::question(
+            this, tr("Level Defaults"),
+            tr("Do you want to reset Level Calibration back to defaults?"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes) { return; }
+        const QString reason = m_model->requestResetLevelCalibration();
+        if (!reason.isEmpty()) {
+            QMessageBox::warning(this, tr("Level Defaults"), reason);
+        }
     });
 
     // 6m LNA offsets
@@ -688,6 +708,15 @@ void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     if (m_calCtrl && m_model && !m_model->ownsLocalDsp() && !info.macAddress.isEmpty()) {
         m_calCtrl->setMacAddress(info.macAddress);
         m_calCtrl->load();
+    }
+    // A remote window resets through its Core; a Core that cannot take the
+    // request leaves Reset disabled with the reason.
+    if (m_model) {
+        const bool resetAvailable = m_model->levelCalibrationResetAvailable();
+        m_levelCalResetBtn->setEnabled(resetAvailable);
+        m_levelCalResetBtn->setToolTip(resetAvailable
+            ? tr("Put the receive level calibration back to this radio's defaults.")
+            : IStationLink::levelCalibrationResetUnavailableReason());
     }
     // Load per-radio calibration settings from controller (set by RadioModel at connect).
     if (m_calCtrl) {
