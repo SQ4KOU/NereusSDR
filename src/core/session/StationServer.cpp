@@ -877,6 +877,9 @@
 //               N-2): or, for a keyer that shares slices, on any other
 //               device's slice; the flag moves after askKey admits. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: Level Cal 2: rx2AttenuatorVersion 1 for a peer that
+//               declared rx2Attenuator. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -12408,6 +12411,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.mediaDirectVersion = mediaDirectVersion();
                 caps.mediaStunUrls = m_mediaStunUrls;
             }
+            // Level Cal 2: the catalogue's RX2 input control, only to a
+            // peer whose hello declared rx2Attenuator 1 (after the direct
+            // media ladder and before coreBuildInfo on the wire); any other
+            // peer's capabilities are today's.
+            caps.rx2AttenuatorVersion =
+                peerDeclares(transport, QByteArrayLiteral("rx2Attenuator"), 1) ? 1 : 0;
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();

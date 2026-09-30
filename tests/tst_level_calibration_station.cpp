@@ -26,7 +26,8 @@
 //                AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-30 - Level Cal 2: another device's slice is refused, the
 //                device's own slice runs; a paired remote window names
-//                its own active slice. J.J. Boyd (KG4VCF), with
+//                its own active slice; rx2AttenuatorVersion reaches
+//                only a peer that declared it. J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -37,6 +38,7 @@
 #include <QTemporaryDir>
 
 #include "FakeLevelCalibrationHost.h"
+#include "core/BuildIdentity.h"
 #include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
 #include "core/security/ClientDeviceIdentity.h"
@@ -374,6 +376,44 @@ private slots:
         QVERIFY(!remote.levelCalSucceeded());
         QVERIFY(remote.levelCalMessage().isEmpty());
         QCOMPARE(remote.levelCalPercent(), 0);
+    }
+
+    // Level Cal 2: rx2AttenuatorVersion 1 reaches a peer that declared
+    // rx2Attenuator, as the last entry before coreBuildInfo; a peer that
+    // did not is sent none. The entry reads back.
+    void rx2AttenuatorVersion_onlyToADeclaringPeer()
+    {
+        const QString savedVersion = QCoreApplication::applicationVersion();
+        const auto restore = qScopeGuard([&savedVersion]() {
+            QCoreApplication::setApplicationVersion(savedVersion);
+        });
+        QCoreApplication::setApplicationVersion(QStringLiteral("0.5.2"));
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        QHash<QByteArray, int> asks = kHolder;
+        asks.insert(QByteArrayLiteral("rx2Attenuator"), 1);
+        asks.insert(QByteArrayLiteral("coreBuildInfo"), 1);
+        LoopbackTransport* appA = core.signIn(a, asks);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(capability(appA->received(), QStringLiteral("rx2AttenuatorVersion")), 1);
+        QVERIFY(!capability(appB->received(), QStringLiteral("rx2AttenuatorVersion")).has_value());
+        const QJsonArray caps = firstOfType(appA->received(), QStringLiteral("capabilities"))
+                                    .value(QStringLiteral("properties")).toArray();
+        QVERIFY(caps.size() >= 2);
+        QCOMPARE(caps.at(caps.size() - 2).toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("rx2AttenuatorVersion"));
+        QCOMPARE(caps.last().toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("coreBuildInfo"));
+
+        StationCapabilities sent;
+        sent.rx2AttenuatorVersion = 1;
+        QCOMPARE(StationCapabilities::fromUpdates(sent.toUpdates()).rx2AttenuatorVersion, 1);
+        QCOMPARE(StationCapabilities::fromUpdates(StationCapabilities{}.toUpdates())
+                     .rx2AttenuatorVersion, 0);
     }
 
     // Level Cal 2 (remote parity): a paired remote window's Start names

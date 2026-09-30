@@ -924,6 +924,13 @@ media connection"); a peer that does not sees exactly the wire it was built
 for, with neither, and its `replace` keeps its three fields. The station
 does not declare it; the desktop's remote window does.
 
+**`rx2Attenuator` 1** (Level Cal 2): the client reads RX2's own input
+control from the catalogue's `board` (`rx2Attenuator`, `rx2PreampItems`,
+`rx2AttenuatorReason`). A peer that declares it is sent
+`rx2AttenuatorVersion` (section 6.3); a peer that does not sees exactly the
+capabilities it was built for. Neither the station nor the desktop's remote
+window declares it; the phone does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1104,6 +1111,7 @@ change shows as surface drift and as a change to this table.
 | `paTransmitBandVersion` | 1 |
 | `sliceAccessVersion` | 2 |
 | `mediaDirectVersion` | 1 |
+| `rx2AttenuatorVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2116,6 +2124,14 @@ operation with `mediaDirectVersion` 1: a direct-only connection that
 gathers STUN and host candidates and neither the media tunnel nor the
 relay. A peer that did not declare the feature is sent neither entry.
 
+**RX2's input control.** A client that declared `rx2Attenuator` 1 is sent
+`rx2AttenuatorVersion`, an `i64`, 1, after the direct media ladder (or after
+the last entry before it when that is absent) and before `coreBuildInfo`.
+At 1 the catalogue's `board` carries `rx2Attenuator`, `rx2PreampItems` and
+`rx2AttenuatorReason` (section "Catalogue"). A peer that did not declare
+the feature is sent no entry; the catalogue keys are sent to every peer,
+and an app that does not know them ignores them.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2339,7 +2355,8 @@ older window sees only the values it was built for.
 | 99 | `sliceAccessVersion` | `i64` |
 | 100 | `mediaDirectVersion` | `i64` |
 | 101 | `mediaStunUrls` | `utf8` |
-| 102 | `coreBuildInfo` | `utf8` |
+| 102 | `rx2AttenuatorVersion` | `i64` |
+| 103 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -4884,6 +4901,9 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `transmit` | `{power, tunePowerForTxBand, tunePower, micGainDb}`: the transmit controls' ranges on this radio (below) |
 | `rx1Preamp` | Whether it has the RX applet's RX1 preamp toggle (the dual-ADC boards; `rx1Preamp` true is refused elsewhere) |
 | `relays` | `{rxOutOnTx, ext1OutOnTx, ext2OutOnTx, rxOutOverride}`: the antenna relays it has (below) |
+| `rx2Attenuator` | `{min, max, step}` in dB for RX2's own input attenuator, 0 to 31 in 1 dB steps on the radios with a second ADC (ANAN-100D, 200D, OrionMKII, 7000D, 8000D, Anvelina Pro3, G2, G2 1K), or `null`. An app draws a slider and writes `stepAtt`'s `rx2AttenuationDb` with `rx2StepAttEnabled` true (`adcAttenuatorVersion` 1) |
+| `rx2PreampItems` | `[{id, label}]`: RX2's preamp choices where RX2's input has two states instead (the HPSDR's second Mercury: `0dB`, `-20dB`), `id` the `stepAtt` object's `rx2PreampMode`; empty elsewhere |
+| `rx2AttenuatorReason` | Why RX2 has no input control of its own, in operator words, when `rx2Attenuator` is `null` and `rx2PreampItems` is empty (RX2 shares RX1's input, or the radio's second input is not known); `null` otherwise |
 
 `board.transmit`: each key is `{min, max, step}` in the property's own
 units, as the desktop's control ranges it (the TX applet's RF Power and Tune

@@ -36,6 +36,9 @@
 //               page's spinbox at every value (mi0bot's HL2 tune readouts).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: board.rx2Attenuator, rx2PreampItems and rx2AttenuatorReason
+//               on every radio (Level Cal 2). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -58,6 +61,7 @@
 #include "core/ControlRanges.h"
 #include "core/HpsdrModel.h"
 #include "core/SkuUiProfile.h"
+#include "core/StepAttenuatorController.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/StationCatalog.h"
 #include "gui/AntennaPopupBuilder.h"
@@ -69,6 +73,8 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -522,6 +528,55 @@ private slots:
                          sku.ext2OutOnTxLabel);
             }
             QCOMPARE(relays.value(QStringLiteral("rxOutOverride")).toBool(), sku.hasRxBypassUi);
+        }
+    }
+
+    // ── board.rx2Attenuator (Level Cal 2) ──────────────────────────────
+
+    // RX2's own input control, every step the hardware has (JJ's ruling of
+    // 2026-09-30): the second ADC's 0-31 dB attenuator in 1 dB steps on the
+    // two-ADC radios, the second Mercury's two states on the HPSDR, and on
+    // every other radio neither, with the reason in operator words.
+    void rx2InputControlIsTheHardwaresSteps()
+    {
+        const QString shares =
+            QStringLiteral("RX2 uses RX1's input on this radio. Set it with RX1's attenuator.");
+        const QString unknown = QStringLiteral("NereusSDR cannot set RX2's input on this radio.");
+        QVERIFY(OperatorWording::isPlain(shares));
+        QVERIFY(OperatorWording::isPlain(unknown));
+        const QList<HPSDRModel> twoAdcs{
+            HPSDRModel::ANAN100D, HPSDRModel::ANAN200D, HPSDRModel::ORIONMKII,
+            HPSDRModel::ANAN7000D, HPSDRModel::ANAN8000D, HPSDRModel::ANVELINAPRO3,
+            HPSDRModel::ANAN_G2, HPSDRModel::ANAN_G2_1K};
+        for (int m = static_cast<int>(HPSDRModel::FIRST) + 1;
+             m < static_cast<int>(HPSDRModel::LAST); ++m) {
+            const auto model = static_cast<HPSDRModel>(m);
+            const QJsonObject board = boardOf(model);
+            const QJsonValue slider = board.value(QStringLiteral("rx2Attenuator"));
+            const QJsonArray items = board.value(QStringLiteral("rx2PreampItems")).toArray();
+            const QJsonValue reason = board.value(QStringLiteral("rx2AttenuatorReason"));
+            QVERIFY2(board.contains(QStringLiteral("rx2Attenuator"))
+                         && board.contains(QStringLiteral("rx2PreampItems"))
+                         && board.contains(QStringLiteral("rx2AttenuatorReason")),
+                     qPrintable(QString::number(m)));
+            if (twoAdcs.contains(model)) {
+                QCOMPARE(slider.toObject(), range(0, 31, 1));
+                QVERIFY(items.isEmpty());
+                QVERIFY(reason.isNull());
+            } else if (model == HPSDRModel::HPSDR) {
+                QVERIFY(slider.isNull());
+                QCOMPARE(items, (QJsonArray{
+                    QJsonObject{{QStringLiteral("id"), static_cast<int>(PreampMode::On)},
+                                {QStringLiteral("label"), QStringLiteral("0dB")}},
+                    QJsonObject{{QStringLiteral("id"), static_cast<int>(PreampMode::Off)},
+                                {QStringLiteral("label"), QStringLiteral("-20dB")}}}));
+                QVERIFY(reason.isNull());
+            } else {
+                QVERIFY(slider.isNull());
+                QVERIFY(items.isEmpty());
+                QCOMPARE(reason.toString(),
+                         model == HPSDRModel::REDPITAYA ? unknown : shares);
+            }
         }
     }
 
