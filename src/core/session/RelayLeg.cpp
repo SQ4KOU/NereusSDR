@@ -11,6 +11,9 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: dropSocket() sends a close frame only on an open
+//               WebSocket and aborts one still opening. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RelayLeg.h"
@@ -418,7 +421,17 @@ void RelayLeg::dropSocket()
     QWebSocket* socket = m_socket.data();
     m_socket = nullptr;
     socket->disconnect(this);
-    socket->close();
+    // A close frame belongs only on an open WebSocket (RFC 6455 section
+    // 7.1.2). Still opening (TCP connecting, or the upgrade unanswered),
+    // close() would write one anyway: into the upgrade exchange, or into a
+    // TCP socket not yet connected (QNativeSocketEngine's "write() was not
+    // called in QAbstractSocket::ConnectedState"). Abort that instead, as
+    // StationClient::onHandshakeDeadline does for its own socket.
+    if (socket->state() == QAbstractSocket::ConnectedState) {
+        socket->close();
+    } else {
+        socket->abort();
+    }
     socket->deleteLater();
 }
 

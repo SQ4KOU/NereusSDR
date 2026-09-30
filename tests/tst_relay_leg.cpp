@@ -19,6 +19,8 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: closing a leg whose WebSocket is still opening writes
+//               nothing to it (aLegClosedWhileOpeningWritesNothing).
 // =================================================================
 
 #include <QtTest>
@@ -28,6 +30,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkDatagram>
+#include <QRegularExpression>
 #include <QNetworkProxy>
 #include <QPointer>
 #include <QRandomGenerator>
@@ -443,6 +446,30 @@ private slots:
         }
         QTRY_COMPARE(stuck.droppedQueueFull(), quint64(36));
         QCOMPARE(stuck.datagramsSent(), quint64(0));
+    }
+
+    // A leg closed while its WebSocket is still opening (the relay took the
+    // TCP connection and has not answered the upgrade) writes nothing to
+    // it: there is no open WebSocket to send a close frame on, so the
+    // socket is aborted and the relay sees the connection go.
+    void aLegClosedWhileOpeningWritesNothing()
+    {
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("QNativeSocketEngine::write")));
+        QTcpServer silent;
+        QVERIFY(silent.listen(QHostAddress::LocalHost));
+        RelayLeg leg;
+        QVERIFY(leg.bindLanes());
+        leg.open(QUrl(QStringLiteral("ws://127.0.0.1:%1/v1/relay").arg(silent.serverPort())),
+                 QStringLiteral("tok"));
+        QTRY_VERIFY(silent.hasPendingConnections());
+        QTcpSocket* accepted = silent.nextPendingConnection();
+        QVERIFY(accepted != nullptr);
+        // The upgrade request arrives; it is never answered.
+        QTRY_VERIFY(accepted->bytesAvailable() > 0);
+        accepted->readAll();
+        leg.close();
+        QTRY_VERIFY(accepted->state() == QAbstractSocket::UnconnectedState);
+        QCOMPARE(accepted->bytesAvailable(), qint64(0));
     }
 
     // A connection's candidate source gives its agent the lane socket's
