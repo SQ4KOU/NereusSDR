@@ -70,6 +70,19 @@
 //               failure prints both ends' progress, the relay's output and
 //               the service's log. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: relay teardown finding: the fake relay exited on a datagram
+//               it could not send, so no release reached it. The waits on
+//               a connection through the fake relay and on its releases
+//               stop at their bound (QTRY_* ran three times it, past
+//               ctest's 300 s) and at once if the relay exits, with its
+//               errors; new cases for the relay carrying on past such a
+//               datagram and for both ends of a relayed connection closed
+//               at once giving both allocations back. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: theServiceEndsWithTheProcessThatStartedIt: the service
+//               LocalService starts ends with the process it is tied to.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -94,6 +107,9 @@
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
+#include <QNetworkDatagram>
+#include <QUdpSocket>
+#include <QtEndian>
 #include <QWebSocket>
 #include <QWebSocketServer>
 
@@ -962,6 +978,15 @@ public:
     LibDataChannelMediaTransport* offerer() const { return m_offerer.get(); }
     LibDataChannelMediaTransport* answerer() const { return m_answerer.get(); }
 
+    // Both ends closed and destroyed in the same turn of the event loop:
+    // each peer's close races the other end's teardown, with nothing
+    // waiting for either.
+    void closeBothAtOnce()
+    {
+        m_offerer.reset();
+        m_answerer.reset();
+    }
+
     // What each end got to, for a failure message: readiness, gathering,
     // the relay servers each was given and the candidates each produced
     // (addresses are loopback, nothing secret).
@@ -1040,6 +1065,216 @@ private:
     std::optional<IceConfiguration> m_clientIce;
     std::unique_ptr<LibDataChannelMediaTransport> m_offerer;
     std::unique_ptr<LibDataChannelMediaTransport> m_answerer;
+};
+
+// Waits for both ends of `pair` to be ready, for `boundMs` at most, and
+// stops at once if the fake relay exits. On failure `why` has the reason,
+// what each end got to, the relay's own account and the service's log.
+bool waitForPair(IcePair& pair, LocalService& service, int boundMs, QString* why)
+{
+    EndWatch ends;
+    ends.watch(service);
+    QString reason;
+    if (waitUntil([&pair] { return pair.clientReady && pair.stationReady; }, boundMs, ends,
+                  QStringLiteral("both ends of the connection ready"), &reason)) {
+        return true;
+    }
+    *why = reason + QLatin1Char('\n') + pair.describe() + QStringLiteral("\n--- relay:\n")
+        + service.turnReport() + QStringLiteral("\n--- service:\n") + service.log();
+    return false;
+}
+
+// Waits until the fake relay's output has `line`, for `boundMs` at most,
+// stopping at once if the relay exits; on failure `why` has its account.
+bool waitForRelayLine(LocalService& service, const QString& line, int boundMs, QString* why)
+{
+    EndWatch ends;
+    ends.watch(service);
+    QString reason;
+    if (waitUntil([&service, &line] { return service.turnOutput().contains(line); }, boundMs,
+                  ends, QStringLiteral("\"%1\" from the relay").arg(line), &reason)) {
+        return true;
+    }
+    *why = reason + QLatin1Char('\n') + service.turnReport();
+    return false;
+}
+
+// A STUN/TURN client over UDP, just enough of RFC 8489 and RFC 8656 to
+// drive the fake relay by hand: requests with the long-term credentials
+// the fake takes (coturn's time-limited ones), and a Send indication.
+class TurnProbe {
+public:
+    static constexpr quint16 kAllocate = 0x003;
+    static constexpr quint16 kRefresh = 0x004;
+    static constexpr quint16 kSend = 0x006;
+    static constexpr quint16 kCreatePermission = 0x008;
+    static constexpr quint16 kRequest = 0x000;
+    static constexpr quint16 kIndication = 0x010;
+    static constexpr quint16 kSuccess = 0x100;
+    static constexpr quint16 kError = 0x110;
+
+    struct Attribute {
+        quint16 type;
+        QByteArray value;
+    };
+    struct Response {
+        quint16 method = 0;
+        quint16 cls = 0;
+        QList<Attribute> attributes;
+        QByteArray value(quint16 type) const
+        {
+            for (const Attribute& attribute : attributes) {
+                if (attribute.type == type) {
+                    return attribute.value;
+                }
+            }
+            return {};
+        }
+    };
+
+    TurnProbe(quint16 port, QByteArray secret) : m_port(port), m_secret(std::move(secret))
+    {
+        m_socket.bind(QHostAddress(QHostAddress::LocalHost), 0);
+    }
+
+    // Allocate without credentials, take the realm and nonce from the 401,
+    // then allocate with them.
+    bool allocate()
+    {
+        const auto challenge = request(kAllocate, {{0x0019, transport()}}, false);
+        if (!challenge || challenge->cls != kError) {
+            return false;
+        }
+        m_realm = challenge->value(0x0014);
+        m_nonce = challenge->value(0x0015);
+        m_username = QByteArrayLiteral("4102444800:relay-probe");
+        const QByteArray password = QMessageAuthenticationCode::hash(
+            m_username, m_secret, QCryptographicHash::Sha1).toBase64();
+        m_key = QCryptographicHash::hash(m_username + ':' + m_realm + ':' + password,
+                                         QCryptographicHash::Md5);
+        const auto allocated = request(kAllocate, {{0x0019, transport()}}, true);
+        return allocated && allocated->cls == kSuccess;
+    }
+
+    bool permit(const QHostAddress& peer, quint16 port)
+    {
+        const auto permitted = request(kCreatePermission, {{0x0012, xorAddress(peer, port)}}, true);
+        return permitted && permitted->cls == kSuccess;
+    }
+
+    void sendTo(const QHostAddress& peer, quint16 port, const QByteArray& data)
+    {
+        m_socket.writeDatagram(message(kSend, kIndication, {{0x0012, xorAddress(peer, port)},
+                                                            {0x0013, data}}, false),
+                               QHostAddress(QHostAddress::LocalHost), m_port);
+    }
+
+    // A Refresh of LIFETIME 0: the allocation given back.
+    bool release()
+    {
+        QByteArray zero(4, '\0');
+        const auto released = request(kRefresh, {{0x000D, zero}}, true);
+        return released && released->cls == kSuccess;
+    }
+
+private:
+    static QByteArray transport()
+    {
+        return QByteArray("\x11\x00\x00\x00", 4);  // UDP
+    }
+
+    QByteArray xorAddress(const QHostAddress& peer, quint16 port) const
+    {
+        QByteArray value(8, '\0');
+        value[1] = 0x01;
+        qToBigEndian<quint16>(port ^ quint16(kMagic >> 16), value.data() + 2);
+        qToBigEndian<quint32>(peer.toIPv4Address() ^ kMagic, value.data() + 4);
+        return value;
+    }
+
+    static void append(QByteArray& body, quint16 type, const QByteArray& value)
+    {
+        char header[4];
+        qToBigEndian<quint16>(type, header);
+        qToBigEndian<quint16>(quint16(value.size()), header + 2);
+        body.append(header, 4);
+        body.append(value);
+        body.append(QByteArray((4 - value.size() % 4) % 4, '\0'));
+    }
+
+    QByteArray message(quint16 method, quint16 cls, const QList<Attribute>& attributes,
+                       bool signed_)
+    {
+        m_transaction = randomBytes(12);
+        QByteArray body;
+        for (const Attribute& attribute : attributes) {
+            append(body, attribute.type, attribute.value);
+        }
+        if (signed_) {
+            append(body, 0x0006, m_username);
+            append(body, 0x0014, m_realm);
+            append(body, 0x0015, m_nonce);
+        }
+        const quint16 type = quint16(((method & 0x0F80) << 2) | ((method & 0x0070) << 1)
+                                     | (method & 0x000F) | cls);
+        const auto header = [&](int length) {
+            QByteArray bytes(8, '\0');
+            qToBigEndian<quint16>(type, bytes.data());
+            qToBigEndian<quint16>(quint16(length), bytes.data() + 2);
+            qToBigEndian<quint32>(kMagic, bytes.data() + 4);
+            return bytes + m_transaction;
+        };
+        if (signed_) {
+            const QByteArray mac = QMessageAuthenticationCode::hash(
+                header(body.size() + 24) + body, m_key, QCryptographicHash::Sha1);
+            append(body, 0x0008, mac);
+        }
+        return header(body.size()) + body;
+    }
+
+    std::optional<Response> request(quint16 method, const QList<Attribute>& attributes,
+                                    bool signed_)
+    {
+        m_socket.writeDatagram(message(method, kRequest, attributes, signed_),
+                               QHostAddress(QHostAddress::LocalHost), m_port);
+        const QDeadlineTimer deadline(kReplyBoundMs);
+        while (!deadline.hasExpired()) {
+            if (!m_socket.hasPendingDatagrams()
+                && !m_socket.waitForReadyRead(int(qMax<qint64>(1, deadline.remainingTime())))) {
+                continue;
+            }
+            const QByteArray data = m_socket.receiveDatagram().data();
+            if (data.size() < 20 || data.mid(8, 12) != m_transaction) {
+                continue;
+            }
+            Response response;
+            const quint16 type = qFromBigEndian<quint16>(data.constData());
+            response.cls = type & 0x0110;
+            response.method = quint16((type & 0x000F) | ((type & 0x00E0) >> 1)
+                                      | ((type & 0x3E00) >> 2));
+            int offset = 20;
+            while (offset + 4 <= data.size()) {
+                const quint16 attributeType = qFromBigEndian<quint16>(data.constData() + offset);
+                const quint16 length = qFromBigEndian<quint16>(data.constData() + offset + 2);
+                response.attributes.append({attributeType, data.mid(offset + 4, length)});
+                offset += 4 + length + (4 - length % 4) % 4;
+            }
+            return response;
+        }
+        return std::nullopt;
+    }
+
+    static constexpr quint32 kMagic = 0x2112A442;
+    // How long one request waits for the fake relay on this computer.
+    static constexpr int kReplyBoundMs = 5000;
+    QUdpSocket m_socket;
+    quint16 m_port;
+    QByteArray m_secret;
+    QByteArray m_realm;
+    QByteArray m_nonce;
+    QByteArray m_username;
+    QByteArray m_key;
+    QByteArray m_transaction;
 };
 
 // Task 28 tail (R-IOS-16): whether this computer has IPv6 the product would
@@ -2170,7 +2405,10 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, /*relayOnly=*/false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
         const auto path = pair.offerer()->selectedPath();
         QVERIFY(path.has_value());
         QVERIFY(!path->relayed());
@@ -2207,7 +2445,10 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, /*relayOnly=*/false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
         QCOMPARE(pair.stationRelays, 1);
         QCOMPARE(pair.clientRelays, 1);
         QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->selectedPath().has_value()
@@ -2236,7 +2477,10 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
         QTRY_VERIFY_WITH_TIMEOUT(pair.clientGathered && pair.stationGathered, 30000);
         QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("QUOTA 486")), 5000);
         QVERIFY(!service.turnOutput().contains(QLatin1String("ALLOCATED")));
@@ -2280,11 +2524,14 @@ private slots:
         // client idle close starts only when the introduction ends (its
         // 120 s lifetime), so it cannot cut this wait short. On failure the
         // relay's and the service's output say which leg stalled.
-        QTRY_VERIFY2_WITH_TIMEOUT(pair.clientReady && pair.stationReady,
-                                  qPrintable(pair.describe() + QStringLiteral("\n--- relay:\n")
-                                             + service.turnOutput()
-                                             + QStringLiteral("\n--- service:\n") + service.log()),
-                                  IceConfiguration::kConnectDeadlineMs);
+        // The wait stops at that bound (a QTRY_* ran on to three times it,
+        // past ctest's 300 s for the whole binary) or as soon as the relay
+        // exits.
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, IceConfiguration::kConnectDeadlineMs, &why),
+                     qPrintable(why));
+        }
         QCOMPARE(pair.stationRelays, 1);
         QCOMPARE(pair.clientRelays, 1);
         QVERIFY(pair.offerer()->selectedPath().has_value());
@@ -2297,6 +2544,105 @@ private slots:
                                  5000);
         QTRY_VERIFY_WITH_TIMEOUT(pair.stationReceived.contains(QByteArrayLiteral("through the relay")),
                                  5000);
+    }
+
+    // Both ends of a connection carried by the relay closed and destroyed
+    // in the same turn of the event loop, each close racing the other
+    // end's teardown: both allocations are still given back, not held for
+    // their lifetime (the libjuice agent's bounded release outlives the
+    // transports, cmake/patches/libdatachannel-0003).
+    void aRelayIsGivenBackWhenBothEndsCloseAtOnce()
+    {
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, /*relayOnly=*/true);
+        pair.start(rendezvous.client()->stationId(), phone);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, IceConfiguration::kConnectDeadlineMs, &why),
+                     qPrintable(why));
+        }
+        QVERIFY(pair.offerer()->selectedPath().has_value());
+        {
+            QString why;
+            QVERIFY2(waitForRelayLine(service, QStringLiteral("ALLOCATED 2"), 5000, &why),
+                     qPrintable(why));
+        }
+        QVERIFY(!service.turnOutput().contains(QLatin1String("RELEASED")));
+
+        pair.closeBothAtOnce();
+        // The agents' release window is 5 s (libjuice-0002's
+        // TURN_CLOSE_DEADLINE); this waits three times that at most.
+        {
+            QString why;
+            QVERIFY2(waitForRelayLine(service, QStringLiteral("RELEASED 2"), 15000, &why),
+                     qPrintable(why));
+        }
+    }
+
+    // The fake relay itself: a datagram it cannot send (here to a
+    // documentation address, RFC 5737, which its loopback-bound relay
+    // socket cannot reach, as it could not reach this computer's VPN
+    // address) is dropped and counted, and the relay carries on and takes
+    // the release after it. Before, the send's error ended the relay, and
+    // no release that followed was ever seen.
+    void theFakeRelayCarriesOnPastADatagramItCannotSend()
+    {
+        LocalService service;
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        const QHostAddress unreachable(QStringLiteral("192.0.2.1"));
+        constexpr quint16 kDiscardPort = 9;
+        TurnProbe probe(service.turnPort(), service.turnSecret());
+        QVERIFY2(probe.allocate(), qPrintable(service.turnReport()));
+        QVERIFY2(probe.permit(unreachable, kDiscardPort), qPrintable(service.turnReport()));
+        probe.sendTo(unreachable, kDiscardPort, QByteArrayLiteral("nowhere to go"));
+        // The relay reads its one socket in order: the release is answered
+        // after the Send indication was handled.
+        QVERIFY2(probe.release(), qPrintable(service.turnReport()));
+        QString why;
+        QVERIFY2(waitForRelayLine(service, QStringLiteral("RELEASED 1"), 5000, &why),
+                 qPrintable(why));
+        QVERIFY2(service.turnOutput().contains(QLatin1String("UNSENT 1")),
+                 qPrintable(service.turnReport()));
+        QVERIFY2(service.turnProcess()->state() == QProcess::Running,
+                 qPrintable(service.turnReport()));
+    }
+
+    // The service a test starts ends with the process it was tied to, even
+    // when no destructor runs (a test killed at its ctest timeout): here
+    // tied to a stand-in process that is then killed.
+    void theServiceEndsWithTheProcessThatStartedIt()
+    {
+        QProcess standIn;
+        standIn.start(QStringLiteral("/bin/sleep"), {QStringLiteral("600")});
+        QVERIFY(standIn.waitForStarted(10000));
+        LocalService service;
+        service.setParentPidForTest(standIn.processId());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        QProcess* running = service.serviceProcess();
+        QVERIFY(running != nullptr);
+        QCOMPARE(running->state(), QProcess::Running);
+        standIn.kill();
+        QVERIFY(standIn.waitForFinished(10000));
+        // The launcher looks every 0.5 s (PARENT_POLL_S); ten times that.
+        constexpr int kEndBoundMs = 5000;
+        QVERIFY2(running->waitForFinished(kEndBoundMs),
+                 qPrintable(QStringLiteral("the service was still running %1 ms after the "
+                                           "process it was tied to ended\n%2")
+                                .arg(kEndBoundMs)
+                                .arg(service.log())));
     }
 
     void relayDeniedAsksForNoCredentials()
@@ -2318,7 +2664,10 @@ private slots:
         QSignalSpy answers(&client, &RendezvousClient::answerReceived);
         IcePair pair(rendezvous.client(), &client, false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
         QCOMPARE(credentials.size(), 0);
         QCOMPARE(answers.size(), 1);
         QCOMPARE(answers.at(0).at(1).toBool(), false);
@@ -2562,7 +2911,10 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
 
         service.stop();
         QTRY_VERIFY_WITH_TIMEOUT(lost.size() >= 1, 10000);
@@ -2602,7 +2954,10 @@ private slots:
         client.setServers({service.url()});
         IcePair pair(rendezvous.client(), &client, false);
         pair.start(rendezvous.client()->stationId(), phone);
-        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        {
+            QString why;
+            QVERIFY2(waitForPair(pair, service, 30000, &why), qPrintable(why));
+        }
         const auto hasFamily = [](const QStringList& candidates, QAbstractSocket::NetworkLayerProtocol family) {
             for (const QString& candidate : candidates) {
                 const QStringList fields = candidate.split(QLatin1Char(' '));
@@ -3068,10 +3423,11 @@ private slots:
         // Both allocations, the Core's and the computer's, given back at
         // once rather than held for their lifetime. On a failure, what the
         // relay saw: which allocations were made and which came back.
-        QTRY_VERIFY2_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
-                                  qPrintable(QStringLiteral("fake TURN server output:\n%1")
-                                                 .arg(service.turnOutput())),
-                                  15000);
+        {
+            QString why;
+            QVERIFY2(waitForRelayLine(service, QStringLiteral("RELEASED 2"), 15000, &why),
+                     qPrintable(why));
+        }
     }
 
     // Task 29 (R-IOS-16): a Core with `relay = deny` settles its relay
