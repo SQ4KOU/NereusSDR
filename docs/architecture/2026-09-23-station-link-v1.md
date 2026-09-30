@@ -1102,7 +1102,7 @@ change shows as surface drift and as a change to this table.
 | `radeStatusVersion` | 1 |
 | `txInhibitReasonVersion` | 1 |
 | `paTransmitBandVersion` | 1 |
-| `sliceAccessVersion` | 1 |
+| `sliceAccessVersion` | 2 |
 | `mediaDirectVersion` | 1 |
 
 <!-- /surface -->
