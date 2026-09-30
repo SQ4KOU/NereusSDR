@@ -1118,7 +1118,7 @@ change shows as surface drift and as a change to this table.
 | `radeStatusVersion` | 1 |
 | `txInhibitReasonVersion` | 1 |
 | `paTransmitBandVersion` | 1 |
-| `sliceAccessVersion` | 2 |
+| `sliceAccessVersion` | 3 |
 | `mediaDirectVersion` | 1 |
 | `rx2AttenuatorVersion` | 1 |
 | `radioMicVersion` | 1 |
@@ -1468,11 +1468,19 @@ When a feature is off, its version is 0:
   offers it (`takeBack` true) and `notice.takeBack {id}` takes control of
   the slice back. The value sent is the lower of the Core's version and
   the one the peer's hello declared (`sliceAccess` 1 reads 1, `sliceAccess`
-  2 reads 2), so a peer that declared 1 sees exactly what it saw before;
-  nothing is renumbered and `coreBuildInfo` stays last. An app that
-  declared 2 on a Core that sends 1 shows Take it back on the card
-  disabled, with the reason "This Core cannot give control back from here.
-  Updating the Core may help."
+  2 reads 2, `sliceAccess` 3 reads 3), so a peer that declared 1 sees
+  exactly what it saw before; nothing is renumbered and `coreBuildInfo`
+  stays last. An app that declared 2 on a Core that sends 1 shows Take it
+  back on the card disabled, with the reason "This Core cannot give
+  control back from here. Updating the Core may help." 3 (core-slice
+  take-over, JJ 2026-09-30) lets a device take the Core's own slice
+  (`controllerDeviceId` `station`) with nobody at the Core's desktop
+  (section 7.1, `slice.takeControl`): at 3 an app offers Take control on
+  every slice as it does on any device's, and the Core's answer is the
+  take's own. Below 3 the Core refuses that take in its words, "Slice
+  <letter> is run by the Core itself, so control of it cannot pass to this
+  device.", and an app shows Take control on a slice whose controller is
+  `station` disabled, never hidden, with those words.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -4533,21 +4541,30 @@ object says who controls and who listens. The verbs (section 9.1):
   slice; see "A Core with no slice" below).
 - `slice.takeControl {sliceId, incarnation, controlRevision}` makes the
   device its controller in one change: no slice is closed or made, and
-  its receiver, channel and audio stay. The former controller stays a
-  listener (its `slice:<id>` stays; it is sent `notice` `controlTaken`)
-  and every other listener stays. Refused while the slice is
-  transmitting (the transmit slice of a holder on the air, or the one a
-  keyed radio holds), checked when the take is applied: "Slice <letter>
-  is transmitting. Take control once it stops."; and when its controller
-  cannot stay on as a listener: a session without the feature ("<name>
-  needs an update before control of slice <letter> can pass to another
-  device."), or the Core's own position with nobody at the hosting
-  desktop ("Slice <letter> is run by the Core itself, so control of it
-  cannot pass to this device."). A slice the Core keeps for a device may
-  be taken, and so may an away device's slice within its 3 minutes. A
-  hosting desktop's own slice passes like any device's (take-over
-  parity): the desktop is the station device, stays on as a listener, and
-  is told with `controlTaken` and Take it back. When the
+  its receiver, channel and audio stay. Every slice can be taken (JJ,
+  2026-09-30): the one refusal is while the slice is transmitting (the
+  transmit slice of a holder on the air, or the one a keyed radio holds),
+  checked when the take is applied: "Slice <letter> is transmitting. Take
+  control once it stops." The former controller stays a listener (its
+  `slice:<id>` stays; it is sent `notice` `controlTaken`) and every other
+  listener stays, when it can listen: a session with the feature, the
+  Core's own position, or a device away within its 3 minutes (it finds
+  itself a listener when it returns). A former controller that cannot (a
+  session without the feature, or a device neither here nor away) loses
+  the slice: it leaves it, is sent no `controlTaken`, and an older window
+  left with no slice ends (`takenOver`), as when a take closes an older
+  window's last slice. A slice the
+  Core keeps for a device may be taken. A hosting desktop's own slice
+  passes like any device's (take-over parity): the desktop is the station
+  device, stays on as a listener, and is told with `controlTaken` and Take
+  it back. With nobody at the Core's desktop (a Core with no hosting
+  desktop window, such as a headless Core: no desktop takes the station
+  device's notices), the Core's own slice is taken at once
+  (`sliceAccessVersion` 3): no question and nobody told; the station
+  device stays joined as a listener. To a session below
+  `sliceAccessVersion` 3 that one take is refused as before: "Slice
+  <letter> is run by the Core itself, so control of it cannot pass to this
+  device." When the
   former controller holds transmit on the slice, the transmit flag moves
   to another of its slices, or with none transmit is released; its
   remembered transmit choice no longer names the slice, and the new

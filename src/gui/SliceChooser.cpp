@@ -9,6 +9,14 @@
 //   2026-09-29: created for NereusSDR by J.J. Boyd (KG4VCF), slice control
 //               and shared listening plan Task 13, with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: Take control of the Core's own
+//               slice is disabled with the Core's words below
+//               sliceAccessVersion 3. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-30: take-over review: the Core's own slice reads "the Core
+//               itself", as the Core's refusal does, not "the Core's own
+//               window". J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "gui/SliceChooser.h"
@@ -18,6 +26,7 @@
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/RemoteDevicesState.h"
 #include "core/session/SliceAccessMirror.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "gui/StyleConstants.h"
 #include "gui/widgets/VfoWidget.h"
@@ -206,8 +215,10 @@ VfoWidget::SliceAccess SliceChooser::flagAccessFor(const Row& row)
     access.state = VfoWidget::SliceAccess::State::Listening;
     switch (row.controller) {
     case Controller::CoreDesktop:
-        access.line = tr("Listening · controlled by the Core's own window");
-        access.heldReason = tr("The Core's own window controls this slice");
+        access.line = tr("Listening · controlled by the Core itself");
+        access.heldReason = tr("The Core itself controls this slice");
+        // Core-slice take-over: Take control off with the Core's words.
+        access.takeHeldReason = row.takeRefusal;
         break;
     case Controller::OtherDevice:
         access.line = tr("Listening · controlled by %1").arg(row.controllerName);
@@ -268,7 +279,7 @@ QString SliceChooser::ownerWords(const Row& row) const
 {
     switch (row.controller) {
     case Controller::ThisWindow:  return tr("This window controls");
-    case Controller::CoreDesktop: return tr("The Core's own window controls");
+    case Controller::CoreDesktop: return tr("The Core itself controls");
     case Controller::OtherDevice: return tr("%1 controls").arg(row.controllerName);
     case Controller::Nobody:      break;
     }
@@ -302,8 +313,13 @@ QString SliceChooser::descriptionFor(const Row& row) const
         return tr("You control tuning. Release leaves other listeners playing; with nobody "
                   "left, the slice closes.");
     }
+    // Core-slice take-over: a Core that refuses the take says why.
+    if (!row.takeRefusal.isEmpty()) {
+        return row.listeningHere ? row.takeRefusal
+                                 : tr("You can listen in. %1").arg(row.takeRefusal);
+    }
     const QString who = row.controller == Controller::OtherDevice ? row.controllerName
-        : row.controller == Controller::CoreDesktop ? tr("The Core's own window")
+        : row.controller == Controller::CoreDesktop ? tr("The Core itself")
                                                     : QString();
     if (row.controllerAway && !who.isEmpty()) {
         return tr("%1 is away. You can listen or take control now. It loses this slice after "
@@ -439,8 +455,12 @@ void SliceChooser::rebuildDetail()
                 [this, id]() { emit selectRequested(id); });
     }
     if (!mine) {
-        connect(actionButton(tr("Take control"), false, !row.transmitting),
-                &QPushButton::clicked, this, [this, id]() { emit takeControlRequested(id); });
+        // Core-slice take-over: disabled with the Core's words, never
+        // hidden, when the Core refuses the take.
+        QPushButton* take =
+            actionButton(tr("Take control"), false, !row.transmitting && row.takeRefusal.isEmpty());
+        take->setToolTip(row.takeRefusal);
+        connect(take, &QPushButton::clicked, this, [this, id]() { emit takeControlRequested(id); });
     }
     if (row.listeningHere) {
         if (mine) {
@@ -501,6 +521,16 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
         row.activeHere = row.activeHere || entry->activeRx.contains(self);
         row.listenerCount = static_cast<int>(entry->listeners.size());
         row.transmitting = entry->onAir;
+        // Core-slice take-over (JJ, 2026-09-30): the Core's own slice is
+        // taken like any other at sliceAccessVersion 3; below it the Core
+        // refuses the take, and Take control says so. A slice the Core
+        // keeps for an away device (its marker names that device) may be
+        // taken at any version.
+        const bool keptForAway = !markerOwner.isEmpty() && markerOwner != kStationWireId;
+        row.takeRefusal = row.controller == Controller::CoreDesktop && !keptForAway
+                && !access->coreSliceTakeable()
+            ? StationClient::coreSliceTakeUnavailableReason(row.letter())
+            : QString();
     };
     const SliceModel* active = model.activeSlice();
     for (SliceModel* slice : model.slices()) {

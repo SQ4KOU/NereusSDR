@@ -21,6 +21,10 @@
 //                 reason, write nothing, and come back on a controlled one,
 //                 local and remote. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: Take control of the Core's own
+//               slice is disabled with the Core's words below
+//               sliceAccessVersion 3. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QAbstractButton>
@@ -435,6 +439,30 @@ private slots:
         releaseAct->trigger();
         QCOMPARE(release.count(), 1);
         QCOMPARE(release.first().at(0).toInt(), 0);
+    }
+
+    // Core-slice take-over: Take control stays in the tab menu, disabled
+    // with the Core's words, when the Core refuses the take.
+    void listened_menu_take_control_is_disabled_with_the_cores_words()
+    {
+        SliceModel a(0);
+        RxApplet applet(&a, nullptr);
+        VfoWidget::SliceAccess access = listened();
+        access.takeHeldReason = QStringLiteral("Slice A is run by the Core itself, so control of it cannot pass to this device.");
+        applet.setSliceAccess(access);
+        applet.setSliceTabAccess({{0, access}});
+        QSignalSpy take(&applet, &RxApplet::takeControlRequested);
+
+        QMenu menu;
+        applet.populateSliceMenu(menu, 0);
+        QAction* takeAct = findAction(menu, QStringLiteral("Take control"));
+        QVERIFY(takeAct);
+        QVERIFY(!takeAct->isEnabled());
+        QCOMPARE(takeAct->toolTip(), access.takeHeldReason);
+        QAction* stopAct = findAction(menu, QStringLiteral("Stop listening"));
+        QVERIFY(stopAct && stopAct->isEnabled());
+        takeAct->trigger();
+        QCOMPARE(take.count(), 0);
     }
 
     void unshared_menu_has_no_access_actions()

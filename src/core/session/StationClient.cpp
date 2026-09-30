@@ -400,6 +400,10 @@
 //   2026-09-30: take-over fix wave (M-3): a controlTaken card stays when
 //               its Take it back was refused and may be tried again.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: the hello declares sliceAccess 3,
+//               and the slice access mirror learns whether the Core's own
+//               slice may be taken. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -2110,6 +2114,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // Slice control plan Task 5: so were its access objects. The slices keep
     // their read-only marks until the next session's objects arrive.
     m_sliceAccess->clear();
+    m_sliceAccess->setCoreSliceTakeable(false);
     if (m_radioModel) {
         m_radioModel->setStationMayCloseLastSlice(false);
     }
@@ -2818,6 +2823,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         // Slice control plan Task 5: every slice the snapshot named is
         // marked from the access objects it sent (none: not read-only).
         m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
+        m_sliceAccess->setCoreSliceTakeable(coreSliceTakeAvailable());
         m_sliceAccess->refreshSlices();
         emit transmitTakeAvailabilityChanged();
         refreshSettingsHygiene();
@@ -3304,6 +3310,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     }
     m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
     m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
+    // Core-slice take-over: Take control of the Core's own slice follows
+    // the Core's sliceAccessVersion.
+    m_sliceAccess->setCoreSliceTakeable(coreSliceTakeAvailable());
     emit transmitTakeAvailabilityChanged();
     if (!self || m_sessionEpoch != epoch) { return; }
     if (m_handshakeComplete) {
@@ -4844,6 +4853,22 @@ bool StationClient::controlTakeBackAvailable() const
     // Take-over parity: the Core sends the lower of its sliceAccessVersion
     // and the one this window declared.
     return remoteSliceAccessAvailable() && m_capabilities.sliceAccessVersion >= 2;
+}
+
+bool StationClient::coreSliceTakeAvailable() const
+{
+    // Core-slice take-over: the Core sends the lower of its
+    // sliceAccessVersion and the one this window declared.
+    return remoteSliceAccessAvailable() && m_capabilities.sliceAccessVersion >= 3;
+}
+
+QString StationClient::coreSliceTakeUnavailableReason(QChar letter)
+{
+    // The words a Core below sliceAccessVersion 3 refuses the take with
+    // (StationServer::handOffRefusal).
+    return QStringLiteral("Slice %1 is run by the Core itself, so control of it cannot pass to "
+                          "this device.")
+        .arg(letter);
 }
 
 QString StationClient::controlTakeBackUnavailableReason()

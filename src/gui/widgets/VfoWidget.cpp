@@ -119,6 +119,9 @@
 //                 flag the AF slider and Mute return as this device's own
 //                 volume and mute ("Your volume"), never the slice's AF.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - core-slice take-over: the flag's Take control is
+//                 disabled with the Core's words when it refuses the take.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3419,6 +3422,12 @@ void VfoWidget::populateContextMenu(QMenu& menu)
     };
     if (listening) {
         addAccessAction(tr("Take control"), &VfoWidget::takeControlRequested);
+        // Core-slice take-over: off with the Core's words when it refuses.
+        if (!m_sliceAccess.takeHeldReason.isEmpty() && m_accessPending.isEmpty()) {
+            QAction* take = menu.actions().constLast();
+            take->setEnabled(false);
+            take->setToolTip(m_sliceAccess.takeHeldReason);
+        }
         addAccessAction(tr("Stop listening"), &VfoWidget::stopListeningRequested);
         menu.addSeparator();
     } else if (m_sliceAccess.state == SliceAccess::State::Controlled) {

@@ -13,6 +13,10 @@
 // Task 14b (ruling U5): a listened flag's AF slider and Mute return as
 // "Your volume", bound to this device's own listening level. They never
 // write the slice, and the slice's AF does not move them.
+//
+// Core-slice take-over (2026-09-30, J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code): Take control stays, disabled with the Core's
+// words, when the Core refuses the take of its own slice.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QAction>
@@ -177,6 +181,29 @@ private slots:
         QSignalSpy freq(&slice, &SliceModel::frequencyChanged);
         wheel(flag);
         QCOMPARE(freq.count(), 1);
+    }
+
+    // Core-slice take-over: a Core below sliceAccessVersion 3 refuses the
+    // take of its own slice, so Take control stays, disabled with its words.
+    void listened_menu_take_control_is_disabled_with_the_cores_words()
+    {
+        VfoWidget flag;
+        flag.setSliceIndex(0);
+        VfoWidget::SliceAccess access = listened();
+        access.takeHeldReason = QStringLiteral("Slice A is run by the Core itself, so control of it cannot pass to this device.");
+        flag.setSliceAccess(access);
+
+        QMenu menu;
+        flag.populateContextMenu(menu);
+        QAction* take = findAction(menu, QStringLiteral("Take control"));
+        QVERIFY(take);
+        QVERIFY(!take->isEnabled());
+        QCOMPARE(take->toolTip(), access.takeHeldReason);
+        QAction* stop = findAction(menu, QStringLiteral("Stop listening"));
+        QVERIFY(stop && stop->isEnabled());
+        QSignalSpy taken(&flag, &VfoWidget::takeControlRequested);
+        take->trigger();
+        QCOMPARE(taken.count(), 0);
     }
 
     void listened_menu_offers_take_control_and_stop_listening()

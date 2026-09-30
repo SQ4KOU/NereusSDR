@@ -493,7 +493,7 @@
         {
             "kind": "i64",
             "name": "sliceAccessVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",

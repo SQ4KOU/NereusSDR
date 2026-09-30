@@ -565,7 +565,7 @@ private slots:
 
     // Take-over re-review (N-3): the hosting window's controlTaken card
     // stays when Take it back is refused and may be tried again (the slice
-    // transmitting, its controller away), and goes when it never can now.
+    // transmitting), and goes when the take-back works.
     void hostTakeItBackCardStaysWhileItMayBeTriedAgain()
     {
         if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
@@ -628,24 +628,102 @@ private slots:
         QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
         QCOMPARE(cards().size(), 1);
 
-        // Once it stops, the phone (a session with no link here, so away)
-        // still cannot hand over: refused again, may be tried again, and
-        // the card stays.
+        // Once it stops, the same tap works (JJ's wider ruling, 2026-09-30:
+        // every slice can be taken, and the one refusal is while it
+        // transmits). The phone, a session with no link here, cannot stay
+        // on as a listener, so it loses the slice; the card goes.
         server->transmitHolder()->release(phone.deviceId, QStringLiteral("test release"));
         QVERIFY(!server->sliceOnAir(aId));
         cards().first()->takeBackButton()->click();
-        QTest::qWait(100);
-        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
-        QCOMPARE(cards().size(), 1);
+        QTRY_COMPARE(ownership->mark(aId).owner, station);
+        QVERIFY(!ownership->listenersOf(aId).contains(phone.deviceId));
+        QTRY_COMPARE(cards().size(), 0);
+        controller.stop();
+    }
 
-        // The phone lets go of the slice, so control moved on: the take-back
-        // can never run now, and the card goes.
+    // Review fix (Job B, c): once the phone lets go of the slice, control
+    // moved on. The host's Take it back can never run now: it is refused,
+    // the card goes, ownership does not change, and asked again the Core
+    // answers "That can no longer be taken back.".
+    void hostTakeItBackCardGoesAfterThePhoneReleases()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-take-back-02"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        SliceOwnership* ownership = model->sliceOwnership();
+        const QByteArray station = SliceOwnership::stationDevice();
+        QCOMPARE(ownership->mark(aId).owner, station);
+
+        const auto cards = [&window]() {
+            QList<NoticeCard*> shown;
+            for (NoticeCard* card : window.findChildren<NoticeCard*>()) {
+                if (card->isVisibleTo(&window) && card->takeBackButton() != nullptr) {
+                    shown.append(card);
+                }
+            }
+            return shown;
+        };
+        SliceAccessController* access = server->sliceAccessController();
+        QVERIFY(access);
+        const SliceOwnership::SliceRef ref{aId, ownership->incarnation(aId)};
+        QVERIFY(access->listen(phone.deviceId, ref).accepted);
+        const SliceAccessController::Result took =
+            access->takeControl(phone.deviceId, ref, ownership->controlRevision(aId));
+        QVERIFY2(took.accepted, qPrintable(took.reason));
+        QCOMPARE(ownership->mark(aId).owner, phone.deviceId);
+        QTRY_COMPARE(cards().size(), 1);
+        NoticeCard* card = cards().first();
+        QVERIFY(card->takeBackButton()->isEnabled());
+
         const SliceAccessController::Result released =
             access->release(phone.deviceId, SliceOwnership::SliceRef{aId, ownership->incarnation(aId)},
                             ownership->controlRevision(aId));
         QVERIFY2(released.accepted, qPrintable(released.reason));
-        cards().first()->takeBackButton()->click();
+        const QByteArray ownerAfterRelease = ownership->mark(aId).owner;
+        QVERIFY(ownerAfterRelease != phone.deviceId);
+        const quint64 revisionAfterRelease = ownership->controlRevision(aId);
+
+        HostingSliceActions* actions = window.hostingSliceActionsForTest();
+        QVERIFY(actions);
+        QSignalSpy answered(actions, &HostingSliceActions::finished);
+        QSignalSpy ended(actions, &HostingSliceActions::takeBackAnswered);
+        card->takeBackButton()->click();
+        QTRY_VERIFY(!answered.isEmpty());
+        QList<QVariant> answer = answered.takeFirst();
+        QCOMPARE(answer.at(0).toByteArray(), QByteArrayLiteral("notice.takeBack"));
+        QVERIFY(!answer.at(2).toBool());
+        // The first tap meets the moved control revision, as
+        // slice.takeControl does, and the Core forgets the take-back.
+        QCOMPARE(answer.at(3).toString(),
+                 QStringLiteral("Someone else changed who controls slice A. Look again and try "
+                                "once more."));
+        QTRY_COMPARE(ended.size(), 1);
+        QVERIFY(ended.first().at(1).toBool());
         QTRY_COMPARE(cards().size(), 0);
+        // Asked again, the Core has nothing left to take back.
+        actions->takeBack(ended.first().at(0).toLongLong());
+        QTRY_VERIFY(!answered.isEmpty());
+        answer = answered.takeFirst();
+        QVERIFY(!answer.at(2).toBool());
+        QCOMPARE(answer.at(3).toString(), QStringLiteral("That can no longer be taken back."));
+        QCOMPARE(ownership->mark(aId).owner, ownerAfterRelease);
+        QCOMPARE(ownership->controlRevision(aId), revisionAfterRelease);
         controller.stop();
     }
 

@@ -36,6 +36,10 @@
 //   2026-09-29: slice control plan Task 17: listenerReason names the
 //               controller as the Core does. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: coreSliceTakeable(), the Core at
+//               sliceAccessVersion 3 lets its own slice be taken. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -97,6 +101,15 @@ public:
     void setSelfDeviceId(const QString& id);
     QString selfDeviceId() const { return m_selfDeviceId; }
 
+    /// Core-slice take-over (JJ, 2026-09-30): the Core sent
+    /// sliceAccessVersion 3 or more, so a slice its own position controls
+    /// (controllerDeviceId "station") may be taken like any other. Below
+    /// 3 the Core refuses that take (StationClient::
+    /// coreSliceTakeUnavailableReason). StationClient sets it from each
+    /// capabilities message; false until then.
+    void setCoreSliceTakeable(bool takeable);
+    bool coreSliceTakeable() const { return m_coreSliceTakeable; }
+
     std::optional<Entry> entry(int sliceId) const;
     QList<Entry> entries() const { return m_entries.values(); }
     /// This window controls the slice.
@@ -124,6 +137,7 @@ private:
     QPointer<RemoteDevicesState> m_devices;
     QHash<int, Entry> m_entries;
     QString m_selfDeviceId;
+    bool m_coreSliceTakeable = false;
 };
 
 } // namespace NereusSDR

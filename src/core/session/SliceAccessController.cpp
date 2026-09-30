@@ -29,6 +29,12 @@
 //               slice transmits before any close; the comments name the
 //               last slice's close (Task 7). AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-30: core-slice take-over: the hand-off check is given the
+//               taker. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-09-30: JJ's wider ruling: a former controller that cannot stay
+//               listening leaves the slice it lost. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -270,7 +276,7 @@ SliceAccessController::Result SliceAccessController::takeControl(const QByteArra
     }
     // Ruling Q7: the former controller must stay on as a listener.
     if (!former.isEmpty() && m_hooks.cannotHandOff) {
-        const QString refusal = m_hooks.cannotHandOff(former, sliceId);
+        const QString refusal = m_hooks.cannotHandOff(former, device, sliceId);
         if (!refusal.isEmpty()) {
             return refused(refusal);
         }
@@ -286,6 +292,11 @@ SliceAccessController::Result SliceAccessController::takeControl(const QByteArra
     // One mark change: the taker joins, the former controller stays joined
     // (SliceOwnership), nothing is removed or made.
     own->setOwner(sliceId, device);
+    // JJ's wider ruling (2026-09-30): a former controller that cannot stay
+    // on as a listener loses the slice.
+    if (!former.isEmpty() && m_hooks.staysListening && !m_hooks.staysListening(former)) {
+        own->leave(former, sliceId);
+    }
     if (m_hooks.tookControl) {
         m_hooks.tookControl(device, sliceId);
     }

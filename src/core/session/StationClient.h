@@ -434,6 +434,10 @@
 //               its Take it back may be tried again
 //               (controlTakeBackMayBeTriedAgain). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: coreSliceTakeAvailable() and
+//               coreSliceTakeUnavailableReason(); the hello declares
+//               sliceAccess 3. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1132,6 +1136,13 @@ public:
     /// shows it off with controlTakeBackUnavailableReason().
     bool controlTakeBackAvailable() const;
     static QString controlTakeBackUnavailableReason();
+    /// Core-slice take-over (JJ, 2026-09-30): the Core sent
+    /// sliceAccessVersion 3, so Take control of a slice its own position
+    /// controls is offered like any other. Below 3 the Core refuses it,
+    /// and Take control on that slice is shown disabled with
+    /// coreSliceTakeUnavailableReason(), the Core's own refusal words.
+    bool coreSliceTakeAvailable() const;
+    static QString coreSliceTakeUnavailableReason(QChar letter);
     /// Take-over fix wave (M-3; the phone contract: a take-back refused
     /// while the slice transmits "may be tried again"): whether Take it
     /// back on controlTaken `notice`, refused with `reason`, may be tried
@@ -1829,7 +1840,8 @@ private:
     QString m_tokenSessionHolderIdForTest;
     bool m_tokenSliceAccessForTest = false;
     /// Take-over parity: the sliceAccess version the hello declares.
-    int m_sliceAccessDeclared = 2;
+    /// Core-slice take-over: 3, the Core's own slice may be taken.
+    int m_sliceAccessDeclared = 3;
     RemoteDevicesState* m_remoteDevices = nullptr;
     /// Task 78 item 3: the device that took this window's place, from the
     /// end that stopped it, so the next session.held starts on it (Take it

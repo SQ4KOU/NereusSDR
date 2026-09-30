@@ -50,6 +50,8 @@
 //                 flag the AF slider and Mute are this device's own
 //                 volume, labeled "Your volume". J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : core-slice take-over: SliceAccess::takeHeldReason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -586,6 +588,10 @@ public:
         State state{State::Unshared};
         QString line;
         QString heldReason;
+        /// Core-slice take-over (JJ, 2026-09-30): why Take control is off
+        /// on a listened slice (the Core's own words), or empty when it is
+        /// offered. The action stays in the menu, disabled with it.
+        QString takeHeldReason;
         bool operator==(const SliceAccess&) const = default;
     };
     void setSliceAccess(const SliceAccess& access);

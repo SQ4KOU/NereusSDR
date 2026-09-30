@@ -62,6 +62,9 @@
 //                                    receive-level write forwards
 //                                    listenerChangeReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Core-slice take-over: the hand-off
+//                                    check's forward names the taker.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
@@ -926,7 +929,7 @@ const QList<ReasonSource>& reasonSources()
          {// refused()'s parameter, from this file's calls.
           QStringLiteral("reason"),
           // StationServer::handOffRefusal's words (scanned there).
-          QStringLiteral("m_hooks.cannotHandOff(former, sliceId)")}},
+          QStringLiteral("m_hooks.cannotHandOff(former, device, sliceId)")}},
         {"src/core/session/StationTransmitTake.cpp", {}, {}, 2,
          {QStringLiteral("takerName")},
          {// This file's own constant and reason function, scanned here;

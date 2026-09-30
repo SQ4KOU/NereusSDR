@@ -73,6 +73,9 @@
 //                 choice, RX1 preamp) are disabled with the reason naming the
 //                 controlling device, and their write sites return early.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - core-slice take-over: the tab menu's Take control is
+//                 disabled with the Core's words when it refuses the take.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1713,6 +1716,12 @@ void RxApplet::populateSliceMenu(QMenu& menu, int sliceId)
     switch (access.state) {
     case VfoWidget::SliceAccess::State::Listening:
         addAccessAction(tr("Take control"), &RxApplet::takeControlRequested);
+        // Core-slice take-over: off with the Core's words when it refuses.
+        if (!access.takeHeldReason.isEmpty() && m_accessPending.isEmpty()) {
+            QAction* take = menu.actions().constLast();
+            take->setEnabled(false);
+            take->setToolTip(access.takeHeldReason);
+        }
         addAccessAction(tr("Stop listening"), &RxApplet::stopListeningRequested);
         break;
     case VfoWidget::SliceAccess::State::Controlled:

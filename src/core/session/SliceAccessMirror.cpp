@@ -14,6 +14,9 @@
 //               controller as StationServer::sliceHolderWords does. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: core-slice take-over: setCoreSliceTakeable(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessMirror.h"
@@ -129,6 +132,19 @@ void SliceAccessMirror::clear()
 {
     const QList<int> ids = m_entries.keys();
     m_entries.clear();
+    for (int sliceId : ids) {
+        emit changed(sliceId);
+    }
+}
+
+void SliceAccessMirror::setCoreSliceTakeable(bool takeable)
+{
+    if (m_coreSliceTakeable == takeable) {
+        return;
+    }
+    m_coreSliceTakeable = takeable;
+    // Every slice's Take control follows it.
+    const QList<int> ids = m_entries.keys();
     for (int sliceId : ids) {
         emit changed(sliceId);
     }

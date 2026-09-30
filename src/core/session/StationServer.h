@@ -517,6 +517,14 @@
 //               radioPttKeyRefusal(), the radio's own PTT keys the
 //               desktop's active slice. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: core-slice take-over (JJ, 2026-09-30): sliceAccessVersion
+//               3, peerTakesCoreSlice(); handOffRefusal() takes the
+//               taker, and with nobody at the Core's desktop the Core's
+//               own slice passes to a taker at 3. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: JJ's wider ruling: staysListeningAfterTake(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1368,6 +1376,8 @@ public:
     /// at minor 11 that declared sliceAccess 1 with sessionHolder.
     /// Take-over parity: 2 adds Take it back on the controlTaken notice
     /// (notice.takeBack runs slice.takeControl with the notice's slice).
+    /// Core-slice take-over (JJ, 2026-09-30): 3, with nobody at the Core's
+    /// desktop a device may take the Core's own slice (handOffRefusal).
     /// A peer is sent the lower of this and the version its hello declared.
     int sliceAccessVersion() const;
     /// Slice control plan Task 4: sliceAccessVersion 1 reached `transport`
@@ -1376,6 +1386,10 @@ public:
     /// Take-over parity: sliceAccessVersion 2 reached `transport` (its hello
     /// declared sliceAccess 2): its controlTaken notices offer Take it back.
     bool peerTakesControlBack(SessionTransport* transport) const;
+    /// Core-slice take-over (JJ, 2026-09-30): sliceAccessVersion 3 reached
+    /// `transport` (its hello declared sliceAccess 3): with nobody at the
+    /// Core's desktop it may take the Core's own slice.
+    bool peerTakesCoreSlice(SessionTransport* transport) const;
     /// Slice control plan Task 4: each attached view's `slice:` and
     /// `marker:` forms of `sliceId` after its controller or its listeners
     /// changed: object.destroy of the form it had, object.create of the
@@ -2043,8 +2057,17 @@ private:
     /// move waits for the unkey gate to land on.
     bool sliceTransmitting(int sliceId) const;
     /// Slice control plan Task 4 (ruling Q7): why control of `sliceId`
-    /// cannot pass from `controller`, or empty.
-    QString handOffRefusal(const QByteArray& controller, int sliceId) const;
+    /// cannot pass from `controller` to `taker`, or empty. Core-slice
+    /// take-over (JJ's wider ruling): only the Core's own slice with nobody
+    /// at its desktop, to a taker below sliceAccessVersion 3; every other
+    /// slice passes (a slice on the air is refused by the take itself).
+    QString handOffRefusal(const QByteArray& controller, const QByteArray& taker,
+                           int sliceId) const;
+    /// JJ's wider ruling (2026-09-30): whether `former` stays joined as a
+    /// listener of a slice taken from it: the Core's own position, a
+    /// session that shares slices, or a device away within its grace.
+    /// Any other loses the slice.
+    bool staysListeningAfterTake(const QByteArray& former) const;
     /// Slice control plan Task 4 (ruling Q8): `former`'s transmit selection
     /// of `sliceId` cleared before control passes from it (`former` may be
     /// empty for a slice with no controller); fix wave: whoever holds
