@@ -189,6 +189,11 @@ private slots:
     //
     // The G2's RX2 has its own front end (rx2PreampPresent), so Thetis uses
     // RX1 alone.
+    //
+    // Shared-input filters, ruling (c) 2026-09-30: both slices here share
+    // ADC0's input, so the low-pass now follows the highest counted slice.
+    // A is the highest at every step below, so the answers are the same;
+    // tst_shared_input_filters covers a higher B.
     void g2_receiveLowPass_isRx1s()
     {
         G2Session s;

@@ -35,6 +35,9 @@
 //                mi0bot fork's Alex.cs HERMESLITE branches and console.cs
 //                SetIOBoardAerialPorts. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (d)): setLowPassHold.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -176,6 +179,19 @@ void AlexController::setSwitchBypass(int adc, SwitchBypass cause)
     if (m_switchBypass[adc] == cause) { return; }
     m_switchBypass[adc] = cause;
     recomputeBpf(adc);
+}
+
+// Shared-input filters, ruling (d) 2026-09-30. NereusSDR-original: Thetis
+// has one low-pass rule and no way to report it.
+void AlexController::setLowPassHold(int adc, int sliceIndex, const QString& reason)
+{
+    if (adc < 0 || adc >= 2) { return; }
+    AlexAdcState& s = m_perAdcState[adc];
+    const int slice = reason.isEmpty() ? -1 : sliceIndex;
+    if (s.lowPassSlice == slice && s.lowPassReason == reason) { return; }
+    s.lowPassSlice = slice;
+    s.lowPassReason = reason;
+    emit bpfStateChanged(adc, s);
 }
 
 // Phase 3F: slice-aware recompute trigger.

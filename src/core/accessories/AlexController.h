@@ -45,6 +45,10 @@
 //                mi0bot fork's Alex.cs HERMESLITE branches and console.cs
 //                SetIOBoardAerialPorts. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (d)): AlexAdcState carries the
+//                low-pass reason and the slice that forces it
+//                (setLowPassHold). NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/HPSDR/Alex.cs header (lines 1-23) ===
@@ -195,6 +199,15 @@ public:
         /// still what RadioModel sends, and the connection turns it into
         /// the bypass on the wire.
         SwitchBypass bypassSwitch {SwitchBypass::None};
+        /// Shared-input filters, ruling (d) 2026-09-30: when the slices
+        /// counted on this chain's input need more than one receive
+        /// low-pass, the one sent follows the slice on the highest band,
+        /// and this says so in plain words. Empty otherwise. RadioModel
+        /// decides it (republishAlexAdcSlices); recomputeBpf leaves it.
+        QString lowPassReason;
+        /// The slice whose band sets that low-pass (the slice the others on
+        /// the input are held to), -1 when no slice forces it.
+        int lowPassSlice {-1};
     };
 
     // ── Per-ADC BPF mode mutators + recompute ────────────────────────────────
@@ -212,6 +225,11 @@ public:
     /// the wire (see SwitchBypass). Recomputes; reported only where the
     /// policy's own answer is Filtered.
     void setSwitchBypass(int adc, SwitchBypass cause);
+
+    /// Shared-input filters, ruling (d): the low-pass reason and the slice
+    /// that forces it (AlexAdcState::lowPassReason, lowPassSlice). Emits
+    /// bpfStateChanged when either changes.
+    void setLowPassHold(int adc, int sliceIndex, const QString& reason);
 
     /// Mark that a wideband stream is active on this ADC.
     /// Recomputes BPF (wideband forces effective=WidebandLocked).

@@ -516,6 +516,11 @@
             "value": 1
         },
         {
+            "kind": "i64",
+            "name": "rxFilterLowPassVersion",
+            "value": 1
+        },
+        {
             "kind": "utf8",
             "name": "coreBuildInfo",
             "value": "{\"productVersion\":\"0.5.2\",\"sourceTag\":\"link-surface@fixture\"}"
@@ -5320,6 +5325,18 @@
                     "kind": "bool",
                     "name": "levelCalSucceeded",
                     "ordinal": 34
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rxFilter0LowPassReason",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rxFilter0LowPassSlice",
+                    "ordinal": 36
                 }
             ]
         },

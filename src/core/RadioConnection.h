@@ -93,9 +93,18 @@ struct AntennaRouting {
 //
 // Values are the Thetis HPF bit encoding (AlexFilterMap::computeHpf):
 // 0x10/0x08/0x04/0x01/0x02 band filters, 0x40 6 m preamp, 0x20 bypass.
+//
+// countedSlotsAdc0 (shared-input filters, ruling (c) 2026-09-30): the
+// hardware receiver slots (P2 DDC index, P1 frame slot) of the slices this
+// decision counted on ADC0's input, the same set the band-pass above was
+// chosen over (away slices and unbound slices left out). The receive
+// low-pass follows the highest of them, so both filters on the input serve
+// exactly the same slices. 0 means none counted, and the connection keeps
+// its RX1 stand-in rule for the low-pass.
 struct AlexRxBpf {
     int hpfBitsAdc0 {-1};
     int hpfBitsAdc1 {-1};
+    quint32 countedSlotsAdc0 {0};
 };
 
 // A bounded copy made on the radio connection's parser thread for the

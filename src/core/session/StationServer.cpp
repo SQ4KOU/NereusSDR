@@ -1,6 +1,11 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Shared-input filters (ruling (d)): radio's
+//               rxFilter0LowPassReason and rxFilter0LowPassSlice go to a
+//               peer that declared rxFilterLowPass 1, which is sent
+//               rxFilterLowPassVersion 1 (before coreBuildInfo). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec lane: radioHardwareVersion 13, the receive
 //               audio to the Core's radio and HL2 Swap audio channels from
 //               a window. Setup description version 24 (Audio > TX Input's
@@ -1427,6 +1432,10 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     {"RadioModel", "radio", false, "levelCalPercent", "levelCalibration"},
     {"RadioModel", "radio", false, "levelCalMessage", "levelCalibration"},
     {"RadioModel", "radio", false, "levelCalSucceeded", "levelCalibration"},
+    // Why the receive low-pass on chain 0's input is held, and the slice
+    // holding it (rxFilterLowPassVersion 1, shared-input filters ruling (d)).
+    {"RadioModel", "radio", false, "rxFilter0LowPassReason", "rxFilterLowPass"},
+    {"RadioModel", "radio", false, "rxFilter0LowPassSlice", "rxFilterLowPass"},
     // The CFC dialog's band editor (transmitSettingsVersion 15).
     {"TransmitModel", "transmit", false, "cfcProfile", "cfcProfile"},
 };
@@ -12510,6 +12519,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // rx2AttenuatorVersion and before coreBuildInfo on the wire).
             caps.radioMicVersion =
                 peerDeclares(transport, QByteArrayLiteral("radioMic"), 1) ? 1 : 0;
+            // Shared-input filters, ruling (d): radio's receive low-pass
+            // reason and the slice holding it, only to a peer whose hello
+            // declared rxFilterLowPass 1 (after radioMicVersion and before
+            // coreBuildInfo on the wire).
+            caps.rxFilterLowPassVersion =
+                peerDeclares(transport, QByteArrayLiteral("rxFilterLowPass"), 1) ? 1 : 0;
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();

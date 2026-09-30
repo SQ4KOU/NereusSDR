@@ -6,6 +6,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Shared-input filters (ruling (d)): RadioModel
+//                 rxFilter0LowPassReason and rxFilter0LowPassSlice
+//                 Outbound, gated on rxFilterLowPass
+//                 (rxFilterLowPassVersion 1). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - Level Cal: RadioModel levelCalRunning, levelCalPercent,
 //                 levelCalMessage and levelCalSucceeded Outbound, gated on
 //                 levelCalibration (radioHardwareVersion 12). J.J. Boyd
@@ -1163,6 +1168,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "levelCalPercent", MirrorDirection::Outbound },
     { "RadioModel", "levelCalMessage", MirrorDirection::Outbound },
     { "RadioModel", "levelCalSucceeded", MirrorDirection::Outbound },
+    // Shared-input filters, ruling (d) (rxFilterLowPassVersion 1): why the
+    // receive low-pass on chain 0's input is held, and the slice holding
+    // it, Core to window only; only to a peer that declared rxFilterLowPass
+    // (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "rxFilter0LowPassReason", MirrorDirection::Outbound },
+    { "RadioModel", "rxFilter0LowPassSlice", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1265,6 +1276,11 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         {"RadioModel", "levelCalPercent", "levelCalibration", 1},
         {"RadioModel", "levelCalMessage", "levelCalibration", 1},
         {"RadioModel", "levelCalSucceeded", "levelCalibration", 1},
+        // Shared-input filters, ruling (d) (rxFilterLowPassVersion 1): the
+        // receive low-pass reason and the slice holding it, to a peer that
+        // declared rxFilterLowPass 1.
+        {"RadioModel", "rxFilter0LowPassReason", "rxFilterLowPass", 1},
+        {"RadioModel", "rxFilter0LowPassSlice", "rxFilterLowPass", 1},
     };
     return gates;
 }

@@ -74,6 +74,10 @@
 //                [v2.10.3.15]); on the HL2 only when Swap audio channels is
 //                on, as mi0bot (networkproto1.c:1231-1239 [@c26a8a4]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (c)): m_countedSlotsAdc0,
+//                the slots the receive low-pass and the HL2 OC receive band
+//                follow. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*
@@ -847,6 +851,13 @@ private:
     // before routing by frame slot.
     quint32 m_liveSlotMask{0};
     int     m_rx1Slot{0};
+
+    // The frame slots of the slices counted on the input (AlexRxBpf::
+    // countedSlotsAdc0). The receive low-pass follows the highest, and on
+    // the HL2 the OC receive band follows the highest band among them
+    // (mi0bot Penny.cs UpdateExtCtrl). 0 = none counted, and the RX1
+    // stand-in rule applies.
+    quint32 m_countedSlotsAdc0{0};
 
     // Recompute the receive-side Alex selections (m_alexHpfBits and
     // m_alexLpfBitsRx) from the RX1 stand-in. `changedSlot` is the frame slot

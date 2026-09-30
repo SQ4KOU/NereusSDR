@@ -14,6 +14,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Shared-input filters (rulings (c) and (d)):
+//               republishAlexAdcSlices hands the connection the slots it
+//               counted on ADC0's input, so the receive low-pass follows the
+//               same slices as the band-pass (Thetis UpdateAlexTXFilter,
+//               console.cs:15487-15498 [v2.10.3.15]), and sets the chain's
+//               low-pass reason and the slice that forces it
+//               (lowPassHoldReason); rxFilter0LowPassReason and
+//               rxFilter0LowPassSlice reach a window that declared
+//               rxFilterLowPass. bypassReasonForAdc names the counted slices
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -22035,6 +22046,15 @@ void RadioModel::republishAlexAdcSlices()
         ++counts[chain];
     };
 
+    // Shared-input filters, ruling (c) 2026-09-30: the slices counted on
+    // each chain below, and the hardware receiver slots of those on ADC0's
+    // input. Both filters on an input serve exactly this set: the band-pass
+    // is chosen over it here, and the receive low-pass follows its highest
+    // slice in the connection (AlexRxBpf::countedSlotsAdc0). One set, one
+    // away rule.
+    std::array<QList<SliceModel*>, kAdcCount> countedSlices;
+    quint32 countedSlotsAdc0 = 0;
+
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s == nullptr) { continue; }
 
@@ -22056,9 +22076,29 @@ void RadioModel::republishAlexAdcSlices()
         const Band   b  = bandFromFrequency(hz);
 
         if (diversityPair) {
-            for (int c = 0; c < chainCount; ++c) { addToChain(c, b, hz); }
+            for (int c = 0; c < chainCount; ++c) {
+                addToChain(c, b, hz);
+                countedSlices[static_cast<size_t>(c)].append(s);
+            }
         } else {
             addToChain(chain, b, hz);
+            countedSlices[static_cast<size_t>(chain)].append(s);
+        }
+
+        // The slot the connection knows this slice's receiver by, as
+        // republishReceiverVfoFrequencies finds it.
+        if ((diversityPair || chain == 0) && m_receiverManager != nullptr) {
+            const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
+            if (cfg.active && cfg.hardwareRx >= 0 && cfg.hardwareRx < 32) {
+                countedSlotsAdc0 |= (1u << cfg.hardwareRx);
+            }
+        }
+    }
+    m_alexCountedSliceIds[0].clear();
+    m_alexCountedSliceIds[1].clear();
+    for (size_t c = 0; c < countedSlices.size(); ++c) {
+        for (SliceModel* s : std::as_const(countedSlices[c])) {
+            m_alexCountedSliceIds[c].append(s->sliceIndex());
         }
     }
 
@@ -22178,6 +22218,68 @@ void RadioModel::republishAlexAdcSlices()
     AlexRxBpf bpf;
     bpf.hpfBitsAdc0 = hpfBitsFor(0);
     bpf.hpfBitsAdc1 = hpfBitsFor(1);
+    bpf.countedSlotsAdc0 = countedSlotsAdc0;
+
+    // ── Shared-input filters, ruling (d): why the low-pass is where it is ──
+    //
+    // The receive low-pass sits on ADC0's input only (Alex0; Thetis
+    // setAlexLPF, console.cs:7177-7243 [v2.10.3.15]), and it follows the
+    // highest counted slice (ruling (c), the connections'
+    // applyReceiveAlexLpf). When the counted slices need more than one
+    // low-pass, every slice below that one hears through a filter set for a
+    // higher band, and the operator is told which slice holds it there.
+    //
+    // The identity compared is the low-pass the slice would get alone: the
+    // Alex-1 row selection (codec::alex::selectAlexLpf over the tab's rows,
+    // as the connection selects it), and on the HL2 the N2ADR board's
+    // receive pins for the band (OcMatrix, as buildCodecContext sends them),
+    // falling back to the row selection where no pins are set. With 6m/
+    // ByPass on RX on, the receive low-pass is the 6 m filter for every
+    // slice (codec::alex::setAlexLpf) and nothing is held.
+    {
+        const bool hl2 = m_hardwareProfile.model == HPSDRModel::HERMESLITE;
+        const bool lowPassPresent = boardCapabilities().hasAlexFilters || hl2;
+        int forcing = -1;
+        QString lowPassReason;
+        const QList<SliceModel*>& onInput = countedSlices[0];
+        if (lowPassPresent && !m_alexLpfBypassSwitch && onInput.size() >= 2) {
+            const auto lowPassFor = [this, hl2](const SliceModel* s) -> int {
+                const double hz = s->frequency();
+                if (hl2) {
+                    const quint8 pins = m_ocMatrix.maskFor(bandFromFrequency(hz), /*tx=*/false);
+                    if (pins != 0) { return 0x100 | pins; }
+                }
+                return codec::alex::selectAlexLpf(hz / 1.0e6, m_alexLpfEdges);
+            };
+            // Which slice sets it: the highest frequency, and on the HL2 the
+            // highest band in mi0bot's order (OcMatrix::extCtrlBandIndex),
+            // the same choice the connections make.
+            const auto higher = [hl2](const SliceModel* a, const SliceModel* b) {
+                if (hl2) {
+                    const int ia = OcMatrix::extCtrlBandIndex(bandFromFrequency(a->frequency()));
+                    const int ib = OcMatrix::extCtrlBandIndex(bandFromFrequency(b->frequency()));
+                    if (ia != ib) { return ia > ib; }
+                }
+                return a->frequency() > b->frequency();
+            };
+            const SliceModel* top = nullptr;
+            for (const SliceModel* s : onInput) {
+                if (top == nullptr || higher(s, top)) { top = s; }
+            }
+            QList<const SliceModel*> held;
+            const int topLowPass = lowPassFor(top);
+            for (const SliceModel* s : onInput) {
+                if (s != top && lowPassFor(s) != topLowPass) { held.append(s); }
+            }
+            if (!held.isEmpty()) {
+                forcing = top->sliceIndex();
+                lowPassReason = lowPassHoldReason(top, held);
+            }
+        }
+        m_alexController.setLowPassHold(0, forcing, lowPassReason);
+        // The low-pass is on ADC0's input only.
+        m_alexController.setLowPassHold(1, -1, QString());
+    }
 
     if (m_connection == nullptr) {
         // Disconnected: AlexController's state still updated above, which is
@@ -22254,6 +22356,12 @@ void RadioModel::clearStationFilterState()
     if (ownsLocalDsp()) { return; }
     m_stationFilterFields.fill(0);
     m_stationFilterSnapshotReady = false;
+    // Shared-input filters, ruling (d): a Core that does not send the
+    // low-pass fields leaves them empty.
+    for (auto& state : m_stationFilterStates) {
+        state.lowPassReason.clear();
+        state.lowPassSlice = -1;
+    }
     emit filterStateChanged();
 }
 
@@ -22272,6 +22380,25 @@ bool RadioModel::applyStationFilterValue(const QByteArray& name, const QVariant&
         if (!name.startsWith(prefix)) { continue; }
         const QByteArray field = name.mid(prefix.size());
         auto& state = m_stationFilterStates[static_cast<size_t>(chain)];
+        // Shared-input filters, ruling (d): the low-pass reason and the
+        // slice that forces it (rxFilterLowPassVersion 1). Optional: they
+        // are not part of the four fields that make the state available,
+        // so a Core that does not send them still shows its chain.
+        if (field == "LowPassReason") {
+            const QString reason = value.toString();
+            if (reason.size() > 512) { return false; }
+            state.lowPassReason = reason;
+            emit filterStateChanged();
+            return true;
+        }
+        if (field == "LowPassSlice") {
+            bool ok = false;
+            const int slice = value.toInt(&ok);
+            if (!ok || slice < -1 || slice > 63) { return false; }
+            state.lowPassSlice = slice;
+            emit filterStateChanged();
+            return true;
+        }
         unsigned received = 0;
         if (field == "Reason") {
             const QString reason = value.toString();
@@ -22340,6 +22467,11 @@ RadioModel::panBypassState(const QSet<int>& sliceIndices) const
 
         result.bypassed = true;
         result.reason   = bypassReasonForAdc(adc, st);
+        // Shared-input filters, ruling (d): and the receive low-pass on the
+        // same input, when a slice holds it.
+        if (!st.lowPassReason.isEmpty()) {
+            result.reason += QLatin1Char(' ') + st.lowPassReason;
+        }
         // First offending chain wins the tooltip. A pan straddling a wide and
         // a filtered chain is wide either way; naming the exposed one is what
         // the operator needs.
@@ -22700,12 +22832,17 @@ QString RadioModel::bypassReasonForAdc(
     // Read the live slice set rather than parsing AlexAdcState::reasonText,
     // which is a display string and not a contract. Same grouping rule as
     // republishAlexAdcSlices so the two can never disagree.
+    //
+    // Shared-input filters, ruling (c): and the same slices, the ones that
+    // pass counted on this chain (m_alexCountedSliceIds). Reading every
+    // slice on the chain named an away device's slice, which the decision
+    // itself leaves out (Amendment 8a).
     QStringList rangeNames;
     QSet<Band> seen;
-    for (SliceModel* s : m_slices) {
+    const int countedChain = std::clamp(adc, 0, 1);
+    for (int sliceId : m_alexCountedSliceIds[static_cast<size_t>(countedChain)]) {
+        const SliceModel* s = sliceById(sliceId);
         if (s == nullptr) { continue; }
-        const int sliceChain = sliceChainIndex(s->sliceIndex());
-        if (sliceChain != adc) { continue; }
         const Band b = bandFromFrequency(s->frequency());
         if (seen.contains(b)) { continue; }
         seen.insert(b);
@@ -22729,6 +22866,37 @@ QString RadioModel::bypassReasonForAdc(
               "to restore filtering, or click to change the filter policy for "
               "this chain.")
         .arg(joinRangeNames(rangeNames));
+}
+
+// ---------------------------------------------------------------------------
+// lowPassHoldReason: the sentence behind AlexAdcState::lowPassReason
+// (shared-input filters, ruling (d) 2026-09-30). `top` is the slice whose
+// band sets the receive low-pass on the input; `held` are the counted slices
+// that would have had a lower one alone. NereusSDR-original: Thetis sets the
+// same filter (console.cs:15487-15498 [v2.10.3.15]) and says nothing.
+//
+// Plain words, read by an operator: the slice letters and bands, and what
+// it costs the lower slices.
+// ---------------------------------------------------------------------------
+QString RadioModel::lowPassHoldReason(const SliceModel* top,
+                                      const QList<const SliceModel*>& held) const
+{
+    const auto named = [](const SliceModel* s) {
+        return QStringLiteral("%1 on %2").arg(s->sliceLetter(),
+                                              bandLabel(bandFromFrequency(s->frequency())));
+    };
+    QStringList lower;
+    for (const SliceModel* s : held) { lower << named(s); }
+    const QString lead = tr("The receive low-pass filter is set for slice %1, the highest "
+                            "band on this receiver input.").arg(named(top));
+    if (lower.size() == 1) {
+        return lead + QLatin1Char(' ')
+            + tr("Slice %1 shares the input, so it has less protection from strong "
+                 "signals on higher bands.").arg(lower.first());
+    }
+    return lead + QLatin1Char(' ')
+        + tr("Slices %1 share the input, so they have less protection from strong "
+             "signals on higher bands.").arg(joinRangeNames(lower));
 }
 
 // The same station-owned tick runs in the desktop local mode and daemon.
@@ -28284,6 +28452,7 @@ void RadioModel::applyAlexHpfSwitchSettings()
             mac, QString::fromLatin1(alexKeys::kLpfBypass), QStringLiteral("False"));
     }
     const codec::alex::AlexLpfEdges lpfEdges = savedAlexLpfEdges(mac);
+    const bool lpfEdgesChanged = !(lpfEdges == m_alexLpfEdges);
     m_alexLpfEdges = lpfEdges;
     const bool lpfBypass = flag(alexKeys::kLpfBypass, "False")
         && codec::alex::lpfBypassAvailable(m_hardwareProfile.model);
@@ -28307,10 +28476,15 @@ void RadioModel::applyAlexHpfSwitchSettings()
     // they put on the wire while keyed.
     // The rows decide each chain's selection there too. (The 6 m LNA gain
     // offset they also decide is refreshed at the top.)
-    if (edgesChanged || bypass != m_alexHpfBypassSwitch
+    // Shared-input filters, ruling (d): the low-pass rows and 6m/ByPass on
+    // RX decide which slices the receive low-pass holds, so the reason
+    // follows them too.
+    if (edgesChanged || lpfEdgesChanged || lpfBypass != m_alexLpfBypassSwitch
+        || bypass != m_alexHpfBypassSwitch
         || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
         || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch
         || lnaOffTx != m_alexDisable6mLnaOnTxSwitch) {
+        m_alexLpfBypassSwitch = lpfBypass;
         m_alexHpfBypassSwitch = bypass;
         m_alexDisable6mLnaOnRxSwitch = lnaOffRx;
         m_alexHpfBypassOnTxSwitch = onTx;

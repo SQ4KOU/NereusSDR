@@ -226,6 +226,10 @@
 //                                    orionMicPanelUnavailableReason placed
 //                                    beside lpfBypassUnavailableReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters: RadioModel's
+//                                    lowPassHoldReason and the
+//                                    rxFilter0LowPassReason getter.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -766,6 +770,13 @@ struct ReasonSource {
 const QList<ReasonSource>& reasonSources()
 {
     static const QList<ReasonSource> sources{
+        // Shared-input filters, ruling (d): rxFilter0LowPassReason. The
+        // slices are named by letter and band ("B on 20m"), one or several
+        // joined by joinRangeNames.
+        {"src/models/RadioModel.cpp", {QStringLiteral("lowPassHoldReason")},
+         {QStringLiteral("%1 on %2")}, 3,
+         {QStringLiteral("named(top)"), QStringLiteral("lower.first()"),
+          QStringLiteral("joinRangeNames(lower)")}},
         // session.end, auth.result, property.result, settings.reject and
         // the refusals of a verb an older app sends.
         {"src/core/session/StationServer.cpp", {},
@@ -1802,6 +1813,10 @@ const QList<AppSideReason>& appSideReasons()
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",
          "the filter badge's status label (AlexController), not a refusal"},
+        // Shared-input filters, ruling (d): why the receive low-pass is set
+        // for another slice (lowPassHoldReason, scanned below).
+        {"src/models/RadioModel.h", "rxFilter0LowPassReason",
+         "the CH label's tooltip and the WIDE reason's second sentence, not a refusal"},
     };
     return sites;
 }

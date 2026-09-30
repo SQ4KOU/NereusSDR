@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Shared-input filters (ruling (d)): rxFilterLowPassVersion,
+//               after radioMicVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec lane: radioMicVersion, after
 //               rx2AttenuatorVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -578,6 +581,12 @@ struct StationCapabilities {
     /// coreBuildInfo, only to a peer whose hello declared `radioMic` 1; 0
     /// otherwise.
     int radioMicVersion = 0;
+    /// Shared-input filters, ruling (d): 1 means radio carries
+    /// rxFilter0LowPassReason (why the receive low-pass on chain 0's input
+    /// is held for one slice) and rxFilter0LowPassSlice (that slice's id, -1
+    /// for none). Sent after radioMicVersion and before coreBuildInfo, only
+    /// to a peer whose hello declared `rxFilterLowPass` 1; 0 otherwise.
+    int rxFilterLowPassVersion = 0;
     /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
     static constexpr int kMaxMediaStunUrls = 8;
     static constexpr int kMaxMediaStunUrlBytes = 512;

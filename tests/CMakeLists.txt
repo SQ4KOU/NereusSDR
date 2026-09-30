@@ -2068,6 +2068,12 @@ nereus_add_test(tst_volts_amps_log)
 # frequency. NereusSDR-original: no Thetis port.
 nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
 
+# Shared-input filters, rulings (c) and (d) 2026-09-30: both filters on one
+# receiver input follow the same counted slices, the low-pass the highest
+# (Thetis UpdateAlexTXFilter, mi0bot Penny.cs on the HL2), and the chain
+# names the slice holding it. NereusSDR-original: no Thetis port.
+nereus_add_test(tst_shared_input_filters)
+
 # Plan Task 14 (3M-1 transmit, Phase 3F section 16.3.2, R-R3-49): the band
 # outputs follow the transmitting slice while keyed and the VFO of the RX1
 # stand-in while not (Thetis Penny.cs:170-178, mi0bot Penny.cs:176-190);
@@ -8247,6 +8253,11 @@ nereus_add_test(tst_confirm_step
 # Level Cal as a Core procedure: a paired device starts and cancels it,
 # progress comes back on the wire, a remote window makes the same calls.
 nereus_add_test(tst_level_calibration_station
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# Shared-input filters, ruling (d): the low-pass reason and forcing slice
+# reach only a peer that declared rxFilterLowPass 1.
+nereus_add_test(tst_shared_input_filters_link
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 # Level Cal: the window's grid stops following the noise floor while a run

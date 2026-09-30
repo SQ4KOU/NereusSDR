@@ -118,6 +118,11 @@
 //                WriteUDPFrame case 0, network.c:1276-1294, 1363-1373
 //                [v2.10.3.15]), from the transmit I/Q send thread.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (c)): the receive low-pass
+//                follows the highest slice the model counted on ADC0's input
+//                (Thetis UpdateAlexTXFilter, console.cs:15487-15498
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -995,6 +1000,37 @@ void P2RadioConnection::recomputeReceiveFilters()
 // ---------------------------------------------------------------------------
 void P2RadioConnection::applyReceiveAlexLpf()
 {
+    // Shared-input filters, ruling (c) 2026-09-30: the low-pass follows the
+    // highest receiver among the slices the model counted on ADC0's input
+    // (AlexRxBpf::countedSlotsAdc0), the same set the band-pass was chosen
+    // over. That is Thetis's "higher of the two" generalised to every slice
+    // that shares the input:
+    //   From Thetis console.cs:15491-15495 UpdateAlexTXFilter [v2.10.3.15]
+    //     if (!_rx2_preamp_present && chkRX2.Checked)
+    //     {
+    //         if (rx1_dds_freq_mhz > rx2_dds_freq_mhz) setAlexLPF(rx1_dds_freq_mhz, false);
+    //         else setAlexLPF(rx2_dds_freq_mhz, false);
+    //     }
+    // Thetis gates the rule on the board flag _rx2_preamp_present; here the
+    // counted set is already per input, so a receiver on its own front end
+    // is simply not in it. With nothing counted the RX1 stand-in rule below
+    // stands, as the band-pass falls back to its frequency-derived bits.
+    {
+        const quint32 counted = (m_liveSlotMask != 0)
+            ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
+        double highestMhz = 0.0;
+        for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+            if ((counted & (1u << ddc)) == 0) { continue; }
+            const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
+            if (hz <= 0) { continue; }
+            highestMhz = std::max(highestMhz, hz / 1e6);
+        }
+        if (highestMhz > 0.0) {
+            applyAlexLpf(highestMhz, /*freqIsTx=*/false);
+            return;
+        }
+    }
+
     const int rx1 = rx1Ddc();
     const int rx1Hz = m_rx[static_cast<size_t>(rx1)].frequency;
     if (rx1Hz <= 0) {
@@ -1453,11 +1489,22 @@ void P2RadioConnection::setAntennaRouting(AntennaRouting r)
 void P2RadioConnection::setAlexRxBpf(AlexRxBpf b)
 {
     if (m_alex.rxHpfBitsAdc0 == b.hpfBitsAdc0
-        && m_alex.rxHpfBitsAdc1 == b.hpfBitsAdc1) {
+        && m_alex.rxHpfBitsAdc1 == b.hpfBitsAdc1
+        && m_countedSlotsAdc0 == b.countedSlotsAdc0) {
         return;
     }
     m_alex.rxHpfBitsAdc0 = b.hpfBitsAdc0;
     m_alex.rxHpfBitsAdc1 = b.hpfBitsAdc1;
+
+    // Shared-input filters, ruling (c): the receive low-pass follows the
+    // same counted slices. Unkeyed only, as every receive-derived low-pass
+    // write (console.cs:15487-15498 [v2.10.3.15], `if (!_mox)`).
+    if (m_countedSlotsAdc0 != b.countedSlotsAdc0) {
+        m_countedSlotsAdc0 = b.countedSlotsAdc0;
+        if (!m_mox) {
+            applyReceiveAlexLpf();
+        }
+    }
 
     qCDebug(lcConnection) << "P2::setAlexRxBpf adc0=" << m_alex.rxHpfBitsAdc0
                           << "adc1=" << m_alex.rxHpfBitsAdc1
