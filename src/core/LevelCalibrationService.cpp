@@ -10,6 +10,9 @@
 //   2026-09-29 - Reads and writes the connected model's own meter and
 //                display calibration. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's preamp is its own mode, set
+//                through the controller's RX2PreampMode port. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/LevelCalibrationService.h"
@@ -153,16 +156,18 @@ public:
             c->setPreampMode(mode);
         }
     }
-    // The second ADC's preamp switch.
-    bool rx2PreampOn() const override
+    // RX2's preamp mode, through the controller's RX2PreampMode port: the
+    // HPSDR alone takes a preamp bit, the listed boards the mode's
+    // attenuation on RX2's ADC.
+    PreampMode rx2PreampMode() const override
     {
         const StepAttenuatorController* c = m_model->stepAttController();
-        return c && c->rx1Preamp();
+        return c ? c->rx2PreampMode() : PreampMode::On;
     }
-    void setRx2PreampOn(bool on) override
+    void setRx2PreampMode(PreampMode mode) override
     {
         if (StepAttenuatorController* c = m_model->stepAttController()) {
-            c->setRx1Preamp(on);
+            c->setRx2PreampMode(mode);
         }
     }
 

@@ -21,6 +21,9 @@
 //                progress signal and cancel(), and the receiver it acts
 //                on is reached through LevelCalibrationHost so the same
 //                run serves the Core and a fake meter in tests.
+//   2026-09-29 - Level Cal fix wave: RX2's preamp is its own mode, set
+//                through the controller's RX2PreampMode port. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -134,11 +137,12 @@ public:
     virtual bool rx1StepAttEnabled() const = 0;
     virtual bool rx2StepAttEnabled() const = 0;
     virtual void setStepAttEnabled(bool rx1, bool rx2) = 0;
-    // Thetis RX1PreampMode; RX2's preamp is on or off in NereusSDR.
+    // Thetis RX1PreampMode and RX2PreampMode, each set through its own
+    // setter's model gate (StepAttenuatorController).
     virtual PreampMode rx1PreampMode() const = 0;
     virtual void setRx1PreampMode(PreampMode mode) = 0;
-    virtual bool rx2PreampOn() const = 0;
-    virtual void setRx2PreampOn(bool on) = 0;
+    virtual PreampMode rx2PreampMode() const = 0;
+    virtual void setRx2PreampMode(PreampMode mode) = 0;
 
     // The station's meter and display calibration. The override is the
     // saved value (nullopt: none saved, the radio's default applies);
@@ -204,7 +208,7 @@ private:
         bool rx1Att = false;
         bool rx2Att = false;
         PreampMode rx1Preamp = PreampMode::On;
-        bool rx2Preamp = false;
+        PreampMode rx2Preamp = PreampMode::On;
         std::optional<double> meterCal;
         std::optional<double> displayCal;
     };

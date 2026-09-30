@@ -58,6 +58,11 @@
 //                 Alex board switches in the Alex attenuator and sends the
 //                 value + 2 (console.cs:11027-11065). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's own preamp mode with its band
+//                memory and drive (console.cs:19413-19520 [v2.10.3.15]),
+//                and the HPSDR MOX path turns RX1's step attenuator off and
+//                holds RX2's mode (console.cs:29598-29608, 29688-29692).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -164,6 +169,7 @@ mw0lge@grange-lane.co.uk
 #include <QTimer>
 
 #include <array>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -351,6 +357,16 @@ public:
     void setRx2AutoAttUndo(bool on);
     int rx2AutoUndoDelaySec() const noexcept { return m_rx2AutoUndoDelaySec; }
     void setRx2AutoUndoDelaySec(int sec);
+
+    // Level Cal: RX2's own preamp mode (Thetis RX2PreampMode,
+    // console.cs:19413-19520 [v2.10.3.15]) with its band memory
+    // (rx2_preamp_by_band), saved for the radio. With RX2's step attenuator
+    // off it puts the mode's attenuation on the other ADC on the boards in
+    // Thetis's list; on the HPSDR it sends the second preamp bit
+    // (NetworkIO.SetRX2Preamp). While RX2 shares slice A's ADC, or diversity
+    // links them, the two modes are one, as Thetis links them.
+    PreampMode rx2PreampMode() const noexcept { return m_rx2PreampMode; }
+    void setRx2PreampMode(PreampMode mode);
 
     // R-R3-46 / R-R3-11: save this radio's settings a short while after an
     // operator change, not only at teardown.  Off by default; the Core
@@ -558,6 +574,7 @@ public:
         m_loadedMac.clear();
         m_bandState.clear();
         m_rx2BandAttDb.clear();
+        m_rx2BandPreamp.clear();
     }
     bool settingsLoaded() const { return !m_loadedMac.isEmpty(); }
 
@@ -663,6 +680,8 @@ signals:
     void rx2AutoAttEnabledChanged(bool on);
     void rx2AutoAttUndoChanged(bool on);
     void rx2AutoUndoDelayChanged(int seconds);
+    // Level Cal: rx2PreampMode() changed.
+    void rx2PreampModeChanged(NereusSDR::PreampMode mode);
 
 private:
     static constexpr int kMaxAdcs = 3;
@@ -919,8 +938,14 @@ private:
     void runRx2AutoAtt(bool overloaded);
     // Drop the other ADC's auto-attenuate state, restoring its value.
     // RX2's auto-attenuate history (Thetis _historic_attenuator_readings_rx2):
-    // the value before each raise, unwound one per undo.
-    std::vector<int> m_rx2AutoAttHistory;
+    // the value before each raise, unwound one per undo. Thetis's
+    // HistoricAttenuatorReading: stepAttenuator -1 and preampMode FIRST
+    // (empty here) when not taken.
+    struct Rx2AttReading {
+        int stepAttenuator{-1};
+        std::optional<PreampMode> preampMode;
+    };
+    std::vector<Rx2AttReading> m_rx2AutoAttHistory;
     qint64 m_rx2LastAutoAttTimeMs{0};
     // RX2's own enable and auto-attenuate settings (Thetis
     // _rx2_step_att_enabled, _auto_att_rx2, _auto_att_undo_rx2,
@@ -931,6 +956,28 @@ private:
     int m_rx2AutoUndoDelaySec{5};
     // Whether RX2 is on an ADC of its own (not slice A's, not linked).
     bool rx2OnItsOwnAdc() const noexcept;
+
+    // Level Cal: RX2's preamp mode (Thetis rx2_preamp_mode) and its band
+    // memory (rx2_preamp_by_band, HPSDR_ON on every band at start,
+    // console.cs:1797 [v2.10.3.15]).
+    PreampMode m_rx2PreampMode{PreampMode::On};
+    std::unordered_map<int, PreampMode> m_rx2BandPreamp;
+    // Thetis temp_mode2: RX2's mode held over an HPSDR transmit.
+    PreampMode m_savedRx2PreampMode{PreampMode::On};
+    // Thetis _setFromOtherAttenuator: one mode setting the other.
+    bool m_setFromOtherPreamp{false};
+    // What one RX2 preamp mode sends (the RX2PreampMode setter's switch).
+    struct Rx2PreampDrive {
+        int attDb{0};
+        bool preamp{false};
+    };
+    static Rx2PreampDrive rx2PreampDriveFor(PreampMode mode) noexcept;
+    // The models whose RX2 mode drives the other ADC's step attenuator.
+    bool rx2PreampDrivesAdc() const noexcept;
+    // Thetis _rx2_preamp_present for the connected model.
+    bool rx2PreampPresent() const noexcept;
+    // Send RX2's mode drive (the RX2PreampMode setter's sends).
+    void applyRx2PreampDrive();
 
     // --- Helpers ---
     void applyClassicAutoAtt(int adc);
@@ -962,6 +1009,7 @@ private slots:
 public:
     // Test seams — expose internal TX-path state for white-box unit tests.
     PreampMode savedPreampModeForTest() const noexcept { return m_savedPreampMode; }
+    PreampMode savedRx2PreampModeForTest() const noexcept { return m_savedRx2PreampMode; }
     int txAttByBandForTest(Band band) const { return applyTxAttenuationForBand(band); }
     // Expose the last TX ATT value pushed to hardware (via m_lastTxStepAttDb).
     int lastTxStepAttForTest() const noexcept { return m_lastTxStepAttDb; }

@@ -17,6 +17,13 @@
 #include <cmath>
 #include "FakeLevelCalibrationHost.h"
 
+#include "core/AppSettings.h"
+#include "core/ConnectionState.h"
+#include "core/HpsdrModel.h"
+#include "core/RadioConnection.h"
+#include "core/StepAttenuatorController.h"
+#include "models/Band.h"
+
 using namespace NereusSDR;
 using namespace NereusSDR::LevelCalTest;
 
@@ -51,8 +58,75 @@ void verifyRestored(const FakeHost& h, double vfo)
     QCOMPARE(h.att1, true);
     QCOMPARE(h.att2, true);
     QCOMPARE(h.preamp1, PreampMode::Minus20);
-    QCOMPARE(h.preamp2, false);
+    QCOMPARE(h.preamp2, PreampMode::Off);
 }
+
+// Level Cal fix wave: records the receive-side sends a controller makes.
+class RecordingConnection final : public RadioConnection {
+    Q_OBJECT
+public:
+    explicit RecordingConnection(QObject* parent = nullptr)
+        : RadioConnection(parent)
+    {
+        setState(ConnectionState::Connected);
+    }
+
+    QList<QPair<int, int>> sends;
+    QList<bool> preamp;
+    QList<bool> rx2Preamp;
+
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int dB) override { sends.append({0, dB}); }
+    void setAttenuatorForAdc(int adc, int dB) override { sends.append({adc, dB}); }
+    void setPreamp(bool on) override { preamp.append(on); }
+    void setRx2Preamp(bool on) override { rx2Preamp.append(on); }
+    void setTxDrive(int) override {}
+    void sendTxIq(const float*, int) override {}
+    void setWatchdogEnabled(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setMox(bool) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
+
+// The fake receiver with its step attenuators and preamp modes on a real
+// controller, as the Core's host drives them (LevelCalibrationService).
+class ControllerHost final : public FakeHost {
+public:
+    explicit ControllerHost(StepAttenuatorController& c) : m_c(c) {}
+    bool rx1StepAttEnabled() const override { return m_c.stepAttEnabled(); }
+    bool rx2StepAttEnabled() const override { return m_c.rx2StepAttEnabled(); }
+    void setStepAttEnabled(bool rx1, bool rx2) override
+    {
+        m_c.setStepAttEnabled(rx1);
+        m_c.setRx2StepAttEnabled(rx2);
+    }
+    PreampMode rx1PreampMode() const override { return m_c.preampMode(); }
+    void setRx1PreampMode(PreampMode m) override
+    {
+        m_c.setPreampMode(m);
+        preamp1 = m_c.preampMode();
+    }
+    PreampMode rx2PreampMode() const override { return m_c.rx2PreampMode(); }
+    void setRx2PreampMode(PreampMode m) override { m_c.setRx2PreampMode(m); }
+
+private:
+    StepAttenuatorController& m_c;
+};
 
 } // namespace
 
@@ -118,7 +192,7 @@ private slots:
         run.setTimings(instant());
         QSignalSpy done(&run, &LevelCalibrationRun::finished);
         struct Seen {
-            bool rit; DSPMode mode; int buffer; bool a1; bool a2; bool p2; double vfo;
+            bool rit; DSPMode mode; int buffer; bool a1; bool a2; PreampMode p2; double vfo;
         };
         std::optional<Seen> seen;
         h.onMeterRead = [&h, &seen]() {
@@ -134,7 +208,7 @@ private slots:
         QCOMPARE(seen->buffer, 16384);
         QCOMPARE(seen->a1, false);
         QCOMPARE(seen->a2, false);
-        QCOMPARE(seen->p2, true);
+        QCOMPARE(seen->p2, PreampMode::On);
         // peak_hz = (int)((max_bucket - zero_hz_bucket) * hz_per_bucket)
         // (console.cs:36253): zero bucket 2048 + 21, carrier bucket 2080.
         QCOMPARE(seen->vfo, kCentre + 1000.0 + double(int((2080 - 2069) * kBinWidth)));
@@ -311,6 +385,74 @@ private slots:
         QVERIFY(!o.ok);
         QVERIFY(o.message.contains(QStringLiteral("disconnected")));
         QCOMPARE(h.meterCal, std::optional<double>(3.5));
+    }
+
+    // Level Cal fix wave: the run sets RX2's mode through the same model
+    // gate as the Setup combo (Thetis RX2PreampMode = PreampMode.HPSDR_ON;
+    // //MW0LGE_[2.9.0.6], console.cs:9914 [v2.10.3.15]). On a G2 with RX2 on
+    // ADC1 that is 0 dB on ADC1 and never a preamp bit; the restore puts
+    // RX2's mode back.
+    void g2Run_setsNoPreampBit()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:lc:01");
+        AppSettings::instance().clearHardwareValues(mac);
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        ctrl.loadSettings(mac);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(false);
+        ctrl.setRx2PreampMode(PreampMode::SaMinus20);
+        radio.sends.clear();
+
+        ControllerHost h(ctrl);
+        LevelCalibrationRun run(&h);
+        run.setTimings(instant());
+        QSignalSpy done(&run, &LevelCalibrationRun::finished);
+        QVERIFY(run.start(-50.0f, kCentre + 1000.0).isEmpty());
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::On);
+        QVERIFY(radio.sends.contains(QPair<int, int>(1, 0)));
+        QVERIFY(runToEnd(run, done).ok);
+        QVERIFY(radio.preamp.isEmpty());
+        QVERIFY(radio.rx2Preamp.isEmpty());
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::SaMinus20);
+        int lastAdc1 = -1;
+        for (const auto& send : radio.sends) {
+            if (send.first == 1) {
+                lastAdc1 = send.second;
+            }
+        }
+        QCOMPARE(lastAdc1, 20);
+        ctrl.setRadioConnection(nullptr);
+        AppSettings::instance().clearHardwareValues(mac);
+    }
+
+    // The HPSDR's run sets RX2's preamp bit, as Thetis's setter does there.
+    void hpsdrRun_setsTheSecondPreampBit()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:lc:02");
+        AppSettings::instance().clearHardwareValues(mac);
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Atlas, HPSDRModel::HPSDR, true);
+        ctrl.loadSettings(mac);
+        ctrl.setPreampMode(PreampMode::Off);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+
+        ControllerHost h(ctrl);
+        LevelCalibrationRun run(&h);
+        run.setTimings(instant());
+        QSignalSpy done(&run, &LevelCalibrationRun::finished);
+        QVERIFY(run.start(-50.0f, kCentre + 1000.0).isEmpty());
+        QVERIFY(!radio.rx2Preamp.isEmpty());
+        QCOMPARE(radio.rx2Preamp.first(), true);
+        QVERIFY(runToEnd(run, done).ok);
+        QCOMPARE(radio.rx2Preamp.last(), false);
+        ctrl.setRadioConnection(nullptr);
+        AppSettings::instance().clearHardwareValues(mac);
     }
 };
 

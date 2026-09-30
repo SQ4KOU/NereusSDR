@@ -34,6 +34,9 @@
 //                - Meter mode, display mode and the grid's noise floor
 //                  follow are window settings; a window saves and restores
 //                  its own around a run.
+//   2026-09-29 - Level Cal fix wave: RX2's preamp is its own mode, set
+//                through the controller's RX2PreampMode port. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -231,7 +234,7 @@ QString LevelCalibrationRun::start(float levelDbm, double frequencyHz)
     m_saved.rx1Att = m_host->rx1StepAttEnabled();
     m_saved.rx2Att = m_host->rx2StepAttEnabled();  //MW0LGE_[2.9.0.6]
     m_saved.rx1Preamp = m_host->rx1PreampMode();
-    m_saved.rx2Preamp = m_host->rx2PreampOn();
+    m_saved.rx2Preamp = m_host->rx2PreampMode();
     m_saved.meterCal = m_host->meterCalOverride();
     m_saved.displayCal = m_host->displayCalOverride();
 
@@ -244,7 +247,7 @@ QString LevelCalibrationRun::start(float levelDbm, double frequencyHz)
     m_host->setFrequencyHz(frequencyHz);           // set VFOA frequency
     m_host->setStepAttEnabled(false, false);       // SetupForm.RX2EnableAtt = false; //MW0LGE_[2.9.0.6]
     m_host->setRx1PreampMode(PreampMode::On);      // set to high
-    m_host->setRx2PreampOn(true);                  // RX2PreampMode = PreampMode.HPSDR_ON; //MW0LGE_[2.9.0.6]
+    m_host->setRx2PreampMode(PreampMode::On);      // RX2PreampMode = PreampMode.HPSDR_ON;        //MW0LGE_[2.9.0.6]
 
     m_progressDivisor = m_host->alexPresent() ? kProgressDivisorAlex : kProgressDivisorNoAlex;
 
@@ -318,7 +321,7 @@ void LevelCalibrationRun::restore(bool ok)
     }
     m_host->setRit(m_saved.ritOn, m_saved.ritHz);        // restore RIT on / value
     m_host->setRx1PreampMode(m_saved.rx1Preamp);         // restore preamp value
-    m_host->setRx2PreampOn(m_saved.rx2Preamp);           // restore preamp value MW0LGE_[2.9.0.6]
+    m_host->setRx2PreampMode(m_saved.rx2Preamp);         // restore preamp value MW0LGE_[2.9.0.6]
     m_host->setStepAttEnabled(m_saved.rx1Att, m_saved.rx2Att);  //MW0LGE_[2.9.0.6]
     m_host->setDspMode(m_saved.mode);                    // restore DSP mode
     m_host->setPhoneRxBuffer(m_saved.phoneRxBuffer);     // restore DSP Buffer Size

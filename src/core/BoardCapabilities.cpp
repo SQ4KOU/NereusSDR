@@ -52,6 +52,10 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: rx2PreampItemsForBoard cites
+//                console.cs:40883-40889 [v2.10.3.15] and gives SaturnMKII the
+//                G2's list. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -1731,14 +1735,26 @@ std::span<const PreampItem> preampItemsForBoard(HPSDRHW hw, bool alexPresent) no
 
 std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
 {
-    // From Thetis console.cs:40815 — RX2 always uses either on_off or anan100d.
-    // Upstream inline attribution preserved verbatim (console.cs:40813):
-    //   ... HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    // RX2 always uses either on_off or anan100d.
+    // From Thetis console.cs:40883-40889 [v2.10.3.15]:
+    //   comboRX2Preamp.Items.Clear();
+    //   if (HardwareSpecific.Model == HPSDRModel.ANAN100D || HardwareSpecific.Model == HPSDRModel.ANAN200D || HardwareSpecific.Model == HPSDRModel.ANAN7000D ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN8000D || HardwareSpecific.Model == HPSDRModel.ORIONMKII || HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2 || HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+    //       comboRX2Preamp.Items.AddRange(anan100d_preamp_settings);
+    //   else
+    //       comboRX2Preamp.Items.AddRange(on_off_preamp_settings);
+    // By board: Angelia is the ANAN-100D, Orion the ANAN-200D, OrionMKII the
+    // 7000D, 8000D, OrionMKII, AnvelinaPro3 and Red Pitaya, Saturn the G2
+    // and G2 1K. SaturnMKII is the G2's later board revision (no Thetis
+    // model resolves to it), so it takes the G2's list. HermesC10 (the
+    // G2E) is not in the list.
     switch (hw) {
     case HPSDRHW::Angelia:
     case HPSDRHW::Orion:
     case HPSDRHW::OrionMKII:
     case HPSDRHW::Saturn:
+    case HPSDRHW::SaturnMKII:
         return items(kAnan100d);
     case HPSDRHW::Atlas:
         // Model == HPSDR: "-20dB" is HPSDR_OFF on RX2 as well

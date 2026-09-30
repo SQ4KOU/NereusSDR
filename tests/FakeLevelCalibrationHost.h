@@ -28,7 +28,7 @@ constexpr double kRate = 192000.0;
 constexpr double kCentre = 7100000.0;
 constexpr double kBinWidth = kRate / kFft;  // 46.875 Hz
 
-class FakeHost final : public LevelCalibrationHost {
+class FakeHost : public LevelCalibrationHost {
 public:
     // Receiver state.
     bool live = true;
@@ -43,7 +43,7 @@ public:
     bool att1 = true;
     bool att2 = true;
     PreampMode preamp1 = PreampMode::Minus20;
-    bool preamp2 = false;
+    PreampMode preamp2 = PreampMode::Off;
     std::optional<double> meterCal = 3.5;
     std::optional<double> displayCal;  // absent key: the model default
     double displayDefault = 1.25;
@@ -93,8 +93,8 @@ public:
     void setStepAttEnabled(bool rx1, bool rx2) override { att1 = rx1; att2 = rx2; log << QStringLiteral("att"); }
     PreampMode rx1PreampMode() const override { return preamp1; }
     void setRx1PreampMode(PreampMode m) override { preamp1 = m; log << QStringLiteral("preamp1"); }
-    bool rx2PreampOn() const override { return preamp2; }
-    void setRx2PreampOn(bool on) override { preamp2 = on; log << QStringLiteral("preamp2"); }
+    PreampMode rx2PreampMode() const override { return preamp2; }
+    void setRx2PreampMode(PreampMode m) override { preamp2 = m; log << QStringLiteral("preamp2"); }
 
     std::optional<double> meterCalOverride() const override { return meterCal; }
     std::optional<double> displayCalOverride() const override { return displayCal; }

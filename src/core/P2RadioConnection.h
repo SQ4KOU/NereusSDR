@@ -83,6 +83,10 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -381,6 +385,8 @@ public slots:
     // P2CodecOrionMkII::composeCmdHighPriority byte 1403 bit 1.
     // ADC0 preamp uses the existing setPreamp(bool) (byte 1403 bit 0).
     void setRx1Preamp(bool enabled);
+    // Level Cal: Thetis SetRX2Preamp is the same prn->rx[1].preamp.
+    void setRx2Preamp(bool enabled) override { setRx1Preamp(enabled); }
 
     // Wire RadioModel's OcMatrix so buildCodecContext() can set ctx.ocByte
     // from maskFor(currentBand, mox).  No P2 codec reads ocByte yet — this

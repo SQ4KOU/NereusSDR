@@ -792,6 +792,10 @@
 //                46868-46886 [v2.10.3.15]); a one-value calibration of an
 //                earlier build moves to the connected model.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's meter offset reads
+//                rx2_preamp_offset[rx2_preamp_mode] from RX2's own mode
+//                (console.cs:21052 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4891,6 +4895,8 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
                 this, [this](int) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx1PreampChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx2PreampModeChanged,
+                this, [this](PreampMode) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx2StepAttEnabledChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::adcRoutingChanged,
@@ -10090,14 +10096,12 @@ double RadioModel::rxPreampOffsetDbForAdc(int adc) const
     //       {
     //           fOffset = _rx2_step_att_enabled ? (float)rx2_attenuator_data : rx2_preamp_offset[(int)rx2_preamp_mode];
     //       }
-    // RX2 has its own step attenuator enable (_rx2_step_att_enabled). The
-    // second ADC's preamp is one switch (rx1Preamp): rx2_preamp_offset
-    // HPSDR_ON 0 dB, HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the
-    // same two entries rxPreampOffsetDbFor holds for RX1.
+    // RX2 has its own step attenuator enable (_rx2_step_att_enabled) and,
+    // since the Level Cal fix wave, its own preamp mode (rx2_preamp_mode).
     if (m_stepAttController->rx2StepAttEnabled()) {
         return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
     }
-    const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;
+    const PreampMode rx2Preamp = m_stepAttController->rx2PreampMode();
     // Level Cal: rx2_preamp_offset[] as CalibrateLevel left it.
     return static_cast<double>(rx2PreampOffsetDbFor(rx2Preamp));
 }

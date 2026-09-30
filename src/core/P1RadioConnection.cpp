@@ -107,6 +107,10 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2076,6 +2080,17 @@ void P1RadioConnection::setPreamp(bool enabled)
     // setAttenuator above; matches peer-setter parity.
     m_forceBank11Next = true;
     m_rxPreamp[0] = enabled;
+}
+
+void P1RadioConnection::setRx2Preamp(bool enabled)
+{
+    // Level Cal: Thetis SetRX2Preamp sets prn->rx[1].preamp
+    // (ChannelMaster/netInterface.c:758-767 [v2.10.3.15]), which
+    // networkproto1.c:595 [v2.10.3.15] sends as C1 bit 1:
+    //   C1 = (prn->rx[0].preamp & 1) | ((prn->rx[1].preamp & 1) << 1) |
+    // Flushed on the next frame, as setPreamp is.
+    m_forceBank11Next = true;
+    m_rxPreamp[1] = enabled;
 }
 // ---------------------------------------------------------------------------
 // setTxDrive — 3M-1c follow-up (HL2 bench triage 2026-04-29)

@@ -54,6 +54,11 @@
 //                SA_MINUS10/20/30 and each step and its undo drive the
 //                radio (console.cs:21611-21651 [v2.10.3.15]). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's own preamp mode with its band
+//                memory and drive (console.cs:19413-19520 [v2.10.3.15]),
+//                and the HPSDR MOX path turns RX1's step attenuator off and
+//                holds RX2's mode (console.cs:29598-29608, 29688-29692).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -489,6 +494,203 @@ void StepAttenuatorController::setPreampMode(PreampMode mode)
 
     emit preampModeChanged(m_preampMode);
     scheduleSave();
+
+    // Level Cal: receivers on one ADC, or linked in diversity, keep one
+    // mode, so RX2's follows.
+    // From Thetis console.cs:19384-19394 [v2.10.3.15] (RX1PreampMode):
+    //   if (!_mox && !_setFromOtherAttenuator)
+    //   {
+    //       bool bRX1RX2diversity = m_bDiversityAttLinkForRX1andRX2 && (diversityForm != null && Diversity2 && diversityForm.EXTDIVOutput == 2); // if using diversity, and both rx's are linked, then we need to attenuate both
+    //       if (((nRX1ADCinUse == nRX2ADCinUse) || bRX1RX2diversity) && RX2PreampMode != rx1_preamp_mode)
+    //       {
+    //           _setFromOtherAttenuator = true;
+    //           if (SetupForm.RX2EnableAtt != SetupForm.RX1EnableAtt) SetupForm.RX2EnableAtt = SetupForm.RX1EnableAtt;
+    //           RX2PreampMode = rx1_preamp_mode;
+    //           _setFromOtherAttenuator = false;
+    //       }
+    //   }
+    // (The enables are already one while RX2 shares the ADC: setStepAttEnabled.)
+    if (!m_isMox && !m_setFromOtherPreamp && !rx2OnItsOwnAdc() && m_rx2PreampMode != m_preampMode) {
+        m_setFromOtherPreamp = true;
+        setRx2PreampMode(m_preampMode);
+        m_setFromOtherPreamp = false;
+    }
+}
+
+// --- Level Cal: RX2's preamp mode ---
+
+StepAttenuatorController::Rx2PreampDrive
+StepAttenuatorController::rx2PreampDriveFor(PreampMode mode) noexcept
+{
+    // From Thetis console.cs:19431-19479 [v2.10.3.15] (RX2PreampMode):
+    //   int rx2_preamp = 0;
+    //   int rx2_att_value = 0;
+    //
+    //   //MW0LGE_22b
+    //   _from_preampmode[1] = true;
+    //   switch (rx2_preamp_mode)
+    //   {
+    //       case PreampMode.HPSDR_ON:  //0dB
+    //           rx2_att_value = 0;
+    //           rx2_preamp = 1; //no attn
+    //       case PreampMode.HPSDR_OFF: //-20dB
+    //           rx2_att_value = 20;
+    //           rx2_preamp = 0; //attn inline
+    //       case PreampMode.HPSDR_MINUS10:
+    //           rx2_att_value = 10;
+    //           rx2_preamp = 1;
+    //           comboRX2Preamp.Text = "-10db"; //MW0LGE_22b lower
+    //       case PreampMode.HPSDR_MINUS20:
+    //           rx2_att_value = 20;
+    //           rx2_preamp = 1;
+    //           comboRX2Preamp.Text = "-20db";  //MW0LGE_22b lower
+    //       case PreampMode.HPSDR_MINUS30:
+    //           rx2_att_value = 30;
+    //           rx2_preamp = 1;
+    //           comboRX2Preamp.Text = "-30db";  //MW0LGE_22b lower
+    //       SA_MINUS10 10/0, SA_MINUS20 20/0, SA_MINUS30 30/0
+    // HPSDR_MINUS40 and HPSDR_MINUS50 have no case and keep the 0/0 the
+    // switch starts from.
+    switch (mode) {
+    case PreampMode::On:        return {0, true};    //0dB
+    case PreampMode::Off:       return {20, false};  //-20dB
+    case PreampMode::Minus10:   return {10, true};
+    case PreampMode::Minus20:   return {20, true};
+    case PreampMode::Minus30:   return {30, true};
+    case PreampMode::SaMinus10: return {10, false};
+    case PreampMode::SaMinus20: return {20, false};
+    case PreampMode::SaMinus30: return {30, false};
+    case PreampMode::Minus40:
+    case PreampMode::Minus50:
+        break;
+    }
+    return {0, false};
+}
+
+bool StepAttenuatorController::rx2PreampDrivesAdc() const noexcept
+{
+    // From Thetis console.cs:19488-19497 [v2.10.3.15]:
+    //   if (!_rx2_step_att_enabled && (HardwareSpecific.Model == HPSDRModel.ANAN100D ||  //MW0LGE_22b we dont want to do this if we are using SA
+    //       HardwareSpecific.Model == HPSDRModel.ANAN200D ||
+    //       HardwareSpecific.Model == HPSDRModel.ORIONMKII ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN7000D ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2E ||  //N1GP G2E added
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K ||
+    //       HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 ||
+    //       HardwareSpecific.Model == HPSDRModel.REDPITAYA)) //DH1KLM
+    if (!m_boardKnown) {
+        return false;
+    }
+    switch (m_hpsdrModel) {
+    case HPSDRModel::ANAN100D:
+    case HPSDRModel::ANAN200D:
+    case HPSDRModel::ORIONMKII:
+    case HPSDRModel::ANAN7000D:
+    case HPSDRModel::ANAN8000D:
+    case HPSDRModel::ANAN_G2E:  //N1GP G2E added
+    case HPSDRModel::ANAN_G2:
+    case HPSDRModel::ANAN_G2_1K:
+    case HPSDRModel::ANVELINAPRO3:
+    case HPSDRModel::REDPITAYA: //DH1KLM
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool StepAttenuatorController::rx2PreampPresent() const noexcept
+{
+    // From Thetis console.cs:14788-14854 [v2.10.3.15] (SetupForHPSDRModel):
+    // _rx2_preamp_present = true for ANAN100D, ANAN200D, ORIONMKII,
+    // ANAN7000D, ANAN8000D, ANAN_G2, ANAN_G2_1K, ANVELINAPRO3 and
+    // REDPITAYA (//DH1KLM); false for HERMES, ANAN10, ANAN10E, ANAN100,
+    // ANAN100B and ANAN_G2E (//N1GP G2E added); any other model keeps the
+    // field's initial false (console.cs:15068).
+    //   case HPSDRModel.ANAN_G2_1K:                          // G8NJJ: likely to need further changes for PA
+    //   RX2PreampPresent = _rx2_preamp_present; //[2.10.3.11]MW0LGE we were setting the member var above, but this was not actually having any effect/update
+    if (!m_boardKnown) {
+        return false;
+    }
+    switch (m_hpsdrModel) {
+    case HPSDRModel::ANAN100D:
+    case HPSDRModel::ANAN200D:
+    case HPSDRModel::ORIONMKII:
+    case HPSDRModel::ANAN7000D:
+    case HPSDRModel::ANAN8000D:
+    case HPSDRModel::ANAN_G2:
+    case HPSDRModel::ANAN_G2_1K:
+    case HPSDRModel::ANVELINAPRO3:
+    case HPSDRModel::REDPITAYA: //DH1KLM
+        return true;
+    default:
+        return false;
+    }
+}
+
+void StepAttenuatorController::applyRx2PreampDrive()
+{
+    if (!m_connection || !m_boardKnown) {
+        return;
+    }
+    const Rx2PreampDrive drive = rx2PreampDriveFor(m_rx2PreampMode);
+    // From Thetis console.cs:19491-19505 [v2.10.3.15]:
+    //       HardwareSpecific.Model == HPSDRModel.ANAN_G2E ||  //N1GP G2E added
+    //       ...
+    //       HardwareSpecific.Model == HPSDRModel.REDPITAYA)) //DH1KLM
+    //   {
+    //       if (nRX2ADCinUse == 0) NetworkIO.SetADC1StepAttenData(rx2_att_value);
+    //       else if (nRX2ADCinUse == 1) NetworkIO.SetADC2StepAttenData(rx2_att_value);
+    //       else if (nRX2ADCinUse == 2) NetworkIO.SetADC3StepAttenData(rx2_att_value);
+    //   }
+    //
+    //   if (HardwareSpecific.Model == HPSDRModel.HPSDR)
+    //       NetworkIO.SetRX2Preamp(rx2_preamp);
+    // RX2's ADC is the other ADC in use; while every slice is on slice A's
+    // ADC there is none, and RX1's mode, which RX2's follows, drives it.
+    if (!m_rx2StepAttEnabled && rx2PreampDrivesAdc() && m_rx2Adc >= 0 && m_rx2Adc != m_rx1Adc) {
+        sendAttenuatorToAdc(m_rx2Adc, drive.attDb);
+    }
+    if (isHpsdrModel()) {
+        RadioConnection* conn = m_connection.get();
+        const bool bit = drive.preamp;
+        QMetaObject::invokeMethod(conn, [conn, bit]() {
+            conn->setRx2Preamp(bit);
+        });
+    }
+}
+
+void StepAttenuatorController::setRx2PreampMode(PreampMode mode)
+{
+    if (m_rx2PreampMode == mode) {
+        return;
+    }
+    m_rx2PreampMode = mode;
+    applyRx2PreampDrive();
+    // From Thetis console.cs:19507 [v2.10.3.15]:
+    //   rx2_preamp_by_band[(int)rx2_band] = rx2_preamp_mode;
+    m_rx2BandPreamp[static_cast<int>(m_rx2Band)] = m_rx2PreampMode;
+    emit rx2PreampModeChanged(m_rx2PreampMode);
+    scheduleSave();
+
+    // From Thetis console.cs:19509-19519 [v2.10.3.15]:
+    //   if (!_mox && !_setFromOtherAttenuator)
+    //   {
+    //       bool bRX1RX2diversity = m_bDiversityAttLinkForRX1andRX2 && (diversityForm != null && Diversity2 && diversityForm.EXTDIVOutput == 2); // if using diversity, and both rx's are linked, then we need to attenuate both
+    //       if (((nRX1ADCinUse == nRX2ADCinUse) || bRX1RX2diversity) && RX1PreampMode != rx2_preamp_mode)
+    //       {
+    //           _setFromOtherAttenuator = true;
+    //           if (SetupForm.RX1EnableAtt != SetupForm.RX2EnableAtt) SetupForm.RX1EnableAtt = SetupForm.RX2EnableAtt;
+    //           RX1PreampMode = rx2_preamp_mode;
+    //           _setFromOtherAttenuator = false;
+    //       }
+    //   }
+    if (!m_isMox && !m_setFromOtherPreamp && !rx2OnItsOwnAdc() && m_preampMode != m_rx2PreampMode) {
+        m_setFromOtherPreamp = true;
+        setPreampMode(m_rx2PreampMode);
+        m_setFromOtherPreamp = false;
+    }
 }
 
 void StepAttenuatorController::setMaxAttenuation(int dB)
@@ -804,16 +1006,34 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
         }
 
         if (m_isHpsdrBoard) {
-            // HPSDR variant: save preamp mode, then force PreampMode::Off
-            // (Thetis PreampMode.HPSDR_OFF, -20 dB).
-            // From Thetis console.cs:29550-29556 [v2.10.3.13]:
-            //   temp_mode = RX1PreampMode;
-            //   SetupForm.RX1EnableAtt = false;
-            //   RX1PreampMode = PreampMode.HPSDR_OFF;  // set to -20dB
+            // HPSDR variant: save preamp mode, turn RX1's step attenuator
+            // off, then force PreampMode::Off (Thetis PreampMode.HPSDR_OFF,
+            // -20 dB), and the same for RX2's mode where the model has it.
+            // From Thetis console.cs:29599-29608 [v2.10.3.15]:
+            // [original inline comment from console.cs:29612, on the else
+            // branch below]
+            //MW0LGE [2.9.0.7] added option to always apply 31 att from setup form when not in ps
+            //   if (HardwareSpecific.Model == HPSDRModel.HPSDR)
+            //   {
+            //       temp_mode = RX1PreampMode;
+            //       SetupForm.RX1EnableAtt = false;
+            //       RX1PreampMode = PreampMode.HPSDR_OFF;			// set to -20dB
+            //       if (_rx2_preamp_present)
+            //       {
+            //           temp_mode2 = RX2PreampMode;
+            //           RX2PreampMode = PreampMode.HPSDR_OFF;
+            //       }
+            //   }
             // Level Cal: PreampMode::Off is HPSDR_OFF now that the ten
             // Thetis modes are held (Minus20 is HPSDR_MINUS20).
+            // Thetis leaves RX1EnableAtt off at the unkey; so does this.
             saveRxPreampMode();
-            setPreampMode(PreampMode::Off);
+            setStepAttEnabled(false);
+            setPreampMode(PreampMode::Off);			// set to -20dB
+            if (rx2PreampPresent()) {
+                m_savedRx2PreampMode = m_rx2PreampMode;
+                setRx2PreampMode(PreampMode::Off);
+            }
         } else {
             // Non-HPSDR standard board: TX ATT lookup + force-31 override.
             // From Thetis console.cs:29562-29568 [v2.10.3.13]:
@@ -874,8 +1094,27 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
     } else {
         // TX→RX transition: restore RX state.
         if (m_isHpsdrBoard) {
-            // HPSDR: restore the preamp mode saved at TX start.
-            restoreRxPreampMode();
+            // HPSDR: restore the preamp modes saved at TX start, only with
+            // ATT on TX on, as the key saved them only then.
+            // From Thetis console.cs:29686-29693 [v2.10.3.15]:
+            // [original inline comments from console.cs:29698-29699, on the
+            // else branch below]
+            //   //comboRX2Preamp.Enabled = true; //[2.10.3.6]MW0LGE att_fixes
+            //   //udRX2StepAttData.Enabled = true; //[2.10.3.6]MW0LGE att_fixes
+            //   if (m_bATTonTX)
+            //   {
+            //       if (HardwareSpecific.Model == HPSDRModel.HPSDR)
+            //       {
+            //           RX1PreampMode = temp_mode;
+            //           if (_rx2_preamp_present)
+            //               RX2PreampMode = temp_mode2;
+            //       }
+            if (m_attOnTxEnabled) {
+                restoreRxPreampMode();
+                if (rx2PreampPresent()) {
+                    setRx2PreampMode(m_savedRx2PreampMode);
+                }
+            }
         } else {
             // Standard board: clear TX ATT back to 0 + restore the saved RX
             // att so the S-ATT spinbox tracks the un-keyed value.
@@ -1093,10 +1332,39 @@ void StepAttenuatorController::tick()
 //                   if (har.stepAttenuator != RX2AttenuatorData) RX2AttenuatorData = har.stepAttenuator;
 // RX2 keeps its own enable, undo and hold (setRx2AutoAtt...). The step is
 // the ADC's overload level and the ceiling the attenuator's maximum, as
-// slice A's Classic bump takes them (applyClassicAutoAtt). Thetis steps
-// RX2's preamp mode when its step attenuator is off; the second ADC's preamp
-// is one switch here, so that branch has nothing to step. Thetis has no
+// slice A's Classic bump takes them (applyClassicAutoAtt). Thetis has no
 // mode choice for RX2: Adaptive is a NereusSDR extension of slice A's.
+// Level Cal: with RX2's step attenuator off, Thetis steps RX2's preamp mode
+// instead, and the undo puts the mode back:
+// From Thetis console.cs:21693-21716 [v2.10.3.15]:
+//   else
+//   {
+//       har.preampMode = RX2PreampMode;
+//
+//       PreampMode pam = har.preampMode;
+//       switch (pam)
+//       {
+//           case PreampMode.HPSDR_OFF:
+//           case PreampMode.HPSDR_ON:
+//               pam = PreampMode.SA_MINUS10;
+//               break;
+//           case PreampMode.SA_MINUS10:
+//               pam = PreampMode.SA_MINUS20;
+//               break;
+//           case PreampMode.SA_MINUS20:
+//               pam = PreampMode.SA_MINUS30;
+//               break;
+//       }
+//       if (pam != har.preampMode)
+//       {
+//           RX2PreampMode = pam;
+//           _auto_att_last_hold_time_rx2 = now;
+//           _historic_attenuator_readings_rx2.Push(har);
+// and in the unwind (console.cs 21737-21740):
+//               else if (har.preampMode != PreampMode.FIRST)
+//               {
+//                   if (har.preampMode != RX2PreampMode) RX2PreampMode = har.preampMode;
+//               }
 void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
 {
     if (m_rx2Adc < 0 || m_adcAttLinked) {
@@ -1105,12 +1373,36 @@ void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (overloaded) {
         if (!m_rx2StepAttEnabled) {
+            PreampMode pam = m_rx2PreampMode;
+            switch (pam) {
+            case PreampMode::Off:
+            case PreampMode::On:
+                pam = PreampMode::SaMinus10;
+                break;
+            case PreampMode::SaMinus10:
+                pam = PreampMode::SaMinus20;
+                break;
+            case PreampMode::SaMinus20:
+                pam = PreampMode::SaMinus30;
+                break;
+            default:
+                break;
+            }
+            if (pam != m_rx2PreampMode) {
+                Rx2AttReading har;
+                har.preampMode = m_rx2PreampMode;
+                m_rx2AutoAttHistory.push_back(har);
+                setRx2PreampMode(pam);
+                m_rx2LastAutoAttTimeMs = now;
+            }
             return;
         }
         const int shift = m_adcState[static_cast<size_t>(m_rx2Adc)].level;
         const int newAtt = std::min(m_rx2AttDb + shift, m_maxAttDb);
         if (newAtt != m_rx2AttDb) {
-            m_rx2AutoAttHistory.push_back(m_rx2AttDb);
+            Rx2AttReading har;
+            har.stepAttenuator = m_rx2AttDb;
+            m_rx2AutoAttHistory.push_back(har);
             m_rx2AttDb = newAtt;
             sendRx2Attenuation();
             emit rx2AttenuationChanged(m_rx2AttDb);
@@ -1126,12 +1418,20 @@ void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
         return;
     }
     // Unwind one reading; put it back only with undo on.
-    const int previous = m_rx2AutoAttHistory.back();
+    const Rx2AttReading previous = m_rx2AutoAttHistory.back();
     m_rx2AutoAttHistory.pop_back();
-    if (m_rx2AutoUndoEnabled && m_rx2StepAttEnabled && previous != m_rx2AttDb) {
-        m_rx2AttDb = previous;
-        sendRx2Attenuation();
-        emit rx2AttenuationChanged(m_rx2AttDb);
+    if (m_rx2AutoUndoEnabled) {
+        if (m_rx2StepAttEnabled && previous.stepAttenuator != -1) {
+            if (previous.stepAttenuator != m_rx2AttDb) {
+                m_rx2AttDb = previous.stepAttenuator;
+                sendRx2Attenuation();
+                emit rx2AttenuationChanged(m_rx2AttDb);
+            }
+        } else if (previous.preampMode.has_value()) {
+            if (*previous.preampMode != m_rx2PreampMode) {
+                setRx2PreampMode(*previous.preampMode);
+            }
+        }
     }
     m_rx2LastAutoAttTimeMs = now;
 }
@@ -1173,8 +1473,24 @@ void StepAttenuatorController::setRx2StepAttEnabled(bool on)
         scheduleSave();
         // Thetis's chkRX2StepAtt re-applies RX2's value when it turns on
         // (udHermesStepAttenuatorDataRX2_ValueChanged).
+        // Level Cal: turning it off sends RX2's preamp mode.
+        // From Thetis console.cs:11117-11128 [v2.10.3.15] (RX2StepAttEnabled):
+        //   if (_rx2_preamp_present)
+        //   {
+        //       if (_rx2_step_att_enabled)
+        //       {
+        //           udRX2StepAttData.Value = validateRX2StepAttData(getRX2stepAttenuatorForBand(rx2_band)); //[2.10.3.9]MW0LGE validated
+        //           udRX2StepAttData_ValueChanged(this, EventArgs.Empty);
+        //       }
+        //       else
+        //       {
+        //           comboRX2Preamp_SelectedIndexChanged(this, EventArgs.Empty);
+        //       }
+        //   }
         if (on) {
             sendRx2Attenuation();
+        } else if (rx2PreampPresent() && !m_isMox) {
+            applyRx2PreampDrive();
         }
     }
     if (!rx2OnItsOwnAdc() && m_stepAttEnabled != on) {
@@ -1637,7 +1953,15 @@ int StepAttenuatorController::rx1WireAttDbFor(int dB) const noexcept
 
 int StepAttenuatorController::wireAttDbForAdc(int adc) const noexcept
 {
-    return adcUsesRx1Attenuator(adc) ? rx1WireAttDbFor(m_attDb) : m_rx2AttDb;
+    if (adcUsesRx1Attenuator(adc)) {
+        return rx1WireAttDbFor(m_attDb);
+    }
+    // Level Cal: with RX2's step attenuator off, the models in Thetis's
+    // list carry RX2's preamp mode on its ADC (applyRx2PreampDrive).
+    if (!m_rx2StepAttEnabled && rx2PreampDrivesAdc()) {
+        return rx2PreampDriveFor(m_rx2PreampMode).attDb;
+    }
+    return m_rx2AttDb;
 }
 
 void StepAttenuatorController::applyPreampDrive()
@@ -1772,13 +2096,15 @@ void StepAttenuatorController::setRx2Band(Band band)
     //       RX2PreampMode = rx2_preamp_by_band[(int)rx2_band];
     //       RX2AttenuatorData = getRX2stepAttenuatorForBand(rx2_band);
     //       int tmp = rx2_agct_by_band[(int)rx2_band]; //[2.10.3.6]MW0LGE see comment in RX1Band
-    // The other ADC's preamp is not kept per band here (NereusSDR's second
-    // ADC preamp is one switch, rx1Preamp).
+    // Level Cal: RX2's preamp mode is kept per band as well
+    // (rx2_preamp_by_band); like the attenuation, a band never visited
+    // keeps the current mode.
     // Thetis keep_att_entries_for_band drops RX2's auto-attenuate history on
     // a band change (console.cs 21567-21569); the band keeps the value it
     // had, raised or not, as Thetis's RX2Band setter saves it.
     m_rx2AutoAttHistory.clear();
     m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
+    m_rx2BandPreamp[static_cast<int>(m_rx2Band)] = m_rx2PreampMode;
     m_rx2Band = band;
     const auto it = m_rx2BandAttDb.find(static_cast<int>(band));
     if (it != m_rx2BandAttDb.end()) {
@@ -1787,6 +2113,13 @@ void StepAttenuatorController::setRx2Band(Band band)
             m_rx2AttDb = restoredDb;
             emit rx2AttenuationChanged(m_rx2AttDb);
         }
+    }
+    // The restored mode reaches the radio with the ADC's value
+    // (setAdcRouting sends it; the HPSDR has no second ADC to move to).
+    const auto pit = m_rx2BandPreamp.find(static_cast<int>(band));
+    if (pit != m_rx2BandPreamp.end() && pit->second != m_rx2PreampMode) {
+        m_rx2PreampMode = pit->second;
+        emit rx2PreampModeChanged(m_rx2PreampMode);
     }
     scheduleSave();
 }
@@ -1843,6 +2176,13 @@ void StepAttenuatorController::setAdcRouting(int rx1Adc, int rx2Adc, Band rx2Ban
     if (!rx2OnItsOwnAdc() && m_rx2StepAttEnabled != m_stepAttEnabled) {
         m_rx2StepAttEnabled = m_stepAttEnabled;
         emit rx2StepAttEnabledChanged(m_rx2StepAttEnabled);
+    }
+    // Level Cal: and RX2's preamp mode is RX1's, as the linked setters
+    // leave them (console.cs:19384-19394, 19509-19519 [v2.10.3.15]).
+    if (!rx2OnItsOwnAdc() && m_rx2PreampMode != m_preampMode) {
+        m_rx2PreampMode = m_preampMode;
+        m_rx2BandPreamp[static_cast<int>(m_rx2Band)] = m_rx2PreampMode;
+        emit rx2PreampModeChanged(m_rx2PreampMode);
     }
     if (moved || maskMoved) {
         emit adcRoutingChanged();
@@ -2042,6 +2382,24 @@ void StepAttenuatorController::saveSettings(const QString& mac)
             QStringLiteral("options/stepAtt/rx2Band/") + bandKeyName(m_rx2Band),
             QString::number(m_rx2AttDb));
     }
+    // Level Cal: RX2's preamp mode and its band memory (Thetis
+    // rx2_preamp_by_band, saved at console.cs:3062-3065 [v2.10.3.15]), in
+    // the ten-mode numbering from the start.
+    s.setHardwareValue(mac, QStringLiteral("options/preamp/rx2Mode"),
+                       QString::number(static_cast<int>(m_rx2PreampMode)));
+    for (const auto& [b, mode] : m_rx2BandPreamp) {
+        if (b < 0 || b >= static_cast<int>(Band::SwlFirst)) {
+            continue;
+        }
+        s.setHardwareValue(mac,
+            QStringLiteral("options/preamp/rx2Band/") + bandKeyName(static_cast<Band>(b)),
+            QString::number(static_cast<int>(mode)));
+    }
+    if (static_cast<int>(m_rx2Band) < static_cast<int>(Band::SwlFirst)) {
+        s.setHardwareValue(mac,
+            QStringLiteral("options/preamp/rx2Band/") + bandKeyName(m_rx2Band),
+            QString::number(static_cast<int>(m_rx2PreampMode)));
+    }
 
     // Adaptive floor.
     s.setHardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
@@ -2083,6 +2441,7 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // on this one and save them under this MAC.
     m_bandState.clear();
     m_rx2BandAttDb.clear();
+    m_rx2BandPreamp.clear();
 
     auto& s = AppSettings::instance();
 
@@ -2196,6 +2555,29 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     if (m_adcAttLinked) {
         m_rx2AttDb = m_attDb;
     }
+    // Level Cal: RX2's preamp mode and band memory, HPSDR_ON where none is
+    // saved (rx2_preamp_by_band starts HPSDR_ON on every band,
+    // console.cs:1797 [v2.10.3.15]).
+    const auto validMode = [](int v) {
+        return v >= static_cast<int>(PreampMode::Off)
+            && v <= static_cast<int>(PreampMode::SaMinus30);
+    };
+    {
+        const int v = s.hardwareValue(mac, QStringLiteral("options/preamp/rx2Mode"),
+                                      static_cast<int>(PreampMode::On)).toInt();
+        m_rx2PreampMode = validMode(v) ? static_cast<PreampMode>(v) : PreampMode::On;
+    }
+    for (int b = 0; b < static_cast<int>(Band::SwlFirst); ++b) {
+        const QVariant v = s.hardwareValue(mac,
+            QStringLiteral("options/preamp/rx2Band/") + bandKeyName(static_cast<Band>(b)));
+        if (v.isValid() && validMode(v.toInt())) {
+            m_rx2BandPreamp[b] = static_cast<PreampMode>(v.toInt());
+        }
+    }
+    if (const auto rx2Pit = m_rx2BandPreamp.find(static_cast<int>(m_rx2Band));
+        rx2Pit != m_rx2BandPreamp.end()) {
+        m_rx2PreampMode = rx2Pit->second;
+    }
 
     // Adaptive floor.
     m_adaptiveFloorDb = s.hardwareValue(mac, QStringLiteral("options/autoAtt/rx1AdaptiveFloor"),
@@ -2230,8 +2612,14 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // as Thetis's RX1PreampMode setter makes it (console.cs:19220-19227
     // [v2.10.3.15]).
     m_preampMode = clampPreampForBoard(m_preampMode);
+    // Level Cal: on one ADC (or linked) RX2's mode is RX1's, as InitConsole
+    // leaves them: RX1PreampMode's link sets RX2's first.
+    if (!rx2OnItsOwnAdc()) {
+        m_rx2PreampMode = m_preampMode;
+    }
     emit attenuationChanged(m_attDb);
     emit preampModeChanged(m_preampMode);
+    emit rx2PreampModeChanged(m_rx2PreampMode);
     emit stepAttEnabledChanged(m_stepAttEnabled);
     emit rx2AttenuationChanged(m_rx2AttDb);
     emit rx2StepAttEnabledChanged(m_rx2StepAttEnabled);
@@ -2251,14 +2639,17 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     //   initializing = true;
     // (SetupForHPSDRModel's SetComboPreampForHPSDR, console.cs 40891-40897,
     // does the same for a model change.) Without this slice A's restored
-    // attenuation and preamp were not sent until they next changed. The
-    // second ADC's preamp is not held per band here (rx1Preamp), so there
-    // is no stored value of it to send.
+    // attenuation and preamp were not sent until they next changed. RX2's
+    // restored preamp mode goes after them (Level Cal).
     // Level Cal: the preamp mode's whole drive (applyPreampDrive), then the
     // step attenuator, in InitConsole's order.
     if (m_connection && !m_isMox) {
         applyPreampDrive();
         sendRx1Attenuation(m_attDb);
+        // RX2PreampMode = rx2_preamp_by_band[(int)rx2_band]; as above.
+        if (!m_rx2StepAttEnabled) {
+            applyRx2PreampDrive();
+        }
     }
     // The other ADC in use takes its restored value now (its byte is not
     // otherwise sent until the value changes).

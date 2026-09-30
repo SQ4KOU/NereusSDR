@@ -223,6 +223,21 @@ private slots:
         }
     }
 
+    // Level Cal fix wave: RX2's list per board (console.cs:40883-40889
+    // [v2.10.3.15]): the four-step list on the dual-ADC boards, the G2's
+    // later board revision included; on/off everywhere else, the G2E too.
+    void rx2Items_followThetissModelList()
+    {
+        for (const HPSDRHW hw : {HPSDRHW::Angelia, HPSDRHW::Orion, HPSDRHW::OrionMKII,
+                                 HPSDRHW::Saturn, HPSDRHW::SaturnMKII}) {
+            QCOMPARE(BoardCapsTable::rx2PreampItemsForBoard(hw).size(), size_t(4));
+        }
+        for (const HPSDRHW hw : {HPSDRHW::Atlas, HPSDRHW::Hermes, HPSDRHW::HermesII,
+                                 HPSDRHW::HermesLite, HPSDRHW::HermesC10}) {
+            QCOMPARE(BoardCapsTable::rx2PreampItemsForBoard(hw).size(), size_t(2));
+        }
+    }
+
     // A mode stored before the SA modes keeps the label it showed.
     void migration_keepsTheLabelShown()
     {

@@ -64,6 +64,10 @@
 //                attenuator range above 31 dB on Alex boards (value + 2,
 //                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -285,6 +289,9 @@ public slots:
     void setAttenuator(int dB) override;
     void setAttenuatorForAdc(int adc, int dB) override;
     void setPreamp(bool enabled) override;
+    // Level Cal: prn->rx[1].preamp (C1 bit 1 of the bank carrying the
+    // preamp bits), Thetis SetRX2Preamp.
+    void setRx2Preamp(bool enabled) override;
     void setTxDrive(int level) override;
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
