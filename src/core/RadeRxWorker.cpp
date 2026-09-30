@@ -11,9 +11,14 @@
 // Modification history (NereusSDR):
 //   2026-09-30  J.J. Boyd (KG4VCF)  Created for the RADE threads lane.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd (KG4VCF)  The decoder thread registers with
+//                 ThreadPlacement as a DspThread, so nereusd places it
+//                 with the DSP thread. AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadeRxWorker.h"
+#include "core/platform/ThreadPlacement.h"
 
 #include <QThread>
 
@@ -224,6 +229,13 @@ void RadeRxWorker::wake(RadeRxBridge& bridge)
 void RadeRxWorker::run()
 {
     m_threadId.store(QThread::currentThreadId(), std::memory_order_release);
+    // In nereusd on Linux the decoder runs where the DSP thread that feeds
+    // it runs (a fast core, raised priority), not on the housekeeping cores
+    // with spectrum and networking. Elsewhere this does nothing.
+    const bool placed = ThreadPlacement::managesThreadPriority();
+    if (placed) {
+        ThreadPlacement::instance().registerCurrentThread(ThreadRole::DspThread);
+    }
     RadeRxBridge& bridge = *m_bridge;
     RadeRxBridge::Header header;
     std::vector<float> iq;
@@ -268,6 +280,9 @@ void RadeRxWorker::run()
             break;
         }
         bridge.m_wake.wait(seen, std::memory_order_acquire);
+    }
+    if (placed) {
+        ThreadPlacement::instance().deregisterCurrentThread();
     }
 }
 

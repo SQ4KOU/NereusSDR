@@ -210,10 +210,10 @@ private:
     std::atomic<Qt::HANDLE> m_threadId{nullptr};
     std::mutex m_idleMutex;  // decoder thread notifies test waiters only
     std::condition_variable m_idle;
-#ifdef NEREUS_BUILD_TESTS
+    // Test seam state (setBeforeDecodeHookForTest). Present in every build
+    // so the class has one layout whatever defines a unit sees.
     std::mutex m_hookMutex;
     std::function<void()> m_beforeDecodeHook;
-#endif
 };
 
 }  // namespace NereusSDR
