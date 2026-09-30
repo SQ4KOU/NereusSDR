@@ -1390,6 +1390,92 @@ private slots:
         QCOMPARE(paSpy.count(), 2);
     }
 
+    // Version 22: DSP > Options' four RX buffer size rows carry their
+    // on-the-air lock and its reason, as Thetis greys grpDSPBufferSize
+    // while MOX is on (setup.cs:5159 [v2.10.3.15]). A peer below 22 reads
+    // the rows exactly as before; the TX rows keep their offAir gate.
+    void dspRxBufferSizesLockOnTheAirFromVersion22()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+
+        QStringList rxIds;
+        for (const char* mode : {"Phone", "Fm", "Cw", "Dig"}) {
+            rxIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Rx").arg(QLatin1String(mode));
+        }
+        QStringList txIds;
+        for (const char* mode : {"Phone", "Fm", "Dig"}) {
+            txIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Tx").arg(QLatin1String(mode));
+        }
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", "Can't change while transmitting."}};
+        QCOMPARE(RadioModel::dspBufferOnAirLockedReason(), locked.value("reason").toString());
+
+        // Off the air: no row carries a lock at any version.
+        for (const int version : {19, 21, 22}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : rxIds) {
+                const QJsonObject row = controlById(dsp, id);
+                QVERIFY2(!row.isEmpty(), qPrintable(id));
+                QVERIFY2(!row.contains("availability"), qPrintable(id));
+                QVERIFY2(!row.contains("gate"), qPrintable(id));
+            }
+        }
+        QCOMPARE(projectedCategory(service.dsp(), 22).value("version"), QJsonValue(22));
+        QCOMPARE(projectedCategory(service.dsp(), 21).value("version"), QJsonValue(19));
+        const QString olderOffAir = SetupDescriptionService::fitCategoryForVersion(service.dsp(), 21);
+        const QJsonObject txGate = controlById(projectedCategory(service.dsp(), 22), txIds.first())
+                                       .value("gate").toObject();
+        QCOMPARE(txGate.value("offAir"), QJsonValue(true));
+
+        // On the air: DSP and the revision are sent again, nothing else.
+        const quint32 before = service.revision();
+        QSignalSpy dspSpy(&service, &SetupDescriptionService::dspDescriptionChanged);
+        QSignalSpy paSpy(&service, &SetupDescriptionService::paDescriptionChanged);
+        QSignalSpy allSpy(&service, &SetupDescriptionService::descriptionsChanged);
+        service.setDspOnAirState(true);
+        QCOMPARE(dspSpy.count(), 1);
+        QCOMPARE(paSpy.count(), 1);
+        QCOMPARE(allSpy.count(), 0);
+        QVERIFY(service.revision() > before);
+        const QJsonObject onAir = projectedCategory(service.dsp(), 22);
+        int lockedRows = 0;
+        for (const QJsonValue& page : onAir.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    if (raw.toObject().value("availability") == QJsonValue(locked)) {
+                        QVERIFY2(rxIds.contains(raw.toObject().value("id").toString()),
+                                 qPrintable(raw.toObject().value("id").toString()));
+                        ++lockedRows;
+                    }
+                }
+            }
+        }
+        QCOMPARE(lockedRows, 4);
+        for (const QString& id : txIds) {
+            const QJsonObject row = controlById(onAir, id);
+            QVERIFY2(!row.contains("availability"), qPrintable(id));
+            QCOMPARE(row.value("gate").toObject(), txGate);
+        }
+        // A version 21 peer reads the same DSP as off the air.
+        QCOMPARE(SetupDescriptionService::fitCategoryForVersion(service.dsp(), 21), olderOffAir);
+
+        // The same state again sends nothing.
+        service.setDspOnAirState(true);
+        QCOMPARE(dspSpy.count(), 1);
+
+        // Back on receive: the lock is gone.
+        service.setDspOnAirState(false);
+        QCOMPARE(dspSpy.count(), 2);
+        QCOMPARE(paSpy.count(), 2);
+        for (const QString& id : rxIds) {
+            QVERIFY2(!controlById(projectedCategory(service.dsp(), 22), id).contains("availability"),
+                     qPrintable(id));
+        }
+    }
+
     // Version 13: Hardware Config's Radio Info (the Core's radio, as the
     // desktop tab shows it), TX Display Cal and the HL2's N2ADR switch.
     void hardwareV13PublishesRadioInfoCalibrationAndN2adr()
@@ -3310,7 +3396,8 @@ private slots:
             }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
             QCOMPARE(category.value("version").toInt(),
-                     expected >= 19 ? 19 : expected >= 15 ? 15 : qMin(expected, 3));
+                     expected >= 22 ? 22 : expected >= 19 ? 19
+                         : expected >= 15 ? 15 : qMin(expected, 3));
             QCOMPARE(category.value("pages").toArray().size(), expected >= 15 ? 10 : 9);
             bool hasTable = false;
             bool hasAdd = false;
@@ -3359,7 +3446,11 @@ private slots:
         check(18, kSessionProtocolMinor, 18);
         check(19, kSessionProtocolMinor, 19);
         check(20, kSessionProtocolMinor, 20);
-        check(21, kSessionProtocolMinor, 20);
+        // 21 is the TCI lane's (not on this branch); 22 is the RX buffer
+        // sizes' on-the-air lock and the cap.
+        check(21, kSessionProtocolMinor, 21);
+        check(22, kSessionProtocolMinor, 22);
+        check(23, kSessionProtocolMinor, 22);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

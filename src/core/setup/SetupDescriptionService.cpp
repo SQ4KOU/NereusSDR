@@ -2780,6 +2780,39 @@ QString paWithOnAirState(const QString& description, bool onAir, int transmittin
     return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
 }
 
+// Version 22: DSP > Options' RX buffer size rows lock on the air. The TCI
+// lane holds version 21; this branch's description skips it.
+constexpr int kDspOnAirLockVersion = 22;
+
+bool isRxBufferSizeControl(const QJsonObject& control)
+{
+    const QString id = control.value(QStringLiteral("id")).toString();
+    return id.startsWith(QLatin1String("dsp.options."))
+        && RadioModel::isRxDspBufferSizeKey(id.mid(int(qstrlen("dsp.options."))));
+}
+
+// The Core's DSP description in its version 22 shape: on the air the four
+// RX buffer size rows say why they are locked. Thetis greys the whole
+// Buffer Size (IQcomp) group, RX combos included, while MOX is on:
+// From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+// The TX rows keep their offAir gate. The lock is published rather than
+// gated on offAir because offAir needs txState, which a receive-only
+// peer (no remoteTx) never gets.
+QString dspWithOnAirState(const QString& description, bool onAir)
+{
+    if (description.isEmpty() || !onAir) { return description; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return description; }
+    const QJsonObject fitted = mapCategoryControls(document.object(), [](QJsonObject control) {
+        if (isRxBufferSizeControl(control)) {
+            control.insert(QStringLiteral("availability"),
+                           lockedAvailability(RadioModel::dspBufferOnAirLockedReason()));
+        }
+        return control;
+    });
+    return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
+}
+
 } // namespace
 
 QString SetupDescription::fitCategoryForVersion(const QString& description, int version,
@@ -2896,8 +2929,21 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             return control;
         });
     }
-    // DSP changed at 15 and 19 (CFC's band editor): 15 to 18 see 15.
-    const int ceiling = categoryId == QLatin1String("dsp") && version >= 19 ? 19
+    // Before version 22 a peer keeps DSP's RX buffer size rows unlocked,
+    // as it always read them.
+    if (categoryId == QLatin1String("dsp") && version < kDspOnAirLockVersion) {
+        category = mapCategoryControls(category, [](QJsonObject control) {
+            if (isRxBufferSizeControl(control)) {
+                control.remove(QStringLiteral("availability"));
+            }
+            return control;
+        });
+    }
+    // DSP changed at 15, 19 (CFC's band editor) and 22 (the RX buffer
+    // sizes' on-the-air lock): 15 to 18 see 15, 19 to 21 see 19.
+    const int ceiling = categoryId == QLatin1String("dsp") && version >= kDspOnAirLockVersion
+            ? kDspOnAirLockVersion
+        : categoryId == QLatin1String("dsp") && version >= 19 ? 19
         : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
         // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
@@ -3024,7 +3070,15 @@ void SetupDescription::rebuild()
     update(QStringLiteral("general"), m_general);
     update(QStringLiteral("hardware"), m_hardware);
     update(QStringLiteral("audio"), m_audio);
-    update(QStringLiteral("dsp"), m_dsp);
+    bool dspChanged = false;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp != m_dsp) {
+        m_dsp = dsp;
+        changed = true;
+        dspChanged = true;
+    }
     update(QStringLiteral("display"), m_display);
     update(QStringLiteral("transmit"), m_transmit);
     update(QStringLiteral("appearance"), m_appearance);
@@ -3041,8 +3095,24 @@ void SetupDescription::rebuild()
     if (changed) {
         ++m_revision;
         emit descriptionsChanged();
+        if (dspChanged) { emit dspDescriptionChanged(); }
         emit paDescriptionChanged();
     }
+}
+
+void SetupDescription::setDspOnAirState(bool onAir)
+{
+    if (onAir == m_dspOnAir) { return; }
+    m_dspOnAir = onAir;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp == m_dsp) { return; }
+    m_dsp = dsp;
+    ++m_revision;
+    emit dspDescriptionChanged();
+    // The revision's notify: a peer sees the new revision with the lock.
+    emit paDescriptionChanged();
 }
 
 void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)

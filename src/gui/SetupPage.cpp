@@ -193,6 +193,13 @@ void SetupPage::gateStationControls(const QList<QWidget*>& controls, bool availa
                      "SetupPageSavedStationDescription", "SetupPageSavedStationEnabled");
 }
 
+void SetupPage::gateOnAirControls(const QList<QWidget*>& controls, bool offAir,
+                                  const QString& reason)
+{
+    gateControlsWith(controls, offAir, reason, "SetupPageSavedOnAirTooltip",
+                     "SetupPageSavedOnAirDescription", "SetupPageSavedOnAirEnabled");
+}
+
 QGroupBox* SetupPage::addSection(const QString& title)
 {
     auto* group = new QGroupBox(title);

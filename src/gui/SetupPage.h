@@ -115,6 +115,13 @@ protected:
     static void gateStationControls(const QList<QWidget*>& controls, bool available,
                                     const QString& reason);
 
+    // The same again, for controls locked while the radio is on the air
+    // (a page's own on-the-air rule). It keeps its own saved state, so a
+    // control follows only this helper; a control also held for transmit
+    // combines the two conditions and calls gateTransmitControls.
+    static void gateOnAirControls(const QList<QWidget*>& controls, bool offAir,
+                                  const QString& reason);
+
     QVBoxLayout* contentLayout() { return m_contentLayout; }
     RadioModel*  model()         { return m_model; }
 

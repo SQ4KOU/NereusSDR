@@ -34,7 +34,7 @@ private slots:
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
     // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
     // clock rows) opens the clock rows and is Hardware's cap; the
-    // description's own cap is version 20 (PA's on-air lock per row).
+    // description's own cap is version 22 (DSP's RX buffer size lock).
     void pairedV16PhoneReadsHl2Options()
     {
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
@@ -51,7 +51,7 @@ private slots:
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
             {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
-            {99, 20, 18}, {15, 15, 13}};
+            {22, 22, 18}, {99, 22, 18}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
             Core core;
@@ -715,6 +715,118 @@ private slots:
         QCOMPARE(rowLock(other, 3), QJsonValue(QJsonValue::Undefined));
         QCOMPARE(rowLock(holder, 3), QJsonValue(QJsonValue::Undefined));
         QCOMPARE(table(older), olderTable);
+    }
+
+    // Version 22: DSP > Options' RX buffer sizes lock while the Core is on
+    // the air, for every version 22 peer, receive-only ones (no remoteTx,
+    // so no txState) included, as Thetis greys grpDSPBufferSize while MOX
+    // is on (setup.cs:5159 [v2.10.3.15]). A version 20 peer's DSP never
+    // changes, and the Core refuses the rows' keys on the air.
+    void onAirRxBufferSizeLockReachesReceiveOnlyPeers()
+    {
+        Core core(true);
+        allowTransmit(core);
+        Device keyer(QStringLiteral("Buffer keyer iPhone"), QStringLiteral("phone"));
+        Device listener(QStringLiteral("Buffer listener iPad"), QStringLiteral("tablet"));
+        Device older(QStringLiteral("Buffer V20 iPhone"), QStringLiteral("phone"));
+        core.pair(keyer);
+        core.pair(listener);
+        core.pair(older);
+        QHash<QByteArray, int> transmitter = kTransmitter;
+        transmitter.insert("setupDescription", 22);
+        QHash<QByteArray, int> receiveOnly = kHolder;
+        receiveOnly.insert("setupDescription", 22);
+        QHash<QByteArray, int> v20 = kHolder;
+        v20.insert("setupDescription", 20);
+        auto* keyerApp = core.signIn(keyer, transmitter);
+        auto* listenerApp = core.signIn(listener, receiveOnly);
+        auto* olderApp = core.signIn(older, v20);
+        QVERIFY(admitted(keyerApp) && admitted(listenerApp) && admitted(olderApp));
+        QCOMPARE(capability(listenerApp->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(22));
+        QCOMPARE(capability(olderApp->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(20));
+        QVERIFY(!receiveOnly.contains("remoteTx"));
+
+        const auto dspOf = [](LoopbackTransport* app) {
+            return latest(app->received(), QStringLiteral("setup"), QStringLiteral("dsp"))
+                .toString();
+        };
+        const auto rowLock = [&dspOf](LoopbackTransport* app, const QString& id) {
+            const QJsonObject dsp = QJsonDocument::fromJson(dspOf(app).toUtf8()).object();
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue(id)) {
+                            return raw.toObject().value("availability");
+                        }
+                    }
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const auto rejectReason = [](LoopbackTransport* app, const QString& key) {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QStringList rxIds{QStringLiteral("dsp.options.DspOptionsBufferSizePhoneRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeFmRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeCwRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeDigRx")};
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::dspBufferOnAirLockedReason()}};
+
+        // Off the air: every row is enabled, and the receive-only peer's
+        // write is taken.
+        for (const QString& id : rxIds) {
+            QCOMPARE(rowLock(listenerApp, id), QJsonValue(QJsonValue::Undefined));
+        }
+        const QString olderDsp = dspOf(olderApp);
+        QVERIFY(!olderDsp.isEmpty());
+        const QString key = QStringLiteral("DspOptionsBufferSizePhoneRx");
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("256"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("256"));
+        QVERIFY(rejectReason(listenerApp, key).isEmpty());
+
+        const QJsonObject keyed = core.invoke(keyerApp, "tx.key",
+                                              {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                            QStringLiteral("screen")}});
+        QVERIFY2(keyed.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(keyed.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        // On the air: locked with its reason for both version 22 peers.
+        for (const QString& id : rxIds) {
+            QTRY_COMPARE(rowLock(listenerApp, id), QJsonValue(locked));
+            QTRY_COMPARE(rowLock(keyerApp, id), QJsonValue(locked));
+        }
+        QCOMPARE(dspOf(olderApp), olderDsp);
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("phone"))));
+        QTRY_COMPARE(rejectReason(listenerApp, key), RadioModel::dspBufferOnAirLockedReason());
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("256"));
+
+        const QJsonObject unkeyed = core.invoke(keyerApp, "tx.unkey", {int64("epoch", 1)});
+        QVERIFY2(unkeyed.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(unkeyed.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        for (const QString& id : rxIds) {
+            QTRY_COMPARE(rowLock(listenerApp, id), QJsonValue(QJsonValue::Undefined));
+        }
+        QCOMPARE(dspOf(olderApp), olderDsp);
+        // Back on receive the write is taken again.
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("512"));
     }
 
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()

@@ -2643,6 +2643,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             if (m_radioModel && m_setupDescription) {
                 m_setupDescription->setPaOnAirState(
                     onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
+                // Version 22: and DSP > Options' RX buffer sizes (Thetis
+                // setup.cs:5159 [v2.10.3.15], grpDSPBufferSize).
+                m_setupDescription->setDspOnAirState(onAir);
             }
         };
         applyPaOnAir(radioModel->isCoreOnAir());
@@ -8068,8 +8071,9 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // rows (radioHardwareVersion 10). 18: HL2 Options' clock rows
             // (radioHardwareVersion 11). 19: DSP > CFC's band editor
             // (cfcProfile, cfc.setProfile). 20: PA Gain's on-the-air lock
-            // per row.
-            const int version = qMin(declared, 20);
+            // per row. 22: DSP > Options' RX buffer sizes' on-the-air lock
+            // (21 is the TCI lane's, not on this branch).
+            const int version = qMin(declared, 22);
             // Version 20: the transmit holder's own PA band stays live.
             const QByteArray deviceId = peerInfoFor(transport).deviceId;
             const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
@@ -9991,6 +9995,15 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
 QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 {
     QString reason;
+    // Setup description version 22: the DSP > Options RX buffer sizes wait
+    // while the radio is on the air, whoever asks, as Thetis greys the
+    // whole Buffer Size (IQcomp) group while MOX is on:
+    // From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+    // The words are the ones the description's lock shows.
+    if (RadioModel::isRxDspBufferSizeKey(key) && m_radioModel
+        && m_radioModel->stationOnAirRefusal(nullptr)) {
+        return RadioModel::dspBufferOnAirLockedReason();
+    }
     // Changing a transmit region, including removing it to restore the
     // default, always waits for RX, regardless of who holds transmit. So
     // do Extended transmit and Prevent transmitting on a different band
@@ -11235,7 +11248,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 20) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 22) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

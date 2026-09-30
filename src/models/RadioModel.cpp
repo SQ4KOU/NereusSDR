@@ -5523,6 +5523,19 @@ QString RadioModel::paOnAirLockedReason()
     return QStringLiteral("Can't change while transmitting.");
 }
 
+QString RadioModel::dspBufferOnAirLockedReason()
+{
+    return paOnAirLockedReason();
+}
+
+bool RadioModel::isRxDspBufferSizeKey(const QString& key)
+{
+    return key == QLatin1String("DspOptionsBufferSizePhoneRx")
+        || key == QLatin1String("DspOptionsBufferSizeFmRx")
+        || key == QLatin1String("DspOptionsBufferSizeCwRx")
+        || key == QLatin1String("DspOptionsBufferSizeDigRx");
+}
+
 QString RadioModel::paHolderOnlyReason()
 {
     return QStringLiteral("Only the device that is transmitting can change this.");

@@ -165,13 +165,13 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 20. PA has a version-20 ceiling (version 14
+future declaration at version 22 (21 is reserved for the TCI lane). PA has a version-20 ceiling (version 14
 for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
 for V17, version 16 for V16, version 13
 for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
-V4–V6 and version-7 projection for V7–V11. DSP is version 19 to a V19 or
-later peer (see Version 19) and version 15 to a V15 to V18 peer; Transmit,
+V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
+later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19) and version 15 to a V15 to V18 peer; Transmit,
 Audio, Diagnostics and CAT & Network are version 15 to a V15 or later peer
 (see Version 15); Transmit is version 13 to a V13 or V14 peer and version 3 to
 a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
@@ -1080,6 +1080,22 @@ off the air, and a change of the device holding transmit while on the
 air, advance `revision` and resend `pa` alone (`revision` and `pa` share
 their own notify). V19 and older peers keep the exact closed version-14
 rows, the table's `offAir` gate included.
+
+Version 22 locks DSP > Options' four RX Buffer Size rows (Phone, FM, CW,
+Digital) while the radio is on the air. Thetis greys the whole buffer group
+under MOX (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled = !mox`).
+Version 21 is held by the TCI lane, which is not merged on this branch; this
+version was numbered 22 so the two do not collide. The rows keep their gate
+(no `offAir`, since a peer that did not declare remote transmit receives no
+`txState`); instead, while on the air, the Core adds the existing
+`availability` object `{"enabled":false,"reason":"Can't change while
+transmitting."}` to each of the four rows, and off the air they carry none.
+Keying and unkeying advance `revision` and resend `dsp` (DSP has its own
+notify). The Core refuses a write or removal of any of the four keys on the
+air with the same reason, at every version. A V21 or older peer receives DSP
+at its earlier version without the `availability` objects. The desktop Setup
+greys the four RX rows and the three TX Buffer Size rows on the air with the
+same reason.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,

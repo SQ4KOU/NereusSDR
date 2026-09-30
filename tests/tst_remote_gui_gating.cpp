@@ -956,6 +956,100 @@ private slots:
     // pre-check, so the refusal reaches the status-bar toast.
     // ====================================================================
 
+    // Setup description version 22's desktop half: DSP > Options' Buffer
+    // Size (IQcomp) group locks while the radio is on the air, as Thetis
+    // greys grpDSPBufferSize while MOX is on (setup.cs:5159 [v2.10.3.15]).
+    // A remote window follows its Core's air state; the rows stay shown,
+    // disabled with their reason, and the filter rows never lock.
+    void remoteDspBufferSizesLockWhileTheCoreIsOnTheAir()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        DspOptionsPage page(&model);
+        const auto combo = [&page](const char* name) {
+            auto* box = page.findChild<QComboBox*>(QLatin1String(name));
+            return box;
+        };
+        const QList<QComboBox*> rx{combo("DspOptionsBufferSizePhoneRx"),
+                                   combo("DspOptionsBufferSizeFmRx"),
+                                   combo("DspOptionsBufferSizeCwRx"),
+                                   combo("DspOptionsBufferSizeDigRx")};
+        const QList<QComboBox*> txBuffer{combo("DspOptionsBufferSizePhoneTx"),
+                                         combo("DspOptionsBufferSizeFmTx"),
+                                         combo("DspOptionsBufferSizeDigTx")};
+        QComboBox* txFilter = combo("DspOptionsFilterSizePhoneTx");
+        QComboBox* rxFilter = combo("DspOptionsFilterSizePhoneRx");
+        for (QComboBox* box : rx + txBuffer) { QVERIFY(box != nullptr); }
+        QVERIFY(txFilter && rxFilter);
+        const QString ownTip = rx.first()->toolTip();
+        const QString locked = RadioModel::dspBufferOnAirLockedReason();
+        QCOMPARE(locked, QStringLiteral("Can't change while transmitting."));
+
+        // Off the air: the RX rows are live; the TX rows wait for transmit
+        // settings, as before.
+        for (QComboBox* box : rx) { QVERIFY(box->isEnabled()); }
+        page.setTransmitSettingsPermitted(true, QString());
+        for (QComboBox* box : txBuffer) { QVERIFY(box->isEnabled()); }
+        QVERIFY(txFilter->isEnabled());
+
+        QVERIFY(model.applyMirroredValue("transmitting", QVariant(true)).isEmpty());
+        QVERIFY(model.isCoreOnAir());
+        for (QComboBox* box : rx + txBuffer) {
+            QVERIFY2(!box->isEnabled(), qPrintable(box->objectName()));
+            QVERIFY2(!box->isHidden(), qPrintable(box->objectName())); // shown, never hidden
+            QCOMPARE(box->toolTip(), locked);
+            QCOMPARE(box->accessibleDescription(), locked);
+        }
+        QVERIFY(txFilter->isEnabled());
+        QVERIFY(rxFilter->isEnabled());
+
+        // Transmit settings withdrawn on the air: the TX buffer rows give
+        // that reason instead, and keep it once the radio is back on receive.
+        page.setTransmitSettingsPermitted(false, QStringLiteral("No transmit settings here."));
+        for (QComboBox* box : txBuffer) {
+            QCOMPARE(box->toolTip(), QStringLiteral("No transmit settings here."));
+        }
+        QVERIFY(model.applyMirroredValue("transmitting", QVariant(false)).isEmpty());
+        QVERIFY(!model.isCoreOnAir());
+        for (QComboBox* box : rx) {
+            QVERIFY2(box->isEnabled(), qPrintable(box->objectName()));
+            QCOMPARE(box->toolTip(), ownTip);
+        }
+        for (QComboBox* box : txBuffer) {
+            QVERIFY(!box->isEnabled());
+            QCOMPARE(box->toolTip(), QStringLiteral("No transmit settings here."));
+        }
+        page.setTransmitSettingsPermitted(true, QString());
+        for (QComboBox* box : txBuffer) {
+            QVERIFY(box->isEnabled());
+            QCOMPARE(box->toolTip(), ownTip);
+        }
+    }
+
+    // The same lock on a local window, following its own MOX.
+    void localDspBufferSizesLockWhileKeyed()
+    {
+        RadioModel model;
+        DspOptionsPage page(&model);
+        auto* phoneRx = page.findChild<QComboBox*>(QStringLiteral("DspOptionsBufferSizePhoneRx"));
+        auto* phoneTx = page.findChild<QComboBox*>(QStringLiteral("DspOptionsBufferSizePhoneTx"));
+        QVERIFY(phoneRx && phoneTx);
+        QVERIFY(phoneRx->isEnabled() && phoneTx->isEnabled());
+
+        MoxController* mox = model.moxController();
+        QVERIFY(mox != nullptr);
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox->setMoxCheck({});
+        mox->setMox(true); // logical state, no radio transport
+        QTRY_VERIFY(model.isCoreOnAir());
+        QVERIFY(!phoneRx->isEnabled());
+        QVERIFY(!phoneTx->isEnabled());
+        QCOMPARE(phoneRx->toolTip(), RadioModel::dspBufferOnAirLockedReason());
+        mox->setMox(false);
+        QTRY_VERIFY(!model.isCoreOnAir());
+        QVERIFY(phoneRx->isEnabled());
+        QVERIFY(phoneTx->isEnabled());
+    }
+
     void remoteModelRefusesMoxWithAnOperatorReason()
     {
         RadioModel model(RadioModel::Role::Remote);

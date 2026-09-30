@@ -155,6 +155,16 @@ public:
 private:
     void buildUI();
 
+    // The TX combos' transmit settings gate and the Buffer Size (IQcomp)
+    // group's on-the-air lock, applied together: Thetis greys
+    // grpDSPBufferSize, RX and TX combos alike, while MOX is on
+    // (setup.cs:5159 [v2.10.3.15]). A remote window follows its Core's
+    // air state (RadioModel::coreOnAirChanged).
+    void refreshBufferAndTransmitGates();
+    bool    m_transmitSettingsPermitted{true};
+    QString m_transmitSettingsReason;
+    bool    m_onAir{false};
+
     // Wire a per-mode combo to persist to AppSettings AND trigger a WDSP
     // channel rebuild if the combo's mode matches the current slice mode
     // (design Section 4B: live-apply if same mode, persist-only otherwise).
