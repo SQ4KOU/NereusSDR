@@ -8430,6 +8430,7 @@
             "StationCallsign",
             "RX1_MeterCalOffsetDb",
             "RX1_DisplayCalOffsetDb",
+            "RX1_PreampOffsetsDb",
             "PeripheralsMigrationDone",
             "SwrProtectionEnabled",
             "SwrProtectionLimit",

@@ -568,6 +568,10 @@ const Rule kWholeKeys[] = {
     // rxDisplayCalOffsetDb), the same kind of constant as the meter's.
     { "RX1_DisplayCalOffsetDb", SettingsScope::Station },
 
+    // Level Cal: the ten preamp settings' receive offsets that the level
+    // calibration measures (RadioModel::rx1PreampOffsetDbFor).
+    { "RX1_PreampOffsetsDb", SettingsScope::Station },
+
     // One-shot migration marker for legacy global peripherals/* keys
     // moving to per-MAC hardware/<mac>/peripherals/* scope
     // (RadioModel.cpp:2956, :2992). Paired with data that is itself

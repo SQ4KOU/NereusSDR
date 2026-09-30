@@ -5104,6 +5104,7 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `StationCallsign` | station |
 | 3. whole key | `RX1_MeterCalOffsetDb` | station |
 | 3. whole key | `RX1_DisplayCalOffsetDb` | station |
+| 3. whole key | `RX1_PreampOffsetsDb` | station |
 | 3. whole key | `PeripheralsMigrationDone` | station |
 | 3. whole key | `SwrProtectionEnabled` | station |
 | 3. whole key | `SwrProtectionLimit` | station |

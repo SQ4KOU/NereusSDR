@@ -777,6 +777,10 @@
 //                requestResetLevelCalibration and levelCalibrationChanged;
 //                TCI calibration_ex reads the meter and display offsets.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -9925,7 +9929,111 @@ double RadioModel::rxPreampOffsetDbForAdc(int adc) const
         return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
     }
     const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;
-    return static_cast<double>(::NereusSDR::rxPreampOffsetDbFor(static_cast<int>(rx2Preamp)));
+    // Level Cal: rx2_preamp_offset[] as CalibrateLevel left it.
+    return static_cast<double>(rx2PreampOffsetDbFor(rx2Preamp));
+}
+
+namespace {
+const QString kRx1PreampOffsetsKey = QStringLiteral("RX1_PreampOffsetsDb");
+constexpr int kPreampModeCount = 10;
+
+// Thetis rx2_preamp_offset[] defaults.
+// From Thetis console.cs:2011-2019 [v2.10.3.15]:
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_OFF] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_ON] = 0.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS10] = 10.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS20] = 20.0f;  //MW0LGE_21d step atten
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS30] = 30.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS10] = 10.0f;  //MW0LGE_21d SA stuff
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS20] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS30] = 30.0f;
+// HPSDR_MINUS40 and HPSDR_MINUS50 are never set, so they stay 0.
+float rx2PreampOffsetDefault(int idx)
+{
+    if (idx == static_cast<int>(PreampMode::Minus40)
+        || idx == static_cast<int>(PreampMode::Minus50)) {
+        return 0.0f;
+    }
+    return ::NereusSDR::rxPreampOffsetDbFor(idx);
+}
+
+// The saved RX1 list, or Thetis's defaults when it is absent or is not
+// ten numbers.
+std::array<float, kPreampModeCount> readRx1PreampOffsets()
+{
+    std::array<float, kPreampModeCount> out{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        out[static_cast<size_t>(i)] = ::NereusSDR::rxPreampOffsetDbFor(i);
+    }
+    const QString raw = AppSettings::instance().value(kRx1PreampOffsetsKey).toString();
+    if (raw.isEmpty()) {
+        return out;
+    }
+    const QStringList parts = raw.split(QLatin1Char('|'));
+    if (parts.size() != kPreampModeCount) {
+        return out;
+    }
+    std::array<float, kPreampModeCount> saved{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        bool ok = false;
+        const double v = parts.at(i).trimmed().toDouble(&ok);
+        if (!ok || !std::isfinite(v)) {
+            return out;
+        }
+        saved[static_cast<size_t>(i)] = static_cast<float>(v);
+    }
+    return saved;
+}
+}  // namespace
+
+float RadioModel::rx1PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    return readRx1PreampOffsets()[static_cast<size_t>(idx)];
+}
+
+float RadioModel::rx2PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    const float held = m_rx2PreampOffsetDb[static_cast<size_t>(idx)];
+    return std::isnan(held) ? rx2PreampOffsetDefault(idx) : held;
+}
+
+void RadioModel::setRx1PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    // From Thetis console.cs:3202-3203 [v2.10.3.15]:
+    //   for (int i = (int)PreampMode.FIRST + 1; i < (int)PreampMode.LAST; i++)
+    //       a.Add("rx1_preamp_offset[" + i.ToString() + "]/" + rx1_preamp_offset[i].ToString("f3"));
+    // and the load rounds to three places (console.cs:4781-4785 [v2.10.3.15]).
+    std::array<float, kPreampModeCount> values = readRx1PreampOffsets();
+    values[static_cast<size_t>(idx)] = db;
+    QStringList parts;
+    parts.reserve(kPreampModeCount);
+    for (float v : values) {
+        parts.append(QString::number(static_cast<double>(v), 'f', 3));
+    }
+    AppSettings::instance().setValue(kRx1PreampOffsetsKey, parts.join(QLatin1Char('|')));
+    refreshRxMeterOffset();
+}
+
+void RadioModel::setRx2PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    m_rx2PreampOffsetDb[static_cast<size_t>(idx)] = db;
+    refreshRxMeterOffset();
 }
 
 double RadioModel::rxMeterOffsetDbForAdc(int adc) const
@@ -9992,7 +10100,8 @@ double RadioModel::rxPreampOffsetDb() const
             // Preamp-mode path: lookup table per console.cs:1991-2001.
             const int modeIdx = static_cast<int>(
                 m_stepAttController->preampMode());
-            preampOffset = ::NereusSDR::rxPreampOffsetDbFor(modeIdx);
+            // Level Cal: rx1_preamp_offset[] as CalibrateLevel left it.
+            preampOffset = rx1PreampOffsetDbFor(static_cast<PreampMode>(modeIdx));
         }
     }
 

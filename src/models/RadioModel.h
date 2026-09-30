@@ -455,6 +455,10 @@
 //                resetLevelCalibration, levelCalibrationResetAvailable,
 //                requestResetLevelCalibration and levelCalibrationChanged.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -595,6 +599,7 @@ namespace NereusSDR { class VoltsAmpsLog; }
 namespace NereusSDR {
 
 class AppSettings;
+enum class PreampMode;
 
 class ReceiverManager;
 class RemoteDevicesState;
@@ -3824,6 +3829,18 @@ public:
     QString requestResetLevelCalibration();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
+    // Level Cal: the receive offset of each preamp setting, Thetis
+    // rx1_preamp_offset[] (console.cs:1999-2009 [v2.10.3.15]), which
+    // CalibrateLevel measures (console.cs:10026-10140 [v2.10.3.15]). RX1's
+    // ten are saved under RX1_PreampOffsetsDb as ten values at three
+    // decimals separated by '|' (Thetis saves them the same way,
+    // console.cs:3202-3203 [v2.10.3.15]); absent, or not ten numbers, they
+    // read Thetis's defaults. RX2's are held while the program runs, as
+    // Thetis never saves rx2_preamp_offset. Setting one refreshes the meter.
+    float rx1PreampOffsetDbFor(PreampMode mode) const;
+    float rx2PreampOffsetDbFor(PreampMode mode) const;
+    void setRx1PreampOffsetDb(PreampMode mode, float db);
+    void setRx2PreampOffsetDb(PreampMode mode, float db);
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
     // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
     // receiver: the TX Display Cal Offset, plus with display duplex on the
@@ -7046,6 +7063,14 @@ private:
     std::unique_ptr<TxDisplayFeed> m_txDisplayFeed;
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
+    // Level Cal: Thetis rx2_preamp_offset[] (console.cs:2011-2019
+    // [v2.10.3.15]), never saved; NaN reads the default.
+    std::array<float, 10> m_rx2PreampOffsetDb{
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
     // R-R3-46: followReceiveSliceWithStepAttenuator() has wired its connects.
     bool m_stepAttFollowsSlices{false};
 

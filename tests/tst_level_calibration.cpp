@@ -31,6 +31,7 @@
 #include "core/ConnectionState.h"
 #include "core/HpsdrModel.h"
 #include "core/RadioDiscovery.h"
+#include "core/StepAttenuatorController.h"
 #include "core/TciProtocol.h"
 #include "models/RadioModel.h"
 #ifdef HAVE_WEBSOCKETS
@@ -44,6 +45,7 @@ namespace {
 const QString kMac = QStringLiteral("AA:BB:CC:DD:1C:01");
 const QString kMeterKey = QStringLiteral("RX1_MeterCalOffsetDb");
 const QString kDisplayKey = QStringLiteral("RX1_DisplayCalOffsetDb");
+const QString kPreampKey = QStringLiteral("RX1_PreampOffsetsDb");
 
 void setUpLocal(RadioModel& model, HPSDRModel radio)
 {
@@ -157,6 +159,94 @@ private slots:
         QVERIFY(!model.applyLevelCalibrationSetting(
             QStringLiteral("hardware/%1/cal/txDisplayOffset").arg(kMac)));
         QCOMPARE(calSpy.count(), 0);
+    }
+
+    // Level Cal's preamp offsets: absent, each of the ten settings reads
+    // Thetis's defaults (console.cs:1999-2009 [v2.10.3.15]), so readings
+    // taken before this change are unchanged.
+    void preampOffsets_absentReadTheDefaults()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN100);
+        for (int i = 0; i < 10; ++i) {
+            QCOMPARE(model.rx1PreampOffsetDbFor(static_cast<PreampMode>(i)),
+                     rxPreampOffsetDbFor(i));
+            // Thetis leaves rx2_preamp_offset's -40 and -50 entries at 0
+            // (console.cs:2011-2019 [v2.10.3.15]).
+            const bool unset = (i == 5 || i == 6);
+            QCOMPARE(model.rx2PreampOffsetDbFor(static_cast<PreampMode>(i)),
+                     unset ? 0.0f : rxPreampOffsetDbFor(i));
+        }
+        StepAttenuatorController ctrl;
+        model.setStepAttController(&ctrl);
+        ctrl.setStepAttEnabled(false);
+        ctrl.setPreampMode(PreampMode::Off);
+        QCOMPARE(model.rxPreampOffsetDb(), 20.0);
+        ctrl.setPreampMode(PreampMode::On);
+        QCOMPARE(model.rxPreampOffsetDb(), 0.0);
+        model.setStepAttController(nullptr);
+    }
+
+    // A saved list drives the receive offset of the selected setting; a
+    // list that is not ten numbers reads the defaults.
+    void preampOffsets_savedListDrivesTheOffset()
+    {
+        AppSettings::instance().setValue(
+            kPreampKey,
+            QStringLiteral("18.500|0.000|9.250|20.000|30.000|40.000|50.000|10.000|20.000|30.000"));
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN100);
+        StepAttenuatorController ctrl;
+        model.setStepAttController(&ctrl);
+        ctrl.setStepAttEnabled(false);
+        ctrl.setPreampMode(PreampMode::Off);
+        QCOMPARE(model.rxPreampOffsetDb(), 18.5);
+        QCOMPARE(model.rx1PreampOffsetDbFor(PreampMode::Minus10), 9.25f);
+        model.setStepAttController(nullptr);
+
+        AppSettings::instance().setValue(kPreampKey, QStringLiteral("1|2|3"));
+        QCOMPARE(model.rx1PreampOffsetDbFor(PreampMode::Off), 20.0f);
+        AppSettings::instance().setValue(
+            kPreampKey, QStringLiteral("x|0|10|20|30|40|50|10|20|30"));
+        QCOMPARE(model.rx1PreampOffsetDbFor(PreampMode::Off), 20.0f);
+    }
+
+    // Setting one entry saves all ten at three decimals, as Thetis saves
+    // rx1_preamp_offset (console.cs:3202-3203 [v2.10.3.15]), and moves the
+    // meter at once. RX2's entries are held only while the program runs,
+    // as Thetis's rx2_preamp_offset is.
+    void preampOffsets_setSavesAllTen()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN100);
+        StepAttenuatorController ctrl;
+        model.setStepAttController(&ctrl);
+        ctrl.setStepAttEnabled(false);
+        ctrl.setPreampMode(PreampMode::Off);
+        model.refreshRxMeterOffset();
+        QSignalSpy meterSpy(&model, &RadioModel::rxMeterOffsetChanged);
+        model.setRx1PreampOffsetDb(PreampMode::Off, 17.12345f);
+        QCOMPARE(AppSettings::instance().value(kPreampKey).toString(),
+                 QStringLiteral("17.123|0.000|10.000|20.000|30.000|40.000|50.000|10.000|20.000|30.000"));
+        QCOMPARE(model.rx1PreampOffsetDbFor(PreampMode::Off), 17.123f);
+        QVERIFY(meterSpy.count() >= 1);
+        model.setRx2PreampOffsetDb(PreampMode::Off, 16.5f);
+        QCOMPARE(model.rx2PreampOffsetDbFor(PreampMode::Off), 16.5f);
+        QCOMPARE(AppSettings::instance().value(kPreampKey).toString().left(6),
+                 QStringLiteral("17.123"));
+        model.setStepAttController(nullptr);
+    }
+
+    // Reset leaves the preamp offsets alone, as Thetis's
+    // ResetLevelCalibration does (console.cs:46868-46886 [v2.10.3.15]).
+    void reset_leavesPreampOffsets()
+    {
+        RadioModel model;
+        setUpLocal(model, HPSDRModel::ANAN100);
+        model.setRx1PreampOffsetDb(PreampMode::Off, 18.0f);
+        model.resetLevelCalibration();
+        QCOMPARE(model.rx1PreampOffsetDbFor(PreampMode::Off), 18.0f);
+        QVERIFY(AppSettings::instance().contains(kPreampKey));
     }
 
     // Reset returns the meter and display offsets to the model's defaults
