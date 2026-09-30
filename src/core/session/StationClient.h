@@ -426,6 +426,10 @@
 //               a remote window test's bench link declares sliceAccess
 //               with sessionHolder, as a device-key sign-in does.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the hello declares sliceAccess 2;
+//               controlTakeBackAvailable() and its reason for the
+//               controlTaken card's Take it back. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1101,6 +1105,11 @@ public:
     quint32 cancelQuestion(qint64 id);
     /// `notice.takeBack {id}`; the card goes either way.
     quint32 takeBackNotice(qint64 id);
+    /// Take-over parity (sliceAccessVersion 2): a controlTaken notice's
+    /// Take it back works here. An older Core offers none, and the card
+    /// shows it off with controlTakeBackUnavailableReason().
+    bool controlTakeBackAvailable() const;
+    static QString controlTakeBackUnavailableReason();
     /// `session.leave`, when the Core offers it: the operator is done with
     /// the Core here (Disconnect, or quitting). Sent before the link
     /// closes; nothing waits for its answer.
@@ -1121,6 +1130,9 @@ public:
     /// Test seam: with setTokenSessionHolderForTest, the bench link also
     /// declares sliceAccess, as a device-key sign-in always does.
     void setTokenSliceAccessForTest(bool declares) { m_tokenSliceAccessForTest = declares; }
+    /// Test seam: the sliceAccess version the hello declares (2), 1 for a
+    /// window from before Take it back on controlTaken.
+    void setSliceAccessDeclaredForTest(int version) { m_sliceAccessDeclared = version; }
     /// Test seam: an older window, which never declares sessionHolder.
     void setDeclaresSessionHolder(bool declares) { m_declaresSessionHolder = declares; }
 #endif
@@ -1782,6 +1794,8 @@ private:
     bool m_declaresSessionHolder = true;
     QString m_tokenSessionHolderIdForTest;
     bool m_tokenSliceAccessForTest = false;
+    /// Take-over parity: the sliceAccess version the hello declares.
+    int m_sliceAccessDeclared = 2;
     RemoteDevicesState* m_remoteDevices = nullptr;
     /// Task 78 item 3: the device that took this window's place, from the
     /// end that stopped it, so the next session.held starts on it (Take it

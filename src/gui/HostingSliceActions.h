@@ -15,8 +15,10 @@
 // A request's answer arrives as finished(); a refusal is also refused(),
 // worded for the operator. A request held for a question is pending(), and
 // the question itself is question(), answered with proceed() or cancel().
-// A notice meant for the station device is notice(); controlTaken is a
-// refusal instead, as it is in a remote window (Task 5).
+// A notice meant for the station device is notice(), controlTaken
+// included: another device took control of a slice this desktop controlled,
+// and the notice offers Take it back (takeBack()), as a remote window's
+// does.
 //
 // Each request names the slice as it is now (its incarnation and control
 // revision from SliceOwnership), so the Core refuses one that no longer
@@ -27,6 +29,9 @@
 //   2026-09-29: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 10,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: controlTaken is a notice with Take it
+//               back, as in a remote window. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -86,7 +91,7 @@ signals:
     /// A request on `sliceId` (-1 for an add) waits for a question (true),
     /// or no longer does (false).
     void pending(int sliceId, bool waiting);
-    /// A notice for the station device, controlTaken excepted.
+    /// A notice for the station device.
     void notice(const NereusSDR::SessionMessage& notice);
     /// Every request's final answer.
     void finished(const QByteArray& verb, int sliceId, bool accepted, const QString& reason);

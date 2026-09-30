@@ -16,8 +16,12 @@
 //     nobody it closes, to none when it was the last;
 //   - a stale take (an old incarnation) and a select of a slice no longer on
 //     the Core are refused;
-//   - controlTaken reaches the host as a refusal; a verb the host does not
-//     run is refused as unknown; without a server, nothing runs.
+//   - a verb the host does not run is refused as unknown; without a
+//     server, nothing runs;
+//   - take-over parity: a remote device takes the host's slice under the
+//     same rules, the host hears controlTaken with Take it back, and one
+//     tap returns control; with nobody at the desktop the Core's own slice
+//     stays its own.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -27,6 +31,10 @@
 //   2026-09-29: slice control plan Task 17: the hosting desktop's refusal
 //               names who holds a slice as a remote window's does, and a
 //               remote window names the hosting desktop by its name.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-30: take-over parity: a remote device takes the host's slice
+//               and the host takes it back from its controlTaken notice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
 // =================================================================
@@ -40,6 +48,10 @@
 namespace {
 
 const QHash<QByteArray, int> kShares{{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}};
+// Take-over parity: a device at sliceAccess 2 (Take it back on
+// controlTaken).
+const QHash<QByteArray, int> kSharesBack{
+    {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}};
 const QHash<QByteArray, int> kSharesTx{
     {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}, {"remoteTx", 1}};
 
@@ -556,6 +568,82 @@ private slots:
         QCOMPARE(told.prompt.kind, QStringLiteral("sliceClosed"));
         QCOMPARE(told.reason, QStringLiteral("iPad took the receiver slice A was on. You were "
                                              "listening to it."));
+    }
+
+    void aRemoteDeviceTakesTheHostsSliceAndTheHostTakesItBack()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, station);
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        QSignalSpy refused(&host, &HostingSliceActions::refused);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        const QJsonObject taken = core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))));
+        QVERIFY2(accepted(taken), qPrintable(reasonOf(taken)));
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        QVERIFY(ownership->listenersOf(0).contains(station));
+
+        // The desktop is told, with Take it back, and not as a refusal.
+        QTRY_COMPARE(notices.count(), 1);
+        const SessionMessage told = notices.first().at(0).value<SessionMessage>();
+        QCOMPARE(told.prompt.kind, QStringLiteral("controlTaken"));
+        QCOMPARE(told.reason,
+                 QStringLiteral("iPad took control of slice A. You are still listening."));
+        QVERIFY(OperatorWording::isPlain(told.reason));
+        QVERIFY(told.prompt.takeBack);
+        QCOMPARE(refused.count(), 0);
+
+        // One tap.
+        host.takeBack(told.prompt.id);
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        QCOMPARE(ownership->mark(0).owner, station);
+        QVERIFY(ownership->listenersOf(0).contains(b.key.fingerprint()));
+
+        // The iPad is told in turn, with a Take it back of its own.
+        QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject toldB = lastOfType(appB, QStringLiteral("notice"));
+        QCOMPARE(toldB.value(QStringLiteral("kind")).toString(), QStringLiteral("controlTaken"));
+        QCOMPARE(toldB.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("%1 took control of slice A. You are still listening.")
+                     .arg(kHostName));
+        QCOMPARE(toldB.value(QStringLiteral("takeBack")).toBool(false), true);
+    }
+
+    void withNobodyAtTheDesktopTheCoresSliceStaysItsOwn()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        startHosting(core);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, SliceOwnership::stationDevice());
+        // No HostingSliceActions: nobody takes the station device's notices.
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        const QJsonObject r = core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))));
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), QStringLiteral("Slice A is run by the Core itself, so control of "
+                                             "it cannot pass to this device."));
+        QCOMPARE(ownership->mark(0).owner, SliceOwnership::stationDevice());
     }
 
     void aVerbTheHostDoesNotRunIsRefusedAsUnknown()

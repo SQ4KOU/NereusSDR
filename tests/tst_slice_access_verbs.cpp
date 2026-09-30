@@ -28,6 +28,10 @@
 //               station freeze covers both verbs, and the local transmit
 //               hand-off obeys the same access rule as the remote verb.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: Take it back on controlTaken
+//               (sliceAccessVersion 2), transmit left where it was, and an
+//               older peer offered none. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -45,6 +49,12 @@ namespace {
 const QHash<QByteArray, int> kShares{{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}};
 const QHash<QByteArray, int> kSharesTx{
     {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}, {"remoteTx", 1}};
+// Take-over parity: a device at sliceAccess 2 (Take it back on
+// controlTaken), and one that also transmits.
+const QHash<QByteArray, int> kSharesBack{
+    {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}};
+const QHash<QByteArray, int> kSharesBackTx{
+    {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}, {"remoteTx", 1}};
 
 QString accessKey(int sliceId)
 {
@@ -504,6 +514,163 @@ private slots:
         QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)))));
         Q_UNUSED(now);
         QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+    }
+
+    // ── Take it back (take-over parity, sliceAccessVersion 2) ───────────
+
+    void aPeerIsSentTheLowerSliceAccessVersion()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(capability(appA->received(), QStringLiteral("sliceAccessVersion")), 1);
+        QCOMPARE(capability(appB->received(), QStringLiteral("sliceAccessVersion")), 2);
+    }
+
+    void takeItBackReturnsControlAndLeavesTransmitAlone()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesBackTx);
+        LoopbackTransport* appB = core.signIn(b, kSharesBackTx);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        for (int id : ownership->ownedBy(b.key.fingerprint())) {
+            QVERIFY(accepted(core.invoke(appB, "removeSlice", {int64("sliceId", id)})));
+        }
+
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(seenBy(appB, 0)))));
+        const QJsonObject taken =
+            core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(taken), qPrintable(reasonOf(taken)));
+        const qint64 afterTake = resultValue(taken, QStringLiteral("controlRevision"));
+
+        // A is told, with Take it back and the slice as it is now.
+        QTRY_VERIFY(!firstOfType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject notice = firstOfType(appA->received(), QStringLiteral("notice"));
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("controlTaken"));
+        QCOMPARE(notice.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("iPad took control of slice A. You are still listening."));
+        QCOMPARE(notice.value(QStringLiteral("takeBack")).toBool(false), true);
+        const QJsonObject entry =
+            notice.value(QStringLiteral("slices")).toArray().first().toObject();
+        QCOMPARE(entry.value(QStringLiteral("sliceId")).toInt(-1), 0);
+        QCOMPARE(static_cast<quint64>(entry.value(QStringLiteral("incarnation")).toInteger()),
+                 ownership->incarnation(0));
+        QCOMPARE(entry.value(QStringLiteral("controlRevision")).toInteger(), afterTake);
+
+        // B chooses the slice to transmit on, and stays unkeyed.
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QVERIFY(accepted(core.invoke(appB, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", 0)})));
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        QSignalSpy moxChanges(mox, &MoxController::moxChanged);
+
+        // One tap: notice.takeBack with the notice's id.
+        const qint64 id = notice.value(QStringLiteral("id")).toInteger();
+        const QJsonObject back = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QVERIFY2(accepted(back), qPrintable(reasonOf(back)));
+        QCOMPARE(resultValue(back, QStringLiteral("controlRevision")), afterTake + 1);
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+        QVERIFY(ownership->listenersOf(0).contains(b.key.fingerprint()));
+
+        // Transmit does not come with it (ruling Q8): B's choice of the
+        // slice goes, A holds nothing, and A's key is refused until A
+        // chooses the slice with tx.setTxSlice.
+        QTRY_VERIFY(!core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QVERIFY(!core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QCOMPARE(moxChanges.count(), 0);
+        QVERIFY(!mox->isMox());
+        mox->setMox(true, keyerFor(a));
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kChooseTransmitSlice));
+
+        // B is told in turn, with a Take it back of its own.
+        QTRY_VERIFY(!firstOfType(appB->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject toldB = firstOfType(appB->received(), QStringLiteral("notice"));
+        QCOMPARE(toldB.value(QStringLiteral("kind")).toString(), QStringLiteral("controlTaken"));
+        QCOMPARE(toldB.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("iPhone took control of slice A. You are still listening."));
+        QCOMPARE(toldB.value(QStringLiteral("takeBack")).toBool(false), true);
+
+        // The same tap again: nothing left to take back.
+        const QJsonObject again = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QVERIFY(!accepted(again));
+        QCOMPARE(reasonOf(again), QStringLiteral("That can no longer be taken back."));
+        QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
+    }
+
+    void aTakeItBackAfterControlMovedOnIsRefused()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("Mac"), QStringLiteral("computer"));
+        for (Device* x : {&a, &b, &c}) {
+            core.pair(*x);
+        }
+        LoopbackTransport* appA = core.signIn(a, kSharesBack);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        LoopbackTransport* appC = core.signIn(c, kSharesBack);
+        QVERIFY(admitted(appA) && admitted(appB) && admitted(appC));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)))));
+        QTRY_VERIFY(!firstOfType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const qint64 id =
+            firstOfType(appA->received(), QStringLiteral("notice")).value(QStringLiteral("id"))
+                .toInteger();
+        // C takes it from B before A taps.
+        QTRY_VERIFY(holds(appC, accessKey(0)));
+        QTRY_COMPARE(accessOf(appC, 0, "controllerDeviceId").toString(), b.id());
+        QVERIFY(accepted(core.invoke(appC, "slice.takeControl", revisionArgs(seenBy(appC, 0)))));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, c.key.fingerprint());
+
+        const QJsonObject late = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QVERIFY(!accepted(late));
+        QVERIFY(!reasonOf(late).isEmpty());
+        QVERIFY(OperatorWording::isPlain(reasonOf(late)));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, c.key.fingerprint());
+        // It never can be now, so the record is gone.
+        const QJsonObject again = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QCOMPARE(reasonOf(again), QStringLiteral("That can no longer be taken back."));
+    }
+
+    void anOlderPeerIsOfferedNoTakeItBack()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kShares);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)))));
+        QTRY_VERIFY(!firstOfType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject notice = firstOfType(appA->received(), QStringLiteral("notice"));
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("controlTaken"));
+        QCOMPARE(notice.value(QStringLiteral("takeBack")).toBool(true), false);
+        // Its id sent anyway is refused, and control stays.
+        const QJsonObject r = core.invoke(
+            appA, "notice.takeBack", {int64("id", notice.value(QStringLiteral("id")).toInteger())});
+        QVERIFY(!accepted(r));
+        QCOMPARE(reasonOf(r), QStringLiteral("That can no longer be taken back."));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, b.key.fingerprint());
     }
 
     void ofTwoTakesWithTheSameRevisionExactlyOneIsApplied()

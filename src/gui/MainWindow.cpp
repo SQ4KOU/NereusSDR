@@ -458,6 +458,9 @@
 //   2026-09-29 - Slice control fix wave (whole-branch review, Minor 1):
 //               the unanswered slice request toast drops "yet". J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Take-over parity: the hosting desktop's controlTaken
+//               card has Take it back, as a remote window's does. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -3020,7 +3023,9 @@ void MainWindow::showHostingNotice(const SessionMessage& notice)
     prompt.prompt = notice.prompt;
     prompt.reason = notice.reason;
     prompt.receivedAt = QDateTime::currentDateTime();
-    auto* card = new NoticeCard(prompt, host);
+    // Take-over parity: its own Core always runs Take it back for
+    // controlTaken; a card that does not offer it shows it off with why.
+    auto* card = new NoticeCard(prompt, host, MultiDeviceController::controlTakeBackOff(prompt, true));
     const QPointer<NoticeCard> guard(card);
     connect(card, &NoticeCard::takeBackRequested, this, [this, guard](qint64 id) {
         m_hostingNoticeCards.removeAll(guard);

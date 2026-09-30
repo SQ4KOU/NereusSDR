@@ -394,6 +394,9 @@
 //               declares sliceAccess with sessionHolder when
 //               setTokenSliceAccessForTest asks. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the hello declares sliceAccess 2 (Take
+//               it back on controlTaken); controlTakeBackAvailable().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -3103,7 +3106,8 @@ bool StationClient::signIn(const SessionMessage& hello)
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
             // Slice control plan Task 4: listening to and taking another
             // device's slice (the rest of the window's side is Task 5).
-            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+            // Take-over parity: 2, Take it back on controlTaken.
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
         }
         m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3150,7 +3154,7 @@ bool StationClient::signIn(const SessionMessage& hello)
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
         features.insert(QByteArrayLiteral("sessionHolder"), 1);
         if (m_tokenSliceAccessForTest) {
-            features.insert(QByteArrayLiteral("sliceAccess"), 1);
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
         }
         m_declaredSessionHolder = true;
     }
@@ -4774,6 +4778,19 @@ bool StationClient::remoteSliceAccessAvailable() const
     // a window that declared sliceAccess with sessionHolder.
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.sliceAccessVersion >= 1;
+}
+
+bool StationClient::controlTakeBackAvailable() const
+{
+    // Take-over parity: the Core sends the lower of its sliceAccessVersion
+    // and the one this window declared.
+    return remoteSliceAccessAvailable() && m_capabilities.sliceAccessVersion >= 2;
+}
+
+QString StationClient::controlTakeBackUnavailableReason()
+{
+    return QStringLiteral("This Core cannot give control back from here. Updating the Core may "
+                          "help.");
 }
 
 namespace {

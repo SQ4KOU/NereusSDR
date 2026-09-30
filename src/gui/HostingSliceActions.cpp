@@ -10,6 +10,9 @@
 //   2026-09-29: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), slice control and shared listening plan Task 10,
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: controlTaken is a notice with Take it
+//               back, as in a remote window. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/HostingSliceActions.h"
@@ -76,13 +79,8 @@ HostingSliceActions::HostingSliceActions(StationServer* server, RadioModel* mode
         if (!self) {
             return;
         }
-        if (message.prompt.kind == QStringLiteral("controlTaken")) {
-            // As in a remote window (Task 5): said once, as a refusal.
-            if (!message.reason.isEmpty()) {
-                emit self->refused(message.reason);
-            }
-            return;
-        }
+        // Take-over parity: controlTaken too, with Take it back, as in a
+        // remote window.
         emit self->notice(message);
     });
 }

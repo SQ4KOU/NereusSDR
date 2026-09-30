@@ -21,6 +21,9 @@
 //               question's dialog, and stackNoticeCards() places the notice
 //               cards, for the hosting desktop too. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: controlTaken is a card with Take it
+//               back (controlTakeBackOff shows it off on an older Core).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -276,33 +279,12 @@ void MultiDeviceController::onNoticesChanged()
     if (!m_client) {
         return;
     }
-    QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
-    // Slice control plan Task 5: another device took control of a slice
-    // this window controlled. It is said once, as a refusal toast, and not
-    // kept as a card (it offers no Take it back).
-    QList<qint64> controlTaken;
-    for (auto it = notices.begin(); it != notices.end();) {
-        if (it->prompt.kind == QStringLiteral("controlTaken")) {
-            controlTaken.append(it->prompt.id);
-            if (!it->reason.isEmpty()) {
-                emit refusal(it->reason);
-            }
-            it = notices.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    for (qint64 id : controlTaken) {
-        if (!m_client) {
-            return;
-        }
-        // Re-enters onNoticesChanged with the notice gone.
-        m_client->remoteDevices()->dismissNotice(id);
-    }
-    if (!m_client) {
-        return;
-    }
-    notices = m_client->remoteDevices()->notices();
+    // Take-over parity: controlTaken (another device took control of a
+    // slice this window controlled) is a card like any other notice, with
+    // Take it back; an older Core offers none, and the button is shown off
+    // with the reason.
+    const QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
+    const bool takesControlBack = m_client->controlTakeBackAvailable();
     QSet<qint64> live;
     for (const RemotePrompt& notice : notices) {
         live.insert(notice.prompt.id);
@@ -310,7 +292,7 @@ void MultiDeviceController::onNoticesChanged()
         if (card) {
             continue;
         }
-        card = new NoticeCard(notice, m_noticeHost);
+        card = new NoticeCard(notice, m_noticeHost, controlTakeBackOff(notice, takesControlBack));
         connect(card, &NoticeCard::takeBackRequested, this, [this](qint64 id) {
             if (m_client) {
                 m_client->takeBackNotice(id);
@@ -334,6 +316,17 @@ void MultiDeviceController::onNoticesChanged()
         }
     }
     layoutNoticeCards();
+}
+
+QString MultiDeviceController::controlTakeBackOff(const RemotePrompt& notice, bool available)
+{
+    if (notice.prompt.kind != QStringLiteral("controlTaken") || notice.prompt.takeBack) {
+        return {};
+    }
+    // A Core that can run it and did not offer it: the take-back ended
+    // (its device was away past its 3 minutes).
+    return available ? QStringLiteral("That can no longer be taken back.")
+                     : StationClient::controlTakeBackUnavailableReason();
 }
 
 void MultiDeviceController::setNoticeHost(QWidget* host)

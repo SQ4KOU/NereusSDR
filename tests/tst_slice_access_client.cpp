@@ -11,7 +11,9 @@
 // `access:<id>` objects (SliceAccessMirror), its four verbs, the read-only
 // mark on a slice it only listens to (a change is held back with the Core's
 // listener words and nothing is sent), and that MultiDeviceController shows
-// a refusal, a held change and a controlTaken notice as one refusal each.
+// a refusal and a held change as one refusal each, and a controlTaken
+// notice as a card whose Take it back returns control (take-over parity),
+// shown off with a reason on a Core that cannot run it.
 // Nothing keys a radio: the Core's model has no radio.
 //
 // =================================================================
@@ -27,12 +29,17 @@
 //                                    listener words names the controller
 //                                    as the Core does. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Take-over parity: controlTaken is a
+//               card with Take it back, and an older Core's is shown off
+//               with the reason. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include <QApplication>
 #include <QDialog>
+#include <QLabel>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QWidget>
 
@@ -48,6 +55,10 @@
 namespace {
 
 const QHash<QByteArray, int> kShares{{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}};
+// Take-over parity: a device at sliceAccess 2 (Take it back on
+// controlTaken).
+const QHash<QByteArray, int> kSharesBack{
+    {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}};
 
 // The window: this computer's own key, a remote model and its client.
 struct Window {
@@ -539,16 +550,18 @@ private slots:
     }
 
     // Another device takes control of a slice this window controlled: the
-    // window is told once, as a refusal toast, with no card left behind;
-    // it keeps listening, and the slice is now read-only here.
-    void controlTakenIsOneToastOnTheFormerController()
+    // window keeps listening, the slice is read-only here, and a card says
+    // so with Take it back (take-over parity). One tap returns control.
+    void controlTakenIsACardWhoseTakeItBackReturnsControl()
     {
         Core core;
         core.model->configureStreamPool(3, 5, 192000);
         Window w;
         QVERIFY(core.server->deviceStore()->add(w.record()));
         QVERIFY(w.connectTo(core));
+        QVERIFY(w.client.controlTakeBackAvailable());
         MultiDeviceController controller(&w.client, &w.host);
+        controller.setNoticeHost(&w.host);
         QSignalSpy refusals(&controller, &MultiDeviceController::refusal);
         const int own = core.model->sliceOwnership()->ownedBy(w.key->fingerprint()).first();
         QTRY_VERIFY(w.access().controlledHere(own));
@@ -558,7 +571,7 @@ private slots:
 
         Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
         core.pair(b);
-        LoopbackTransport* appB = core.signIn(b, kShares);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
         QVERIFY(admitted(appB));
         QTRY_VERIFY(holds(appB, QStringLiteral("access:%1").arg(own)));
         QVERIFY(accepted(core.invoke(appB, "slice.listen", refArgs(appB, own))));
@@ -566,18 +579,66 @@ private slots:
         QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(appB, own))));
 
         const QString letter = QString(QChar(QLatin1Char('A').unicode() + own));
-        QTRY_COMPARE(refusals.count(), 1);
-        QCOMPARE(refusals.first().first().toString(),
-                 QStringLiteral("iPad took control of slice %1. You are still listening.").arg(letter));
-        QTest::qWait(100);
-        QCOMPARE(refusals.count(), 1);
-        QVERIFY(controller.noticeCards().isEmpty());
-        QVERIFY(w.client.remoteDevices()->notices().isEmpty());
+        QTRY_COMPARE(controller.noticeCards().size(), 1);
+        NoticeCard* card = controller.noticeCards().first();
+        QVERIFY(card->textLabel()->text().endsWith(
+            QStringLiteral("iPad took control of slice %1. You are still listening.").arg(letter)));
+        QVERIFY(card->takeBackButton() != nullptr);
+        QVERIFY(card->takeBackButton()->isEnabled());
+        QCOMPARE(refusals.count(), 0);
         QTRY_VERIFY(!w.access().controlledHere(own));
         QVERIFY(w.access().listeningHere(own));
         QCOMPARE(w.remote.sliceById(own), slice);
         QVERIFY(slice->isReadOnlyListener());
         QCOMPARE(slice->readOnlyListenerReason(), controlledBy(letter, QStringLiteral("iPad")));
+
+        // One tap sends notice.takeBack; control comes back here.
+        card->takeBackButton()->click();
+        QTRY_COMPARE(core.model->sliceOwnership()->mark(own).owner, w.key->fingerprint());
+        QVERIFY(w.sentVerbs(QStringLiteral("notice.takeBack")).size() == 1);
+        QTRY_VERIFY(w.access().controlledHere(own));
+        QTRY_VERIFY(!slice->isReadOnlyListener());
+        QCOMPARE(refusals.count(), 0);
+        QVERIFY(core.model->sliceOwnership()->listenersOf(own).contains(b.key.fingerprint()));
+    }
+
+    // A window on a Core that cannot give control back from a notice (here:
+    // the window declares sliceAccess 1, so the Core sends it version 1 and
+    // offers no Take it back): the card shows Take it back off, with the
+    // reason, never hidden.
+    void onAnOlderCoreTakeItBackIsShownOffWithTheReason()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Window w;
+        w.client.setSliceAccessDeclaredForTest(1);
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        QVERIFY(w.client.remoteSliceAccessAvailable());
+        QVERIFY(!w.client.controlTakeBackAvailable());
+        MultiDeviceController controller(&w.client, &w.host);
+        controller.setNoticeHost(&w.host);
+        const int own = core.model->sliceOwnership()->ownedBy(w.key->fingerprint()).first();
+        QTRY_VERIFY(w.access().controlledHere(own));
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QTRY_VERIFY(holds(appB, QStringLiteral("access:%1").arg(own)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(appB, own))));
+
+        QTRY_COMPARE(controller.noticeCards().size(), 1);
+        NoticeCard* card = controller.noticeCards().first();
+        QVERIFY(card->takeBackButton() != nullptr);
+        QVERIFY(!card->takeBackButton()->isEnabled());
+        const QString why = card->takeBackButton()->toolTip();
+        QCOMPARE(why, StationClient::controlTakeBackUnavailableReason());
+        QVERIFY(OperatorWording::isPlain(why));
+        card->takeBackButton()->click();
+        QTest::qWait(100);
+        QVERIFY(w.sentVerbs(QStringLiteral("notice.takeBack")).isEmpty());
+        QCOMPARE(core.model->sliceOwnership()->mark(own).owner, b.key.fingerprint());
     }
 
     // A window whose link has no sliceAccessVersion (here: a window that

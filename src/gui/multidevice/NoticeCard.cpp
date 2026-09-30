@@ -10,6 +10,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: a Take it back the Core cannot run here
+//               is shown off, with the reason as its tooltip. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/NoticeCard.h"
@@ -31,7 +34,8 @@ QString NoticeCard::text(const RemotePrompt& notice)
     return QStringLiteral("At %1. %2").arg(when, notice.reason);
 }
 
-NoticeCard::NoticeCard(const RemotePrompt& notice, QWidget* parent)
+NoticeCard::NoticeCard(const RemotePrompt& notice, QWidget* parent,
+                       const QString& takeBackOff)
     : QFrame(parent)
     , m_id(notice.prompt.id)
 {
@@ -55,6 +59,13 @@ NoticeCard::NoticeCard(const RemotePrompt& notice, QWidget* parent)
         layout->addWidget(m_takeBack);
         connect(m_takeBack, &QPushButton::clicked, this,
                 [this]() { emit takeBackRequested(m_id); });
+    } else if (!takeBackOff.isEmpty()) {
+        // Take-over parity: shown off, with why.
+        m_takeBack = new QPushButton(QStringLiteral("Take it back"), this);
+        m_takeBack->setObjectName(QStringLiteral("noticeCardTakeBack"));
+        m_takeBack->setEnabled(false);
+        m_takeBack->setToolTip(takeBackOff);
+        layout->addWidget(m_takeBack);
     }
     m_close = new QPushButton(QStringLiteral("Close"), this);
     m_close->setObjectName(QStringLiteral("noticeCardClose"));
