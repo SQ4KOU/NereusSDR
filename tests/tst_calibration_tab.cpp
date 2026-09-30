@@ -23,6 +23,7 @@
 #include "core/SliceOwnership.h"
 #include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include "FakeLevelCalibrationHost.h"
 
@@ -429,11 +430,14 @@ void TstCalibrationTab::levelCalHostUsesItsOwnSliceWhenAnotherDeviceIsActive()
     QCOMPARE(model.levelCalHostSlice(&refusal), mine);
     QVERIFY(refusal.isEmpty());
     QVERIFY(c.start->isEnabled());
+    const double phoneHz = model.sliceById(phones)->frequency();
     c.freq->setValue(kCentre + 1000.0);
     c.level->setValue(-50.0);
     c.start->click();
     QTRY_VERIFY(model.levelCalSucceeded());
     QVERIFY(!prompts.warnings.contains(true));
+    // The phone's slice was not moved.
+    QCOMPARE(model.sliceById(phones)->frequency(), phoneHz);
     NereusSDR::AppSettings::instance().clear();
 }
 
@@ -462,6 +466,23 @@ void TstCalibrationTab::levelCalHostWithNoSliceOfItsOwnIsDisabled()
     QCOMPARE(refusal, owned);
     QVERIFY(!c.start->isEnabled());
     QCOMPARE(c.start->toolTip(), owned);
+
+    // A slice the station runs held for an absent device is that device's,
+    // not the desktop's own: Start stays off, whether the held slice is the
+    // station's active slice or only the station device's (activeFor).
+    const int held = model.addSlice(QStringLiteral("pan-0"));
+    owners->hold(held, QByteArrayLiteral("phone-b"));
+    QCOMPARE(owners->activeFor(NereusSDR::SliceOwnership::stationDevice()), held);
+    QCOMPARE(model.levelCalHostSlice(&refusal), -1);
+    QCOMPARE(refusal, owned);
+    QVERIFY(!c.start->isEnabled());
+    QVERIFY(model.setActiveSliceById(held));
+    QCOMPARE(model.activeSlice()->sliceIndex(), held);
+    QCOMPARE(model.levelCalHostSlice(&refusal), -1);
+    QCOMPARE(refusal, owned);
+    QVERIFY(!c.start->isEnabled());
+    QCOMPARE(c.start->toolTip(), owned);
+    QVERIFY(model.setActiveSliceById(phones));
 
     // Nobody controls it, but a device listens: still not the desktop's.
     owners->setOwner(phones, QByteArray());

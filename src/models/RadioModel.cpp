@@ -810,6 +810,9 @@
 //                hosting desktop's Start names, or the ownership words when
 //                it may change none. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 re-review: a slice held for an absent device
+//                is not the desktop's own. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -16384,16 +16387,27 @@ int RadioModel::levelCalHostSlice(QString* refusal) const
     const SliceOwnership& owners = *m_sliceOwnership;
     const QByteArray& station = SliceOwnership::stationDevice();
     const int active = m_activeSlice->sliceIndex();
-    // The station changes a slice it controls, or one with no controller
-    // and no listeners (SliceAccessPolicy), as StationServer::changeRefusal
-    // holds a device to.
-    if (SliceAccessPolicy::mayChange(owners, station, active)
-        || SliceAccessPolicy::stationMayChangeUnclaimed(owners, active)) {
+    // The station changes a slice it controls as its own (not one it runs
+    // held for an absent device, MainWindow::stationControlsSlice), or one
+    // with no controller and no listeners (SliceAccessPolicy), as
+    // StationServer::changeRefusal holds a device to.
+    const auto ownNotHeld = [&owners, &station](int sliceId) {
+        return SliceAccessPolicy::mayChange(owners, station, sliceId)
+            && !owners.mark(sliceId).isHeld();
+    };
+    if (ownNotHeld(active) || SliceAccessPolicy::stationMayChangeUnclaimed(owners, active)) {
         return -1;
     }
-    const int own = owners.activeFor(station);
-    if (own >= 0) {
-        return own;
+    // The desktop's own active slice; activeFor matches the owner alone, so
+    // a held slice (owner the station) is passed over for one of its own.
+    const int chosen = owners.activeFor(station);
+    if (chosen >= 0 && ownNotHeld(chosen)) {
+        return chosen;
+    }
+    for (int sliceId : owners.ownedBy(station)) {
+        if (ownNotHeld(sliceId)) {
+            return sliceId;
+        }
     }
     if (refusal != nullptr) {
         // The words StationServer gives a device for a slice it may not
