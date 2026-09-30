@@ -67,6 +67,9 @@
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 3, JJ): the ATT flyout is held, with the
+//                reason, on a pan whose slice this window only listens to.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -1201,6 +1204,7 @@ void SpectrumOverlayPanel::buildAttFlyout()
 
     connect(m_attEnableChk, &QCheckBox::toggled, this, [this](bool on) {
         if (m_updatingFromModel || !m_radioModel) { return; }
+        if (!m_attHeldReason.isEmpty()) { return; }  // TX rulings (item 3)
         if (StepAttenuatorFacade* att = m_radioModel->stepAttFacade()) {
             att->setEnabled(on);
         }
@@ -1208,6 +1212,7 @@ void SpectrumOverlayPanel::buildAttFlyout()
     });
     connect(m_attSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int dB) {
         if (m_updatingFromModel || !m_radioModel) { return; }
+        if (!m_attHeldReason.isEmpty()) { return; }  // TX rulings (item 3)
         if (StepAttenuatorFacade* att = m_radioModel->stepAttFacade()) {
             att->setAttenuationDb(dB);
         }
@@ -1243,10 +1248,24 @@ void SpectrumOverlayPanel::showAttValues()
         m_attSpin->setValue(att->attenuationDb());
     }
     m_updatingFromModel = false;
-    m_attEnableChk->setEnabled(available);
-    m_attSpin->setEnabled(available && att->enabled());
-    m_attReason->setText(available ? QString() : att->windowUnavailableReason());
-    m_attReason->setVisible(!available);
+    // TX rulings (item 3): held on a listened slice, with the reason.
+    const bool held = !m_attHeldReason.isEmpty();
+    m_attEnableChk->setEnabled(available && !held);
+    m_attSpin->setEnabled(available && !held && att->enabled());
+    const QString reason = held ? m_attHeldReason
+                         : available ? QString() : att->windowUnavailableReason();
+    m_attEnableChk->setToolTip(held ? m_attHeldReason
+                                    : QStringLiteral("Use the radio's step attenuator"));
+    m_attSpin->setToolTip(held ? m_attHeldReason : QStringLiteral("Step attenuator level"));
+    m_attReason->setText(reason);
+    m_attReason->setVisible(!reason.isEmpty());
+}
+
+void SpectrumOverlayPanel::setAttHeldReason(const QString& reason)
+{
+    if (reason == m_attHeldReason) { return; }
+    m_attHeldReason = reason;
+    showAttValues();
 }
 
 void SpectrumOverlayPanel::toggleAttFlyout()

@@ -68,6 +68,11 @@
 //   2026-09-30 - Level Cal 2 review: a slice on the other ADC's S-ATT box
 //                 stops at 31 dB (rx2MaxAttenuation). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 3, JJ): on a listened slice the
+//                 attenuator and preamp controls (ATT row, S-ATT, the preamp
+//                 choice, RX1 preamp) are disabled with the reason naming the
+//                 controlling device, and their write sites return early.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -301,11 +306,13 @@ void RxApplet::wireRemoteStepAtt()
     // R-R3-46 / R-R3-11: the attenuator of this slice's own ADC.
     connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, [this, stepAtt](int dB) {
+        if (isListening()) { return; }  // TX rulings (item 3)
         stepAtt->setAttenuationDbForSlice(m_slice ? m_slice->sliceIndex() : 0, dB);
     });
     connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this, stepAtt](int idx) {
         if (idx < 0) { return; }  // guard during clear/repopulate
+        if (isListening()) { return; }  // TX rulings (item 3)
         const int mode = m_preampCombo->itemData(idx).toInt();
         if (m_preampShowsRx2) {
             stepAtt->setRx2PreampMode(mode);
@@ -404,10 +411,9 @@ void RxApplet::refreshAttForSlice()
             && !m_model->stepAttFacade()->windowAvailable();
         if (!remoteBlocked) {
             const bool rx2Unavailable = rx2 && !m_model->rx2PreampModeAvailable();
-            m_preampCombo->setEnabled(!rx2Unavailable);
-            m_preampCombo->setToolTip(rx2Unavailable
-                ? IStationLink::rx2PreampModeUnavailableReason()
-                : QString());
+            setAttControlState(m_preampCombo, !rx2Unavailable,
+                               rx2Unavailable ? IStationLink::rx2PreampModeUnavailableReason()
+                                              : QString());
         }
     }
 }
@@ -516,8 +522,7 @@ void RxApplet::applyRemoteStepAttAvailability()
                        static_cast<QWidget*>(m_attLabel),
                        static_cast<QWidget*>(m_rx1PreampToggle)}) {
         if (w) {
-            w->setEnabled(available);
-            w->setToolTip(tip);
+            setAttControlState(w, available, tip);
         }
     }
     showRemoteStepAttValues();
@@ -540,6 +545,7 @@ void RxApplet::ensureRx1PreampToggle()
     // which routes to CodecContext.p2Rx1Preamp → byte 1403 bit 1.
     connect(m_rx1PreampToggle, &QCheckBox::toggled, this, [this](bool on) {
         if (!m_model) { return; }
+        if (isListening()) { return; }  // TX rulings (item 3)
         // R-R3-46: a remote window has no connection of its own;
         // the toggle writes the Core's `stepAtt` object instead.
         if (!m_model->ownsLocalDsp()) {
@@ -558,6 +564,8 @@ void RxApplet::ensureRx1PreampToggle()
                                   Qt::QueuedConnection);
     });
     m_ovlRow->addWidget(m_rx1PreampToggle);
+    // TX rulings (item 3): built while listening, it is held at once.
+    holdForListening(m_rx1PreampToggle);
 }
 
 void RxApplet::buildUi()
@@ -1592,8 +1600,9 @@ void RxApplet::setSliceIndex(int idx)
 // Mirrors VfoWidget's slice access (Task 14a): on a listened slice every
 // shared tuning and DSP control is disabled with the reason naming the
 // controlling device, and each write site also returns early, so no path
-// through the applet writes the slice. The attenuator and preamp row is
-// the radio's hardware, not the slice's, and stays as it is.
+// through the applet writes the slice. TX rulings (JJ, 2026-09-30, item 3):
+// the attenuator and preamp controls are held the same way, with the same
+// reason, though they are the radio's input rather than the slice's.
 namespace {
 constexpr const char* kSavedTip     = "RxSavedAccessTooltip";
 constexpr const char* kSavedDesc    = "RxSavedAccessDescription";
@@ -1625,6 +1634,8 @@ QList<QWidget*> RxApplet::listeningHeldControls() const
         m_agcCombo, m_agcTSlider, m_agcAutoLabel,
         m_ritOnBtn, m_ritZero, m_ritMinus, m_ritPlus,
         m_xitOnBtn, m_xitZero, m_xitMinus, m_xitPlus,
+        // TX rulings (item 3).
+        m_attLabel, m_attStack, m_preampCombo, m_stepAttSpin, m_rx1PreampToggle,
     };
     for (QPushButton* btn : m_filterBtns) {
         held.append(btn);
@@ -1640,7 +1651,11 @@ void RxApplet::holdForListening(QWidget* control)
         if (!control->property(kSavedEnabled).isValid()) {
             control->setProperty(kSavedTip, control->toolTip());
             control->setProperty(kSavedDesc, control->accessibleDescription());
-            control->setProperty(kSavedEnabled, control->isEnabled());
+            // The control's own flag, not isEnabled(): a control inside a
+            // disabled parent (the attenuator stack while the Core offers
+            // none) must come back enabled when its parent does.
+            control->setProperty(kSavedEnabled,
+                                 !control->testAttribute(Qt::WA_ForceDisabled));
         }
         control->setEnabled(false);
         control->setToolTip(m_sliceAccess.heldReason);
@@ -1654,6 +1669,20 @@ void RxApplet::holdForListening(QWidget* control)
     control->setProperty(kSavedTip, QVariant());
     control->setProperty(kSavedDesc, QVariant());
     control->setProperty(kSavedEnabled, QVariant());
+}
+
+void RxApplet::setAttControlState(QWidget* control, bool enabled, const QString& tip)
+{
+    if (!control) { return; }
+    // TX rulings (item 3): held for listening, the state is what the
+    // restore brings back; the control stays held.
+    if (control->property(kSavedEnabled).isValid()) {
+        control->setProperty(kSavedEnabled, enabled);
+        control->setProperty(kSavedTip, tip);
+        return;
+    }
+    control->setEnabled(enabled);
+    control->setToolTip(tip);
 }
 
 void RxApplet::applySliceAccess()
@@ -2139,6 +2168,7 @@ void RxApplet::connectSlice(SliceModel* s)
         // R-R3-46 / R-R3-11: the attenuator of this slice's own ADC.
         connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
                 this, [this, attCtrl](int val) {
+            if (isListening()) { return; }  // TX rulings (item 3)
             const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
             if (sliceId >= 0 && sliceId < 32
                 && (attCtrl->rx2SliceMask() & (1u << sliceId)) != 0) {
@@ -2151,6 +2181,7 @@ void RxApplet::connectSlice(SliceModel* s)
         connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, attCtrl](int idx) {
             if (idx < 0) { return; }  // guard during clear/repopulate
+            if (isListening()) { return; }  // TX rulings (item 3)
             int modeInt = m_preampCombo->itemData(idx).toInt();
             // Level Cal: a slice on the other ADC sets RX2's own mode
             // (Thetis comboRX2Preamp_SelectedIndexChanged, RX2PreampMode).

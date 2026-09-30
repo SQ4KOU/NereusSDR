@@ -96,6 +96,12 @@
 //                reconcileListenPlacements, stopListeningOffWindow,
 //                m_listenPlacement, m_pendingRevealSlice. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). TX rulings (item 3):
+//                refreshOverlayAttAccess. AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). TX rulings review:
+//                hostingSliceActionsForTest. AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -308,6 +314,11 @@ public:
     // Slice control plan Task 15 fix round 1: drops the hosting slice
     // requests so a test reaches selectSliceForWindow's fallback path.
     void dropHostingSliceActionsForTest();
+#ifdef NEREUS_BUILD_TESTS
+    // TX rulings review: the hosting slice requests, for a test that
+    // checks what a card's close leaves there.
+    HostingSliceActions* hostingSliceActionsForTest() const { return m_hostingSlices.get(); }
+#endif
 
     // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
     // before main() by tests/TestSandboxInit.cpp), false in the app. A test
@@ -1259,6 +1270,10 @@ private:
     // slice this window controls or listens to and shows, each saying who
     // controls it; the applet binds windowRxSlice() with its access.
     void refreshRxAppletSlices();
+    // TX rulings (JJ, 2026-09-30, item 3): each pan's ATT flyout is held
+    // with sliceChangeRefusal()'s reason while the pan's slice is one this
+    // window only listens to.
+    void refreshOverlayAttAccess();
     bool sliceShownInWindow(int sliceId) const;
     // Slice control plan Task 16 (rulings U1, U2, U7). Whether this window
     // shares slices with other devices (it hosts, or it is a remote window

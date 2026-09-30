@@ -31,6 +31,10 @@
 //                 offer Take control, Stop listening and Release. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - TX rulings (item 3, JJ): on a listened slice the
+//                 attenuator and preamp controls are held too, with the same
+//                 reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -231,8 +235,8 @@ public:
     // window's point of view (the flag's SliceAccess). Listening disables
     // every shared tuning and DSP control with heldReason as its tooltip
     // and the applet never writes the slice; Controlled and Unshared
-    // restore them. The attenuator and preamp row is the radio's, not the
-    // slice's, and is not held.
+    // restore them. TX rulings (JJ, 2026-09-30, item 3): the attenuator and
+    // preamp controls are held on a listened slice too.
     void setSliceAccess(const VfoWidget::SliceAccess& access);
     const VfoWidget::SliceAccess& sliceAccess() const { return m_sliceAccess; }
     bool isListening() const
@@ -365,6 +369,10 @@ private:
     void applySliceAccess();
     void holdForListening(QWidget* control);
     QList<QWidget*> listeningHeldControls() const;
+    // TX rulings (item 3): an attenuator or preamp control's own enabled
+    // state and tooltip; while held for listening they are kept for the
+    // restore instead.
+    void setAttControlState(QWidget* control, bool enabled, const QString& tip);
     void showSliceMenu(int sliceId, QWidget* anchor, const QPoint& pos);
 
     VfoWidget::SliceAccess             m_sliceAccess;

@@ -468,6 +468,9 @@
 //   2026-09-30 - Level Cal: rx2PreampModeAvailable, whether a slice on the
 //                other ADC can change RX2's own preamp mode.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 1): moxPressAsksOn and tunePressAsksOn, a
+//                remote window's press toggles against its own key.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4973,6 +4976,17 @@ public slots:
     /// on the way off TUN and two-tone are turned off as chkMOX_Click does
     /// (first, keeping the manual key until their own ends; see the .cpp).
     void setMoxFromButton(bool on);
+
+    /// TX rulings (JJ, 2026-09-30, item 1): what a press of the MOX button
+    /// asks, given the way the button toggled (`toggledOn`). A local window
+    /// asks what the button shows. A remote window toggles against its own
+    /// key, as the desktop's button does: its key down (or waiting) is
+    /// unkeyed; a press after it let go keys, even while the Core's
+    /// `transmitting` still reads true for the key it let go; otherwise the
+    /// button's way (a lit button for a key not its own is let go).
+    bool moxPressAsksOn(bool toggledOn) const;
+    /// The same for the TUNE button.
+    bool tunePressAsksOn(bool toggledOn) const;
 
     /// iPhone app plan, desktop remote transmit (R-IOS-13): the 2-TONE
     /// buttons (TxApplet and the container). A local window starts or stops
