@@ -20,6 +20,11 @@
 //                 decoder with it. The single-owner checks this file held
 //                 are retired with the single owner. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 -- A RADE slice restored from its saved band (a device's
+//                 slice made again, a band button) decodes; a slice
+//                 restored in another mode has no decoder. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QRegularExpression>
@@ -28,14 +33,17 @@
 #include <QTest>
 #include <QThread>
 
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadeRxWorker.h"
+#include "core/ReceiveLayoutStore.h"
 #include "core/RxChannel.h"
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
 #include "fakes/FakeAudioBus.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/RxDspWorker.h"
 #include "models/SliceModel.h"
@@ -187,6 +195,37 @@ struct TwoSliceRig {
         slice->setDspMode(DSPMode::RADE_U);
         QCoreApplication::processEvents();  // the route reaches the worker
         return wdsp->radeChannel(slice->sliceIndex());
+    }
+
+    // Runs blocks through both streams until `channel` has decoded, and
+    // says on which thread it did. False (with the counts in `evidence`)
+    // when it never ran the codec or ran it on the main thread.
+    bool decodesOnItsOwnThread(RadeChannel* channel, QString* evidence)
+    {
+        std::atomic<Qt::HANDLE> decodedOn{nullptr};
+        const QMetaObject::Connection probe = QObject::connect(
+            channel, &RadeChannel::rxSpeechReady, channel,
+            [&decodedOn](const QByteArray&) {
+                decodedOn.store(QThread::currentThreadId());
+            }, Qt::DirectConnection);
+        const int callsBefore = channel->radeRxCallCountForTest();
+        constexpr int kBlocks = 512;  // past the resamplers and one rade_rx
+        bool idle = true;
+        for (int i = 0; i < kBlocks && idle; ++i) {
+            worker.processIqBatch(0, iq);
+            worker.processIqBatch(1, iq);
+            idle = channel->waitRxIdleForTest(5000);
+        }
+        QObject::disconnect(probe);
+        const Qt::HANDLE on = decodedOn.load();
+        *evidence = QStringLiteral("idle=%1 radeRx=%2 decodedOnDecoderThread=%3 onMain=%4")
+            .arg(idle)
+            .arg(channel->radeRxCallCountForTest() - callsBefore)
+            .arg(on != nullptr && on == channel->rxThreadIdForTest())
+            .arg(on == QThread::currentThreadId());
+        return idle && channel->radeRxCallCountForTest() > callsBefore
+            && on != nullptr && on != QThread::currentThreadId()
+            && on == channel->rxThreadIdForTest();
     }
 };
 
@@ -424,6 +463,139 @@ private slots:
         QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.a));
         QVERIFY(radeA->txSelected());
         QVERIFY(!radeB->txSelected());
+    }
+
+    // JJ's bench, 2026-09-30: a device's RADE slice closed after the grace
+    // (saved, then removed) and made again on reconnect read RADE but
+    // played its sideband audio. restoreFromSettings set the mode without
+    // the RADE start, and the setDspMode after it saw no change. It now
+    // decodes again, on its own decoder thread.
+    void aRestoredRadeSliceDecodesAgain()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceB->setFrequency(14200000.0);
+        QVERIFY(rig.toRade(rig.sliceB));
+
+        // What the grace end does (StationServer releaseDeviceClaims):
+        // save the slice, then close it.
+        const Band band = bandFromFrequency(rig.sliceB->frequency());
+        rig.sliceB->saveToSettings(band);
+        ReceiveSliceState saved;
+        saved.id = rig.b;
+        saved.panKey = rig.sliceB->panKey();
+        saved.frequencyHz = rig.sliceB->frequency();
+        saved.dspMode = rig.sliceB->dspMode();
+        rig.radio.removeSlice(rig.b);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.b) == nullptr);
+
+        // Readmission (StationServer placeSlicesForAdmission).
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        QString reason;
+        const int restored = rig.radio.restoreSliceFor(QByteArrayLiteral("phone"), rig.b,
+                                                       saved, &reason);
+        QVERIFY2(restored == rig.b, qPrintable(reason));
+        QCoreApplication::processEvents();  // the route reaches the worker
+        SliceModel* const slice = rig.radio.sliceById(restored);
+        QVERIFY(slice);
+        QCOMPARE(slice->dspMode(), DSPMode::RADE_U);
+
+        RadeChannel* const channel = rig.wdsp->radeChannel(restored);
+        QVERIFY(channel);
+        QVERIFY(channel->isActive());
+        QVERIFY(channel->sidebandUpper());
+        QVERIFY(channel->rxWorkerRunning());
+        QCOMPARE(channel->rxThreadNameForTest(), QStringLiteral("RadeRx%1").arg(restored));
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+    }
+
+    // The band buttons restore a band's saved mode the same way. A RADE
+    // slice keeps decoding across them, a band saved in RADE starts its
+    // decoder, and a band saved in another mode stops it.
+    void bandButtonsKeepARadeSliceDecoding()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceA->setFrequency(14200000.0);
+        QVERIFY(rig.toRade(rig.sliceA));  // 20 m in RADE-U
+
+        // 40 m, first visit: its seed mode, not RADE. No decoder.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band40m);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.sliceA->dspMode() != DSPMode::RADE_U
+                && rig.sliceA->dspMode() != DSPMode::RADE_L);
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        rig.sliceA->setDspMode(DSPMode::RADE_L);  // 40 m in RADE-L
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a));
+
+        // Back to 20 m, saved in RADE-U: the decoder follows the band.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band20m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), DSPMode::RADE_U);
+        RadeChannel* channel = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(channel && channel->isActive() && channel->sidebandUpper());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+
+        // And to 40 m, saved in RADE-L: still decoding.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band40m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), DSPMode::RADE_L);
+        channel = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(channel && channel->isActive() && !channel->sidebandUpper());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+
+        // 80 m, first visit, is saved in its seed mode; coming back to it
+        // from a RADE band restores that mode and stops the decoder.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band80m);
+        QCoreApplication::processEvents();
+        const DSPMode seed80 = rig.sliceA->dspMode();
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band20m);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a));
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band80m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), seed80);
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+    }
+
+    // A slice restored in another mode makes no decoder.
+    void aSliceRestoredInAnotherModeHasNoDecoder()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceB->setFrequency(7150000.0);
+        rig.sliceB->setDspMode(DSPMode::LSB);
+        rig.sliceB->saveToSettings(bandFromFrequency(rig.sliceB->frequency()));
+        ReceiveSliceState saved;
+        saved.id = rig.b;
+        saved.panKey = rig.sliceB->panKey();
+        saved.frequencyHz = rig.sliceB->frequency();
+        saved.dspMode = DSPMode::LSB;
+        rig.radio.removeSlice(rig.b);
+        QCoreApplication::processEvents();
+
+        QString reason;
+        const int restored = rig.radio.restoreSliceFor(QByteArrayLiteral("phone"), rig.b,
+                                                       saved, &reason);
+        QVERIFY2(restored == rig.b, qPrintable(reason));
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.radio.sliceById(restored)->dspMode(), DSPMode::LSB);
+        QVERIFY(rig.wdsp->radeChannel(restored) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
     }
 };
 

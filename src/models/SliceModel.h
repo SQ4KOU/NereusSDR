@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: applyRadeModeChange, the RADE decoder start and stop that
+//               setDspMode and restoreFromSettings (a band change, a
+//               restored slice) both run. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: radeSynced and radeFreqOffsetHz, the RADE decoder's sync and
 //               frequency offset as the VFO flag shows them, declared last.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1822,6 +1826,21 @@ private:
     // Constructor helper: build the timer + connect its expiry lambda.
     // Called from both SliceModel ctor overloads.
     void setupRadeIdleClearTimer();
+
+    // The RADE decoder's start and stop for a mode change from oldMode to
+    // newMode (m_dspMode already holds newMode): create, destroy or
+    // recreate the slice's RadeChannel and clear the old decoder's
+    // callsign, sync and idle timer. Every path that changes the mode runs
+    // it, setDspMode and restoreFromSettings (band buttons, a device's
+    // slice made again) alike, so a slice that reads RADE always has its
+    // decoder and one that does not has none. No-op when neither mode is
+    // RADE.
+    void applyRadeModeChange(DSPMode oldMode, DSPMode newMode);
+    // restoreReceiveState's offline seam, before the radio and its DSP
+    // exist: the restored layout's own RADE start
+    // (RadioModel::activateRestoredRadeReceiveOwner) runs later, so
+    // applyRadeModeChange creates no decoder while this is set.
+    bool m_radeStartDeferredToAdmission{false};
 };
 
 } // namespace NereusSDR
