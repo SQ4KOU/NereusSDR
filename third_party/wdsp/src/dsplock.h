@@ -95,6 +95,9 @@ boydsoftprez@gmail.com
 //   2026-09-25 - Test-only WDSPSetTestBlockHook declared by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40).
+//   2026-09-29 - Test-only WDSPGetTestWorkerPauseNs declared by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -260,5 +263,10 @@ PORT long long WDSPGetTestLastWorkerExitWaitUs (int channel);
 // Test-only: how many times this channel's worker has left its loop in this
 // process. Not for production use.
 PORT int WDSPGetTestWorkerExitCount (int channel);
+
+// Test-only: the pause, in nanoseconds, between the worker's waiter checks
+// while it holds off (a nanosleep; SwitchToThread on Windows). Not for
+// production use.
+PORT long WDSPGetTestWorkerPauseNs (void);
 
 #endif

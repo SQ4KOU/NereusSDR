@@ -114,7 +114,6 @@ constexpr double kBurstGraceMs = 1.0;
 // median against a median, so a worker that holds off its whole 20 ms
 // budget still fails on a computer that wakes a thread in under 10 ms.
 constexpr int kIdleProbes = kSingleCalls;
-constexpr long kWorkerPauseNs = 50000;   // dsplock.c kDspWorkerPauseNs
 constexpr std::chrono::milliseconds kPostCallWatch{60};
 constexpr double kMinThroughputRatio = 0.90;
 
@@ -424,7 +423,8 @@ private:
     }
 
     // kIdleProbes waits shaped as the worker's burst grace after a call:
-    // busy for kBlockDelayUs as a block is, then nanosleep kWorkerPauseNs
+    // busy for kBlockDelayUs as a block is, then nanosleep the worker's own
+    // pause (WDSPGetTestWorkerPauseNs, dsplock.c kDspWorkerPauseNs)
     // (a yield on Windows, as the worker does) until kBurstGraceMs has
     // passed, on a thread with the worker's QoS class (linux_port.c starts
     // RX workers QOS_CLASS_USER_INTERACTIVE on macOS). A probe that only
@@ -453,7 +453,7 @@ private:
 #ifdef Q_OS_WIN
                     std::this_thread::yield();   // dsplock.c: SwitchToThread on Windows
 #else
-                    const timespec pause{0, kWorkerPauseNs};
+                    const timespec pause{0, WDSPGetTestWorkerPauseNs()};
                     nanosleep(&pause, nullptr);
 #endif
                 }

@@ -140,6 +140,11 @@ boydsoftprez@gmail.com
 //                 counters do, independently of them. By J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40).
+//   2026-09-29 - Test-only WDSPGetTestWorkerPauseNs: the pause between
+//                 waiter checks, so a test times the same pause without a
+//                 copy of the constant. By J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -773,4 +778,10 @@ PORT
 int WDSPGetTestWorkerExitCount (int channel)
 {
 	return valid_channel (channel) ? (int)load_worker_exits (channel) : 0;
+}
+
+PORT
+long WDSPGetTestWorkerPauseNs (void)
+{
+	return kDspWorkerPauseNs;
 }
