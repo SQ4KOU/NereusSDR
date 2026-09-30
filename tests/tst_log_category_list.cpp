@@ -10,6 +10,8 @@
 // Modification history (NereusSDR):
 //   2026-09-28 - Created. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 - radio's alexLpfBits is declared after logCategoryList.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -59,8 +61,17 @@ private slots:
         const int index = meta.indexOfProperty("logCategoryList");
         QVERIFY(index >= 0);
         QVERIFY(meta.property(index).isConstant());
-        // Declared last, so every earlier property keeps its wire ordinal.
-        QCOMPARE(index, meta.propertyCount() - 1);
+        // Appended after every earlier property, so each keeps its wire
+        // ordinal; it keeps its own (27) as later properties (txInhibitReason,
+        // alexLpfBits, paTransmitBand, then the four Level Cal run
+        // properties) append after it.
+        QCOMPARE(index - meta.propertyOffset(), 27);
+        QCOMPARE(meta.indexOfProperty("txInhibitReason"), index + 1);
+        QCOMPARE(meta.indexOfProperty("alexLpfBits"), index + 2);
+        QCOMPARE(meta.indexOfProperty("paTransmitBand"), index + 3);
+        QCOMPARE(meta.indexOfProperty("levelCalRunning"), index + 4);
+        QCOMPARE(meta.indexOfProperty("levelCalSucceeded"), index + 7);
+        QCOMPARE(index, meta.propertyCount() - 8);
         RadioModel model;
         QCOMPARE(model.logCategoryList(), LogManager::instance().categoryListJson());
     }

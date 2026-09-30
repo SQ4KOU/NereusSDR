@@ -231,7 +231,11 @@ void TestGuiConnectionController::selectingAndCancellingEditLeaveLiveAAndDoNotDi
     QPointer<MainWindow> firstWindowLifetime = firstWindow;
     QPointer<StationClient> firstClient = firstWindow->findChild<StationClient*>();
     QVERIFY(firstClient);
-    QTRY_VERIFY(firstClient->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*firstClient, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
 
     QAction* connectAction = managedConnectAction(firstWindow);
     QVERIFY(connectAction != nullptr);
@@ -280,7 +284,11 @@ void TestGuiConnectionController::explicitConnectToSavedBReplacesWholeLiveA()
     QPointer<RadioModel> firstModel = firstWindow->radioModel();
     QPointer<StationClient> firstClient = firstWindow->findChild<StationClient*>();
     QVERIFY(firstClient);
-    QTRY_VERIFY(firstClient->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*firstClient, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
 
     controller.showConnections();
     controller.selector()->setSelectedKey(QStringLiteral("saved:b"));
@@ -292,7 +300,11 @@ void TestGuiConnectionController::explicitConnectToSavedBReplacesWholeLiveA()
     QCOMPARE(controller.sessions()->selection().savedId, QStringLiteral("b"));
     StationClient* secondClient = controller.sessions()->window()->findChild<StationClient*>();
     QVERIFY(secondClient != nullptr);
-    QTRY_VERIFY(secondClient->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*secondClient, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     controller.shutdown();
 }
 
@@ -308,7 +320,11 @@ void TestGuiConnectionController::disconnectCancelsRetryWithoutUsingHighlightedB
     MainWindow* firstWindow = controller.sessions()->window();
     QPointer<StationClient> firstClient = firstWindow->findChild<StationClient*>();
     QVERIFY(firstClient);
-    QTRY_VERIFY(firstClient->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*firstClient, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     firstClient->disconnectFromStation(QStringLiteral("test retry"), true);
     QTRY_VERIFY(firstClient->isReconnectPending());
 
@@ -343,7 +359,11 @@ void TestGuiConnectionController::connectionsDisconnectReopensConnectionsOnceWit
     auto* remoteControls = window->findChild<RemoteConnectionController*>();
     QVERIFY(client);
     QVERIFY(remoteControls);
-    QTRY_VERIFY(client->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*client, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     // These loopback Cores name no radio, so the old automatic open (which
     // needs a radio name) could not fire here either way; the remote
     // window harness covers that half with a named radio.
@@ -392,7 +412,11 @@ void TestGuiConnectionController::aManualReconnectReadsTheStoresLastAddresses()
     auto* remoteControls = window->findChild<RemoteConnectionController*>();
     QVERIFY(client);
     QVERIFY(remoteControls);
-    QTRY_VERIFY(client->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*client, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     const QStringList remembered{saved.connection.url};
     QTRY_VERIFY([&] {
         CoreTargetStore store(AppSettings::instance());
@@ -404,7 +428,11 @@ void TestGuiConnectionController::aManualReconnectReadsTheStoresLastAddresses()
     QTRY_VERIFY(!client->isConnectionActive());
     remoteControls->connectToStation();
     QCOMPARE(client->cachedAddresses(), QList<QUrl>{QUrl(saved.connection.url)});
-    QTRY_VERIFY(client->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*client, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     controller.shutdown();
 }
 
@@ -456,7 +484,11 @@ void TestGuiConnectionController::savedCoreEditsDoNotChangeCurrentTupleBeforeCon
     QTRY_VERIFY(cores.firstServer.hasAuthenticatedSession());
     QPointer<StationClient> firstClient = controller.sessions()->window()->findChild<StationClient*>();
     QVERIFY(firstClient);
-    QTRY_VERIFY(firstClient->isHandshakeComplete());
+    {
+        QString handshakeWhy;  // QTRY_VERIFY's default timeout
+        QVERIFY2(Test::Rendezvous::waitForHandshake(*firstClient, 5000, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     const StationStartupSelection active = controller.sessions()->selection();
 
     controller.showConnections();
@@ -513,7 +545,7 @@ void TestGuiConnectionController::codeOnlyDialogPairsThroughMailboxAndOpensRemot
 {
     using namespace NereusSDR::Test::Rendezvous;
     LocalService service;
-    QVERIFY(service.start());
+    QVERIFY2(service.start(), qPrintable(service.startFailure()));
     Core core;
     StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
     QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);
@@ -580,10 +612,16 @@ void TestGuiConnectionController::codeOnlyDialogPairsThroughMailboxAndOpensRemot
     addByCode->click();
     QVERIFY(dialogAccepted);
 
-    QTRY_VERIFY_WITH_TIMEOUT(controller.sessions()->window()
-        && controller.sessions()->window()->findChild<StationClient*>()
-        && controller.sessions()->window()->findChild<StationClient*>()->isHandshakeComplete(),
-        kServiceConnectBudgetMs);
+    {
+        QString handshakeWhy;
+        QVERIFY2(waitForHandshake(
+                     [&controller]() -> StationClient* {
+                         MainWindow* window = controller.sessions()->window();
+                         return window ? window->findChild<StationClient*>() : nullptr;
+                     },
+                     kServiceConnectBudgetMs, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     const auto selected = controller.sessions()->selection();
     QVERIFY(selected.connection.url.isEmpty());
     QVERIFY(selected.connection.isRemote());
@@ -611,10 +649,16 @@ void TestGuiConnectionController::codeOnlyDialogPairsThroughMailboxAndOpensRemot
 
     GuiConnectionController relaunched;
     relaunched.start({});
-    QTRY_VERIFY_WITH_TIMEOUT(relaunched.sessions()->window()
-        && relaunched.sessions()->window()->findChild<StationClient*>()
-        && relaunched.sessions()->window()->findChild<StationClient*>()->isHandshakeComplete(),
-        kServiceConnectBudgetMs);
+    {
+        QString handshakeWhy;
+        QVERIFY2(waitForHandshake(
+                     [&relaunched]() -> StationClient* {
+                         MainWindow* window = relaunched.sessions()->window();
+                         return window ? window->findChild<StationClient*>() : nullptr;
+                     },
+                     kServiceConnectBudgetMs, &handshakeWhy),
+                 qPrintable(handshakeWhy));
+    }
     QCOMPARE(relaunched.sessions()->selection().savedId, persisted.targets().first().id);
     QVERIFY(relaunched.sessions()->selection().connection.url.isEmpty());
     QCOMPARE(relaunched.sessions()->selection().connection.identityFingerprint,

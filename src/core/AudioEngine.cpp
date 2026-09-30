@@ -19,6 +19,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6: the AF
+//                                    level is applied in the mix to the
+//                                    controller's sums (JJ's ruling, a
+//                                    departure from Thetis radio.cs, which
+//                                    sets it as WDSP's panel gain); each
+//                                    listener hears the slice at its own
+//                                    level; VAX and the receiver taps no
+//                                    longer undo the AF gain, so VAX stays
+//                                    audible at AF 0. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: remote-window audio reset
 //                                    keeps Core-owned DSP settings.
 //                                    AI-assisted implementation via Codex.
@@ -187,7 +198,6 @@
 
 #include "AppSettings.h"
 #include "LogCategories.h"
-#include "RxChannel.h"        // afGain() — for VAX AF-bypass
 #include "WdspEngine.h"       // rxChannel(0) lookup
 #include "audio/CaptureAudioBus.h"
 #include "audio/PortAudioBus.h"
@@ -212,6 +222,7 @@
 #include <portaudio.h>
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <vector>
 
@@ -418,15 +429,17 @@ void AudioEngine::setRadioModel(RadioModel* radio)
     m_radio = radio;
 }
 
-// R-R3-49: one 32-bit word per slice id, so a block reads a slice's whole
-// view in one lock-free load and never sees half of one publish.
+// R-R3-49: one word per slice id, so a block reads a slice's whole view in
+// one lock-free load and never sees half of one publish. Slice control plan
+// Task 6: 64 bits now, the AF level's float bits in the high half.
 namespace {
-constexpr quint32 kViewPresent = 1u << 0;
-constexpr quint32 kViewMuted = 1u << 1;
-constexpr quint32 kViewHeadphones = 1u << 2;
+constexpr quint64 kViewPresent = 1u << 0;
+constexpr quint64 kViewMuted = 1u << 1;
+constexpr quint64 kViewHeadphones = 1u << 2;
 constexpr int kViewVaxShift = 3;
-constexpr quint32 kViewVaxMask = 0x7u;
-static_assert(std::atomic<quint32>::is_always_lock_free,
+constexpr quint64 kViewVaxMask = 0x7u;
+constexpr int kViewAfShift = 32;
+static_assert(std::atomic<quint64>::is_always_lock_free,
               "the audio thread reads the slice view without a lock");
 }  // namespace
 
@@ -435,12 +448,15 @@ void AudioEngine::setSliceAudioView(int sliceId, const SliceAudioView& view) noe
     if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
         return;
     }
-    quint32 word = 0;
+    quint64 word = 0;
     if (view.present) {
         const int vax = (view.vaxChannel >= 1 && view.vaxChannel <= 4) ? view.vaxChannel : 0;
+        // NaN reads as 0 (std::clamp would pass it through).
+        const float af = view.afGain >= 0.0f ? std::min(view.afGain, 1.0f) : 0.0f;
         word = kViewPresent | (view.muted ? kViewMuted : 0u)
             | (view.headphones ? kViewHeadphones : 0u)
-            | (static_cast<quint32>(vax) << kViewVaxShift);
+            | (static_cast<quint64>(vax) << kViewVaxShift)
+            | (static_cast<quint64>(std::bit_cast<quint32>(af)) << kViewAfShift);
     }
     m_sliceAudioViews[static_cast<size_t>(sliceId)].store(word, std::memory_order_release);
 }
@@ -451,12 +467,15 @@ AudioEngine::SliceAudioView AudioEngine::sliceAudioView(int sliceId) const noexc
     if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
         return view;
     }
-    const quint32 word =
+    const quint64 word =
         m_sliceAudioViews[static_cast<size_t>(sliceId)].load(std::memory_order_acquire);
     view.present = (word & kViewPresent) != 0;
     view.muted = (word & kViewMuted) != 0;
     view.headphones = (word & kViewHeadphones) != 0;
     view.vaxChannel = static_cast<int>((word >> kViewVaxShift) & kViewVaxMask);
+    view.afGain = view.present
+        ? std::bit_cast<float>(static_cast<quint32>(word >> kViewAfShift))
+        : 1.0f;
     return view;
 }
 
@@ -1835,6 +1854,7 @@ int AudioEngine::acquireOwnerMix()
         if (!slot.taken.load(std::memory_order_acquire)) {
             slot.sliceMask.store(0, std::memory_order_release);
             slot.monitor.store(0, std::memory_order_release);
+            slot.listenMask.store(0, std::memory_order_release);
             slot.taken.store(true, std::memory_order_release);
             return k;
         }
@@ -1857,7 +1877,65 @@ void AudioEngine::releaseOwnerMix(int slot)
     owner.headphones.admissionClosed.store(false, std::memory_order_seq_cst);
     owner.sliceMask.store(0, std::memory_order_release);
     owner.monitor.store(0, std::memory_order_release);
+    owner.listenMask.store(0, std::memory_order_release);
     owner.taken.store(false, std::memory_order_release);
+}
+
+// Slice control plan Task 6: the level lands before the bit, so a drain
+// that sees the bit sees a level for it.
+void AudioEngine::setOwnerMixListen(int slot, int sliceId, float level, bool muted)
+{
+    if (!validOwnerMixSlot(slot) || sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return;
+    }
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    const float stored = muted || !(level > 0.0f) ? 0.0f : std::min(level, 1.0f);
+    owner.listenLevels[static_cast<size_t>(sliceId)].store(stored, std::memory_order_release);
+    owner.listenMask.fetch_or(quint32{1} << sliceId, std::memory_order_acq_rel);
+}
+
+void AudioEngine::clearOwnerMixListen(int slot, int sliceId)
+{
+    if (!validOwnerMixSlot(slot) || sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return;
+    }
+    m_ownerMixes[static_cast<size_t>(slot)].listenMask.fetch_and(~(quint32{1} << sliceId),
+                                                                 std::memory_order_acq_rel);
+}
+
+quint32 AudioEngine::ownerMixListenMask(int slot) const
+{
+    return validOwnerMixSlot(slot)
+        ? m_ownerMixes[static_cast<size_t>(slot)].listenMask.load(std::memory_order_acquire)
+        : 0u;
+}
+
+float AudioEngine::ownerMixListenLevel(int slot, int sliceId) const
+{
+    if (!validOwnerMixSlot(slot) || sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return 0.0f;
+    }
+    return m_ownerMixes[static_cast<size_t>(slot)]
+        .listenLevels[static_cast<size_t>(sliceId)]
+        .load(std::memory_order_acquire);
+}
+
+void AudioEngine::setLocalListen(int sliceId, float level, bool muted)
+{
+    if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return;
+    }
+    const float stored = muted || !(level > 0.0f) ? 0.0f : std::min(level, 1.0f);
+    m_localListenLevels[static_cast<size_t>(sliceId)].store(stored, std::memory_order_release);
+    m_localListenMask.fetch_or(quint32{1} << sliceId, std::memory_order_acq_rel);
+}
+
+void AudioEngine::clearLocalListen(int sliceId)
+{
+    if (sliceId < 0 || sliceId >= kMaxSliceAudioViews) {
+        return;
+    }
+    m_localListenMask.fetch_and(~(quint32{1} << sliceId), std::memory_order_acq_rel);
 }
 
 void AudioEngine::setOwnerMixMonitor(int slot, MasterMixer::OwnerMonitor monitor)
@@ -2037,26 +2115,12 @@ int AudioEngine::sliceAudioTapCount() const
     return count;
 }
 
-float AudioEngine::afGainInverseForSlice(int sliceId) const noexcept
-{
-    // Sub-Epic I invariant: a slice's WDSP RX channel id is its slice id.
-    // The same unlocked lookup the VAX tee has always made on this thread.
-    if (m_radio && m_radio->wdspEngine()) {
-        if (RxChannel* rx = m_radio->wdspEngine()->rxChannel(sliceId)) {
-            const double afGain = rx->afGain();
-            if (afGain > 0.001) {
-                return static_cast<float>(1.0 / afGain);
-            }
-        }
-    }
-    return 1.0f;
-}
-
 void AudioEngine::feedSliceTaps(int sliceId, const float* samples, int frames) noexcept
 {
-    // Scaled once, on the first tap that wants this slice; a block no tap
-    // wants costs four atomic loads.
-    const float* scaled = nullptr;
+    // Slice control plan Task 6: the block as the receiver produced it. The
+    // AF level is applied in the mix, after this point, so there is no AF
+    // gain to undo here any more (the 1 / AF scaling is gone). A block no
+    // tap wants costs four atomic loads.
     for (SliceTapSlot& slot : m_sliceTaps) {
         if (slot.sliceId.load(std::memory_order_relaxed) != sliceId
             || slot.admissionClosed.load(std::memory_order_seq_cst)) {
@@ -2066,25 +2130,7 @@ void AudioEngine::feedSliceTaps(int sliceId, const float* samples, int frames) n
         if (!slot.admissionClosed.load(std::memory_order_seq_cst)
             && slot.sliceId.load(std::memory_order_seq_cst) == sliceId) {
             if (SliceAudioTap* tap = slot.tap.load(std::memory_order_seq_cst)) {
-                if (scaled == nullptr) {
-                    const float afInverse = afGainInverseForSlice(sliceId);
-                    if (afInverse == 1.0f) {
-                        scaled = samples;
-                    } else {
-                        // Its own scratch: the VAX tee's and the mix's are
-                        // separate. Grows once per thread, then no allocation.
-                        static thread_local std::vector<float> tapScratch;
-                        const int stereoFloats = frames * 2;
-                        if (static_cast<int>(tapScratch.size()) < stereoFloats) {
-                            tapScratch.resize(static_cast<size_t>(stereoFloats));
-                        }
-                        for (int i = 0; i < stereoFloats; ++i) {
-                            tapScratch[i] = samples[i] * afInverse;
-                        }
-                        scaled = tapScratch.data();
-                    }
-                }
-                tap->consume(scaled, frames, kMasterMixSampleRateHz);
+                tap->consume(samples, frames, kMasterMixSampleRateHz);
             }
         }
         if (slot.callsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
@@ -2223,8 +2269,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // R-R3-45: the route rides in the same way (VAX design 6.2): the mixer
     // builds this slice into the speakers sum or the headphones sum.
     const bool toHeadphones = slice.headphones;
+    //
+    // Slice control plan Task 6 (JJ's ruling): the slice's AF level rides
+    // in too. WDSP's panel gain stays at 1.0, so the mixer applies AF to
+    // the controller's sums and each listener's own level to its sum.
     m_masterMix.accumulate(sliceId, samples, frames, slice.muted,
-                           toHeadphones);
+                           toHeadphones, slice.afGain);
 
     // Anti-VOX hears exactly what the speakers hear. From Thetis
     // cmaster.c:370-372 [v2.10.3.15], every sub-receiver's audio is handed
@@ -2248,19 +2298,19 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // the reference is drained speakers-only (tryDrain(out, n)), so a
     // headphones slice is queued, keeps its barrier place, and adds
     // nothing, since its audio is not in the room either.
+    //
+    // Slice control plan Task 6: at the AF level, as the speakers hear it.
     m_antiVoxMix.accumulate(sliceId, samples, frames, slice.muted,
-                            toHeadphones);
+                            toHeadphones, slice.afGain);
 
     // VAX tap receives raw demodulated audio — pre-MasterMixer gain/pan,
-    // pre-master-volume — matching Thetis VAC behavior and the spec §3.4
+    // pre-master-volume, matching Thetis VAC behavior and the spec §3.4
     // pseudocode. Per-channel mute skips the push; the per-channel gain
-    // (and the slice's 1 / AF gain) scale the block as it is queued for
-    // the channel's mix below. See docs/architecture/2026-04-19-vax-design.md
+    // scales the block as it is queued for the channel's mix below. See docs/architecture/2026-04-19-vax-design.md
     // §3.4 and §6.4.
-    // R-R3-43 receiver taps: the same point and the same channel-independent
-    // scaling as the VAX tee below (1 / the slice's AF gain, no VAX channel
-    // gain or mute), so a remote VAX or TCI app gets the level a local one
-    // would.
+    // R-R3-43 receiver taps: the same point as the VAX tee below (no AF
+    // level, no VAX channel gain or mute), so a remote VAX or TCI app gets
+    // the level a local one would.
     feedSliceTaps(sliceId, samples, frames);
 
     // R-R3-44 (fix wave): slices that share a VAX channel are summed into
@@ -2282,33 +2332,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         const float gainUser =
             m_vaxRxGain[vaxIdx].load(std::memory_order_acquire);
 
-        // AF-Gain bypass for VAX (post-v0.3.2 AF-Gain rewire fix).
-        //
-        // Commit e61658f routed AF Gain through WDSP's PanelGain1
-        // stage (third_party/wdsp/src/rxa.c:538 [v2.10.3.14]),
-        // which is upstream of `samples` here.  Pre-fix WDSP shipped
-        // PanelGain1=4.0 (+12 dB) silently and the AF slider acted
-        // as a post-DSP scalar elsewhere — VAX inherited the +12 dB
-        // and felt "really hot".  Post-fix, VAX inherits whatever
-        // attenuation the speaker slider is currently applying,
-        // which is wrong for digital-mode apps that expect a stable
-        // calibrated level.
-        //
-        // Inverse-scale by 1/afGain so VAX recovers the pre-
-        // PanelGain1 signal level.  Clamped to skip compensation
-        // when the slider is essentially muted (≤ 0.001) — div-
-        // by-zero guard.  At full mute VAX goes silent (samples
-        // were already multiplied by ~0 inside WDSP); proper
-        // VAX-independent-of-mute requires the larger pre-PanelGain1
-        // tap (Option C in 2026-05-08 design discussion).
-        //
-        // R-R3-43: the AF gain undone is the feeding slice's own,
-        // from its WDSP RX channel. This used to read channel 0's,
-        // receiver 1's, for every slice.
-        //
-        // The fix wave applies it per slice as the block is queued, so a
-        // channel's sum carries each slice at its own level.
-        vaxGain = gainUser * afGainInverseForSlice(sliceId);
+        // Slice control plan Task 6 (JJ's ruling): the AF level is applied
+        // in the mix, after this tee, and WDSP's panel gain stays at 1.0, so
+        // `samples` is already the level VAX wants. The 1 / AF gain scaling
+        // that undid the panel gain here is gone, and with it the silence at
+        // AF 0: VAX stays audible whatever the speaker AF slider says. This
+        // departs from Thetis, where radio.cs sets AF as the receiver's
+        // panel gain (SetRXAPanelGain1) and VAC hears it.
+        vaxGain = gainUser;
     }
     // A slice with no (or an out-of-range) channel leaves any channel it
     // was on, so it stops holding that channel's mix.
@@ -2387,6 +2418,9 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
     // owner with a tap on it, each of its own slices, and the local sums
     // carry only the local output's slices (the station device's).
     std::array<MasterMixer::OwnerOutput, kMaxOwnerMixes> owners{};
+    // Slice control plan Task 6: each owner's listen levels, copied once
+    // per drain so the mixer reads plain floats.
+    std::array<std::array<float, kMaxSliceAudioViews>, kMaxOwnerMixes> ownerListenLevels{};
     int ownerCount = 0;
     for (int k = 0; k < kMaxOwnerMixes; ++k) {
         OwnerMixSlot& slot = m_ownerMixes[static_cast<size_t>(k)];
@@ -2404,14 +2438,36 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
         // owner's device holds transmit (DaemonMediaController sets it).
         owner.monitor = static_cast<MasterMixer::OwnerMonitor>(
             slot.monitor.load(std::memory_order_acquire));
+        // Slice control plan Task 6: its listening, keyed by its slot so a
+        // listen ramp carries across drains whatever the other slots do.
+        owner.listenMask = slot.listenMask.load(std::memory_order_acquire);
+        if (owner.listenMask != 0) {
+            std::array<float, kMaxSliceAudioViews>& levels =
+                ownerListenLevels[static_cast<size_t>(ownerCount)];
+            for (int id = 0; id < kMaxSliceAudioViews; ++id) {
+                levels[static_cast<size_t>(id)] =
+                    slot.listenLevels[static_cast<size_t>(id)].load(std::memory_order_acquire);
+            }
+            owner.listenLevels = levels.data();
+        }
+        owner.listenSlot = k;
         ++ownerCount;
+    }
+    const quint32 localListen = m_localListenMask.load(std::memory_order_acquire);
+    std::array<float, kMaxSliceAudioViews> localListenLevels{};
+    if (localListen != 0) {
+        for (int id = 0; id < kMaxSliceAudioViews; ++id) {
+            localListenLevels[static_cast<size_t>(id)] =
+                m_localListenLevels[static_cast<size_t>(id)].load(std::memory_order_acquire);
+        }
     }
     // Task 32 (JJ's MON ruling): MON stays off this computer's outputs, and
     // the master taps, while a remote device holds transmit.
     const int mixed = m_masterMix.tryDrain(
         mix.data(), hpMix.data(), drainFrames,
         m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount,
-        m_txMonitorLocal.load(std::memory_order_acquire), monitorOnly);
+        m_txMonitorLocal.load(std::memory_order_acquire), monitorOnly, localListen,
+        localListenLevels.data());
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.

@@ -142,6 +142,25 @@
 //                 the adjust tooltip's stray %, and the Default profile found
 //                 by its real name after a delete). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49: PA Gain follows Thetis's on-the-air lock (found
+//                 bug: a local window could switch, create, copy, delete or
+//                 reset a profile, or change another band's values, while
+//                 the radio transmitted, and a profile switch reaches the
+//                 drive at its next recompute). While the Core is on the
+//                 air the profile controls and every band's row but the
+//                 transmitting band's are disabled, in a local and a remote
+//                 window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-27 (JJ's ruling): the transmitting band's
+//                 row opens on the air only while this window's device holds
+//                 transmit, with plain-words reasons; an adjust taken on the
+//                 air moves the drive to that step, as Thetis's
+//                 nudAdjustGain_ValueChanged does. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: the open row follows the Core's
+//                 transmit band change, which holds while keyed, not the
+//                 slice's band. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -212,6 +231,7 @@
 #include "gui/widgets/MetricLabel.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
 #include <QCheckBox>
@@ -883,6 +903,48 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
         setTransmitSettingsPermittedAt(6, false, QString());
         setTransmitPermitted(false, QString());
     }
+
+    // R-R3-49: Thetis's on-the-air lock. isCoreOnAir follows the Core's MOX,
+    // TUNE and two-tone in a local and a remote window alike.
+    connect(model, &RadioModel::coreOnAirChanged, this,
+            [this](bool onAir) { applyOnAirState(onAir); });
+    // JJ's ruling (holder only, both ways): the transmitting band opens
+    // only while this window's device holds transmit, so the lock follows
+    // the holder too.
+    connect(model, &RadioModel::transmitHolderChanged, this,
+            [this]() { applyPaSettingsGate(); });
+    // The open row is the Core's transmit band (paOnAirBandIndex), which
+    // holds while keyed: Thetis OnTXBandChanged (setup.cs:23835-23839
+    // [v2.10.3.15]) moves _adjustingBand only from the TXBand setter, and
+    // that returns while MOX.
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    // A local window follows its own transmit band. A remote window takes
+    // the Core's held band from the paTransmitBand property, which also
+    // raises transmitBandChanged. The slice followers below serve only a
+    // remote window on an older Core that does not send paTransmitBand; its
+    // row then follows the window's own transmit slice as before.
+    connect(model, &RadioModel::transmitBandChanged, this,
+            [this]() { refreshOnAirBand(); });
+    const auto followSlice = [this](SliceModel* slice) {
+        if (!slice) {
+            return;
+        }
+        connect(slice, &SliceModel::bandChanged, this, [this](Band) { refreshOnAirBand(); });
+        connect(slice, &SliceModel::txSliceChanged, this,
+                [this](bool) { refreshOnAirBand(); });
+    };
+    for (SliceModel* slice : model->slices()) {
+        followSlice(slice);
+    }
+    connect(model, &RadioModel::sliceAdded, this, [this, followSlice](int index) {
+        if (RadioModel* const radio = this->model()) {
+            followSlice(radio->slices().value(index, nullptr));
+        }
+        refreshOnAirBand();
+    });
+    if (model->isCoreOnAir()) {
+        applyOnAirState(true);
+    }
 }
 
 QList<QWidget*> PaGainByBandPage::paSettingsControls() const
@@ -898,6 +960,120 @@ QList<QWidget*> PaGainByBandPage::paSettingsControls() const
     return controls;
 }
 
+QList<QWidget*> PaGainByBandPage::paBandControls(int bandIndex) const
+{
+    QList<QWidget*> controls{m_gainSpins[bandIndex], m_maxPowerSpins[bandIndex],
+                             m_useMaxPowerChecks[bandIndex]};
+    for (int step = 0; step < kAutoCalDriveSteps; ++step) {
+        controls << m_adjustSpins[bandIndex][step];
+    }
+    return controls;
+}
+
+// R-R3-49: what Thetis locks while the radio is on the air.
+// From Thetis setup.cs:23826-23834 [v2.10.3.15] OnMoxChangeHandler:
+//   PAProfileEnableControls(newMox);
+//   if (newMox) enabledAllPAnuds(false); else enabledAllPAnuds(true);
+//   //[2.3.10.6]MW0LGE added (also in ATTOnTX)  [original inline comment from
+//   setup.cs:23838, OnTXBandChanged's TX attenuator label line, not ported]
+// From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+//   //prevent profile switch during a tx
+//   //user can only tweak the NUD's
+//   comboPAProfile.Enabled = !tx; btnNewPAProfile.Enabled = !tx;
+//   if (tx) { btnDeletePAProfile, btnResetPAProfile, btnCopyPAProfile
+//             .Enabled = false; }
+// From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds(false):
+//   // ignore current band
+//   if (b != _adjustingBand) c.Enabled = false;
+// Thetis shows the adjust matrix, max power and use-max for _adjustingBand
+// alone (panelAdjustGain, enabledPAAdjust), so under MOX only that band's
+// values can change; NereusSDR shows every band's row and locks the others.
+// New Cal and the G2E's bypass box are not in Thetis's lock.
+QList<QWidget*> PaGainByBandPage::onAirLockedControls() const
+{
+    if (!m_onAir) {
+        return {};
+    }
+    QList<QWidget*> controls{m_profileCombo, m_btnNew, m_btnCopy, m_btnDelete, m_btnReset};
+    for (int n = 0; n < kPaBandCount; ++n) {
+        if (n != m_onAirBandIndex) {
+            controls << paBandControls(n);
+        }
+    }
+    return controls;
+}
+
+void PaGainByBandPage::applyOnAirState(bool onAir)
+{
+    if (onAir == m_onAir) {
+        return;
+    }
+    m_onAir = onAir;
+    m_onAirBandIndex = currentOnAirBandIndex();
+    applyPaSettingsGate();
+}
+
+int PaGainByBandPage::currentOnAirBandIndex()
+{
+    // Thetis _adjustingBand, read where the Core's own refusals read it.
+    // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+    RadioModel* const radio = model();
+    return (m_onAir && radio) ? radio->paOnAirBandIndex() : -1;
+}
+
+void PaGainByBandPage::refreshOnAirBand()
+{
+    const int band = currentOnAirBandIndex();
+    if (band == m_onAirBandIndex) {
+        return;
+    }
+    m_onAirBandIndex = band;
+    applyPaSettingsGate();
+}
+
+void PaGainByBandPage::applyPaSettingsGate()
+{
+    const QList<QWidget*> all = paSettingsControls();
+    if (!m_paSettingsPermitted) {
+        gateTransmitControls(all, false, m_paSettingsReason);
+        return;
+    }
+    const QList<QWidget*> locked = onAirLockedControls();
+    // JJ's ruling: on the air only the device that holds transmit changes
+    // the transmitting band's values; this window too, when another device
+    // holds it (RadioModel::paOnAirEditRefusal gives the Core's refusal).
+    QList<QWidget*> holderOnly;
+    if (m_onAir && m_onAirBandIndex >= 0 && !holdsTransmitHere()) {
+        holderOnly = paBandControls(m_onAirBandIndex);
+    }
+    QList<QWidget*> open;
+    for (QWidget* control : all) {
+        if (!locked.contains(control) && !holderOnly.contains(control)) {
+            open << control;
+        }
+    }
+    gateTransmitControls(open, true, QString());
+    gateTransmitControls(locked, false, RadioModel::paOnAirLockedReason());
+    gateTransmitControls(holderOnly, false, RadioModel::paHolderOnlyReason());
+}
+
+bool PaGainByBandPage::holdsTransmitHere()
+{
+    const RadioModel* const radio = model();
+    if (!radio) {
+        return false;
+    }
+    // The Core's own window holds it unless another device does; a remote
+    // window only while the Core names this device the holder.
+    if (radio->ownsLocalDsp()) {
+        return radio->otherDeviceHoldsRefusal().isEmpty();
+    }
+    const IStationLink* const link = radio->stationLink();
+    return link && link->holdsTransmitHere();
+}
+
 QList<QWidget*> PaGainByBandPage::paKeyingControls() const
 {
     // The sweep engages TUNE on every band (Thetis chkAutoPACalibrate), so
@@ -907,7 +1083,7 @@ QList<QWidget*> PaGainByBandPage::paKeyingControls() const
 
 void PaGainByBandPage::applyPaGates()
 {
-    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
+    applyPaSettingsGate();
     gateTransmitControls(paKeyingControls(), m_paKeyingPermitted, m_paKeyingReason);
 }
 
@@ -929,7 +1105,7 @@ void PaGainByBandPage::setTransmitSettingsPermittedAt(int version, bool permitte
     m_paSettingsPermitted = permitted;
     m_paSettingsReason = reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
                                           : reason;
-    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
+    applyPaSettingsGate();
 }
 
 // ── Phase 8 of #167: per-SKU visibility wiring ────────────────────────────────
@@ -1404,6 +1580,7 @@ void PaGainByBandPage::onGainChanged(Band band, double value)
     mutated.setGainForBand(band, static_cast<float>(value));
     m_paProfileManager->saveProfile(active->name(), mutated);
     warnIfProfileDiverged();
+    applyEditOnAir(band, /*adjust=*/false, -1);
 }
 
 void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
@@ -1416,6 +1593,25 @@ void PaGainByBandPage::onAdjustChanged(Band band, int step, double value)
     PaProfile mutated = *active;
     mutated.setAdjust(band, step, static_cast<float>(value));
     m_paProfileManager->saveProfile(active->name(), mutated);
+    // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
+    //   if (console.MOX) ... console.PWR = nNumber + 10; // set drive to the value we are adjusting
+    applyEditOnAir(band, /*adjust=*/true, step);
+}
+
+void PaGainByBandPage::applyEditOnAir(Band band, bool adjust, int step)
+{
+    // The Core's own window drives the radio: an edit taken on the air
+    // reaches the drive as Thetis's does. A remote window's edit reaches
+    // it at the Core (RadioModel::applyPaSettingOnAir). Only an edit to
+    // the band transmitting now moves the drive (Thetis _adjustingBand);
+    // the band is read at the edit, never latched at key.
+    RadioModel* const radio = model();
+    if (radio && radio->ownsLocalDsp() && radio->paOnAirNow()
+        && static_cast<int>(band) == radio->paOnAirBandIndex()) {
+        radio->applyPaEditOnAir(adjust ? RadioModel::PaProfileAction::SetAdjust
+                                       : RadioModel::PaProfileAction::SetGain,
+                                step);
+    }
 }
 
 void PaGainByBandPage::onMaxPowerChanged(Band band, double watts)
@@ -2122,9 +2318,10 @@ void PaWattMeterPage::setTransmitSettingsPermittedAt(int version, bool permitted
                                                      const QString& reason)
 {
     // R-R3-46 / R-R3-49 (parity Task 6): the PA forward-power table
-    // (hardware/<mac>/paCalibration/...) is taken by the Core while its
-    // radio is off the air. Show PA Values and Reset PA Values are this
-    // window's own.
+    // (hardware/<mac>/paCalibration/...) is taken by the Core on or off the
+    // air, as Thetis has no transmit rule for it; a point changed while the
+    // radio transmits reaches the meter once it is back on receive. Show PA
+    // Values and Reset PA Values are this window's own.
     if (version != 6 || !m_paCalGroup) {
         return;
     }

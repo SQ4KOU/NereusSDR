@@ -26,6 +26,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: RX2's own enable
 //                                    and auto-attenuate settings.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampMode, RX2's own
+//                                    preamp mode. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -41,7 +44,7 @@ namespace NereusSDR {
 namespace {
 
 constexpr int kPreampModeFirst = static_cast<int>(PreampMode::Off);
-constexpr int kPreampModeLast = static_cast<int>(PreampMode::Minus50);
+constexpr int kPreampModeLast = static_cast<int>(PreampMode::SaMinus30);
 
 int overloadWireLevel(OverloadLevel level)
 {
@@ -119,6 +122,7 @@ void StepAttenuatorFacade::bindController(StepAttenuatorController* controller)
     follow(&C::rx2AutoAttEnabledChanged);
     follow(&C::rx2AutoAttUndoChanged);
     follow(&C::rx2AutoUndoDelayChanged);
+    follow(&C::rx2PreampModeChanged);
     refresh();
 }
 
@@ -544,6 +548,49 @@ void StepAttenuatorFacade::setRx2AutoAttUndoDelayMs(int ms)
     publish(next);
 }
 
+void StepAttenuatorFacade::setRx2PreampMode(int mode)
+{
+    if (!beginEdit("rx2PreampMode")) {
+        return;
+    }
+    if (StepAttenuatorController* c = m_controller.data()) {
+        bool offered = mode >= kPreampModeFirst && mode <= kPreampModeLast;
+        if (offered && m_radio) {
+            // The same items the RX applet offers a slice on the other ADC
+            // (BoardCapsTable::rx2PreampItemsForBoard, from Thetis
+            // comboRX2Preamp's lists).
+            const BoardCapabilities& caps = m_radio->boardCapabilities();
+            const auto items = BoardCapsTable::rx2PreampItemsForBoard(caps.board);
+            if (!items.empty()) {
+                offered = std::any_of(items.begin(), items.end(),
+                                      [mode](const BoardCapsTable::PreampItem& item) {
+                    return item.modeInt == mode;
+                });
+            }
+        }
+        if (!offered) {
+            settle("rx2PreampMode",
+                   QStringLiteral("This radio does not offer that preamp setting."));
+        } else {
+            c->setRx2PreampMode(static_cast<PreampMode>(mode));
+        }
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rx2PreampMode = mode;
+    publish(next);
+}
+
+void StepAttenuatorFacade::setPreampModeForSlice(int sliceId, int mode)
+{
+    if (sliceUsesRx2(sliceId)) {
+        setRx2PreampMode(mode);
+    } else {
+        setPreampMode(mode);
+    }
+}
+
 void StepAttenuatorFacade::setAttenuationDbForSlice(int sliceId, int dB)
 {
     if (sliceUsesRx2(sliceId)) {
@@ -584,6 +631,7 @@ void StepAttenuatorFacade::refresh()
     next.rx2AutoAttEnabled = c->rx2AutoAttEnabled();
     next.rx2AutoAttUndo = c->rx2AutoAttUndo();
     next.rx2AutoAttUndoDelayMs = c->rx2AutoUndoDelaySec() * 1000;
+    next.rx2PreampMode = static_cast<int>(c->rx2PreampMode());
     publish(next);
 }
 
@@ -636,6 +684,9 @@ void StepAttenuatorFacade::publish(const Values& next)
     }
     if (before.rx2AutoAttUndoDelayMs != next.rx2AutoAttUndoDelayMs) {
         emit rx2AutoAttUndoDelayMsChanged(next.rx2AutoAttUndoDelayMs);
+    }
+    if (before.rx2PreampMode != next.rx2PreampMode) {
+        emit rx2PreampModeChanged(next.rx2PreampMode);
     }
 }
 

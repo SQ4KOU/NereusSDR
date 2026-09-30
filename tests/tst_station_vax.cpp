@@ -87,7 +87,8 @@ struct Device {
             features.insert("deviceAuth", 1);
         }
         server->acceptTransport(station);
-        QTest::qWaitFor([this]() { return !app->received().isEmpty(); }, 5000);
+        QVERIFY2(QTest::qWaitFor([this]() { return !app->received().isEmpty(); }, 5000),
+                 "the Core never greeted the device");
         app->sendText(SessionMessages::encode(SessionMessages::hello(
             kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("VAX phone"),
             {kSessionProtocolMajor}, features)));
@@ -182,8 +183,7 @@ struct Device {
         app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
             QByteArrayLiteral("vax"), {MirrorUpdate{1, name, kind, value}}, writeId)));
         SessionPropertyResult found;
-        found.reason = QStringLiteral("no property.result arrived");
-        QTest::qWaitFor([&]() {
+        const bool arrived = QTest::qWaitFor([&]() {
             for (const SessionMessage& message : messages()) {
                 if (message.kind == SessionMessageKind::PropertyResult
                     && message.writeId == writeId && !message.propertyResults.isEmpty()) {
@@ -193,6 +193,9 @@ struct Device {
             }
             return false;
         }, 3000);
+        if (!arrived) {
+            found.reason = QStringLiteral("no property.result arrived");
+        }
         return found;
     }
     SessionMessage invoke(const QByteArray& verb, const QList<MirrorUpdate>& arguments)
@@ -200,8 +203,7 @@ struct Device {
         const quint32 id = ++nextId;
         app->sendText(SessionMessages::encode(SessionMessages::commandInvoke(verb, id, arguments)));
         SessionMessage found;
-        found.reason = QStringLiteral("no command.result arrived");
-        QTest::qWaitFor([&]() {
+        const bool arrived = QTest::qWaitFor([&]() {
             for (const SessionMessage& message : messages()) {
                 if (message.kind == SessionMessageKind::CommandResult
                     && message.commandId == id) {
@@ -211,6 +213,9 @@ struct Device {
             }
             return false;
         }, 3000);
+        if (!arrived) {
+            found.reason = QStringLiteral("no command.result arrived");
+        }
         return found;
     }
     // Every vaxLevels record this device received, oldest first.

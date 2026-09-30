@@ -74,6 +74,14 @@
 //   2026-09-27 - R-R3-49: savedSampleRateHz, the rate saved for a band,
 //                read at connect. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control and shared listening plan Task 5: the
+//                read-only listener mark; every setter of a property a
+//                remote window writes to the Core (MirrorPolicy
+//                Bidirectional) but panKey, setFilter, applyNnrSettings
+//                and restoreFromSettings hold a change back while it is
+//                set.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -266,6 +274,7 @@ SliceModel::~SliceModel() = default;
 
 void SliceModel::setFrequency(double freq)
 {
+    if (holdsListenerWrite(frequency(), freq)) { return; }
     // 3G-10 S2.9: client-side lock guard. When locked, setFrequency is a
     // no-op — prevents accidental tuning. The hardware VFO is not changed.
     if (m_locked) { return; }
@@ -279,6 +288,30 @@ bool SliceModel::applyStationFrequency(double freq)
         return false;
     }
     applyFrequency(freq);
+    return true;
+}
+
+void SliceModel::setReadOnlyListener(bool readOnly, const QString& reason)
+{
+    // Slice control plan Task 5: set by the remote window's
+    // SliceAccessMirror only; a Local model never listens to a slice.
+    const QString words = readOnly ? reason : QString();
+    const bool changed = m_readOnlyListener != readOnly;
+    m_readOnlyListener = readOnly;
+    m_readOnlyListenerReason = words;
+    if (changed) {
+        emit readOnlyListenerChanged(readOnly);
+    }
+}
+
+bool SliceModel::holdForListener()
+{
+    // The Core's own state applied to a listened slice is never held; only
+    // a change this window would send is.
+    if (!m_readOnlyListener || (m_stationApplyProbe && m_stationApplyProbe())) {
+        return false;
+    }
+    emit listenerWriteHeld(m_readOnlyListenerReason);
     return true;
 }
 
@@ -306,6 +339,7 @@ void SliceModel::applyFrequency(double freq)
 
 void SliceModel::setDspMode(DSPMode mode)
 {
+    if (holdsListenerWrite(dspMode(), mode)) { return; }
     const bool modeChanged = (m_dspMode != mode);
     const DSPMode oldMode = m_dspMode;
     m_dspMode = mode;
@@ -531,6 +565,7 @@ QString SliceModel::radeModelPath() const
 
 void SliceModel::setFilterLow(int low)
 {
+    if (holdsListenerWrite(filterLow(), low)) { return; }
     if (m_filterLow != low) {
         m_filterLow = low;
         emit filterChanged(m_filterLow, m_filterHigh);
@@ -539,6 +574,7 @@ void SliceModel::setFilterLow(int low)
 
 void SliceModel::setFilterHigh(int high)
 {
+    if (holdsListenerWrite(filterHigh(), high)) { return; }
     if (m_filterHigh != high) {
         m_filterHigh = high;
         emit filterChanged(m_filterLow, m_filterHigh);
@@ -547,6 +583,7 @@ void SliceModel::setFilterHigh(int high)
 
 void SliceModel::setFilter(int low, int high)
 {
+    if (holdsListenerWrite(std::pair(m_filterLow, m_filterHigh), std::pair(low, high))) { return; }
     if (m_filterLow != low || m_filterHigh != high) {
         m_filterLow = low;
         m_filterHigh = high;
@@ -560,6 +597,7 @@ void SliceModel::setFilter(int low, int high)
 
 void SliceModel::setAgcMode(AGCMode mode)
 {
+    if (holdsListenerWrite(agcMode(), mode)) { return; }
     if (m_agcMode != mode) {
         m_agcMode = mode;
         emit agcModeChanged(mode);
@@ -572,6 +610,7 @@ void SliceModel::setAgcMode(AGCMode mode)
 
 void SliceModel::setStepHz(int hz)
 {
+    if (holdsListenerWrite(stepHz(), hz)) { return; }
     if (m_stepHz != hz && hz > 0) {
         m_stepHz = hz;
         emit stepHzChanged(hz);
@@ -584,6 +623,7 @@ void SliceModel::setStepHz(int hz)
 
 void SliceModel::setAfGain(int gain)
 {
+    if (holdsListenerWrite(afGain(), gain)) { return; }
     gain = std::clamp(gain, ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
     if (m_afGain != gain) {
         m_afGain = gain;
@@ -593,6 +633,7 @@ void SliceModel::setAfGain(int gain)
 
 void SliceModel::setRfGain(int gain)
 {
+    if (holdsListenerWrite(rfGain(), gain)) { return; }
     gain = std::clamp(gain, 0, 100);
     if (m_rfGain != gain) {
         m_rfGain = gain;
@@ -606,6 +647,7 @@ void SliceModel::setRfGain(int gain)
 
 void SliceModel::setRxAntenna(const QString& ant)
 {
+    if (holdsListenerWrite(rxAntenna(), ant)) { return; }
     if (m_rxAntenna != ant) {
         m_rxAntenna = ant;
         emit rxAntennaChanged(ant);
@@ -614,6 +656,7 @@ void SliceModel::setRxAntenna(const QString& ant)
 
 void SliceModel::setTxAntenna(const QString& ant)
 {
+    if (holdsListenerWrite(txAntenna(), ant)) { return; }
     if (m_txAntenna != ant) {
         m_txAntenna = ant;
         emit txAntennaChanged(ant);
@@ -981,6 +1024,9 @@ void SliceModel::setShiftOffsetHz(double hz)
 
 void SliceModel::setPanKey(const QString& key)
 {
+    // Slice control plan Task 5: not held on a listened slice. Which pan
+    // shows it is this window's layout (a layout change rehomes it so it
+    // stays visible); the window's StationClient does not send it.
     if (m_panKey != key) {
         m_panKey = key;
         emit panKeyChanged(key);
@@ -997,6 +1043,7 @@ void SliceModel::setSampleRateHz(int hz)
 
 void SliceModel::setDiversityEnabled(bool on)
 {
+    if (holdsListenerWrite(diversityEnabled(), on)) { return; }
     if (m_diversityEnabled != on) {
         m_diversityEnabled = on;
         emit diversityEnabledChanged(on);
@@ -1013,6 +1060,7 @@ void SliceModel::setDiversityEnabled(bool on)
 
 void SliceModel::setDiversityPhaseDeg(double deg)
 {
+    if (holdsListenerWrite(diversityPhaseDeg(), deg)) { return; }
     if (m_diversityPhaseDeg != deg) {
         m_diversityPhaseDeg = deg;
         emit diversityPhaseDegChanged(deg);
@@ -1022,6 +1070,7 @@ void SliceModel::setDiversityPhaseDeg(double deg)
 
 void SliceModel::setDiversityGainDb(double db)
 {
+    if (holdsListenerWrite(diversityGainDb(), db)) { return; }
     if (m_diversityGainDb != db) {
         m_diversityGainDb = db;
         emit diversityGainDbChanged(db);
@@ -1065,6 +1114,7 @@ void SliceModel::noteDiversityPatternInputs()
 
 void SliceModel::setDiversityFineNullEnabled(bool on)
 {
+    if (holdsListenerWrite(diversityFineNullEnabled(), on)) { return; }
     if (m_diversityFineNullEnabled != on) {
         m_diversityFineNullEnabled = on;
         emit diversityFineNullEnabledChanged(on);
@@ -1091,6 +1141,7 @@ void SliceModel::setPsPaused(bool paused)
 
 void SliceModel::setLocked(bool v)
 {
+    if (holdsListenerWrite(locked(), v)) { return; }
     if (m_locked != v) {
         m_locked = v;
         emit lockedChanged(v);
@@ -1099,6 +1150,7 @@ void SliceModel::setLocked(bool v)
 
 void SliceModel::setMuted(bool v)
 {
+    if (holdsListenerWrite(muted(), v)) { return; }
     if (m_muted != v) {
         m_muted = v;
         emit mutedChanged(v);
@@ -1107,6 +1159,7 @@ void SliceModel::setMuted(bool v)
 
 void SliceModel::setAudioPan(double pan)
 {
+    if (holdsListenerWrite(audioPan(), pan)) { return; }
     // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
     if (qFuzzyIsNull(m_audioPan - pan)) {
         return;
@@ -1117,6 +1170,7 @@ void SliceModel::setAudioPan(double pan)
 
 void SliceModel::setSsqlEnabled(bool v)
 {
+    if (holdsListenerWrite(ssqlEnabled(), v)) { return; }
     if (m_ssqlEnabled != v) {
         m_ssqlEnabled = v;
         emit ssqlEnabledChanged(v);
@@ -1125,6 +1179,7 @@ void SliceModel::setSsqlEnabled(bool v)
 
 void SliceModel::setSsqlThresh(double dB)
 {
+    if (holdsListenerWrite(ssqlThresh(), dB)) { return; }
     // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
     if (qFuzzyIsNull(m_ssqlThresh - dB)) {
         return;
@@ -1135,6 +1190,7 @@ void SliceModel::setSsqlThresh(double dB)
 
 void SliceModel::setAmsqEnabled(bool v)
 {
+    if (holdsListenerWrite(amsqEnabled(), v)) { return; }
     if (m_amsqEnabled != v) {
         m_amsqEnabled = v;
         emit amsqEnabledChanged(v);
@@ -1143,6 +1199,7 @@ void SliceModel::setAmsqEnabled(bool v)
 
 void SliceModel::setAmsqThresh(double dB)
 {
+    if (holdsListenerWrite(amsqThresh(), dB)) { return; }
     // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
     if (qFuzzyIsNull(m_amsqThresh - dB)) {
         return;
@@ -1153,6 +1210,7 @@ void SliceModel::setAmsqThresh(double dB)
 
 void SliceModel::setFmsqEnabled(bool v)
 {
+    if (holdsListenerWrite(fmsqEnabled(), v)) { return; }
     if (m_fmsqEnabled != v) {
         m_fmsqEnabled = v;
         emit fmsqEnabledChanged(v);
@@ -1161,6 +1219,7 @@ void SliceModel::setFmsqEnabled(bool v)
 
 void SliceModel::setFmsqThresh(double dB)
 {
+    if (holdsListenerWrite(fmsqThresh(), dB)) { return; }
     // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
     if (qFuzzyIsNull(m_fmsqThresh - dB)) {
         return;
@@ -1171,6 +1230,7 @@ void SliceModel::setFmsqThresh(double dB)
 
 void SliceModel::setAgcThreshold(int dBu)
 {
+    if (holdsListenerWrite(agcThreshold(), dBu)) { return; }
     if (m_agcThreshold != dBu) {
         m_agcThreshold = dBu;
         emit agcThresholdChanged(dBu);
@@ -1179,6 +1239,7 @@ void SliceModel::setAgcThreshold(int dBu)
 
 void SliceModel::setAgcHang(int ms)
 {
+    if (holdsListenerWrite(agcHang(), ms)) { return; }
     if (m_agcHang != ms) {
         m_agcHang = ms;
         emit agcHangChanged(ms);
@@ -1187,6 +1248,7 @@ void SliceModel::setAgcHang(int ms)
 
 void SliceModel::setAgcSlope(int dB)
 {
+    if (holdsListenerWrite(agcSlope(), dB)) { return; }
     if (m_agcSlope != dB) {
         m_agcSlope = dB;
         emit agcSlopeChanged(dB);
@@ -1195,6 +1257,7 @@ void SliceModel::setAgcSlope(int dB)
 
 void SliceModel::setAgcAttack(int ms)
 {
+    if (holdsListenerWrite(agcAttack(), ms)) { return; }
     if (m_agcAttack != ms) {
         m_agcAttack = ms;
         emit agcAttackChanged(ms);
@@ -1203,6 +1266,7 @@ void SliceModel::setAgcAttack(int ms)
 
 void SliceModel::setAgcDecay(int ms)
 {
+    if (holdsListenerWrite(agcDecay(), ms)) { return; }
     if (m_agcDecay != ms) {
         m_agcDecay = ms;
         emit agcDecayChanged(ms);
@@ -1211,6 +1275,7 @@ void SliceModel::setAgcDecay(int ms)
 
 void SliceModel::setAutoAgcEnabled(bool on)
 {
+    if (holdsListenerWrite(autoAgcEnabled(), on)) { return; }
     if (m_autoAgcEnabled != on) {
         m_autoAgcEnabled = on;
         emit autoAgcEnabledChanged(on);
@@ -1219,6 +1284,7 @@ void SliceModel::setAutoAgcEnabled(bool on)
 
 void SliceModel::setAutoAgcOffset(double dB)
 {
+    if (holdsListenerWrite(autoAgcOffset(), dB)) { return; }
     if (!qFuzzyCompare(m_autoAgcOffset, dB)) {
         m_autoAgcOffset = dB;
         emit autoAgcOffsetChanged(dB);
@@ -1227,6 +1293,7 @@ void SliceModel::setAutoAgcOffset(double dB)
 
 void SliceModel::setAgcFixedGain(int dB)
 {
+    if (holdsListenerWrite(agcFixedGain(), dB)) { return; }
     if (m_agcFixedGain != dB) {
         m_agcFixedGain = dB;
         emit agcFixedGainChanged(dB);
@@ -1235,6 +1302,7 @@ void SliceModel::setAgcFixedGain(int dB)
 
 void SliceModel::setAgcHangThreshold(int val)
 {
+    if (holdsListenerWrite(agcHangThreshold(), val)) { return; }
     if (m_agcHangThreshold != val) {
         m_agcHangThreshold = val;
         emit agcHangThresholdChanged(val);
@@ -1243,6 +1311,7 @@ void SliceModel::setAgcHangThreshold(int val)
 
 void SliceModel::setAgcMaxGain(int dB)
 {
+    if (holdsListenerWrite(agcMaxGain(), dB)) { return; }
     if (m_agcMaxGain != dB) {
         m_agcMaxGain = dB;
         emit agcMaxGainChanged(dB);
@@ -1251,6 +1320,7 @@ void SliceModel::setAgcMaxGain(int dB)
 
 void SliceModel::setRitEnabled(bool v)
 {
+    if (holdsListenerWrite(ritEnabled(), v)) { return; }
     if (m_ritEnabled != v) {
         m_ritEnabled = v;
         emit ritEnabledChanged(v);
@@ -1259,6 +1329,7 @@ void SliceModel::setRitEnabled(bool v)
 
 void SliceModel::setRitHz(int hz)
 {
+    if (holdsListenerWrite(ritHz(), hz)) { return; }
     if (m_ritHz != hz) {
         m_ritHz = hz;
         emit ritHzChanged(hz);
@@ -1267,6 +1338,7 @@ void SliceModel::setRitHz(int hz)
 
 void SliceModel::setXitEnabled(bool v)
 {
+    if (holdsListenerWrite(xitEnabled(), v)) { return; }
     if (m_xitEnabled != v) {
         m_xitEnabled = v;
         emit xitEnabledChanged(v);
@@ -1275,6 +1347,7 @@ void SliceModel::setXitEnabled(bool v)
 
 void SliceModel::setXitHz(int hz)
 {
+    if (holdsListenerWrite(xitHz(), hz)) { return; }
     if (m_xitHz != hz) {
         m_xitHz = hz;
         emit xitHzChanged(hz);
@@ -1283,6 +1356,7 @@ void SliceModel::setXitHz(int hz)
 
 void SliceModel::setNbMode(NereusSDR::NbMode v)
 {
+    if (holdsListenerWrite(nbMode(), v)) { return; }
     if (v == m_nbMode) { return; }
     m_nbMode = v;
     emit nbModeChanged(v);
@@ -1297,6 +1371,7 @@ void SliceModel::setNbMode(NereusSDR::NbMode v)
 
 void SliceModel::setActiveNr(NereusSDR::NrSlot slot)
 {
+    if (holdsListenerWrite(activeNr(), slot)) { return; }
     setNnrLastError({});
     if (static_cast<int>(slot) < 0 || static_cast<int>(slot) > static_cast<int>(NrSlot::NNR)) {
         setNnrLastError(QStringLiteral("Unsupported noise-reduction selection."));
@@ -1328,6 +1403,7 @@ void SliceModel::setNnrLastError(const QString& error)
 
 bool SliceModel::applyNnrSettings(const NnrSettings& requested)
 {
+    if (holdsListenerWrite(m_nnrSettings, requested)) { return false; }
     setNnrLastError({});
     if (!requested.isValid()) {
         setNnrLastError(QStringLiteral("NNR values must be finite and within their supported ranges."));
@@ -1361,6 +1437,7 @@ bool SliceModel::applyNnrSettings(const NnrSettings& requested)
 
 void SliceModel::setNnrModelSlot(int value)
 {
+    if (holdsListenerWrite(nnrModelSlot(), value)) { return; }
     // R-R3-40: choosing a model while the Core holds this receiver back is
     // the operator asking for it again, even when it is the saved model
     // (which the equality check in applyNnrSettings would otherwise ignore).
@@ -1377,6 +1454,7 @@ void SliceModel::setNnrModelSlot(int value)
 
 void SliceModel::setNnrMaskFloorDb(double value)
 {
+    if (holdsListenerWrite(nnrMaskFloorDb(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.maskFloorDb = value;
     applyNnrSettings(requested);
@@ -1384,6 +1462,7 @@ void SliceModel::setNnrMaskFloorDb(double value)
 
 void SliceModel::setNnrPosition(NereusSDR::NrPosition value)
 {
+    if (holdsListenerWrite(nnrPosition(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.position = value;
     applyNnrSettings(requested);
@@ -1391,6 +1470,7 @@ void SliceModel::setNnrPosition(NereusSDR::NrPosition value)
 
 void SliceModel::setNnrAlpha(double value)
 {
+    if (holdsListenerWrite(nnrAlpha(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.alpha = value;
     applyNnrSettings(requested);
@@ -1398,6 +1478,7 @@ void SliceModel::setNnrAlpha(double value)
 
 void SliceModel::setNnrAlphaKneeDb(double value)
 {
+    if (holdsListenerWrite(nnrAlphaKneeDb(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.alphaKneeDb = value;
     applyNnrSettings(requested);
@@ -1405,6 +1486,7 @@ void SliceModel::setNnrAlphaKneeDb(double value)
 
 void SliceModel::setNnrTauSeconds(double value)
 {
+    if (holdsListenerWrite(nnrTauSeconds(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.tauSeconds = value;
     applyNnrSettings(requested);
@@ -1412,6 +1494,7 @@ void SliceModel::setNnrTauSeconds(double value)
 
 void SliceModel::setNnrMaxGainDb(double value)
 {
+    if (holdsListenerWrite(nnrMaxGainDb(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.maxGainDb = value;
     applyNnrSettings(requested);
@@ -1419,6 +1502,7 @@ void SliceModel::setNnrMaxGainDb(double value)
 
 void SliceModel::setNnrAttackMs(double value)
 {
+    if (holdsListenerWrite(nnrAttackMs(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.attackMs = value;
     applyNnrSettings(requested);
@@ -1426,6 +1510,7 @@ void SliceModel::setNnrAttackMs(double value)
 
 void SliceModel::setNnrReleaseMs(double value)
 {
+    if (holdsListenerWrite(nnrReleaseMs(), value)) { return; }
     auto requested = m_nnrSettings;
     requested.releaseMs = value;
     applyNnrSettings(requested);
@@ -1659,30 +1744,35 @@ void SliceModel::restoreNnrSettings()
 // NR1
 void SliceModel::setNr1Taps(int v)
 {
+    if (holdsListenerWrite(nr1Taps(), v)) { return; }
     if (m_nr1Taps == v) { return; }
     m_nr1Taps = v;
     emit nr1TapsChanged(v);
 }
 void SliceModel::setNr1Delay(int v)
 {
+    if (holdsListenerWrite(nr1Delay(), v)) { return; }
     if (m_nr1Delay == v) { return; }
     m_nr1Delay = v;
     emit nr1DelayChanged(v);
 }
 void SliceModel::setNr1Gain(double v)
 {
+    if (holdsListenerWrite(nr1Gain(), v)) { return; }
     if (qFuzzyCompare(m_nr1Gain, v)) { return; }
     m_nr1Gain = v;
     emit nr1GainChanged(v);
 }
 void SliceModel::setNr1Leakage(double v)
 {
+    if (holdsListenerWrite(nr1Leakage(), v)) { return; }
     if (qFuzzyCompare(m_nr1Leakage, v)) { return; }
     m_nr1Leakage = v;
     emit nr1LeakageChanged(v);
 }
 void SliceModel::setNr1Position(NereusSDR::NrPosition p)
 {
+    if (holdsListenerWrite(nr1Position(), p)) { return; }
     if (m_nr1Position == p) { return; }
     m_nr1Position = p;
     emit nr1PositionChanged(p);
@@ -1691,66 +1781,77 @@ void SliceModel::setNr1Position(NereusSDR::NrPosition p)
 // NR2
 void SliceModel::setNr2GainMethod(NereusSDR::EmnrGainMethod v)
 {
+    if (holdsListenerWrite(nr2GainMethod(), v)) { return; }
     if (m_nr2GainMethod == v) { return; }
     m_nr2GainMethod = v;
     emit nr2GainMethodChanged(v);
 }
 void SliceModel::setNr2NpeMethod(NereusSDR::EmnrNpeMethod v)
 {
+    if (holdsListenerWrite(nr2NpeMethod(), v)) { return; }
     if (m_nr2NpeMethod == v) { return; }
     m_nr2NpeMethod = v;
     emit nr2NpeMethodChanged(v);
 }
 void SliceModel::setNr2TrainT1(double v)
 {
+    if (holdsListenerWrite(nr2TrainT1(), v)) { return; }
     if (qFuzzyCompare(m_nr2TrainT1, v)) { return; }
     m_nr2TrainT1 = v;
     emit nr2TrainT1Changed(v);
 }
 void SliceModel::setNr2TrainT2(double v)
 {
+    if (holdsListenerWrite(nr2TrainT2(), v)) { return; }
     if (qFuzzyCompare(m_nr2TrainT2, v)) { return; }
     m_nr2TrainT2 = v;
     emit nr2TrainT2Changed(v);
 }
 void SliceModel::setNr2AeFilter(bool v)
 {
+    if (holdsListenerWrite(nr2AeFilter(), v)) { return; }
     if (m_nr2AeFilter == v) { return; }
     m_nr2AeFilter = v;
     emit nr2AeFilterChanged(v);
 }
 void SliceModel::setNr2Position(NereusSDR::NrPosition p)
 {
+    if (holdsListenerWrite(nr2Position(), p)) { return; }
     if (m_nr2Position == p) { return; }
     m_nr2Position = p;
     emit nr2PositionChanged(p);
 }
 void SliceModel::setNr2Post2Run(bool v)
 {
+    if (holdsListenerWrite(nr2Post2Run(), v)) { return; }
     if (m_nr2Post2Run == v) { return; }
     m_nr2Post2Run = v;
     emit nr2Post2RunChanged(v);
 }
 void SliceModel::setNr2Post2Level(double v)
 {
+    if (holdsListenerWrite(nr2Post2Level(), v)) { return; }
     if (qFuzzyCompare(m_nr2Post2Level, v)) { return; }
     m_nr2Post2Level = v;
     emit nr2Post2LevelChanged(v);
 }
 void SliceModel::setNr2Post2Factor(double v)
 {
+    if (holdsListenerWrite(nr2Post2Factor(), v)) { return; }
     if (qFuzzyCompare(m_nr2Post2Factor, v)) { return; }
     m_nr2Post2Factor = v;
     emit nr2Post2FactorChanged(v);
 }
 void SliceModel::setNr2Post2Rate(double v)
 {
+    if (holdsListenerWrite(nr2Post2Rate(), v)) { return; }
     if (qFuzzyCompare(m_nr2Post2Rate, v)) { return; }
     m_nr2Post2Rate = v;
     emit nr2Post2RateChanged(v);
 }
 void SliceModel::setNr2Post2Taper(int v)
 {
+    if (holdsListenerWrite(nr2Post2Taper(), v)) { return; }
     if (m_nr2Post2Taper == v) { return; }
     m_nr2Post2Taper = v;
     emit nr2Post2TaperChanged(v);
@@ -1759,12 +1860,14 @@ void SliceModel::setNr2Post2Taper(int v)
 // NR3
 void SliceModel::setNr3Position(NereusSDR::NrPosition p)
 {
+    if (holdsListenerWrite(nr3Position(), p)) { return; }
     if (m_nr3Position == p) { return; }
     m_nr3Position = p;
     emit nr3PositionChanged(p);
 }
 void SliceModel::setNr3UseDefaultGain(bool v)
 {
+    if (holdsListenerWrite(nr3UseDefaultGain(), v)) { return; }
     if (m_nr3UseDefaultGain == v) { return; }
     m_nr3UseDefaultGain = v;
     emit nr3UseDefaultGainChanged(v);
@@ -1773,36 +1876,42 @@ void SliceModel::setNr3UseDefaultGain(bool v)
 // NR4
 void SliceModel::setNr4Reduction(double v)
 {
+    if (holdsListenerWrite(nr4Reduction(), v)) { return; }
     if (qFuzzyCompare(m_nr4Reduction, v)) { return; }
     m_nr4Reduction = v;
     emit nr4ReductionChanged(v);
 }
 void SliceModel::setNr4Smoothing(double v)
 {
+    if (holdsListenerWrite(nr4Smoothing(), v)) { return; }
     if (qFuzzyCompare(m_nr4Smoothing, v)) { return; }
     m_nr4Smoothing = v;
     emit nr4SmoothingChanged(v);
 }
 void SliceModel::setNr4Whitening(double v)
 {
+    if (holdsListenerWrite(nr4Whitening(), v)) { return; }
     if (qFuzzyCompare(m_nr4Whitening, v)) { return; }
     m_nr4Whitening = v;
     emit nr4WhiteningChanged(v);
 }
 void SliceModel::setNr4Rescale(double v)
 {
+    if (holdsListenerWrite(nr4Rescale(), v)) { return; }
     if (qFuzzyCompare(m_nr4Rescale, v)) { return; }
     m_nr4Rescale = v;
     emit nr4RescaleChanged(v);
 }
 void SliceModel::setNr4PostThresh(double v)
 {
+    if (holdsListenerWrite(nr4PostThresh(), v)) { return; }
     if (qFuzzyCompare(m_nr4PostThresh, v)) { return; }
     m_nr4PostThresh = v;
     emit nr4PostThreshChanged(v);
 }
 void SliceModel::setNr4Algo(NereusSDR::SbnrAlgo v)
 {
+    if (holdsListenerWrite(nr4Algo(), v)) { return; }
     if (m_nr4Algo == v) { return; }
     m_nr4Algo = v;
     emit nr4AlgoChanged(v);
@@ -1811,12 +1920,14 @@ void SliceModel::setNr4Algo(NereusSDR::SbnrAlgo v)
 // DFNR
 void SliceModel::setDfnrAttenLimit(double v)
 {
+    if (holdsListenerWrite(dfnrAttenLimit(), v)) { return; }
     if (qFuzzyCompare(m_dfnrAttenLimit, v)) { return; }
     m_dfnrAttenLimit = v;
     emit dfnrAttenLimitChanged(v);
 }
 void SliceModel::setDfnrPostFilterBeta(double v)
 {
+    if (holdsListenerWrite(dfnrPostFilterBeta(), v)) { return; }
     if (qFuzzyCompare(m_dfnrPostFilterBeta, v)) { return; }
     m_dfnrPostFilterBeta = v;
     emit dfnrPostFilterBetaChanged(v);
@@ -1825,42 +1936,49 @@ void SliceModel::setDfnrPostFilterBeta(double v)
 // BNR + MNR
 void SliceModel::setBnrStrength(double v)
 {
+    if (holdsListenerWrite(bnrStrength(), v)) { return; }
     if (qFuzzyCompare(m_bnrStrength, v)) { return; }
     m_bnrStrength = v;
     emit bnrStrengthChanged(v);
 }
 void SliceModel::setMnrStrength(double v)
 {
+    if (holdsListenerWrite(mnrStrength(), v)) { return; }
     if (qFuzzyCompare(m_mnrStrength, v)) { return; }
     m_mnrStrength = v;
     emit mnrStrengthChanged(v);
 }
 void SliceModel::setMnrOversub(double v)
 {
+    if (holdsListenerWrite(mnrOversub(), v)) { return; }
     if (qFuzzyCompare(m_mnrOversub, v)) { return; }
     m_mnrOversub = v;
     emit mnrOversubChanged(v);
 }
 void SliceModel::setMnrFloor(double v)
 {
+    if (holdsListenerWrite(mnrFloor(), v)) { return; }
     if (qFuzzyCompare(m_mnrFloor, v)) { return; }
     m_mnrFloor = v;
     emit mnrFloorChanged(v);
 }
 void SliceModel::setMnrAlpha(double v)
 {
+    if (holdsListenerWrite(mnrAlpha(), v)) { return; }
     if (qFuzzyCompare(m_mnrAlpha, v)) { return; }
     m_mnrAlpha = v;
     emit mnrAlphaChanged(v);
 }
 void SliceModel::setMnrBias(double v)
 {
+    if (holdsListenerWrite(mnrBias(), v)) { return; }
     if (qFuzzyCompare(m_mnrBias, v)) { return; }
     m_mnrBias = v;
     emit mnrBiasChanged(v);
 }
 void SliceModel::setMnrGsmooth(double v)
 {
+    if (holdsListenerWrite(mnrGsmooth(), v)) { return; }
     if (qFuzzyCompare(m_mnrGsmooth, v)) { return; }
     m_mnrGsmooth = v;
     emit mnrGsmoothChanged(v);
@@ -1868,6 +1986,7 @@ void SliceModel::setMnrGsmooth(double v)
 
 void SliceModel::setSnbEnabled(bool v)
 {
+    if (holdsListenerWrite(snbEnabled(), v)) { return; }
     if (m_snbEnabled != v) {
         m_snbEnabled = v;
         emit snbEnabledChanged(v);
@@ -1876,6 +1995,7 @@ void SliceModel::setSnbEnabled(bool v)
 
 void SliceModel::setAnfEnabled(bool v)
 {
+    if (holdsListenerWrite(anfEnabled(), v)) { return; }
     if (m_anfEnabled != v) {
         m_anfEnabled = v;
         emit anfEnabledChanged(v);
@@ -1894,6 +2014,7 @@ void SliceModel::setAnfEnabled(bool v)
 // re-emitted on an unchanged value would bounce between co-hosted slices.
 void SliceModel::setNb1Threshold(int v)
 {
+    if (holdsListenerWrite(nb1Threshold(), v)) { return; }
     const int clamped = qBound(1, v, 1000);
     if (m_nb1Threshold != clamped) {
         m_nb1Threshold = clamped;
@@ -1903,6 +2024,7 @@ void SliceModel::setNb1Threshold(int v)
 
 void SliceModel::setNb1TransitionMs(double v)
 {
+    if (holdsListenerWrite(nb1TransitionMs(), v)) { return; }
     const double clamped = qBound(0.01, v, 2.00);
     if (!qFuzzyCompare(m_nb1TransitionMs, clamped)) {
         m_nb1TransitionMs = clamped;
@@ -1912,6 +2034,7 @@ void SliceModel::setNb1TransitionMs(double v)
 
 void SliceModel::setNb1LeadMs(double v)
 {
+    if (holdsListenerWrite(nb1LeadMs(), v)) { return; }
     const double clamped = qBound(0.01, v, 2.00);
     if (!qFuzzyCompare(m_nb1LeadMs, clamped)) {
         m_nb1LeadMs = clamped;
@@ -1921,6 +2044,7 @@ void SliceModel::setNb1LeadMs(double v)
 
 void SliceModel::setNb1LagMs(double v)
 {
+    if (holdsListenerWrite(nb1LagMs(), v)) { return; }
     const double clamped = qBound(0.01, v, 2.00);
     if (!qFuzzyCompare(m_nb1LagMs, clamped)) {
         m_nb1LagMs = clamped;
@@ -1932,6 +2056,7 @@ void SliceModel::setNb1LagMs(double v)
 // Hold and Sample / Linear Interpolate (setup.designer.cs:44434 [v2.10.3.13]).
 void SliceModel::setNb2Mode(int v)
 {
+    if (holdsListenerWrite(nb2Mode(), v)) { return; }
     const int clamped = qBound(0, v, 4);
     if (m_nb2Mode != clamped) {
         m_nb2Mode = clamped;
@@ -1941,6 +2066,7 @@ void SliceModel::setNb2Mode(int v)
 
 void SliceModel::setSnbK1(double v)
 {
+    if (holdsListenerWrite(snbK1(), v)) { return; }
     const double clamped = qBound(2.0, v, 20.0);
     if (!qFuzzyCompare(m_snbK1, clamped)) {
         m_snbK1 = clamped;
@@ -1950,6 +2076,7 @@ void SliceModel::setSnbK1(double v)
 
 void SliceModel::setSnbK2(double v)
 {
+    if (holdsListenerWrite(snbK2(), v)) { return; }
     const double clamped = qBound(4.0, v, 60.0);
     if (!qFuzzyCompare(m_snbK2, clamped)) {
         m_snbK2 = clamped;
@@ -1962,6 +2089,7 @@ void SliceModel::setSnbK2(double v)
 // unchanged from the slider it replaces.
 void SliceModel::setSnbOutputBandwidthHz(int v)
 {
+    if (holdsListenerWrite(snbOutputBandwidthHz(), v)) { return; }
     const int clamped = qBound(100, v, 96000);
     if (m_snbOutputBandwidthHz != clamped) {
         m_snbOutputBandwidthHz = clamped;
@@ -1971,6 +2099,7 @@ void SliceModel::setSnbOutputBandwidthHz(int v)
 
 void SliceModel::setApfEnabled(bool v)
 {
+    if (holdsListenerWrite(apfEnabled(), v)) { return; }
     if (m_apfEnabled != v) {
         m_apfEnabled = v;
         emit apfEnabledChanged(v);
@@ -1979,6 +2108,7 @@ void SliceModel::setApfEnabled(bool v)
 
 void SliceModel::setApfTuneHz(int hz)
 {
+    if (holdsListenerWrite(apfTuneHz(), hz)) { return; }
     if (m_apfTuneHz != hz) {
         m_apfTuneHz = hz;
         emit apfTuneHzChanged(hz);
@@ -1987,6 +2117,7 @@ void SliceModel::setApfTuneHz(int hz)
 
 void SliceModel::setBinauralEnabled(bool v)
 {
+    if (holdsListenerWrite(binauralEnabled(), v)) { return; }
     if (m_binauralEnabled != v) {
         m_binauralEnabled = v;
         emit binauralEnabledChanged(v);
@@ -1995,6 +2126,7 @@ void SliceModel::setBinauralEnabled(bool v)
 
 void SliceModel::setFmCtcssMode(int mode)
 {
+    if (holdsListenerWrite(fmCtcssMode(), mode)) { return; }
     if (m_fmCtcssMode != mode) {
         m_fmCtcssMode = mode;
         emit fmCtcssModeChanged(mode);
@@ -2003,6 +2135,7 @@ void SliceModel::setFmCtcssMode(int mode)
 
 void SliceModel::setFmCtcssValueHz(double hz)
 {
+    if (holdsListenerWrite(fmCtcssValueHz(), hz)) { return; }
     // qFuzzyCompare is undefined when either arg is 0.0; use the subtraction-to-zero pattern.
     if (qFuzzyIsNull(m_fmCtcssValueHz - hz)) {
         return;
@@ -2013,6 +2146,7 @@ void SliceModel::setFmCtcssValueHz(double hz)
 
 void SliceModel::setFmOffsetHz(int hz)
 {
+    if (holdsListenerWrite(fmOffsetHz(), hz)) { return; }
     if (m_fmOffsetHz != hz) {
         m_fmOffsetHz = hz;
         emit fmOffsetHzChanged(hz);
@@ -2021,6 +2155,7 @@ void SliceModel::setFmOffsetHz(int hz)
 
 void SliceModel::setFmTxMode(FmTxMode mode)
 {
+    if (holdsListenerWrite(fmTxMode(), mode)) { return; }
     if (m_fmTxMode == mode) { return; }
     m_fmTxMode = mode;
     emit fmTxModeChanged(mode);
@@ -2028,6 +2163,7 @@ void SliceModel::setFmTxMode(FmTxMode mode)
 
 void SliceModel::setFmReverse(bool v)
 {
+    if (holdsListenerWrite(fmReverse(), v)) { return; }
     if (m_fmReverse != v) {
         m_fmReverse = v;
         emit fmReverseChanged(v);
@@ -2036,6 +2172,7 @@ void SliceModel::setFmReverse(bool v)
 
 void SliceModel::setDiglOffsetHz(int hz)
 {
+    if (holdsListenerWrite(diglOffsetHz(), hz)) { return; }
     if (m_diglOffsetHz == hz) { return; }
     m_diglOffsetHz = hz;
     emit diglOffsetHzChanged(hz);
@@ -2043,6 +2180,7 @@ void SliceModel::setDiglOffsetHz(int hz)
 
 void SliceModel::setDiguOffsetHz(int hz)
 {
+    if (holdsListenerWrite(diguOffsetHz(), hz)) { return; }
     if (m_diguOffsetHz == hz) { return; }
     m_diguOffsetHz = hz;
     emit diguOffsetHzChanged(hz);
@@ -2050,6 +2188,7 @@ void SliceModel::setDiguOffsetHz(int hz)
 
 void SliceModel::setRttyMarkHz(int hz)
 {
+    if (holdsListenerWrite(rttyMarkHz(), hz)) { return; }
     if (m_rttyMarkHz != hz) {
         m_rttyMarkHz = hz;
         emit rttyMarkHzChanged(hz);
@@ -2058,6 +2197,7 @@ void SliceModel::setRttyMarkHz(int hz)
 
 void SliceModel::setRttyShiftHz(int hz)
 {
+    if (holdsListenerWrite(rttyShiftHz(), hz)) { return; }
     if (m_rttyShiftHz != hz) {
         m_rttyShiftHz = hz;
         emit rttyShiftHzChanged(hz);
@@ -2670,6 +2810,9 @@ void SliceModel::saveToSettings(Band band)
 
 void SliceModel::restoreFromSettings(Band band)
 {
+    // Slice control plan Task 5: a band's saved state is a change a
+    // listened slice holds back (it would go to the Core as writes).
+    if (holdForListener()) { return; }
     auto& s = AppSettings::instance();
     const QString bp = bandPrefix(m_sliceIndex, band);
     const QString sp = slicePrefix(m_sliceIndex);
@@ -3122,6 +3265,7 @@ QString SliceModel::outputRouteSettingValue(OutputRoute route)
 
 void SliceModel::setOutputRoute(OutputRoute route)
 {
+    if (holdsListenerWrite(outputRoute(), route)) { return; }
     if (route != OutputRoute::Headphones) {
         route = OutputRoute::Speakers;
     }

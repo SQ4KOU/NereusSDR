@@ -28,6 +28,9 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  An RX DSP > Options apply waits for
+//                                    receive as the TX half does. AI-
+//                                    assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Remote parity on the air
 //                                    (transmitSettingsVersion 13): the
 //                                    transmit settings and DSP > Options
@@ -201,6 +204,8 @@ private slots:
     void dspOptionsTxKeyTakenOnTheAirAndAppliedAtTheUnkey();
     void dspOptionsTxApplyWaitsForTheUnkey();
     void dspOptionsTxApplyWaitsForTwoToneToEnd();
+    void dspOptionsRxApplyWaitsForReceive_data();
+    void dspOptionsRxApplyWaitsForReceive();
     void paReloadWaitsWhileOnTheAir();
     void transmitHardwareKeysStayRefused();
     void windowOnAirFollowsTheCore();
@@ -244,9 +249,10 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // 11 since hardware parity batch B (Disable HF PA), 12 since addendum
     // G-42 (the Core's Extended transmit setting), 13 since the transmit
     // settings are taken on the air as a local window takes them, 14 since
-    // Prevent TX'ing on a different band became the Core's setting.
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 14);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
+    // Prevent TX'ing on a different band became the Core's setting, 15 since
+    // a remote window edits the CFC bands (cfcProfile).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 15);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 15);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -262,7 +268,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(12));
     QVERIFY(s.client->transmitSettingsAvailable(13));
     QVERIFY(s.client->transmitSettingsAvailable(14));
-    QVERIFY(!s.client->transmitSettingsAvailable(15));
+    QVERIFY(s.client->transmitSettingsAvailable(15));
+    QVERIFY(!s.client->transmitSettingsAvailable(16));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
@@ -722,6 +729,67 @@ void TstTransmitSettingsGate::dspOptionsTxApplyWaitsForTwoToneToEnd()
     QCOMPARE(txApplies.first(), DSPMode::USB);
     QTest::qWait(120);
     QCOMPARE(txApplies.size(), 1);
+    twoTone->setTxChannel(nullptr);
+}
+
+// Setup description version 22: an RX DSP > Options write accepted off the
+// air applies up to 50 ms later. Keyed inside that window (MOX or the
+// two-tone test), nothing reaches the RX channels until the radio is back
+// on receive; then the change applies once, as the TX half waits.
+void TstTransmitSettingsGate::dspOptionsRxApplyWaitsForReceive_data()
+{
+    QTest::addColumn<bool>("twoToneKey");
+    QTest::newRow("mox") << false;
+    QTest::newRow("two-tone") << true;
+}
+
+void TstTransmitSettingsGate::dspOptionsRxApplyWaitsForReceive()
+{
+    QFETCH(bool, twoToneKey);
+    const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
+    Session s(m_securityDir.path(), this);
+    QList<DSPMode> rxApplies;
+    s.core->setDspOptionsApplyObserverForTest(
+        [&rxApplies](int, DSPMode mode) { rxApplies.append(mode); });
+    QVERIFY(s.connect());
+    SliceModel* slice = s.core->slices().first();
+    QVERIFY(slice);
+    slice->setDspMode(DSPMode::USB);
+
+    TxChannel tx(/*channelId=*/1);
+    TwoToneController* const twoTone = s.core->twoToneController();
+    twoTone->setTxChannel(&tx);
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+
+    // Accepted off the air: the apply is queued for the coalescing window.
+    QVERIFY(!s.core->stationOnAirRefusal(nullptr));
+    s.settings.setValue(rxKey, QStringLiteral("2048"));
+    s.core->scheduleRemoteDspOptionsApply(rxKey);
+
+    // Keyed before the window ends.
+    if (twoToneKey) {
+        twoTone->setActive(true);
+        QTRY_VERIFY(twoTone->isActive());
+    } else {
+        mox->setMox(true);
+    }
+    QVERIFY(s.core->stationOnAirRefusal(nullptr));
+    QTest::qWait(150);
+    QVERIFY(rxApplies.isEmpty());
+
+    // Back on receive: the held change applies once.
+    if (twoToneKey) {
+        twoTone->setActive(false);
+        QTRY_VERIFY(!twoTone->isActive());
+    } else {
+        mox->setMox(false);
+    }
+    QTRY_VERIFY(!s.core->stationOnAirRefusal(nullptr));
+    QTRY_COMPARE(rxApplies.size(), 1);
+    QCOMPARE(rxApplies.first(), DSPMode::USB);
+    QTest::qWait(120);
+    QCOMPARE(rxApplies.size(), 1);
     twoTone->setTxChannel(nullptr);
 }
 

@@ -1,5 +1,9 @@
 // no-port-check: NereusSDR-original live-apply checks for described settings.
+// 2026-09-29: the RX buffer size lock follows TUNE and the two-tone test.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
+
+#include <tuple>
 
 #include "core/AppSettings.h"
 #include "core/PaTelemetryScaling.h"
@@ -18,6 +22,8 @@
 #include "core/accessories/AlexController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TxAnalyzer.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/session/TransmitStateFacade.h"
 #include "MultiDeviceHarness.h"
@@ -27,6 +33,64 @@ using namespace NereusSDR;
 class SetupDescriptionLiveTest : public QObject {
     Q_OBJECT
 private slots:
+    // Version 16: a phone that declares version 16 or later reads the HL2
+    // Options rows on HL2 I/O, the stored-only ones disabled with their
+    // reason; a version 15 phone keeps version 13's Hardware. Version 17
+    // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
+    // clock rows) opens the clock rows and is Hardware's cap; the
+    // description's own cap is version 22 (21: CAT & Network's Forget row
+    // follows Duplicate; 22: DSP's RX buffer size lock).
+    void pairedV16PhoneReadsHl2Options()
+    {
+        const auto hl2OptionsOf = [](const QJsonObject& hardware) {
+            QJsonObject options;
+            for (const QJsonValue& page : hardware.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    if (section.toObject().value("title") == QJsonValue("Hermes Lite Options")) {
+                        options = section.toObject();
+                    }
+                }
+            }
+            return options;
+        };
+        // {declared, capability sent back, Hardware version the phone reads}
+        const QList<std::tuple<int, int, int>> declarations{
+            {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
+            {21, 21, 18}, {22, 22, 18}, {99, 22, 18}, {15, 15, 13}};
+        for (const auto& [declared, granted, received] : declarations) {
+            // One Core per phone: five phones are more than a Core's places.
+            Core core;
+            core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                             core.model->hardwareProfile().model,
+                                                             core.model->currentRadioInfo());
+            Device phone(QStringLiteral("HL2 V%1 iPhone").arg(declared), QStringLiteral("phone"));
+            core.pair(phone);
+            QHash<QByteArray, int> features = kHolder;
+            features.insert("setupDescription", declared);
+            auto* peer = core.signIn(phone, features);
+            QVERIFY(admitted(peer));
+            QCOMPARE(capability(peer->received(), QStringLiteral("setupDescriptionVersion")),
+                     std::optional<qint64>(granted));
+            const QJsonObject hardware = QJsonDocument::fromJson(latest(peer->received(),
+                QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+            QCOMPARE(hardware.value("version"), QJsonValue(received));
+            const QJsonArray rows = hl2OptionsOf(hardware).value("controls").toArray();
+            QCOMPARE(rows.size(), received >= 16 ? 9 : 0);
+            if (received >= 16) {
+                const QJsonObject swap = rows.last().toObject();
+                QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
+                QCOMPARE(swap.value("availability").toObject().value("enabled"),
+                         QJsonValue(false));
+                // The clock rows are open from version 18; a version 16 or
+                // 17 phone keeps them closed.
+                const QJsonObject cl2 = rows.at(2).toObject();
+                QCOMPARE(cl2.value("id"), QJsonValue("hardware.hl2Io.cl2Enable"));
+                QCOMPARE(cl2.contains("availability"), received < 18);
+                QCOMPARE(rows.at(3).toObject().contains("enabledWhen"), received == 18);
+            }
+        }
+    }
+
     // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware
     // Config's new rows while a version 12 phone keeps its projection, and
     // the described radio settings reach the Core through the gates the
@@ -83,6 +147,9 @@ private slots:
         }
         QCOMPARE(point.value("label"), QJsonValue("3 W"));
         QCOMPARE(point.value("boardClass"), QJsonValue(int(PaCalBoardClass::Anan10)));
+        // The Core takes a point on the air (below), so the gate says so.
+        QCOMPARE(point.value("gate"), QJsonValue(QJsonObject{
+            {"capability", "transmitSettingsVersion"}, {"min", 6}}));
 
         QHash<QByteArray, int> v12Features = kHolder;
         v12Features.insert("setupDescription", 12);
@@ -296,7 +363,8 @@ private slots:
         QCOMPARE(ok("paProfile.select", {name("Nothing")}),
                  QStringLiteral("There is no PA profile called Nothing."));
 
-        // On the air, a receive-only Core takes none of them.
+        // On the air, a device that does not hold transmit changes nothing
+        // (onAirPaProfileVerbsFollowThetisForTheHolderOnly has the rest).
         const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
         allowTransmit(core);
         core.model->setReceiveOnlyStationPolicy(true);
@@ -305,7 +373,9 @@ private slots:
         mox->setMox(true); // logical test state, no radio transport
         QTRY_COMPARE(mox->state(), MoxState::Tx);
         QCOMPARE(ok("paProfile.setGain", {band(5), value(48.0)}),
-                 QStringLiteral("The radio is on the air. Try again when it stops."));
+                 QStringLiteral("Only the device that is transmitting can change this."));
+        QCOMPARE(ok("paProfile.select", {name(factory)}),
+                 QStringLiteral("Can't change while transmitting."));
         QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
         mox->setMox(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
@@ -321,6 +391,535 @@ private slots:
         const QJsonObject refused = core.invoke(old, "paProfile.select", {name(factory)});
         QVERIFY(!refused.value("accepted").toBool(true));
         QVERIFY(!refused.value("reason").toString().isEmpty());
+    }
+
+    // R-R3-49 / R-IOS-18 / R-IOS-27 (JJ's ruling, follow Thetis): on the
+    // air the device that holds transmit changes the transmitting band's
+    // gain, drive-step adjust, max power and use-max, and an adjust moves
+    // the drive to the step it adjusts (Thetis nudAdjustGain_ValueChanged,
+    // setup.cs:24199-24225 [v2.10.3.15]). Every profile action and every
+    // other band is refused (OnMoxChangeHandler, setup.cs:23826-23834), and
+    // a device that does not hold transmit changes nothing.
+    void onAirPaProfileVerbsFollowThetisForTheHolderOnly()
+    {
+        Core core(true);
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        const QString factory = bank->activeProfileName();
+        QVERIFY(bank->saveProfile(QStringLiteral("On-air spare"), *bank->activeProfile()));
+        Device holderDevice(QStringLiteral("PA holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("PA other iPad"), QStringLiteral("tablet"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        QHash<QByteArray, int> features = kTransmitter;
+        features.insert("paProfiles", 1);
+        auto* holder = core.signIn(holderDevice, features);
+        auto* other = core.signIn(otherDevice, features);
+        QVERIFY(admitted(holder) && admitted(other));
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(holderDevice.key.fingerprint()));
+
+        const auto ok = [&core](LoopbackTransport* app, const QByteArray& verb,
+                                const QList<MirrorUpdate>& args) {
+            const QJsonObject result = core.invoke(app, verb, args);
+            return result.value("accepted").toBool()
+                ? QString() : result.value("reason").toString(QStringLiteral("(no answer)"));
+        };
+        const auto name = [](const QString& n) {
+            return MirrorUpdate{0, "name", MirrorWireKind::Utf8, n};
+        };
+        const auto band = [](int b) { return MirrorUpdate{0, "band", MirrorWireKind::Int64, qlonglong(b)}; };
+        const auto step = [](int s) { return MirrorUpdate{0, "step", MirrorWireKind::Int64, qlonglong(s)}; };
+        const auto value = [](double v) { return MirrorUpdate{0, "value", MirrorWireKind::Float64, v}; };
+        const auto on = [](bool b) { return MirrorUpdate{0, "on", MirrorWireKind::Bool, b}; };
+        const QString locked = QStringLiteral("Can't change while transmitting.");
+
+        // Allowed: the transmitting band's four values, from the holder.
+        QCOMPARE(ok(holder, "paProfile.setGain", {band(5), value(47.0)}), QString());
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 47.0f);
+        core.model->transmitModel().setPower(100);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(3), value(-1.5)}), QString());
+        QCOMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 3), -1.5f);
+        // DRIVE_SLIDER: the drive moves to the step being adjusted (40%).
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        QCOMPARE(ok(holder, "paProfile.setMaxPower", {band(5), value(60.0)}), QString());
+        QCOMPARE(ok(holder, "paProfile.setUseMax", {band(5), on(true)}), QString());
+        QVERIFY(bank->activeProfile()->getMaxPowerUse(Band::Band20m));
+        // TUNE_SLIDER: the tune power moves instead.
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(5), value(0.5)}), QString());
+        QCOMPARE(core.model->transmitModel().tunePowerForTxBand(), 60);
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        // FIXED: neither moves.
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::Fixed);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(5), step(1), value(0.2)}), QString());
+        QCOMPARE(core.model->transmitModel().power(), 40);
+        QCOMPARE(core.model->transmitModel().tunePowerForTxBand(), 60);
+        core.model->transmitModel().setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
+
+        // Refused: any other band, and every profile action.
+        const PaProfile before = *bank->activeProfile();
+        QCOMPARE(ok(holder, "paProfile.setGain", {band(3), value(47.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setAdjust", {band(3), step(3), value(1.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setMaxPower", {band(3), value(50.0)}), locked);
+        QCOMPARE(ok(holder, "paProfile.setUseMax", {band(3), on(true)}), locked);
+        QCOMPARE(ok(holder, "paProfile.select", {name(QStringLiteral("On-air spare"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.new", {name(QStringLiteral("On-air new"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.copy", {name(QStringLiteral("On-air new"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.delete", {name(QStringLiteral("On-air spare"))}), locked);
+        QCOMPARE(ok(holder, "paProfile.reset", {}), locked);
+        QCOMPARE(bank->activeProfileName(), factory);
+        QVERIFY(bank->profileNames().contains(QStringLiteral("On-air spare")));
+        QVERIFY(!bank->profileNames().contains(QStringLiteral("On-air new")));
+        QCOMPARE(bank->activeProfile()->dataToString(), before.dataToString());
+
+        // Refused: every edit from a device that does not hold transmit.
+        // With remote transmit on, the Core's transmit gate answers first
+        // and names the holder; on a receive-only Core the PA rule does
+        // (pairedPaProfileVerbsChangeTheCoresBankOffTheAirOnly).
+        const QString holderNamed = QStringLiteral("PA holder iPhone has the transmitter.");
+        QCOMPARE(ok(other, "paProfile.setGain", {band(5), value(48.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setAdjust", {band(5), step(3), value(1.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setMaxPower", {band(5), value(70.0)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setUseMax", {band(5), on(false)}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.select", {name(QStringLiteral("On-air spare"))}), holderNamed);
+        QCOMPARE(ok(other, "paProfile.setGain", {band(3), value(48.0)}), holderNamed);
+        QCOMPARE(bank->activeProfile()->dataToString(), before.dataToString());
+        QCOMPARE(core.model->transmitModel().power(), 40);
+    }
+
+    // R-R3-49 / R-IOS-27 (JJ's ruling): a window's raw PA profile keys
+    // (hardware/<mac>/pa/profile/...) follow the same on-air rule as the
+    // verbs. The holder's change to the active profile's transmitting band
+    // is taken and applied at once (an adjust moves the drive); any other
+    // band, the active profile, the list and every other profile are
+    // refused with the Core's value handed back, never held until receive.
+    void onAirRawPaProfileKeysFollowThetisForTheHolderOnly()
+    {
+        Core core(true);
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        PaProfileManager* bank = core.model->paProfileManager();
+        QVERIFY(bank != nullptr);
+        bank->setMacAddress(mac);
+        bank->load(core.model->hardwareProfile().model);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        const QString active = bank->activeProfileName();
+        QVERIFY(bank->saveProfile(QStringLiteral("Raw spare"), *bank->activeProfile()));
+        Device holderDevice(QStringLiteral("Raw holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("Raw other iPad"), QStringLiteral("tablet"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        auto* holder = core.signIn(holderDevice, kTransmitter);
+        auto* other = core.signIn(otherDevice, kTransmitter);
+        QVERIFY(admitted(holder) && admitted(other));
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        const auto paKey = [&mac](const QString& rest) {
+            return QStringLiteral("hardware/%1/pa/profile/%2").arg(mac, rest);
+        };
+        const auto rejects = [](LoopbackTransport* app, const QString& k) {
+            int count = 0;
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == k) {
+                    ++count;
+                    reason = message.reason;
+                }
+            }
+            return qMakePair(count, reason);
+        };
+        const auto write = [](LoopbackTransport* app, const QString& k, const QString& v) {
+            app->sendText(SessionMessages::encode(
+                SessionMessages::settingsWrite(k, v, QStringLiteral("window"))));
+        };
+        const auto remove = [](LoopbackTransport* app, const QString& k) {
+            app->sendText(SessionMessages::encode(SessionMessages::settingsRemove(k)));
+        };
+        const QString locked = QStringLiteral("Can't change while transmitting.");
+
+        // Taken, and applied at once: the transmitting band's gain.
+        PaProfile edited = *bank->activeProfile();
+        edited.setGainForBand(Band::Band20m, 46.0f);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), edited.dataToString());
+        // An adjust moves the drive to the step being adjusted (50%). The
+        // bank is the process's: values no other test writes.
+        core.model->transmitModel().setPower(100);
+        edited.setAdjust(Band::Band20m, 4, -2.5f);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getAdjust(Band::Band20m, 4), -2.5f);
+        QCOMPARE(core.model->transmitModel().power(), 50);
+        edited.setMaxPower(Band::Band20m, 65.0f);
+        edited.setMaxPowerUse(Band::Band20m, !edited.getMaxPowerUse(Band::Band20m));
+        const bool useMax = edited.getMaxPowerUse(Band::Band20m);
+        write(holder, paKey(active), edited.dataToString());
+        QTRY_COMPARE(bank->activeProfile()->getMaxPower(Band::Band20m), 65.0f);
+        QCOMPARE(bank->activeProfile()->getMaxPowerUse(Band::Band20m), useMax);
+        QCOMPARE(rejects(holder, paKey(active)).first, 0);
+
+        // Refused, with the Core's value handed back: another band, the
+        // active profile, the list, another profile, a remove.
+        const QString kept = core.settings->value(paKey(active)).toString();
+        PaProfile otherBand = *bank->activeProfile();
+        otherBand.setGainForBand(Band::Band40m, 51.0f);
+        write(holder, paKey(active), otherBand.dataToString());
+        QTRY_COMPARE(rejects(holder, paKey(active)).second, locked);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+        const QString activeKept = core.settings->value(paKey(QStringLiteral("active"))).toString();
+        write(holder, paKey(QStringLiteral("active")), QStringLiteral("Raw spare"));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("active"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("active"))).toString(), activeKept);
+        const QString names = core.settings->value(paKey(QStringLiteral("_names"))).toString();
+        write(holder, paKey(QStringLiteral("_names")), names + QStringLiteral(",Raw new"));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("_names"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("_names"))).toString(), names);
+        const QString spare = core.settings->value(paKey(QStringLiteral("Raw spare"))).toString();
+        write(holder, paKey(QStringLiteral("Raw spare")), otherBand.dataToString());
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).second, locked);
+        QCOMPARE(core.settings->value(paKey(QStringLiteral("Raw spare"))).toString(), spare);
+        remove(holder, paKey(QStringLiteral("Raw spare")));
+        QTRY_COMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).first, 2);
+        QCOMPARE(rejects(holder, paKey(QStringLiteral("Raw spare"))).second, locked);
+        QVERIFY(bank->profileNames().contains(QStringLiteral("Raw spare")));
+        QCOMPARE(bank->activeProfileName(), active);
+
+        // Refused: a value out of the page's range, with the phone verbs'
+        // words. The key's text is not clamped on the way in, so without the
+        // check a gain of 20 dB would reach the live drive (Job B item 1).
+        const auto rangeRefused = [&](const PaProfile& p, const QString& reason) {
+            const int before = rejects(holder, paKey(active)).first;
+            QSignalSpy volume(&core.model->transmitModel(), &TransmitModel::audioVolumeChanged);
+            const int power = core.model->transmitModel().power();
+            write(holder, paKey(active), p.dataToString());
+            QTRY_COMPARE(rejects(holder, paKey(active)).first, before + 1);
+            QCOMPARE(rejects(holder, paKey(active)).second, reason);
+            QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+            QCOMPARE(bank->activeProfile()->dataToString(), kept);
+            QCOMPARE(core.model->transmitModel().power(), power);
+            QCOMPARE(volume.count(), 0);
+        };
+        PaProfile lowGain = *bank->activeProfile();
+        lowGain.setGainForBand(Band::Band20m, 20.0f);
+        rangeRefused(lowGain, QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        PaProfile wideAdjust = *bank->activeProfile();
+        wideAdjust.setAdjust(Band::Band20m, 3, 11.5f);
+        rangeRefused(wideAdjust, QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        PaProfile bigMax = *bank->activeProfile();
+        bigMax.setMaxPower(Band::Band20m, 1600.0f);
+        rangeRefused(bigMax, QStringLiteral("Choose a max power from 0 to 1500 W."));
+
+        // Refused: the transmitting band from a device that does not hold
+        // transmit (the Core's transmit gate names the holder first).
+        PaProfile notHolder = *bank->activeProfile();
+        notHolder.setGainForBand(Band::Band20m, 44.0f);
+        write(other, paKey(active), notHolder.dataToString());
+        QTRY_COMPARE(rejects(other, paKey(active)).second,
+                     QStringLiteral("Raw holder iPhone has the transmitter."));
+        QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 46.0f);
+        QCOMPARE(core.settings->value(paKey(active)).toString(), kept);
+    }
+
+    // Version 20 (JJ's ruling, holder only): each paired device reads PA
+    // Gain's on-the-air lock for itself. The holder's transmitting band
+    // stays open; another device sees it locked with the plain reason; a
+    // version 19 device keeps the closed rows.
+    void onAirPaGainLockIsPublishedPerDevice()
+    {
+        Core core(true);
+        allowTransmit(core); // the slice is on 20 m (Band 5)
+        Device holderDevice(QStringLiteral("Lock holder iPhone"), QStringLiteral("phone"));
+        Device otherDevice(QStringLiteral("Lock other iPad"), QStringLiteral("tablet"));
+        Device olderDevice(QStringLiteral("Lock V19 iPhone"), QStringLiteral("phone"));
+        core.pair(holderDevice);
+        core.pair(otherDevice);
+        core.pair(olderDevice);
+        QHash<QByteArray, int> v20 = kTransmitter;
+        v20.insert("setupDescription", 20);
+        v20.insert("paProfiles", 1);
+        QHash<QByteArray, int> v19 = v20;
+        v19.insert("setupDescription", 19);
+        auto* holder = core.signIn(holderDevice, v20);
+        auto* other = core.signIn(otherDevice, v20);
+        auto* older = core.signIn(olderDevice, v19);
+        QVERIFY(admitted(holder) && admitted(other) && admitted(older));
+        QCOMPARE(capability(holder->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(20));
+        QCOMPARE(capability(older->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(19));
+
+        const auto table = [](LoopbackTransport* app) {
+            const QJsonObject pa = QJsonDocument::fromJson(latest(app->received(),
+                QStringLiteral("setup"), QStringLiteral("pa")).toString().toUtf8()).object();
+            for (const QJsonValue& page : pa.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue("pa.gain.table")) {
+                            return raw.toObject();
+                        }
+                    }
+                }
+            }
+            return QJsonObject{};
+        };
+        const auto rowLock = [&table](LoopbackTransport* app, int band) {
+            for (const QJsonValue& row : table(app).value("rows").toArray()) {
+                if (row.toObject().value("band") == QJsonValue(band)) {
+                    return row.toObject().value("availability");
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::paOnAirLockedReason()}};
+        const QJsonObject holderOnly{{"enabled", false},
+                                     {"reason", RadioModel::paHolderOnlyReason()}};
+        QVERIFY(!table(holder).isEmpty());
+        QCOMPARE(rowLock(holder, 5), QJsonValue(QJsonValue::Undefined));
+        const QJsonObject olderTable = table(older);
+        QVERIFY(SetupDescriptionService::validatePaV14Control(olderTable));
+
+        const QJsonObject key = core.invoke(holder, "tx.key",
+                                            {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                          QStringLiteral("screen")}});
+        QVERIFY2(key.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(key.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        QTRY_COMPARE(rowLock(holder, 3), QJsonValue(locked));
+        QCOMPARE(rowLock(holder, 5), QJsonValue(QJsonValue::Undefined));
+        QTRY_COMPARE(rowLock(other, 3), QJsonValue(locked));
+        QCOMPARE(rowLock(other, 5), QJsonValue(holderOnly));
+        QVERIFY(!QJsonDocument(table(other)).toJson().contains("holderMayEdit"));
+        // The version 19 device's rows never change.
+        QCOMPARE(table(older), olderTable);
+
+        const QJsonObject unkey = core.invoke(holder, "tx.unkey", {int64("epoch", 1)});
+        QVERIFY2(unkey.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(unkey.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        QTRY_COMPARE(rowLock(other, 5), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(rowLock(other, 3), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(rowLock(holder, 3), QJsonValue(QJsonValue::Undefined));
+        QCOMPARE(table(older), olderTable);
+    }
+
+    // Version 22: DSP > Options' RX buffer sizes lock while the Core is on
+    // the air, for every version 22 peer, receive-only ones (no remoteTx,
+    // so no txState) included, as Thetis greys grpDSPBufferSize while MOX
+    // is on (setup.cs:5159 [v2.10.3.15]). A version 20 peer's DSP never
+    // changes, and the Core refuses the rows' keys on the air.
+    void onAirRxBufferSizeLockReachesReceiveOnlyPeers()
+    {
+        Core core(true);
+        allowTransmit(core);
+        Device keyer(QStringLiteral("Buffer keyer iPhone"), QStringLiteral("phone"));
+        Device listener(QStringLiteral("Buffer listener iPad"), QStringLiteral("tablet"));
+        Device older(QStringLiteral("Buffer V20 iPhone"), QStringLiteral("phone"));
+        core.pair(keyer);
+        core.pair(listener);
+        core.pair(older);
+        QHash<QByteArray, int> transmitter = kTransmitter;
+        transmitter.insert("setupDescription", 22);
+        QHash<QByteArray, int> receiveOnly = kHolder;
+        receiveOnly.insert("setupDescription", 22);
+        QHash<QByteArray, int> v20 = kHolder;
+        v20.insert("setupDescription", 20);
+        auto* keyerApp = core.signIn(keyer, transmitter);
+        auto* listenerApp = core.signIn(listener, receiveOnly);
+        auto* olderApp = core.signIn(older, v20);
+        QVERIFY(admitted(keyerApp) && admitted(listenerApp) && admitted(olderApp));
+        QCOMPARE(capability(listenerApp->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(22));
+        QCOMPARE(capability(olderApp->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(20));
+        QVERIFY(!receiveOnly.contains("remoteTx"));
+
+        const auto dspOf = [](LoopbackTransport* app) {
+            return latest(app->received(), QStringLiteral("setup"), QStringLiteral("dsp"))
+                .toString();
+        };
+        const auto rowLock = [&dspOf](LoopbackTransport* app, const QString& id) {
+            const QJsonObject dsp = QJsonDocument::fromJson(dspOf(app).toUtf8()).object();
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue(id)) {
+                            return raw.toObject().value("availability");
+                        }
+                    }
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const auto rejectReason = [](LoopbackTransport* app, const QString& key) {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QStringList rxIds{QStringLiteral("dsp.options.DspOptionsBufferSizePhoneRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeFmRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeCwRx"),
+                                QStringLiteral("dsp.options.DspOptionsBufferSizeDigRx")};
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::dspBufferOnAirLockedReason()}};
+
+        // Off the air: every row is enabled, and the receive-only peer's
+        // write is taken.
+        for (const QString& id : rxIds) {
+            QCOMPARE(rowLock(listenerApp, id), QJsonValue(QJsonValue::Undefined));
+        }
+        const QString olderDsp = dspOf(olderApp);
+        QVERIFY(!olderDsp.isEmpty());
+        const QString key = QStringLiteral("DspOptionsBufferSizePhoneRx");
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("256"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("256"));
+        QVERIFY(rejectReason(listenerApp, key).isEmpty());
+
+        const QJsonObject keyed = core.invoke(keyerApp, "tx.key",
+                                              {MirrorUpdate{0, "trigger", MirrorWireKind::Utf8,
+                                                            QStringLiteral("screen")}});
+        QVERIFY2(keyed.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(keyed.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(core.model->isCoreOnAir());
+
+        // On the air: locked with its reason for both version 22 peers.
+        for (const QString& id : rxIds) {
+            QTRY_COMPARE(rowLock(listenerApp, id), QJsonValue(locked));
+            QTRY_COMPARE(rowLock(keyerApp, id), QJsonValue(locked));
+        }
+        QCOMPARE(dspOf(olderApp), olderDsp);
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("phone"))));
+        QTRY_COMPARE(rejectReason(listenerApp, key), RadioModel::dspBufferOnAirLockedReason());
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("256"));
+
+        const QJsonObject unkeyed = core.invoke(keyerApp, "tx.unkey", {int64("epoch", 1)});
+        QVERIFY2(unkeyed.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(unkeyed.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        for (const QString& id : rxIds) {
+            QTRY_COMPARE(rowLock(listenerApp, id), QJsonValue(QJsonValue::Undefined));
+        }
+        QCOMPARE(dspOf(olderApp), olderDsp);
+        // Back on receive the write is taken again.
+        listenerApp->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("512"));
+    }
+
+    // The same lock follows TUNE and the two-tone test, the Core's other
+    // ways onto the air (isCoreOnAir), both edges: locked with its reason
+    // and the write refused while keyed, open and taken again after.
+    void onAirRxBufferSizeLockFollowsTuneAndTwoTone_data()
+    {
+        QTest::addColumn<bool>("twoToneKey");
+        QTest::newRow("tune") << false;
+        QTest::newRow("two-tone") << true;
+    }
+
+    void onAirRxBufferSizeLockFollowsTuneAndTwoTone()
+    {
+        QFETCH(bool, twoToneKey);
+        Core core(true);
+        Device listener(QStringLiteral("Buffer edge iPad"), QStringLiteral("tablet"));
+        core.pair(listener);
+        QHash<QByteArray, int> receiveOnly = kHolder;
+        receiveOnly.insert("setupDescription", 22);
+        auto* app = core.signIn(listener, receiveOnly);
+        QVERIFY(admitted(app));
+
+        const QString id = QStringLiteral("dsp.options.DspOptionsBufferSizeCwRx");
+        const QString key = QStringLiteral("DspOptionsBufferSizeCwRx");
+        const auto rowLock = [app, &id]() {
+            const QJsonObject dsp = QJsonDocument::fromJson(
+                latest(app->received(), QStringLiteral("setup"), QStringLiteral("dsp"))
+                    .toString().toUtf8()).object();
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue(id)) {
+                            return raw.toObject().value("availability");
+                        }
+                    }
+                }
+            }
+            return QJsonValue(QStringLiteral("no row"));
+        };
+        const auto rejectReason = [app, &key]() {
+            QString reason;
+            for (const QByteArray& wire : app->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::SettingsReject
+                    && QString::fromUtf8(message.objectKey) == key) {
+                    reason = message.reason;
+                }
+            }
+            return reason;
+        };
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", RadioModel::dspBufferOnAirLockedReason()}};
+        QCOMPARE(rowLock(), QJsonValue(QJsonValue::Undefined));
+
+        // State only: no radio, no RF.
+        TxChannel tx(/*channelId=*/1);
+        TwoToneController* const twoTone = core.model->twoToneController();
+        QVERIFY(twoTone);
+        twoTone->setTxChannel(&tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        core.model->moxController()->setMoxCheck({});
+        const auto setKeyed = [&](bool on) {
+            if (twoToneKey) {
+                twoTone->setActive(on);
+                QTRY_COMPARE(twoTone->isActive(), on);
+            } else {
+                core.model->transmitModel().setTune(on);
+            }
+        };
+
+        setKeyed(true);
+        QTRY_VERIFY(core.model->isCoreOnAir());
+        QTRY_COMPARE(rowLock(), QJsonValue(locked));
+        app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("cw"))));
+        QTRY_COMPARE(rejectReason(), RadioModel::dspBufferOnAirLockedReason());
+        QVERIFY(core.settings->value(key).toString() != QStringLiteral("512"));
+
+        setKeyed(false);
+        QTRY_VERIFY(!core.model->isCoreOnAir());
+        QTRY_VERIFY(!core.model->stationOnAirRefusal(nullptr));
+        QTRY_COMPARE(rowLock(), QJsonValue(QJsonValue::Undefined));
+        app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("512"), QStringLiteral("cw"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("512"));
+        twoTone->setTxChannel(nullptr);
     }
 
     void calibrationWritesOutsideTheirRangeAreRefusedWhole()
@@ -467,6 +1066,54 @@ private slots:
             const QString text = latest(v14->received(), QStringLiteral("setup"), name).toString();
             QVERIFY2(!text.contains(QStringLiteral("\"requiresDescriptionVersion\":15")), qPrintable(name));
             QVERIFY2(!text.contains(QStringLiteral("coverageV15")), qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("\"requiresDescriptionVersion\":19")), qPrintable(name));
+            QVERIFY2(!text.contains(QStringLiteral("coverageV19")), qPrintable(name));
+        }
+    }
+
+    // Version 19: a paired phone reads DSP > CFC's band editor; a version 18
+    // phone keeps DSP version 15 without it.
+    void pairedV19PhoneReadsCfcBands()
+    {
+        Core core;
+        const auto cfcBandsOf = [](const QJsonObject& dsp) {
+            for (const QJsonValue& page : dsp.value("pages").toArray()) {
+                for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                    for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                        if (raw.toObject().value("id") == QJsonValue("dsp.cfc.bands")) {
+                            return raw.toObject();
+                        }
+                    }
+                }
+            }
+            return QJsonObject();
+        };
+        // {declared, capability sent back, DSP version the phone reads}
+        const QList<std::tuple<int, int, int>> declarations{{19, 19, 19}, {18, 18, 15}};
+        for (const auto& [declared, granted, received] : declarations) {
+            Device phone(QStringLiteral("CFC V%1 iPhone").arg(declared), QStringLiteral("phone"));
+            core.pair(phone);
+            QHash<QByteArray, int> features = kHolder;
+            features.insert("setupDescription", declared);
+            auto* peer = core.signIn(phone, features);
+            QVERIFY(admitted(peer));
+            QCOMPARE(capability(peer->received(), QStringLiteral("setupDescriptionVersion")),
+                     std::optional<qint64>(granted));
+            const QString text = latest(peer->received(), QStringLiteral("setup"),
+                                        QStringLiteral("dsp")).toString();
+            QVERIFY(!text.contains(QStringLiteral("coverageV19")));
+            const QJsonObject dsp = QJsonDocument::fromJson(text.toUtf8()).object();
+            QCOMPARE(dsp.value("version"), QJsonValue(received));
+            const QJsonObject bands = cfcBandsOf(dsp);
+            QCOMPARE(bands.isEmpty(), received != 19);
+            if (received == 19) {
+                QVERIFY(SetupDescriptionService::validateDspV19Control(bands));
+                // Published with no off-air rule: the Core takes it on the air.
+                QCOMPARE(bands.value("gate"), QJsonValue(QJsonObject{
+                    {"capability", "transmitSettingsVersion"}, {"min", 15}}));
+                QCOMPARE(dsp.value("coverage"),
+                         QJsonValue("partial: the NR3 and NNR model files are not described"));
+            }
         }
     }
 

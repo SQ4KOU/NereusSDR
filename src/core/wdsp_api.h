@@ -231,6 +231,12 @@
 //                 NereusSDR-original test seam exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29  WDSPGetTestWorkerPauseNs declaration added by J.J. Boyd
+//                 (KG4VCF) so the turn-taking test times the worker's own
+//                 pause (R-R3-39). NereusSDR-original test seam exported
+//                 from third_party/wdsp/src/dsplock.c; no Thetis
+//                 counterpart. AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -436,6 +442,11 @@ long long WDSPGetTestLastWorkerExitWaitUs(int channel);
 // Test-only (NereusSDR dsplock.c): how many times this channel's DSP worker
 // has left its loop in this process. Never call it in production code.
 int WDSPGetTestWorkerExitCount(int channel);
+
+// Test-only (NereusSDR dsplock.c): the pause, in nanoseconds, between the
+// DSP worker's waiter checks while it holds off. Never call it in
+// production code.
+long WDSPGetTestWorkerPauseNs();
 
 // NereusSDR dsplock.c: one channel's worker load since the process started,
 // read without the channel's DSP lock (it never waits for the worker). Same

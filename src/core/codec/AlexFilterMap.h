@@ -4,7 +4,8 @@
 //
 // Ported from Thetis sources:
 //   Project Files/Source/Console/console.cs:6830-6942 (setAlexHPF)
-//   Project Files/Source/Console/console.cs:7168-7234 (setAlexLPF)
+//   Project Files/Source/Console/console.cs:7177-7243 (setAlexLPF) [v2.10.3.15]
+//   Project Files/Source/ChannelMaster/netInterface.c:680-725 (SetAlexLPFBits) [v2.10.3.15]
 //   original licence from Thetis source is included below
 //
 // =================================================================
@@ -26,6 +27,15 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's setAlexLPF
+//                does, written to the Alex0 / Alex1 masks as netInterface.c
+//                SetAlexLPFBits writes them (radioHardwareVersion 10). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The low-pass edges' ranges (setup.designer.cs spinner
+//                Minimum / Maximum) and the neighbour rule (setup.cs
+//                udAlex*LPF*_ValueChanged) shared by the tab and the Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -79,6 +89,27 @@
 //============================================================================================//
 //
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
+// --- From netInterface.c ---
+/*
+ * netinterface.c
+ * Copyright (C) 2006,2007  Bill Tracey (bill@ejwt.com) (KD5TFD)
+ * Copyright (C) 2010-2020 Doug Wigley (W5WC)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ */
 // =================================================================
 
 #pragma once
@@ -87,6 +118,8 @@
 #include "../HpsdrModel.h"
 
 #include <array>
+#include <optional>
+#include <vector>
 
 namespace NereusSDR::codec::alex {
 
@@ -242,8 +275,177 @@ bool usesAlex2Hpf(NereusSDR::HPSDRModel model) noexcept;
 // alex.h:110 [@f3d857c]: "The TX bits are just as for the generic case."
 // The MkII boards changed the RX front end, not the TX low-pass bank.
 //
-// From Thetis console.cs:7168-7234 [@501e3f5]
+// The low-pass selection over Thetis's shipped row defaults (see
+// AlexLpfEdges below); the connections hand the saved rows to selectAlexLpf.
+// From Thetis console.cs:7177-7243 [v2.10.3.15]
 quint8 computeLpf(double freqMhz);
+
+// ---------------------------------------------------------------------------
+// The Alex-1 Filters tab's low-pass rows, as Thetis's setAlexLPF reads them.
+// ---------------------------------------------------------------------------
+//
+// From Thetis console.cs:7177-7243 [v2.10.3.15] (setAlexLPF)
+//   if (!_mox && lpf_bypass)
+//   {
+//       NetworkIO.SetAlexLPFBits(0x10, false, _mox); // 6m LPF
+//       SetupForm.rad6LPFled.Checked = true;
+//       return;
+//   }
+//   if (alexpresent && !initializing)
+//   {
+//       if ((decimal)freq >= SetupForm.udAlex20mLPFStart.Value && // 30/20m LPF
+//                 (decimal)freq <= SetupForm.udAlex20mLPFEnd.Value)
+//           NetworkIO.SetAlexLPFBits(0x01, freqIsTX, _mox);
+//       ... 40m 0x02, 80m 0x04, 160m 0x08, 6m 0x10, 10m 0x20, 15m 0x40 ...
+//       else
+//           NetworkIO.SetAlexLPFBits(0x10, freqIsTX, _mox); // 6m LPF
+//   }
+// The rows are held here in the tab's order (160 m first); the selection
+// tests them in Thetis's order (20 m first), so an overlap goes to the
+// row Thetis tests first. The defaults are the spinners' shipped values,
+// setup.designer.cs:24492-24881 [v2.10.3.15].
+struct AlexLpfRow {
+    double startMhz {0.0};
+    double endMhz   {0.0};
+    bool operator==(const AlexLpfRow&) const noexcept = default;
+};
+
+inline constexpr int kAlexLpfRowCount = 7;
+using AlexLpfRows = std::array<AlexLpfRow, kAlexLpfRowCount>;
+
+// Settings-key slugs, in row order: hardware/<mac>/alex/lpf/<slug>/{start,end}.
+inline constexpr std::array<const char*, kAlexLpfRowCount> kAlexLpfRowSlugs = {
+    "160m", "80m", "40m", "20m", "15m", "10m", "6m",
+};
+
+struct AlexLpfEdges {
+    AlexLpfRows rows;  // 160m, 80m, 40m, 20m, 15m, 10m, 6m (udAlex*LPFStart/End)
+
+    // Thetis's shipped spinner values.
+    static AlexLpfEdges thetisDefaults() noexcept;
+    bool operator==(const AlexLpfEdges&) const noexcept = default;
+};
+
+// setAlexLPF's row selection: the first row, in Thetis's order, whose edges
+// hold `freqMhz` (inclusive, compared in whole hertz as Thetis compares the
+// decimal spinner values); no row gives the 6 m low-pass, 0x10.
+quint8 selectAlexLpf(double freqMhz, const AlexLpfEdges& edges) noexcept;
+
+// The two low-pass masks the radio carries: Alex0 (the receive word, and the
+// only one Protocol 1 sends) and Alex1 (the transmit word, Protocol 2).
+struct AlexLpfMasks {
+    quint8 alex0 {0};
+    quint8 alex1 {0};
+    bool operator==(const AlexLpfMasks&) const noexcept = default;
+};
+
+// From Thetis ChannelMaster/netInterface.c:680-725 [v2.10.3.15]
+//   // if not MOX, write to alex1 if a TX setting else write to alex0
+//   if (isMox || isTX)        // true if Alex1 should be written
+//   if (isMox || !isTX)        // true if Alex0 should be written
+// Returns true when either mask changed.
+bool setAlexLpfBits(AlexLpfMasks& masks, quint8 bits, bool isTx, bool isMox) noexcept;
+
+// setAlexLPF: the 6m/ByPass on RX branch (unkeyed only, tested before the
+// Alex-present gate, as Thetis tests it), then the row selection written with
+// setAlexLpfBits. `alexPresent` false and no bypass: nothing is written.
+// Thetis's `initializing` guard has no equivalent: a connection only selects
+// once it is running. Returns true when either mask changed.
+bool setAlexLpf(AlexLpfMasks& masks, double freqMhz, bool freqIsTx, bool mox,
+                bool lpfBypass, bool alexPresent, const AlexLpfEdges& edges) noexcept;
+
+// Each low-pass edge's allowed range, the spinners' Minimum / Maximum.
+// From Thetis setup.designer.cs [v2.10.3.15]:
+//   udAlex160mLPFStart 0 (:24872) .. 1.999999 (:24867)
+//   udAlex160mLPFEnd   1.5 (:24842) .. 2.5 (:24837)
+//   udAlex80mLPFStart  1.8 (:24812) .. 2.999999 (:24807)
+//   udAlex80mLPFEnd    3 (:24782) .. 5 (:24777)
+//   udAlex40mLPFStart  4 (:24752) .. 6.5 (:24747)
+//   udAlex40mLPFEnd    6.500001 (:24722) .. 8.0 (:24717)
+//   udAlex20mLPFStart  7 (:24602) .. 12 (:24597)
+//   udAlex20mLPFEnd    12.000001 (:24662) .. 16.5 (:24657)
+//   udAlex15mLPFStart  15.5 (:24632) .. 21 (:24627)
+//   udAlex15mLPFEnd    23.000001 (:24692) .. 25.0 (:24687)
+//   udAlex10mLPFStart  24 (:24513) .. 30 (:24508)
+//   udAlex10mLPFEnd    30.000001 (:24483) .. 35.6 (:24478)
+//   udAlex6mLPFStart   34 (:24572) .. 50 (:24567)
+//   udAlex6mLPFEnd     50.000001 (:24543) .. 61.44 (:24538)
+// A 160 m End of 30 MHz would put a 25 MHz transmission through the 160 m
+// low-pass, so no path may store or apply an edge outside these.
+struct AlexLpfEdgeLimits {
+    double startMin;
+    double startMax;
+    double endMin;
+    double endMax;
+};
+inline constexpr std::array<AlexLpfEdgeLimits, kAlexLpfRowCount> kAlexLpfEdgeLimits = {{
+    {0.0,       1.999999,  1.5,       2.5},    // 160m
+    {1.8,       2.999999,  3.0,       5.0},    // 80m
+    {4.0,       6.5,       6.500001,  8.0},    // 40m
+    {7.0,       12.0,      12.000001, 16.5},   // 20m
+    {15.5,      21.0,      23.000001, 25.0},   // 15m
+    {24.0,      30.0,      30.000001, 35.6},   // 10m
+    {34.0,      50.0,      50.000001, 61.44},  // 6m
+}};
+
+// True when `mhz` is finite and inside the row edge's range (compared in
+// whole micro-MHz, the spinners' six decimals).
+bool alexLpfEdgeAllowed(int row, bool isEnd, double mhz) noexcept;
+
+// `mhz` held to the row edge's range; a non-finite value gives `fallback`
+// (itself held to the range).
+double clampAlexLpfEdge(int row, bool isEnd, double mhz, double fallback) noexcept;
+
+// One edge value an edit moved.
+struct AlexLpfEdgeMove {
+    int row {0};
+    bool isEnd {false};
+    double mhz {0.0};
+    bool operator==(const AlexLpfEdgeMove&) const noexcept = default;
+};
+
+// The Filters tab's neighbour rule for one edited edge: the neighbouring edge
+// it pushes, if any, rounded to six decimals and held to that edge's range.
+// From Thetis setup.cs:15888-15994 [v2.10.3.15]
+//   udAlex160mLPFStart: if (Start >= End + 0.000001) End = Start + 0.000001;
+//   udAlex160mLPFEnd:   if (End <= Start) Start = End - 0.000001;
+//                       else if (End >= 80mStart) 80mStart = End + 0.000001;
+//   udAlex<N>LPFStart (80..6m):  if (Start <= prevEnd) prevEnd = Start - 0.000001;
+//   udAlex<N>LPFEnd (80..10m):   if (End >= nextStart) nextStart = End + 0.000001;
+//   (udAlex6mLPFEnd has no handler.)
+std::optional<AlexLpfEdgeMove> alexLpfNeighbourMove(const AlexLpfRows& rows,
+                                                    int row, bool isEnd);
+
+// Sets one edge in `rows` (held to its range) and runs the neighbour rule to
+// rest, as Thetis's ValueChanged handlers cascade: each moved edge fires its
+// own handler. Returns the neighbours moved, in order (not the edited edge).
+// The Core runs this on every accepted low-pass write, so every window and
+// the phone see the moved neighbours; the desktop tab uses
+// alexLpfNeighbourMove one step at a time through its spin boxes.
+std::vector<AlexLpfEdgeMove> applyAlexLpfEdgeEdit(AlexLpfRows& rows, int row,
+                                                  bool isEnd, double mhz);
+
+// Whether "6m/ByPass on RX" applies on `model`. Thetis hides and unchecks
+// chkLPFBypass on five boards (NereusSDR shows it disabled, with the reason,
+// and treats it as off):
+// From Thetis setup.cs:6190-6205 [v2.10.3.15]
+//   if (HardwareSpecific.Model == HPSDRModel.ANAN8000D ||
+//       HardwareSpecific.Model == HPSDRModel.ANAN7000D ||
+//       HardwareSpecific.Model == HPSDRModel.ANAN_G2 ||
+//       HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K ||
+//       HardwareSpecific.Model == HPSDRModel.ANVELINAPRO3 ||
+//       HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+//   {
+//       if (HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+//       {
+//           chkLPFBypass.Visible = true;
+//       }
+//       else
+//       {
+//           chkLPFBypass.Checked = false;
+//           chkLPFBypass.Visible = false;
+//       }
+bool lpfBypassAvailable(NereusSDR::HPSDRModel model) noexcept;
 
 // Which RECEIVE frequency selects the low-pass when more than one receiver is
 // listening. Returns the frequency to hand to computeLpf, in MHz.

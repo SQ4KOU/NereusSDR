@@ -14,6 +14,15 @@
 //                                    settings backend is installed and at
 //                                    each admission.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: records
+//                                    the tx.setTxSlice commands the Core
+//                                    received.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: a window
+//                                    that shares slices, held slice-access
+//                                    updates and the slice access verbs the
+//                                    Core received.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RemoteWindowHarness.h"
@@ -69,6 +78,13 @@ QByteArray CoreSessionTransport::named(const QByteArray& wire) const
 void CoreSessionTransport::sendText(const QByteArray& original)
 {
     const QByteArray wire = named(original);
+    if (m_holdingAccess) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message) && message.objectKey.startsWith("access:")) {
+            m_heldAccess.append(wire);
+            return;
+        }
+    }
     if (m_holding) {
         m_held.append(wire);
         return;
@@ -98,6 +114,15 @@ void CoreSessionTransport::release()
     const QList<QByteArray> held = std::exchange(m_held, {});
     for (const QByteArray& wire : held) {
         WebSocketTransport::sendText(wire);
+    }
+}
+
+void CoreSessionTransport::releaseSliceAccessUpdates()
+{
+    m_holdingAccess = false;
+    const QList<QByteArray> held = std::exchange(m_heldAccess, {});
+    for (const QByteArray& wire : held) {
+        sendText(wire);
     }
 }
 
@@ -242,6 +267,10 @@ bool RemoteWindowHarness::start()
                                             MainWindow::ConnectionStartup::Deferred);
     if (StationClient* stationClient = client()) {
         stationClient->setReconnectBackoffUnitMs(m_options.backoffUnitMs);
+        if (m_options.sliceAccess) {
+            stationClient->setTokenSessionHolderForTest(m_options.sessionHolderId);
+            stationClient->setTokenSliceAccessForTest(true);
+        }
     }
     m_window->resize(1280, 800);
     m_window->show();
@@ -273,6 +302,24 @@ void RemoteWindowHarness::recordInbound(const QByteArray& wire)
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)
         || message.kind != SessionMessageKind::CommandInvoke) {
+        return;
+    }
+    if (message.commandVerb == "tx.setTxSlice") {
+        for (const MirrorUpdate& argument : message.arguments) {
+            if (argument.name == "sliceId") {
+                m_txSliceCommands << argument.value.toInt();
+            }
+        }
+        return;
+    }
+    if (message.commandVerb == "slice.listen" || message.commandVerb == "slice.stopListening"
+        || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release") {
+        for (const MirrorUpdate& argument : message.arguments) {
+            if (argument.name == "sliceId") {
+                m_sliceAccessCommands << QStringLiteral("%1:%2").arg(
+                    QString::fromUtf8(message.commandVerb)).arg(argument.value.toInt());
+            }
+        }
         return;
     }
     if (message.commandVerb != "addSlice" && message.commandVerb != "addSliceOnPan") {

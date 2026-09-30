@@ -131,6 +131,15 @@
 //                Pwr and SWR bars fall at the Core's unkey as a local
 //                window's do at its own. AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 (Q15, U8):
+//                setTransmitSliceResolver (the TX band, per-band power and
+//                the MOX mode follow the transmit slice, never a listened
+//                one) and the transmit-slice letter row
+//                (setTransmitSliceChoices). AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: holds
+//                the transmit slice's band while transmitting (m_txBand).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -206,6 +215,7 @@
 #include "core/HpsdrModel.h"   // HPSDRModel for rescaleFwdGaugeForModel
 #include "core/WdspTypes.h"
 
+class QHBoxLayout;
 class QPushButton;
 class QSlider;
 class QComboBox;
@@ -369,10 +379,10 @@ public slots:
                                    const QString& unavailableReason = QString());
     static QString monitorOutputUnavailableReason();
     // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
-    // the per-band power and the tune drive source (powerByBandJson and
-    // tuneDrivePowerSource on the link), which a Core takes from
-    // transmitSettingsVersion 5. MainWindow supplies false for an older
-    // Core, which would refuse them on every move. Always true locally.
+    // the tune drive source (tuneDrivePowerSource on the link), which a Core
+    // takes from transmitSettingsVersion 5. MainWindow supplies false for an
+    // older Core, which would refuse it on every move. Always true locally.
+    // The per-band power is never written from a window: the Core owns it.
     void setPowerByBandPermitted(bool permitted) { m_powerByBandPermitted = permitted; }
     // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
     // The EQ and CFC right-clicks open their dialogs in any window; this
@@ -415,9 +425,30 @@ public:
     void setDesktopKeyHandlers(std::function<void(bool)> mox,
                                std::function<void(bool)> tune,
                                std::function<bool()> moxOn,
-                               std::function<bool()> tuneOn,
-                               std::function<SliceModel*()> activeSlice = {});
+                               std::function<bool()> tuneOn);
     void syncDesktopKeyState();
+    /// Slice control plan Task 11 (Q15): the slice this window transmits
+    /// on. The TX band, the per-band RF power, the MOX mode tooltip and the
+    /// TX filter status follow it, never a slice this window only listens
+    /// to (Thetis TXBand follows the transmit VFO, console.cs:35753
+    /// [v2.10.3.15]). Empty: the radio's TX-bound slice, else the slice
+    /// flagged for transmit, else the active slice.
+    void setTransmitSliceResolver(std::function<SliceModel*()> resolver);
+    SliceModel* transmitSlice() const;
+    /// The band the TX applet's per-band controls read and write now.
+    Band currentBand() const { return m_currentBand; }
+    /// Slice control plan Task 11 (U8): one letter button per slice this
+    /// window controls (`controlled`); the checked one transmits. A press
+    /// calls `choose` with the slice id (a move while keyed unkeys first,
+    /// ruling 8.10). `unavailableReason` non-empty shows the row disabled
+    /// with that reason. Empty functions: every slice, the radio's own
+    /// handoff (RadioModel::requestTxHandoffToSlice), always available.
+    void setTransmitSliceChoices(std::function<bool(int)> controlled,
+                                 std::function<void(int)> choose,
+                                 std::function<QString()> unavailableReason = {});
+    /// Rebuilds the letter row (a slice came or went, control changed).
+    void refreshTransmitSliceChoices();
+    QList<QPushButton*> transmitSliceButtons() const { return m_txSliceButtons; }
     QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
@@ -520,20 +551,31 @@ private:
     // back.
     void removeReceiveOnlyLock();
     void applyReceiveOnlyLock();
-    // Task 16 fix wave (M3): follow the active slice's mode for the MOX
-    // tooltip; m_moxModeConnection is the current slice's connection.
-    void followActiveSliceMode();
+    // Task 16 fix wave (M3), slice control plan Task 11: follow the
+    // transmit slice's mode for the MOX tooltip and the TX filter status,
+    // and its frequency for the TX band; the connections are the current
+    // slice's.
+    void followTransmitSlice();
+    void refreshTxFilterStatus();
+    // Connects each slice's txSliceChanged once (Qt::UniqueConnection).
+    void watchTransmitFlags();
+    void onSliceTransmitFlagChanged(bool isTx);
     QMetaObject::Connection m_moxModeConnection;
+    QMetaObject::Connection m_txFreqConnection;
+    QPointer<SliceModel> m_followedTxSlice;
+    // Slice control plan Task 11 fix: the followed transmit slice's band,
+    // held while transmitting (Thetis's _tx_band under its MOX gate).
+    Band m_txBand{Band::Band20m};
+    bool m_txBandKnown{false};
 
-    // Canonical TX band derived from the active slice's frequency.  This
+    // Canonical TX band derived from the transmit slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905
     // uses the same expression for the TX wire path).  Distinct from
-    // m_currentBand, which tracks UI state and is fed by both
-    // PanadapterModel::bandChanged AND SliceModel::frequencyChanged from
-    // MainWindow — m_currentBand can drift to the panadapter band when
-    // the user pans without retuning the slice (CTUN), so it is NOT safe
-    // to use as the storage key for per-band TX state.  Falls back to
-    // m_currentBand when the active slice is unavailable (early bootstrap
+    // m_currentBand, which tracks UI state (since slice control plan Task
+    // 11 it follows the transmit slice's band through followTransmitSlice,
+    // and setCurrentBand can still set it directly), so it is not the
+    // storage key for per-band TX state.  Falls back to
+    // m_currentBand when the transmit slice is unavailable (early bootstrap
     // or after disconnection).
     Band txBand() const;
 
@@ -670,8 +712,13 @@ private:
     std::function<void(bool)> m_desktopTuneRequest;
     std::function<bool()> m_desktopMoxOn;
     std::function<bool()> m_desktopTuneOn;
-    std::function<SliceModel*()> m_desktopActiveSlice;
-    SliceModel* activeSliceForControls() const;
+    std::function<SliceModel*()> m_transmitSliceResolver;
+    // Slice control plan Task 11 (U8): the transmit-slice letter row.
+    QHBoxLayout* m_txSliceRow = nullptr;
+    QList<QPushButton*> m_txSliceButtons;
+    std::function<bool(int)> m_txSliceControlled;
+    std::function<void(int)> m_txSliceChoose;
+    std::function<QString()> m_txSliceUnavailable;
 
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.

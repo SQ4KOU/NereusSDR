@@ -59,6 +59,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-29 - R-R3-49 / R-IOS-18: PaProfilesFacade mirrored (read-only).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 4: SliceAccess mirrored
+//                 (`access:<sliceId>`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -140,6 +143,9 @@ const char* const kMirroredClasses[] = {
     // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): what another
     // device sees of a slice that is not its own, read-only.
     "NereusSDR::SliceMarker",
+    // Slice control plan Task 4 (sliceAccessVersion 1): who controls and who
+    // listens to each slice, read-only, for a view that shares slices.
+    "NereusSDR::SliceAccess",
     // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
     // transmitter, its meters and why it last stopped, read-only.
     "NereusSDR::TransmitState",

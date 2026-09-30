@@ -20,12 +20,16 @@
 // 2026-09-27: Parity Task 23 (R-R3-48, R-R3-42, R-R3-49): the apps, their
 // disconnect and the four options. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-09-28: slice control plan Task 2: the write gate is SliceAccessPolicy's;
+// a slice nobody controls but devices listen to is refused. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 #include "core/StationNetwork.h"
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/TciClientSession.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
@@ -62,13 +66,16 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     // slice N) and changes only the station device's own: the slices it
     // runs held for an absent device, and, before any device is on the
     // Core, the slices nobody owns yet. A device's slice changes only on
-    // that device.
+    // that device. Slice control plan Task 2 (SliceAccessPolicy): a slice
+    // with no controller that devices still listen to is nobody's to
+    // change until one of them takes control.
     m_server->setSliceWriteGate([radio = QPointer<RadioModel>(radio)](int sliceId) {
         if (!radio) {
             return false;
         }
-        const QByteArray owner = radio->sliceOwnership()->mark(sliceId).owner;
-        return owner.isEmpty() || owner == SliceOwnership::stationDevice();
+        const SliceOwnership& ownership = *radio->sliceOwnership();
+        return SliceAccessPolicy::mayChange(ownership, SliceOwnership::stationDevice(), sliceId)
+            || SliceAccessPolicy::stationMayChangeUnclaimed(ownership, sliceId);
     });
     // Rework follow-up 2: this controller logs the station listener's
     // state changes itself (once each); the server's per-attempt listen,

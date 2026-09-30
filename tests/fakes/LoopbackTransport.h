@@ -42,7 +42,19 @@
 //                                    setDropsOutgoing(), one direction
 //                                    dead. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    setCarriesBinary(), a session link
+//                                    without binary messages (a data
+//                                    channel). AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setHoldsOutgoing(), a slow link
+//                                    that delivers late and in order;
+//                                    setDropsOutgoing() loses pings and
+//                                    pongs too. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
+
+#include <functional>
 
 #include <QByteArray>
 #include <QList>
@@ -66,7 +78,7 @@ public:
     void sendText(const QByteArray& wire) override;
     /// Task 29 step 2b: binary messages, queued as text is.
     bool sendBinary(const QByteArray& message) override;
-    bool carriesBinary() const override { return true; }
+    bool carriesBinary() const override { return m_carriesBinary; }
     void ping() override;
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
@@ -79,6 +91,11 @@ public:
     /// What peerAddress() reports (the far end's address, as the station
     /// sees it). Default empty, as a relayed connection reports.
     void setPeerAddress(const QString& address) { m_peerAddress = address; }
+
+    /// What carriesBinary() reports. Default true (a WebSocket); false
+    /// stands for a session link that carries no binary messages, where
+    /// the media tunnel cannot run.
+    void setCarriesBinary(bool carries) { m_carriesBinary = carries; }
 
     /// What peerCertificateSha256() reports: the certificate the far end
     /// would have presented over TLS (a Core's, as its pin's 32 bytes).
@@ -96,10 +113,14 @@ public:
     /// at it. Neither end sees a close. Default false.
     void setSevered(bool severed) { m_severed = severed; }
     bool severed() const { return m_severed; }
-    /// Task 29 fix wave: while true, the text this end sends is lost and
-    /// what the far end sends still arrives (one direction dead). Default
-    /// false.
+    /// Task 29 fix wave: while true, what this end sends is lost (text,
+    /// binary, its pings and its pongs) and what the far end sends still
+    /// arrives (one direction dead). Default false.
     void setDropsOutgoing(bool drops) { m_dropsOutgoing = drops; }
+    /// While true, what this end sends (text, binary, pings and pongs)
+    /// waits, in order; false releases it in the order sent. A slow link:
+    /// late, never lost. Default false.
+    void setHoldsOutgoing(bool holds);
     LoopbackTransport* peerForTest() const { return m_peer; }
 
     /// Every wire message this end has received, in arrival order.
@@ -120,6 +141,7 @@ signals:
 private:
     void deliver(const QByteArray& wire);
     void receivePing();
+    void sendOrHold(std::function<void()> delivery);
 
     QString m_description;
     QPointer<LoopbackTransport> m_peer;
@@ -127,6 +149,9 @@ private:
     bool m_answersPings = true;
     bool m_severed = false;
     bool m_dropsOutgoing = false;
+    bool m_carriesBinary = true;
+    bool m_holdsOutgoing = false;
+    QList<std::function<void()>> m_heldOutgoing;
     int m_pingsSeen = 0;
     QString m_closeReason;
     QString m_peerAddress;

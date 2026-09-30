@@ -63,6 +63,39 @@
 //                TX inhibit's reason (the HL2 I/O board's fault code) and
 //                the transmit buttons follow the inhibit. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 14b: a
+//                listened flag's "Your volume" (setFlagListenVolume,
+//                listenVolumeFor, m_remoteListenVolumes). AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 15:
+//                windowRxSlice, refreshRxAppletSlices, sliceShownInWindow.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 15 fix round
+//                1: sliceAccessServer, sliceAccessClient,
+//                sliceChangeRefusal (the container buttons' refusal),
+//                dropHostingSliceActionsForTest.
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 10: the
+//                hosting desktop's slice requests run as the station device
+//                (m_hostingSlices, hostingSlices(), selectSliceForWindow,
+//                addSliceForWindow, closeSliceForWindow). AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 11:
+//                populatePanSlices takes the hosting actions, so a hosting
+//                window's empty pans get station-device slices. AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 11 fix:
+//                transmitSliceChoiceReason, requestTransmitSlice and
+//                refreshFlagTransmitGates, one path for the flag's TX button
+//                and the TX applet's letters. AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-29 - J.J. Boyd (KG4VCF). Slice control plan Task 16 (rulings
+//                U1, U2, U7): windowSharesSlices, windowControlsSlice,
+//                windowListensTo, windowPanIds, windowPanFor,
+//                rehostSliceView, revealSliceInWindow,
+//                reconcileListenPlacements, stopListeningOffWindow,
+//                m_listenPlacement, m_pendingRevealSlice. AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -118,6 +151,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <utility>
 #include <QMainWindow>
 #include <QLabel>
 #include <QAction>
@@ -146,6 +180,7 @@
 class QProgressDialog;
 class QSplitter;
 class QMenu;
+class QDialog;
 
 namespace NereusSDR {
 
@@ -164,6 +199,7 @@ class FftEnginePool;
 class TxAnalyzer;
 class SpectrumWidget;
 class SliceModel;
+class SliceChooser;
 class VfoWidget;
 class PanadapterModel;
 // Phase 3F Sub-Epic D: forward declarations for the multi-pan layout
@@ -199,6 +235,9 @@ class ChromeBarController;
 class SystemTile;
 class StatusBadge;
 class MultiDeviceController;
+class HostingSliceActions;
+class NoticeCard;
+struct SessionMessage;
 class AdcOverloadBadge;
 class OverflowChip;
 class PsaIndicatorWidget;
@@ -266,6 +305,9 @@ public:
     void refreshDesktopStationState();
     FftEnginePool* fftEnginePoolForTest() const { return m_fftEnginePool; }
     int miniProducerCountForTest() const { return int(m_miniProducers.size()); }
+    // Slice control plan Task 15 fix round 1: drops the hosting slice
+    // requests so a test reaches selectSliceForWindow's fallback path.
+    void dropHostingSliceActionsForTest();
 
     // R-R3-49 / R-R3-21: true in a test run (QStandardPaths test mode, set
     // before main() by tests/TestSandboxInit.cpp), false in the app. A test
@@ -323,8 +365,21 @@ public:
     /// AetherSDR, unless Auto mode is off in the Spot Hub.
     static void applySpotModeToSlice(RadioModel* model, SliceModel* slice, int spotIndex);
     // Shared startup/operator boundary, exercised without booting MainWindow.
+    // Slice control plan Task 11: while this window hosts, `hosting` makes
+    // each new slice the station device's (HostingSliceActions::addOnPan),
+    // never an unowned one.
     static void populatePanSlices(RadioModel* model, const QStringList& panIds,
-                                  bool operatorRequested, bool snapshotReady);
+                                  bool operatorRequested, bool snapshotReady,
+                                  HostingSliceActions* hosting = nullptr);
+    /// Slice control plan Task 2: a slice the station device may change as
+    /// its own (not one it listens to, nor one it runs held for an absent
+    /// device). desktopSliceAllowed is this while the window hosts.
+    static bool stationControlsSlice(const RadioModel* model, int sliceId);
+    /// Slice control plan Task 11: the slice a hosting window's TX applet
+    /// follows: the transmit-bound slice when the station controls it,
+    /// else the station's own active slice, else its first slice. Never a
+    /// slice it only listens to.
+    static SliceModel* stationTransmitSlice(RadioModel* model);
 
     // Narrow composition seams used by deletion-gap regressions. Runtime
     // call sites use these same helpers so stable-ID lookup cannot diverge
@@ -698,6 +753,19 @@ private slots:
     /// Desktop remote transmit (R-IOS-13): why this remote window may not
     /// transmit now, in the Core's words when the Core gave them.
     QString remoteTransmitReason() const;
+    /// Slice control plan Task 11 fix: why this window may not move
+    /// transmit to another slice now (empty when it may). One answer for
+    /// the flag's TX button and the TX applet's letters: a hosting window
+    /// must hold transmit; a remote window must hold it on the Core.
+    QString transmitSliceChoiceReason() const;
+    /// Moves transmit to slice `sliceId`: tx.setTxSlice from a remote
+    /// window, the arbiter here otherwise. Nothing while the reason above
+    /// is not empty.
+    void requestTransmitSlice(int sliceId);
+    /// Gives every flag's TX button the transmit permission and the reason
+    /// above.
+    void refreshFlagTransmitGates();
+    void applyFlagTransmitGate(VfoWidget* flag) const;
     /// Desktop remote transmit (R-R3-42): the TCI server forwards a
     /// program's transmit to the Core while the Core takes this window's
     /// keys, and not otherwise.
@@ -933,6 +1001,34 @@ private:
     void refreshRemoteDeviceScreens();
     void refreshForeignMarkers();
     void refreshTakeReceiverOffer();
+    // Slice control plan Task 13: the bottom RX area's all-slice chooser.
+    enum class SliceChooserAction { Listen, TakeControl, Release, StopListening, Select, NewSlice };
+    void ensureSliceChooser();
+    void openSliceChooser();
+    void refreshSliceChooser();
+    // Slice control plan Task 14a: a flag's menu action sent as the
+    // chooser's request.
+    void runFlagAccessAction(SliceChooserAction action, int sliceId);
+    void runSliceChooserAction(SliceChooserAction action, int sliceId);
+    // Slice control plan Task 14b (ruling U5): a listened flag's "Your
+    // volume" and Mute, sent as this device's own listening level
+    // (slice.setListenLevel), and the level a flag shows. level is 0..100.
+    void setFlagListenVolume(int sliceId, int level, bool muted);
+    // Slice control plan Task 10: while this desktop hosts, its slice
+    // requests run as the station device through m_hostingSlices, with the
+    // checks, questions and slice access a remote device's take. Otherwise
+    // RadioModel's own entry points, as before.
+    HostingSliceActions* hostingSlices() const;
+    void wireHostingSlices();
+    bool selectSliceForWindow(int sliceId);
+    void addSliceForWindow(const QString& panId);
+    void closeSliceForWindow(int sliceId);
+    void showHostingQuestion(const SessionMessage& question);
+    void showHostingNotice(const SessionMessage& notice);
+    void layoutHostingNoticeCards();
+    std::pair<int, bool> listenVolumeFor(int sliceId);
+    void finishSliceChooserRequest(const QByteArray& verb, bool accepted,
+                                   const QString& reason);
     void onPanTakeTransmitRequested(const QString& panId);
     void buildUI();
     void buildMenuBar();
@@ -1130,6 +1226,10 @@ private:
     QPointer<DesktopStationController> m_desktopStationController;
     QPointer<class TakeTransmitDialog> m_desktopTakeDialog;
     QPointer<class StationServer> m_desktopBoundServer;
+    // Slice control plan Task 10: bound to m_desktopBoundServer.
+    std::unique_ptr<HostingSliceActions> m_hostingSlices;
+    QPointer<QDialog> m_hostingQuestionDialog;
+    QList<QPointer<NoticeCard>> m_hostingNoticeCards;
     QMetaObject::Connection m_desktopHolderConnection;
     QMetaObject::Connection m_desktopDevicesConnection;
     QMetaObject::Connection m_desktopPresenceConnection;
@@ -1141,7 +1241,63 @@ private:
     bool m_desktopHostStopConfirmed{true};
     bool desktopHosting() const;
     bool desktopSliceAllowed(int sliceId) const;
+    // Slice control plan Task 14a: a slice the hosting window listens to
+    // while another device controls it (not one held for an absent device).
+    // Its flag shows, read-only, in place of a foreign marker.
+    bool desktopListensTo(int sliceId) const;
+    // Slice control plan Task 14a: while hosting, each flag's presentation
+    // and TX badge. The one place the host's badge rule lives; it runs on
+    // every change sliceOnAir depends on (holder, TX slice, pending
+    // handoff, MOX state).
+    void refreshDesktopFlags();
     SliceModel* activeSliceForWindow() const;
+    // Slice control plan Task 15: the slice this window's RX area follows
+    // (bottom bar, flag focus, RX applet). A listened slice may be it; the
+    // active slice (menus, transmit) never moves with it.
+    SliceModel* windowRxSlice() const;
+    // Slice control plan Task 15 (ruling U7): the RX applet's tabs, one per
+    // slice this window controls or listens to and shows, each saying who
+    // controls it; the applet binds windowRxSlice() with its access.
+    void refreshRxAppletSlices();
+    bool sliceShownInWindow(int sliceId) const;
+    // Slice control plan Task 16 (rulings U1, U2, U7). Whether this window
+    // shares slices with other devices (it hosts, or it is a remote window
+    // on a Core that reports slice access); whether it controls a slice (a
+    // window that shares nothing controls every slice); whether it listens
+    // to one another device controls.
+    bool windowSharesSlices() const;
+    bool windowControlsSlice(int sliceId) const;
+    bool windowListensTo(int sliceId) const;
+    // This window's pans: the current layout's ids that exist (floating
+    // ones included). A pan made only to hold another device's slice is
+    // not one of them.
+    QStringList windowPanIds() const;
+    // The window pan showing `slice`: where this window placed a listened
+    // slice, else its pan key, else the window pan that lists it. Empty
+    // when this window does not show it.
+    QString windowPanFor(const SliceModel* slice) const;
+    // Move a slice's flag onto the pan that shows it (spectrumForSlice).
+    void rehostSliceView(SliceModel* slice);
+    // Ruling U1 and U2: show `sliceId` in this window. A pan that shows it
+    // comes forward (a floating one is raised); otherwise it goes to an
+    // empty main-window pan, else the window grows to the next layout that
+    // fits, else the operator picks a pan. Nothing is added or moved for
+    // any other slice.
+    void revealSliceInWindow(int sliceId);
+    // A placement for a slice this window no longer only listens to is
+    // dropped; one it now controls takes the placement as its pan.
+    void reconcileListenPlacements();
+    // Ruling U7: stop listening to a slice a layout change took out of
+    // view, and say so.
+    void stopListeningOffWindow(int sliceId);
+    // Slice control plan Task 15 fix round 1: the server this window hosts
+    // and the Core link it shares slices over (each null when it does not),
+    // from which the chooser, the flags and the RX applet say who controls
+    // each slice; and why this window may not change a slice, as the RX
+    // applet says it (empty when it may). The container buttons ask it.
+    class StationServer* sliceAccessServer() const;
+    class StationClient* sliceAccessClient() const;
+    QString sliceChangeRefusal(int sliceId) const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
     void requestDesktopTransmit(bool tune, bool on);
@@ -1569,6 +1725,34 @@ private:
     // slice is active, not a fixed slice(0) -- see the rebindDashboard
     // lambda in buildStatusBar().
     RxDashboard* m_rxDashboard{nullptr};
+    // Slice control plan Task 13: the chooser (a popup), the request it
+    // waits on (the verb, or "addSlice"), and the words for its success.
+    QPointer<SliceChooser> m_sliceChooser;
+    // Task 14a: the flag whose menu sent the request in flight (-1: none);
+    // it shows the wait and then the Core's answer.
+    int m_flagRequestSlice{-1};
+    // Slice control plan Task 16: where this window shows a slice it only
+    // listens to, when that slice's own pan key names no pan here (slice id
+    // to pan id). Never written to the slice: its pan key belongs to its
+    // controller.
+    QHash<int, QString> m_listenPlacement;
+    // A remote window's listen or take-control request whose slice is shown
+    // once the Core accepts it (-1: none).
+    int m_pendingRevealSlice{-1};
+    bool m_reconcilingPlacements{false};
+    // Task 14b: a remote window's own listening level per listened slice,
+    // for the slice incarnation it was set on. The Core applies it and
+    // does not publish it back, so the window keeps the value it sent,
+    // first seeded from the slice's AF as the Core seeds it.
+    struct RemoteListenVolume {
+        quint64 incarnation{0};
+        int level{100};
+        bool muted{false};
+    };
+    QHash<int, RemoteListenVolume> m_remoteListenVolumes;
+    // Task 14b: the hosting desktop's access controller whose level
+    // changes for this station refresh its flags (connected once).
+    QPointer<QObject> m_listenLevelSource;
 
     // Phase 3M-4 Task 10: PSA bottom-banner indicator pair (FB + PS labels).
     // Inserted between m_rxDashboard and m_stationBlock per design doc §4 #5

@@ -302,8 +302,9 @@ void TstRemoteOcCal::keysAreOnTheListAtVersion8()
 
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    // 14 since the Core owns Prevent transmitting on a different band.
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
+    // 14 since the Core owns Prevent transmitting on a different band, 15
+    // since a remote window edits the CFC bands.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 15);
     QVERIFY(s.client->transmitSettingsAvailable(8));
     const IStationLink* link = s.window.stationLink();
     QVERIFY(link != nullptr && link->transmitSettingsAvailable(8));
@@ -626,7 +627,7 @@ void TstRemoteOcCal::hiddenAlexAndHl2ControlsKeepTheirSavedValues()
                                     QStringLiteral("alexLpfEnd_20m")}) {
             auto* w = page.findChild<QWidget*>(name);
             QVERIFY2(w != nullptr, qPrintable(name));
-            QVERIFY2(w->isHidden(), qPrintable(name));
+            QVERIFY2(!w->isHidden(), qPrintable(name));
         }
         QVERIFY(settings.save());
     }

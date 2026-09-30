@@ -20,6 +20,9 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slices set to AF 100: AF is the
+//                                    mixer level now. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -103,6 +106,8 @@ private slots:
                                    /*defaultRateHz=*/192000);
         const int slice = radio->addSlice();
         QVERIFY(slice >= 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio->sliceById(slice)->setAfGain(100);
 
         // Two seconds of the 48 kHz stereo mix: 700 Hz left, 1900 Hz right.
         std::vector<float> block(kBlockFrames * 2);
@@ -189,6 +194,8 @@ private slots:
                                    /*defaultRateHz=*/192000);
         const int slice = radio->addSlice();
         QVERIFY(slice >= 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio->sliceById(slice)->setAfGain(100);
         const auto restore = qScopeGuard([&] {
             radio->sliceById(slice)->setOutputRoute(SliceModel::OutputRoute::Speakers);
             AppSettings::instance().remove(QStringLiteral("Slice%1/OutputRoute").arg(slice));

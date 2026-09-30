@@ -56,7 +56,9 @@
 #include "core/session/StationServer.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/session/media/RemoteAudioContext.h"
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "LoopbackTransport.h"
@@ -283,6 +285,9 @@ struct RemoteAudioSessionHarness {
         sliceA = station.addSlice();
         sliceB = station.addSlice();
         Q_ASSERT(sliceA >= 0 && sliceB >= 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        station.sliceById(sliceA)->setAfGain(100);
+        station.sliceById(sliceB)->setAfGain(100);
         stationAudio->setSliceStreaming(sliceA, true);
         stationAudio->setSliceStreaming(sliceB, true);
         stationAudio->masterMixForTest().setSliceGain(sliceA, 0.60f, -0.95f);
@@ -363,6 +368,52 @@ struct RemoteAudioSessionHarness {
             if (hideHeadphonesMix) { QCOMPARE(client.capabilities().headphonesMixVersion, 0); }
             if (hideTxMonitorAudio) { QCOMPARE(client.capabilities().txMonitorAudioVersion, 0); }
         }
+    }
+
+    // A wait on this window's media connection allows what the window
+    // itself allows before it gives up and recovers: the Core's media
+    // description, then the connection (RemoteMediaController's
+    // kMediaDescriptionDeadlineMs + kMediaConnectDeadlineMs; this harness
+    // connects directly, never through the remote access service, so no
+    // gathering bound is added). A shorter wait failed on a loaded
+    // computer while the product was still inside its own limits.
+    static constexpr int kMediaConnectionWaitMs =
+        RemoteMediaController::kMediaDescriptionDeadlineMs
+        + RemoteMediaController::kMediaConnectDeadlineMs;
+
+    // How far the media connection got, for the message of a wait on it
+    // that ran out: control handshake, the Core's media, the window's media
+    // peer (started once the Core's description arrived), bytes over it,
+    // the audio status and the last accepted audio context.
+    QByteArray mediaStage(const RemoteMediaController& media) const
+    {
+        const auto yesNo = [](bool value) {
+            return value ? QStringLiteral("yes") : QStringLiteral("no");
+        };
+        const std::optional<MediaPeerTelemetry> traffic = media.trafficTelemetry();
+        const std::unique_ptr<char[]> state(toString(media.audioStatus().state));
+        QString context = QStringLiteral("none");
+        if (const std::optional<RemoteAudioContextMessage> accepted
+            = media.acceptedAudioContext()) {
+            context = QStringLiteral("generation %1, %2")
+                          .arg(accepted->generation)
+                          .arg(accepted->enabled
+                                   ? QStringLiteral("enabled")
+                                   : QStringLiteral("off (%1)").arg(
+                                         accepted->offReason
+                                             ? remoteAudioOffReasonToWire(*accepted->offReason)
+                                             : QStringLiteral("no reason")));
+        }
+        return QStringLiteral(
+                   "media connection stage: handshake complete %1; Core media %2; "
+                   "window media %3; media peer started %4; RTP bytes received %5, "
+                   "sent %6; audio status %7; accepted audio context %8")
+            .arg(yesNo(client.isHandshakeComplete()), yesNo(server.mediaAvailable()),
+                 yesNo(client.mediaAvailable()), yesNo(traffic.has_value()))
+            .arg(traffic ? traffic->traffic.receivedRtpBytes : 0)
+            .arg(traffic ? traffic->traffic.submittedRtpBytes : 0)
+            .arg(QString::fromLatin1(state.get()), context)
+            .toUtf8();
     }
 
     // Desktop remote transmit: set before connectSession(): the window

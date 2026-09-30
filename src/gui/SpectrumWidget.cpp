@@ -8,6 +8,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 J.J. Boyd / KG4VCF : Level Cal fix wave: while the level
+//                 calibration holds the grid's noise floor follow off, the
+//                 saved value stays the user's (setGridFollowSaveHold).
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 J.J. Boyd / KG4VCF : a remote window's waterfall AGC and
 //                 NF-AGC colour against the Core's levels (display extras)
 //                 when the Core offers them. AI-assisted via Anthropic
@@ -1268,8 +1272,11 @@ void SpectrumWidget::saveSettings()
     // Task 2.9: NF-aware grid settings.
     // From Thetis setup.cs:24202-24213 [v2.10.3.13] chkAdjustGridMinToNFRX1.
     // RX1 scope dropped; NereusSDR applies as global panadapter default.
+    // Level Cal: the user's value while the level calibration holds the
+    // follow off (setGridFollowSaveHold).
+    const bool followToSave = gridFollowSaveHold().value_or(m_adjustGridMinToNF);
     s.setValue(QStringLiteral("DisplayAdjustGridMinToNoiseFloor"),
-               m_adjustGridMinToNF ? QStringLiteral("True") : QStringLiteral("False"));
+               followToSave ? QStringLiteral("True") : QStringLiteral("False"));
     s.setValue(QStringLiteral("DisplayNFOffsetGridFollow"),
                QString::number(m_nfOffsetGridFollow));
     s.setValue(QStringLiteral("DisplayMaintainNFAdjustDelta"),
@@ -2603,6 +2610,24 @@ void SpectrumWidget::updateDssScaleOverlayFreshness()
 // From Thetis setup.cs:24202-24213 [v2.10.3.13]
 // — RX1 scope dropped; NereusSDR applies as global panadapter default
 //   with per-pan override via ContainerSettings dialog (3G-6 pattern).
+
+namespace {
+std::optional<bool>& gridFollowSaveHoldStore()
+{
+    static std::optional<bool> hold;
+    return hold;
+}
+} // namespace
+
+void SpectrumWidget::setGridFollowSaveHold(std::optional<bool> saved)
+{
+    gridFollowSaveHoldStore() = saved;
+}
+
+std::optional<bool> SpectrumWidget::gridFollowSaveHold()
+{
+    return gridFollowSaveHoldStore();
+}
 
 void SpectrumWidget::setAdjustGridMinToNoiseFloor(bool on)
 {

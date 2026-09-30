@@ -178,6 +178,8 @@ private slots:
 
         const int a = radio.addSlice();
         QCOMPARE(a, 0);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio.sliceById(a)->setAfGain(100);
 
         int   emits      = 0;
         int   gotFrames  = 0;
@@ -226,6 +228,9 @@ private slots:
         const int a = radio.addSlice();
         const int b = radio.addSlice();
         QVERIFY(a >= 0 && b >= 0 && a != b);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio.sliceById(a)->setAfGain(100);
+        radio.sliceById(b)->setAfGain(100);
 
         int emits     = 0;
         int gotFrames = 0;
@@ -263,6 +268,9 @@ private slots:
         const int a = radio.addSlice();
         const int b = radio.addSlice();
         QVERIFY(a >= 0 && b >= 0 && a != b);
+        // AF is the mixer level now; these tests measure unity gain.
+        radio.sliceById(a)->setAfGain(100);
+        radio.sliceById(b)->setAfGain(100);
         const auto restore = qScopeGuard([&] {
             radio.sliceById(b)->setOutputRoute(SliceModel::OutputRoute::Speakers);
             AppSettings::instance().remove(QStringLiteral("Slice%1/OutputRoute").arg(b));

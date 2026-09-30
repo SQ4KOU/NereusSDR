@@ -13,6 +13,17 @@
 //   2026-09-28: the fifth-device choice (Task 78 item 7, G-53). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               controlTaken notice and the slice access refusals and holds
+//               reach refusal(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: questionDialog() builds the
+//               question's dialog, and stackNoticeCards() places the notice
+//               cards, for the hosting desktop too. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: controlTaken is a card with Take it
+//               back (controlTakeBackOff shows it off on an older Core).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -64,6 +75,14 @@ MultiDeviceController::MultiDeviceController(StationClient* client, QWidget* dia
             &MultiDeviceController::markersChanged);
     connect(m_client, &StationClient::deviceCommandFinished, this,
             &MultiDeviceController::onCommandFinished);
+    // Slice control plan Task 5: a change held back on a slice this window
+    // only listens to says why, as the Core's refusal would.
+    connect(m_client, &StationClient::sliceAccessHeld, this,
+            [this](int, const QString& reason) {
+                if (!reason.isEmpty()) {
+                    emit refusal(reason);
+                }
+            });
 }
 
 MultiDeviceController::~MultiDeviceController()
@@ -143,6 +162,33 @@ void MultiDeviceController::askTakeTransmit()
     m_dialogQuestionId = 0;
 }
 
+QDialog* MultiDeviceController::questionDialog(const SessionPrompt& prompt,
+                                               QWidget* parent,
+                                               std::function<qint64()>* choice)
+{
+    std::function<qint64()> picked = []() { return qint64(-1); };
+    QDialog* dialog = nullptr;
+    if (prompt.kind == QStringLiteral("takeTransmit")) {
+        dialog = new TakeTransmitDialog(
+            TakeTransmitDialog::fromHolderEntry(prompt.holder.value_or(QJsonObject{})),
+            parent);
+    } else if (prompt.kind == QStringLiteral("takeReceiver")
+               || prompt.kind == QStringLiteral("takeSlice")) {
+        auto* chooser = new TakeReceiverDialog(prompt, parent);
+        const QPointer<TakeReceiverDialog> guard(chooser);
+        picked = [guard]() { return guard ? guard->pickedChoice() : qint64(-1); };
+        dialog = chooser;
+    } else {
+        // sharedSetting, panMove, and any kind a newer Core adds: the one
+        // shape that shows the change and who it reaches.
+        dialog = new ConfirmChangeDialog(prompt, parent);
+    }
+    if (choice != nullptr) {
+        *choice = std::move(picked);
+    }
+    return dialog;
+}
+
 void MultiDeviceController::onQuestionChanged()
 {
     if (!m_client) {
@@ -161,23 +207,8 @@ void MultiDeviceController::onQuestionChanged()
     }
     const SessionPrompt& prompt = question->prompt;
     const qint64 id = prompt.id;
-    QDialog* dialog = nullptr;
-    std::function<qint64()> choice = []() { return qint64(-1); };
-    if (prompt.kind == QStringLiteral("takeTransmit")) {
-        dialog = new TakeTransmitDialog(
-            TakeTransmitDialog::fromHolderEntry(prompt.holder.value_or(QJsonObject{})),
-            m_dialogParent);
-    } else if (prompt.kind == QStringLiteral("takeReceiver")
-               || prompt.kind == QStringLiteral("takeSlice")) {
-        auto* chooser = new TakeReceiverDialog(prompt, m_dialogParent);
-        const QPointer<TakeReceiverDialog> guard(chooser);
-        choice = [guard]() { return guard ? guard->pickedChoice() : qint64(-1); };
-        dialog = chooser;
-    } else {
-        // sharedSetting, panMove, and any kind a newer Core adds: the one
-        // shape that shows the change and who it reaches.
-        dialog = new ConfirmChangeDialog(prompt, m_dialogParent);
-    }
+    std::function<qint64()> choice;
+    QDialog* dialog = questionDialog(prompt, m_dialogParent, &choice);
     const QPointer<QDialog> self(dialog);
     connect(dialog, &QDialog::accepted, this, [this, self, id, choice]() {
         if (m_dialog != self) { return; }
@@ -248,7 +279,12 @@ void MultiDeviceController::onNoticesChanged()
     if (!m_client) {
         return;
     }
+    // Take-over parity: controlTaken (another device took control of a
+    // slice this window controlled) is a card like any other notice, with
+    // Take it back; an older Core offers none, and the button is shown off
+    // with the reason.
     const QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
+    const bool takesControlBack = m_client->controlTakeBackAvailable();
     QSet<qint64> live;
     for (const RemotePrompt& notice : notices) {
         live.insert(notice.prompt.id);
@@ -256,7 +292,7 @@ void MultiDeviceController::onNoticesChanged()
         if (card) {
             continue;
         }
-        card = new NoticeCard(notice, m_noticeHost);
+        card = new NoticeCard(notice, m_noticeHost, controlTakeBackOff(notice, takesControlBack));
         connect(card, &NoticeCard::takeBackRequested, this, [this](qint64 id) {
             if (m_client) {
                 m_client->takeBackNotice(id);
@@ -282,6 +318,17 @@ void MultiDeviceController::onNoticesChanged()
     layoutNoticeCards();
 }
 
+QString MultiDeviceController::controlTakeBackOff(const RemotePrompt& notice, bool available)
+{
+    if (notice.prompt.kind != QStringLiteral("controlTaken") || notice.prompt.takeBack) {
+        return {};
+    }
+    // A Core that can run it and did not offer it: the take-back ended
+    // (its device was away past its 3 minutes).
+    return available ? QStringLiteral("That can no longer be taken back.")
+                     : StationClient::controlTakeBackUnavailableReason();
+}
+
 void MultiDeviceController::setNoticeHost(QWidget* host)
 {
     if (m_noticeHost == host) {
@@ -298,13 +345,17 @@ void MultiDeviceController::setNoticeHost(QWidget* host)
 
 void MultiDeviceController::layoutNoticeCards()
 {
-    if (!m_noticeHost) {
+    stackNoticeCards(m_noticeHost, noticeCards());
+}
+
+void MultiDeviceController::stackNoticeCards(QWidget* host, QList<NoticeCard*> cards)
+{
+    if (!host) {
         return;
     }
     // Stacked from the foot of the band upwards, newest at the foot.
-    const int width = std::min(kCardMaxWidth, m_noticeHost->width() - 2 * kCardMargin);
-    int bottom = m_noticeHost->height() - kCardMargin;
-    QList<NoticeCard*> cards = noticeCards();
+    const int width = std::min(kCardMaxWidth, host->width() - 2 * kCardMargin);
+    int bottom = host->height() - kCardMargin;
     std::sort(cards.begin(), cards.end(), [](const NoticeCard* a, const NoticeCard* b) {
         return a->noticeId() > b->noticeId();
     });

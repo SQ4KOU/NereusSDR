@@ -285,6 +285,15 @@ bool ReceiveLayoutStore::stage(AppSettings& settings, const QString& mac,
     return true;
 }
 
+void ReceiveLayoutStore::forget(AppSettings& settings, const QString& mac)
+{
+    const QString normalizedMac = AppSettings::normalizedRadioMac(mac);
+    if (normalizedMac.isEmpty()) {
+        return;
+    }
+    settings.remove(QStringLiteral("hardware/%1/%2").arg(normalizedMac, kSettingsKey));
+}
+
 ReceiveLayoutStore::LoadResult ReceiveLayoutStore::load(const AppSettings& settings,
                                                          const QString& mac)
 {

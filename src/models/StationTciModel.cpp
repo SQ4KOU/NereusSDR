@@ -75,9 +75,12 @@ const QList<StationTciModel::Setting>& StationTciModel::settingsTable()
         {"txChannel", "TciTxChannel", K::TxChannel, 0, 2, "Both"},
         {"rxSensorIntervalMs", "TciRxSensorIntervalMs", K::Int, 30, 1000, "200"},
         {"txSensorIntervalMs", "TciTxSensorIntervalMs", K::Int, 30, 1000, "200"},
-        {"forgetRx2VfoBOnDisconnect", "TciForgetRx2VfoBOnDisconnect", K::Bool, 0, 1, "False"},
-        {"useRx1VfoaForRx2Vfoa", "TciUseRx1VfoaForRx2Vfoa", K::Bool, 0, 1, "False"},
-        {"copyRx2VfobToVfoa", "TciCopyRx2VfobToVfoa", K::Bool, 0, 1, "False"},
+        {"forgetRx2VfoBOnDisconnect", "TciForgetRx2VfoBOnDisconnect", K::Bool, 0, 1,
+         kTciForgetRx2VfobDefault ? "True" : "False"},
+        {"useRx1VfoaForRx2Vfoa", "TciUseRx1VfoaForRx2Vfoa", K::Bool, 0, 1,
+         kTciUseRx1VfoaForRx2VfoaDefault ? "True" : "False"},
+        {"copyRx2VfobToVfoa", "TciCopyRx2VfobToVfoa", K::Bool, 0, 1,
+         kTciCopyRx2VfobToVfoaDefault ? "True" : "False"},
     };
     return table;
 }

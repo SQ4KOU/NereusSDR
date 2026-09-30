@@ -9,6 +9,32 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    mediaTunnelOnlyIceConfiguration, the
+//                                    tunnel alone for the fallback.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder: the hello
+//                                    declares mediaDirect 1; media takes
+//                                    the Core's STUN (mediaStunServer), and
+//                                    mediaDirectIceConfiguration makes a
+//                                    direct-only replacement. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The heartbeat does not count missed
+//                                    pongs before the snapshot-complete
+//                                    marker. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The older-Core reason for the 2 m band
 //                                    no longer says "yet". AI-assisted via
 //                                    Anthropic Claude Code.
@@ -335,6 +361,45 @@
 //   2026-09-29: HL2 port part 2: the hello declares txInhibitReason 1, and
 //               the Core's reason applies as observed state.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the hello declares alexLpf 1 and radio
+//                takes the Core's alexLpfBits, so the Alex-1 Filters tab's
+//                lamps show the Core's low-pass (radioHardwareVersion 10).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - transmitSettingsVersion 15: requestCfcProfile
+//                (cfc.setProfile). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 / R-IOS-27: holdsTransmitHere() answers the
+//                IStationLink query, and a holder change reaches the
+//                window's model (reportTransmitHolderChanged). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the hello
+//               declares sliceAccess with sessionHolder; the `access:<id>`
+//               objects are held by no model object until Task 5. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5: the
+//               `access:<id>` objects go to SliceAccessMirror, which marks
+//               a listened slice read-only; remoteSliceAccessAvailable and
+//               slice.listen, slice.stopListening, slice.takeControl and
+//               slice.release, answered on deviceCommandFinished; a change
+//               held back on a listened slice is sliceAccessHeld. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel sends
+//               slice.setListenLevel for a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: a test's token bench link
+//               declares sliceAccess with sessionHolder when
+//               setTokenSliceAccessForTest asks. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the hello declares sliceAccess 2 (Take
+//               it back on controlTaken); controlTakeBackAvailable().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-3): a controlTaken card stays when
+//               its Take it back was refused and may be tried again.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -369,6 +434,7 @@
 #include "core/session/MediaTunnel.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessMirror.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
@@ -406,6 +472,7 @@
 #include <QWebSocket>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -666,6 +733,14 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     }
     // iPhone app plan Task 78: who else is on the Core.
     m_remoteDevices = new RemoteDevicesState(this);
+    // Slice control plan Task 5: who controls and who listens to each
+    // slice; it marks a slice this window only listens to read-only.
+    m_sliceAccess = new SliceAccessMirror(m_radioModel.data(), m_remoteDevices, this);
+    if (!m_radioModel.isNull()) {
+        // A slice request the model held back for a listened slice.
+        connect(m_radioModel.data(), &RadioModel::sliceRequestHeldForListener, this,
+                [this](int sliceId, const QString& reason) { emit sliceAccessHeld(sliceId, reason); });
+    }
     connect(m_transmitState, &TransmitState::holderChanged, this,
             &StationClient::transmitTakeAvailabilityChanged);
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
@@ -696,6 +771,10 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
         radioModel->setStationDevices(m_remoteDevices);
+        // R-R3-49 / R-IOS-27: pages that follow who holds transmit (the
+        // PA Gain page's on-the-air lock) hear it through the model.
+        connect(this, &StationClient::transmitTakeAvailabilityChanged, radioModel,
+                &RadioModel::reportTransmitHolderChanged);
     }
 
     // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this
@@ -726,6 +805,19 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // HL2 port part 2: this window shows why the Core's transmit is held
     // off (radio's txInhibitReason; txInhibitReasonVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("txInhibitReason"), 1);
+    // The Alex-1 Filters tab's lamps show the low-pass the Core's radio is
+    // using (radio's alexLpfBits, radioHardwareVersion 10).
+    m_declaredFeatures.insert(QByteArrayLiteral("alexLpf"), 1);
+    // PA on-air gate re-review, Important C: the PA pages open and lock
+    // the row the Core holds on the air (paTransmitBandVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("paTransmitBand"), 1);
+    // The direct media ladder: this window takes the Core's STUN list
+    // (mediaStunUrls) and asks for a direct-only media replacement
+    // (mediaDirectVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("mediaDirect"), 1);
+    // Level Cal: Setup's calibration shows the Core's run as it goes
+    // (radio's levelCal* properties, radioHardwareVersion 12).
+    m_declaredFeatures.insert(QByteArrayLiteral("levelCalibration"), 1);
     m_settingsBackupReplyTimer = new QTimer(this);
     m_settingsBackupReplyTimer->setSingleShot(true);
     connect(m_settingsBackupReplyTimer, &QTimer::timeout, this, [this]() {
@@ -846,6 +938,15 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                 }
                 const QByteArray className =
                     MirrorSchema::shortClassName(object->metaObject()->className());
+                // Slice control plan Task 5: a slice this window only
+                // listens to sends nothing; the Core refuses a listener's
+                // every write. Its setters hold a change back before it
+                // gets here; what is left (the pan it is shown on) is this
+                // window's own.
+                if (const auto* slice = qobject_cast<const SliceModel*>(object);
+                    slice != nullptr && slice->isReadOnlyListener()) {
+                    return;
+                }
                 for (const MirrorUpdate& update : updates) {
                     // OUTBOUND is MirrorPolicy-gated: this is the exact
                     // direction that table describes, so a property the
@@ -1212,7 +1313,45 @@ std::optional<IceConfiguration> StationClient::mediaTunnelIceConfiguration()
     if (!m_mediaTunnel) {
         return std::nullopt;
     }
-    return MediaTunnel::iceFor(m_mediaTunnel);
+    return MediaTunnel::iceFor(m_mediaTunnel, mediaStunServer());
+}
+
+std::optional<IceServerAddress> StationClient::mediaStunServer() const
+{
+    // The direct media ladder (link section 21): the Core's own STUN list
+    // (mediaStunUrls) first. libjuice has no TLS, so only a stun: entry is
+    // usable.
+    for (const QString& url : m_capabilities.mediaStunUrls) {
+        if (auto stun = IceConfiguration::parseStunUrl(url)) {
+            return stun;
+        }
+    }
+    // Then the STUN server of this session's connection through the
+    // service, and failing that the last one a session through the service
+    // used. Kept in memory only, never saved.
+    if (const auto ice = sessionIceConfiguration(); ice && ice->stunServer()) {
+        m_lastServiceStun = ice->stunServer();
+    }
+    return m_lastServiceStun;
+}
+
+bool StationClient::mediaDirectAvailable() const
+{
+    return m_handshakeComplete && m_capabilities.mediaDirectVersion >= 1 && mediaAvailable();
+}
+
+IceConfiguration StationClient::mediaDirectIceConfiguration() const
+{
+    return MediaTunnel::directIceFor(mediaStunServer());
+}
+
+std::optional<IceConfiguration> StationClient::mediaTunnelOnlyIceConfiguration()
+{
+    // The direct media ladder's fallback: the same tunnel, alone.
+    if (!mediaTunnelIceConfiguration()) {
+        return std::nullopt;
+    }
+    return MediaTunnel::tunnelIceFor(m_mediaTunnel);
 }
 
 SwitchableTransport* StationClient::sessionTransport() const
@@ -1961,6 +2100,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // Task 78: who else was on the Core was this session's.
     m_declaredSessionHolder = false;
     m_remoteDevices->clear();
+    // Slice control plan Task 5: so were its access objects. The slices keep
+    // their read-only marks until the next session's objects arrive.
+    m_sliceAccess->clear();
     if (m_radioModel) {
         m_radioModel->setStationMayCloseLastSlice(false);
     }
@@ -1987,6 +2129,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // unanswered commands would suppress completions for fresh requests
     // after reconnect (including the 4O3A master and C-Tune controls).
     m_pendingCommands.clear();
+    m_controlTakeBacks.clear();
     m_pendingPs3Display.reset();
 
     // Fix round 1, Important 1: disconnect the dead transport's signals to
@@ -2111,6 +2254,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
         m_radioModel->clearStationFilterState();
         m_radioModel->clearStationBandOutputs();
+        m_radioModel->clearStationAlexLpf();
+        m_radioModel->clearStationLevelCal();
         for (SliceModel* slice : m_radioModel->slices()) {
             slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
                                               slice->stationAutoAgcNoiseFloorGeneration());
@@ -2245,6 +2390,19 @@ void StationClient::onHeartbeatTick()
     // Step 2b: the cadence follows the path (a move or a settled pair may
     // have changed it since the last tick).
     m_heartbeatTimer->setInterval(effectiveHeartbeatIntervalMs());
+    // Before the snapshot-complete marker a missed pong is not counted. The
+    // station sends its whole snapshot in order ahead of any pong, so on a
+    // slow link (the web relay under load) the pong can arrive later than
+    // kMaxMissedPongs relayed intervals while the snapshot is still coming.
+    // Counting it then declared a live link dead and dialled again (a
+    // second relay join from each end, tst_relay_session). The handshake
+    // deadline already bounds this window: it runs until the marker and
+    // ends a connect that stalls. The ping is still sent; only a pong
+    // counts once the session is up (StationServer.h, heartbeat section).
+    if (!m_handshakeComplete && m_handshakeDeadlineTimer->isActive()) {
+        m_transport->ping();
+        return;
+    }
     if (m_pingsAwaitingPong >= m_maxMissedPongs) {
         qCWarning(lcStationClient)
             << "Station missed" << m_pingsAwaitingPong
@@ -2480,6 +2638,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         m_handshakeComplete = true;
         // R-R3-16/17: the connect sequence finished inside its deadline.
         m_handshakeDeadlineTimer->stop();
+        // The heartbeat counts missed pongs from here (onHeartbeatTick);
+        // pings sent during the snapshot are not held against the link.
+        if (firstSnapshot) {
+            m_pingsAwaitingPong = 0;
+        }
         if (m_radioModel) {
             // R-R3-49 (parity Task 7): and arming off the air from a Core
             // at transmitSettingsVersion 7.
@@ -2634,6 +2797,10 @@ void StationClient::onTransportText(const QByteArray& wire)
             m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
         }
         m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+        // Slice control plan Task 5: every slice the snapshot named is
+        // marked from the access objects it sent (none: not read-only).
+        m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
+        m_sliceAccess->refreshSlices();
         emit transmitTakeAvailabilityChanged();
         refreshSettingsHygiene();
         const QPointer<StationClient> watchSelf(this);
@@ -2941,6 +3108,10 @@ bool StationClient::signIn(const SessionMessage& hello)
         }
         if (m_declaresSessionHolder) {
             features.insert(QByteArrayLiteral("sessionHolder"), 1);
+            // Slice control plan Task 4: listening to and taking another
+            // device's slice (the rest of the window's side is Task 5).
+            // Take-over parity: 2, Take it back on controlTaken.
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
         }
         m_declaredSessionHolder = m_declaresSessionHolder;
         send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -2986,6 +3157,9 @@ bool StationClient::signIn(const SessionMessage& hello)
     if (!m_tokenSessionHolderIdForTest.isEmpty() && m_declaresSessionHolder
         && features.contains(QByteArrayLiteral("deviceAuth"))) {
         features.insert(QByteArrayLiteral("sessionHolder"), 1);
+        if (m_tokenSliceAccessForTest) {
+            features.insert(QByteArrayLiteral("sliceAccess"), m_sliceAccessDeclared);
+        }
         m_declaredSessionHolder = true;
     }
     send(SessionMessages::hello(m_agreedMajor, kSessionProtocolMinor, m_localSettingsSchema,
@@ -3099,6 +3273,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         m_radioModel->setStationMayCloseLastSlice(sessionHolderAvailable());
     }
     m_remoteDevices->setSelfDeviceId(thisDeviceWireId());
+    m_sliceAccess->setSelfDeviceId(thisDeviceWireId());
     emit transmitTakeAvailabilityChanged();
     if (!self || m_sessionEpoch != epoch) { return; }
     if (m_handshakeComplete) {
@@ -3650,7 +3825,6 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
     if (objectKey == QByteArrayLiteral("devices")) {
         return nullptr;
     }
-
     const int sliceId = idFromKey(objectKey, kSliceKeyPrefix);
     if (sliceId < 0) {
         qCWarning(lcStationClient)
@@ -3790,6 +3964,12 @@ void StationClient::handleObjectCreate(const SessionMessage& message)
         m_remoteDevices->applyObject(message.objectKey, message.updates);
         return;
     }
+    // Slice control plan Task 5: who controls and who listens to a slice.
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_pendingStationSchemas.remove(message.className);
+        m_sliceAccess->applyObject(message.objectKey, message.updates);
+        return;
+    }
     QObject* target = resolveOrCreate(message.objectKey, message.className);
     if (target == nullptr) {
         return;
@@ -3813,6 +3993,10 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
         m_remoteDevices->destroyObject(message.objectKey);
         return;
     }
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_sliceAccess->destroyObject(message.objectKey);
+        return;
+    }
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
     m_propertyWriteIds.remove(message.objectKey);
@@ -3831,6 +4015,10 @@ void StationClient::handleDelta(const SessionMessage& message)
 {
     if (RemoteDevicesState::holdsKey(message.objectKey)) {
         m_remoteDevices->applyObject(message.objectKey, message.updates);
+        return;
+    }
+    if (SliceAccessMirror::holdsKey(message.objectKey)) {
+        m_sliceAccess->applyObject(message.objectKey, message.updates);
         return;
     }
     QObject* target = m_objects.value(message.objectKey).data();
@@ -4035,6 +4223,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.logCategories"),
         // HL2 port part 2: likewise the Core's TX inhibit reason.
         QByteArrayLiteral("RadioModel.txInhibitReason"),
+        // PA on-air gate re-review: likewise the Core's on-air PA row.
+        QByteArrayLiteral("RadioModel.paTransmitBand"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
@@ -4080,6 +4270,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
             return true;
         }
         if (m_radioModel->applyStationBandOutputsValue(propertyName, native)) {
+            return true;
+        }
+        if (m_radioModel->applyStationAlexLpfValue(propertyName, native)) {
+            return true;
+        }
+        if (m_radioModel->applyStationLevelCalValue(propertyName, native)) {
             return true;
         }
         return m_radioModel->applyStationFilterValue(propertyName, native);
@@ -4243,6 +4439,10 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
     m_outboundMirror->watch(objectKey, object);
     if (auto* slice = qobject_cast<SliceModel*>(object)) {
         const QPointer<StationClient> owner(this);
+        // Slice control plan Task 5: the Core's own state is applied to a
+        // listened slice; only a change this window makes is held back.
+        // (RadioModel announces a held change, sliceRequestHeldForListener.)
+        slice->setStationApplyProbe([owner]() { return owner && owner->m_applyingInbound; });
         slice->setNnrSettingsApplier([owner](const NnrSettings& requested, QString* reason)
                                        -> std::optional<NnrSettings> {
             if (owner && (owner->m_applyingInbound || owner->nnrControlAvailable())) {
@@ -4576,6 +4776,96 @@ StationClient::CommandOutcome StationClient::requestSelectBand(int sliceId, int 
                        QStringLiteral("the band change"));
 }
 
+bool StationClient::remoteSliceAccessAvailable() const
+{
+    // Slice control plan Task 5: the Core sends sliceAccessVersion only to
+    // a window that declared sliceAccess with sessionHolder.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.sliceAccessVersion >= 1;
+}
+
+bool StationClient::controlTakeBackAvailable() const
+{
+    // Take-over parity: the Core sends the lower of its sliceAccessVersion
+    // and the one this window declared.
+    return remoteSliceAccessAvailable() && m_capabilities.sliceAccessVersion >= 2;
+}
+
+QString StationClient::controlTakeBackUnavailableReason()
+{
+    return QStringLiteral("This Core cannot give control back from here. Updating the Core may "
+                          "help.");
+}
+
+namespace {
+
+MirrorUpdate countArgument(const QByteArray& name, quint64 value)
+{
+    // An incarnation or a control revision: a non-negative i64 on the wire.
+    return MirrorUpdate{ 0, name, MirrorWireKind::Int64,
+                         QVariant(static_cast<qlonglong>(value)) };
+}
+
+} // namespace
+
+StationClient::CommandOutcome StationClient::requestListen(int sliceId, quint64 incarnation)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestListen(sliceId, incarnation);
+    }
+    return sendCommand("slice.listen", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation) },
+                       QStringLiteral("the request to listen to this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestStopListening(int sliceId,
+                                                                  quint64 incarnation)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestStopListening(sliceId, incarnation);
+    }
+    return sendCommand("slice.stopListening", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation) },
+                       QStringLiteral("the request to stop listening to this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestTakeControl(int sliceId, quint64 incarnation,
+                                                                quint64 controlRevision)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestTakeControl(sliceId, incarnation, controlRevision);
+    }
+    return sendCommand("slice.takeControl", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         countArgument("controlRevision", controlRevision) },
+                       QStringLiteral("the request to take control of this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestRelease(int sliceId, quint64 incarnation,
+                                                            quint64 controlRevision)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestRelease(sliceId, incarnation, controlRevision);
+    }
+    return sendCommand("slice.release", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         countArgument("controlRevision", controlRevision) },
+                       QStringLiteral("the request to release this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestListenLevel(int sliceId, quint64 incarnation,
+                                                                double level, bool muted)
+{
+    if (!remoteSliceAccessAvailable()) {
+        return IStationLink::requestListenLevel(sliceId, incarnation, level, muted);
+    }
+    const double clamped = std::isfinite(level) ? std::clamp(level, 0.0, 1.0) : 0.0;
+    return sendCommand("slice.setListenLevel", sliceId,
+                       { intArgument("sliceId", sliceId), countArgument("incarnation", incarnation),
+                         doubleArgument("level", clamped), boolArgument("muted", muted) },
+                       QStringLiteral("the change to your volume for this slice"));
+}
+
 StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
 {
     return sendCommand(
@@ -4821,6 +5111,53 @@ StationClient::CommandOutcome StationClient::requestRadioSampleRate(int rateHz)
     }
     return sendCommand("setRadioSampleRate", -1, { intArgument("rateHz", rateHz) },
                        QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000));
+}
+
+bool StationClient::levelCalibrationResetAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+StationClient::CommandOutcome StationClient::requestResetLevelCalibration()
+{
+    if (!levelCalibrationResetAvailable()) {
+        return IStationLink::requestResetLevelCalibration();
+    }
+    return sendCommand("resetLevelCalibration", -1, {},
+                       QStringLiteral("the level calibration reset"));
+}
+
+bool StationClient::levelCalibrationRunAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+bool StationClient::rx2PreampModeAvailable() const
+{
+    return radioHardwareAvailable(12);
+}
+
+StationClient::CommandOutcome StationClient::requestStartLevelCalibration(float levelDbm,
+                                                                          double frequencyHz,
+                                                                          int sliceId)
+{
+    if (!levelCalibrationRunAvailable()) {
+        return IStationLink::requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+    }
+    return sendCommand("startLevelCalibration", -1,
+                       { doubleArgument("levelDbm", levelDbm),
+                         doubleArgument("frequencyHz", frequencyHz),
+                         intArgument("sliceId", sliceId) },
+                       QStringLiteral("the level calibration"));
+}
+
+StationClient::CommandOutcome StationClient::requestCancelLevelCalibration()
+{
+    if (!levelCalibrationRunAvailable()) {
+        return IStationLink::requestCancelLevelCalibration();
+    }
+    return sendCommand("cancelLevelCalibration", -1, {},
+                       QStringLiteral("the level calibration cancel"));
 }
 
 bool StationClient::dspInfoAvailable() const
@@ -5868,6 +6205,21 @@ StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts
                        QStringLiteral("the tune power"));
 }
 
+// transmitSettingsVersion 15: the CFC dialog's band editor, applied by the
+// Core at once against the revision the window last saw. A Core below 15
+// is not asked; the dialog writes the CFC properties one by one instead.
+StationClient::CommandOutcome StationClient::requestCfcProfile(const QString& profileJson,
+                                                               const QString& expectedRevision)
+{
+    if (!transmitSettingsAvailable(kTransmitSettingsCfcProfileVersion)) {
+        return IStationLink::requestCfcProfile(profileJson, expectedRevision);
+    }
+    return sendCommand("cfc.setProfile", -1,
+                       { stringArgument("profileJson", profileJson),
+                         stringArgument("expectedRevision", expectedRevision) },
+                       QStringLiteral("the CFC settings"));
+}
+
 // R-R3-49 (parity Task 3): the TX profile combos, Setup > Audio > TX
 // Profile and the RADE applet's Reset vocoder. A Core below
 // transmitSettingsVersion 3 is not asked.
@@ -6435,10 +6787,47 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             awaiting = !message.accepted;
         }
     }
+    // Slice control plan Task 5: the four slice access verbs are answered
+    // where the window's several-devices refusals are shown; Task 14b adds
+    // a listened slice's own volume (slice.setListenLevel), Task 11 the
+    // transmit slice's choice (tx.setTxSlice).
     if (message.commandVerb == "tx.take" || message.commandVerb == "confirm.proceed"
         || message.commandVerb == "confirm.cancel" || message.commandVerb == "notice.takeBack"
-        || message.commandVerb == "session.leave") {
+        || message.commandVerb == "session.leave" || message.commandVerb == "slice.listen"
+        || message.commandVerb == "slice.stopListening"
+        || message.commandVerb == "slice.takeControl" || message.commandVerb == "slice.release"
+        || message.commandVerb == "slice.setListenLevel"
+        || message.commandVerb == "tx.setTxSlice") {
         m_pendingCommands.remove(message.commandId);
+        if (const auto kept = m_controlTakeBacks.constFind(message.commandId);
+            kept != m_controlTakeBacks.cend()) {
+            const qint64 noticeId = kept.value();
+            m_controlTakeBacks.erase(kept);
+            // Take-over fix wave (M-3): the card goes when control came
+            // back or never can now; a refusal that may be tried again
+            // (the slice transmits) leaves it.
+            bool retry = false;
+            if (!message.accepted) {
+                for (const RemotePrompt& notice : m_remoteDevices->notices()) {
+                    if (notice.prompt.id != noticeId || !notice.prompt.slices
+                        || notice.prompt.slices->isEmpty()) {
+                        continue;
+                    }
+                    const int sliceId = notice.prompt.slices->first().toObject()
+                                            .value(QStringLiteral("sliceId")).toInt(-1);
+                    const std::optional<SliceAccessMirror::Entry> now =
+                        m_sliceAccess ? m_sliceAccess->entry(sliceId) : std::nullopt;
+                    retry = controlTakeBackMayBeTriedAgain(
+                        notice.prompt, message.reason,
+                        now ? static_cast<qint64>(now->incarnation) : -1,
+                        now ? static_cast<qint64>(now->controlRevision) : -1);
+                    break;
+                }
+            }
+            if (!retry) {
+                m_remoteDevices->dismissNotice(noticeId);
+            }
+        }
         emit deviceCommandFinished(message.commandVerb, message.commandId, message.accepted,
                                    message.reason, awaiting);
         return;
@@ -7264,6 +7653,19 @@ quint32 StationClient::requestTakeTransmit(bool shown, qint64 holderEpoch, bool 
     return invokeCommand(QByteArrayLiteral("tx.take"), args);
 }
 
+quint32 StationClient::requestTxSlice(int sliceId)
+{
+    // tx.setTxSlice came with remoteTxVersion 1 (iPhone app plan Task 34);
+    // the Core answers notHolder while this window does not hold transmit.
+    if (!sessionHolderAvailable() || !remoteTransmitAvailable() || sliceId < 0) {
+        return 0;
+    }
+    return invokeCommand(
+        QByteArrayLiteral("tx.setTxSlice"),
+        {MirrorUpdate{0, QByteArrayLiteral("sliceId"), MirrorWireKind::Int64,
+                      QVariant(static_cast<qint64>(sliceId))}});
+}
+
 quint32 StationClient::proceedQuestion(qint64 id, qint64 choice)
 {
     if (!sessionHolderAvailable()) {
@@ -7290,13 +7692,45 @@ quint32 StationClient::cancelQuestion(qint64 id)
 
 quint32 StationClient::takeBackNotice(qint64 id)
 {
-    m_remoteDevices->dismissNotice(id);
+    // Take-over fix wave (M-3): a controlTaken card waits for the answer.
+    bool controlTaken = false;
+    for (const RemotePrompt& notice : m_remoteDevices->notices()) {
+        if (notice.prompt.id == id) {
+            controlTaken = notice.prompt.kind == QLatin1String("controlTaken");
+            break;
+        }
+    }
+    if (!controlTaken || !sessionHolderAvailable()) {
+        m_remoteDevices->dismissNotice(id);
+    }
     if (!sessionHolderAvailable()) {
         return 0;
     }
-    return invokeCommand(
+    const quint32 commandId = invokeCommand(
         QByteArrayLiteral("notice.takeBack"),
         {MirrorUpdate{0, QByteArrayLiteral("id"), MirrorWireKind::Int64, QVariant(id)}});
+    if (controlTaken) {
+        if (commandId == 0) {
+            m_remoteDevices->dismissNotice(id);
+        } else {
+            m_controlTakeBacks.insert(commandId, id);
+        }
+    }
+    return commandId;
+}
+
+bool StationClient::controlTakeBackMayBeTriedAgain(const SessionPrompt& notice,
+                                                   const QString& reason, qint64 incarnationNow,
+                                                   qint64 revisionNow)
+{
+    if (notice.kind != QLatin1String("controlTaken") || !notice.slices
+        || notice.slices->isEmpty() || incarnationNow < 0
+        || reason == QLatin1String("That can no longer be taken back.")) {
+        return false;
+    }
+    const QJsonObject entry = notice.slices->first().toObject();
+    return entry.value(QStringLiteral("incarnation")).toInteger(-1) == incarnationNow
+        && entry.value(QStringLiteral("controlRevision")).toInteger(-1) == revisionNow;
 }
 
 bool StationClient::answerHeld(const QString& deviceId)

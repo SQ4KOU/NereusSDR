@@ -31,8 +31,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 0,
               "max": 100,
@@ -54,8 +53,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -74,8 +72,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "unit": "dB",
               "rangeSource": "attOnTx"
@@ -96,8 +93,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             }
           ]
@@ -121,8 +117,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "choices": [
                 "Use Drive Slider",
@@ -146,8 +141,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "rangeFrom": {
                 "catalogueTransmit": "tunePower"
@@ -179,8 +173,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "valueEncoding": {
                 "true": "True",
@@ -199,8 +192,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 1,
               "max": 5,
@@ -218,8 +210,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "valueEncoding": {
                 "true": "True",
@@ -238,8 +229,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 5,
               "max": 50,
@@ -257,8 +247,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "valueEncoding": {
                 "true": "True",
@@ -282,8 +271,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "valueEncoding": {
                 "true": "True",
@@ -302,8 +290,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "valueEncoding": {
                 "true": "True",
@@ -604,8 +591,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -623,8 +609,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 2,
               "max": 100,
@@ -645,8 +630,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 1,
               "max": 2000,
@@ -667,8 +651,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 2,
               "max": 1000,
@@ -689,8 +672,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": -80,
               "max": 0,
@@ -711,8 +693,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 0,
               "max": 30,
@@ -733,8 +714,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 0,
               "max": 10,
@@ -755,8 +735,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 1,
               "max": 100,
@@ -782,8 +761,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -801,8 +779,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 10,
               "max": 999,
@@ -828,8 +805,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -847,8 +823,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 100,
               "max": 10000,
@@ -869,8 +844,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 100,
               "max": 10000,
@@ -896,8 +870,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -915,8 +888,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": -60,
               "max": 60,
@@ -937,8 +909,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 5,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 1,
               "max": 500,

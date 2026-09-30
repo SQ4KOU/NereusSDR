@@ -14,6 +14,9 @@
 //
 // Modification history: 2026-09-27 J.J. Boyd (KG4VCF), AI-assisted via
 // OpenAI Codex: retain idle/key-call scheduling evidence without relaxing bounds.
+// 2026-09-30 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: the
+// keyed phase's idle reference also ticks on its own thread while the keys
+// run, so a neighbour's load that starts after the idle phase is in both.
 //
 // REALTIME: the timer-gap bound is wall-clock time while a real TX channel
 // and a real RX channel run 200 ms blocks and feeder threads drive them.
@@ -40,6 +43,10 @@
 #include <numbers>
 #include <thread>
 #include <vector>
+
+#ifdef Q_OS_MAC
+#include <pthread/qos.h>
+#endif
 
 #include "core/DspControlThread.h"
 #include "core/MoxController.h"
@@ -213,6 +220,72 @@ bool wdspDisplayExists(int disp)
 {
     return pdisp[disp] != nullptr;
 }
+
+// An idle event loop on its own thread, ticking every kTimerIntervalMs at the
+// calling thread's QoS class (macOS) until stopped: the idle reference that
+// runs at the same time as the loop it is compared with, so both see the
+// same machine. Nothing else runs on it.
+class IdleTwinLoop {
+public:
+    IdleTwinLoop()
+    {
+#ifdef Q_OS_MAC
+        qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+        int relative = 0;
+        pthread_get_qos_class_np(pthread_self(), &qos, &relative);
+#endif
+        m_thread.reset(QThread::create([this
+#ifdef Q_OS_MAC
+                                        , qos, relative
+#endif
+        ] {
+#ifdef Q_OS_MAC
+            if (qos != QOS_CLASS_UNSPECIFIED) {
+                pthread_set_qos_class_self_np(qos, relative);
+            }
+#endif
+            QEventLoop loop;
+            QTimer ticker;
+            ticker.setTimerType(Qt::PreciseTimer);
+            ticker.setInterval(kTimerIntervalMs);
+            Clock::time_point previous = Clock::now();
+            QObject::connect(&ticker, &QTimer::timeout, &loop, [&] {
+                const Clock::time_point now = Clock::now();
+                if (m_ticks > 0) {
+                    m_worstGapMs = std::max(m_worstGapMs, msBetween(previous, now));
+                }
+                previous = now;
+                ++m_ticks;
+                if (m_quit.load()) {
+                    loop.quit();
+                }
+            });
+            ticker.start();
+            m_running.store(true);
+            loop.exec();
+        }));
+        m_thread->start();
+        while (!m_running.load()) {
+            std::this_thread::yield();
+        }
+    }
+    ~IdleTwinLoop() { stop(); }
+    void stop()
+    {
+        m_quit.store(true);
+        m_thread->wait();
+    }
+    // Valid after stop().
+    double worstGapMs() const { return m_worstGapMs; }
+    int ticks() const { return m_ticks; }
+
+private:
+    std::unique_ptr<QThread> m_thread;
+    std::atomic<bool> m_running{false};
+    std::atomic<bool> m_quit{false};
+    double m_worstGapMs{0.0};
+    int m_ticks{0};
+};
 
 // A thread that calls `tick` about once a millisecond until stopped.
 class Feeder {
@@ -532,6 +605,12 @@ private slots:
     // 25 ms (idle 31.19 ms, keyed 39.10 ms at load 234, key call 0.32 ms);
     // keying still must not add more than the 15 ms the bound allows over
     // the tick, so a keying stall of the 200 ms kind this guards still fails.
+    // The idle worst gap is the idle phase's and that of an idle loop on its
+    // own thread ticking through the keyed phase: a neighbour's load that
+    // started after the idle phase stalled the keyed loop 39 to 44 ms before
+    // any key (idle 15 ms, load 24), and the same onset during the idle
+    // phase stalls it 25 to 36 ms; the twin loop sees such a load too, and a
+    // stall on this thread's loop does not reach it.
     void keyCyclesLeaveTheEventLoopAlone()
     {
         TimedLog log;
@@ -590,6 +669,7 @@ private slots:
         bool keyed = false;
         int keysTaken = 0;
         double worstGapMs = 0.0;
+        IdleTwinLoop idleTwin;
         Clock::time_point lastTick = Clock::now();
         QEventLoop loop;
         QTimer ticker;
@@ -642,6 +722,7 @@ private slots:
         ticker.start();
         loop.exec();
         ticker.stop();
+        idleTwin.stop();
         const quint64 eventLoopCalls = WdspThreadCheck::eventLoopEntries();
         WdspThreadCheck::uninstall();
 
@@ -651,17 +732,23 @@ private slots:
         WDSPSetTestBlockDelayUs(kTxId, 0);
         QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
 
+        const double idleReferenceMs = std::max(idleWorstGapMs, idleTwin.worstGapMs());
         const double keyedLimitMs =
-            std::max(kMaxTimerGapMs, idleWorstGapMs + kKeyedOverIdleAllowanceMs);
+            std::max(kMaxTimerGapMs, idleReferenceMs + kKeyedOverIdleAllowanceMs);
         qInfo("%d key and unkey cycles (MOX, TUNE, two-tone) with the PureSignal poll: "
               "%d ticks; worst %d ms timer gap %.2f ms (limit %.2f); TX blocks sent %d; "
               "WDSP calls on the event loop %llu",
               keysTaken, ticks, kTimerIntervalMs, worstGapMs, keyedLimitMs,
               rig.conn->txBlocks(), static_cast<unsigned long long>(eventLoopCalls));
         qInfo("Scheduling comparison: idle ticks %d, idle worst gap %.2f ms, "
+              "idle twin ticks %d, twin worst gap %.2f ms, "
               "key call worst %.2f ms, unkey call worst %.2f ms",
-              idleTicks, idleWorstGapMs, worstKeyCallMs, worstUnkeyCallMs);
+              idleTicks, idleWorstGapMs, idleTwin.ticks(), idleTwin.worstGapMs(),
+              worstKeyCallMs, worstUnkeyCallMs);
         QCOMPARE(idleTicks, 555);
+        // The twin ticked through the keyed phase (about as often as the
+        // keyed loop: it is idle).
+        QVERIFY2(idleTwin.ticks() >= ticks / 2, qPrintable(QString::number(idleTwin.ticks())));
         QCOMPARE(keysTaken, kKeyCycles);
         QCOMPARE(eventLoopCalls, quint64(0));
         QVERIFY2(worstGapMs <= keyedLimitMs, "the event loop's 10 ms timer gapped");

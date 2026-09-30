@@ -45,6 +45,8 @@
 #include <QFile>
 #include <QLoggingCategory>
 #include <QSignalSpy>
+#include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QTemporaryDir>
 
 #include <array>
@@ -93,6 +95,25 @@ constexpr quint8 kOutputRegister = 169;
 QString hw(const QString& rest)
 {
     return QStringLiteral("hardware/%1/%2").arg(kMac, rest);
+}
+
+// Clock chip writes as (register, data) pairs. Tables from mi0bot
+// Console/setup.cs:21572-21629 [@c26a8a4]; the CL2 divider bytes worked
+// out apart from the code under test, with Python's decimal module at 28
+// digits following ControlCl2 (setup.cs:21694-21721), as
+// tst_p1_hl2_clock's are.
+using ClockWrites = std::vector<std::pair<int, int>>;
+const ClockWrites kClock10MhzEnable = {
+    {0x10, 0xc0}, {0x13, 0x03}, {0x10, 0x40}, {0x2d, 0x01}, {0x2e, 0x20},
+    {0x22, 0x03}, {0x23, 0x00}, {0x24, 0x00}, {0x25, 0x00}, {0x19, 0x00},
+    {0x1A, 0x00}, {0x1B, 0x00}, {0x18, 0x00}, {0x17, 0x12}};
+const ClockWrites kClockCl2Off = {
+    {0x62, 0x5b}, {0x2c, 0x00}, {0x31, 0x00}, {0x3d, 0x00}, {0x3e, 0x00},
+    {0x32, 0x00}, {0x33, 0x00}, {0x34, 0x00}, {0x35, 0x00}, {0x63, 0x00}};
+ClockWrites clockCl2(int d3d, int d3e, int d32, int d33, int d34, int d35)
+{
+    return {{0x62, 0x3b}, {0x2c, 0x00}, {0x31, 0x81}, {0x3d, d3d}, {0x3e, d3e},
+            {0x32, d32}, {0x33, d33}, {0x34, d34}, {0x35, d35}, {0x63, 0x01}};
 }
 
 std::unique_ptr<RadioModel> makeHl2Model()
@@ -282,9 +303,12 @@ private slots:
     void olderCoreKeepsTheToolAndSwitchesClosedWithItsReason();
     void alexHpfSwitchesFromARemoteWindowOnAndOffTheAir();
     void localAlexHpfSwitchesStayLiveOnTheAir();
+    void alexLpfEdgesFromARemoteWindowKeepRangesAndMoveNeighbours();
     void reasonsArePlain();
     void inputStripFollowsThePinsAndTransmitLocalAndRemote();
     void toolReadsPauseThePollUntilAnswered();
+    void clockOptionsFromARemoteWindowReachTheCoresRadio();
+    void olderCoreKeepsTheClockOptionsClosedWithItsReason();
 
 private:
     QTemporaryDir m_securityDir;
@@ -318,7 +342,7 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 9);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 12);
     QVERIFY(s.client->radioHardwareAvailable(7));
     s.window.alexAntennaFacade()->setWindowAvailability(true, {});
     HardwarePage page(&s.window);
@@ -714,9 +738,66 @@ void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
     QCOMPARE(s.settings.value(hw(QStringLiteral("alex/master/hpfBypassOnPs"))).toString(),
              QStringLiteral("False"));
     QCOMPARE(rejected.count(), 1);
-    // The LPF band edges stay refused.
+    // The LPF band edges are taken from a window offered hardware version 10.
     s.proxy.setValue(hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0"));
+    QTRY_COMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/20m/start"))).toString(),
+                 QStringLiteral("10.0"));
+    QCOMPARE(rejected.count(), 1);
+}
+
+// Alex LPF review C1 and I1: a remote window's low-pass edge outside its
+// Thetis spinner's range is refused with the range in plain words and never
+// stored or applied; an accepted edge moves its neighbours on the Core
+// (setup.cs:15888-15994 [v2.10.3.15], codec::alex::applyAlexLpfEdgeEdit),
+// stored there so every window and the phone see them.
+void TstRemoteHl2Io::alexLpfEdgesFromARemoteWindowKeepRangesAndMoveNeighbours()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    s.core.model->applyAlexHpfSwitchSettings();
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 2.5);
+
+    // 160m End set to 30: refused, not stored, not applied.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/160m/end")), QStringLiteral("30"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().first().toString(), hw(QStringLiteral("alex/lpf/160m/end")));
+    QVERIFY(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString().isEmpty());
+    QCOMPARE(RadioModel::savedAlexLpfEdges(kMac).rows[0].endMhz, 2.5);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 2.5);
+    // And a value that is not a number.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/10m/end")), QStringLiteral("nan"));
     QTRY_COMPARE(rejected.count(), 2);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[5].endMhz, 35.6);
+
+    // 40m End up to 8.5 is outside its range (6.500001 to 8) too.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/40m/end")), QStringLiteral("8.5"));
+    QTRY_COMPARE(rejected.count(), 3);
+
+    // 80m Start down to 1.8: taken, and the Core moves the 160m End below
+    // it, which every window sees and the radio uses.
+    s.proxy.setValue(hw(QStringLiteral("alex/lpf/80m/start")), QStringLiteral("1.8"));
+    QTRY_COMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString(),
+                 QStringLiteral("1.799999"));
+    QTRY_COMPARE(s.proxy.value(hw(QStringLiteral("alex/lpf/160m/end")), {}).toString(),
+                 QStringLiteral("1.799999"));
+    QTRY_COMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 1.799999);
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[1].startMhz, 1.8);
+    QCOMPARE(rejected.count(), 3);
+
+    // The same edge in another case: the Core recognizes it as the 160m
+    // End but refuses it, so it is stored under no key and moves nothing
+    // (the neighbour rule stores under the lowercase keys only).
+    const QString oddCase = hw(QStringLiteral("Alex/LPF/160M/End"));
+    s.proxy.setValue(oddCase, QStringLiteral("1.7"));
+    QTRY_COMPARE(rejected.count(), 4);
+    QCOMPARE(rejected.last().first().toString(), oddCase);
+    QVERIFY(s.settings.value(oddCase).toString().isEmpty());
+    QCOMPARE(s.settings.value(hw(QStringLiteral("alex/lpf/160m/end"))).toString(),
+             QStringLiteral("1.799999"));
+    QVERIFY(s.settings.value(hw(QStringLiteral("alex/lpf/160m/start"))).toString().isEmpty());
+    QCOMPARE(s.core.p1.alexLpfEdges().rows[0].endMhz, 1.799999);
 }
 
 void TstRemoteHl2Io::localAlexHpfSwitchesStayLiveOnTheAir()
@@ -841,7 +922,7 @@ void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
         QCOMPARE(local.model->ioBoardFacade()->outputs(), 0x04);
 
         // A read the radio does not answer releases it when the tool gives
-        // up (last here: the board still expects that answer).
+        // up.
         Outcome lost;
         request.reg = 0x0B;
         local.model->requestIoBoardI2c(request, lost.done());
@@ -858,6 +939,20 @@ void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
         request.value = 0x01;
         local.model->requestIoBoardI2c(request, write.done());
         QVERIFY(write.called && write.ok);
+        QVERIFY(!board.isPollingPaused());
+        QVERIFY(compose(board).composed);
+
+        // The read given up does not take the next read's answer.
+        Outcome next;
+        request.write = false;
+        request.reg = 0x0C;
+        request.value = 0;
+        local.model->requestIoBoardI2c(request, next.done());
+        QVERIFY(compose(board).composed);
+        answer(board, 0x00, 0x00, 0x00, 0x33);
+        QVERIFY(next.called);
+        QVERIFY2(next.ok, qPrintable(next.reason));
+        QCOMPARE(next.value, qint64(0x33));
         QVERIFY(!board.isPollingPaused());
         local.p1.setIoBoard(nullptr);
     }
@@ -881,4 +976,127 @@ void TstRemoteHl2Io::toolReadsPauseThePollUntilAnswered()
 }
 
 QTEST_MAIN(TstRemoteHl2Io)
+// HL2 clock options (radioHardwareVersion 11): a remote window's Enable CL2,
+// CL2 frequency and External 10 MHz reach the Core's radio connection
+// through the "hl2" reload, on and off the air (mi0bot's handlers write the
+// clock chip with no MOX check, setup.cs:21732-21756 [@c26a8a4]). The
+// window's rows are open, the frequency box only while Enable CL2 is on.
+void TstRemoteHl2Io::clockOptionsFromARemoteWindowReachTheCoresRadio()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QVERIFY(s.client->radioHardwareAvailable(11));
+    QVERIFY(s.core.model->receiveOnlyStationPolicy());
+    QSignalSpy rejected(&s.proxy, &SettingsProxy::valueRejected);
+    // The connect path's options -> connection push (the Session injects
+    // its connection without it).
+    s.core.model->wireHl2OptionsForTest();
+    // The I/O board's I2C queue carries the clock chip writes, as the
+    // connect path attaches it.
+    s.core.p1.setIoBoard(&s.board());
+    // The Core's radio is streaming, so a change goes to the clock chip.
+    s.core.p1.simulateDataFlowingForTest();
+    // The clock chip writes that reach the I2C queue, in order: the queue
+    // drained as the radio would, until the connection has none waiting.
+    const auto drainClock = [&s] {
+        ClockWrites writes;
+        IoBoardHl2::I2cTxn txn;
+        for (int round = 0; round < 1000; ++round) {
+            while (s.board().dequeueI2c(txn)) {
+                if (txn.bus == 0 && txn.address == 0xd4 && !txn.isRead) {
+                    writes.emplace_back(txn.control, txn.writeData);
+                }
+            }
+            if (s.core.p1.hl2ClockPendingForTest() == 0) {
+                break;
+            }
+            s.core.p1.hl2ClockPumpForTest();
+        }
+        return writes;
+    };
+    QCOMPARE(drainClock(), ClockWrites{});
+    QCOMPARE(s.core.p1.hl2Cl2FreqKHzForTest(), 116000);
+
+    s.window.alexAntennaFacade()->setWindowAvailability(true, {});
+    {
+        HardwarePage page(&s.window);
+        auto* cl2 = page.findChild<QCheckBox*>(QStringLiteral("hl2Cl2Enable"));
+        auto* freq = page.findChild<QDoubleSpinBox*>(QStringLiteral("hl2Cl2Freq"));
+        auto* ext = page.findChild<QCheckBox*>(QStringLiteral("hl2Ext10MHz"));
+        QVERIFY(cl2 != nullptr && freq != nullptr && ext != nullptr);
+        QVERIFY(cl2->isEnabled());
+        QVERIFY(ext->isEnabled());
+        QVERIFY(!cl2->isChecked());
+        QVERIFY(!freq->isEnabled());
+        QCOMPARE(cl2->toolTip(), QStringLiteral("Enable frequency output on CL2"));
+    }
+
+    // A frequency with decimals, as udCl2Freq holds three places
+    // (setup.designer.cs:11133-11163 [@c26a8a4]).
+    s.proxy.setValue(hw(QStringLiteral("hl2/cl2FreqMHz")), QStringLiteral("10.7"));
+    QTRY_COMPARE(s.core.p1.hl2Cl2FreqKHzForTest(), 10700);
+    // mi0bot's udCl2Freq_ValueChanged runs ControlCl2 with CL2 off, which
+    // writes the CL2-off list.
+    QCOMPARE(drainClock(), kClockCl2Off);
+    s.proxy.setValue(hw(QStringLiteral("hl2/cl2Enable")), QStringLiteral("True"));
+    QTRY_VERIFY(s.core.p1.hl2ClockPendingForTest() + s.board().i2cQueueDepth() > 0);
+    // 1305.6 MHz / 10.7.
+    QCOMPARE(drainClock(), clockCl2(0x07, 0xA0, 0x00, 0x13, 0x23, 0xE0));
+    QCOMPARE(s.core.model->hl2Options().cl2FreqKHz(), 10700);
+
+    // A frequency that is not a number or is out of range is refused with
+    // a plain reason; the Core keeps 10.7 MHz and nothing goes to the chip.
+    const QString freqKey = hw(QStringLiteral("hl2/cl2FreqMHz"));
+    QSignalSpy toast(&s.window, &RadioModel::sliceAddRejected);
+    int refused = 0;
+    for (const char* bad : {"999", "nan", "abc"}) {
+        s.proxy.setValue(freqKey, QString::fromLatin1(bad));
+        ++refused;
+        QTRY_COMPARE(rejected.count(), refused);
+        QCOMPARE(rejected.last().at(0).toString(), freqKey);
+        QCOMPARE(toast.last().at(0).toString(),
+                 QStringLiteral("Choose a CL2 frequency from 1 to 200 MHz."));
+        QCOMPARE(s.settings.value(freqKey).toString(), QStringLiteral("10.7"));
+        QCOMPARE(s.core.p1.hl2Cl2FreqKHzForTest(), 10700);
+        QCOMPARE(drainClock(), ClockWrites{});
+    }
+
+    // On the air, keyed by the Core's own key: taken all the same. The
+    // 10 MHz table, then CL2 again on the 1440 MHz VCO: 1440 / 10.7.
+    s.core.key();
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    s.proxy.setValue(hw(QStringLiteral("hl2/ext10MHz")), QStringLiteral("True"));
+    QTRY_VERIFY(s.core.model->hl2Options().ext10MHz());
+    QTRY_VERIFY(s.core.p1.hl2ClockPendingForTest() + s.board().i2cQueueDepth() > 0);
+    ClockWrites expected = kClock10MhzEnable;
+    const ClockWrites cl2Ext = clockCl2(0x08, 0x60, 0x02, 0x51, 0x58, 0x84);
+    expected.insert(expected.end(), cl2Ext.begin(), cl2Ext.end());
+    QCOMPARE(drainClock(), expected);
+    s.core.unkey();
+    QTRY_COMPARE(s.core.model->moxController()->state(), MoxState::Rx);
+    QCOMPARE(rejected.count(), refused);
+    s.core.p1.setIoBoard(nullptr);
+    QString keyed;
+    QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
+}
+
+// A remote window whose Core does not offer version 11 keeps the clock rows
+// disabled with its reason, never hidden: that Core stores them without
+// sending them to its radio.
+void TstRemoteHl2Io::olderCoreKeepsTheClockOptionsClosedWithItsReason()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    remote.alexAntennaFacade()->setWindowAvailability(true, {});
+    HardwarePage page(&remote);
+    for (const QString& name : {QStringLiteral("hl2Cl2Enable"), QStringLiteral("hl2Cl2Freq"),
+                                QStringLiteral("hl2Ext10MHz")}) {
+        auto* w = page.findChild<QWidget*>(name);
+        QVERIFY2(w != nullptr, qPrintable(name));
+        QVERIFY2(!w->isHidden() && !w->isEnabled(), qPrintable(name));
+        QCOMPARE(w->toolTip(), IStationLink::hl2ClockUnavailableReason());
+    }
+    QVERIFY(!IStationLink::hl2ClockUnavailableReason().contains(QStringLiteral("yet")));
+}
+
 #include "tst_remote_hl2_io.moc"

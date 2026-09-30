@@ -38,6 +38,11 @@
 //                 register + 3 on the left, C4 at the register on the right)
 //                 with its per-box tooltips. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29 - Swap audio channels, Enable CL2, CL2 frequency and
+//                 External 10 MHz are stored but not sent to the radio, so
+//                 they show disabled with a plain reason; the "wire
+//                 emission" warnings are gone. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 1: the TX buffer latency and PTT hang
 //                 reach the radio (bank 17), so their rows are shown again.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -48,6 +53,16 @@
 //   2026-09-29 - HL2 port part 2: the input strip shows the input pins
 //                 register (6) as each poll reads it, lit pins red while
 //                 on the air, in a local window and a remote one alike.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - The Hermes Lite Options boxes carry the ids of the rows
+//                 the Setup description gives them (version 16), so a
+//                 test holds the two alike. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 clock options: Enable CL2, CL2 frequency and External
+//                 10 MHz reach the radio (mi0bot setup.cs:21694-21756
+//                 [@c26a8a4]), so they are enabled with mi0bot's tooltips;
+//                 the frequency box follows Enable CL2, and a remote window
+//                 needs a Core that sends them (setClockControlAvailable).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
@@ -112,6 +127,8 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -253,6 +270,7 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                             Hl2OptionsModel::kTxLatencyMaxMs);
     m_udTxLatency->setSuffix(tr(" ms"));
     m_udTxLatency->setObjectName(QStringLiteral("hl2TxBufferLatency"));
+    m_udTxLatency->setProperty("nereusSetupId", "hardware.hl2Io.txLatency");
     grid->addWidget(m_udTxLatency, row, 1);
     ++row;
 
@@ -264,28 +282,58 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                           Hl2OptionsModel::kPttHangMaxMs);
     m_udPttHang->setSuffix(tr(" ms"));
     m_udPttHang->setObjectName(QStringLiteral("hl2PttHang"));
+    m_udPttHang->setProperty("nereusSetupId", "hardware.hl2Io.pttHang");
     grid->addWidget(m_udPttHang, row, 1);
     ++row;
 
     // From mi0bot setup.designer.cs:11166-11176 chkCl2Enable +
-    // :11142-11164 udCl2Freq [v2.10.3.13-beta2] — range 1..200 MHz,
-    // default 116.
+    // :11133-11163 udCl2Freq [@c26a8a4] - range 1..200 MHz, three decimal
+    // places, step 0.1, default 116. The box applies on commit (Enter or
+    // leaving it), as a NumericUpDown does, so typing does not reprogram
+    // the CL2 output at every keystroke.
+    //
+    // The clock options reach the radio's clock chip over I2C
+    // (P1RadioConnection::setHl2Clock, mi0bot setup.cs:21694-21756
+    // [@c26a8a4]). In a remote window they wait for a Core that sends them
+    // (setClockControlAvailable).
+    // From mi0bot setup.designer.cs:11174 [@c26a8a4]:
+    //   this.toolTip1.SetToolTip(this.chkCl2Enable, "Enable frequency output on CL2");
     m_chkCl2Enable = new QCheckBox(tr("Enable CL2"), parent);
+    m_chkCl2Enable->setObjectName(QStringLiteral("hl2Cl2Enable"));
+    m_chkCl2Enable->setProperty("nereusSetupId", "hardware.hl2Io.cl2Enable");
+    m_chkCl2Enable->setToolTip(tr("Enable frequency output on CL2"));
     grid->addWidget(m_chkCl2Enable, row, 0);
-    m_udCl2Freq = new QSpinBox(parent);
-    m_udCl2Freq->setRange(Hl2OptionsModel::kCl2FreqMinMHz,
-                          Hl2OptionsModel::kCl2FreqMaxMHz);
+    m_udCl2Freq = new QDoubleSpinBox(parent);
+    m_udCl2Freq->setDecimals(3);
+    m_udCl2Freq->setSingleStep(0.1);
+    m_udCl2Freq->setRange(Hl2OptionsModel::kCl2FreqMinKHz / 1000.0,
+                          Hl2OptionsModel::kCl2FreqMaxKHz / 1000.0);
+    m_udCl2Freq->setKeyboardTracking(false);
     m_udCl2Freq->setSuffix(tr(" MHz"));
+    m_udCl2Freq->setObjectName(QStringLiteral("hl2Cl2Freq"));
+    m_udCl2Freq->setProperty("nereusSetupId", "hardware.hl2Io.cl2Freq");
+    // The row label the Setup description gives the box beside Enable CL2.
+    m_udCl2Freq->setAccessibleName(tr("CL2 frequency"));
+    // From mi0bot setup.designer.cs:11158 [@c26a8a4]:
+    //   this.toolTip1.SetToolTip(this.udCl2Freq, "Output frequency on CL2 output");
+    m_udCl2Freq->setToolTip(tr("Output frequency on CL2 output"));
     grid->addWidget(m_udCl2Freq, row, 1);
     ++row;
 
-    // From mi0bot setup.designer.cs:11178+ chkExt10MHz [v2.10.3.13-beta2]
+    // From mi0bot setup.designer.cs:11178-11189 chkExt10MHz [@c26a8a4]:
+    //   this.chkExt10MHz.Text = "Ext 10MHz (CL1 Input)";
+    //   this.toolTip1.SetToolTip(this.chkExt10MHz, "Enable external 10MHz input on CL1");
     m_chkExt10MHz = new QCheckBox(tr("External 10 MHz reference"), parent);
+    m_chkExt10MHz->setObjectName(QStringLiteral("hl2Ext10MHz"));
+    m_chkExt10MHz->setProperty("nereusSetupId", "hardware.hl2Io.ext10MHz");
+    m_chkExt10MHz->setToolTip(tr("Enable external 10 MHz input on CL1"));
     grid->addWidget(m_chkExt10MHz, row, 0, 1, 2);
     ++row;
 
     // From mi0bot setup.designer.cs:11258 chkDisconnectReset
     m_chkDisconnectReset = new QCheckBox(tr("Reset on Ethernet disconnect"), parent);
+    m_chkDisconnectReset->setObjectName(QStringLiteral("hl2DisconnectReset"));
+    m_chkDisconnectReset->setProperty("nereusSetupId", "hardware.hl2Io.disconnectReset");
     grid->addWidget(m_chkDisconnectReset, row, 0, 1, 2);
     ++row;
 
@@ -297,17 +345,29 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     // supply sync for the HL2). Spelled out so it cannot read as PureSignal.
     m_chkPsSync = new QCheckBox(tr("Disable power supply sync"), parent);
     m_chkPsSync->setObjectName(QStringLiteral("hl2DisablePsSync"));
+    m_chkPsSync->setProperty("nereusSetupId", "hardware.hl2Io.psSync");
     m_chkPsSync->setToolTip(tr("Stops the radio synchronizing its power supply clock."));
     grid->addWidget(m_chkPsSync, row, 0, 1, 2);
     ++row;
 
     // From mi0bot setup.designer.cs:11305-11313 chkHL2BandVolts
     m_chkBandVolts = new QCheckBox(tr("Band Volts (PWM out 0–3.3 V)"), parent);
+    m_chkBandVolts->setObjectName(QStringLiteral("hl2BandVolts"));
+    m_chkBandVolts->setProperty("nereusSetupId", "hardware.hl2Io.bandVolts");
     grid->addWidget(m_chkBandVolts, row, 0, 1, 2);
     ++row;
 
     // From mi0bot setup.designer.cs:11343 chkSwapAudioChannels
+    // mi0bot swaps the left and right audio it sends the radio over P1
+    // (networkproto1.c:1231-1239 [@c26a8a4]). NereusSDR sends the radio no
+    // audio of its own over P1 (the audio bytes of each TX frame are zero),
+    // so the option is stored and shown disabled with the reason.
     m_chkSwapAudio = new QCheckBox(tr("Swap audio channels"), parent);
+    m_chkSwapAudio->setObjectName(QStringLiteral("hl2SwapAudioChannels"));
+    m_chkSwapAudio->setProperty("nereusSetupId", "hardware.hl2Io.swapAudioChannels");
+    m_chkSwapAudio->setEnabled(false);
+    m_chkSwapAudio->setToolTip(
+        tr("NereusSDR does not send the radio audio of its own, so there is nothing to swap."));
     grid->addWidget(m_chkSwapAudio, row, 0, 1, 2);
     ++row;
 
@@ -320,9 +380,6 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                     if (m_syncing) { return; }
                     if (m_options) {
                         (m_options->*setter)(on);
-                        qCWarning(lcHl2Options).nospace()
-                            << "wire emission TBD Phase 3L follow-up "
-                               "(toggle " << (on ? "ON" : "OFF") << ")";
                     }
                 });
     };
@@ -332,21 +389,32 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
                     if (m_syncing) { return; }
                     if (m_options) {
                         (m_options->*setter)(v);
-                        qCWarning(lcHl2Options).nospace()
-                            << "wire emission TBD Phase 3L follow-up (value=" << v << ")";
                     }
                 });
     };
 
     bindBool(m_chkSwapAudio,        &Hl2OptionsModel::setSwapAudioChannels);
     bindBool(m_chkCl2Enable,        &Hl2OptionsModel::setCl2Enabled);
-    bindInt (m_udCl2Freq,           &Hl2OptionsModel::setCl2FreqMHz);
+    connect(m_udCl2Freq, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double mhz) {
+                if (m_syncing) { return; }
+                if (m_options) {
+                    m_options->setCl2FreqKHz(static_cast<int>(std::lround(mhz * 1000.0)));
+                }
+            });
     bindBool(m_chkExt10MHz,         &Hl2OptionsModel::setExt10MHz);
     bindBool(m_chkDisconnectReset,  &Hl2OptionsModel::setDisconnectReset);
     bindInt (m_udPttHang,           &Hl2OptionsModel::setPttHangMs);
     bindInt (m_udTxLatency,         &Hl2OptionsModel::setTxLatencyMs);
     bindBool(m_chkPsSync,           &Hl2OptionsModel::setPsSync);
     bindBool(m_chkBandVolts,        &Hl2OptionsModel::setBandVolts);
+
+    // From mi0bot setup.cs:21694-21729 ControlCl2 [@c26a8a4]:
+    //   // MI0BOT: Support for HL2 Cl2 clock output
+    //   udCl2Freq.Enabled = enable;
+    // The frequency box follows Enable CL2.
+    connect(m_chkCl2Enable, &QCheckBox::toggled, this, [this](bool) { applyClockGates(); });
+    applyClockGates();
 }
 
 // ── buildI2cControl ─────────────────────────────────────────────────────────
@@ -541,7 +609,7 @@ void Hl2OptionsTab::syncFromModel()
     if (m_chkCl2Enable)       { QSignalBlocker b(m_chkCl2Enable);
         m_chkCl2Enable->setChecked(m_options->cl2Enabled()); }
     if (m_udCl2Freq)          { QSignalBlocker b(m_udCl2Freq);
-        m_udCl2Freq->setValue(m_options->cl2FreqMHz()); }
+        m_udCl2Freq->setValue(m_options->cl2FreqKHz() / 1000.0); }
     if (m_chkExt10MHz)        { QSignalBlocker b(m_chkExt10MHz);
         m_chkExt10MHz->setChecked(m_options->ext10MHz()); }
     if (m_chkDisconnectReset) { QSignalBlocker b(m_chkDisconnectReset);
@@ -556,6 +624,7 @@ void Hl2OptionsTab::syncFromModel()
         m_chkBandVolts->setChecked(m_options->bandVolts()); }
 
     m_syncing = false;
+    applyClockGates();
 }
 
 // ── I2C Control slots ──────────────────────────────────────────────────────
@@ -575,6 +644,28 @@ void Hl2OptionsTab::setIoBoardControlAvailable(bool available, const QString& re
     m_ioAvailable = available;
     m_ioUnavailableReason = available ? QString() : reason;
     applyIoGates();
+}
+
+void Hl2OptionsTab::setClockControlAvailable(bool available, const QString& reason)
+{
+    m_clockAvailable = available;
+    m_clockUnavailableReason = available ? QString() : reason;
+    applyClockGates();
+}
+
+void Hl2OptionsTab::applyClockGates()
+{
+    // Enable CL2 and External 10 MHz follow the Core's offer (a remote
+    // window); the frequency box also follows Enable CL2, as mi0bot's
+    // ControlCl2 sets udCl2Freq.Enabled. No on-air rule: mi0bot writes the
+    // clock chip with no MOX check.
+    HardwareTransmitGate::apply(m_chkCl2Enable, m_clockAvailable, m_clockUnavailableReason);
+    HardwareTransmitGate::apply(m_chkExt10MHz, m_clockAvailable, m_clockUnavailableReason);
+    HardwareTransmitGate::apply(m_udCl2Freq, m_clockAvailable, m_clockUnavailableReason);
+    if (m_udCl2Freq) {
+        m_udCl2Freq->setEnabled(m_clockAvailable && m_chkCl2Enable
+                                && m_chkCl2Enable->isChecked());
+    }
 }
 
 void Hl2OptionsTab::applyIoGates()

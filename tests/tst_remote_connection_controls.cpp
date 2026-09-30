@@ -350,7 +350,9 @@ private slots:
         speakerTimer.start();
 
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
 
         RemoteConnectionPanel panel(&controls, nullptr, &remoteMedia);
         auto* audioTimer = panel.findChild<QTimer*>(QStringLiteral("remoteAudioPanelTimer"));

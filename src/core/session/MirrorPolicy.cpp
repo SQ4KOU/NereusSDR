@@ -6,6 +6,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29 - Level Cal: RadioModel levelCalRunning, levelCalPercent,
+//                 levelCalMessage and levelCalSucceeded Outbound, gated on
+//                 levelCalibration (radioHardwareVersion 12). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: RadioModel alexLpfBits Outbound, gated
+//                 on alexLpf (radioHardwareVersion 10). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - RADE status: SliceModel radeSynced and radeFreqOffsetHz
 //                 Outbound, gated on radeStatus (radeStatusVersion 1).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -179,6 +186,17 @@
 //   2026-09-29 - HL2 port part 2: RadioModel txInhibitReason Outbound and
 //                 in featureGates (txInhibitReasonVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - transmitSettingsVersion 15: TransmitModel cfcProfile
+//                 Outbound and in featureGates. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: TransmitModel powerByBandJson and
+//                 tunePowerByBandJson Outbound; the Core's RF and Tune
+//                 sliders own the per-band maps and a peer's write is
+//                 refused. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-28 - Slice control plan Task 4: SliceAccess, sliceId and
+//                 incarnation ConstantSnapshot, the rest Outbound. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -532,8 +550,12 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
     // Power's per-band power, DEXP/VOX and Test > Two-Tone IMD. None keys
     // the radio; the two-tone test itself stays in the keying set.
-    { "TransmitModel", "powerByBandJson", MirrorDirection::Bidirectional },
-    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Bidirectional },
+    // The per-band maps are the Core's own (PA on-air gate review): its RF
+    // and Tune sliders write them through `power` and tunePowerForTxBand,
+    // which pass the on-air gate. A whole-map write from a peer would skip
+    // that gate, so the Core refuses it. No Setup page writes the maps.
+    { "TransmitModel", "powerByBandJson", MirrorDirection::Outbound },
+    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Outbound },
     { "TransmitModel", "dexpAttackTimeMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpDetectorTauMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpExpansionRatioDb", MirrorDirection::Bidirectional },
@@ -563,6 +585,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // derives from txEqParaEqData, read-only; only to a peer that declared
     // txEqCurve (StationServer::fitTxEqCurveToPeer).
     { "TransmitModel", "txEqCurve", MirrorDirection::Outbound },
+    // transmitSettingsVersion 15: the CFC dialog's band editor the Core
+    // derives from cfcParaEqData (or the ten-band values), read-only; only
+    // to a peer that declared cfcProfile (StationServer::fitPeerOnlyProperties).
+    // An app changes it with cfc.setProfile.
+    { "TransmitModel", "cfcProfile", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
@@ -667,6 +694,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StepAttenuatorFacade", "rx2AutoAttEnabled", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "rx2AutoAttUndo", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "rx2AutoAttUndoDelayMs", MirrorDirection::Bidirectional },
+    // Level Cal (radioHardwareVersion 12): RX2's own preamp mode, two-way,
+    // same gate.
+    { "StepAttenuatorFacade", "rx2PreampMode", MirrorDirection::Bidirectional },
 
     // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
     // The receive settings are two-way; the Core applies each through its
@@ -981,6 +1011,19 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
     { "SliceMarker", "psPaused", MirrorDirection::Outbound },
 
+    // Slice control plan Task 4 (sliceAccessVersion 1): who controls and
+    // who listens to each slice, read-only. Control changes only through
+    // slice.takeControl and slice.release, membership through slice.listen
+    // and slice.stopListening.
+    { "SliceAccess", "sliceId", MirrorDirection::ConstantSnapshot },
+    { "SliceAccess", "incarnation", MirrorDirection::ConstantSnapshot },
+    { "SliceAccess", "controllerDeviceId", MirrorDirection::Outbound },
+    { "SliceAccess", "controlRevision", MirrorDirection::Outbound },
+    { "SliceAccess", "listenerDeviceIds", MirrorDirection::Outbound },
+    { "SliceAccess", "activeRxDeviceIds", MirrorDirection::Outbound },
+    { "SliceAccess", "txSelected", MirrorDirection::Outbound },
+    { "SliceAccess", "onAir", MirrorDirection::Outbound },
+
     // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
     // transmitter, read-only. It changes only as the radio keys, unkeys and
     // reads its meters, and as the Core stops a transmission.
@@ -1050,7 +1093,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (29 entries) ----
+    // ---- RadioModel (35 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -1072,6 +1115,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "bandOutputsByte", MirrorDirection::Outbound },
     { "RadioModel", "bandOutputsBand", MirrorDirection::Outbound },
     { "RadioModel", "bandOutputsKeyed", MirrorDirection::Outbound },
+    // radioHardwareVersion 10: the Alex-1 low-pass in use, read-only; only
+    // to a peer that declared alexLpf (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "alexLpfBits", MirrorDirection::Outbound },
     // R-R3-47: the Core's RF-Kit switch. A window changes it with the
     // setRfKitEnabled command; a raw write is refused.
     { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },
@@ -1106,6 +1152,17 @@ const MirrorPolicy::Entry kEntries[] = {
     // held off (the HL2 I/O board's fault code); only to a peer that
     // declared txInhibitReason (StationServer::fitPeerOnlyProperties).
     { "RadioModel", "txInhibitReason", MirrorDirection::Outbound },
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air, Core to window only; only to a peer
+    // that declared paTransmitBand (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "paTransmitBand", MirrorDirection::Outbound },
+    // Level Cal (radioHardwareVersion 12): the Core's calibration run as it
+    // goes, Core to window only; only to a peer that declared
+    // levelCalibration (StationServer::fitPeerOnlyProperties).
+    { "RadioModel", "levelCalRunning", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalPercent", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalMessage", MirrorDirection::Outbound },
+    { "RadioModel", "levelCalSucceeded", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },
@@ -1172,6 +1229,9 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // curve, to a peer that declared txEqCurve 1
         // (StationServer::fitTxEqCurveToPeer).
         {"TransmitModel", "txEqCurve", "txEqCurve", 1},
+        // transmitSettingsVersion 15: the CFC band editor, to a peer that
+        // declared cfcProfile 1 (StationServer::fitPeerOnlyProperties).
+        {"TransmitModel", "cfcProfile", "cfcProfile", 1},
         // Phone wire batch (diversityPatternVersion 1): each slice's
         // Diversity dialog pattern, to a peer that declared
         // diversityPattern 1 (StationServer::fitPeerOnlyProperties).
@@ -1183,6 +1243,10 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // HL2 port part 2: why the Core's transmit is held off, to a peer
         // that declared txInhibitReason 1.
         {"RadioModel", "txInhibitReason", "txInhibitReason", 1},
+        // PA on-air gate re-review, Important C (paTransmitBandVersion 1):
+        // the PA row the Core holds on the air, to a peer that declared
+        // paTransmitBand 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "paTransmitBand", "paTransmitBand", 1},
         // The phone's direct addresses (coreAddressesVersion 1): where a
         // device can dial this Core, to a device signed in with its own key
         // that declared coreAddresses 1 (StationServer::fitPeerOnlyProperties).
@@ -1192,6 +1256,15 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // (StationServer::fitPeerOnlyProperties).
         {"SliceModel", "radeSynced", "radeStatus", 1},
         {"SliceModel", "radeFreqOffsetHz", "radeStatus", 1},
+        // radioHardwareVersion 10: radio's Alex-1 low-pass in use, to a peer
+        // that declared alexLpf 1 (StationServer::fitPeerOnlyProperties).
+        {"RadioModel", "alexLpfBits", "alexLpf", 1},
+        // radioHardwareVersion 12: the Core's level calibration run, to a
+        // peer that declared levelCalibration 1.
+        {"RadioModel", "levelCalRunning", "levelCalibration", 1},
+        {"RadioModel", "levelCalPercent", "levelCalibration", 1},
+        {"RadioModel", "levelCalMessage", "levelCalibration", 1},
+        {"RadioModel", "levelCalSucceeded", "levelCalibration", 1},
     };
     return gates;
 }

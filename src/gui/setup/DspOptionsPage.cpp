@@ -327,19 +327,45 @@ DspOptionsPage::DspOptionsPage(RadioModel* model, QWidget* parent)
     // TX channel, and refuses them while it is on the air
     // (StationServer::handleSettingsWrite).
     if (model && !model->ownsLocalDsp()) {
-        setTransmitSettingsPermitted(false, QString());
+        m_transmitSettingsPermitted = false;
     }
+
+    // The Buffer Size (IQcomp) group locks while the radio is on the air,
+    // with its reason, as Thetis's MOX setter greys it:
+    // From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+    // On a remote window isCoreOnAir is the Core's own air state.
+    if (model) {
+        m_onAir = model->isCoreOnAir();
+        connect(model, &RadioModel::coreOnAirChanged, this, [this](bool onAir) {
+            m_onAir = onAir;
+            refreshBufferAndTransmitGates();
+        });
+    }
+    refreshBufferAndTransmitGates();
 }
 
 void DspOptionsPage::setTransmitSettingsPermitted(bool permitted, const QString& reason)
 {
-    gateTransmitControls({m_bufPhoneTx, m_bufFmTx, m_bufDigTx,
-                          m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx,
+    m_transmitSettingsPermitted = permitted;
+    m_transmitSettingsReason = reason;
+    refreshBufferAndTransmitGates();
+}
+
+void DspOptionsPage::refreshBufferAndTransmitGates()
+{
+    const QString onAirReason = RadioModel::dspBufferOnAirLockedReason();
+    const QString transmitReason = m_transmitSettingsReason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : m_transmitSettingsReason;
+    gateOnAirControls({m_bufPhoneRx, m_bufFmRx, m_bufCwRx, m_bufDigRx}, !m_onAir, onAirReason);
+    gateTransmitControls({m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx,
                           m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx},
-                         permitted,
-                         reason.isEmpty()
-                             ? IStationLink::transmitSettingsUnavailableReason()
-                             : reason);
+                         m_transmitSettingsPermitted, transmitReason);
+    // The TX buffer sizes are in the same group: held for transmit and
+    // locked on the air, with whichever reason applies.
+    gateTransmitControls({m_bufPhoneTx, m_bufFmTx, m_bufDigTx},
+                         m_transmitSettingsPermitted && !m_onAir,
+                         m_transmitSettingsPermitted ? onAirReason : transmitReason);
 }
 
 // ── Per-mode live-apply wiring (Task 4.2) ─────────────────────────────────────

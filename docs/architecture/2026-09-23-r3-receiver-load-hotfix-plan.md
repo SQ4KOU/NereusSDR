@@ -87,7 +87,9 @@ down; the cost is measured, not assumed) and R-R3-37 (CPU-adaptive display limit
   - 9 ms of delay every 12th block (frame-like): every sample is under 0.75 and within
     0.1 of the CPU share, and the governor never steps back. This fails before the fix.
   - 900 us every block: within 10% of its CPU share.
-  - 1400 us every block (real overload): reads at least 0.95 and the governor steps back.
+  - Two block periods of work (2666 us) every block (real overload; was 1400 us until
+    2026-09-29, too close to one block period to keep the worker fed on a busy machine):
+    reads at least 0.95 and the governor steps back.
   - One 1.5 s block: reads at least 0.95.
 - A worker stuck in one block reads about 1.0, not more.
 - Late blocks during a calm load no longer hold the display at a reduced setting.

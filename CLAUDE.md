@@ -1,310 +1,134 @@
-# NereusSDR — Project Context for Claude
+# NereusSDR
 
-## Project Goal
+Cross-platform C++20 / Qt6 port of **Thetis** (OpenHPSDR / Apache Labs SDR
+console, C#), structured on **AetherSDR** patterns. Targets every OpenHPSDR
+Protocol 1 and 2 radio (ANAN line, Hermes Lite 2). The client does ALL signal
+processing; the radio is an ADC/DAC with network transport.
 
-Port **Thetis** (the OpenHPSDR / Apache Labs SDR console, written in C#) to a
-**cross-platform C++20 application** using Qt6. The architectural template is
-**AetherSDR** (a FlexRadio SmartSDR client). Target radios: all OpenHPSDR
-Protocol 1 and Protocol 2 devices, including the Apache Labs ANAN line and
-Hermes Lite 2.
+## SOURCE-FIRST PORTING PROTOCOL
 
-**Critical implication:** The client does ALL signal processing (DSP, FFT,
-demodulation). The radio is essentially an ADC/DAC with network transport.
-
----
-
-## ⚠️ SOURCE-FIRST PORTING PROTOCOL (Read This Before Every Task)
-
-NereusSDR is a **port**, not a reimagination. The Thetis codebase is the
-authoritative source for all radio logic, DSP behavior, protocol handling,
-constants, state machines, and feature behavior. **Do not guess. Do not
-infer. Do not improvise.** Read the source, then translate it.
-
-### The Rule: READ → SHOW → TRANSLATE
-
-For every piece of logic you write that has a Thetis equivalent:
-
-1. **READ** the relevant Thetis source file(s). Use `find`, `grep`, or `rg`
-   to locate the C# code. The Thetis repo should be cloned at
-   `../Thetis/` (relative to the NereusSDR root). Capture the Thetis
-   version tag once at the start of the session — `git -C ../Thetis
-   describe --tags` (release) or `git -C ../Thetis rev-parse --short
-   HEAD` (between releases) — every inline cite you write in this
-   session gets that stamp.
-2. **SHOW** the original code before writing anything. State:
-   `"Porting from [file]:[function/line range] — original C# logic:"` and
-   quote or summarize the relevant section.
-3. **TRANSLATE** the C# to C++20/Qt6 faithfully. Use AetherSDR patterns for
-   the Qt6 structure (signals/slots, class layout, threading), but the
-   **behavior and logic** must come from Thetis.
-
-### License-preservation rule (non-negotiable)
-
-When porting any Thetis file, you MUST — in the same commit that introduces
-the port — copy the following from the Thetis source into the NereusSDR
-file's header comment:
-
-1. All `Copyright (C)` lines naming contributors (FlexRadio, Wigley,
-   Samphire, W2PA, mi0bot, etc.)
-2. The GPLv2-or-later permission block verbatim
-3. The Samphire dual-licensing statement — ONLY if the Thetis source file
-   contains Samphire-authored contributions
-4. A trailing "Modification history (NereusSDR)" block with the port date,
-   human author, and AI tooling disclosure
-
-Templates live in `docs/attribution/HOW-TO-PORT.md`. Failure to
-preserve these notices on a new port is a GPL compliance bug, not a style
-nit — reject the PR.
-
-### Byte-for-byte headers and multi-file attribution
-
-Each Thetis source file has its own distinct header with different copyright
-holders and modification credits (e.g. `console.cs` credits W2PA and
-Samphire; `display.cs` credits VK6APH and Samphire). These headers are NOT
-interchangeable.
-
-- Copy each source file's header **byte-for-byte** — do not paraphrase,
-  summarize, or merge headers from different files.
-- If a NereusSDR file ports from **multiple** Thetis files, include **every**
-  relevant header, separated by `// --- From [filename] ---` markers.
-- Include the Thetis version (`v2.10.3.15`) and commit (`3759d09`) in the
-  "Ported from" line.
-
-### Inline comment preservation — SHIP-BLOCKING
-
-**This is a GPL attribution rule, not a style preference. Dropping a
-developer-attribution tag during porting is a compliance bug that
-blocks release.** A real incident (2026-04-21) shipped with a
-`//DH1KLM` tag silently dropped during a `computeAlexFwdPower` port
-— caught only because someone eyeballed the PR. The fix is
-mechanical:
-
-All inline comments from Thetis source code within ported logic **must be
-preserved verbatim** in the C++ translation. This includes:
-
-- **Developer attribution tags** — `//DH1KLM`, `//MW0LGE`, `//W2PA`,
-  `//G8NJJ`, `//MI0BOT`, etc. Canonical list of recognized authors
-  lives in `docs/attribution/thetis-author-tags.json`, built
-  mechanically by `scripts/discover-thetis-author-tags.py`.
-- **Dash-prefix attribution** — `//-W2PA`, `// -W2PA`
-- **Version-tagged attribution** — `//[2.10.3.13]MW0LGE`, `//MW0LGE [2.9.0.7]`
-- **Underscored variants** — `//MW0LGE_21k5 change to rx2`
-- **Behavioral notes** — `// only cleared by getAndResetADC_Overload()`
-- **TODO / FIXME / XXX / HACK** annotations
-- Any `//` comment on or above a ported line of logic
-
-When the C++ translation restructures the code so that the comment no longer
-sits on the same line, place it on the nearest equivalent line with a note:
-```cpp
-// MW0LGE_21k5 change to rx2  [original inline comment from display.cs:10079]
-```
-
-**Mechanical enforcement:** `scripts/verify-inline-tag-preservation.py`
-runs in the pre-commit hook chain and in CI. For every
-`// From Thetis X:N [@sha]` cite in the diff, it opens `../Thetis/X`
-(or `../mi0bot-Thetis/X`) at line N, extracts any author tag within
-±5 source lines, and fails the commit if a corresponding tag is not
-present within ±10 port lines. No way to land a port with a dropped
-tag. If the check fires, re-insert the verbatim tag exactly as it
-appears upstream.
-
-**Corpus drift:** when you re-sync Thetis (`git -C ../Thetis pull`),
-also run:
-```
-python3 scripts/discover-thetis-author-tags.py
-```
-to refresh the corpus. CI's `--drift` check fails the PR if new
-upstream contributors aren't in the committed corpus.
-
-### Pre-port checklist (Ring 1 — authoring-time)
-
-Before reading any Thetis source file (`../Thetis/...`), state out loud:
-
-1. **Thetis file** you're about to read.
-2. **NereusSDR file(s)** the port will touch (new or existing).
-3. **Provenance status** of each NereusSDR file — run:
-    ```
-    grep -l "<nereussdr-path>" docs/attribution/THETIS-PROVENANCE.md
-    ```
-   If the file is not registered, the port is a **new attribution event**.
-   For freedv-gui ports specifically: also run
-   `grep -l "<nereussdr-path>" docs/attribution/FREEDV-GUI-PROVENANCE.md`
-   to check provenance status.
-4. **Plan**: if (3) returned nothing, you will add the verbatim upstream
-   header AND a PROVENANCE row in the same commit that introduces the
-   ported logic. Use `docs/attribution/HOW-TO-PORT.md` for the format.
-
-If you cannot answer (3) confidently, **stop and grep** before continuing.
-The cost of asking is one shell command; the cost of skipping is a
-merge-blocking CI failure (or worse, a missed gap that ships to main).
-
-This applies equally to:
-- New files that port Thetis logic.
-- Edits to NereusSDR-original files that **add** new ported logic
-  (e.g. wiring in a new Thetis-derived constant or formula).
-- Ports from non-Thetis upstreams (`../mi0bot-Thetis/`, `../AetherSDR/`,
-  `../freedv-gui/`, WDSP). Same protocol, different PROVENANCE table /
-  variant.
-
-Verifier scripts (`scripts/verify-thetis-headers.py`,
-`scripts/verify-freedv-headers.py`, `scripts/check-new-ports.py`) are the
-safety net (Ring 3, in CI). The local pre-commit hook installed via
-`scripts/install-hooks.sh` runs the same scripts pre-push (Ring 2). The
-primary control is this checklist.
-
-### What Counts As "Guessing" (NEVER Do These)
-
-- Writing a function body without first reading the Thetis equivalent
-- Assuming what WDSP function signatures, parameters, or return types look like
-- Inventing enum values, constants, magic numbers, thresholds, or defaults
-- Paraphrasing what a Thetis feature "probably does" based on its name
-- Writing placeholder/stub logic with TODOs for things that exist in Thetis
-- Assuming protocol message formats or byte layouts without reading the code
-- "Improving" or "simplifying" Thetis logic without being asked to
-- Using general DSP knowledge instead of the actual WDSP API calls Thetis makes
-- Porting a Thetis file without copying its license header and appending a modification note
-
-### Constants and Magic Numbers
-
-Preserve ALL constants, thresholds, scaling factors, and magic numbers exactly
-as they appear in Thetis. If Thetis uses `0.98f`, NereusSDR uses `0.98f`. If
-Thetis uses `2048` as a buffer size, document where it came from and keep it.
-Give constants a `constexpr` name but note the Thetis origin — with a
-version stamp — in a comment:
-
-```cpp
-// From Thetis console.cs:4821 [v2.10.3.13] — original value 0.98f
-static constexpr float kAgcDecayFactor = 0.98f;
-```
-
-The `[v2.10.3.13]` tag records the Thetis release the value was verified
-against. Use `[@shortsha]` when no tagged release applies, and refresh the
-stamp whenever you re-port from a newer upstream. Full grammar:
-`docs/attribution/HOW-TO-PORT.md` §Inline cite versioning.
-
-### WDSP Calls — Extra Caution
-
-- Every WDSP function call must match the exact name, parameter order, and
-  types from `Project Files/Source/wdsp/` in the Thetis repo
-- Cross-reference against `Project Files/Source/Console/dsp.cs` (the C#
-  P/Invoke declarations) for the managed-side signatures
-- DSP parameter ranges, defaults, and scaling come from Thetis code, not
-  from general knowledge or WDSP documentation
-- When in doubt, read both the WDSP C source AND the Thetis C# callsite
-
-### If You Can't Find the Source
-
-**STOP AND ASK.** Say: "I cannot locate the Thetis source for [X]. Which
-file or class should I look in?" Do NOT fabricate an implementation. It is
-always better to ask than to guess wrong.
-
-### The Two-Source Rule
+NereusSDR is a port, not a reimagination. Thetis is authoritative for radio
+logic, DSP behavior, protocol handling, constants, state machines and feature
+behavior. **Do not guess. Read the source, then translate it.**
 
 | Question | Source |
 | --- | --- |
-| **What** does the code do? | Thetis (C# source) |
-| **How** do we structure it in Qt6? | AetherSDR (C++20/Qt6 patterns) |
+| **What** the code does | Thetis (`../Thetis/Project Files/Source/Console/*.cs`, `wdsp/*.c`) |
+| **How** it is structured in Qt6 | AetherSDR (`../AetherSDR/`) |
 
-AetherSDR provides the **skeleton** (class structure, signals/slots, threading,
-state management patterns). Thetis provides the **organs** (logic, algorithms,
-constants, protocol handling, DSP flow, feature behavior).
+**READ → SHOW → TRANSLATE.** Read the Thetis source first. Quote or
+summarize it ("Porting from file:lines, original C# logic:") before writing.
+Translate faithfully. If you can't find the source, **stop and ask** which file
+to look in; never fabricate.
 
-### Thetis Source Layout Quick Reference
+Never: write a function body before reading its Thetis equivalent; assume WDSP
+signatures, protocol byte layouts, enum values, constants or defaults; infer
+behavior from a feature's name; stub with TODOs what Thetis implements;
+"improve" Thetis logic unasked; use general DSP knowledge in place of the WDSP
+calls Thetis makes.
 
-```
-../Thetis/
-├── Project Files/
-│   └── Source/
-│       ├── Console/          ← Main UI, radio logic, state management
-│       │   ├── console.cs    ← Monster file: VFO, band, mode, DSP, display
-│       │   ├── setup.cs      ← Setup dialog (hardware config, DSP params)
-│       │   ├── display.cs    ← Spectrum/waterfall rendering
-│       │   ├── audio.cs      ← Audio engine, VAC, portaudio
-│       │   ├── cmaster.cs    ← Channel master (WDSP channel management)
-│       │   ├── dsp.cs        ← WDSP P/Invoke declarations
-│       │   ├── NetworkIO.cs  ← Protocol 1/2 network I/O
-│       │   ├── protocol2.cs  ← Protocol 2 specific handling
-│       │   └── ...
-│       └── wdsp/             ← WDSP C source (DSP engine)
-│           ├── channel.c     ← Channel create/destroy/exchange
-│           ├── RXA.c         ← RX channel pipeline
-│           ├── TXA.c         ← TX channel pipeline
-│           └── ...
-```
+**Before any port, read [docs/attribution/HOW-TO-PORT.md](docs/attribution/HOW-TO-PORT.md)**
+(header template, pre-port provenance checklist, cite grammar, enforcement
+scripts, Thetis tree layout). Same protocol for mi0bot-Thetis, AetherSDR,
+freedv-gui and WDSP ports.
 
-### freedv-gui Source Layout Quick Reference
+### License-preservation rule (non-negotiable)
 
-```
-../freedv-gui/
-├── src/
-│   ├── reporting/                  ← FreeDVReporter + pskreporter
-│   │   ├── FreeDVReporter.{h,cpp}
-│   │   └── pskreporter.{h,cpp}
-│   ├── pipeline/                   ← RADE pipeline + EQ + AGC steps
-│   │   ├── RADEReceiveStep.{h,cpp}
-│   │   ├── RADETransmitStep.{h,cpp}
-│   │   ├── rade_text.{h,c}
-│   │   ├── EqualizerStep.{h,cpp}
-│   │   └── AgcStep.{h,cpp}
-│   └── gui/dialogs/freedv_reporter.{h,cpp}  ← 14-col live station view
-```
+In the same commit that introduces a port, the NereusSDR file header gets the
+upstream file's header **byte-for-byte**: every `Copyright (C)` line, the GPL
+permission block, the Samphire dual-licence statement if present, plus a
+"Modification history (NereusSDR)" block (date, human author, AI tooling).
+Headers differ per upstream file and are not interchangeable; a file porting
+from several gets each one under `// --- From [filename] ---`. New ports also
+add a row to `docs/attribution/THETIS-PROVENANCE.md` (or
+`FREEDV-GUI-PROVENANCE.md`). Missing notices are a GPL compliance bug that
+blocks the PR.
 
----
+### Inline comment preservation (SHIP-BLOCKING)
 
-## AI Agent Guidelines
+Every `//` comment inside ported logic is copied verbatim, above all developer
+tags (`//MW0LGE`, `//-W2PA`, `//[2.10.3.13]MW0LGE`, `//DH1KLM`, `//MI0BOT`, ...),
+behavioral notes and TODO/FIXME. If restructuring moves the line, put the
+comment on the nearest equivalent line with
+`[original inline comment from file:line]`.
+`scripts/verify-inline-tag-preservation.py` enforces this in pre-commit and CI.
 
-When helping with NereusSDR:
+### Cites, constants, WDSP
 
-* Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots)
-* Keep classes small and single-responsibility
-* Use RAII everywhere (no naked new/delete)
-* Comment non-obvious protocol decisions with protocol version (P1 vs P2)
-* Never suggest Wine/Crossover workarounds — goal is native cross-platform
-* Flag any proposal that would break the core RX path (I/Q → WDSP → audio)
-* If unsure about protocol behavior → ask for pcap captures first
-* **Use `AppSettings`, never `QSettings`** — see "Settings Persistence" below
-* **Read `CONTRIBUTING.md`** for full contributor guidelines and coding conventions
-* Reference OpenHPSDR protocol specs, not SmartSDR protocol
+* Every ported block and constant carries `// From Thetis file:line [v2.10.3.15]`
+  (current pin: v2.10.3.15 / `3759d09`; `[@shortsha]` between releases; get it once per session with
+  `git -C ../Thetis describe --tags`).
+* Keep constants and magic numbers exactly (`0.98f` stays `0.98f`) as named
+  `constexpr` with the cite.
+* WDSP calls must match name, parameter order and types in Thetis `wdsp/` and
+  the P/Invoke in `Console/dsp.cs`; ranges, defaults and scaling come from the
+  Thetis callsite.
+* Hardware facts (DDC count, board byte, clocks) may cite the FPGA gateware at
+  `../n1gp-Anvelina_PROIII/` (pinned `8e86a61`, never pull). Cite facts only;
+  ask before porting Verilog logic. Details in HOW-TO-PORT.md.
+* piHPSDR (`../pihpsdr/`, pinned `4aa95c5`) and deskhpsdr (`../deskhpsdr/`,
+  pinned `f3d857c`) follow the same rule: cite facts only (PROVENANCE kind
+  `reference`), stop and ask before translating their logic, and never propose
+  adopting their structure. Details in HOW-TO-PORT.md.
 
-### Autonomous Agent Boundaries
+## Agent boundaries
 
-AI agents may autonomously fix:
+May fix autonomously: bugs with a clear root cause, OpenHPSDR protocol
+compliance, build/CI breakage.
 
-* **Bugs with clear root cause** — persistence missing, guard missing, crash fix
-* **Protocol compliance** — matching OpenHPSDR protocol spec behavior
-* **Build/CI fixes** — missing dependencies, platform compatibility
+Must NOT change without the maintainer: visual design, UX behavior, architecture
+(threads, signal routing, dependencies), feature scope, user-facing defaults,
+DSP parameters (unless ported from Thetis). When in doubt, implement and flag
+the design decision in the PR.
 
-AI agents must **NOT** autonomously change:
+Also: never propose Wine/CrossOver; flag anything touching the core RX path
+(I/Q → WDSP → audio); ask for pcaps when protocol behavior is unclear; use
+OpenHPSDR specs, not SmartSDR.
 
-* **Visual design** — colors, fonts, layout, theme
-* **UX behavior** — how controls work, what clicks do, keyboard shortcuts
-* **Architecture** — adding new threads, changing signal routing, new dependencies
-* **Feature scope** — adding features beyond what the issue describes
-* **Default values** — changing defaults that affect all users
-* **DSP parameters or constants** — unless directly porting from Thetis source
+## C++ style
 
-When in doubt, implement the fix and note in the PR that design decisions need
-maintainer review.
+Full conventions in [CONTRIBUTING.md](CONTRIBUTING.md). Non-negotiables:
 
----
+* No `goto`, no raw `new`/`delete` (unique_ptr or Qt parent), no `#define`
+  constants (`constexpr`), braces on all control flow, `auto` only when the
+  type is obvious.
+* Naming: `PascalCase` classes, `camelCase` methods, `kPascalCase` constants,
+  `m_camelCase` members.
+* Platform guards `Q_OS_WIN` / `Q_OS_MAC` / `Q_OS_LINUX`, never `_WIN32` /
+  `__APPLE__`.
+* Errors: `qCWarning(lcCategory)`, no exceptions.
+* Cross-thread DSP parameters are `std::atomic`; never hold a mutex in the
+  audio callback.
+* Don't remove code you didn't add.
 
-## C++ Style Guide
+## Settings
 
-* **No `goto`** — use early returns, break, or restructure the logic
-* **No raw `new`/`delete`** — use `std::unique_ptr`, `std::make_unique`, or Qt parent ownership
-* **No `#define` macros for constants** — use `constexpr` or `static constexpr`
-* **Braces on all control flow** — even single-line `if`/`else`/`for`/`while`
-* **`auto` sparingly** — use explicit types unless the type is obvious from context
-* **Naming**: classes `PascalCase`, methods/variables `camelCase`, constants `kPascalCase`, member variables `m_camelCase`
-* **Platform guards**: use `#ifdef Q_OS_WIN` / `Q_OS_MAC` / `Q_OS_LINUX`, not `_WIN32` or `__APPLE__`
-* **Don't remove code you didn't add** — review the diff before submitting
-* **Atomic parameters for cross-thread DSP** — main thread writes via `std::atomic`, audio thread reads. Never hold a mutex in the audio callback.
-* **Error handling**: log with `qCWarning(lcCategory)`, don't throw exceptions
-* **Thetis origin comments**: when porting logic, add `// From Thetis [file]:[line or function] [v<version>|@<shortsha>]` comments. The bracketed stamp records the upstream release or commit the port was verified against; grab it from `git -C ../Thetis describe --tags` (or `rev-parse --short HEAD`) at the moment of porting. Full grammar and placement rules: `docs/attribution/HOW-TO-PORT.md` §Inline cite versioning
+**`AppSettings`, never `QSettings`** (`src/core/AppSettings.h`, XML at
+`~/.config/NereusSDR/NereusSDR.settings`). PascalCase keys; booleans are the
+strings `"True"` / `"False"`.
 
----
+* Radio-authoritative, never persisted: ADC attenuation, preamp, TX power,
+  antenna selection.
+* Per-MAC under `hardware/<mac>/...`: sample rate, active RX count.
+* Client-authoritative, persisted: VFO, mode, filter, DSP settings, layout, UI
+  and display preferences.
 
-## Build
+GUI↔model sync: model setters emit, the connection sends; guard echo loops with
+`m_updatingFromModel` or `QSignalBlocker` (AetherSDR pattern).
+
+## Architecture
+
+`src/core/` (protocol, audio, DSP), `src/models/` (RadioModel, SliceModel,
+PanadapterModel), `src/gui/` (MainWindow, SpectrumWidget, applets). Threads:
+main (GUI + all models), connection (UDP), audio (WDSP + output), spectrum
+(FFT). Cross-thread traffic is auto-queued signals only. Details and data flow:
+[docs/architecture/overview.md](docs/architecture/overview.md).
+
+**Rule R1: nothing under `src/core/` or `src/models/` includes a GUI header.**
+`tst_core_has_no_gui_includes` enforces it; extract an interface instead (as
+`ISpectrumSink` did).
+
+## Build and test
 
 ```
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -312,498 +136,24 @@ cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
 
-The build produces **two** binaries. `NereusSDR` is the GUI. `nereusd` is the
-headless daemon added in remote-daemon R1: it links `NereusCore` only, no GUI
-object code, and is guarded by `tst_core_has_no_gui_includes`. It is installed
-separately so the GUI's release artifacts are unaffected:
-
-```
-cmake --install build --component nereusd
-```
-
-A plain `cmake --install` deliberately installs neither `nereusd` nor its
-systemd unit. Note that `release.yml` is the only workflow that runs
-`cmake --install` and it triggers only on `v*` tags, so **the daemon's install
-path has no PR-CI coverage**. Always pass `--profile <name>` when running
-`nereusd` by hand, or it writes the same settings the GUI reads.
-
-Dependencies (Arch): `qt6-base qt6-multimedia qt6-svg qt6-websockets cmake ninja pkgconf fftw alsa-lib jack2 pipewire openssl`
-Dependencies (Ubuntu/Debian): `qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev cmake ninja-build pkg-config libfftw3-dev libgl1-mesa-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev libssl-dev`
-Notes:
-* `qt6-svg` / `qt6-svg-dev` is hard-required (`find_package(Qt6 REQUIRED COMPONENTS Svg)`).
-* `alsa-lib` / `libasound2-dev` and `jack2` / `libjack-jackd2-dev` are hard-required on Linux because PortAudio is built with `PA_USE_ALSA=ON` and `PA_USE_JACK=ON FORCE`; without them the static libportaudio links with zero host APIs.
-* `libpipewire-0.3-dev` ≥ 0.3.50 enables the native PipeWire audio bridge (Phase 3O). Build still succeeds without it; the Linux audio path falls back to the existing pactl / LinuxPipeBus FIFO route.
-* `openssl` / `libssl-dev` (≥ 3.0) is hard-required (`find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)`) since Remote Daemon R2 Task 17: `src/core/security/CertificateStore` links libcrypto directly to mint nereusd's self-signed TLS certificate, because Qt6 has no certificate-*generation* API. macOS resolves this through Homebrew's `openssl@3` formula with no extra hints; it is not keg-only (verified via `brew info --json=v2 openssl@3` fix round 3), its files are ordinary live symlinks into `${HOMEBREW_PREFIX}/lib` and `.../include`, the same path already searched for every other Homebrew library. The macOS Intel release row (no arm64 keg to link against) and both Windows rows source OpenSSL differently; see the `find_package(OpenSSL)` block in `CMakeLists.txt` and `vcpkg.json` for the full per-platform acquisition story.
-
-WDSP source is in `third_party/wdsp/` (TAPR v1.29 + linux_port.h for cross-platform).
-FFTW3: system package on Linux/macOS, pre-built DLL on Windows (`third_party/fftw3/`).
-First run generates FFTW wisdom (~15 min). Cached in `~/.config/NereusSDR/` for subsequent launches.
-
-Current version: **0.5.2** (set in `CMakeLists.txt`; tagged pre-releases use `vX.Y.Z-rcN` suffix). 3M-2 CW TX is the next major epic; the exact version of the next release is picked by the `/release` skill at release time.
-
----
-
-## Architecture Quick Reference
-
-Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
-(RadioModel, SliceModel, etc.), `src/gui/` (MainWindow, SpectrumWidget, applets).
-
-**Key classes:**
-
-* `RadioModel` — central state, owns connection + all sub-models + WdspEngine
-* `SliceModel` — per-receiver VFO state (freq, mode, filter, AGC, gains, antenna). Single source of truth.
-* `PanadapterModel` — per-panadapter display state (center freq, bandwidth, dBm range). As of 3G-8, also owns the per-band grid storage (`BandGridSettings {dbMax, dbMin}` × 14 bands, global `gridStep`) and the current `band()` derived from `setCenterFrequency()` via `Band::bandFromFrequency()`. Emits `bandChanged(Band)` on boundary crossings and pushes the stored slot into `dBmFloor`/`dBmCeiling` automatically. `RadioModel::spectrumWidget()` / `fftEngine()` non-owning view hooks are set here by `MainWindow` so setup pages reach the renderer.
-* `Band` (`src/models/Band.h`) — first-class 14-band enum (160m–6m + GEN + WWV + XVTR) with `bandLabel()`, `bandKeyName()` (AppSettings key suffix), `bandFromFrequency()` (IARU Region 2 lookup with WWV discrete centers), `bandFromUiIndex()` / `uiIndexFromBand()`. Added in 3G-8.
-* `ReceiverManager` — DDC-aware receiver lifecycle, maps logical receivers to hardware DDCs; exposes DDC center frequency for CTUN pan positioning
-* `RadioDiscovery` — OpenHPSDR radio discovery on UDP port 1024
-* `RadioConnection` — Protocol 1 (UDP) and Protocol 2 (UDP multi-port) connections
-* `WdspEngine` — WDSP lifecycle manager (wisdom, channels, impulse cache)
-* `RxChannel` — per-receiver WDSP channel wrapper (fexchange2, NB, mode/filter/AGC, shift offset for CTUN demodulation)
-* `AudioEngine` — QAudioSink output (Int16 stereo, timer-based drain)
-* `FFTEngine` — FFTW3 spectrum computation (worker thread, I/Q → dBm bins)
-* `SpectrumWidget` — GPU spectrum trace + waterfall display (QRhiWidget — Metal/Vulkan/D3D12); zoom via visibleBinRange() bin subsetting with m_ddcCenterHz/m_sampleRateHz
-* `VfoWidget` — floating VFO flag (AetherSDR pattern): freq display, mode/filter/AGC tabs, antenna buttons
-* `ContainerWidget` — dock/float/resize/axis-lock container shell (Thetis ucMeter equivalent)
-* `FloatingContainer` — top-level window wrapper for floating containers (Thetis frmMeterDisplay equivalent)
-* `ContainerManager` — singleton container lifecycle: 3 dock modes (panel/overlay/floating), axis-lock reposition, QSplitter, persistence
-* `MeterWidget` — GPU meter renderer (QRhiWidget — 3 pipelines: background texture, vertex geometry, QPainter overlay); one per container, renders all MeterItems in single draw pass
-* `MeterItem` — base class for composable meter elements (normalized 0-1 positioning, data binding, z-order); concrete types: BarItem (+ Edge mode), TextItem, ScaleItem, SolidColourItem, ImageItem, NeedleItem (+ ANANMM/CrossNeedle calibration extensions), SpacerItem, FadeCoverItem, LEDItem, HistoryGraphItem, MagicEyeItem, NeedleScalePwrItem, SignalTextItem, DialItem, TextOverlayItem, WebImageItem, FilterDisplayItem, RotatorItem, ButtonBoxItem (shared grid base), BandButtonItem, ModeButtonItem, FilterButtonItem, AntennaButtonItem, TuneStepButtonItem, OtherButtonItem, VoiceRecordPlayItem, DiscordButtonItem, VfoDisplayItem, ClockItem, ClickBoxItem, DataOutItem
-* `ItemGroup` — composites N MeterItems into named presets; 35+ factory methods including S-Meter, Power/SWR, ANANMM (7-needle), CrossNeedle (dual fwd/rev), MagicEye, History, SignalText, and all TX bar meters
-* `MeterPoller` — QTimer-based WDSP meter polling (100ms/10fps); calls RxChannel::getMeter(), pushes to bound MeterWidgets
-* `AppSettings` — custom XML settings persistence (NOT QSettings)
-* `MainWindow` — wires everything together, signal routing hub; uses QSplitter for spectrum + container panel
-* `SpectrumOverlayPanel` — 10-button overlay panel on SpectrumWidget with 5 flyout sub-panels (display/filter/noise/spots/tools), auto-close
-* `SetupDialog` — 47-page setup dialog across 10 categories with real controls
-* `AppletPanelWidget` — fixed S-Meter header + scrollable applet body for Container #0
-* `applets/` — 12 applets: RxApplet, TxApplet, PhoneCwApplet, EqApplet, FmApplet, DigitalApplet, PureSignalApplet, DiversityApplet, CwxApplet, DvkApplet, CatApplet, TunerApplet
-* `StyleConstants.h` — shared color palette, fonts, widget style constants
-* `HGauge` — horizontal bar gauge widget
-* `ComboStyle` — styled combo box shared across applets
-* `ColorSwatchButton` (`src/gui/ColorSwatchButton.h`) — reusable color picker button: QPushButton subclass, QColorDialog with alpha, `colorChanged(QColor)` signal, static `colorToHex` / `colorFromHex` helpers for AppSettings `"#RRGGBBAA"` round-trip. Added in 3G-8; used by 9 call sites across the Display setup pages (S11/S13 trace colours, W10 waterfall low colour, G6 band edge, G9–G13 grid/text/zero-line colours).
-* `TciServer` — Qt6 QWebSocketServer wrapper + multi-client lifecycle + 5ms drain timer + per-client `TciSendQueue`; loopback bind port 50001; ping-interval 20s; emits `clientConnected` / `clientDisconnected`
-* `TciProtocol` — Thetis-faithful command dispatch (two-switch: 60 set + 21 query handlers across 8 families); parse → dispatch → optional synchronous response string
-* `TciClientSession` — per-client state struct (subscriptions, RX/TX audio ring lifecycle, IQ stream state, drop counters, last-command log); condenses Thetis's 49-field `TCPIPtciSocketListener` to 14 fields
-* `TciBinaryFrame` — 64-byte LE header binary frame encode/decode; `TCISampleType` + `TCIStreamType` enum mirrors; `encodeSamples` handles FLOAT32/INT16/INT24/INT32 paths
-* `TciSensorManager` — 4 wire format helpers (`formatRxSensors`, `formatRxChannelSensors`, `formatRxChannelSensorsEx`, `formatTxSensors`) + `minimumRequiredInterval` clamp (30..1000 ms, default 200 ms)
-* `TciVfoCoalescer` — outbound-coalesced-map dedup (Layer 3 of Thetis 3-layer VFO throttle); Layer 1 is `TciUpdateGap`, the Thetis-paced per-app update gap (per-receiver waiting lines, 0-1000 ms, default 100); Layer 2 subsumed by the coalescer
-* `TciSendQueue` — 3-priority FIFO per client (Urgent / Binary / Control) with bounded-depth oldest-drop; drain order mirrors Thetis `tryDequeueNextOutboundFrameLocked`
-* `TciApplet` — operator-facing TCI status applet (Container #0): status dot + port + client count + Setup button; Slice A + TX level meters with gain sliders
-* `ClientChainApplet` — per-client TCI connection detail applet (Container #0): TX badge, peer/name, subscription badges, last command, drop counter, disconnect button; 1 Hz auto-refresh
-* `CatTciServerPage` (inside `CatNetworkSetupPages`) — Setup → Network → TCI Server: 6 group boxes (Server / Compatibility / IQ Stream / Audio Stream / Sensors / VFO Quirks), 17 AppSettings keys
-
-**Phase 3J-2 (Spot system) classes (shipped v0.5.0):**
-
-* `SpotModel` (`src/models/SpotModel.h`): TCI-keyed sink for all spot sources (ported from AetherSDR). Owns the canonical SpotData ring + emits `spotReceived` / `spotExpired`. Per-source dedup window (10 s, configurable).
-* `SpotTableModel` (`src/models/SpotTableModel.h`): QAbstractTableModel backing the Spot List tab (extracted from AetherSDR DxClusterDialog).
-* `BandFilterProxy` (`src/models/BandFilterProxy.h`): QSortFilterProxyModel for band + source pill filtering.
-* `FreeDVStationModel` (`src/models/FreeDVStationModel.h`): NereusSDR-native 14-field live station map driven by FreeDVReporterClient.
-* `RxDecodeModel` (`src/models/RxDecodeModel.h`): local decode ring buffer; sources WSJT-X UDP + RADE callsign-over-EOO decodes (RADE decodes not wired through v0.5.2; see the RADE end-of-over callsigns note).
-* `DxClusterClient` / `WsjtxClient` / `SpotCollectorClient` / `PotaClient` / `FreeDVReporterClient` / `PskReporterClient` (`src/core/`): 6 spot-source clients (RBN handled through DxClusterClient on the RBN telnet host).
-* `CtyDatParser` / `AdifParser` / `DxccWorkedStatus` / `DxccColorProvider` (`src/core/`): 4-tier DXCC color resolver stack (ported from AetherSDR).
-* `SpotHubDialog` (`src/gui/SpotHubDialog.h`): modeless 9-tab dialog (Tools > Spot Hub, Ctrl+Shift+S) with per-source tabs + unified Spot List + Display knobs (ported from AetherSDR's DxClusterDialog pattern).
-* `FreeDVReporterDialog` (`src/gui/FreeDVReporterDialog.h`): modeless 14-column live station view (Tools > FreeDV Reporter, Ctrl+Shift+R) with TX/RX highlights, QSY, status messages, idle auto-removal (Qt6 port from freedv-gui's wx UI).
-
-**Phase 3R (RADE mode) classes (shipped v0.5.0):**
-
-* `RadeChannel` (`src/core/wdsp/RadeChannel.h`): peer-mode DSP channel for `DSPMode::RADE_U` / `DSPMode::RADE_L`. RX + TX paths both live; confirmed on-air on ANAN-G2 via remote receivers. Hybrid port: AetherSDR for Qt6 channel structure + freedv-gui for DSP pipeline truth.
-* `RadeText` (`src/core/wdsp/RadeText.h`): thin Qt6 wrapper over third_party/rade's native callsign-over-EOO API. Task I4 Option B decision avoided porting freedv-gui's rade_text.c + roughly 1500 lines of codec2 deps. Not wired through v0.5.2; see the RADE end-of-over callsigns note below.
-* **RADE end-of-over callsigns.** RADE end-of-over callsigns were not actually wired through v0.5.2 (none were sent or decoded). The Core/GUI trunk now sends and decodes FreeDV-format callsigns (rade_text with LDPC, ported from freedv-backend); a callsign goes out only while FreeDV Reporter is on. On-air check against freedv-gui is pending.
-* `RadeApplet` (`src/gui/applets/RadeApplet.h`): right-column applet auto-docked when RADE is the active mode. Profile combo + sync indicator + Reset Vocoder button.
-* `Resampler` / `RadeTxHpf80` / `RadeTx48to16` (`src/core/audio/`): TX-path helpers (HPF + 48-to-16 kHz polyphase resampler). Used by TxWorkerThread's RADE TxPath; the earlier K-bench deferral has been retired.
-* `MicProfileManager` (existing): gains a new RADE factory profile (22 total, was 21). Leveler enabled; ALC + CFC + CESSB + Phase Rotator all bypassed. Auto-selected on mode entry to RADE.
-* `SliceModel` (existing): gains `snrDb` Q_PROPERTY for the VFO flag SNR row, mode-aware visibility (RADE only).
-
-**Remote-daemon R1 classes (build split + headless `nereusd`):**
-
-The rule these exist to enforce: **nothing under `src/core/` or `src/models/` may
-include a GUI header.** `tst_core_has_no_gui_includes` fails the build if that
-breaks. Before adding a GUI type to a core class, extract an interface instead,
-the way `ISpectrumSink` did.
-
-* `ISpectrumSink` (`src/core/spectrum/ISpectrumSink.h`): abstract sink `RadioModel` pushes spectrum-adjacent state through, so it no longer includes `gui/SpectrumWidget.h`. `SpectrumWidget` implements it. Also houses the `WfColorScheme` and `AverageMode` display enums.
-* `SpectrumDetector` / `SpectrumAvenger` (`src/core/spectrum/`): relocated verbatim from `src/gui/spectrum/`. WDSP `detector()` / `avenger()` ports; bin-to-pixel reduction and frame averaging.
-* `SpectrumReducer` (`src/core/spectrum/SpectrumReducer.h`): crop-and-reduce stage, detector then avenger, configured by an injected `ReducerConfig` with no AppSettings dependency. `reduce()` writes into a **caller-owned out-parameter**; do not change it back to returning a reference, that aliases the caller's buffer and costs a detach every frame on the render hot path.
-* `FftEnginePool` (`src/core/spectrum/FftEnginePool.h`): per-stream `FFTEngine` lifecycle plus worker-thread parking, previously inline in `MainWindow`. Note `setConfigForNewStreams()` is the live path; `setConfig()` overwrites existing engines and has no production caller.
-* `FftTopology` (`src/core/spectrum/FftTopology.h`): which streams each consumer subscribes to, as data rather than as state living inside `PanadapterStack`. `applyTo(FFTRouter&)` is a full rebuild. Many streams per consumer.
-* `CoreInit` (`src/core/CoreInit.h`): the process setup both binaries share (settings load, schema migrations, logging). `initialize(profile)` / `shutdown()`, idempotent.
-* `DaemonConfig` / `DaemonApp` (`src/core/daemon/`): `/etc/nereusd.conf` parsing and the daemon's own lifecycle. A key that reaches `DaemonConfig` must reach behaviour too, or it does not belong in `packaging/nereusd.conf.sample`; a test pins the two key sets against each other.
-
-**Thread Architecture:**
-
-| Thread | Components |
-| --- | --- |
-| **Main** | GUI rendering, RadioModel, all sub-models, user input |
-| **Connection** | RadioConnection (UDP I/O, protocol framing) |
-| **Audio** | AudioEngine + WdspEngine (I/Q processing, DSP, audio output) |
-| **Spectrum** | FFT computation, waterfall data generation |
-
-Cross-thread communication uses auto-queued signals exclusively.
-RadioModel owns all sub-models on the main thread. Never hold a mutex in the
-audio callback.
-
-### Data Flow (Phase 3E + CTUN + Zoom — VERIFIED WORKING)
-
-```
-Radio (ADC) → UDP port 1037 (DDC2) → P2RadioConnection
-    ↓ iqDataReceived(ddcIndex=2, interleaved float I/Q)
-ReceiverManager::feedIqData(2) → maps DDC2 → receiver 0
-    ↓ iqDataForReceiver(0, samples)
-RadioModel lambda:
-    ├── emit rawIqData(samples) → FFTEngine → SpectrumWidget
-    ├── Deinterleave I/Q, accumulate 238 → 1024 samples
-    └── RxChannel::processIq() → fexchange2() → decoded audio
-        ↓
-    AudioEngine::feedAudio() → float→int16 → m_rxBuffer
-        ↓ 10ms timer drain
-    QAudioSink (48kHz stereo Int16) → Speakers
-
-FFT → Display (with zoom):
-    FFTEngine emits N bins (full DDC bandwidth)
-    → SpectrumWidget::updateSpectrum() stores in m_smoothed
-    → visibleBinRange(N) maps m_centerHz ± m_bandwidthHz/2 to bin indices
-      using m_ddcCenterHz + m_sampleRateHz for bin-to-frequency mapping
-    → GPU/CPU renderer iterates only [firstBin..lastBin], stretched to full display
-    → pushWaterfallRow() writes only visible bin subset to waterfall texture
-
-User zooms (freq scale drag or Ctrl+scroll):
-    m_bandwidthHz changes → visibleBinRange() narrows → immediate visual zoom
-    On mouse release → bandwidthChangeRequested → MainWindow replans FFT size
-    → FFTEngine delivers more bins → sharper resolution at new zoom level
-
-User tunes VFO:
-    VfoWidget (wheel/click/edit) → emit frequencyChanged(hz)
-    → SliceModel::setFrequency(hz)
-    → ReceiverManager::setReceiverFrequency(0, hz)
-      → hardwareFrequencyChanged(DDC2, hz)
-      → P2RadioConnection::setReceiverFrequency(2, hz) + Alex HPF/LPF update
-      → sendCmdHighPriority() → radio retunes DDC NCO
-```
-
----
-
-## Key Implementation Patterns
-
-### Settings Persistence (AppSettings — NOT QSettings)
-
-**IMPORTANT:** Do NOT use `QSettings` anywhere in NereusSDR. All client-side
-settings are stored via `AppSettings` (`src/core/AppSettings.h`), which writes
-an XML file at `~/.config/NereusSDR/NereusSDR.settings`. Key names use
-PascalCase (e.g. `LastConnectedRadioMac`, `DisplayFftAverage`). Boolean
-values are stored as `"True"` / `"False"` strings.
-
-```
-auto& s = AppSettings::instance();
-s.setValue("MyFeatureEnabled", "True");
-bool on = s.value("MyFeatureEnabled", "False").toString() == "True";
-```
-
-### Radio-Authoritative Settings Policy
-
-**Radio-authoritative (do NOT persist):** ADC attenuation, preamp, TX power,
-antenna selection.
-
-**Hardware sample rate and active RX count:** persisted per-MAC in AppSettings
-under `hardware/<mac>/radioInfo/sampleRate` and `.../activeRxCount`. Applied
-on next connect. This matches Thetis, which persists rate globally via
-`DB.SaveVarsDictionary("Options", ...)` (setup.cs:1627). NereusSDR scopes
-per-MAC so users with multiple radios retain per-radio selections.
-**Live-apply of rate changes lands via `RadioModel::setSampleRateLive` (12-step
-sequence ported from Thetis `setup.cs:7003-7159 [v2.10.3.13]`) + the
-`WdspEngine::setRxChannelRate` Thetis-faithful `SetXcmInrate` path
-(`cmaster.c:453-507 [v2.10.3.13]`).** The earlier rebuild-based approach
-shipped briefly in PR #219 + the codex-P2 wiring in PR #221, then crashed
-on the first user combo-change because destroying the C++ wrapper invalidated
-seven raw-pointer holders (RadioModel, TxWorkerThread, PureSignal,
-MeterPoller, TwoToneController, TxCfcDialog, the TxChannel VOX-key static).
-The new path keeps all wrapper pointers alive across a rate change.
-Active-RX count live-apply remains in the same `setActiveRxCountLive` form
-shipped by PR #219 — pending the Phase 3F multi-panadapter work that
-actually exercises RX2.
-
-**Client-authoritative (persist in AppSettings):** VFO frequency, mode, filter,
-DSP settings (AGC, NR, NB, ANF), layout arrangement, UI preferences, display
-preferences. OpenHPSDR radios don't store per-slice state.
-
-### GUI↔Model Sync (No Feedback Loops)
-
-* Model setters emit signals → RadioConnection sends protocol commands
-* Protocol responses update models via `applyStatus()` or equivalent
-* Use `m_updatingFromModel` guard or `QSignalBlocker` to prevent echo loops
-* Follow AetherSDR's proven pattern exactly
-
----
-
-## Documentation Index
-
-### Master Plan & Progress
-
-| Document | Description |
-| --- | --- |
-| [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) | Full phased roadmap, menu bar layout, GUI container mapping (Thetis → NereusSDR), skin system design, progress tracking |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Contributor guidelines, coding conventions, PR process |
-| [docs/development/fast-test-loop.md](docs/development/fast-test-loop.md) | **Read before running tests.** Per-test builds, `ctest -L` subsystem labels, ccache setup, the macOS first-run scan (and why the Developer Tools exemption does not stop it), and how to write tests that stay fast. Since the app became a shared library: rebuilding every test after a `src/core` edit is ~24 s and the full 598-test suite runs in ~110 s. Record load average with any timing you add here; unqualified numbers in this area have been wrong three times. |
-| [STYLEGUIDE.md](STYLEGUIDE.md) | Applet color palette, button states, gauge zones, slider/combo styling |
-| [CHANGELOG.md](CHANGELOG.md) | Version history and per-phase feature additions |
-
-### Architecture Design Docs (`docs/architecture/`)
-
-| Document | Scope |
-| --- | --- |
-| [overview.md](docs/architecture/overview.md) | Layer diagram, thread architecture, RX/TX data flow overview |
-| [radio-abstraction.md](docs/architecture/radio-abstraction.md) | P1/P2 connections, MetisFrameParser, ReceiverManager, C&C register map, protocol details |
-| [multi-panadapter.md](docs/architecture/multi-panadapter.md) | PanadapterStack (5 layouts), PanadapterApplet, wirePanadapter(), FFTRouter |
-| [gpu-waterfall.md](docs/architecture/gpu-waterfall.md) | FFTEngine, SpectrumWidget, QRhi shaders, overlay system, color schemes |
-| [wdsp-integration.md](docs/architecture/wdsp-integration.md) | RxChannel/TxChannel wrappers, PureSignal, thread safety, WDSP channel lifecycle |
-| [skin-compatibility.md](docs/architecture/skin-compatibility.md) | SkinParser, extended skin format, Thetis import, 4-pan support |
-| [adc-ddc-panadapter-mapping.md](docs/architecture/adc-ddc-panadapter-mapping.md) | ADC->DDC->Receiver->FFT->Pan signal chain, Thetis UpdateDDCs() analysis, per-board DDC assignment, bandwidth limits |
-| [ctun-zoom-design.md](docs/architecture/ctun-zoom-design.md) | CTUN zoom bin subsetting: visibleBinRange(), hybrid FFT replan, DDC center tracking |
-
-### Implementation Plans (`docs/architecture/phase*-plan.md`)
-
-| Plan | Phase | Status |
-| --- | --- | --- |
-| [phase3d-spectrum-waterfall-plan.md](docs/architecture/phase3d-spectrum-waterfall-plan.md) | 3D: GPU Spectrum & Waterfall | **Complete** |
-| [ctun-zoom-plan.md](docs/architecture/ctun-zoom-plan.md) | 3E: CTUN Zoom Bin Subsetting | **Complete** |
-| [phase3g1-container-infrastructure-plan.md](docs/architecture/phase3g1-container-infrastructure-plan.md) | 3G-1: Container Infrastructure | **Complete** |
-| [phase3g2-meter-widget.md](docs/superpowers/plans/2026-04-10-phase3g2-meter-widget.md) | 3G-2: MeterWidget GPU Renderer | **Complete** |
-| [phase3g3-core-meter-groups.md](docs/superpowers/plans/2026-04-10-phase3g3-core-meter-groups.md) | 3G-3: Core Meter Groups | **Complete** |
-| [phase3-ui-skeleton-plan-v2.md](docs/architecture/phase3-ui-skeleton-plan-v2.md) | 3-UI: Full UI Skeleton | **Complete** |
-| [phase3g4-g6-advanced-meters-design.md](docs/architecture/phase3g4-g6-advanced-meters-design.md) | 3G-4/5/6: Advanced Meters Design Spec | **Approved** |
-| [phase3g4-advanced-meters-plan.md](docs/architecture/phase3g4-advanced-meters-plan.md) | 3G-4: Advanced Meter Items | **Complete** |
-| [phase3g5-interactive-meters-plan.md](docs/architecture/phase3g5-interactive-meters-plan.md) | 3G-5: Interactive Meter Items | **Complete** |
-| [phase3g6a-plan.md](docs/architecture/phase3g6a-plan.md) | 3G-6 (one-shot): Full Thetis Parity + MMIO | **Complete** |
-| [phase3g8-rx1-display-parity-plan.md](docs/architecture/phase3g8-rx1-display-parity-plan.md) | 3G-8: RX1 Display Parity (47 Spectrum/Waterfall/Grid controls, Band enum, per-band grid, GPU polish) | **Complete** |
-| [phase3g8-verification/README.md](docs/architecture/phase3g8-verification/README.md) | 3G-8: 47-control manual verification matrix | Matrix drafted |
-| [phase3j2-3r-spots-and-rade-design.md](docs/architecture/phase3j2-3r-spots-and-rade-design.md) | 3J-2 + 3R: Spot system + FreeDV Reporter + PSK Reporter + RADE peer mode design spec | **Complete (shipped v0.5.0)** |
-| [phase3j2-3r-spots-and-rade-plan.md](docs/architecture/phase3j2-3r-spots-and-rade-plan.md) | 3J-2 + 3R: implementation plan (50+ commits landed in v0.5.0) | **Complete (shipped v0.5.0)** |
-| [phase3j2-verification/README.md](docs/architecture/phase3j2-verification/README.md) | 3J-2: 11-row bench verification matrix (DX cluster, RBN, WSJT-X, SpotCollector, POTA, FreeDV Reporter, PSK Reporter, DXCC coloring, panadapter collisions, auto-connect, Display knobs) | Matrix verified (v0.5.0) |
-| [phase3r-verification/README.md](docs/architecture/phase3r-verification/README.md) | 3R: 12-row bench verification matrix (RADE RX, RADE TX confirmed on-air on ANAN-G2, preset routing, mode dispatch, UI surfaces, HL2 gated, PA safety, DEXP/VOX, multi-slice deferred) | Matrix verified (v0.5.0; Rows 9/12 deferred) |
-| [2026-05-18-pgxl-tgxl-and-analog-smeter-design.md](docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-design.md) | 3P-II: PGXL/TGXL + analog S-Meter port (Phase 1-4) design spec | **Complete (pending bench in v0.5.2)** |
-| [phase-pgxl-tgxl-smeter-verification/README.md](docs/architecture/phase-pgxl-tgxl-smeter-verification/README.md) | 3P-II: 36-row bench verification matrix | Matrix drafted (pending live PGXL + TGXL hardware) |
-| [2026-05-21-anan-g2e-verification/README.md](docs/architecture/2026-05-21-anan-g2e-verification/README.md) | ANAN-G2E SKU port: 12-row bench verification matrix | Matrix drafted (4 documented gaps; pending live G2E hardware) |
-| [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
-| [2026-07-28-remote-daemon-architecture-design.md](docs/architecture/2026-07-28-remote-daemon-architecture-design.md) | Remote daemon: split point, transport ladder (direct first, relay as fallback), NAT traversal incl. CGNAT-to-CGNAT, measured Pi 4 floor capacity, R1-R6 phasing | **Approved** |
-| [2026-08-02-remote-daemon-r1-plan.md](docs/architecture/2026-08-02-remote-daemon-r1-plan.md) | R1: build split + spectrum extraction + headless `nereusd` (13 tasks, 91 steps) | **Complete** |
-| [2026-08-02-remote-daemon-r1-verification/README.md](docs/architecture/2026-08-02-remote-daemon-r1-verification/README.md) | R1: 12-row Pi 4 bench matrix (Rows 5/10/11 found real defects; Row 10 fixed, 5 and 11 chipped) | Matrix verified (Pi 4 + ANAN-G2E) |
-| [2026-08-02-bottom-banner-and-pan-menu-design.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md) | Bottom Banner Cleanup + AetherSDR-Shaped Pan Menu design spec: single `ChromeBarController` layout authority replacing 3 competing responsive systems, 9-layout pan menu thumbnail grid | **Complete (pending PR merge)** |
-| [2026-08-02-bottom-banner-and-pan-menu-plan.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-plan.md) | Bottom Banner Cleanup + Pan Menu: 14-task implementation plan (Phase A ChromeBarController + fold ladder, Phase B pan-menu thumbnail grid) plus a final fix wave closing the merge-blocking audit findings | **Complete (14/14 tasks + fix wave; pending PR merge)** |
-| [2026-08-02-bottom-banner-and-pan-menu-verification/README.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-verification/README.md) | Bottom Banner + Pan Menu: 7-row bench verification matrix | Matrix drafted (pending live G2 + HL2 hardware) |
-| [2026-09-23-iphone-app-design.md](docs/architecture/2026-09-23-iphone-app-design.md) | NereusSDR for iPhone and iPad: native Swift client of the remote station (`nereusd`), receive and transmit in the first App Store release; 68 decisions (D44 to D67 for several devices on one Core at once and D68 for headphones, added 2026-09-24), R-IOS-01 to R-IOS-31, every screen pictured from the confirmed mockup board | **Approved** (2026-09-23; several devices at once 2026-09-24) |
-| [2026-09-23-iphone-app-plan.md](docs/architecture/2026-09-23-iphone-app-plan.md) | NereusSDR for iPhone and iPad: the one implementation plan, 89 tasks in 11 parts, one owner per task, the phone's listening build first (JJ, 2026-09-24) (station and desktop tasks in the Core/GUI session's lanes, phone tasks on `claude/iphone-app`) (the written link and conformance suite, the app's foundation, identity and pairing, what the phone shows, R5 remote access, R4 remote transmit with the DSP-control thread, several devices at once and accessories, Setup described by the station, the desktop's station, the app, proof and release) | In progress: station tasks in the Core/GUI session (Parts A to C, 2026-09-24); phone Tasks 5 to 11, 51 and 55a built on `claude/iphone-app` |
-| [2026-09-23-station-link-v1.md](docs/architecture/2026-09-23-station-link-v1.md) | The station link, version 1: the written specification of the link between the Core and every client (transport, certificate and pin, token, connect sequence, versions and the two-key feature gate, messages, settings proxy, commands, telemetry, liveness and ending, LAN announcement); indexes the media control, display codec, notch control and accessory control documents; its tables are rendered from `tests/data/link/v1/surface.json` by `scripts/render-link-tables.py` (`--check` in CI) | **Written** (R-IOS-01) |
-
-### Protocol Reference (`docs/protocols/`)
-
-| Document | Scope |
-| --- | --- |
-| [openhpsdr-protocol1.md](docs/protocols/openhpsdr-protocol1.md) | P1 summary + pointer to capture reference; Thetis P1 source map |
-| [openhpsdr-protocol1-capture-reference.md](docs/protocols/openhpsdr-protocol1-capture-reference.md) | Annotated HL2↔Thetis capture: discovery, start/stop, EP6/EP2 frames, C0 maps, cadence, band/TX traces, HL2 quirks, Phase 3L checklist |
-| [openhpsdr-protocol2.md](docs/protocols/openhpsdr-protocol2.md) | P2 UDP multi-port, command packets, per-DDC I/Q streams |
-
-### Phase 1 Analysis Docs (`docs/phase1/`)
-
-| Document | Key Findings |
-| --- | --- |
-| 1A: AetherSDR Analysis | RadioModel hub, auto-queued signals, worker threads, AppSettings XML, GPU rendering via QRhi |
-| 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
-| 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
-
-### Current Phase: Phase 3P-II External RF accessories (PGXL/TGXL + analog S-Meter); bench verification pending in v0.5.2. Next major epic: 3M-2 CW TX.
-
-**Pending v0.5.2 release (2026-05-24)** with one major epic (Phase 3P-II) plus a new SKU port (ANAN-G2E / HermesC10), a new UI subsystem (applet visibility controller), 4O3A integration polish, TCI live-state fixes, PS-A persistence fixes, a G2E P2 RX unblock, and a PA-profile / quit-handling tail, all landing on top of v0.5.1:
-
-* **Phase 3P-II (External RF accessories + analog S-Meter port).** Four-phase epic.
-  - **Phase 1, PGXL/TGXL baseline (AetherSDR 1:1).** `PgxlConnection` (TCP 9008 V/R/S frame parser), `TgxlConnection` (TCP 9010 V/R/S parser), `TunerModel` (13 Q_PROPERTYs), `LanDiscovery` (UDP broadcast on 9008/9010), `AmpApplet`, `TunerApplet` rewire, `RelayBar`, Peripherals page under Setup → Network with Scan LAN dialogs.
-  - **Phase 2, Analog S-Meter port.** `SMeterWidget` (180-degree needle arc, S-unit scale, animated needle 45/180 ms, peak hold Fast/Medium/Slow) wired to four WDSP meter sources: Signal / Signal Average (`RXA_S_AV`, Thetis `console.cs:957 [@501e3f5]`) / Signal Peak / Max Bin (`SetupDetectMaxBin` + `GetDetectMaxBin`, Thetis `wdsp/analyzer.c:688..830 [@501e3f5]`). Right-click context menu replaces inline strip. PGXL 2 kW power-scale snap. AppSettings round-trip.
-  - **Phase 3, Connection robustness.** Exponential auto-reconnect (1/2/5/10/30/60 s), keepalive (30 s default), RTT-correlated ping (10 s default), full PGXL pairing flow (`amplifier create` + `flexradio pair` with paired-serial capture), band-change notifications, `ConnectionDiagnostics` (10 Q_PROPERTYs, 1 Hz coalesce), PeripheralsPage live status labels.
-  - **Phase 4, Advanced UI.** `PgxlAdvancedPage` + `TgxlAdvancedPage` (Identity / Hardware / Network / Pairing / Diagnostics / Fault History / Tune Memory sections), `FaultLog` (10-entry ring buffer, JSON persisted, likelyCause heuristic), `TuneMemoryStore` (per-(antenna, band) auto-recall on `bandChanged`), `TxInterlockPolicy` (Disabled / Warn / Block + SWR gate + grace period), `PgxlInterlockPage` under Setup → Transmit, antenna label persistence (`TGXL_AntLabel_1/2/3`), power-cap soft-alert toast, applet right-click navigation. Bench verification matrix at `docs/architecture/phase-pgxl-tgxl-smeter-verification/README.md` (36 rows pending live PGXL + TGXL hardware; HL2 row gated on ATT/filter audit).
-* **ANAN-G2E (HermesC10) SKU port.** New board enum + capability row, hardware profile init verified against Thetis v2.10.3.15, codec wrappers (`SetADCSupply`, `LRAudioSwap`), discovery byte 0x14 → HPSDRHW::HermesC10, BPF1 algorithm family (HPF setAlex1HPF), Hermes-class DDC4 + DDC0 + PS-DDC config, PA telemetry (fwd-power triplet, current / supply-volts), per-model preamp items, `SkuUiProfile` EXT label overrides, AddCustomRadioDialog wiring. Tasks A3 through F6 (12 ANAN-G2E bench tasks); bench matrix at `docs/architecture/2026-05-21-anan-g2e-verification/README.md` (12 rows pending live G2E hardware).
-* **Applet visibility controller.** New `AppletVisibilityController` + AppSettings round-trip, hamburger menu embedded in the AppletPanelWidget banner / S-Meter title bar, View > Containers > Applets show/hide section, two-way menu sync, capability-gated `setAvailable` axis, RADE-aware routing, master-toggle live UI gating via `RadioModel::fourO3AEnabledChanged`. Retires View > Network Applets.
-* **4O3A integration polish.** PGXL bar-graph zero-on-post-TX fix, TGXL identity labels populate, PGXL pre-standby on TGXL hardware TUNE, event-driven FlexAPI interlock chain + MOX RF-flow gate, route-aware FLEX-discovery broadcast IP (computed subnet, not 255.255.255.255), canonical FlexRadio-format 16-digit serial from MAC, PGXL SmartSDR API responder explicit-IPv4 bind (macOS IPv6 default blocked PGXL connect), "AMP" → "Power Genius" rebrand, master-toggle auto-connect gating on PGXL + TGXL, AmpApplet reconnect uses canonical `PGXL_Manual*` keys.
-* **TCI live-state + 5 review-issue fixes.** Init burst defaults wire-aligned with Thetis (P1 fix), broadcast slice state changes to connected clients, ChangedHandlers port, af/mon roundtrip in-spec, sliceAdded hook restored after stop/start, setFilterBand single-emit, live VFO broadcast reads `rx2Enabled`, agc_mode wire-token conversion.
-* **PS-A persistence + bench tail.** Direct AppSettings save for autoCalEnabled, P2 baseline regen, two-tone power defaults to 10 W, PS-A direct save via `scheduleSettingsSave`, source-first per-packet PS pairing via Thetis `sync.c InboundBlock(id=1)`.
-* **G2E P2 RX unblock + crash fix.** Mask dither/random for HermesC10, Hermes-class DDC0, zero rate on disabled DDCs (P2 connect unblock), retry SendStop + bounds-check on I/Q batch (G2E gateware lockup + crash).
-* **PA profile + quit handling.** Manifest backfill on factory-profile lookup, disconnect-on-quit, SIGTERM handler.
-
-**Build + packaging:** `third_party/rade/` (radae_nopy SHA b289102) and `third_party/r8brain/` (24-bit polyphase resampler, MIT) added to vendored dependency set. CMake glue builds RADE + Opus + LPCNet via ExternalProject. Approximately 9 MB added to the binary on every platform.
-
-**Deferred / known limitations for v0.5.2:**
-
-* Phase 3P-II bench verification on live PGXL + TGXL hardware (36-row matrix pending; ANAN-G2 bench available for control-plane / DSP verification).
-* ANAN-G2E bench verification on live G2E hardware (12-row matrix pending; F2/F3/F4/F6 documented as `DONE_WITH_CONCERNS`).
-* HL2 RADE bench verification still gated on HL2 ATT/filter audit closure.
-* RADE multi-slice (RADE on A while SSB on B); Phase 3F future.
-
-**Shipped in v0.5.1 (2026-05-15):** patch release. Eight fix-only PRs. Three close release-artifact ship-blockers carried over from v0.5.0 (Windows installer missing `rade.dll`, macOS x86_64 DMG built without `Qt6::WebSockets` silently disabling FreeDV Reporter / PSK Reporter / TCI, HL2 + Windows 11 waterfall sliders did not stick across launches). Three are persistence / connection-state correctness fixes that surfaced after v0.5.0 hit a bench (orphan `.bak` data-loss path, connection state stuck `Connected` on failed initial connect, VOX needed juggling to prime on every connect). Two keep the CodeQL SAST pipeline green after the `Qt6::WebSockets` REQUIRED gate (Qt 6.8 + `qt6-websockets-dev`).
-
-**Shipped in v0.5.0 (2026-05-13).** Substantial minor release on top of v0.4.0, three major epics + extended bench-fix tail:
-
-* **Phase 3J-1 (TCI v2.0 WebSocket server).** 8 new core classes (`TciServer` / `TciProtocol` / `TciClientSession` / `TciBinaryFrame` / `TciSensorManager` / `TciVfoCoalescer` / `TciSendQueue` / `TciVolume`), 2 new applets (`TciApplet` + `ClientChainApplet`), Tools > TCI Server + View > Network Applets menu, 4-state bottom-bar indicator. 62 dispatch commands across 8 families. Binary RX audio with per-stream WDSP resampler (FreeDV 8 kHz / Quisk / JTDX 12 kHz end-to-end). Init burst byte-for-byte parity with Thetis (~98 wire frames). 15 closeout items shipped after the initial port stabilized against real clients. ~80-row matrix verification harness.
-* **Phase 3J-2 (Spot system + FreeDV Reporter + PSK Reporter).** 7 spot-source clients (DX cluster telnet, RBN, WSJT-X UDP, SpotCollector / DXLab UDP, POTA HTTPS, FreeDV Reporter Socket.IO, PSK Reporter IPFIX). SpotHubDialog (Tools > Spot Hub, Ctrl+Shift+S, 9 tabs). FreeDVReporterDialog (Tools > FreeDV Reporter, Ctrl+Shift+R, 14-col live view with TX/RX highlights + QSY + 2-hour idle auto-remove). Panadapter spot overlay with collision-avoidance stacking + `+N` cluster badges. DXCC color resolver (cty.dat + ADIF 4-tier). Auto-connect restore on launch.
-* **Phase 3R (RADE as a true peer mode, RX + TX end-to-end).** Vendored `radae_nopy` (BSD-2-Clause SHA b289102) + Opus (LPCNet + FARGAN) at `third_party/rade/` (~9 MB embedded weights, no external model file). `DSPMode::RADE_U` / `DSPMode::RADE_L` peer mode dispatch. `RadeChannel` (RX + TX paths). Task I4 Option B (native callsign-over-EOO API via thin `RadeText` wrapper avoids ~1500 lines of codec2 deps). RADE TX shipped end-to-end (earlier K-bench deferral retired; confirmed on-air on ANAN-G2 via remote receivers). VFO flag mode-aware SNR row + speaker callsign from EOO decode (not wired through v0.5.2; see the RADE end-of-over callsigns note). `RadeApplet`. `MicProfileManager` RADE factory profile (22 total).
-* **Bench-fix tail (2026-05-11 → 2026-05-12).** 16 wire / parser / UX gaps: first-MOX audio_volume seed, 10 missing spot-client lifecycle wires, DXSpider parser fallthrough, SpotModel → SpectrumWidget bridge restored, SpotTableModel ownership moved RadioModel-side, per-source UI feedback wired across all source tabs, PSK Reporter source-first port from freedv-gui, 10-gap spot overlay closure against AetherSDR audit, FreeDV Reporter 4-feature port (hide-self / kHz toggle / sort+column persist) + distance/heading fix + row-highlight-vs-selection fix + Socket.IO ACK message push + VFO-spin throttle, RADE speaker callsign on the flag + idle-clear timer, first-time setup banner.
-
-**Prior context (v0.4.0, shipped 2026-05-08)** with five major pieces of work landing together:
-
-* **3M-4 PureSignal arrives.** Feedback DDC plumbing on Protocol 1 and Protocol 2, `calcc.c` + `iqc.c` vendored verbatim from Thetis, `PureSignal` coordinator class, `PsccPump` driver, per-board `PsDdcConfig`, `PsForm` modeless dialog (Tools → PureSignal), `AmpView` modeless dialog, two-tone IMD overlay on the spectrum, `PsaIndicatorWidget` bottom-banner FB+PS pair. Enabled on every supported P1 and P2 SKU including HL2 (with HL2-specific negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, psSampleRate=0 sentinel resolution) and plain Hermes. NereusSDR-only PureSignal Setup pages retired in favour of the Thetis-parity PsForm dialog.
-* **Display + DSP-Options refactor.** WDSP `avenger()` and `detector()` ported (Thetis-faithful frame averaging + bin-to-pixel reduction). New Setup → DSP page (18 controls, RX/TX combo split, in-place filter resize, Filter Impulse Cache, per-mode buffer/filter/filter-type live-apply). Spectrum: full Thetis-faithful FFT slider with 7 windows + live bin width, K-based auto-zoom, NF-aware grid, Hz/bin auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + ActivePeakHoldTrace, source-first port of Thetis `processNoiseFloor`. New Multimeter page with configurable MeterPoller. SettingsSchemaVersion v5 migrates DSP-Options Buffer/Filter Size to per-direction.
-* **3M-3a-iv anti-VOX cancellation feed.** Closes the v0.3.2 gap where the gain control was plumbed but `SendAntiVOXData` was never called. 4 new WDSP wrappers, RxDspWorker → TxWorkerThread → TxChannel pump per chunk (single-RX direct path; aamix port deferred to 3F). Setup → Transmit → DEXP/VOX gains the full grpAntiVOX trio (Enable / Gain / Tau) with verbatim Thetis tooltips. Architectural divergence: source-selector (RX vs VAC) is dropped because VAX is a digital-mode app bus with no mic-feedback path.
-* **Live-apply sample rate (no disconnect).** PR #219 + #221's destroy-and-recreate path replaced with the Thetis-faithful `SetXcmInrate` route. New `RxChannel::setSampleRate` (carry-only) + `WdspEngine::setRxChannelRate` (`SetInputSamplerate` + `SetInputBuffsize` on the live channel, `cmaster.c:453-507 [v2.10.3.13]`). `RadioModel::setSampleRateLive` is now the 12-step Thetis sequence from `setup.cs:7003-7159 [v2.10.3.13]`. TX channel untouched (Thetis routes `SetXcmInrate(0|1)` for RX1/RX2 only). HL2 P1 384 kHz parity (`mi0bot-Thetis setup.cs:849-851 [v2.10.3.13]`).
-* **AF Gain rewire (PR #218, KM4BLG) + VAX bus calibration.** `RxChannel::setAfGain` → `WDSP.SetRXAPanelGain1` instead of the post-DSP setVolume scalar. Closes a long-standing distortion bug (`panel.gain1=4.0` default leaked +12 dB silently). VAX tap inverse-scales by `1 / afGain` (clamped at 0.001) so digital-mode apps stay calibrated regardless of speaker AF slider position. Edge case: AF=0 silences VAX too; full decoupling needs a pre-`PanelGain1` WDSP tap (deferred).
-
-**Plus** persistence + stability fixes: MainWindow position/size/maximized state across launches (#206), audio bus master-mute flush (#201), PA Gain spinbox 38.8 dB clamp (#199), PA profile auto-pick fixes (#202), pre-connect Mic_Source persistence, macOS mic-permission dialog at launch + app icon + DMG background, step-att MOX clobber fix (#200), HL2 FPGA temperature on bottom banner. Plus Setup → Hardware combo + spinbox SVG-arrow styling and the Active RX Count widget hidden in single-RX builds. Plus compliance / cite touchups.
-
-**Prior context (v0.3.2, shipped 2026-05-05):** 3M-3a-iii DEXP/VOX speech processing end-to-end, HL2 mi0bot RF/Tune Power slider parity, Setup → PA full Thetis parity + PA over-drive safety hotfix kernel, persistence and stability tail. **Prior context (v0.3.1, shipped 2026-05-03):** 3M-1 SSB TX (PR #152), Phase 3Q connection workflow refactor + chrome layer (PR #158), 3M-3a-i TX EQ + Leveler + ALC, 3M-3a-ii CFC + CPDR + CESSB + Phase Rotator (MicProfileManager 91 keys, 19/21 factory profiles ported verbatim), ParametricEq widget port (PR #159), Plan 4 ui-polish-foundation epic (PR #166). HL2 ATT/filter safety audit closed. Pre-emphasis de-scoped from 3M-3a-ii to 3M-3b (FM-mode follow-up).
-
-**Next on the TX epic: 3M-2 CW TX.** Sidetone, firmware keyer, QSK/break-in. Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]`; desk-review B3, "HL2 firmware uses bit 3 of I-low byte for CWX PTT, non-HL2 boards don't"). After 3M-2: 3M-3b (FM pre-emphasis), the RADE TX K-bench follow-up (real-time integration into TxWorkerThread), then 3F multi-panadapter (which finally exercises `RadioModel::setActiveRxCountLive` + the aamix anti-VOX path + unblocks RADE-on-A while SSB-on-B multi-slice) and the longer-tail 3H / 3J-1 (TCI server) / 3K phases.
-
-| Phase | Goal | Status |
-| --- | --- | --- |
-| 3A: Radio Connection | Connect to ANAN-G2 via P2, receive I/Q | **Complete** |
-| 3B: WDSP Integration | Process I/Q through WDSP, audio output | **Complete** |
-| 3C: macOS Build | Cross-platform WDSP build + wisdom crash fix | **Complete** |
-| 3D: Spectrum Display | GPU spectrum + waterfall (QRhi Metal/Vulkan/D3D12) | **Complete** |
-| 3E: VFO + Multi-RX Foundation | VFO controls, CTUN panadapter, rewired I/Q pipeline | **Complete** |
-| **3G-1: Container Infrastructure** | **Dock/float/resize/persist container shells** | **Complete** |
-| **3G-2: MeterWidget GPU Renderer** | **QRhi-based meter rendering engine** | **Complete** |
-| **3G-3: Core Meter Groups** | **S-Meter, Power/SWR, ALC presets** | **Complete** |
-| **3-UI: Full UI Skeleton** | **12 applets, 9-menu bar, SetupDialog (47pp), SpectrumOverlayPanel** | **Complete** |
-| **3G-4: Advanced Meter Items** | **12 item types + ANANMM/CrossNeedle presets + Edge mode** | **Complete** |
-| **3G-5: Interactive Meter Items** | **14 interactive items + mouse forwarding + ButtonBoxItem base** | **Complete** |
-| **3G-6: Container Settings Dialog (one-shot)** | **3-column dialog, 31 per-item editors, MMIO subsystem (4 transports + JSON/XML/RAW), Edit Container submenu** | **Complete** |
-| **3G-7: Polish** | **MMIO clone-path bug fix + 5 subclass accessor gap fills + NeedleItemEditor QGroupBox grouping** | **Complete** |
-| **3G-8: RX1 Display Parity** | **47 Spectrum/Waterfall/Grid controls wired (Setup → Display), `Band` enum + per-band grid on PanadapterModel, `BandButtonItem` 12→14, GPU polish: overlay cache invalidation, waterfall chrome in overlay texture, peak hold VBO, fill/gradient/cal-offset in vertex gen** | **Complete (PR #8)** |
-| **3I: Radio Connector & Radio-Model Port** | **P1 full family (Atlas/Hermes/HermesII/Angelia/Orion/HL2), BoardCapabilities registry, ConnectionPanel, HardwarePage 9-tab capability-gated, per-MAC persistence, mi0bot RadioDiscovery port, RadioConnectionError taxonomy** | **Complete** |
-| **3G-9: Display Refactor** | **3G-9a source-first audit + Thetis-first tooltips + slider/spinbox refactor (PR #25, v0.1.5); 3G-9b smooth defaults + Clarity Blue palette + Reset-to-Smooth-Defaults button (v0.1.5); 3G-9c ClarityController adaptive tuning + NoiseFloorEstimator + Re-tune button + per-band Clarity memory (v0.1.5)** | **Complete (v0.1.5)** |
-| **3G-10: RX DSP Parity + AetherSDR Flag Port** | **Stage 1: widget library + SliceModel stubs + VfoWidget S-meter (PR #28), tab rewrite + mode containers + tooltip coverage (PR #30). Stage 2: 10 WDSP feature slices wired (AGC-adv/EMNR/SNB/APF/squelch/mute-pan-bin/NB2/RIT-XIT/lock/mode-containers), per-slice-per-band persistence, Thetis-first tooltips.** | **Complete** |
-| **3G-13: Step Attenuator & ADC Overload** | **StepAttenuatorController (Classic + Adaptive auto-att), P1/P2 adcOverflow emission, ADC OVL status badge, Setup→General→Options page, RxApplet ATT/S-ATT row, per-model preamp items from Thetis SetComboPreampForHPSDR, stepAttMaxDb (31/61), per-MAC persistence, 9 tests. PR #34.** | **Complete (v0.1.5)** |
-| **3P-I-a: Alex Antenna Integration (Core)** | **AlexController → `RadioConnection::setAntennaRouting` pump (3 triggers: antennaChanged / bandChanged / Connected); VFO Flag, RxApplet, Setup-grid, SpectrumOverlayPanel combos, AntennaButtonItem all route through AlexController; kPopupMenu stylesheet fixes Ubuntu 25.10 dark-on-dark menus; HL2/Atlas hide all antenna UI on `!caps.hasAlex \|\| antennaInputCount < 3`; byte-for-byte P1/P2 wire-lock tests + 10 new test cases + manual verification matrix; closes #98. PR #116.** | **Complete** |
-| **3P-I-b: RX-Only Antennas + SKU Labels + XVTR** | **`SkuUiProfile` 14-SKU overlay drives per-product labels (RX1/RX2/XVTR vs EXT2/EXT1/XVTR vs BYPS/EXT1/XVTR). `AlexController` +6 flags (Ext1/Ext2/RxOutOnTx mutual-exclusion trio + rxOutOverride + useTxAntForRx + xvtrActive), 5 persisted per-MAC. P1 bank0 C3 bits 5-7 + P2 Alex0 bits **8-11** wired (design-doc correction: plan said 27-30 — bit 27 is `_TR_Relay`; Thetis network.h:263-307 authoritative). `applyAlexAntennaForBand` now full Alex.cs:310-413 port minus MOX/Aries (→ 3M-1): isTx branch + Ext-on-TX mapping + xvtrActive-from-band derivation + rx_out_override clamp. Setup → Antenna Control gains RX-only grid column + 5 TX-bypass checkboxes; Alex-2 Filters sub-tab gates on `caps.hasAlex2`; VFO Flag gains BYPS 3rd button (double-gated: hasRxBypassRelay + hasRxOutOnTx). 32 new test cases + verification matrix §7-§8. PR #117.** | **Complete (v0.2.3)** |
-| **3G-14: 💡 AI-Assisted Issue Reporter** | **💡 menu bar corner widget + version check gate + AI-assisted issue dialog (ported from AetherSDR TitleBar). Provider buttons, structured prompt, feature_request.yml / bug_report.yml integration. PR #36.** | **Complete (v0.1.6)** |
-| **3G-RX-Epic (v0.2.3): dBm Strip + NB Family + 7-Filter NR + PipeWire** | **Sub-A AetherSDR-style dBm scale strip (wheel-zoom range, hover crosshair, calibrated). Sub-B full Thetis NB/NB2/SNB family port via `NbFamily` wrapper, per-slice-per-band persistence. Sub-C-1 7-filter NR stack on VFO flag DSP grid (NR1 ANR / NR2 EMNR / NR3 RNNR rnnoise / NR4 SBNR libspecbleach / DFNR DeepFilterNet3 / MNR Apple Accelerate MMSE-Wiener / ANF), `DspParamPopup` right-click quick controls, mutual-exclusion via `setActiveNr`, bundled rnnoise + DFNR models in every release artifact. Phase 3O Linux PipeWire-native audio bridge supersedes 0.2.2 pactl fallback.** | **Complete (v0.2.3)** |
-| **3M-1: Basic SSB TX (was 3I-TX)** | **TxChannel, mic input, MOX state machine, I/Q output. 3M-1a TUNE-only first RF (PR #144) → 3M-1b SSB voice + mic-jack family (PR #149) → 3M-1c polish + persistence + Thetis-faithful semaphore-wake TX pump v3 + HL2 setTxDrive triage + Codex P1/P2 fixes (PR #152).** | **Complete (2026-04-29)** |
-| **3M-3: TX Processing** | **18-stage TXA chain (Equalizer / Pre-emphasis / Leveler / CFC / CESSB Compressor / Phase Rotator / AM-Squelch / ALC) + Setup pages + TX-side RX DSP additions. Schedule swap (2026-04-29) — was originally planned after 3M-2 CW TX; pulled forward because (a) it doesn't need the HL2 hardware bench (DSP stages introspectable on ANAN-G2), (b) it lets HL2 ATT/filter safety audit run in parallel without blocking forward TX progress, (c) it improves voice TX users notice (broadcast-grade preprocessing) before adding the CW state machine. Pre-emphasis de-scoped to 3M-3b (FM-mode follow-up). 3M-3a-i, -ii, and -iv all landed by v0.4.0; 3M-3 itself considered functionally complete pending operator bench feedback.** | **Complete (pending bench, shipped through v0.4.0)** |
-| **3M-3a-i: TX EQ + Leveler + ALC** | TxChannel WDSP wrappers (10 EQ + 5 Lev + 7 ALC setters) + TransmitModel schema + MicProfileManager bundles 27 new keys (was 23 → now 50) + 20 Thetis factory profiles ported verbatim from `database.cs` + AgcAlcSetupPage TX Leveler/TX ALC sections + TxApplet `[LEV] [EQ] [PROC]` toggle row + TxEqDialog modeless editor (10 sliders + freq spinboxes + preamp + Nc / Mp / Ctfmode / Wintype + profile combo) + SpeechProcessorPage TX dashboard (3 status rows + 3 cross-link buttons). 13 GPG-signed commits, 8 new test executables, 246/246 ctest green. PR #TBD. | **Complete (pending bench)** |
-| **3M-3a-ii: CFC + CPDR + CESSB + Phase Rotator** | TxChannel WDSP wrappers (6 CFC + 2 CPDR + 1 CESSB + 3 PhRot setters); cfcomp.c synced to Thetis v2.10.3.13 for 7-arg `SetTXACFCOMPprofile` (Qg/Qe ceiling-Q skirts, MW0LGE Samphire dual-license preserved); TransmitModel +15 properties (PhRot enabled/freq/stages/reverse, CFC enabled/post-EQ/precomp/postEqGain + 10×F/COMP/POST-EQ band arrays, paraEqData blob, global CPDR on, CPDR level-dB, CESSB on); MicProfileManager bundles **+41 keys** (was 50 → 91) with **155 verbatim overrides** across 19 of 21 factory profiles ported from `database.cs:9282-9418 [v2.10.3.13]` (incl. AM 10k unique `PhRotStages=9`); CfcSetupPage rewrite (PhRot + CFC + CESSB groups + open-dialog signal); SpeechProcessorPage live-status bindings; TxApplet `[CFC]` button + right-click → `TxCfcDialog` modeless editor (profile combo + Save/SaveAs/Delete/Reset + 2 globals + 30 per-band spinboxes for F/COMP/POST-EQ); PhoneCwApplet PROC button/slider wired to `cpdrOn`/`cpdrLevelDb` (0..2 → 0..20 dB) — duplicate `[PROC]` button removed from TxApplet to dedup (JJ caught 2026-04-30; saved as `feedback_survey_before_adding_controls`). 17 GPG-signed commits, 7 new test executables (TxChannel setters/TM properties/profile round-trip/profile live-path/CfcSetupPage/TxCfcDialog/PhoneCwApplet PROC), 253/253 ctest green. **TxCfcDialog landed scalar-complete but spartan** — full Thetis-faithful `ucParametricEq` widget port (3396-line `ucParametricEq.cs` UserControl, used by both CFC and EQ dialogs) is queued as a separate sub-PR; hand-off design doc at `docs/architecture/phase3m-3a-ii-cfc-eq-parametriceq-handoff.md`. **Pre-emphasis de-scoped** to 3M-3b (FM-mode work) per master design §7.2 ("run as written"). PR #TBD. | **Complete (pending bench)** |
-| **3M-3a-iv: Anti-VOX Cancellation Feed + grpAntiVOX UI parity** | Closes the gap left in 3M-3a-iii where the anti-VOX gain control was plumbed end-to-end but `SendAntiVOXData` was never called, leaving `antivox_data` zero and the cancellation silent. 4 new WDSP wrappers (`SetAntiVOXSize` / `Rate` / `DetectorTau` / `SendData`) on `TxChannel`. `RxDspWorker` emits `antiVoxSampleReady` per chunk + `bufferSizesChanged` from `setBufferSizes`. `TxWorkerThread` queued slots `onAntiVoxSamplesReady` / `setAntiVoxBlockGeometry` / `setAntiVoxDetectorTau` / `setAntiVoxRun` (new wrapper that flips `m_antiVoxRun` atomic gate). `MoxController::setAntiVoxTau(int ms)` slot with NaN-sentinel idempotency, ms->s scaling. **Independent run flag refactor (post-review M2 fix):** `TransmitModel::antiVoxRun` Q_PROPERTY (bool, default false, persisted per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun(bool)` slot + `antiVoxRunRequested(bool)` signal with first-call-emit guard. `TransmitModel::antiVoxTauMs` Q_PROPERTY (range 1-500 ms, default 20, persisted per-MAC under `AntiVox_Tau_Ms`). **Post-bench Option A refactor (NereusSDR-architectural divergence):** dropped `TransmitModel::antiVoxSourceVax`, `MoxController::setAntiVoxSourceVax`, `antiVoxSourceWhatRequested` signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding. Thetis chkAntiVoxSource (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map to NereusSDR's architecture: VAX is a digital-mode app bus with no mic-feedback path, so the audio output device is the only valid cancellation reference. Replaced with a static "Source: Audio Output Device(s)" info row whose tooltip cites the divergence. Existing users with `AntiVox_Source_VAX` persisted leave it as a harmless orphan (no migration). Tap-point signpost comments added at `RxDspWorker.cpp` and `AudioEngine.h` for the future radio-speaker output work (anti-VOX tap relocates from `RxDspWorker` to post-mixer when per-bus processing diverges). **grpAntiVOX UI** on Setup → Transmit → DEXP/VOX: `chkAntiVoxEnable` ("Anti-VOX Enable"), `udAntiVoxGain` ("Gain (dB)"), `udAntiVoxTau` ("Tau (ms)"), tooltips verbatim from Thetis `setup.designer.cs:44631-44760 [v2.10.3.13]`. WdspEngine constant fix: anti-VOX tau default `0.01` → `0.02` to match Thetis `udAntiVoxTau.Value=20`. Single-RX direct pump (no aamix); aamix port deferred to 3F multi-pan. Bench-verification matrix at `docs/architecture/phase3m-3a-iv-verification/README.md` (5 rows × ANAN-G2 + HL2). Full divergence rationale at `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18. PR #TBD. | **Complete (pending bench)** |
-| **3M-5: TX Display Refactor (Thetis-parity port)** | **Mirrors 3G-9 RX Display Refactor on the TX side. Foundation (3M-5a) is the post-PR-#212 TX panadapter source-switch + Clarity-during-TX gate already on `claude/tx-display` (b93b487 stash + e2b36d2 params/bridge + deb4f13 BH4 + e931aee Clarity-gate). Sub-phases: 3M-5b waterfall colormap (the user-visible "still hot" fix, 5 controls + Setup → Display → TX tab + per-frame MOX branch), 3M-5c custom gradient picker widget, 3M-5d FFT/detector/averaging (reuse RX widgets, wire `TxAnalyzer` from settings), 3M-5e grid scale, 3M-5f appearance colors (audit-and-migrate `m_txZeroLineColorBtn` / `m_txFilterColorBtn`, no duplicates), 3M-5g cal offset apply gap. Master plan: `docs/architecture/tx-display-settings-master-plan.md`. Mockup: `docs/architecture/mockups/tx-display-tab.html`. Parallel-track to 3M-2 (which is the bigger TX epic on its own track).** | **Complete pending bench sign-off (branch `claude/tx-display-revive`).** 3M-5a/b/c/d shipped; 3M-5e/f/g not started. Revived onto current main 2026-08-05 and five bench defects closed: transmit window (pan kept its receive span, so the trace sat at the wrong dial frequency), waterfall banding (ticker and TX analyzer both writing), span clipping (unclipped analyzer upsampled twelvefold), `SetAnalyzer` `bf_sz` carrying the FFT size instead of `dsp_size` (WDSP read past the buffer, which is why no display setting appeared to work), and the transmit graticule (inherited the receive dB range, no control, no persistence). **Sourcing warning:** `UpdateTXDisplayVars` / `CalcSpectrum` govern the SPECTRUM / HISTOGRAM / SPECTRASCOPE displays, NOT the panadapter (`console.cs:8026-8029`); the panadapter window is the fixed +/-4 kHz pair at `display.cs:1284-1295`. That trap has now been fallen into twice. Bench matrix: `docs/architecture/tx-display-verification/README.md`, with one known open defect (residual skirt present in WDSP's raw output). |
-| **3J-2: Spot System + FreeDV Reporter + PSK Reporter** | **DX cluster + RBN + WSJT-X UDP + SpotCollector + POTA + FreeDV Reporter + PSK Reporter spot ingest. SpotHubDialog (9 tabs, AetherSDR-faithful). FreeDVReporterDialog (14-col live view, TX/RX highlights, QSY support, idle auto-delete). Panadapter spot overlay with collision-avoidance multi-level stacking + cluster badges. DXCC color priority via cty.dat + ADIF worked-status. Tools menu (Ctrl+Shift+S / Ctrl+Shift+R). Auto-connect on launch. Display knob persistence.** | **Complete (shipped v0.5.0)** |
-| **3R: RADE as a True Peer Mode** | **Vendored radae_nopy (BSD-2-Clause SHA b289102) + Opus (LPCNet/FARGAN) at `third_party/rade/` (~9 MB embedded weights, no external model file). `DSPMode::RADE_U` / `DSPMode::RADE_L` peer mode + RadeChannel (RX + TX paths). Task I4 Option B: native callsign-over-EOO API via thin RadeText wrapper (avoids ~1500 lines of codec2 deps). Mode dispatch swaps RxChannel <-> RadeChannel; band changes inside RADE keep channel alive. VFO flag mode-aware SNR row + EOO-decoded speaker callsign (not wired through v0.5.2). RadeApplet (profile combo + sync indicator + Reset Vocoder). Mode menu RADE entry. MicProfileManager RADE factory profile (22 total). RxDecodeModel sources from WSJT-X + RADE. RADE TX confirmed on-air on ANAN-G2 via remote receivers (K-bench deferral retired).** | **Complete (shipped v0.5.0; HL2 row + multi-slice deferred)** |
-| **3P-II: External RF Accessories (PGXL + TGXL + Analog S-Meter)** | **Phase 1 PGXL/TGXL baseline (`PgxlConnection` + `TgxlConnection` V/R/S frame parsers + `TunerModel` + `LanDiscovery` + `AmpApplet` + `TunerApplet` rewire + `RelayBar` + Peripherals page). Phase 2 analog S-Meter port from Thetis (`SMeterWidget`: 180° needle arc, 4 RX modes: Signal / Sig Avg `RXA_S_AV` / Signal Peak / Max Bin `SetupDetectMaxBin`+`GetDetectMaxBin`; right-click context menu; PGXL 2 kW snap; peak hold Fast/Medium/Slow). Phase 3 connection robustness (exponential auto-reconnect, keepalive, RTT-correlated ping, full PGXL pairing flow with serial capture, band-change notifications, `ConnectionDiagnostics`, PeripheralsPage live status). Phase 4 advanced UI (`PgxlAdvancedPage` + `TgxlAdvancedPage` Setup pages, `FaultLog` ring buffer with likelyCause heuristic, `TuneMemoryStore` per-(antenna, band) auto-recall, `TxInterlockPolicy` Disabled/Warn/Block + SWR gate + grace, antenna label persistence, power-cap toast, applet right-click navigation).** | **Complete (pending bench in v0.5.2)** |
-| **3P-III: RF-Kit RF2K-S** | Applet + Setup pages + SMeter generalization + 8 new tests. REST polling, TCI band tracking via existing TciServer. TUNE/BYPASS greyed pending firmware. | **Complete (pending bench)** |
-| **ANAN-G2E (HermesC10) SKU Port** | **Tasks A3-A4 + B4'-B7' + D1-D5 + E1-E5 + F1-F6: new board enum + capability row, hardware profile init (verified against Thetis v2.10.3.15), codec wrappers (`SetADCSupply` + `LRAudioSwap`), discovery byte 0x14 → HPSDRHW::HermesC10, BPF1 algorithm family (`setAlex1HPF`), Hermes-class DDC4 + DDC0 + PS-DDC, PA telemetry (fwd-power triplet, current / supply-volts), per-model preamp items, `SkuUiProfile` EXT label overrides, AddCustomRadioDialog wiring, G2E P2 RX unblock (mask dither/random for HermesC10, zero rate on disabled DDCs, retry SendStop + bounds-check I/Q batch).** | **Complete (pending G2E bench in v0.5.2; F2/F3/F4/F6 documented as DONE_WITH_CONCERNS)** |
-| **Remote Daemon R1: Build Split + Headless `nereusd`** | **`NereusCore` / `NereusGui` OBJECT-library split behind an INTERFACE aggregate (589 test call sites unchanged, zero targets removed). Spectrum production stack extracted out of GUI classes into `src/core/spectrum/` (`ISpectrumSink`, `SpectrumReducer`, `FftEnginePool`, `FftTopology`, plus relocated detector/avenger); `RadioModel` no longer includes any GUI header, enforced by `tst_core_has_no_gui_includes`. Shared `CoreInit`. New `nereusd` binary linking no GUI object code: config, discovery, connect, slice creation, hardened systemd unit, `--component nereusd` install kept out of the default install. Benched on a Pi 4 against a live ANAN-G2E.** | **Complete (R1 acceptance NOT met at N>1 slices, see limitations)** |
-| Remote Daemon R2: Control Plane | TCI over `wss` so the GUI drives a daemon-owned radio. Blocked on the N>1 slice defect: R2 assumes a daemon that receives on N slices. | Planned |
-| 3M-2: CW TX (was 3I-CW) | Sidetone, firmware keyer, QSK/break-in. Deferred until after 3M-3 ships AND the HL2 ATT/filter audit closes (so an HL2 can be CW-bench'd safely). Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]` — desk-review B3). | Planned |
-| **3M-4: PureSignal** | **Feedback DDC plumbing on P1 + P2, `calcc.c` + `iqc.c` vendored verbatim from Thetis, `PureSignal` coordinator + `PsccPump` + per-board `PsDdcConfig`, `PsForm` modeless dialog (Tools → PureSignal), `AmpView` modeless dialog, two-tone IMD overlay, `PsaIndicatorWidget` bottom-banner FB+PS pair. Enabled on every supported P1 + P2 SKU including HL2 (negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, psSampleRate=0 sentinel resolution) and plain Hermes.** | **Complete (shipped v0.4.0)** |
-| 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
-| 3H: Skins | Thetis-inspired skin format, 4-pan, legacy import | Planned |
-| **3J-1: TCI Server** | **TCI WebSocket server + 6 setup group boxes + 2 applets + bottom-bar indicator + Tools/View menu integration + matrix-driven verification harness with ~80 rows + init burst golden + 17 unit tests** | **Complete (shipped v0.5.0)** |
-| 3K: CAT/rigctld | 4-channel rigctld, TCP CAT server | Planned |
-| 3L: HL2 ChannelMaster.dll port | HL2 IoBoardHl2 I2C-over-ep2 wire encoding, bandwidth monitor full port | Planned |
-| 3M: Recording | WAV record/playback, I/Q record, scheduled | Planned |
-| **3N: Packaging** | **Consolidated `release.yml` (prepare → build×3 → sign-and-publish), `/release` skill, GPG-signed alpha builds: Linux AppImage ×2 archs, macOS Apple Silicon DMG, Windows portable ZIP + NSIS installer** | **Complete** |
-
----
-
-## Reference Repositories
-
-1. **AetherSDR** — `https://github.com/ten9876/AetherSDR`
-   * Architectural template: radio abstraction, state management, signal/slot patterns, GPU rendering, multi-pan layout
-2. **Thetis** — `https://github.com/ramdor/Thetis`
-   * Feature source: when NereusSDR ports a Thetis feature, Thetis defines how it behaves.
-     Not every Thetis capability is ported: NereusSDR keeps its own design (slices, VAX,
-     the remote Core), and a Thetis feature comes in when it fits that design and serves
-     operators. Features built around Thetis's VFO A/B or RX1/RX2 structure are not forced in.
-   * **Clone to `../Thetis/` relative to NereusSDR root**
-3. **WDSP** — `https://github.com/TAPR/OpenHPSDR-wdsp`
-   * DSP engine: all signal processing functions
-4. **freedv-gui** - `https://github.com/drowe67/freedv-gui`
-   * RADE codec wrappers (RADEReceiveStep, RADETransmitStep, rade_text)
-   * FreeDV Reporter Socket.IO client (qso.freedv.org)
-   * PSK Reporter UDP client
-   * **Clone to `../freedv-gui/` relative to NereusSDR root**
-5. **radae_nopy (peterbmarks)** - `https://github.com/peterbmarks/radae_nopy`
-   * RADE C library (BSD-2-Clause) vendored at SHA b289102 into `third_party/rade/`
-   * Neural-net weights compiled into librade; no external model file ships
-   * Native callsign-over-EOO API consumed via `RadeText` wrapper (Task I4 Option B per Phase 3R) (not wired through v0.5.2; the Core/GUI trunk now uses FreeDV-format rade_text with LDPC)
-6. **r8brain-free-src** - `https://github.com/avaneev/r8brain-free-src`
-   * MIT-licensed 24-bit polyphase resampler vendored at `third_party/r8brain/`
-   * Used by the RADE 48-to-16 kHz TX audio chain and reserved for future general resampling needs
-7. **n1gp-Anvelina_PROIII (FPGA gateware)** - `https://github.com/n1gp/Anvelina_PROIII`
-   * **Clone to `../n1gp-Anvelina_PROIII/` relative to NereusSDR root.** Pinned at
-     SHA `8e86a61` ("Version 2.2.14 Final", 2026-07-06). Do not `git pull`.
-   * Verilog FPGA gateware for an OpenHPSDR Protocol 2 board. This is the
-     **hardware** authority for facts Thetis can only report second-hand:
-     receiver/DDC count, board-type identification byte, protocol version,
-     master clock. Added 2026-07-25 after discovering every row in
-     `BoardCapabilities.cpp` cited only Thetis client code.
-   * Key facts (`Orion.v` @ `8e86a61`):
-     - `Orion.v:958` — `localparam NR = 8; // number of receivers to implement`
-     - `Orion.v:956-957` — fabric fits up to 14 RX; bootloader's 2 MB file-size
-       limit caps the practical build at 10
-     - `Orion.v:964` — `board_type = 8'h05` with the authoritative ID list
-       (00 Metis, 01 Hermes, 02 Griffin, 03 Angelia, 05 Orion)
-     - `Orion.v:632` — NR=8 runs 8 receivers at 192 kHz, but only 2 at 1536 kHz
-   * **`NR` is a compile-time constant that changes between firmware releases**
-     (shipped as 2, 4, 7 and 8 at different times on the same board). No static
-     per-board DDC count can be correct across firmware versions — see the
-     Radio-Authoritative Settings Policy.
-8. **piHPSDR (dl1ycf)** - `https://github.com/dl1ycf/pihpsdr`
-   * **Clone to `../pihpsdr/` relative to NereusSDR root.** Pinned at SHA
-     `4aa95c5` (2026-08-06). GPLv3-or-later, the same licence NereusSDR ships
-     under, so there is no compatibility blocker.
-   * A mature C/GTK OpenHPSDR console with its own client/server remote mode.
-     Added 2026-08-08 after the maintainer evaluated it as a possible
-     alternative base and **decided against it**. That evaluation is the entry's
-     value: it is a second independent implementation of problems we are
-     solving, useful as design evidence and as a source of field-proven numbers.
-   * **The architecture decision is settled: we keep ours.** Their core is not
-     GUI-free (`src/receiver.h:190-192` holds `GtkWidget *panel`, `*panadapter`
-     and `*waterfall` inside `struct RECEIVER`; 150 of 219 source files include
-     `gtk/gtk.h`; no automated test suite). NereusSDR is already split into
-     `NereusCore` / `NereusGui` with `nereusd` as a real target. Do not propose
-     adopting their structure.
-   * Do **not** port their command set. Our generic `StateMirror` over 144
-     `Q_PROPERTY` declarations is deliberately better than their 114
-     hand-enumerated `CMD_*` types, because a new property mirrors for free
-     instead of costing two handlers.
-   * Useful facts cited so far: the remote-mode socket timeouts at
-     `src/server_thread.c:925-934` (15 s heartbeat, 30 s receive, 5 s send, a
-     shipping configuration on real internet links), and four R3 display-codec
-     observations recorded in
-     `docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md` §12.
-   * **`dl1bz/deskhpsdr`**, a piHPSDR desktop fork, is also cloned at
-     `../deskhpsdr/` (SHA `f3d857c`) and falls under the same rules.
-
-### Gateware citations — cite facts, don't port logic
-
-The gateware is **GPLv3**, the same licence NereusSDR itself ships under (root
-`LICENSE`), so there is **no licence conflict** — unlike a GPLv2-only or
-proprietary upstream, this can be used freely. The constraint below is about
-scope and correctness, not legal risk:
-
-* **Normal use** — cite a *fact* the gateware establishes: a receiver count, a
-  board-type byte, a clock rate, a register width. A cite like
-  `// From n1gp-Anvelina_PROIII Orion.v:958 [@8e86a61] — NR = 8` records where a
-  hardware number actually came from, the same standing as citing a datasheet.
-  Prefer this over a Thetis cite whenever the claim is about *hardware*.
-* **Stop and ask first** — translating Verilog *logic* into NereusSDR. It is
-  licence-compatible but almost always the wrong move: gateware logic runs on
-  the radio, not in the client, so needing it usually means the design took a
-  wrong turn. If a task genuinely calls for it, the full port protocol applies
-  (verbatim header, PROVENANCE row as kind `port`, author tags preserved).
-* Fact-only citations use PROVENANCE kind `reference`, not `port`.
-* The gateware carries its own author tags (`Yurij-eu2av` in `Orion.v`). If a
-  gateware comment is ever quoted verbatim, the inline-comment-preservation rule
-  applies to it exactly as it does to Thetis tags.
-
-**The same rule governs piHPSDR and deskhpsdr.** Both are GPLv3-or-later, so
-again the constraint is scope and correctness rather than law. Cite a fact (a
-timeout, a packet layout, a bitrate, a quantiser step) with a
-`// From piHPSDR src/server_thread.c:930 [@4aa95c5]` style cite and a PROVENANCE
-row of kind `reference`. **Stop and ask before translating any of their logic**,
-because the maintainer has already ruled that we keep our architecture, so
-needing their code almost certainly means a design took a wrong turn. Quoting one
-of their comments verbatim triggers the inline-comment-preservation rule exactly
-as a Thetis tag would.
+The build also produces the headless `nereusd`, installed only with
+`--component nereusd`; install notes in [README.md](README.md).
+Dependencies: [README.md](README.md) "Building from Source". **Read
+[docs/development/fast-test-loop.md](docs/development/fast-test-loop.md)
+before running tests**; build single tests, never the whole suite by default.
+First launch generates FFTW wisdom (~15 min), cached in `~/.config/NereusSDR/`.
+
+## Where things live
+
+* Upstreams, cloned as siblings of the repo root:
+  `../Thetis/` (github.com/ramdor/Thetis), `../mi0bot-Thetis/` (authoritative
+  for HL2), `../AetherSDR/` (github.com/ten9876/AetherSDR), `../freedv-gui/`
+  (github.com/drowe67/freedv-gui; RADE steps, FreeDV + PSK Reporter),
+  `../n1gp-Anvelina_PROIII/` (github.com/n1gp/Anvelina_PROIII, pinned).
+* Vendored: `third_party/wdsp/` (TAPR v1.29), `third_party/rade/` (radae_nopy
+  b289102, BSD-2), `third_party/r8brain/` (MIT resampler), `third_party/fftw3/`
+  (Windows DLL).
+* Version: `CMakeLists.txt`. Phase status, release history, plan index:
+  [docs/development/project-status.md](docs/development/project-status.md),
+  [CHANGELOG.md](CHANGELOG.md), [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md).
+* Design docs and plans: `docs/architecture/`. Protocols: `docs/protocols/`.

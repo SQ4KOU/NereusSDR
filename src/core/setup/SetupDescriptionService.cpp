@@ -1,4 +1,6 @@
 // no-port-check: NereusSDR-original Setup description transport.
+// 2026-09-29: setOnAirState, one revision per on-air edge. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
@@ -112,18 +114,26 @@ constexpr char kAppearanceV12ResetColours[] =
 // TX Display Cal and N2ADR switch. Each row is closed as the version 12 rows
 // are. Rows marked rangeSource or carrying an empty value/copyText are the
 // resource's form; loadCategory fills them for the Core's radio.
+// The ten watt-meter points carry no offAir: Thetis gives the table no
+// transmit rule. Its boxes have no ValueChanged handler and the forward-power
+// reading reads them live with no MOX check:
+// From Thetis setup.cs:5437-5452 [v2.10.3.15] PA10W (ud100PA10W, ud10PA1W,
+// ud200PA20W).
+// The table corrects the reading only, and the Core takes a point on the
+// air and applies it once the radio is back on receive
+// (RadioModel::flushRemoteHardwareApply).
 constexpr char kPaV13Controls[] =
     R"json([)json"
-    R"json({"id":"pa.wattMeter.calPoint1","label":"Point 1","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint1"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint2","label":"Point 2","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint2"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint3","label":"Point 3","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint3"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint4","label":"Point 4","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint4"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint5","label":"Point 5","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint5"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint6","label":"Point 6","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint6"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint7","label":"Point 7","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint7"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint8","label":"Point 8","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint8"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint9","label":"Point 9","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint9"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
-    R"json({"id":"pa.wattMeter.calPoint10","label":"Point 10","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint10"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6,"offAir":true},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint1","label":"Point 1","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint1"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint2","label":"Point 2","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint2"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint3","label":"Point 3","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint3"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint4","label":"Point 4","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint4"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint5","label":"Point 5","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint5"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint6","label":"Point 6","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint6"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint7","label":"Point 7","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint7"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint8","label":"Point 8","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint8"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint9","label":"Point 9","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint9"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
+    R"json({"id":"pa.wattMeter.calPoint10","label":"Point 10","tooltip":"","kind":"decimal","binding":{"radioSetting":"paCalibration/calPoint10"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":6},"requiresDescriptionVersion":13,"rangeSource":"board.paCalibration","unit":"W"},)json"
     R"json({"id":"pa.wattMeter.showPaValues","label":"Show PA Values page","tooltip":"Toggle visibility of the PA Values page in Setup navigation.","kind":"toggle","binding":{"phone":"display/showPaValuesPage"},"applies":"live","requiresDescriptionVersion":13,"default":true},)json"
     R"json({"id":"pa.wattMeter.resetPaValues","label":"Reset PA Values","tooltip":"Reset peak/min tracking on the PA Values page.","kind":"button","binding":{"phone":"resetPaValues"},"applies":"live","requiresDescriptionVersion":13},)json"
     R"json({"id":"pa.values.paTemperature","label":"PA Temperature:","tooltip":"","kind":"readout","binding":{"telemetry":{"object":"radio","name":"paTemperatureCelsius"}},"applies":"live","gate":{"capability":"stationTelemetryVersion","min":4},"requiresDescriptionVersion":13,"decimals":1,"unit":"\u00b0C","temperatureUnit":"PaTempUnit"},)json"
@@ -143,6 +153,42 @@ constexpr char kHardwareV13Controls[] =
     R"json({"id":"hardware.radioInfo.copySupportInfo","label":"Copy Support Info to Clipboard","tooltip":"Copies board identity and firmware version to the clipboard for bug reports.","kind":"button","binding":{"phone":"copySupportInfo"},"applies":"live","requiresDescriptionVersion":13,"copyText":""},)json"
     R"json({"id":"hardware.calibration.txDisplayOffset","label":"Offset:","tooltip":"TX display calibration offset in dB. Applied to TX spectrum display.","kind":"decimal","binding":{"radioSetting":"cal/txDisplayOffset"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"min":-100,"max":100,"step":0.1,"decimals":1,"unit":"dB","default":0},)json"
     R"json({"id":"hardware.hl2Io.n2adrFilter","label":"Enable N2ADR Filter board","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2IoBoard/n2adrFilter"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":13,"default":true})json"
+    R"json(])json";
+
+// Hardware version 16: HL2 I/O's Hermes Lite Options, the rows the
+// desktop's HL2 Options tab shows, in its order, bound to the same per-radio
+// keys (Hl2OptionsModel, hardware/<mac>/hl2/...). Ranges and defaults are
+// Hl2OptionsModel's (mi0bot setup.designer.cs). The Core sends the radio TX
+// latency, PTT hang, reset on disconnect, power supply sync and Band Volts;
+// the other four are stored only, so they carry availability disabled with
+// the desktop's own reason. Closed as the version 13 rows are.
+constexpr char kHardwareV16Controls[] =
+    R"json([)json"
+    R"json({"id":"hardware.hl2Io.txLatency","label":"TX buffer latency:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/txLatencyMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":70,"step":1,"unit":"ms","default":20},)json"
+    R"json({"id":"hardware.hl2Io.pttHang","label":"PTT hang:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/pttHangMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":30,"step":1,"unit":"ms","default":12},)json"
+    R"json({"id":"hardware.hl2Io.cl2Enable","label":"Enable CL2","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/cl2Enable"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"min":1,"max":200,"step":1,"unit":"MHz","default":116,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.ext10MHz","label":"External 10 MHz reference","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/ext10MHz"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not change the radio's clock settings."}},)json"
+    R"json({"id":"hardware.hl2Io.disconnectReset","label":"Reset on Ethernet disconnect","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/disconnectReset"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.psSync","label":"Disable power supply sync","tooltip":"Stops the radio synchronizing its power supply clock.","kind":"toggle","binding":{"radioSetting":"hl2/psSync"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.bandVolts","label":"Band Volts (PWM out 0\u20133.3 V)","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/bandVolts"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not send the radio audio of its own, so there is nothing to swap."}})json"
+    R"json(])json";
+
+// Hardware version 18: HL2 Options' Enable CL2, CL2 frequency and External
+// 10 MHz, which the Core now sends to its radio (radioHardwareVersion 11).
+// Tooltips are mi0bot's (setup.designer.cs:11158, 11174, 11187 [@c26a8a4]);
+// the frequency row is enabled only while Enable CL2 is on, as mi0bot's
+// ControlCl2 sets udCl2Freq.Enabled. The frequency is decimal to three
+// places with a 0.1 step, as udCl2Freq (setup.designer.cs:11133-11163
+// [@c26a8a4]). A peer below version 18 gets the version 16 rows, closed with
+// the old reason, so it never writes a value its integer row could not hold.
+// Closed as the version 13 rows are.
+constexpr char kHardwareV18Controls[] =
+    R"json([)json"
+    R"json({"id":"hardware.hl2Io.cl2Enable","label":"Enable CL2","tooltip":"Enable frequency output on CL2","kind":"toggle","binding":{"radioSetting":"hl2/cl2Enable"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"default":false},)json"
+    R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"Output frequency on CL2 output","kind":"decimal","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"min":1,"max":200,"step":0.1,"decimals":3,"unit":"MHz","enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]},"default":116},)json"
+    R"json({"id":"hardware.hl2Io.ext10MHz","label":"External 10 MHz reference","tooltip":"Enable external 10 MHz input on CL1","kind":"toggle","binding":{"radioSetting":"hl2/ext10MHz"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"default":false})json"
     R"json(])json";
 
 // Transmit version 13 (R-R3-49): Power's PA Control group, "Disable HF PA",
@@ -257,6 +303,57 @@ QString alexFilterRowsJson()
     return QLatin1Char('[') + rows.join(QLatin1Char(',')) + QLatin1Char(']');
 }
 
+// Hardware version 17 (R-R3-46, R-R3-49): the Alex-1 tab's low-pass rows
+// and 6m/ByPass on RX, which the Core applies as Thetis's setAlexLPF
+// selects (radioHardwareVersion 10). The rows are the transmit low-pass
+// table (isTransmitHardwareKey), so a write needs transmit permission; the
+// Core takes them on the air and keeps them for the next selection, as
+// Thetis's spinner handlers do (setup.cs:15888-15994 [v2.10.3.15]). The
+// bypass acts on receive only. Defaults are Thetis's spinner values
+// (codec::alex::AlexLpfEdges::thetisDefaults); each edge's min / max is its
+// spinner's Minimum / Maximum (codec::alex::kAlexLpfEdgeLimits,
+// setup.designer.cs [v2.10.3.15]), which the Core also enforces on a write
+// (StationServer::alexLpfKeyValueRefusal); the labels and edge boxes are the
+// desktop tab's (AntennaAlexAlex1Tab).
+QString alexLpfRowsJson()
+{
+    const codec::alex::AlexLpfEdges defaults = codec::alex::AlexLpfEdges::thetisDefaults();
+    const auto number = [](double value) { return QString::number(value, 'g', 10); };
+    static constexpr std::array<const char*, codec::alex::kAlexLpfRowCount> kLabels = {
+        "160m", "80m", "60/40m", "30/20m", "17/15m", "12/10m", "6m"};
+    QStringList rows;
+    for (int i = 0; i < codec::alex::kAlexLpfRowCount; ++i) {
+        const QString slug = QString::fromLatin1(codec::alex::kAlexLpfRowSlugs[i]);
+        const QString label = QString::fromLatin1(kLabels[i]);
+        const codec::alex::AlexLpfEdgeLimits& lim = codec::alex::kAlexLpfEdgeLimits[i];
+        struct Leaf {
+            const char* name;
+            double value;
+            double min;
+            double max;
+        };
+        const std::array<Leaf, 2> leaves{{
+            {"start", defaults.rows[i].startMhz, lim.startMin, lim.startMax},
+            {"end", defaults.rows[i].endMhz, lim.endMin, lim.endMax}}};
+        for (const Leaf& leafRow : leaves) {
+            const char* leaf = leafRow.name;
+            const double value = leafRow.value;
+            const QString leafName = QString::fromLatin1(leaf);
+            const QString word = leafName == QLatin1String("start")
+                ? QStringLiteral("Start") : QStringLiteral("End");
+            rows << QString::fromLatin1(
+                R"j({"id":"hardware.alex1Filters.lpf.%1.%2","label":"%3 LPF %4","tooltip":"","kind":"decimal","binding":{"radioSetting":"alex/lpf/%1/%2"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10,"transmit":true},"requiresDescriptionVersion":17,"min":%6,"max":%7,"step":0.001,"decimals":6,"unit":"MHz","default":%5})j")
+                .arg(slug, leafName, label, word, number(value),
+                     number(leafRow.min), number(leafRow.max));
+        }
+    }
+    // From Thetis setup.designer.cs:23484-23495 [v2.10.3.15] (chkLPFBypass):
+    // the desktop checkbox's text and tooltip ("reguardless" spelled right).
+    rows << QString::fromLatin1(
+        R"j({"id":"hardware.alex1Filters.lpfBypass","label":"6m/ByPass on RX","tooltip":"Selects the 6m LPF during receive regardless of frequency.","kind":"toggle","binding":{"radioSetting":"alex/master/lpfBypass"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":10},"requiresDescriptionVersion":17,"default":false})j");
+    return QLatin1Char('[') + rows.join(QLatin1Char(',')) + QLatin1Char(']');
+}
+
 QHash<QString, QJsonObject> controlsById(const char* json)
 {
     QHash<QString, QJsonObject> controls;
@@ -282,6 +379,26 @@ constexpr char kPaV14Controls[] =
     R"json({"id":"pa.gain.table","label":"PA Gain by Band (dB)","tooltip":"","kind":"table","binding":{"paProfileGrid":{"object":"paProfiles"}},"applies":"live","gate":{"capability":"paProfileVersion","min":1,"offAir":true},"requiresDescriptionVersion":14,"rows":[{"band":0,"label":"160m"},{"band":1,"label":"80m"},{"band":2,"label":"60m"},{"band":3,"label":"40m"},{"band":4,"label":"30m"},{"band":5,"label":"20m"},{"band":6,"label":"17m"},{"band":7,"label":"15m"},{"band":8,"label":"12m"},{"band":9,"label":"10m"},{"band":10,"label":"6m"},{"band":11,"label":"GEN"},{"band":12,"label":"WWV"},{"band":13,"label":"XVTR"}],"columns":[{"id":"gain","label":"Gain (dB)","field":"gain","kind":"decimal","min":38.8,"max":100,"step":0.1,"decimals":1,"tooltip":"PA gain for %1 in dB. The Core subtracts it from the power you ask for to set the drive."},{"id":"adjust1","label":"10%","field":"adjust","driveStep":0,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 10% drive for %1."},{"id":"adjust2","label":"20%","field":"adjust","driveStep":1,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 20% drive for %1."},{"id":"adjust3","label":"30%","field":"adjust","driveStep":2,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 30% drive for %1."},{"id":"adjust4","label":"40%","field":"adjust","driveStep":3,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 40% drive for %1."},{"id":"adjust5","label":"50%","field":"adjust","driveStep":4,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 50% drive for %1."},{"id":"adjust6","label":"60%","field":"adjust","driveStep":5,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 60% drive for %1."},{"id":"adjust7","label":"70%","field":"adjust","driveStep":6,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 70% drive for %1."},{"id":"adjust8","label":"80%","field":"adjust","driveStep":7,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 80% drive for %1."},{"id":"adjust9","label":"90%","field":"adjust","driveStep":8,"kind":"decimal","min":-10,"max":10,"step":0.1,"decimals":1,"tooltip":"Per-step adjust at 90% drive for %1."},{"id":"maxPower","label":"Max W","field":"maxPower","kind":"decimal","min":0,"max":1500,"step":0.1,"decimals":1,"tooltip":"Per-band max-power ceiling in watts for %1."},{"id":"useMax","label":"Use Max","field":"useMax","kind":"toggle","tooltip":"Apply the per-band max-power ceiling on %1."}]})json"
     R"json(])json";
 
+// DSP version 19 (R-R3-49): CFC's band editor, bound to transmit's
+// cfcProfile (transmitSettingsVersion 15) and applied with cfc.setProfile.
+// The ranges are CfcProfile's (CfcProfile.h: each from Thetis
+// frmCFCConfig.Designer.cs [v2.10.3.15]); steps and decimals are the
+// dialog's spin boxes (nudCFC_f step 1; nudCFC_c and nudCFC_gain 0.1, one
+// decimal; nudCFC_cq and nudCFC_q 0.01, two decimals). Closed as the
+// version 16 rows are. No off-air rule: Thetis's frmCFCConfig applies a
+// change on the air (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check),
+// and this Core takes it on the air (transmitSettingsVersion 13).
+constexpr char kDspV19Controls[] =
+    R"json([)json"
+    R"json({"id":"dsp.cfc.bands","label":"Configure CFC bands\u2026","tooltip":"Open the per-band CFC editor: 5, 10 or 18 bands of compression and post-EQ.","kind":"table","binding":{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":15},"requiresDescriptionVersion":19,"bandCounts":[5,10,18],"minSpanHz":1000,"fields":[{"id":"minHz","label":"Low","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"maxHz","label":"High","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"parametric","label":"Use Q Factors","kind":"toggle"},{"id":"precompDb","label":"Pre-Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqGainDb","label":"Post-EQ","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"}],"columns":[{"id":"frequencyHz","label":"Freq","kind":"decimal","min":0,"max":20000,"step":1,"decimals":0,"unit":" Hz"},{"id":"compressionDb","label":"Comp","kind":"decimal","min":0,"max":16,"step":0.1,"decimals":1,"unit":" dB"},{"id":"compressionQ","label":"Comp Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2},{"id":"postEqGainDb","label":"Gain","kind":"decimal","min":-24,"max":24,"step":0.1,"decimals":1,"unit":" dB"},{"id":"postEqQ","label":"EQ Q","kind":"decimal","min":0.2,"max":20,"step":0.01,"decimals":2}]})json"
+    R"json(])json";
+
+const QHash<QString, QJsonObject>& dspV19Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kDspV19Controls);
+    return table;
+}
+
 const QHash<QString, QJsonObject>& paV14Controls()
 {
     static const QHash<QString, QJsonObject> table = controlsById(kPaV14Controls);
@@ -300,8 +417,22 @@ const QHash<QString, QJsonObject>& hardwareV13Controls()
         QHash<QString, QJsonObject> controls = controlsById(kHardwareV13Controls);
         const QByteArray alex = alexFilterRowsJson().toUtf8();
         controls.insert(controlsById(alex.constData()));
+        const QByteArray lpf = alexLpfRowsJson().toUtf8();
+        controls.insert(controlsById(lpf.constData()));
         return controls;
     }();
+    return table;
+}
+
+const QHash<QString, QJsonObject>& hardwareV16Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV16Controls);
+    return table;
+}
+
+const QHash<QString, QJsonObject>& hardwareV18Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV18Controls);
     return table;
 }
 
@@ -570,8 +701,15 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(12))
          && !(id == QLatin1String("pa")
               && root.value(QStringLiteral("version")) == QJsonValue(14))
-         && !((id == QLatin1String("hardware") || id == QLatin1String("transmit"))
+         && !(id == QLatin1String("dsp")
+              && root.value(QStringLiteral("version")) == QJsonValue(19))
+         && !(id == QLatin1String("transmit")
               && root.value(QStringLiteral("version")) == QJsonValue(13))
+         && !(id == QLatin1String("hardware")
+              && root.value(QStringLiteral("version")) == QJsonValue(18))
+         // Version 21: CAT & Network's TCI Forget row greys out with Duplicate.
+         && !(id == QLatin1String("catNetwork")
+              && root.value(QStringLiteral("version")) == QJsonValue(21))
          && !(SetupDescriptionV15::isCategory(id)
               && root.value(QStringLiteral("version"))
                   == QJsonValue(SetupDescriptionV15::kVersion)))
@@ -613,8 +751,25 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     == QJsonValue(SetupDescriptionV15::kVersion)) {
                     if (controlId.isEmpty() || ids.contains(controlId)
                         || !SetupDescriptionV15::isCategory(id)
-                        || root.value(QStringLiteral("version"))
-                            != QJsonValue(SetupDescriptionV15::kVersion)) {
+                        || (root.value(QStringLiteral("version"))
+                                != QJsonValue(SetupDescriptionV15::kVersion)
+                            && !(id == QLatin1String("dsp")
+                                 && root.value(QStringLiteral("version")) == QJsonValue(19))
+                            && !(id == QLatin1String("catNetwork")
+                                 && root.value(QStringLiteral("version")) == QJsonValue(21)))) {
+                        return {};
+                    }
+                    ids.insert(controlId);
+                    continue;
+                }
+                // Version 19: DSP > CFC's band editor, accepted only as the
+                // exact closed row (validateDspV19Control).
+                if (id == QLatin1String("dsp")
+                    && control.value(QStringLiteral("requiresDescriptionVersion"))
+                        == QJsonValue(19)) {
+                    if (controlId.isEmpty() || ids.contains(controlId)
+                        || root.value(QStringLiteral("version")) != QJsonValue(19)
+                        || !SetupDescription::validateDspV19Control(control)) {
                         return {};
                     }
                     ids.insert(controlId);
@@ -629,7 +784,12 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                   && SetupDescription::validateAppearanceMeterStyleBinding(control))
                              && !(id == QLatin1String("hardware")
                                   && SetupDescription::validateHardwareV13Control(control)))
-                            || control.contains(QStringLiteral("enabledWhen"))))
+                            || (control.contains(QStringLiteral("enabledWhen"))
+                                && !(id == QLatin1String("hardware")
+                                     && SetupDescription::validateHardwareV18Control(control))
+                                && !(id == QLatin1String("catNetwork")
+                                     && root.value(QStringLiteral("version")) == QJsonValue(21)
+                                     && SetupDescription::validateCatNetworkV21EnabledWhen(control)))))
                     || (control.contains(QStringLiteral("requiresDescriptionVersion"))
                         && (root.value(QStringLiteral("version")).toInt()
                                 < control.value(QStringLiteral("requiresDescriptionVersion")).toInt()
@@ -672,7 +832,14 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          == QJsonValue(13))
                                 && !(id == QLatin1String("pa")
                                      && control.value(QStringLiteral("requiresDescriptionVersion"))
-                                         == QJsonValue(14)))))
+                                         == QJsonValue(14))
+                                && !(id == QLatin1String("hardware")
+                                     && (control.value(QStringLiteral("requiresDescriptionVersion"))
+                                             == QJsonValue(16)
+                                         || control.value(QStringLiteral("requiresDescriptionVersion"))
+                                             == QJsonValue(17)
+                                         || control.value(QStringLiteral("requiresDescriptionVersion"))
+                                             == QJsonValue(18))))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -712,7 +879,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     || (id == QLatin1String("hardware")
                         && !SetupDescription::validateHardwarePropertyBinding(control)
                         && !SetupDescription::validateAntennaRowsTable(control)
-                        && !SetupDescription::validateHardwareV13Control(control))
+                        && !SetupDescription::validateHardwareV13Control(control)
+                        && !SetupDescription::validateHardwareV16Control(control)
+                        && !SetupDescription::validateHardwareV18Control(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
@@ -1039,6 +1208,36 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                     controls[c] = control;
                 }
                 if (controls.isEmpty()) { sections.removeAt(s--); continue; }
+                section.insert(QStringLiteral("controls"), controls);
+                sections[s] = section;
+            }
+            page.insert(QStringLiteral("sections"), sections);
+            pages[p] = page;
+        }
+        root.insert(QStringLiteral("pages"), pages);
+    }
+    // Hardware version 17: 6m/ByPass on RX stays on a radio that has no
+    // such bypass, disabled with the desktop's reason
+    // (AntennaAlexAlex1Tab::applyLpfGates, codec::alex::lpfBypassAvailable).
+    if (id == QLatin1String("hardware") && !codec::alex::lpfBypassAvailable(model)) {
+        QJsonArray pages = root.value(QStringLiteral("pages")).toArray();
+        for (int p = 0; p < pages.size(); ++p) {
+            QJsonObject page = pages.at(p).toObject();
+            QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+            for (int s = 0; s < sections.size(); ++s) {
+                QJsonObject section = sections.at(s).toObject();
+                QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+                for (int c = 0; c < controls.size(); ++c) {
+                    QJsonObject control = controls.at(c).toObject();
+                    if (control.value(QStringLiteral("id"))
+                        != QJsonValue(QStringLiteral("hardware.alex1Filters.lpfBypass"))) {
+                        continue;
+                    }
+                    control.insert(QStringLiteral("availability"), QJsonObject{
+                        {QStringLiteral("enabled"), false},
+                        {QStringLiteral("reason"), RadioModel::lpfBypassUnavailableReason()}});
+                    controls[c] = control;
+                }
                 section.insert(QStringLiteral("controls"), controls);
                 sections[s] = section;
             }
@@ -1679,8 +1878,12 @@ bool SetupDescription::validateActiveSlicePropertyBinding(const QJsonObject& con
         return false;
     }
     if (object == QLatin1String("transmit")) {
+        // DSP's transmit processing rows (TX Leveler, TX ALC, Phase Rotator,
+        // CFC, CESSB) carry no off-air rule: this Core takes transmit
+        // settings on the air (transmitSettingsVersion 13 or later) from a
+        // session permitted to change them, as the desktop does.
         const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
-        if (gate.value(QStringLiteral("offAir")) != QJsonValue(true)
+        if (gate.contains(QStringLiteral("offAir"))
             || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
             || gate.value(QStringLiteral("min")).toInt() < 4) {
             return false;
@@ -1737,7 +1940,10 @@ bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& contro
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        // The Core takes these on the air (transmitSettingsVersion 13) and
+        // Thetis disables none of them during MOX (setup.cs:5132-5161
+        // [v2.10.3.15]), so they carry no offAir rule.
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -1967,7 +2173,7 @@ bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
         || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
         || control.value(QStringLiteral("gate")).toObject() != QJsonObject{
             {QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
-            {QStringLiteral("min"), 6}, {QStringLiteral("offAir"), true}}) {
+            {QStringLiteral("min"), 6}}) {
         return false;
     }
     const QByteArray name = QByteArrayLiteral("paSettingsBypass");
@@ -2003,6 +2209,39 @@ bool SetupDescription::validateHardwareV13Control(const QJsonObject& control)
     return row != hardwareV13Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateCatNetworkV21EnabledWhen(const QJsonObject& control)
+{
+    // Forget acts only while Duplicate is on, as the desktop greys it out.
+    return control.value(QStringLiteral("id"))
+            == QJsonValue(QStringLiteral("catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect"))
+        && control.value(QStringLiteral("enabledWhen")) == QJsonValue(QJsonObject{
+            {QStringLiteral("property"), QJsonObject{
+                {QStringLiteral("object"), QStringLiteral("stationTci")},
+                {QStringLiteral("name"), QStringLiteral("copyRx2VfobToVfoa")}}},
+            {QStringLiteral("oneOf"), QJsonArray{true}}});
+}
+
+bool SetupDescription::validateDspV19Control(const QJsonObject& control)
+{
+    const auto row = dspV19Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != dspV19Controls().constEnd() && control == *row;
+}
+
+bool SetupDescription::validateHardwareV16Control(const QJsonObject& control)
+{
+    const auto row = hardwareV16Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != hardwareV16Controls().constEnd() && control == *row;
+}
+
+bool SetupDescription::validateHardwareV18Control(const QJsonObject& control)
+{
+    const auto row = hardwareV18Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != hardwareV18Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -2015,7 +2254,7 @@ bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     if (key == QLatin1String("SwrProtectionLimit")) {
@@ -2056,7 +2295,7 @@ bool SetupDescription::validateAudioPropertyBinding(const QJsonObject& control)
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")) != QJsonValue(version)
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -2105,7 +2344,10 @@ bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)
                                         QStringLiteral("Low Latency")};
                     const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
                     if (choices.size() != expected.size()
-                        || (side == QLatin1String("Tx")
+                        // Only the TX buffer sizes stay off-air: Thetis
+                        // greys grpDSPBufferSize during MOX (setup.cs:5159
+                        // [v2.10.3.15]); the TX filter size and type are not.
+                        || (side == QLatin1String("Tx") && family == QLatin1String("BufferSize")
                             ? gate.value(QStringLiteral("offAir")) != QJsonValue(true)
                             : gate.contains(QStringLiteral("offAir")))
                         || (side == QLatin1String("Tx")
@@ -2477,8 +2719,126 @@ bool SetupDescription::validateTnfTable(const QJsonObject& control, QString* err
     return true;
 }
 
+namespace {
+
+// Version 20 (R-R3-49, JJ's ruling: follow Thetis). Thetis locks the PA
+// profile controls while MOX is on (PAProfileEnableControls, setup.cs
+// 23479-23496 [v2.10.3.15]) and keeps only the transmitting band's cells
+// live (setAdjustingBand, setup.cs 23839-23852 [v2.10.3.15]). The Core
+// enforces that on its writes; the description publishes the same state
+// per control and per table row with the availability object the other
+// rows use.
+constexpr char kPaHolderMayEdit[] = "holderMayEdit";
+
+template <typename Fn>
+QJsonObject mapCategoryControls(QJsonObject category, Fn&& fn)
+{
+    QJsonArray pages = category.value(QStringLiteral("pages")).toArray();
+    for (int p = 0; p < pages.size(); ++p) {
+        QJsonObject page = pages.at(p).toObject();
+        QJsonArray sections = page.value(QStringLiteral("sections")).toArray();
+        for (int s = 0; s < sections.size(); ++s) {
+            QJsonObject section = sections.at(s).toObject();
+            QJsonArray controls = section.value(QStringLiteral("controls")).toArray();
+            for (int c = 0; c < controls.size(); ++c) {
+                controls[c] = fn(controls.at(c).toObject());
+            }
+            section.insert(QStringLiteral("controls"), controls);
+            sections[s] = section;
+        }
+        page.insert(QStringLiteral("sections"), sections);
+        pages[p] = page;
+    }
+    category.insert(QStringLiteral("pages"), pages);
+    return category;
+}
+
+QJsonObject lockedAvailability(const QString& reason)
+{
+    return QJsonObject{{QStringLiteral("enabled"), false},
+                       {QStringLiteral("reason"), reason}};
+}
+
+// The Core's PA description in its version 20 shape: the table's gate no
+// longer closes it off the air as a whole; on the air each row says why it
+// is locked, and the transmitting band's row is marked for the holder.
+QString paWithOnAirState(const QString& description, bool onAir, int transmittingBand)
+{
+    if (description.isEmpty()) { return description; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return description; }
+    const QJsonObject fitted = mapCategoryControls(document.object(),
+        [onAir, transmittingBand](QJsonObject control) {
+            const QString id = control.value(QStringLiteral("id")).toString();
+            if (!paV14Controls().contains(id)) { return control; }
+            if (id != QLatin1String("pa.gain.table")) {
+                if (onAir) {
+                    control.insert(QStringLiteral("availability"),
+                                   lockedAvailability(RadioModel::paOnAirLockedReason()));
+                }
+                return control;
+            }
+            QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
+            gate.remove(QStringLiteral("offAir"));
+            control.insert(QStringLiteral("gate"), gate);
+            if (!onAir) { return control; }
+            QJsonArray rows = control.value(QStringLiteral("rows")).toArray();
+            for (int i = 0; i < rows.size(); ++i) {
+                QJsonObject row = rows.at(i).toObject();
+                if (transmittingBand >= 0
+                    && row.value(QStringLiteral("band")).toInt(-1) == transmittingBand) {
+                    row.insert(QStringLiteral("availability"),
+                               lockedAvailability(RadioModel::paHolderOnlyReason()));
+                    row.insert(QLatin1String(kPaHolderMayEdit), true);
+                } else {
+                    row.insert(QStringLiteral("availability"),
+                               lockedAvailability(RadioModel::paOnAirLockedReason()));
+                }
+                rows[i] = row;
+            }
+            control.insert(QStringLiteral("rows"), rows);
+            return control;
+        });
+    return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
+}
+
+// Version 22: DSP > Options' RX buffer size rows lock on the air. The TCI
+// lane holds version 21; this branch's description skips it.
+constexpr int kDspOnAirLockVersion = 22;
+
+bool isRxBufferSizeControl(const QJsonObject& control)
+{
+    const QString id = control.value(QStringLiteral("id")).toString();
+    return id.startsWith(QLatin1String("dsp.options."))
+        && RadioModel::isRxDspBufferSizeKey(id.mid(int(qstrlen("dsp.options."))));
+}
+
+// The Core's DSP description in its version 22 shape: on the air the four
+// RX buffer size rows say why they are locked. Thetis greys the whole
+// Buffer Size (IQcomp) group, RX combos included, while MOX is on:
+// From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+// The TX rows keep their offAir gate. The lock is published rather than
+// gated on offAir because offAir needs txState, which a receive-only
+// peer (no remoteTx) never gets.
+QString dspWithOnAirState(const QString& description, bool onAir)
+{
+    if (description.isEmpty() || !onAir) { return description; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return description; }
+    const QJsonObject fitted = mapCategoryControls(document.object(), [](QJsonObject control) {
+        if (isRxBufferSizeControl(control)) {
+            control.insert(QStringLiteral("availability"),
+                           lockedAvailability(RadioModel::dspBufferOnAirLockedReason()));
+        }
+        return control;
+    });
+    return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
+}
+
+} // namespace
+
 QString SetupDescription::fitCategoryForVersion(const QString& description, int version,
-                                                bool antennaRowsAvailable)
+                                                bool antennaRowsAvailable, bool holdsTransmit)
 {
     if (version < 1 || description.isEmpty()) { return {}; }
     const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
@@ -2495,6 +2855,21 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             QJsonArray controls;
             for (const QJsonValue& rawControl : section.value(QStringLiteral("controls")).toArray()) {
                 QJsonObject control = rawControl.toObject();
+                // Hardware 18 opened HL2 Options' clock rows: a peer below 18
+                // keeps the version 16 rows it was built for, closed.
+                if (categoryId == QLatin1String("hardware") && version < 18
+                    && control.value(QStringLiteral("requiresDescriptionVersion")) == QJsonValue(18)) {
+                    const auto older = hardwareV16Controls().constFind(
+                        control.value(QStringLiteral("id")).toString());
+                    if (older != hardwareV16Controls().constEnd()) {
+                        control = *older;
+                    }
+                }
+                // CAT & Network 21 greys TCI's Forget row out while Duplicate
+                // is off: a peer below 21 keeps the row, always enabled.
+                if (categoryId == QLatin1String("catNetwork") && version < 21) {
+                    control.remove(QStringLiteral("enabledWhen"));
+                }
                 if (control.value(QStringLiteral("requiresDescriptionVersion")).toInt(1) <= version
                     && (antennaRowsAvailable || !control.value(QStringLiteral("binding"))
                             .toObject().contains(QStringLiteral("antennaRows")))) {
@@ -2528,6 +2903,18 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                 }
                 page.remove(QStringLiteral("coverageV15"));
             }
+            // Version 19: likewise, a page's coverage to a version 19 peer.
+            if (page.contains(QStringLiteral("coverageV19"))) {
+                if (version >= 19) {
+                    const QString coverage = page.value(QStringLiteral("coverageV19")).toString();
+                    if (coverage.isEmpty()) {
+                        page.remove(QStringLiteral("coverage"));
+                    } else {
+                        page.insert(QStringLiteral("coverage"), coverage);
+                    }
+                }
+                page.remove(QStringLiteral("coverageV19"));
+            }
             pages.append(page);
         }
     }
@@ -2540,11 +2927,62 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.remove(QStringLiteral("coverageV15"));
     }
-    const int ceiling = SetupDescriptionV15::isCategory(categoryId)
+    if (category.contains(QStringLiteral("coverageV19"))) {
+        if (version >= 19) {
+            category.insert(QStringLiteral("coverage"),
+                            category.value(QStringLiteral("coverageV19")).toString());
+        }
+        category.remove(QStringLiteral("coverageV19"));
+    }
+    if (categoryId == QLatin1String("pa")) {
+        category = mapCategoryControls(category, [version, holdsTransmit](QJsonObject control) {
+            const QString id = control.value(QStringLiteral("id")).toString();
+            const auto closed = paV14Controls().constFind(id);
+            if (closed == paV14Controls().constEnd()) { return control; }
+            // Before version 20 a peer keeps the closed version 14 rows.
+            if (version < 20) { return *closed; }
+            if (id != QLatin1String("pa.gain.table")) { return control; }
+            QJsonArray rows = control.value(QStringLiteral("rows")).toArray();
+            for (int i = 0; i < rows.size(); ++i) {
+                QJsonObject row = rows.at(i).toObject();
+                if (row.contains(QLatin1String(kPaHolderMayEdit))) {
+                    row.remove(QLatin1String(kPaHolderMayEdit));
+                    // The transmit holder edits its band live, as Thetis does.
+                    if (holdsTransmit) { row.remove(QStringLiteral("availability")); }
+                }
+                rows[i] = row;
+            }
+            control.insert(QStringLiteral("rows"), rows);
+            return control;
+        });
+    }
+    // Before version 22 a peer keeps DSP's RX buffer size rows unlocked,
+    // as it always read them.
+    if (categoryId == QLatin1String("dsp") && version < kDspOnAirLockVersion) {
+        category = mapCategoryControls(category, [](QJsonObject control) {
+            if (isRxBufferSizeControl(control)) {
+                control.remove(QStringLiteral("availability"));
+            }
+            return control;
+        });
+    }
+    // DSP changed at 15, 19 (CFC's band editor) and 22 (the RX buffer
+    // sizes' on-the-air lock): 15 to 18 see 15, 19 to 21 see 19.
+    // CAT & Network changed at 15 and 21 (TCI Forget's enabledWhen): 15 to
+    // 20 see 15.
+    const int ceiling = categoryId == QLatin1String("dsp") && version >= kDspOnAirLockVersion
+            ? kDspOnAirLockVersion
+        : categoryId == QLatin1String("dsp") && version >= 19 ? 19
+        : categoryId == QLatin1String("catNetwork") && version >= 21 ? 21
+        : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
-        : categoryId == QLatin1String("hardware")
-            || categoryId == QLatin1String("transmit") ? 13
-        : categoryId == QLatin1String("pa") ? 14
+        // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
+        // rows) and 18 (HL2 Options' clock rows).
+        : categoryId == QLatin1String("hardware") ? 18
+        : categoryId == QLatin1String("transmit") ? 13
+        // PA changed at 20 (PA Gain's on-the-air lock per row): 14 to 19
+        // see 14.
+        : categoryId == QLatin1String("pa") ? (version >= 20 ? 20 : 14)
         : categoryId == QLatin1String("appearance") ? 12
         : categoryId == QLatin1String("display") ? 12 : 3;
     // Appearance changed at 4, 7 and 12: versions 7-11 all see version 7.
@@ -2555,9 +2993,11 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4)
-                        // Hardware changed at 6 and 13, PA at 5 and 13.
+                        // Hardware changed at 6, 13, 16, 17 and 18, PA at 5 and 13.
                         : categoryId == QLatin1String("hardware") && version < 13
                             ? qMin(version, 6)
+                        : categoryId == QLatin1String("hardware") && version < 16
+                            ? 13
                         : categoryId == QLatin1String("pa") && version < 13
                             ? qMin(version, 5)
                         // Transmit changed at 13 (Disable HF PA).
@@ -2578,8 +3018,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.insert(QStringLiteral("pages"), fittedPages);
     }
-    // PA changed at 5, 13 and 14; hardware at 6 and 13; transmit at 13;
-    // DSP, Transmit, Audio, Diagnostics and CAT & Network at 15.
+    // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17 and 18;
+    // transmit at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at
+    // 15; DSP at 19; CAT & Network at 21.
     if (version >= 2 && version < SetupDescriptionV15::kVersion
         && category.value(QStringLiteral("category")).toObject()
             .value(QStringLiteral("id")) == QJsonValue(QStringLiteral("dsp"))) {
@@ -2659,18 +3100,87 @@ void SetupDescription::rebuild()
     update(QStringLiteral("general"), m_general);
     update(QStringLiteral("hardware"), m_hardware);
     update(QStringLiteral("audio"), m_audio);
-    update(QStringLiteral("dsp"), m_dsp);
+    bool dspChanged = false;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp != m_dsp) {
+        m_dsp = dsp;
+        changed = true;
+        dspChanged = true;
+    }
     update(QStringLiteral("display"), m_display);
     update(QStringLiteral("transmit"), m_transmit);
     update(QStringLiteral("appearance"), m_appearance);
     update(QStringLiteral("catNetwork"), m_catNetwork);
     update(QStringLiteral("test"), m_test);
     update(QStringLiteral("diagnostics"), m_diagnostics);
-    update(QStringLiteral("pa"), m_pa);
+    const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
+                                                     m_radioInfo),
+                                        m_paOnAir, m_paTransmittingBand);
+    if (pa != m_pa) {
+        m_pa = pa;
+        changed = true;
+    }
     if (changed) {
         ++m_revision;
         emit descriptionsChanged();
+        if (dspChanged) { emit dspDescriptionChanged(); }
+        emit paDescriptionChanged();
     }
+}
+
+bool SetupDescription::applyDspOnAir(bool onAir)
+{
+    if (onAir == m_dspOnAir) { return false; }
+    m_dspOnAir = onAir;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp == m_dsp) { return false; }
+    m_dsp = dsp;
+    return true;
+}
+
+bool SetupDescription::applyPaOnAir(bool onAir, int transmittingBand)
+{
+    const int band = onAir ? transmittingBand : -1;
+    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return false; }
+    m_paOnAir = onAir;
+    m_paTransmittingBand = band;
+    const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
+                                                     m_radioInfo),
+                                        m_paOnAir, m_paTransmittingBand);
+    if (pa == m_pa) { return false; }
+    m_pa = pa;
+    return true;
+}
+
+void SetupDescription::setOnAirState(bool onAir, int transmittingBand)
+{
+    const bool paChanged = applyPaOnAir(onAir, transmittingBand);
+    const bool dspChanged = applyDspOnAir(onAir);
+    if (!paChanged && !dspChanged) { return; }
+    // One edge, one revision: PA and DSP are sent again together, and PA
+    // carries the revision (its notify), so a peer sees one new revision.
+    ++m_revision;
+    if (dspChanged) { emit dspDescriptionChanged(); }
+    emit paDescriptionChanged();
+}
+
+void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+{
+    if (!applyPaOnAir(onAir, transmittingBand)) { return; }
+    ++m_revision;
+    emit paDescriptionChanged();
+}
+
+void SetupDescription::noteTransmitHolderChanged()
+{
+    // Off the air nothing depends on the holder.
+    if (!m_paOnAir) { return; }
+    ++m_revision;
+    emit paDescriptionChanged();
 }
 
 } // namespace NereusSDR

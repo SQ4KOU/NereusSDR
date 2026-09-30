@@ -48,6 +48,38 @@ Dependency spine:
                       -> 17 delivery verification
 ```
 
+### Execution order (JJ, 2026-09-28 night)
+
+JJ's ruling: "same plan, same scope, new order". The dependency spine above
+still says what each task needs. This is the order the crew runs them in:
+
+1. Tasks 1 to 5 (done), their fix wave, and the layout-restore regression fix
+   (done).
+2. Task 7: zero-slice Core safety.
+3. Task 8 with Amendment 8a: grace expiry, explicit leave and generation
+   fencing, and slices held for away devices never count in the preselector
+   (BYPASS) decision or in several-devices confirmations.
+4. Task 8b: device identity clarity. It is a pairing-security change and gets
+   a scoped review before merge.
+5. Task 13: the bottom RX chooser, built to the approved mockup.
+6. Task 14a: joined flags, their menus (Release, Take control, Stop
+   listening), labels and disabled tuning, without the "Your volume" level.
+7. Task 6: per-listener audio fan-out.
+8. Task 14b: the "Your volume" level on a listened slice.
+9. Tasks 9, 10, 11, 15, 16, 12 and 17, in that order.
+
+Consequences of the new order:
+
+- Task 13 now runs before Task 10. Its hosting-desktop rows use the hosting
+  path as it stands at that point; Task 10 moves them onto the same validated
+  operations afterwards, without changing what the chooser shows.
+- Task 14a runs before Task 6. Until Task 6 lands, a listened slice's flag
+  shows no level control; the merge gate on Task 6 (Important 3 of the Tasks
+  1-4 review) still applies to the branch as a whole.
+- Rulings U1 to U8 are made (see the ledger). The BLOCKED marks on Tasks 13
+  to 16 below record when each was planned; each task's brief carries the
+  ruling that applies to it.
+
 ## Global Constraints
 
 - **Source first where Thetis applies.** Shared listening, control handoff,
@@ -1026,6 +1058,45 @@ Change:
 - Restoring a returning device's saved layout (`placeSlicesForAdmission`,
   `StationServer.cpp:7670-7736`) never displaces a current controller or
   listener and never recreates a control claim on a slice that still exists.
+- Lead ruling (2026-09-29), a deviation from "token end" above: a token
+  window alone on the Core keeps today's rule. Its claims go, and its slices
+  pass to nobody and stay, so the window signing in again (with the token,
+  or with the key it enrolled) adopts them. Closing them would lose the
+  operator's slice at first pairing. With another device on the Core the
+  claims rule applies (close with nobody left, nothing saved).
+- Lead ruling (2026-09-29), Amendment 8a below: an away device's slices stay
+  in the take-a-receiver choices (the take closes them); only the list of
+  slices offered to close leaves them out.
+
+Amendment 8a (JJ approved, 2026-09-28 night). Slices held for away devices
+never count in:
+- the preselector decision. `RadioModel::republishAlexAdcSlices`
+  (`RadioModel.cpp:18936`) feeds every slice on an ADC into the per-chain
+  filter choice. A held slice on another band then forces the chain to
+  BYPASS for the connected device's pan (JJ's bench: a re-paired computer's
+  pan went to BYPASS because its old key's slices sat on another band).
+  The choice uses only slices that are not held for an away device.
+- several-devices confirmations. `ReceiverPlanner` builds the disturbed list
+  (`ReceiverPlanner.cpp:59`, `planWindowMove`) and the choice lists
+  (`:101`, `:174`) that a confirmation names. A slice held for an away device
+  is neither named as disturbed nor offered as a choice to close, and a
+  change that would disturb only held slices applies without asking (JJ's
+  bench: every attenuator step asked for confirmation naming away devices).
+  What happens to the held slice itself is unchanged: it is released at
+  grace expiry by this task's main change.
+
+Amendment 8a acceptance:
+- A holds A0 on 20 m and drops; B is connected with B0 on 40 m on the same
+  ADC; during grace, B's chain is not bypassed on account of A0, and
+  `RadioModel::panBypassState` for B's pan reports not bypassed.
+- The same set-up without the drop (A connected): the filter choice is as
+  today (A0 counts).
+- B changes the attenuator or moves its pan while A is away: no
+  confirmation names A, and the change applies at once.
+- The same change while A is connected and disturbed: the confirmation names
+  A as today.
+- A returns within grace: A0 counts again in both decisions from the moment
+  A's hold returns to A.
 
 Files: `src/core/session/DeviceSessionRegistry.{h,cpp}`,
 `src/core/session/StationServer.{h,cpp}`, `StationReceivers.cpp` (notices),
@@ -1054,9 +1125,89 @@ Acceptance (injected clock):
 - A reconnect inside `admit` after the deadline (timer not yet fired)
   expires first, then admits fresh, and the handler acts once.
 
+Amendment 8a adds `src/models/RadioModel.cpp` (the preselector feed),
+`src/core/session/ReceiverPlanner.{h,cpp}` (disturbed and choice lists) and
+their tests (`tests/tst_confirm_step.cpp`, the preselector cases in
+`tests/tst_station_multi_session.cpp`) to the files above.
+
 Verification: `tst_slice_claims_expiry`, `tst_device_session_registry`,
 `tst_station_multi_session` (grace cases at `:740-805`, `:2619-2632`),
-`tst_transmit_holder`, offscreen, real load.
+`tst_transmit_holder`, and for Amendment 8a `tst_confirm_step` and the
+preselector cases, offscreen, real load.
+
+## Task 8b: Device identity clarity
+
+Implements: JJ's ruling (2026-09-28 night) "the Core's device list names each
+desktop profile; This Core can remove a token-enrolled device". Root cause
+from JJ's bench: a default-profile window and a `--profile` window on the
+same computer are two devices with two keys and the same name
+("MacBook-Pro"), so neither the device list nor a refusal told them apart,
+and the older key's held slices stayed with no way to remove it.
+Depends on: Task 8 (its claims release is what removal relies on).
+Model tier: opus. Pairing-security change: scoped review before merge.
+
+Today:
+- A desktop sends `ClientDeviceIdentity::machineName()` and
+  `machineShortName()` (`src/core/security/ClientDeviceIdentity.cpp:50-68`,
+  from `QSysInfo::machineHostName()`; callers `MainWindow.cpp:2250-2251`,
+  `GuiConnectionController.cpp:784`). The profile is not part of the name,
+  though each profile has its own key
+  (`ClientDeviceIdentity::forThisProfile`, from
+  `AppSettings::resolveConfigDir(AppSettings::profileOverride())`).
+- `StationDevicesFacade::revoke` refuses a token-enrolled device while the
+  pairing token is active ("Stop accepting the pairing token first, then
+  remove this computer.", `StationDevicesFacade.cpp:237-240`).
+  `station.retireToken` exists (`StationDevicesFacade.cpp:278-298`,
+  `SessionCommandDispatcher.cpp:826`, `StationControlCommands.cpp:345`) but
+  nothing on This Core offers it next to that refusal.
+
+Change:
+- A desktop running with a profile other than the default sends a name that
+  carries the profile in plain words (for example "MacBook-Pro (radxa)").
+  The default profile's name is unchanged. The Core's device list, the
+  refusal wording and the chooser show that name.
+- On This Core's device list, removing a token-enrolled device while the
+  token is active offers, in plain words, to stop accepting the pairing token
+  and then remove the device, as one confirmed action. It uses
+  `station.retireToken` then `devices.revoke`, with every existing guard kept
+  (never lock the owner out: `retireToken` still refuses with no other
+  paired device; `revoke` still refuses the last way in).
+- Removing a device releases its claims at once through Task 8's
+  `releaseDeviceClaims` (as revoke does).
+
+Files: `src/core/security/ClientDeviceIdentity.{h,cpp}`,
+`src/gui/setup/RemoteStationPage.{h,cpp}` and/or
+`src/gui/setup/ThisCorePage.{h,cpp}` (whichever hosts the device list),
+`src/gui/GuiDesktopStationRuntime.cpp`,
+`src/core/session/StationDevicesFacade.{h,cpp}`,
+`tests/tst_client_device_identity.cpp` (new), `tests/tst_station_devices.cpp`,
+`tests/tst_multi_device_screens.cpp`.
+
+Interfaces:
+- `static QString ClientDeviceIdentity::machineName(const QString& profile);`
+  and `machineShortName(const QString& profile)` (an empty profile gives
+  today's name).
+- `DeviceAdminResult StationDevicesFacade::retireTokenAndRevoke(const QString& deviceId);`
+  (the safe path: both steps under the existing guards, nothing changed when
+  either refuses).
+
+Acceptance:
+- Two profiles on one computer appear as two plainly different names in the
+  Core's device list and in a refusal naming the other device.
+- The default profile's name is byte-for-byte today's.
+- A token-enrolled device is removed from This Core in one confirmed action
+  while the token was active: the token no longer works, the device is gone,
+  its slices are released or closed per Task 8, and another paired device
+  still signs in.
+- With no other paired device, the action is refused with the existing plain
+  words and nothing changes (token still active, device still paired).
+- No user-visible string names a token, key or profile setting in developer
+  terms.
+
+Verification: `tst_client_device_identity`, `tst_station_devices`,
+`tst_station_multi_session` (removal releases claims), offscreen captures of
+the device list in `tst_multi_device_screens`; the scoped pairing-security
+review before merge.
 
 ## Task 9: Capacity refusals offer existing slices; close-then-apply paths keep their victims
 
@@ -1356,11 +1507,12 @@ Acceptance:
 Verification: `tst_slice_chooser`, `tst_multi_device_screens` with
 `NEREUS_TASK78_SHOTS` captures reviewed by the controller before any launch.
 
-## Task 14: Joined flags, foreign markers and same-pan stacking
+## Task 14a: Joined flags, menus, labels and disabled tuning
 
-Implements: design full-window bullet 2; G-119 palette; JJ's rulings U4,
-U5 and U6 (2026-09-28).
-Depends on: Task 13; Task 6 for the per-device level. Model tier: opus.
+Implements: design full-window proposal bullet 2; G-119 palette; rulings U4
+and U6. Split from the former Task 14 by JJ's new order: this part runs
+before Task 6 and carries no level control.
+Depends on: Task 13. Model tier: opus.
 
 Today: a hosting flag not station-owned is hidden (`MainWindow.cpp:1708-1729`;
 `src/gui/widgets/VfoWidget.cpp:2489-2495`); foreign slices are dashed markers with owner,
@@ -1368,43 +1520,46 @@ away and TX cues (`MainWindow::refreshForeignMarkers`, `MainWindow.cpp:2034+`); 
 `muted`, pan and AF (`MainWindow.cpp:3166-3168`, `:3312-3317`; `src/gui/widgets/VfoWidget.cpp:1245-1271`,
 `:1369-1390`).
 
-Change (as ruled): a controlled flag reads "You control" with Release in
-its menu; a listened flag keeps its letter and Aether color and reads
-"Listening · controlled by <device>", with Take control and Stop listening
-in its menu and its tuning controls disabled with "<device> controls this
-slice"; "TX" as today, red on air (U6). The flag's existing AF slider and
-mute set this device's own level for both controlled and listened slices,
-never `SliceModel::afGain` or `muted` on a listened slice; on a listened
-slice the slider is labeled "Your volume" (U5). Stacking keeps today's
-selected-flag-on-top rule (U4). Slices not joined here stay dashed foreign
-markers.
+Change (U4, U6): a joined listened flag keeps its letter and color; its text
+reads "Listening · controlled by <device>", its menu offers Take control and
+Stop listening, and its shared tuning controls are disabled with "<device>
+controls this slice". A controlled flag reads "You control" with Release in
+its menu. "TX" stays as today, red on the air. Same-pan stacking keeps
+today's rule: the selected slice's flag on top. A listened flag shows no
+level control until Task 14b.
 
 Acceptance:
-- A controlled flag shows "You control" and its menu offers Release; a
-  listened flag shows "Listening · controlled by <device>" with the
-  controller's device name, and its menu offers Take control and Stop
-  listening (U6).
-- On a listened flag every tuning control (frequency, mode, filter, DSP) is
-  disabled and says "<device> controls this slice"; a signal spy shows no
-  `SliceModel` tuning write and no wire tuning message from any of them.
-- A listened flag keeps its slice's letter and Aether color (U4).
-- On a listened flag the AF slider reads "Your volume"; moving it or
-  pressing mute changes only this device's level (Task 6's verb or its
-  in-process call); `SliceModel::afGain` and `muted` are unchanged, and the
-  controller's and other listeners' sums are unchanged (U5).
-- On a controlled flag the AF slider and mute change only this device's
-  hearing; a listener's sum is unchanged (U5, Task 6 consequence).
-- "TX" shows on the transmit slice's flag as today and turns red on air
-  (U6).
-- A controlled and a listened slice on one pan: the selected slice's flag
-  is on top; selecting the other brings its flag forward (U4, today's rule
-  at `PanadapterApplet.cpp:118-134,197-213`).
-- Offscreen captures show each state: controlled idle, controlled with TX
-  selected, controlled on air, listened, listened under a controlled flag
-  on one pan, and a foreign marker.
+- A listener's flag never writes `SliceModel` tuning, AF or mute (signal
+  spy).
+- Each menu action sends its verb and shows pending, then the Core's result.
+- Tuning controls on a listened flag are disabled and name the controller.
+- Captures show each state: controlled, listened, listened while on the air,
+  and two flags stacked on one pan.
 
 Verification: `tst_multi_device_screens`, `tst_remote_window_harness`
 captures.
+
+## Task 14b: "Your volume" on a listened slice
+
+Implements: ruling U5 (the existing AF slider and mute on any slice change
+only what this device hears; labeled "Your volume" on a listened slice).
+Depends on: Task 6 (per-listener audio fan-out) and Task 14a.
+Model tier: opus.
+
+Change: the listened flag's AF slider and mute return, bound to this
+device's own listen level and mute from Task 6, labeled "Your volume". On a
+controlled slice the slider and mute also change only what this device hears
+(U5; the controller's own path per the U5-over-Q2 ruling).
+
+Acceptance:
+- Moving "Your volume" or mute on a listened slice changes only this
+  device's audio; the controller's and every other listener's audio and the
+  shared `SliceModel` AF and mute are unchanged (signal spy and media test).
+- The controller's AF at zero does not silence a listener.
+- A capture shows the labeled control on a listened flag.
+
+Verification: `tst_multi_device_screens`, the Task 6 media tests,
+`tst_remote_window_harness` captures.
 
 ## Task 15: RX applet tabs and listener gating
 
@@ -1450,15 +1605,20 @@ focus only (`PanadapterApplet.cpp:217-234`); floating reparents without
 changing identity (`PanadapterStack::floatPanadapter` `:481`, `dockPanadapter` `:534`); spectrum actions target
 the emitting pan's slice through `sliceForPan` (`MainWindow.cpp:3936-3980`, `:4179`, `:4222-4261`).
 
-Change (as ruled): showing an unseen slice goes into the main window (U1):
-an existing main-window pan showing it comes forward, else an empty
-main-window pan, else the main window grows to a pan layout that fits in
-the single window, or asks for a named destination; never a new floating
-pan. A slice in a floating pan raises that floater and switches the main
-window's RX to it (U2). A pan background click keeps display-only focus
-(U3). A layout change that removes the only pan showing a listened slice
-stops listening to it on this device with a plain notice; controlled slices
-keep today's rehoming (U7). Every control keeps an explicit target slice.
+Change (as ruled): an unseen slice this window starts listening to or
+takes control of goes into the main window: a main-window pan that shows it
+comes forward, else an empty main-window pan, else the window grows to the
+next layout that fits in the single window, else the operator picks a pan.
+Growing adds no slice to any other empty pan and never opens a floating pan.
+A listened slice is placed by this window only; its pan key stays its
+controller's. Selecting a slice shown in a floating pan brings that floater
+forward and makes it this window's RX; nothing moves and no second flag
+appears (U2). A pan background click stays display-only (U3). A layout
+change moves only the slices this window controls; a listened slice whose
+pan the change removes stops being listened to here, with the notice
+"Stopped listening to Slice B: it is no longer shown in this window." (U7).
+A layout change never moves, recreates or spends a DDC for a slice. Every
+control keeps an explicit target slice.
 
 Acceptance:
 - U1, placement order: with the slice already in a main-window pan, that

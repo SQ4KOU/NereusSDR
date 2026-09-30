@@ -577,6 +577,30 @@ private:
     QList<QWidget*> paSettingsControls() const;
     QList<QWidget*> paKeyingControls() const;
     void applyPaGates();
+    // R-R3-49: the version 6 gate with Thetis's on-the-air lock laid over
+    // it (applyOnAirState): one call, so each control follows one helper.
+    void applyPaSettingsGate();
+    // R-R3-49: the Core went on or off the air (RadioModel::coreOnAirChanged).
+    void applyOnAirState(bool onAir);
+    // The PA row transmitting now while on the air (-1 off the air or for
+    // a band with no PA values), read afresh from the model each time.
+    int currentOnAirBandIndex();
+    // A slice changed band or transmit slice: re-gate when the
+    // transmitting row moved.
+    void refreshOnAirBand();
+    QList<QWidget*> paBandControls(int bandIndex) const;
+    QList<QWidget*> onAirLockedControls() const;
+    // JJ's ruling (holder only, both ways): whether this window's device
+    // holds transmit; the transmitting band opens on the air only then.
+    bool holdsTransmitHere();
+    // After a gain or adjust edit to `band`: on the air, when `band` is
+    // the transmitting band, the Core's own window moves the drive as
+    // Thetis does (RadioModel::applyPaEditOnAir).
+    void applyEditOnAir(Band band, bool adjust, int step);
+    bool    m_onAir{false};
+    // Thetis _adjustingBand: the band transmitting now while on the air
+    // (followed through band changes), or no band (-1).
+    int     m_onAirBandIndex{-1};
     bool    m_paSettingsPermitted{true};
     QString m_paSettingsReason;
     bool    m_paKeyingPermitted{true};

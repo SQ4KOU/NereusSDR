@@ -275,6 +275,28 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (transmitSettingsVersion 15): cfcProfile,
+//                 refreshed from every CFC change (refreshCfcProfile).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-29 - PA on-air gate review: the per-band FM TX offset store
+//                 (setter and load) keeps only finite values in 0..50 MHz,
+//                 else the band's default. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: the first transmit band
+//                 repaints the tune power (tunePowerForTxBandChanged) even
+//                 when unchanged; clearTuneTxBand() forgets it at a
+//                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: an out-of-range per-band FM TX
+//                 offset set keeps the previous value (console.cs:20896
+//                 [v2.10.3.15]); the load still falls back to the band's
+//                 default. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-29 - Two-tone PA wiring: setPowerUsingTargetDbm skips the PWR
+//                 slider limit while powerSliderLimitEnabled is off
+//                 (PrettyTrackBar.ConstrainAValue [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -361,6 +383,32 @@ DrivePowerSource drivePowerSourceFromString(const QString& s)
     return DrivePowerSource::DriveSlider;  // unknown-string fallback
 }
 
+// R-R3-49: Thetis's default FM TX offset for a band
+// (console.cs:1833-1841 [v2.10.3.15]): 1 MHz on 6 m, 0.1 MHz elsewhere.
+static double defaultFmTxOffsetMhz(Band band)
+{
+    switch (band) {
+        case Band::Band6m:  return 1.0;  // 1MHz
+        case Band::Band10m: return 0.1;  // 100kHz
+        default:            return 0.1;  // 100kHz
+    }
+}
+
+// The per-band store keeps only what udFMOffset can hold (0..50 MHz, the
+// FMTXOffsetMHz setter's check, console.cs:20891-20902 [v2.10.3.15]:
+//   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
+// ). NaN and infinities are outside it. A set outside it keeps the value it
+// had (the setter's return); a bad stored value loads as the band's default.
+static bool fmTxOffsetInRange(double mhz)
+{
+    return std::isfinite(mhz) && mhz >= 0.0 && mhz <= 50.0;
+}
+
+static double validFmTxOffsetMhz(Band band, double mhz)
+{
+    return fmTxOffsetInRange(mhz) ? mhz : defaultFmTxOffsetMhz(band);
+}
+
 TransmitModel::TransmitModel(QObject* parent)
     : QObject(parent)
 {
@@ -374,16 +422,41 @@ TransmitModel::TransmitModel(QObject* parent)
     // with (the flat curve Thetis applies in its place).
     m_txEqCurve = ParaEqCurve::txEqCurveJson(m_txEqParaEqData);
 
+    // R-R3-49 (transmitSettingsVersion 15): cfcProfile follows every CFC
+    // value, once a profile restore has put them all back.
+    refreshCfcProfile();
+    for (auto signal : {&TransmitModel::cfcParaEqDataChanged,
+                        &TransmitModel::cfcEqFreqJsonChanged,
+                        &TransmitModel::cfcCompressionJsonChanged,
+                        &TransmitModel::cfcPostEqBandGainJsonChanged}) {
+        connect(this, signal, this, [this](const QString&) { refreshCfcProfile(); });
+    }
+    connect(this, &TransmitModel::cfcPrecompDbChanged, this, [this](int) { refreshCfcProfile(); });
+    connect(this, &TransmitModel::cfcPostEqGainDbChanged, this, [this](int) { refreshCfcProfile(); });
+    connect(this, &TransmitModel::cfcProfileRestored, this, &TransmitModel::refreshCfcProfile);
+    connect(this, &TransmitModel::cfcSettingsReloaded, this, &TransmitModel::refreshCfcProfile);
+
     // Initialise per-band normal-mode power to 50W (#167 Phase 3A).
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
     //   power_by_band = new int[(int)Band.LAST];
     //   for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
-    // (Thetis safety-first default; users dial up from 50 per band.
-    //  limitPower_by_band[14] (console.cs:1816-1817 [v2.10.3.13]) is a
-    //  separate band-max ceiling array we do NOT port here — Phase 3C's
-    //  setPowerUsingTargetDbm math kernel sources its slider value from
-    //  this powerByBand array, the ceiling check is independent.)
+    // (Thetis safety-first default; users dial up from 50 per band.)
     m_powerByBand.fill(50);
+
+    // R-R3-49: per-band slider limits and FM TX offsets.
+    // From Thetis console.cs:1824-1841 [v2.10.3.15]:
+    //   for (int i = 0; i < (int)Band.LAST; i++) limitPower_by_band[i] = 100;
+    //   for (int i = 0; i < (int)Band.LAST; i++) limitTunePower_by_band[i] = 100;
+    //   for (int i = 0; i < (int)Band.LAST; i++) // setup default FM offsets
+    //       case Band.B6M: fm_tx_offset_by_band_mhz[i] = 1; break; // 1MHz
+    //       case Band.B10M: fm_tx_offset_by_band_mhz[i] = 0.1; break; // 100kHz
+    //       default: fm_tx_offset_by_band_mhz[i] = 0.1; break; // 100kHz
+    m_limitPowerByBand.fill(100);
+    m_limitTunePowerByBand.fill(100);
+    for (int i = 0; i < kBandCount; ++i) {
+        m_fmTxOffsetByBandMhz[static_cast<std::size_t>(i)] =
+            defaultFmTxOffsetMhz(bandFromPerBandStateSlot(i));
+    }
 }
 
 TransmitModel::~TransmitModel() = default;
@@ -721,9 +794,25 @@ void TransmitModel::refreshTunePowerForTxBand()
 
 void TransmitModel::setTuneTxBand(Band band)
 {
+    const bool firstKnown = !m_tuneTxBandKnown;
     m_tuneTxBand = band;
     m_tuneTxBandKnown = true;
+    if (firstKnown) {
+        // PA on-air gate re-review: until now the slider showed its own
+        // band's tune power, so the first transmit band repaints it even
+        // when its value equals the cached one.
+        m_tunePowerForTxBand = tunePowerForBand(band);
+        emit tunePowerForTxBandChanged(m_tunePowerForTxBand);
+        return;
+    }
     refreshTunePowerForTxBand();
+}
+
+void TransmitModel::clearTuneTxBand()
+{
+    // PA on-air gate re-review: the transmit band belonged to the radio
+    // that went away (RadioModel teardown).
+    m_tuneTxBandKnown = false;
 }
 
 bool TransmitModel::setTunePowerForTxBand(int watts)
@@ -1250,6 +1339,119 @@ void TransmitModel::setPowerForBand(Band band, int watts)
     emit powerByBandJsonChanged(powerByBandJson());  // R-R3-49 (parity Task 5)
 }
 
+// ── Per-band slider limits and FM TX offset (R-R3-49) ───────────────────────
+//
+// Thetis stores these per band (console.cs:1824-1841 [v2.10.3.15]) and the
+// TXBand setter assigns them to the sliders and the FM offset on a band
+// change (console.cs:17539-17550 [v2.10.3.15]).  The limit is only changed
+// in Thetis by a right-drag on the slider (ptbPWR_Scroll, console.cs:28690
+// [v2.10.3.15]: limitPower_by_band[(int)_tx_band] = lc.LimitValue; // store
+// the adjusted limit level), which NereusSDR does not have.
+
+int TransmitModel::limitPowerForBand(Band band) const
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return 100;
+    }
+    return m_limitPowerByBand[static_cast<std::size_t>(idx)];
+}
+
+void TransmitModel::setLimitPowerForBand(Band band, int watts)
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return;
+    }
+    const int clamped = std::clamp(watts, 0, 100);
+    m_limitPowerByBand[static_cast<std::size_t>(idx)] = clamped;
+    if (!m_persistMac.isEmpty()) {
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/limitPowerByBand/%2")
+                .arg(m_persistMac, bandKeyName(band)),
+            QString::number(clamped));
+    }
+}
+
+int TransmitModel::limitTunePowerForBand(Band band) const
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return 100;
+    }
+    return m_limitTunePowerByBand[static_cast<std::size_t>(idx)];
+}
+
+void TransmitModel::setLimitTunePowerForBand(Band band, int watts)
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return;
+    }
+    const int clamped = std::clamp(watts, 0, 100);
+    m_limitTunePowerByBand[static_cast<std::size_t>(idx)] = clamped;
+    if (!m_persistMac.isEmpty()) {
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/limitTunePowerByBand/%2")
+                .arg(m_persistMac, bandKeyName(band)),
+            QString::number(clamped));
+    }
+}
+
+// PrettyTrackBar LimitValue setter (PrettyTrackBar.cs [v2.10.3.15]) clamps
+// the limit to the slider's Min/Max; ptbPWR and ptbTune are 0..100
+// (console.Designer.cs:3686-3689, 3942-3945 [v2.10.3.15]).
+void TransmitModel::setPowerLimit(int watts)
+{
+    m_powerLimit = std::clamp(watts, 0, 100);
+}
+
+void TransmitModel::setTunePowerLimit(int watts)
+{
+    m_tunePowerLimit = std::clamp(watts, 0, 100);
+}
+
+void TransmitModel::setFmTxOffsetMhz(double mhz)
+{
+    // From Thetis console.cs:20891-20902 [v2.10.3.15] (FMTXOffsetMHz setter):
+    //   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
+    // udFMOffset is 0..50 MHz.
+    if (!(mhz >= 0.0 && mhz <= 50.0)) {
+        return;
+    }
+    m_fmTxOffsetMhz = mhz;
+}
+
+double TransmitModel::fmTxOffsetForBandMhz(Band band) const
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return defaultFmTxOffsetMhz(band);
+    }
+    return m_fmTxOffsetByBandMhz[static_cast<std::size_t>(idx)];
+}
+
+void TransmitModel::setFmTxOffsetForBandMhz(Band band, double mhz)
+{
+    const int idx = perBandStateSlot(band);
+    if (idx < 0 || idx >= kBandCount) {
+        return;
+    }
+    // From Thetis console.cs:20896 [v2.10.3.15]: out of range keeps the
+    // previous value.
+    //   if (value < (double)udFMOffset.Minimum || value > (double)udFMOffset.Maximum) return; //MW0LGE_21k9
+    if (!fmTxOffsetInRange(mhz)) {
+        return;
+    }
+    m_fmTxOffsetByBandMhz[static_cast<std::size_t>(idx)] = mhz;
+    if (!m_persistMac.isEmpty()) {
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/fmTxOffsetByBandMhz/%2")
+                .arg(m_persistMac, bandKeyName(band)),
+            QString::number(mhz, 'g', 17));
+    }
+}
+
 // ── ATT-on-TX-on-power-change safety setters (#167 Phase 3A) ────────────────
 //
 // All 3 setters follow the existing per-MAC L.2 auto-persist pattern.
@@ -1591,6 +1793,9 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
     TxPowerResult result;
     result.bConstrain = true;
     int new_pwr = 0;
+    // Thetis: PrettyTrackBar slider = ptbPWR; set to ptbTune on the
+    // TUNE_SLIDER source (console.cs:46724+ [v2.10.3.15]).
+    bool sliderIsTune = false;
 
     // From Thetis console.cs:46651-46669 [v2.10.3.13] — txMode determination.
     //   int txMode = 0; // 0 normal, 1 tune, 2 2tone
@@ -1646,13 +1851,17 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
                     new_pwr = m_power;
                     break;
                 case DrivePowerSource::TuneSlider:
+                    sliderIsTune = true;  // slider = ptbTune;
                     new_pwr = tunePowerForBand(currentBand);
                     // From mi0bot-Thetis console.cs:47660-47673 [v2.10.3.13-beta2]
                     // MI0BOT: As HL2 only has 15 step output attenuator,
                     //         reduce the level further
                     if (model == HPSDRModel::HERMESLITE) {
+                        // if (bConstrain) new_pwr = slider.ConstrainAValue(ptbTune.Value);
+                        // (the HL2 tune slider is 0..99, then its limit)
                         if (result.bConstrain) {
-                            new_pwr = std::clamp(new_pwr, 0, 99);
+                            new_pwr = std::min(std::clamp(new_pwr, 0, 99),
+                                               m_tunePowerLimit);
                         }
                         if (new_pwr <= 51) {
                             setTxPostGenToneMag((new_pwr + 40) / 100.0);
@@ -1684,6 +1893,7 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
                     new_pwr = m_power;
                     break;
                 case DrivePowerSource::TuneSlider:
+                    sliderIsTune = true;  // slider = ptbTune;
                     new_pwr = tunePowerForBand(currentBand);
                     break;
                 case DrivePowerSource::Fixed:
@@ -1698,14 +1908,28 @@ TransmitModel::TxPowerResult TransmitModel::setPowerUsingTargetDbm(
     // computeAudioVolume catches Band::XVTR via PaProfile::getGainForBand
     // returning 1000.  See header comment + plan §"Open follow-ups".
 
-    // From Thetis console.cs:46719 [v2.10.3.13]:
+    // From Thetis console.cs:46797-46798 [v2.10.3.15]:
+    //     //constrain power
     //     if(bConstrain) new_pwr = slider.ConstrainAValue(new_pwr);
-    // Thetis's PrettyTrackBar.ConstrainAValue clamps to slider Min/Max
-    // (PWR/TUN are 0..100).  bConstrain==false is the FIXED-drive path
-    // — the setup-page fixed value bypasses the slider clamp (matches
-    // Thetis behaviour).
+    // PrettyTrackBar.ConstrainAValue [v2.10.3.15]:
+    //     if (!_bLimitEnabled || (value <= _nLimitValue)) return value;
+    //     else return _nLimitValue;
+    // The slider is ptbTune on the TUNE_SLIDER source, else ptbPWR; both
+    // have LimitEnabled = true (console.Designer.cs:3686, 3942
+    // [v2.10.3.15]).  The two-tone start turns ptbPWR's off
+    // (PWRSliderLimitEnabled = false, setup.cs:11154-11158 [v2.10.3.15])
+    // around its FIXED source, so the PWR set to the two-tone power and
+    // its txMode 0 scroll run past the band's limit; the stop turns it
+    // back on.  The 0..100 clamp stands for the slider's own Min/Max.
+    // bConstrain==false is the FIXED-drive path: the setup-page value
+    // bypasses the slider.
     if (result.bConstrain) {
         new_pwr = std::clamp(new_pwr, 0, 100);
+        const bool limitEnabled = sliderIsTune || m_powerSliderLimitEnabled;
+        const int limit = sliderIsTune ? m_tunePowerLimit : m_powerLimit;
+        if (limitEnabled && new_pwr > limit) {
+            new_pwr = limit;
+        }
     }
 
     result.newPower = new_pwr;
@@ -2300,6 +2524,35 @@ void TransmitModel::loadFromSettings(const QString& mac)
         emit powerByBandJsonChanged(powerByBandJson());
     }
 
+    // R-R3-49: per-band slider limits and FM TX offsets, same scope.
+    // From Thetis console.cs:4921-4944 [v2.10.3.15] (the pipe-delimited
+    // restore; NereusSDR uses per-band scalar keys, so a missing key falls
+    // back to the default per band rather than skipping the whole list):
+    //   if (list.Length != (int)Band.LAST) continue; //[2.10.3.5]MW0LGE
+    {
+        const QString limitPfx =
+            QStringLiteral("hardware/%1/limitPowerByBand/").arg(mac);
+        const QString limitTunePfx =
+            QStringLiteral("hardware/%1/limitTunePowerByBand/").arg(mac);
+        const QString fmPfx =
+            QStringLiteral("hardware/%1/fmTxOffsetByBandMhz/").arg(mac);
+        for (int i = 0; i < kBandCount; ++i) {
+            const Band band = bandFromPerBandStateSlot(i);
+            const auto slot = static_cast<std::size_t>(i);
+            m_limitPowerByBand[slot] = std::clamp(
+                s.value(limitPfx + bandKeyName(band), QStringLiteral("100"))
+                    .toInt(), 0, 100);
+            m_limitTunePowerByBand[slot] = std::clamp(
+                s.value(limitTunePfx + bandKeyName(band), QStringLiteral("100"))
+                    .toInt(), 0, 100);
+            bool ok = false;
+            const double fm =
+                s.value(fmPfx + bandKeyName(band)).toString().toDouble(&ok);
+            m_fmTxOffsetByBandMhz[slot] =
+                ok ? validFmTxOffsetMhz(band, fm) : defaultFmTxOffsetMhz(band);
+        }
+    }
+
     // 3 ATT-on-TX-on-power-change safety properties.
     // Defaults match Thetis console.cs:29285-29310 [v2.10.3.13]:
     //   PSAoff = true (//MW0LGE [2.9.0.7]),
@@ -2517,6 +2770,26 @@ void TransmitModel::persistToSettings(const QString& mac) const
             s.setValue(powerPfx + bandKeyName(band),
                        QString::number(
                            m_powerByBand[static_cast<std::size_t>(i)]));
+        }
+    }
+    // R-R3-49: per-band slider limits and FM TX offsets
+    // (console.cs:3101-3115 [v2.10.3.15] save).
+    {
+        const QString limitPfx =
+            QStringLiteral("hardware/%1/limitPowerByBand/").arg(mac);
+        const QString limitTunePfx =
+            QStringLiteral("hardware/%1/limitTunePowerByBand/").arg(mac);
+        const QString fmPfx =
+            QStringLiteral("hardware/%1/fmTxOffsetByBandMhz/").arg(mac);
+        for (int i = 0; i < kBandCount; ++i) {
+            const Band band = bandFromPerBandStateSlot(i);
+            const auto slot = static_cast<std::size_t>(i);
+            s.setValue(limitPfx + bandKeyName(band),
+                       QString::number(m_limitPowerByBand[slot]));
+            s.setValue(limitTunePfx + bandKeyName(band),
+                       QString::number(m_limitTunePowerByBand[slot]));
+            s.setValue(fmPfx + bandKeyName(band),
+                       QString::number(m_fmTxOffsetByBandMhz[slot], 'g', 17));
         }
     }
     // 3 ATT-on-TX safety properties (under tx/ namespace).
@@ -3752,6 +4025,24 @@ void TransmitModel::setCfcParaEqData(const QString& data)
     // Nested writes notify only when the outer projection has released its
     // guard, so DSP and mirrors see the final curve once.
     if (!nestedProjection) { emit cfcParaEqDataChanged(m_cfcParaEqData); }
+}
+
+// NereusSDR-original (R-R3-49, transmitSettingsVersion 15): what the CFC
+// dialog shows, published. The paired blob is authoritative when the Core
+// reads it (setCfcParaEqData); otherwise the ten-band values.
+void TransmitModel::refreshCfcProfile()
+{
+    if (cfcProfileMutationInProgress()) { return; }
+    CfcProfile::Profile paired;
+    const QString profile = CfcProfile::decode(m_cfcParaEqData, paired)
+        ? CfcProfile::publishedJson(paired, QStringLiteral("saved"))
+        : CfcProfile::publishedJson(
+              CfcProfile::legacyProfile(m_cfcEqFreqHz, m_cfcCompressionDb, m_cfcPostEqBandGainDb,
+                                        m_cfcPrecompDb, m_cfcPostEqGainDb),
+              QStringLiteral("legacy"));
+    if (profile == m_cfcProfile) { return; }
+    m_cfcProfile = profile;
+    emit cfcProfileChanged(m_cfcProfile);
 }
 
 void TransmitModel::endCfcProfileRestore() noexcept

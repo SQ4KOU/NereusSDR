@@ -279,6 +279,30 @@
 //                 Claude Code.
 //   2026-09-28 - 2 m as its own band (R-IOS-26, R-R3-49). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49 (transmitSettingsVersion 15): cfcProfile, the
+//                 read-only CFC band editor the Core derives from
+//                 cfcParaEqData or the ten-band values (CfcProfile::
+//                 publishedJson), declared last. Sent only to a peer that
+//                 declared cfcProfile. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-49: the per-band PWR and tune slider limits and
+//                 FM TX offsets from Thetis console.cs:1824-1841, 17539-17550
+//                 [v2.10.3.15]; setPowerUsingTargetDbm constrains the drive
+//                 to the slider limit (ConstrainAValue). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: tuneTxBandKnown() for the TX
+//                 applet's Tune Power slider. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: the first transmit band
+//                 repaints the tune power (tunePowerForTxBandChanged) even
+//                 when unchanged; clearTuneTxBand() forgets it at a
+//                 disconnect. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring: powerSliderLimitEnabled (Thetis
+//                 PWRSliderLimitEnabled, console.cs:30237 [v2.10.3.15]),
+//                 honoured by setPowerUsingTargetDbm's constrain on the PWR
+//                 slider. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 #pragma once
 
@@ -471,11 +495,10 @@ public:
     // From Thetis console.cs:1813-1814 [v2.10.3.13]:
     //     power_by_band = new int[(int)Band.LAST];
     //     for (int i = 0; i < (int)Band.LAST; i++) power_by_band[i] = 50;
-    // (Thetis safety-first default — users dial up from 50 per band.
-    // limitPower_by_band[14] (console.cs:1816-1817 [v2.10.3.13]) is a
-    // separate band-max ceiling array we do NOT port here.  Phase 3C's
-    // setPowerUsingTargetDbm txMode 0 branch writes back into
-    // m_powerByBand[band] via setPower side-effect.)
+    // (Thetis safety-first default: users dial up from 50 per band.
+    // limitPower_by_band is the separate band-max ceiling array; see
+    // limitPowerForBand below.  Phase 3C's setPowerUsingTargetDbm txMode 0
+    // branch writes back into m_powerByBand[band] via setPower side-effect.)
     //
     // HF amateur + GEN/WWV/XVTR and 2 m (the per-band state slots).  Phase 3L
     // SWL bands inherit ham-band values — no separate per-SWL TX power.
@@ -492,6 +515,57 @@ public:
     ///   hardware/<mac>/powerByBand/<bandKeyName>
     /// (mirrors the per-MAC tx/ namespace pattern).
     void setPowerForBand(Band band, int watts);
+
+    // ── Per-band slider limits and FM TX offset (R-R3-49) ─────────────────
+    //
+    // The rest of the Thetis TXBand setter's power half
+    // (console.cs:17511-17580 [v2.10.3.15]):
+    //   ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    //   ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    //   ...
+    //   FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+    // Defaults (console.cs:1824-1841 [v2.10.3.15]): limits 100 on every
+    // band; FM offset 1 MHz on 6 m, 0.1 MHz elsewhere.  Persisted per radio
+    // under hardware/<mac>/limitPowerByBand/, limitTunePowerByBand/ and
+    // fmTxOffsetByBandMhz/ (Thetis saves pipe-delimited strings,
+    // console.cs:3101-3115 save, 4921-4944 load).
+
+    /// PWR slider limit (watts, 0..100) stored for a band.  100 for an
+    /// out-of-range band.
+    int  limitPowerForBand(Band band) const;
+    /// Store a band's PWR slider limit, clamped to 0..100 (PrettyTrackBar's
+    /// LimitValue setter clamps to the slider's Min/Max).
+    void setLimitPowerForBand(Band band, int watts);
+    /// Tune slider limit (watts, 0..100) stored for a band.
+    int  limitTunePowerForBand(Band band) const;
+    /// Store a band's tune slider limit, clamped to 0..100.
+    void setLimitTunePowerForBand(Band band, int watts);
+
+    /// The PWR slider's current limit (ptbPWR.LimitValue).  The band change
+    /// assigns it from limitPowerForBand; setPowerUsingTargetDbm constrains
+    /// the drive to it.
+    int  powerLimit() const noexcept { return m_powerLimit; }
+    void setPowerLimit(int watts);
+    /// Whether the PWR slider limit applies (Thetis PWRSliderLimitEnabled,
+    /// ptbPWR.LimitEnabled; on by default).  The two-tone test turns it off
+    /// around its FIXED drive source and back on at the stop.
+    bool powerSliderLimitEnabled() const noexcept { return m_powerSliderLimitEnabled; }
+    void setPowerSliderLimitEnabled(bool enabled) noexcept { m_powerSliderLimitEnabled = enabled; }
+    /// The tune slider's current limit (ptbTune.LimitValue).
+    int  tunePowerLimit() const noexcept { return m_tunePowerLimit; }
+    void setTunePowerLimit(int watts);
+
+    /// The FM TX offset in MHz for the transmit band (Thetis
+    /// fm_tx_offset_mhz, initially 0).
+    double fmTxOffsetMhz() const noexcept { return m_fmTxOffsetMhz; }
+    /// Set the FM TX offset.  A value outside udFMOffset's 0..50 MHz range
+    /// is ignored, as in Thetis's FMTXOffsetMHz setter.
+    void   setFmTxOffsetMhz(double mhz);
+    /// FM TX offset (MHz) stored for a band.
+    double fmTxOffsetForBandMhz(Band band) const;
+    /// Store a band's FM TX offset (MHz). A value outside 0..50 MHz keeps
+    /// the band's previous value.
+    void   setFmTxOffsetForBandMhz(Band band, double mhz);
 
     // ── ATT-on-TX-on-power-change safety properties (#167 Phase 3A) ──────
     //
@@ -647,7 +721,12 @@ public:
     // band's tunePowerForBand(); in a remote window it is the Core's value,
     // applied by applyStationValue(). NereusSDR-original.
     int  tunePowerForTxBand() const noexcept { return m_tunePowerForTxBand; }
+    /// True once RadioModel has set the transmit band (setTuneTxBand).
+    bool tuneTxBandKnown() const noexcept { return m_tuneTxBandKnown; }
     void setTuneTxBand(Band band);
+    /// Forget the transmit band (a disconnect); tuneTxBandKnown() is false
+    /// until the next setTuneTxBand.
+    void clearTuneTxBand();
     /// What the TX applet's Tune Power slider does locally: the transmit
     /// band's tune power, and the tune drive source to TuneSlider. False,
     /// changing nothing, before the transmit band is known.
@@ -766,6 +845,10 @@ public:
     ///      //[2.10.3.5]MW0LGE).
     ///   3. Emits audioVolumeChanged(audio_volume) signal so RadioModel
     ///      call sites can pump it to TxChannel + RadioConnection.
+    ///
+    /// The drive is constrained to the active slider's limit (powerLimit,
+    /// or tunePowerLimit on the tune-slider source) unless the source is
+    /// FIXED.
     ///
     /// XVTR translation NOT ported (NereusSDR has only one XVTR slot;
     /// sentinel fallback in computeAudioVolume catches that case).
@@ -1324,6 +1407,12 @@ public:
     // WRITE: nothing sets it but the blob. Declared last so every earlier
     // property keeps its wire ordinal.
     Q_PROPERTY(QString txEqCurve READ txEqCurve NOTIFY txEqCurveChanged)
+    // R-R3-49 (transmitSettingsVersion 15): the CFC band editor as a
+    // documented, read-only value (the station link document, "The CFC
+    // band editor"), derived from cfcParaEqData or, where that holds no
+    // curve the Core reads, the ten-band values. cfc.setProfile changes it.
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString cfcProfile READ cfcProfile NOTIFY cfcProfileChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -1979,6 +2068,11 @@ public:
     /// or "unavailable" (a value the Core cannot read). Follows every
     /// change of txEqParaEqData.
     const QString& txEqCurve() const noexcept { return m_txEqCurve; }
+    /// The CFC band editor, as CfcProfile::publishedJson gives it: "state"
+    /// "saved" (cfcParaEqData) or "legacy" (the ten-band values), with a
+    /// "revision" cfc.setProfile checks. Follows every CFC change once a
+    /// profile restore has finished.
+    const QString& cfcProfile() const noexcept { return m_cfcProfile; }
 
     // ── R-R3-49 (parity Task 4): the Legacy EQ box and the band arrays ────
     //
@@ -2160,6 +2254,7 @@ signals:
     /// 3M-3a-ii follow-up Batch 6 — TX EQ parametric blob round-trip.
     void txEqParaEqDataChanged(const QString& data);
     void txEqCurveChanged(const QString& curve);
+    void cfcProfileChanged(const QString& profile);
     // R-R3-49 (parity Task 4): the Legacy EQ box and the link's arrays
     // (emitted beside the per-band signals).
     void txEqUseLegacyChanged(bool on);
@@ -2555,6 +2650,22 @@ private:
     // kernel).  Initialised in the constructor.
     std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_powerByBand{};  // per-band state slots (2 m at 14)
 
+    // R-R3-49: per-band slider limits and FM TX offsets, and the current
+    // slider limits and offset (see limitPowerForBand).  Filled in the
+    // constructor from console.cs:1824-1841 [v2.10.3.15].
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitPowerByBand{};
+    std::array<int, static_cast<std::size_t>(kPerBandStateCount)> m_limitTunePowerByBand{};
+    std::array<double, static_cast<std::size_t>(kPerBandStateCount)> m_fmTxOffsetByBandMhz{};
+    // Thetis's Designer gives both sliders LimitValue = 50
+    // (console.Designer.cs:3688, 3944 [v2.10.3.15]), but the initializing
+    // TXBand pass assigns limitPower_by_band (100 by default) before any
+    // drive is computed, so the effective start value is 100.
+    int    m_powerLimit{100};
+    // ptbPWR.LimitEnabled (console.Designer.cs:3686 [v2.10.3.15]): true.
+    bool   m_powerSliderLimitEnabled{true};
+    int    m_tunePowerLimit{100};
+    double m_fmTxOffsetMhz{0.0};
+
     // ── ATT-on-TX-on-power-change safety state (#167 Phase 3A) ────────────
     // From Thetis console.cs:29285-29310 [v2.10.3.13].  Defaults match
     // upstream: PSAoff=true (MW0LGE [2.9.0.7]), PSAon=true (MW0LGE
@@ -2819,6 +2930,8 @@ private:
     // ships empty until the ucParametricEq dialog populates it).
     QString m_txEqParaEqData;
     QString m_txEqCurve;   // derived from m_txEqParaEqData
+    QString m_cfcProfile;  // derived from the CFC values (refreshCfcProfile)
+    void refreshCfcProfile();
     bool    m_txEqUseLegacy = true;  // R-R3-49 (parity Task 4); eqform.cs:988
 
     // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ────────────

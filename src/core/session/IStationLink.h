@@ -46,6 +46,18 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -143,6 +155,9 @@
 //                                    radio (stationRadiosVersion 1),
 //                                    requestStationRadio.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  HL2 clock options: hl2ClockUnavailableReason
+//                                    (radioHardwareVersion 10).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
 //                                    spot sources (recordStreamVersion 1),
 //                                    requestSpotSource.
@@ -189,6 +204,26 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11:
 //                                    adcAttenuatorsAvailable(). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  requestCfcProfile
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  R-R3-49 / R-IOS-27: holdsTransmitHere(),
+//                                    for the PA Gain page's on-the-air
+//                                    holder rule. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
+//                                    plan Task 5: remoteSliceAccessAvailable
+//                                    and the listen, stop listening, take
+//                                    control and release requests
+//                                    (sliceAccessVersion 1). AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 14b:
+//                                    requestListenLevel, a listened slice's
+//                                    own volume and mute. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -253,6 +288,33 @@ public:
     virtual QString band2mUnavailableReason() const { return {}; }
     virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
     { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
+
+    /// Slice control plan Task 5 (sliceAccessVersion 1 at minor 11): the
+    /// Core shares slices between devices with this window. Verbs
+    /// "slice.listen" and "slice.stopListening" (sliceId, incarnation) and
+    /// "slice.takeControl" and "slice.release" (sliceId, incarnation,
+    /// controlRevision), with the values the window was shown in the
+    /// slice's `access:<id>` object. The defaults refuse, for links that
+    /// did not negotiate it.
+    virtual bool remoteSliceAccessAvailable() const { return false; }
+    static QString sliceAccessUnavailableReason()
+    { return QStringLiteral("This Core cannot share slices with this app. Updating the Core may help."); }
+    virtual CommandOutcome requestListen(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestStopListening(int /*sliceId*/, quint64 /*incarnation*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestTakeControl(int /*sliceId*/, quint64 /*incarnation*/,
+                                              quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    virtual CommandOutcome requestRelease(int /*sliceId*/, quint64 /*incarnation*/,
+                                          quint64 /*controlRevision*/)
+    { return { false, sliceAccessUnavailableReason() }; }
+    /// Slice control plan Task 14b: "slice.setListenLevel" (sliceId,
+    /// incarnation, level 0..1, muted), this window's own volume and mute
+    /// for a slice it listens to (the flag's "Your volume").
+    virtual CommandOutcome requestListenLevel(int /*sliceId*/, quint64 /*incarnation*/,
+                                              double /*level*/, bool /*muted*/)
+    { return { false, sliceAccessUnavailableReason() }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.
@@ -506,6 +568,10 @@ public:
     /// empty while permitted.
     virtual QString transmitPermissionReason() const
     { return QStringLiteral("This device cannot transmit through this Core."); }
+    /// R-R3-49 / R-IOS-27 (JJ's ruling): whether the Core names this
+    /// window's device as the one holding transmit. On the air the PA
+    /// Gain page opens the transmitting band only then. The default: no.
+    virtual bool holdsTransmitHere() const { return false; }
     /// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     /// Tune Power slider. The Core sets the tune power for the band it
     /// transmits on and the tune drive source to the tune slider, as the
@@ -527,6 +593,12 @@ public:
     /// R-R3-49 (parity Task 3): the RADE applet's Reset vocoder; the Core
     /// clears its RADE transmit vocoder. Keys nothing. Refused on the air.
     virtual CommandOutcome requestRadeResetVocoder()
+    { return { false, transmitSettingsUnavailableReason() }; }
+    /// transmitSettingsVersion 15: the CFC dialog's band editor. The Core
+    /// applies `profileJson` (the published cfcProfile form) at once when
+    /// `expectedRevision` is still its profile's revision; the saved values
+    /// come back on the mirrored `transmit` object.
+    virtual CommandOutcome requestCfcProfile(const QString&, const QString&)
     { return { false, transmitSettingsUnavailableReason() }; }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)
@@ -553,6 +625,14 @@ public:
     // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
     static QString alexHpfRowsUnavailableReason()
     { return QStringLiteral("This Core cannot change these filter rows for this app. Updating the Core may help."); }
+    // radioHardwareVersion 10: the Alex-1 Filters tab's low-pass rows and
+    // 6m/ByPass on RX.
+    static QString alexLpfRowsUnavailableReason()
+    { return QStringLiteral("This Core cannot change the low-pass filter rows for this app. Updating the Core may help."); }
+    // radioHardwareVersion 11: HL2 Options' Enable CL2, CL2 frequency and
+    // External 10 MHz, which the Core sends to its radio.
+    static QString hl2ClockUnavailableReason()
+    { return QStringLiteral("This Core cannot change its radio's clock settings for this app. Updating the Core may help."); }
     // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
     // write on the Core's radio. The answer (a read's bytes in `value`)
     // arrives as RadioModel::reportStationIoBoardResult.
@@ -573,6 +653,38 @@ public:
     { return QStringLiteral("This Core changes the sample rate of this window's receivers only. Updating the Core may help."); }
     virtual CommandOutcome requestRadioSampleRate(int /*rateHz*/)
     { return { false, radioSampleRateUnavailableReason() }; }
+
+    // Level Cal, verb "resetLevelCalibration" (radioHardwareVersion 12):
+    // Setup's Reset, the meter and display calibration back to the radio's
+    // defaults on the Core (RadioModel::resetLevelCalibration). The default
+    // refuses, and the window shows Reset disabled with the reason.
+    virtual bool levelCalibrationResetAvailable() const { return false; }
+    static QString levelCalibrationResetUnavailableReason()
+    { return QStringLiteral("This Core cannot reset the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestResetLevelCalibration()
+    { return { false, levelCalibrationResetUnavailableReason() }; }
+
+    // Level Cal, verbs "startLevelCalibration" and "cancelLevelCalibration"
+    // (radioHardwareVersion 12): Setup's Start and Cancel, the calibration
+    // run on the Core (RadioModel::requestStartLevelCalibration). Its
+    // progress comes back as the radio's levelCal* properties (feature
+    // "levelCalibration"). The default refuses, and the window shows Start
+    // disabled with the reason.
+    virtual bool levelCalibrationRunAvailable() const { return false; }
+    static QString levelCalibrationRunUnavailableReason()
+    { return QStringLiteral("This Core cannot run the level calibration for this app. Updating the Core may help."); }
+    virtual CommandOutcome requestStartLevelCalibration(float /*levelDbm*/, double /*frequencyHz*/,
+                                                        int /*sliceId*/)
+    { return { false, levelCalibrationRunUnavailableReason() }; }
+    virtual CommandOutcome requestCancelLevelCalibration()
+    { return { false, levelCalibrationRunUnavailableReason() }; }
+    // Level Cal (radioHardwareVersion 12): the Core's stepAtt carries
+    // rx2PreampMode, RX2's own preamp mode, which a slice on the other ADC
+    // uses. The default says no, and the window shows that slice's preamp
+    // choice disabled with the reason.
+    virtual bool rx2PreampModeAvailable() const { return false; }
+    static QString rx2PreampModeUnavailableReason()
+    { return QStringLiteral("This Core cannot change the preamp of this slice's receiver input for this app. Updating the Core may help."); }
 
     // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
     // 1), the filter graph's curve for a slice's receiver on the Core. The

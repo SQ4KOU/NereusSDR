@@ -205,6 +205,27 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
+//                                    RX2's own preamp mode on the Core
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration, and the
+//                                    levelCalibration feature for the run's
+//                                    progress (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    mediaTunnelOnlyIceConfiguration, the
+//                                    tunnel alone for the fallback;
+//                                    mediaTunnelInUse.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder:
+//                                    mediaStunServer, mediaDirectAvailable,
+//                                    mediaDirectIceConfiguration.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the GUI half
 //                                    of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -382,6 +403,37 @@
 //                                    settings only a permitted device may
 //                                    change. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  requestCfcProfile
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setTransmitSettingsVersionForTest:
+//                                    a window of a current Core that
+//                                    answers as an older one.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 5:
+//               sliceAccess() (SliceAccessMirror), remoteSliceAccessAvailable,
+//               requestListen, requestStopListening, requestTakeControl,
+//               requestRelease and sliceAccessHeld. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: requestListenLevel
+//               (slice.setListenLevel), a listened flag's "Your volume".
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: requestTxSlice sends
+//               tx.setTxSlice for the TX applet's transmit-slice letters,
+//               answered on deviceCommandFinished. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 17: setTokenSliceAccessForTest,
+//               a remote window test's bench link declares sliceAccess
+//               with sessionHolder, as a device-key sign-in does.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the hello declares sliceAccess 2;
+//               controlTakeBackAvailable() and its reason for the
+//               controlTaken card's Take it back. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-3): a controlTaken card stays when
+//               its Take it back may be tried again
+//               (controlTakeBackMayBeTriedAgain). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -430,6 +482,7 @@ class SessionTransport;
 class SwitchableTransport;
 class MediaTunnel;
 class RemoteDevicesState;
+class SliceAccessMirror;
 class SettingsProxy;
 class TransmitState;
 class TxWatchClient;
@@ -558,6 +611,7 @@ public:
     /// Step 2b: media runs in the WebSocket tunnel (the media controller
     /// says so), which counts as a relayed path for the heartbeat.
     void setMediaTunnelInUse(bool inUse);
+    bool mediaTunnelInUse() const { return m_mediaTunnelInUse; }
 
     /// How often locally-observed property changes are drained toward the
     /// station. See StationServer::kDefaultDeltaFlushMs for the same
@@ -695,6 +749,20 @@ public:
     /// The ICE settings for media over the tunnel (made on first use on
     /// this session's transport); none unless the current path carries binary.
     std::optional<IceConfiguration> mediaTunnelIceConfiguration();
+    /// The direct media ladder (link section 21): the STUN server every
+    /// media connection uses. The first stun: entry of the Core's
+    /// mediaStunUrls; without one, this session's service STUN server, or
+    /// the last one a session through the service used (in memory only).
+    std::optional<IceServerAddress> mediaStunServer() const;
+    /// The Core told mediaDirectVersion 1: a media replace may add
+    /// "mediaDirectVersion": 1 for a connection without tunnel or relay.
+    bool mediaDirectAvailable() const;
+    /// STUN and host candidates only: no relay, no tunnel.
+    IceConfiguration mediaDirectIceConfiguration() const;
+    /// The fallback from a silent direct path: the tunnel's candidates
+    /// alone, no STUN and no host candidates (none unless the tunnel is
+    /// usable, as mediaTunnelIceConfiguration()).
+    std::optional<IceConfiguration> mediaTunnelOnlyIceConfiguration();
 
     /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
     /// paired Core can be reached through the internet service: the
@@ -878,6 +946,12 @@ public:
     {
         m_declaredFeatures.insert(name, version);
     }
+    /// Test seam: the transmitSettingsVersion this window heard, as an
+    /// older Core would have sent it. After the handshake.
+    void setTransmitSettingsVersionForTest(int version)
+    {
+        m_capabilities.transmitSettingsVersion = version;
+    }
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
@@ -995,7 +1069,7 @@ public:
     QString otherHolderReason() const;
     /// Task 77 (ruling 8.4): whether this window holds transmit on the Core
     /// (false while nobody does, or the Core does not say).
-    bool holdsTransmitHere() const;
+    bool holdsTransmitHere() const override;
     /// Task 77: whether the holder's rules reach this window: the Core
     /// names who holds transmit (txStateVersion 2) and takes remote keys
     /// (not receive-only).
@@ -1004,6 +1078,10 @@ public:
     // ── iPhone app plan Task 78: several devices on one Core ────────────
     /// What the Core says about the other devices (never null).
     RemoteDevicesState* remoteDevices() const { return m_remoteDevices; }
+    /// Slice control plan Task 5: who controls and who listens to each
+    /// slice on the Core, as its `access:<id>` objects say (never null;
+    /// empty on a Core without sliceAccessVersion).
+    SliceAccessMirror* sliceAccess() const { return m_sliceAccess; }
     /// The Core treats this window as a device that shares it: it signed
     /// in with this computer's own key, declared sessionHolder 1, and the
     /// Core answered sessionHolderVersion 1 at minor 11.
@@ -1020,12 +1098,34 @@ public:
     /// at once when nothing changed. Returns the command id, 0 when it
     /// could not be sent.
     quint32 requestTakeTransmit(bool shown, qint64 holderEpoch, bool shownKeyed);
+    /// Slice control plan Task 11 (U8): `tx.setTxSlice {sliceId}`, the
+    /// holder's choice of the slice it transmits on (ruling 8.10: a keyed
+    /// move unkeys first). The answer arrives on deviceCommandFinished.
+    /// Returns the command id, 0 when it could not be sent.
+    quint32 requestTxSlice(int sliceId);
     /// `confirm.proceed {id, choice}` (-1 for a question with no choices).
     quint32 proceedQuestion(qint64 id, qint64 choice);
     /// `confirm.cancel {id}`.
     quint32 cancelQuestion(qint64 id);
-    /// `notice.takeBack {id}`; the card goes either way.
+    /// `notice.takeBack {id}`. The card goes at once, except a
+    /// controlTaken card's (take-over fix wave, M-3): that one goes when
+    /// the take-back works or can never work now, and stays when it was
+    /// refused and may be tried again (controlTakeBackMayBeTriedAgain).
     quint32 takeBackNotice(qint64 id);
+    /// Take-over parity (sliceAccessVersion 2): a controlTaken notice's
+    /// Take it back works here. An older Core offers none, and the card
+    /// shows it off with controlTakeBackUnavailableReason().
+    bool controlTakeBackAvailable() const;
+    static QString controlTakeBackUnavailableReason();
+    /// Take-over fix wave (M-3; the phone contract: a take-back refused
+    /// while the slice transmits "may be tried again"): whether Take it
+    /// back on controlTaken `notice`, refused with `reason`, may be tried
+    /// again. The Core keeps the take-back in exactly that case: the slice
+    /// the notice names is still that slice (`incarnationNow`, -1 when it
+    /// is gone) at the control revision the notice named (`revisionNow`).
+    /// Never after "That can no longer be taken back."
+    static bool controlTakeBackMayBeTriedAgain(const SessionPrompt& notice, const QString& reason,
+                                               qint64 incarnationNow, qint64 revisionNow);
     /// `session.leave`, when the Core offers it: the operator is done with
     /// the Core here (Disconnect, or quitting). Sent before the link
     /// closes; nothing waits for its answer.
@@ -1043,6 +1143,12 @@ public:
     /// numbered the token window with.
     void setTokenSessionHolderForTest(const QString& wireId)
     { m_tokenSessionHolderIdForTest = wireId; }
+    /// Test seam: with setTokenSessionHolderForTest, the bench link also
+    /// declares sliceAccess, as a device-key sign-in always does.
+    void setTokenSliceAccessForTest(bool declares) { m_tokenSliceAccessForTest = declares; }
+    /// Test seam: the sliceAccess version the hello declares (2), 1 for a
+    /// window from before Take it back on controlTaken.
+    void setSliceAccessDeclaredForTest(int version) { m_sliceAccessDeclared = version; }
     /// Test seam: an older window, which never declares sessionHolder.
     void setDeclaresSessionHolder(bool declares) { m_declaresSessionHolder = declares; }
 #endif
@@ -1165,6 +1271,21 @@ public:
     static QString station2mUnavailableReason();
     QString band2mUnavailableReason() const override;
     CommandOutcome requestSelectBand(int sliceId, int band) override;
+    // Slice control plan Task 5 (sliceAccessVersion 1 at minor 11): listen
+    // to, stop listening to, take control of and release a slice. The
+    // answers arrive on deviceCommandFinished; the access objects follow.
+    // setActiveSliceById (requestActiveSlice) also chooses a listened slice
+    // as this window's receive slice on such a Core.
+    bool remoteSliceAccessAvailable() const override;
+    CommandOutcome requestListen(int sliceId, quint64 incarnation) override;
+    CommandOutcome requestStopListening(int sliceId, quint64 incarnation) override;
+    CommandOutcome requestTakeControl(int sliceId, quint64 incarnation,
+                                      quint64 controlRevision) override;
+    CommandOutcome requestRelease(int sliceId, quint64 incarnation,
+                                  quint64 controlRevision) override;
+    // Task 14b: this window's own volume and mute for a listened slice.
+    CommandOutcome requestListenLevel(int sliceId, quint64 incarnation, double level,
+                                      bool muted) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
@@ -1227,6 +1348,10 @@ public:
     CommandOutcome requestTxProfileSave(const QString& name) override;
     CommandOutcome requestTxProfileDelete(const QString& name) override;
     CommandOutcome requestRadeResetVocoder() override;
+    // transmitSettingsVersion 15: see IStationLink. Sent only to a Core at
+    // transmitSettingsVersion 15.
+    CommandOutcome requestCfcProfile(const QString& profileJson,
+                                     const QString& expectedRevision) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
@@ -1278,6 +1403,19 @@ public:
     /// (radioHardwareVersion 9).
     bool radioSampleRateAvailable() const override;
     CommandOutcome requestRadioSampleRate(int rateHz) override;
+    /// Level Cal: the Core offers resetLevelCalibration
+    /// (radioHardwareVersion 12).
+    bool levelCalibrationResetAvailable() const override;
+    CommandOutcome requestResetLevelCalibration() override;
+    /// Level Cal: the Core offers startLevelCalibration and
+    /// cancelLevelCalibration (radioHardwareVersion 12).
+    bool levelCalibrationRunAvailable() const override;
+    CommandOutcome requestStartLevelCalibration(float levelDbm, double frequencyHz,
+                                                int sliceId) override;
+    CommandOutcome requestCancelLevelCalibration() override;
+    /// Level Cal: the Core's stepAtt carries rx2PreampMode
+    /// (radioHardwareVersion 12).
+    bool rx2PreampModeAvailable() const override;
     /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
     /// answer goes to RadioModel::reportStationFilterResponse.
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
@@ -1406,11 +1544,17 @@ signals:
     /// `atMs` on the Core's clock.
     void cfcCompressionReceived(const QList<double>& binsDb, qint64 atMs);
     /// iPhone app plan Task 78: a several-devices verb was answered
-    /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack).
+    /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack; slice
+    /// control plan Task 5: slice.listen, slice.stopListening,
+    /// slice.takeControl, slice.release).
     /// `awaitingConfirmation` when the Core asked a question instead (it
     /// follows as a confirm.request).
     void deviceCommandFinished(const QByteArray& verb, quint32 commandId, bool accepted,
                                const QString& reason, bool awaitingConfirmation);
+    /// Slice control plan Task 5: a change to slice `sliceId` was held back
+    /// here because this window only listens to it; `reason` is the Core's
+    /// listener words. Nothing was sent.
+    void sliceAccessHeld(int sliceId, const QString& reason);
     /// The holder's rules or this window's ability to take transmit changed.
     void transmitTakeAvailabilityChanged();
     /// Fix wave M6: voxArmedHere() changed.
@@ -1665,11 +1809,15 @@ private:
     bool m_declaredSessionHolder = false;
     bool m_declaresSessionHolder = true;
     QString m_tokenSessionHolderIdForTest;
+    bool m_tokenSliceAccessForTest = false;
+    /// Take-over parity: the sliceAccess version the hello declares.
+    int m_sliceAccessDeclared = 2;
     RemoteDevicesState* m_remoteDevices = nullptr;
     /// Task 78 item 3: the device that took this window's place, from the
     /// end that stopped it, so the next session.held starts on it (Take it
     /// back). Cleared once a session is let in.
     QString m_takeBackDeviceId;
+    SliceAccessMirror* m_sliceAccess = nullptr;
     QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
     bool m_enrolledDeviceKey = false;
@@ -1831,6 +1979,9 @@ private:
         QString spotSource;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
+    /// Take-over fix wave (M-3): notice.takeBack commands for controlTaken
+    /// notices, by command id, to their notice ids.
+    QHash<quint32, qint64> m_controlTakeBacks;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;
 
     // ---- Task 19: stale state and session epoch ----
@@ -1901,6 +2052,9 @@ private:
     /// The ICE settings of the connection through the service this session
     /// left, so its media keeps the service's STUN server (link 21.3).
     std::optional<IceConfiguration> m_serviceIce;
+    /// The last STUN server a session through the service used (the
+    /// direct media ladder's fallback); never saved.
+    mutable std::optional<IceServerAddress> m_lastServiceStun;
     /// Task 29 step 2b: the media tunnel on this session's transport.
     std::shared_ptr<MediaTunnel> m_mediaTunnel;
     bool m_serviceDialing = false;

@@ -239,6 +239,78 @@ private slots:
         compare(step(conn, io), {});
     }
 
+    void aWriteDroppedByAFullQueueIsRetried()
+    {
+        // mi0bot I2CWrite returns -1 on a full queue (netInterface.c:
+        // 1536-1564 [@c26a8a4]) and setFrequency sets currentFreq anyway
+        // (IoBoardHl2.cs:183-202), so the write is lost. Here a value is
+        // recorded as written only when it was queued, and the next poll on
+        // that step sends it.
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        IoBoardHl2 io;
+        io.setDetected(true);
+        conn.setIoBoard(&io);
+        conn.setIoBoardTxState(static_cast<int>(DSPMode::USB), 14074000);
+        compare(step(conn, io), {write(32, 1)});   // 0
+        compare(step(conn, io), {readPins()});     // 1
+        // Fill the queue so step 2's frequency write has no room.
+        for (int i = 0; i < IoBoardHl2::kMaxI2cQueue; ++i) {
+            IoBoardHl2::I2cTxn txn;
+            txn.bus = 1;
+            txn.address = 0x1D;
+            txn.control = 40;
+            txn.writeData = 0x55;
+            QVERIFY(io.enqueueI2c(txn));
+        }
+        QVERIFY(io.i2cQueueIsFull());
+        conn.ioBoardPollTickForTest();             // 2: dropped
+        const QList<Frame> filler = drain(conn, io);
+        QCOMPARE(filler.size(), IoBoardHl2::kMaxI2cQueue);
+        for (const Frame& f : filler) {
+            QCOMPARE(f.c3, 40);
+        }
+        compare(step(conn, io), {});               // 3
+        compare(step(conn, io), {readPins()});     // 4
+        compare(step(conn, io), {});               // 5
+        compare(step(conn, io), {});               // 6
+        compare(step(conn, io), {readPins()});     // 7
+        // 8: the frequency goes out now, all five bytes.
+        compare(step(conn, io), {write(0, 0x00), write(1, 0x00), write(2, 0xD6),
+                                 write(3, 0xC0), write(4, 0x90)});
+        compare(step(conn, io), {});               // 9
+    }
+
+    void aPartlyQueuedFrequencyIsNotSplit()
+    {
+        // With room for only some of the five frequency bytes, none go out
+        // on that step, so the board never holds half of a new frequency.
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::HermesLite);
+        IoBoardHl2 io;
+        io.setDetected(true);
+        conn.setIoBoard(&io);
+        conn.setIoBoardTxState(static_cast<int>(DSPMode::USB), 14074000);
+        compare(step(conn, io), {write(32, 1)});   // 0
+        compare(step(conn, io), {readPins()});     // 1
+        for (int i = 0; i < IoBoardHl2::kMaxI2cQueue - 2; ++i) {
+            IoBoardHl2::I2cTxn txn;
+            txn.bus = 1;
+            txn.address = 0x1D;
+            txn.control = 40;
+            txn.writeData = 0x55;
+            QVERIFY(io.enqueueI2c(txn));
+        }
+        conn.ioBoardPollTickForTest();             // 2: two slots, needs five
+        QCOMPARE(io.i2cQueueDepth(), IoBoardHl2::kMaxI2cQueue - 2);
+        drain(conn, io);
+        for (int s = 3; s < 8; ++s) {
+            step(conn, io);
+        }
+        compare(step(conn, io), {write(0, 0x00), write(1, 0x00), write(2, 0xD6),
+                                 write(3, 0xC0), write(4, 0x90)});   // 8
+    }
+
     void aPauseHoldsThePollOnItsStep()
     {
         // mi0bot console.cs:25640-25646 SetI2CPollingPause and 25931-25935

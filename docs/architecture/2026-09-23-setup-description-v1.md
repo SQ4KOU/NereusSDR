@@ -1,4 +1,4 @@
-# Setup description versions 1–15
+# Setup description versions 1–21
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,15 +165,20 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 15. PA has a version-14 ceiling (version 13
-for V13, version 5 for V5–V12) and Hardware a version-13 ceiling (version 6
-for V6–V12); Display a version-12 ceiling, and Appearance a version-12
-ceiling with its prior version-4 projection for V4–V6 and version-7
-projection for V7–V11. DSP, Transmit, Audio, Diagnostics and CAT & Network
-are version 15 to a V15 peer (see Version 15); Transmit is version 13 to a
-V13 or V14 peer and version 3 to a V3 to V12 peer (with the Power page's
-earlier coverage text), and DSP, Audio, Diagnostics and CAT & Network are
-version 3 to a V3 to V14 peer. General and Test retain version 3.
+future declaration at version 22. PA has a version-20 ceiling (version 14
+for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
+for V17, version 16 for V16, version 13
+for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
+Appearance a version-12 ceiling with its prior version-4 projection for
+V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
+later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19)
+and version 15 to a V15 to V18 peer; Transmit, Audio and Diagnostics are
+version 15 to a V15 or later peer (see Version 15); CAT & Network is version
+21 to a V21 or later peer (see Version 21) and version 15 to a V15 to V20
+peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
+a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
+Audio, Diagnostics and CAT & Network are version 3 to a V3 to V14 peer.
+General and Test retain version 3.
 No mirror field or ordinal changes.
 
 Version 6 adds exactly two closed `kind: "table"` controls to the partial
@@ -467,8 +472,10 @@ point: ANAN-10 class and the HL2 10 W except 11 and 12 W for points 9 and 10,
 ANAN-100 class 100 W except 110 and 120 W, ANAN-8000 class 100, 100, 100,
 120, 140, 200, 200, 200, 220 and 240 W), `step` 0.1, `decimals` 1, `unit`
 `W`, and `boardClass` (1 ANAN-10, 2 ANAN-100, 3 ANAN-8000). A model without a
-class removes the ten points. The gate is `transmitSettingsVersion:6` plus
-`offAir:true`, the desktop's own gate for this table.
+class removes the ten points. The gate is `transmitSettingsVersion:6`, the
+desktop's own gate for this table, with no `offAir`: Thetis gives the table
+no transmit rule (it corrects the forward-power reading only, and its boxes
+are read live with no MOX check).
 
 `binding.radioSetting` is new in version 13: a key under the connected
 radio. The renderer reads and writes `hardware/<MAC>/<radioSetting>` through
@@ -482,9 +489,9 @@ A point reads as its stored `calPoint<N>` while
 and as its `default` while that key is absent or `0`; another class disables
 the point with a plain reason (the table was saved for another model). An
 edit first writes `boardClass` when it is absent or `0`, then the point. The
-Core applies the table at once, and while the radio transmits it refuses the
-write and hands back its value (the settings proxy's off-air rule for these
-keys, as for the desktop's). A value outside the row's range, a
+Core takes a point on or off the air; a point written while the radio
+transmits reaches the meter once the radio is back on receive, as a remote
+desktop window's does. A value outside the row's range, a
 non-number, or a `boardClass` other than the Core's radio's is refused whole
 with the range in plain words (for example "Choose a calibration point from
 0 to 10 W."), and the Core hands back its value; nothing is clamped.
@@ -606,11 +613,11 @@ Reset Defaults, per-band gain, drive-step adjusts and max power (the profile
 bank is serialized per profile and no closed profile state or command exists
 on the wire yet); New Cal (hidden on the desktop, as in Thetis); the
 auto-calibration sweep (it keys the radio from the desktop's own window);
-the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); both
-Alex Filters tabs' LPF edges (hidden on the desktop too: the Core does not
-apply them yet, as nothing selects the transmit low-pass from them); OC Outputs; the rest of Calibration (frequency and level calibration,
+the ANAN-8000DLE title bar volts/amps box (the desktop's title bar); the
+Alex-1 Filters tab's LPF edges and 6m/ByPass on RX (described from version
+17, below); OC Outputs; the rest of Calibration (frequency and level calibration,
 6 m LNA offsets, the correction factors, Volts/Amps calibration and its log);
-HL2 Options; and the rest of HL2 I/O (register, state machine, I2C and
+HL2 Options (described in version 16); and the rest of HL2 I/O (register, state machine, I2C and
 bandwidth monitor views, probe and reset). No new wire field, verb or
 capability value is defined.
 
@@ -655,12 +662,19 @@ not start with "Default" or repeat one there), Copy (the active profile's
 values under a new name), Delete (never the last one; the radio's factory
 profile is then selected, as Thetis does), Reset Defaults (the active
 profile's factory values for its model), and the cell edits, each rounded
-to one decimal place and refused whole outside its column's range. Every
-verb is refused while the radio is on the air, and meets the gates the
-Core gives the desktop's own PA profile writes: a receive-only Core takes
-it from a peer offered transmit settings, and with remote transmit
-allowed only from a device that may transmit. A peer must declare
-`paProfiles:1` to get the object, the capability and the verbs.
+to one decimal place and refused whole outside its column's range. While the
+radio is on the air the Core follows Thetis: select, New, Copy, Delete,
+Reset Defaults and every other band's cells are refused ("Can't change
+while transmitting."), and the transmitting band's gain, adjusts, Max W
+and Use Max are taken live from the device that holds transmit only
+("Only the device that is transmitting can change this."); an Adjust edit
+moves the drive to that step, as `setup.cs:24212-24222 [v2.10.3.15]`
+does. Each verb also meets the gates the Core gives the desktop's own PA
+profile writes: a receive-only Core takes it from a peer offered transmit
+settings, and with remote transmit allowed only from a device that may
+transmit. A peer must declare `paProfiles:1` to get the object, the
+capability and the verbs.
+
 Version 15 describes the rest of Setup > DSP, Transmit, Audio, Diagnostics
 and CAT & Network (R-R3-49, R-IOS-18, R-IOS-27). Every new row has
 `requiresDescriptionVersion:15`. A peer that declares 15 or higher receives
@@ -791,8 +805,8 @@ slot without all three keys; the catalogue follows every change.
 
 Not described in DSP, with the reason: the NR3 and NNR model files (Models…
 opens a manager that adds and saves files; the phone's own), the per-band CFC
-editor (it edits `cfcParaEqData` through a curve and band editor; the phone
-needs a verb such as TX EQ's `txEq.setCurve` for CFC), the Options warning
+editor (described in version 19 as `dsp.cfc.bands`; a V15 to V18 peer keeps
+this coverage text), the Options warning
 marks (worked out from the combos, not settings), the hidden unbuilt CW
 keyer, CW timing, APF bandwidth and gain, SAM, AM squelch tail, FM deviation
 and FM transmit, and the static notes.
@@ -816,7 +830,7 @@ family's Radio Mic section: Hermes / Atlas (Mic In or Line In, +20 dB Mic
 Boost, Line In Gain -34 to 12 dB), Orion-MkII (Mic Tip-Ring, Mic Bias, Mic PTT
 Disabled, +20 dB Mic Boost) or Saturn G2 (3.5 mm Jack or XLR, Mic PTT
 Disabled, Mic Bias, +20 dB Mic Boost). They gate on `transmitSettingsVersion`
-3 and off the air, as the desktop does. The microphone source and the
+3 and carry no off-air rule (see the off-air sweep below). The microphone source and the
 microphone device, buffer and test are each computer's own and are not
 described (the source is not on the link). TX Profile gains the profile
 choice (`txProfile.select`, with the unsaved-changes question), Save... (a
@@ -881,6 +895,224 @@ Genius's Bias Mode, TX Antenna and Follows slice (radio buttons without a
 group the description can name; to be grouped on the desktop first) and the
 static notes.
 
+Version 16 describes the HL2 Options tab's Hermes Lite Options on the
+Hermes Lite 2's HL2 I/O page (`hardware.hl2Io`), as a second section after
+Configuration, after version 15. Every row has `requiresDescriptionVersion:16`, `applies:"live"`, the
+gate `{"capability":"transmitSettingsVersion","min":8}` and a closed
+`{"radioSetting":"hl2/<key>"}` binding, written as the desktop's own tab
+writes `hardware/<mac>/hl2/<key>`, and is accepted only as the exact object
+in `resources/setup/hardware.json`. The two transmit timing rows also carry
+`"transmit":true` in their gate, since the Core treats those keys as
+transmit hardware settings. In the desktop's order:
+
+- `hardware.hl2Io.txLatency`, TX buffer latency, integer 0..70 ms, default 20.
+- `hardware.hl2Io.pttHang`, PTT hang, integer 0..30 ms, default 12.
+- `hardware.hl2Io.cl2Enable`, Enable CL2, toggle, default off.
+- `hardware.hl2Io.cl2Freq`, CL2 frequency, 1..200 MHz, default 116;
+  integer at 16, decimal from 18 (step 0.1, 3 decimals; below).
+- `hardware.hl2Io.ext10MHz`, External 10 MHz reference, toggle, default off.
+- `hardware.hl2Io.disconnectReset`, Reset on Ethernet disconnect, toggle.
+- `hardware.hl2Io.psSync`, Disable power supply sync, toggle.
+- `hardware.hl2Io.bandVolts`, Band Volts (PWM out 0–3.3 V), toggle.
+- `hardware.hl2Io.swapAudioChannels`, Swap audio channels, toggle.
+
+Toggles use `valueEncoding` True/False and default off. Four rows the Core
+stores but does not send to the radio carry `availability {enabled:false,
+reason}`, and the desktop tab, a remote window and the phone show them
+disabled with that reason: Enable CL2, CL2 frequency and External 10 MHz
+reference ("NereusSDR does not change the radio's clock settings.") and
+Swap audio channels ("NereusSDR does not send the radio audio of its own,
+so there is nothing to swap."). A board without the HL2 I/O board has no
+`hardware.hl2Io` page, so none of these rows. V13–V15 peers receive Hardware
+at version 13 without the section. No new wire field, verb or capability
+value is defined.
+
+Version 17 describes the Alex-1 Filters tab's low-pass rows (R-R3-46,
+R-R3-49). The Core applies them to its radio as Thetis's setAlexLPF selects
+the transmit low-pass (console.cs:7177-7243 [v2.10.3.15]), with capability
+`radioHardwareVersion` 10. A peer that declares 17 receives
+Hardware as version 17; a V16 peer receives it as version 16, with no
+low-pass row, a V13 to V15 peer exactly as version 13, and V6 to V12 keep
+version 6. Every new row has `requiresDescriptionVersion:17`.
+
+`hardware.alex1Filters` gains an Alex LPF Bands section after its bank
+section, on every board that has the page. It holds seven rows in the
+desktop's order, each two decimals with ids
+`hardware.alex1Filters.lpf.<slug>.start` and `.end` (slugs `160m`, `80m`,
+`40m`, `20m`, `15m`, `10m`, `6m`), labelled with the desktop's row label
+(160m, 80m, 60/40m, 30/20m, 17/15m, 12/10m, 6m) and LPF Start or LPF End,
+bound to `radioSetting` `alex/lpf/<slug>/start|end`: each edge limited to
+its Thetis spinner's range (`codec::alex::kAlexLpfEdgeLimits`), step 0.001, six decimals, unit `MHz`, defaulting to Thetis's spinner
+values (0 to 2.5, 2.500001 to 5, 5.000001 to 8, 8.000001 to 16.5, 16.500001
+to 24, 24.000001 to 35.6, 35.600001 to 61.44). Their gate is
+`radioHardwareVersion:10` plus `transmit:true` and no off-air rule: they
+are the transmit low-pass table, so with remote transmit allowed the Core
+takes a write only from a session permitted to transmit, and it stores the
+edge on or off the air for the next selection, as Thetis's spinners do. The
+section ends with 6m/ByPass on RX (`hardware.alex1Filters.lpfBypass`,
+`radioSetting` `alex/master/lpfBypass`, a `True`/`False` toggle, default
+false, tooltip "Selects the 6m LPF during receive regardless of
+frequency.", gate `radioHardwareVersion:10` with no transmit flag and no
+off-air rule). On the ANAN-8000DLE, ANAN-7000DLE, ANAN-G2, ANAN-G2 1K and
+Anvelina Pro 3, where Thetis hides it, the row carries `availability`
+disabled with "This radio does not have the 6m low-pass bypass on
+receive." The low-pass in use is not a Setup row: a peer that declares
+`alexLpf` 1 reads it from `radio`'s `alexLpfBits` (link document section
+7.1). No other wire field changes.
+
+Version 18 opens the three clock rows, which the Core now sends to a
+Hermes Lite 2 (radioHardwareVersion 11). A peer that declares 18 or higher
+receives Hardware as version 18. `hardware.hl2Io.cl2Enable`,
+`hardware.hl2Io.cl2Freq` and `hardware.hl2Io.ext10MHz` carry
+`requiresDescriptionVersion:18`, no `availability`, and the tooltips "Enable
+frequency output on CL2", "Output frequency on CL2 output" and "Enable
+external 10 MHz input on CL1". The frequency row becomes `kind:"decimal"`,
+1..200 MHz, `step` 0.1, `decimals` 3, as the desktop's box holds three
+decimal places; its value is the stored text, such as "116" or "24.576".
+Labels, bindings, the other ranges, defaults and the gate are unchanged. The
+frequency row also carries one closed dependency,
+`"enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]}`: the row is
+enabled only while the row of this description bound to `hl2/cl2Enable`
+holds on, as the desktop disables the frequency box while Enable CL2 is off.
+Hardware accepts `enabledWhen` only on that exact row. A peer declaring
+V16 or V17 receives Hardware at version 16 or 17 with the three version 16
+rows, closed with the old reason, in place of the version 18 rows; the six other rows
+are unchanged. Its frequency row stays `kind:"integer"` and closed, so it
+can show a value such as "24.576" set from the desktop or a version 18
+peer, but never write one. No new wire field or verb is defined.
+
+Version 19 describes DSP > CFC's per-band editor, the desktop's Configure
+CFC bands… button (R-R3-49). DSP's root is version 19; the one new row is
+the last control of the CFC page's CFC section, after Post-EQ Gain, and is
+accepted only as the exact object in `resources/setup/dsp.json`
+(`validateDspV19Control`):
+
+- `id` `dsp.cfc.bands`, `label` "Configure CFC bands…", `kind` `table`,
+  `applies` `live`, `requiresDescriptionVersion` 19.
+- `binding` `{"cfcProfile":{"object":"transmit","name":"cfcProfile","command":"cfc.setProfile"}}`:
+  the value is `transmit`'s read-only `cfcProfile` (the link document's
+  "The CFC band editor"), and a change is sent whole with `cfc.setProfile`
+  and that value's `revision` as `expectedRevision`. The Core refuses a
+  stale revision, and the phone shows the refusal reason and the new value.
+- `gate` `{"capability":"transmitSettingsVersion","min":15}`, with no
+  off-air rule: Thetis's CFC dialog applies a change on the air
+  (frmCFCConfig.cs:333-392 [v2.10.3.15] has no MOX check), and the Core
+  takes `cfc.setProfile` on the air from a session permitted to change
+  transmit settings (`transmitSettingsVersion` 13 and later), as the
+  desktop does. Below `transmitSettingsVersion` 15 the row shows disabled
+  with the Core's reason.
+- `bandCounts` `[5,10,18]`: the band counts the editor offers (the
+  desktop's 5-band, 10-band and 18-band). Changing the count respreads the
+  bands evenly between Low and High, as the desktop's editor does.
+- `minSpanHz` 1000: High must be at least 1000 Hz above Low.
+- `fields`, the profile's own values, in order: `minHz` "Low" and `maxHz`
+  "High" (decimal, 0..20000, step 1, no decimals, " Hz"), `parametric` "Use
+  Q Factors" (toggle), `precompDb` "Pre-Comp" (decimal, 0..16, step 0.1,
+  one decimal, " dB") and `postEqGainDb` "Post-EQ" (decimal, -24..24,
+  step 0.1, one decimal, " dB").
+- `columns`, one row per band: `frequencyHz` "Freq" (0..20000, step 1, no
+  decimals, " Hz"), `compressionDb` "Comp" (0..16, step 0.1, one decimal,
+  " dB"), `compressionQ` "Comp Q" (0.2..20, step 0.01, two decimals),
+  `postEqGainDb` "Gain" (-24..24, step 0.1, one decimal, " dB") and
+  `postEqQ` "EQ Q" (0.2..20, step 0.01, two decimals). The Q columns apply
+  only while Use Q Factors is on.
+
+The ranges are `CfcProfile`'s, each from Thetis frmCFCConfig.Designer.cs
+[v2.10.3.15] (`udCFC_low` and `udCFC_high`, `nudCFC_precomp`,
+`nudCFC_posteqgain`, `nudCFC_f`, `nudCFC_c`, `nudCFC_cq`, `nudCFC_gain` and
+`nudCFC_q`; see `CfcProfile.h`), and so are the steps and decimals, with the
+1000 Hz spread from frmCFCConfig.cs:120-140.
+The first band sits on Low and the last on High; the Core keeps them there.
+
+The CFC section's other rows and AGC/ALC's TX Leveler and TX ALC rows
+(`dsp.agcAlc.txLevelerOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+`txAlcMaxGain`, `txAlcDecay`; `dsp.cfc.phaseRotatorEnabled`,
+`phaseRotatorFreqHz`, `phaseRotatorStages`, `phaseReverseEnabled`,
+`cfcEnabled`, `cfcPostEqEnabled`, `cfcPrecompDb`, `cfcPostEqGainDb`,
+`cessbOn`) lose their off-air rule at every description version, for the
+same reason: their gate is `{"capability":"transmitSettingsVersion","min":4}`
+and the Core refuses one that carries `offAir`. The description is always
+served by the Core that applies the edit. With a radio that Core reports
+transmitSettingsVersion 15 and takes these settings on the air; without one it
+reports 0, which fails the `min` and disables the rows anyway.
+
+The off-air sweep applies the same rule to the other transmit rows the Core
+has taken on the air since transmitSettingsVersion 13. These lose their
+off-air rule at every description version, and the Core refuses one that
+carries `offAir`: Audio's TX Input rows (Mic Gain and the twelve Radio Mic
+rows across the three families), TX Profile's profile choice, Save, Delete,
+Filter Low, Filter High and AM Carrier Level; DSP > Options' Filter Size TX
+and Filter Type TX (Phone, FM, Digital); PA Gain's Bypass ANAN PA Settings;
+Transmit > Power's thirteen rows (drive, ATT on TX, tune power, SWR
+protection and External TX Inhibit); and Transmit > DEXP/VOX's sixteen rows.
+Thetis disables none of these while MOX is on: its MOX setter
+(setup.cs:5132-5161 [v2.10.3.15]) greys only the VAC controls and
+`grpDSPBufferSize`. So the DSP > Options Buffer Size TX rows keep their
+`offAir` rule (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled =
+!mox`), and the Core refuses one without it. The PA Watt Meter points never
+carried the rule. No description version changes: a peer at any version reads
+the rows without the lock, and the Core still applies its own on-air checks.
+
+DSP's category coverage becomes "partial: the NR3 and NNR model files are
+not described" and the CFC page carries no coverage (`coverageV19`). A V15
+to V18 peer receives DSP at version 15 without the row, with version 15's
+coverage text. A new transmit property (`cfcProfile`, ordinal 88), a new
+verb (`cfc.setProfile`) and `transmitSettingsVersion` 15 are defined in the
+link document; this version adds no other wire field.
+
+Version 20 publishes that on-the-air lock per control (R-R3-49, R-IOS-18).
+The table's gate becomes `{"capability":"paProfileVersion","min":1}` (no
+`offAir`; its `requiresDescriptionVersion` stays 14), and the profile
+choice and four buttons keep theirs. While the radio is on the air the
+Core adds the existing `availability` object:
+
+- the profile choice, New, Copy, Delete and Reset Defaults each carry
+  `{"enabled":false,"reason":"Can't change while transmitting."}`;
+- every table row (`{band, label}`) carries the same, except the row of
+  the band the radio transmits on. For the device that holds transmit
+  that row has no `availability` (it is live); every other peer gets
+  `{"enabled":false,"reason":"Only the device that is transmitting can
+  change this."}`. With no PA band for the transmit frequency every row
+  is locked.
+
+An absent `availability` means enabled, so off the air the rows carry
+none. A renderer disables what `availability` disables and shows its
+`reason`; it needs neither the transmit band nor the holder. Going on or
+off the air, and a change of the device holding transmit while on the
+air, advance `revision` and resend `pa` alone (`revision` and `pa` share
+their own notify). V19 and older peers keep the exact closed version-14
+rows, the table's `offAir` gate included.
+
+Version 21 greys out CAT & Network > TCI Server's Forget row
+(`catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect`) while Duplicate
+(`copyRx2VfobToVfoa`) is off, as the desktop does and as Thetis does
+(Forget acts only while Duplicate is on). The row gains one closed
+dependency, exactly
+`"enabledWhen":{"property":{"object":"stationTci","name":"copyRx2VfobToVfoa"},"oneOf":[true]}`.
+The renderer reads that value from the `stationTci` mirror object it already
+reads for the row's own `valueProperty`; a missing or non-boolean value
+disables Forget. The row keeps its `stationTciSettingsVersion` gate and has
+no `requiresDescriptionVersion`: a V20 or older peer receives the same row
+without `enabledWhen` (always enabled, as before), and CAT & Network at
+version 15. The Core rejects `enabledWhen` on any other CAT & Network row
+and any altered dependency. This version adds no mirror field, ordinal or
+verb.
+
+Version 22 locks DSP > Options' four RX Buffer Size rows (Phone, FM, CW,
+Digital) while the radio is on the air. Thetis greys the whole buffer group
+under MOX (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled = !mox`).
+Version 21 is CAT & Network's TCI Forget row (above). The rows keep their gate
+(no `offAir`, since a peer that did not declare remote transmit receives no
+`txState`); instead, while on the air, the Core adds the existing
+`availability` object `{"enabled":false,"reason":"Can't change while
+transmitting."}` to each of the four rows, and off the air they carry none.
+Keying and unkeying advance `revision` and resend `dsp` (DSP has its own
+notify). The Core refuses a write or removal of any of the four keys on the
+air with the same reason, at every version. A V21 or older peer receives DSP
+at its earlier version without the `availability` objects. The desktop Setup
+greys the four RX rows and the three TX Buffer Size rows on the air with the
+same reason.
+
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
 with choice defaults as integer ordinals and FFT option defaults as their
@@ -934,9 +1166,9 @@ On the ANAN-G2E only, the partial `PA Gain` page also describes the existing
 `transmit.paSettingsBypass` Boolean toggle. The Core projects that page away
 unless its board capabilities include both an integrated PA and
 `showsBypassPaSettingsUi`, and the SKU is not RX-only. Its gate is
-`transmitSettingsVersion:6` plus `offAir:true`, with no `transmit:true` gate:
-the Core already permits negotiated transmit *settings* on a receive-only
-station while it is off the air. The Core still applies its own property-write
+`transmitSettingsVersion:6`, with no `transmit:true` gate and no `offAir`:
+the Core permits negotiated transmit *settings* on a receive-only station,
+and takes this one on the air (see the off-air sweep below). The Core still applies its own property-write
 authority and on-air checks. This one toggle does not describe the PA profile
 grid, calibration, or auto-calibration sweep.
 

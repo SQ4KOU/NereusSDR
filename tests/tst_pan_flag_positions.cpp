@@ -158,7 +158,7 @@ private slots:
     void own_marker_uses_the_flag_slice_color()
     {
         const SliceColorCase cases[] = {{1, 0xffff40ffu}, {2, 0xff40ff40u},
-                                       {3, 0xffffff00u}, {4, 0xff00d4ffu}};
+                                       {3, 0xffffff00u}, {4, 0xffffa000u}};
         for (const SliceColorCase item : cases) {
             SpectrumWidget w;
             w.resize(800, 400);

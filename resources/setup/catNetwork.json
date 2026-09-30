@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 21,
   "category": {
     "id": "catNetwork",
     "title": "CAT & Network",
@@ -415,8 +415,8 @@
             },
             {
               "id": "catNetwork.tciServer.core.forgetRx2VfoBOnDisconnect",
-              "label": "Forget RX2 VFOB on disconnect",
-              "tooltip": "When a TCI client disconnects, reset RX2 VFOB to its default frequency instead of keeping the last value set by the client.",
+              "label": "Forget RX2 VFO B",
+              "tooltip": "While Duplicate RX2 VFO B to RX2 VFO A is on, send RX2's frequency to TCI apps only as RX2 VFO A, without its VFO B messages.",
               "kind": "toggle",
               "binding": {
                 "command": {
@@ -437,15 +437,18 @@
                 "capability": "stationTciSettingsVersion",
                 "min": 1
               },
-              "availability": {
-                "enabled": false,
-                "reason": "This option does not change anything in NereusSDR at the moment."
+              "enabledWhen": {
+                "property": {
+                  "object": "stationTci",
+                  "name": "copyRx2VfobToVfoa"
+                },
+                "oneOf": [true]
               }
             },
             {
               "id": "catNetwork.tciServer.core.useRx1VfoaForRx2Vfoa",
-              "label": "Use RX1 VFOA for RX2 VFOA",
-              "tooltip": "Report the RX1 VFOA frequency when a TCI client queries RX2 VFOA. Required by clients that do not maintain independent per-receiver VFO state.",
+              "label": "Use RX1 VFO A for RX2 VFO A",
+              "tooltip": "While RX2 is on, TCI apps see RX1's frequency as RX2 VFO A, and an app that sets RX2 VFO A tunes RX1.",
               "kind": "toggle",
               "binding": {
                 "command": {
@@ -465,16 +468,12 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
-              },
-              "availability": {
-                "enabled": false,
-                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             },
             {
               "id": "catNetwork.tciServer.core.copyRx2VfobToVfoa",
-              "label": "Copy RX2 VFOB to VFOA",
-              "tooltip": "Automatically copy RX2 VFOB into RX2 VFOA whenever VFOB changes. Required by apps that drive split mode via VFOB but read back VFOA.",
+              "label": "Duplicate RX2 VFO B to RX2 VFO A",
+              "tooltip": "RX2 has one frequency, which TCI apps get as RX2 VFO B. This also sends it as RX2 VFO A, for apps that follow VFO A.",
               "kind": "toggle",
               "binding": {
                 "command": {
@@ -494,10 +493,6 @@
               "gate": {
                 "capability": "stationTciSettingsVersion",
                 "min": 1
-              },
-              "availability": {
-                "enabled": false,
-                "reason": "This option does not change anything in NereusSDR at the moment."
               }
             }
           ]

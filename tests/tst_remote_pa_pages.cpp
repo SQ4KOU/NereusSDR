@@ -150,7 +150,14 @@ struct Session {
         QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
         client->startSession(windowEnd, server->token());
         server->acceptTransport(coreEnd);
-        return completed.wait(5000) || completed.count() == 1;
+        if (!completed.wait(30000) && completed.count() != 1) {
+            return false;
+        }
+        // The handshake completes before the capability descriptor and the
+        // settings snapshot land. Wait for both, bounded, rather than leaving
+        // it to a later QTRY's default five seconds, which a loaded machine
+        // can overrun.
+        return QTest::qWaitFor([this] { return client->settingsHygieneAvailable(); }, 30000);
     }
     void keyCore()
     {
@@ -252,8 +259,10 @@ private slots:
     void paKeysAreOnTheOffAirListAtVersion6();
     void paProfileWriteReachesTheCoresBankAtOnce();
     void paCalibrationWriteReachesTheCoresTableAtOnce();
-    void paKeysTakenOnTheAirAndAppliedAtTheUnkey();
+    void paKeysRefusedOnTheAirForAWindowThatDoesNotTransmit();
     void remotePaGainPageShowsAndChangesTheCoresBank();
+    void remoteWindowHoldsTheCoresOnAirRowOnKeyedRetune();
+    void remoteWindowOnAnOlderCoreKeepsItsOwnRow();
     void remoteWattMeterPageChangesTheCoresTable();
     void remotePaReadingsShowOnRadioStatusPaValuesAndMeters();
     void localRadioStatusSetsPaVoltage();
@@ -314,8 +323,9 @@ void TstRemotePaPages::paKeysAreOnTheOffAirListAtVersion6()
     // 7 since parity Task 7 (PureSignal arming), 8 since parity Task 13
     // (Hardware Config's OC transmit pins and transmit calibration); 6 is
     // within it.
-    // 14 since the Core owns Prevent transmitting on a different band.
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 14);
+    // 14 since the Core owns Prevent transmitting on a different band, 15
+    // since a remote window edits the CFC bands.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 15);
     QVERIFY(s.client->transmitSettingsAvailable(6));
 }
 
@@ -376,7 +386,7 @@ void TstRemotePaPages::paCalibrationWriteReachesTheCoresTableAtOnce()
     QTRY_COMPARE(cal.paCalProfile().watts[3], 33.5f);
 }
 
-void TstRemotePaPages::paKeysTakenOnTheAirAndAppliedAtTheUnkey()
+void TstRemotePaPages::paKeysRefusedOnTheAirForAWindowThatDoesNotTransmit()
 {
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/true);
     PaProfileManager* const bank = s.core->paProfileManager();
@@ -384,27 +394,37 @@ void TstRemotePaPages::paKeysTakenOnTheAirAndAppliedAtTheUnkey()
     bank->load(HPSDRModel::ANAN_G2);
     const QString active = bank->activeProfileName();
     const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
+    s.core->sliceById(0)->setFrequency(14200000.0); // transmits on 20 m
     QVERIFY(s.connect());
 
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
-    // Remote parity on the air (transmitSettingsVersion 13): the local
-    // pages change them while transmitting, so the Core takes them keyed;
-    // the PA profiles reload once the radio is back on receive.
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
+    // device that holds transmit changes the transmitting band's PA
+    // values. The Core keyed itself, so the window's change is refused with
+    // the Core's value handed back, not held until receive; another band
+    // is refused as Thetis greys it. The Watt Meter's points stay taken.
+    const QString kept = s.settings.value(paKey(active)).toString();
     PaProfile edited = *bank->activeProfile();
     edited.setGainForBand(Band::Band20m, before + 3.0f);
     s.proxy.setValue(paKey(active), edited.dataToString());
-    QTRY_COMPARE(s.settings.value(paKey(active)).toString(), edited.dataToString());
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(active)),
+                 RadioModel::paHolderOnlyReason());
+    PaProfile otherBand = *bank->activeProfile();
+    otherBand.setGainForBand(Band::Band40m, 51.0f);
+    s.proxy.setValue(paKey(active), otherBand.dataToString());
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(active)),
+                 RadioModel::paOnAirLockedReason());
     s.proxy.setValue(calKey(QStringLiteral("calPoint2")), QStringLiteral("19"));
     QTRY_COMPARE(s.settings.value(calKey(QStringLiteral("calPoint2"))).toString(),
                  QStringLiteral("19"));
-    QCOMPARE(settingsRejectReason(s.windowEnd, paKey(active)), QString());
-    QTest::qWait(150);
-    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+    QCOMPARE(s.settings.value(paKey(active)).toString(), kept);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
-    QTRY_COMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before + 3.0f);
+    QTest::qWait(150);
+    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+    QCOMPARE(s.settings.value(paKey(active)).toString(), kept);
 }
 
 // B5.15: PA Gain in a remote window shows the Core's bank and changes it;
@@ -416,6 +436,7 @@ void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     seedBank(s.settings, 47.5f);
     AppSettings::instance().setRemoteBackend(&s.proxy);
+    s.core->sliceById(0)->setFrequency(14200000.0); // transmits on 20 m
     QVERIFY(s.connect());
     QVERIFY(s.proxy.ready());
     QTRY_COMPARE(s.window.paProfileManager()->activeProfileName(), QStringLiteral("Bench"));
@@ -457,19 +478,110 @@ void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
     s.settings.setValue(paKey(QStringLiteral("Bench")), coreEdit.dataToString());
     QTRY_COMPARE(gain20->value(), 49.0);
 
-    // On the air the change is taken too (version 13), as on a local page.
+    // On the air the Core keyed itself, so the window holds no transmit:
+    // its change is refused and the Core keeps its value (JJ's ruling).
+    // The page shows it: the transmitting band's row with the holder
+    // reason, profiles and the other bands with Thetis's lock.
     s.keyCore();
     QTRY_VERIFY(s.window.isCoreOnAir());
+    QVERIFY(!gain20->isEnabled());
+    QCOMPARE(gain20->toolTip(), RadioModel::paHolderOnlyReason());
+    QVERIFY(!combo->isEnabled());
+    QCOMPARE(combo->toolTip(), RadioModel::paOnAirLockedReason());
+    QVERIFY(!page.gainSpinForTest(Band::Band40m)->isEnabled());
     gain20->setValue(40.0);
-    QTRY_COMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 40.0f);
+    QTRY_VERIFY(!settingsRejectReason(s.windowEnd, paKey(QStringLiteral("Bench"))).isEmpty());
+    QCOMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 49.0f);
     s.unkeyCore();
     QTRY_VERIFY(!s.window.isCoreOnAir());
     QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
+    QVERIFY(gain20->isEnabled() && combo->isEnabled());
 
     // The gate closes the editor with its reason.
     page.setTransmitSettingsPermittedAt(6, false, kOnAir);
     QVERIFY(!gain20->isEnabled() && !combo->isEnabled());
     QCOMPARE(gain20->toolTip(), kOnAir);
+    QString keyed;
+    QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
+}
+
+// The Core holds its transmit band while keyed (console.cs TXBand setter,
+// //[2.10.3.6]MW0LGE no band change on TX fix). A remote window opens and
+// locks the row the Core holds, not the row its own slice now shows.
+void TstRemotePaPages::remoteWindowHoldsTheCoresOnAirRowOnKeyedRetune()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    seedBank(s.settings, 47.5f);
+    AppSettings::instance().setRemoteBackend(&s.proxy);
+    s.core->sliceById(0)->setFrequency(14200000.0); // transmits on 20 m
+    QVERIFY(s.connect());
+    QTRY_COMPARE(s.window.paProfileManager()->activeProfileName(), QStringLiteral("Bench"));
+
+    PaGainByBandPage page(&s.window);
+    page.setTransmitSettingsPermittedAt(6, true, QString());
+    page.setTransmitPermitted(false, kTransmitReason);
+    QDoubleSpinBox* gain20 = page.gainSpinForTest(Band::Band20m);
+    QDoubleSpinBox* gain17 = page.gainSpinForTest(Band::Band17m);
+    QVERIFY(gain20 && gain17);
+
+    const int band20 = static_cast<int>(Band::Band20m);
+    const int band17 = static_cast<int>(Band::Band17m);
+    s.keyCore();
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    QTRY_COMPARE(s.window.paOnAirBandIndex(), band20);
+
+    // Retune the transmit slice to 17 m while keyed; the window's slice
+    // follows the Core's.
+    s.core->sliceById(0)->setFrequency(18100000.0);
+    QTRY_VERIFY(s.window.sliceById(0) != nullptr
+                && qFuzzyCompare(s.window.sliceById(0)->frequency(), 18100000.0));
+    QCoreApplication::processEvents();
+    // The Core still holds 20 m, and so does the window.
+    QCOMPARE(s.core->paOnAirBandIndex(), band20);
+    QCOMPARE(s.window.paOnAirBandIndex(), band20);
+    // The open row is 20 m: the holder's row, with the holder reason; the
+    // 17 m row carries Thetis's on-air lock.
+    QCOMPARE(gain20->toolTip(), RadioModel::paHolderOnlyReason());
+    QCOMPARE(gain17->toolTip(), RadioModel::paOnAirLockedReason());
+    // The Core accepts a 20 m edit from the holder and refuses 17 m.
+    QVERIFY(s.core->paOnAirEditRefusal(false, band20, true).isEmpty());
+    QCOMPARE(s.core->paOnAirEditRefusal(false, band17, true),
+             RadioModel::paOnAirLockedReason());
+
+    // At receive the next band change moves the Core's row, and the
+    // window's with it.
+    s.unkeyCore();
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+    QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
+    s.core->sliceById(0)->setFrequency(18110000.0);
+    QTRY_COMPARE(s.core->paOnAirBandIndex(), band17);
+    QTRY_COMPARE(s.window.paOnAirBandIndex(), band17);
+    QString keyed;
+    QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
+}
+
+// An older Core sends no paTransmitBand: the window keeps the row its own
+// state gives, as before the Core published its held band.
+void TstRemotePaPages::remoteWindowOnAnOlderCoreKeepsItsOwnRow()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    seedBank(s.settings, 47.5f);
+    AppSettings::instance().setRemoteBackend(&s.proxy);
+    s.client->withholdFeatureForTest(QByteArrayLiteral("paTransmitBand"));
+    s.core->sliceById(0)->setFrequency(18100000.0); // the Core transmits on 17 m
+    const int windowOwnRow = s.window.paOnAirBandIndex();
+    QSignalSpy windowBand(&s.window, &RadioModel::paTransmitBandChanged);
+    QVERIFY(s.connect());
+    QTRY_COMPARE(s.window.paProfileManager()->activeProfileName(), QStringLiteral("Bench"));
+
+    s.keyCore();
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    QCOMPARE(s.core->paOnAirBandIndex(), static_cast<int>(Band::Band17m));
+    QCoreApplication::processEvents();
+    QCOMPARE(windowBand.count(), 0);
+    QCOMPARE(s.window.paOnAirBandIndex(), windowOwnRow);
+    s.unkeyCore();
+    QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
     QString keyed;
     QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
 }
@@ -793,7 +905,7 @@ void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReaso
 {
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    QTRY_VERIFY(s.client->settingsHygieneAvailable());
+    QVERIFY(s.client->settingsHygieneAvailable());
     QVERIFY(!s.client->signedInWithDeviceKey());
 
     SettingsValidationPage validation(&s.window);

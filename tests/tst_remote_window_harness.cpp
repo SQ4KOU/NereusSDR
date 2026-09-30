@@ -58,6 +58,35 @@
 //                                    follows the Core's band plan, strip
 //                                    and menu check.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control and shared listening
+//                                    plan Task 5: a window whose Core sends
+//                                    no sliceAccessVersion sends no slice
+//                                    access request and tunes as before.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: the
+//                                    flag's TX button moves transmit on the
+//                                    Core (tx.setTxSlice) with the letter
+//                                    row's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: a window
+//                                    sharing the Core's slices. Container
+//                                    slice buttons follow the change of
+//                                    control; a layout change stops
+//                                    listening; an accepted listen or take
+//                                    shows the slice here; placements follow
+//                                    the Core's access updates, the take's
+//                                    answer arriving before its update.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Load findings 4: run as six ctest
+//                                    entries (TestFunctionGroups), past
+//                                    the 120 s limit as one under load.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Load findings 4: the take answered
+//                                    before its access update waits for
+//                                    the Core's update to be held (it
+//                                    comes on the Core's next delta
+//                                    flush). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -83,11 +112,14 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 
+#include "TestFunctionGroups.h"
 #include "core/safety/TxRefusal.h"
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
@@ -101,6 +133,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
+#include "core/session/SliceAccessMirror.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/MainWindow.h"
 #include "gui/MoxDisplayController.h"
@@ -112,6 +145,8 @@
 #include "gui/TitleBar.h"
 #include "gui/applets/RadeApplet.h"
 #include "gui/applets/RxApplet.h"
+#include "core/TxSliceArbiter.h"
+#include "core/safety/TransmitHolder.h"
 #include "gui/setup/DeviceCard.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "core/IoBoardHl2.h"
@@ -128,6 +163,17 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/RemoteWindowHarness.h"
+#include "core/SliceOwnership.h"
+#include "core/session/DeviceSessionRegistry.h"
+#include "gui/containers/ContainerManager.h"
+#include "gui/containers/ContainerWidget.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/meters/OtherButtonItem.h"
+#include "gui/PanadapterApplet.h"
+#include "gui/PanadapterStack.h"
+#include "gui/SliceChooser.h"
+#include "gui/widgets/RxDashboard.h"
+#include "gui/widgets/StatusToast.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::RemoteWindowHarness;
@@ -153,6 +199,95 @@ void clickLeft(QWidget* widget)
 {
     QTest::mouseClick(widget, Qt::LeftButton, Qt::NoModifier,
                       widget->rect().center());
+}
+
+// Slice control plan Task 17: a window that shares slices with the Core's
+// other devices, on the Core's slices and a saved layout.
+RemoteWindowHarness::Options sharingOptions(int stationSlices, const QString& layout)
+{
+    RemoteWindowHarness::Options options;
+    options.stationSlices = stationSlices;
+    options.panLayout = layout;
+    options.sliceAccess = true;
+    return options;
+}
+
+// Starts the window's own connection and waits until it shares slices
+// and its mirror names it the controller of each slice it adopted.
+bool connectSharing(RemoteWindowHarness& h)
+{
+    h.startStartupConnection();
+    StationClient* client = h.client();
+    if (!client || !QTest::qWaitFor([client] { return client->stationLinkReady(); }, 10000)) {
+        return false;
+    }
+    if (!client->remoteSliceAccessAvailable()) { return false; }
+    return QTest::qWaitFor([&h, client] {
+        const QList<int> live = h.station().sliceOwnership()->liveSlices();
+        for (int id : live) {
+            const auto entry = client->sliceAccess()->entry(id);
+            if (!entry || entry->controllerDeviceId != QStringLiteral("token:1")) { return false; }
+        }
+        return !live.isEmpty();
+    }, 10000);
+}
+
+// A named phone on the Core, as tst_desktop_station_window admits one.
+QByteArray admitPhone(RemoteWindowHarness& h, QObject& session)
+{
+    DeviceSessionRegistry::Entry phone;
+    phone.deviceId = QByteArrayLiteral("phone-device-id-for-remote-window1");
+    phone.kind = DeviceSessionRegistry::Kind::Paired;
+    phone.name = QStringLiteral("Living room iPhone");
+    phone.shortName = QStringLiteral("iPhone");
+    phone.deviceKind = QStringLiteral("phone");
+    const bool admitted = h.server().deviceSessions()->admit(phone, &session).admission
+        == DeviceSessionRegistry::Admission::Admitted;
+    return admitted ? phone.deviceId : QByteArray();
+}
+
+// A slice the phone controls on a pan this window does not have, that this
+// window neither controls nor listens to. -1 when the Core did not add it.
+int phonesSliceOnAnotherPan(RemoteWindowHarness& h, const QByteArray& phone)
+{
+    const int id = h.station().addSlice(QStringLiteral("pan-3"));
+    if (id < 0) { return -1; }
+    SliceOwnership* ownership = h.station().sliceOwnership();
+    ownership->setOwner(id, phone);
+    ownership->leave(QByteArrayLiteral("token:1"), id);
+    StationClient* client = h.client();
+    const bool known = QTest::qWaitFor([client, id, phone] {
+        const auto entry = client->sliceAccess()->entry(id);
+        return entry && !entry->listeners.contains(QStringLiteral("token:1"))
+            && entry->controllerDeviceId != QStringLiteral("token:1");
+    }, 10000);
+    return known && !ownership->isListening(QByteArrayLiteral("token:1"), id) ? id : -1;
+}
+
+// The bottom RX area's chooser, opened as the operator opens it.
+SliceChooser* openChooser(RemoteWindowHarness& h)
+{
+    auto* dashboard = h.window()->findChild<RxDashboard*>();
+    if (!dashboard || !dashboard->chooserButton()) { return nullptr; }
+    dashboard->chooserButton()->click();
+    return h.window()->findChild<SliceChooser*>();
+}
+
+VfoWidget* flagFor(RemoteWindowHarness& h, int sliceId)
+{
+    for (VfoWidget* flag : h.window()->findChildren<VfoWidget*>()) {
+        if (flag->sliceIndex() == sliceId) { return flag; }
+    }
+    return nullptr;
+}
+
+int toastsSaying(RemoteWindowHarness& h, const QString& words)
+{
+    int count = 0;
+    for (StatusToast* toast : h.window()->findChildren<StatusToast*>()) {
+        if (toast->message() == words) { ++count; }
+    }
+    return count;
 }
 
 // Radio > Connect, then wait for the Core's snapshot to be applied.
@@ -1355,7 +1490,7 @@ private slots:
         // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
         // shows the Core's board, whose readings arrive on the Core after a
         // probe. (4 since the filter policy verb, R-R3-46 / R-R3-21.)
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 9);
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 12);
         auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
         QVERIFY(ioTab);
         const auto statusText = [ioTab]() {
@@ -1603,7 +1738,426 @@ private slots:
         QCOMPARE(h.acceptedConnections(), 1);
         QVERIFY(client->isHandshakeComplete());
     }
+
+    // Slice control plan Task 5: a window whose Core sends no
+    // sliceAccessVersion (this bench window signs in with the token and
+    // never declares sliceAccess) holds no access object, marks none of its
+    // slices read-only, refuses the four slice access requests here without
+    // sending them, and its flag still tunes the Core as before.
+    void aWindowWithoutSliceAccessTunesAsBefore()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        h.startStartupConnection();
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QTRY_VERIFY_WITH_TIMEOUT(client->stationLinkReady(), 10000);
+        QVERIFY(!client->remoteSliceAccessAvailable());
+        QVERIFY(!client->capabilities().sliceAccessEntry);
+        QCOMPARE(client->capabilities().sliceAccessVersion, 0);
+        QVERIFY(client->sliceAccess()->entries().isEmpty());
+        RadioModel* windowModel = h.remoteModel();
+        QTRY_VERIFY(windowModel->sliceById(0) != nullptr);
+        for (SliceModel* slice : windowModel->slices()) {
+            QVERIFY(!slice->isReadOnlyListener());
+        }
+
+        IStationLink* link = client;
+        const QList<IStationLink::CommandOutcome> outcomes{
+            link->requestListen(0, 1), link->requestStopListening(0, 1),
+            link->requestTakeControl(0, 1, 1), link->requestRelease(0, 1, 1)};
+        for (const IStationLink::CommandOutcome& outcome : outcomes) {
+            QVERIFY(!outcome.sent);
+            QCOMPARE(outcome.commandId, quint32(0));
+            QCOMPARE(outcome.reason, IStationLink::sliceAccessUnavailableReason());
+            QVERIFY(OperatorWording::isPlain(outcome.reason));
+        }
+
+        // The flag's wheel reaches the Core.
+        VfoWidget* flag = nullptr;
+        QTRY_VERIFY([&]() {
+            for (VfoWidget* candidate : h.window()->findChildren<VfoWidget*>()) {
+                if (candidate->sliceIndex() == 0) {
+                    flag = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }());
+        // Slice control plan Task 14a: a Core that does not share slices
+        // gives the flag no access line and holds nothing.
+        QCOMPARE(flag->sliceAccess().state, VfoWidget::SliceAccess::State::Unshared);
+        QVERIFY(flag->accessLineText().isEmpty());
+        QVERIFY(!flag->isListening());
+        SliceModel* coreSlice = h.station().sliceById(0);
+        QVERIFY(coreSlice);
+        const double before = coreSlice->frequency();
+        const QPointF at(flag->width() / 2.0, flag->height() / 2.0);
+        QWheelEvent wheel(at, flag->mapToGlobal(at), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(flag, &wheel);
+        QTRY_VERIFY(coreSlice->frequency() != before);
+        QVERIFY(!windowModel->sliceById(0)->isReadOnlyListener());
+    }
+
+    // Slice control plan Task 11 fix: a remote window's flag TX button asks
+    // the Core with tx.setTxSlice exactly as the TX applet's letter row
+    // does, disabled with the same reason while the press cannot move
+    // transmit. Nothing keys: the Core has no radio.
+    void theFlagsTxButtonMovesTransmitLikeTheLetterRow()
+    {
+        RemoteWindowHarness::Options options;
+        options.stationSlices = 2;
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        client->setTokenSessionHolderForTest(QStringLiteral("token:1"));
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(client->stationLinkReady(), 10000);
+        QVERIFY(client->sessionHolderAvailable());
+        QVERIFY(client->remoteTransmitAvailable());
+        // The Core's radio is not on the air here, so it says transmit is
+        // permitted as a Core with its radio up would.
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        TxSliceArbiter* arbiter = h.station().txSliceArbiter();
+        QVERIFY(arbiter);
+
+        VfoWidget* flag = nullptr;
+        QTRY_VERIFY([&]() {
+            for (VfoWidget* candidate : h.window()->findChildren<VfoWidget*>()) {
+                if (candidate->sliceIndex() == 1) {
+                    flag = candidate;
+                    return true;
+                }
+            }
+            return false;
+        }());
+        auto* badge = flag->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badge);
+        // The TX applet rebuilds its letters as the holder changes: find
+        // slice B's afresh each time.
+        const auto letterB = [&h]() {
+            return h.window()->findChild<QPushButton*>(QStringLiteral("TxSliceButtonB"));
+        };
+        QTRY_VERIFY(letterB() != nullptr);
+
+        // Not holding transmit: both are disabled with the same reason.
+        QVERIFY(!client->holdsTransmitHere());
+        QTRY_VERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), TxRefusals::notHolder().text);
+        QTRY_COMPARE(letterB()->toolTip(), badge->toolTip());
+
+        // Holding transmit (handed over on the Core; nothing keys): the
+        // flag's press sends the letter row's tx.setTxSlice, never a move
+        // on the window's own model.
+        TransmitHolder::Holder self;
+        self.deviceId = QByteArrayLiteral("token:1");
+        self.name = QStringLiteral("Bench window");
+        h.server().transmitHolder()->transferTo(self, QStringLiteral("test"));
+        QTRY_VERIFY(client->holdsTransmitHere());
+        QTRY_VERIFY(badge->isEnabled());
+        QTRY_VERIFY(letterB() && letterB()->isEnabled());
+        QCOMPARE(letterB()->toolTip(), QStringLiteral("Transmit on slice B"));
+        const int boundBefore = arbiter->txBoundSliceId();
+        QVERIFY(boundBefore != 1);
+        badge->click();
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1}));
+        letterB()->click();
+        QTRY_COMPARE(h.txSliceCommands(), QList<int>({1, 1}));
+    }
+    // Slice control plan Task 17 (carried from Task 15): a remote window's
+    // container slice buttons follow the Core's change of control through
+    // the window's slice-access mirror, with no other refresh. A press on
+    // a slice another device controls changes nothing on either side.
+    void remoteContainerSliceButtonsFollowTheCoresChangeOfControl()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        auto* manager = h.window()->findChild<ContainerManager*>();
+        QVERIFY(manager);
+        ContainerWidget* container = manager->createContainer(1 + 1, DockMode::Floating);  // B
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+        using Id = OtherButtonItem::ButtonId;
+        QTRY_VERIFY(buttons->isButtonAvailable(Id::Mute));
+
+        // The buttons read at the moment the window's mirror hears of the
+        // change (this connection runs after the window's own): a timer
+        // also refreshes containers, and must not be what passes this.
+        QList<bool> availableOnChange;
+        QObject watch;
+        connect(h.client()->sliceAccess(), &SliceAccessMirror::changed, &watch,
+                [&availableOnChange, buttons](int sliceId) {
+                    if (sliceId == 1) { availableOnChange << buttons->isButtonAvailable(Id::Mute); }
+                });
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        ownership->setOwner(1, phone);
+        QTRY_VERIFY(h.client()->sliceAccess()->entry(1)->controllerDeviceId
+                    != QStringLiteral("token:1"));
+        QVERIFY(!availableOnChange.isEmpty());
+        QVERIFY(!availableOnChange.last());
+        QVERIFY(!buttons->isButtonAvailable(Id::Mute));
+        QCOMPARE(buttons->buttonUnavailableReason(buttons->indexOf(Id::Mute)),
+                 QStringLiteral("Living room iPhone controls this slice"));
+        SliceModel* windowB = h.remoteModel()->sliceById(1);
+        SliceModel* coreB = h.station().sliceById(1);
+        QVERIFY(windowB && coreB);
+        const bool mutedBefore = coreB->muted();
+        QSignalSpy windowMuted(windowB, &SliceModel::mutedChanged);
+        emit container->otherButtonClicked(int(Id::Mute));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(windowB->muted(), mutedBefore);
+        QCOMPARE(coreB->muted(), mutedBefore);
+        QCOMPARE(windowMuted.count(), 0);
+
+        availableOnChange.clear();
+        ownership->setOwner(1, QByteArrayLiteral("token:1"));
+        QTRY_COMPARE(h.client()->sliceAccess()->entry(1)->controllerDeviceId,
+                     QStringLiteral("token:1"));
+        QVERIFY(!availableOnChange.isEmpty());
+        QVERIFY(availableOnChange.last());
+        QVERIFY(buttons->isButtonAvailable(Id::Mute));
+    }
+
+    // Slice control plan Task 17 (carried from Task 16, ruling U7): a
+    // layout change that retires the pan showing a listened slice stops
+    // this window listening to it on the Core. The slice stays where its
+    // controller put it, and nothing is added.
+    void remoteLayoutChangeStopsListeningToASliceItNoLongerShows()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        ownership->setOwner(1, phone);
+        QVERIFY(ownership->isListening(QByteArrayLiteral("token:1"), 1));
+        QTRY_VERIFY(flagFor(h, 1) && flagFor(h, 1)->isListening());
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+
+        QVERIFY(QMetaObject::invokeMethod(h.window(), "applyPanLayout",
+                                          Q_ARG(QString, QStringLiteral("1"))));
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+        QTRY_VERIFY(!ownership->isListening(QByteArrayLiteral("token:1"), 1));
+        QCOMPARE(h.sliceAccessCommands(), QStringList{QStringLiteral("slice.stopListening:1")});
+        QCOMPARE(ownership->mark(1).subject(), phone);
+        QCOMPARE(h.station().sliceById(1)->panKey(), QStringLiteral("pan-1"));
+        QCOMPARE(h.station().sliceById(0)->panKey(), QStringLiteral("pan-0"));
+        QVERIFY(h.addSliceCommands().isEmpty());
+        QCOMPARE(toastsSaying(h, QStringLiteral(
+                     "Stopped listening to Slice B: it is no longer shown in this window.")), 1);
+    }
+
+    // Slice control plan Task 17 (carried from Task 16, ruling U1): a
+    // listen the Core accepts shows the slice in this window. With one pan
+    // and no empty one, the window grows to the next layout and places the
+    // slice on the new pan; the slice's pan for its controller stays put.
+    void remoteListenTheCoreAcceptsShowsTheSliceHere()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        const int bId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(bId > 0);
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
+
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        // The window is sent the slice only once it listens, and the slice
+        // arrives before its pan key does.
+        QVERIFY(!h.remoteModel()->sliceById(bId));
+        emit chooser->listenRequested(bId);
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        QTRY_VERIFY(ownership->isListening(QByteArrayLiteral("token:1"), bId));
+        QTRY_COMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        PanadapterApplet* grown = stack->panadapter(QStringLiteral("pan-1"));
+        QVERIFY(grown);
+        QTRY_VERIFY(grown->associatedSlices().contains(bId));
+        QTRY_VERIFY(flagFor(h, bId) && flagFor(h, bId)->parentWidget() == grown->spectrumWidget());
+        QCOMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-3"));
+        QCOMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-3"));
+        QCOMPARE(ownership->mark(bId).subject(), phone);
+        QVERIFY(h.addSliceCommands().isEmpty());
+    }
+
+    // Slice control plan Task 17 (carried from Task 16): the window's
+    // placement of a listened slice follows the Core's slice-access
+    // updates. Given control, the placement becomes the slice's pan on the
+    // Core; no longer listening, the slice leaves the pan it was placed on.
+    void remotePlacementsFollowTheCoresAccessUpdates()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        const QByteArray self = QByteArrayLiteral("token:1");
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+
+        // Listened and placed on the grown pan, then given to this window.
+        const int bId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(bId > 0);
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        emit chooser->listenRequested(bId);
+        QTRY_VERIFY(ownership->isListening(self, bId));
+        QTRY_VERIFY(stack->panadapter(QStringLiteral("pan-1"))
+                    && stack->panadapter(QStringLiteral("pan-1"))->associatedSlices().contains(bId));
+        QTRY_VERIFY(!chooser->requestInFlight().size());
+        ownership->setOwner(bId, self);
+        QTRY_COMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+
+        // Listened and placed, then no longer listened: it leaves the pan.
+        const int cId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(cId > 0);
+        chooser = openChooser(h);
+        QVERIFY(chooser);
+        emit chooser->listenRequested(cId);
+        QTRY_VERIFY(ownership->isListening(self, cId));
+        QTRY_COMPARE(stack->currentLayoutId(), QStringLiteral("3v"));
+        PanadapterApplet* placed = stack->panadapter(QStringLiteral("pan-2"));
+        QVERIFY(placed);
+        QTRY_VERIFY(placed->associatedSlices().contains(cId));
+        QVERIFY(ownership->leave(self, cId));
+        QTRY_VERIFY(!placed->associatedSlices().contains(cId));
+        QCOMPARE(h.station().sliceById(cId)->panKey(), QStringLiteral("pan-3"));
+        QCOMPARE(ownership->mark(cId).subject(), phone);
+    }
+
+    // Slice control plan Task 17 (carried from Task 16): a take the Core
+    // accepts whose answer arrives before the Core's slice-access update.
+    // The window first places the slice as a listened one, then, when the
+    // update says it controls the slice, makes that pan the slice's pan on
+    // the Core.
+    void remoteTakeAnsweredBeforeItsAccessUpdateEndsOnTheWindowsPan()
+    {
+        RemoteWindowHarness h(sharingOptions(1, QStringLiteral("1")));
+        QVERIFY(h.start());
+        QVERIFY(connectSharing(h));
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        const int bId = phonesSliceOnAnotherPan(h, phone);
+        QVERIFY(bId > 0);
+        SliceOwnership* ownership = h.station().sliceOwnership();
+        const QByteArray self = QByteArrayLiteral("token:1");
+        auto* stack = h.window()->findChild<PanadapterStack*>();
+        QVERIFY(stack);
+        StationClient* client = h.client();
+        QTRY_VERIFY(client->sliceAccess()->entry(bId).has_value());
+
+        // The phone drops off and is away: another device may take its
+        // slice. The window holds the Core's latest control revision.
+        h.server().deviceSessions()->sessionEnded(phone, &phoneSession,
+                                                  DeviceSessionRegistry::EndKind::Dropped);
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controlRevision,
+                     ownership->controlRevision(bId));
+        QTest::qWait(kSettleMs);
+        QCOMPARE(client->sliceAccess()->entry(bId)->controlRevision,
+                 ownership->controlRevision(bId));
+        h.coreLink()->holdSliceAccessUpdates();
+        SliceChooser* chooser = openChooser(h);
+        QVERIFY(chooser);
+        QSignalSpy answered(client, &StationClient::deviceCommandFinished);
+        emit chooser->takeControlRequested(bId);
+        QTRY_VERIFY(!answered.isEmpty());
+        QCOMPARE(answered.first().at(0).toByteArray(), QByteArrayLiteral("slice.takeControl"));
+        QVERIFY(answered.first().at(2).toBool());
+        QCOMPARE(ownership->mark(bId).owner, self);
+        // The Core answers the take at once, but sends the slice's access
+        // update on its next delta flush (StationServer::kDefaultDeltaFlushMs,
+        // a rate limit), so on a busy computer the window can read the answer
+        // before the update is made and held. Wait for it to be held.
+        QTRY_VERIFY(h.coreLink()->heldSliceAccessCount() > 0);
+        // Step one: the mirror still names the phone, so the window places
+        // the slice on a pan of its own without moving it for anyone.
+        QVERIFY(client->sliceAccess()->entry(bId)->controllerDeviceId != QStringLiteral("token:1"));
+        QTRY_COMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        QTRY_VERIFY(stack->panadapter(QStringLiteral("pan-1"))->associatedSlices().contains(bId));
+        QCOMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-3"));
+
+        // Step two: the update arrives and the placement becomes the pan.
+        h.coreLink()->releaseSliceAccessUpdates();
+        QTRY_COMPARE(client->sliceAccess()->entry(bId)->controllerDeviceId,
+                     QStringLiteral("token:1"));
+        QTRY_COMPARE(h.station().sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+        QTRY_COMPARE(h.remoteModel()->sliceById(bId)->panKey(), QStringLiteral("pan-1"));
+        QVERIFY(flagFor(h, bId));
+        QTRY_VERIFY(!flagFor(h, bId)->isListening());
+        QVERIFY(h.addSliceCommands().isEmpty());
+    }
 };
 
-QTEST_MAIN(TestRemoteWindowHarness)
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+    app.setAttribute(Qt::AA_Use96Dpi, true);
+    TestRemoteWindowHarness test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // Load findings 4: about 37 s on a quiet computer, past ctest's 120 s
+    // under 150 busy loops (200 to 207 s at load 133 to 187), every case
+    // still passing one after another. The time is the window's own work,
+    // spread over all the cases (about 3 to 9 s each at that load, the
+    // Setup page sweep 18 s); its fixed waits are "nothing happens" windows
+    // that do not grow with load. Five groups run as their own ctest
+    // entries, tst_remote_window_harness_connect, _disconnect, _links,
+    // _setup and _radio (tests/CMakeLists.txt), each 27 to 41 s at that
+    // load; the slice access cases run as tst_remote_window_harness. The
+    // limit is not raised.
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_REMOTE_WINDOW_HARNESS_GROUP",
+        {{QStringLiteral("connect"),
+          {QStringLiteral("entryPointsStartAnExplicitConnect"),
+           QStringLiteral("connectedHeaderShowsCurrentSocketAndClearsOnDisconnect"),
+           QStringLiteral("setupConnectionsAsksManagedPickerWithoutDialing")}},
+         {QStringLiteral("disconnect"),
+          {QStringLiteral("cancelDuringBackoffStopsTheRetry"),
+           QStringLiteral("operatorDisconnectOpensConnectionsOnce")}},
+         {QStringLiteral("links"),
+          {QStringLiteral("linkLossOpensNothingAndRetries"),
+           QStringLiteral("radioOfflineOpensNothing"),
+           QStringLiteral("heldSnapshotCreatesNoSliceOnConnectOrReconnect")}},
+         {QStringLiteral("setup"),
+          {QStringLiteral("disconnectedWindowSetupKeepsThisComputersSettings"),
+           QStringLiteral("connectedWithoutTheCoresSettingsCorePagesWait"),
+           QStringLiteral("setupOpenedWhileDisconnectedRecordsNoEdit"),
+           QStringLiteral("freshWindowFirstConnectRaisesNoOfflineEditWarning"),
+           QStringLiteral("meterIntervalFollowsTheCoresSetting")}},
+         {QStringLiteral("radio"),
+          {QStringLiteral("windowFollowsTheCoresBandPlan"),
+           QStringLiteral("attenuatorControlsUseTheCoresObject"),
+           QStringLiteral("hardwareConfigReceiveSettingsReachTheCore"),
+           QStringLiteral("olderCoreLeavesAttenuatorControlsDisabledWithAReason"),
+           QStringLiteral("windowFollowsTheCoresRadio"),
+           QStringLiteral("capabilityChangeRegatesWithoutReconnect")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
 #include "tst_remote_window_harness.moc"

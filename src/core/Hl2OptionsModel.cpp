@@ -63,6 +63,8 @@
 
 #include <QtGlobal>
 
+#include <cmath>
+
 namespace NereusSDR {
 
 namespace {
@@ -84,6 +86,28 @@ bool   strBool(const QVariant& v, bool def)
 }
 } // namespace
 
+bool Hl2OptionsModel::parseCl2FreqMHz(const QString& text, int* kHz)
+{
+    bool ok = false;
+    const double mhz = text.trimmed().toDouble(&ok);
+    // The range bound keeps the kHz product inside int before the caller
+    // checks the real range.
+    if (!ok || !std::isfinite(mhz) || std::fabs(mhz) > 1.0e6) {
+        return false;
+    }
+    if (kHz) {
+        *kHz = static_cast<int>(std::llround(mhz * 1000.0));
+    }
+    return true;
+}
+
+QString Hl2OptionsModel::cl2FreqMHzText(int kHz)
+{
+    // 'g' with ten digits: "116", "24.576", "10.7", the text a remote
+    // window's decimal value turns into on the Core.
+    return QString::number(kHz / 1000.0, 'g', 10);
+}
+
 Hl2OptionsModel::Hl2OptionsModel(QObject* parent)
     : QObject(parent)
 {
@@ -101,9 +125,15 @@ void Hl2OptionsModel::load()
 
     m_swapAudioChannels = strBool(s.hardwareValue(m_mac, QString::fromLatin1(kKeySwapAudio)), false);
     m_cl2Enabled        = strBool(s.hardwareValue(m_mac, QString::fromLatin1(kKeyCl2Enable)), false);
-    m_cl2FreqMHz        = qBound(kCl2FreqMinMHz,
-        s.hardwareValue(m_mac, QString::fromLatin1(kKeyCl2FreqMHz),
-                        kDefaultCl2FreqMHz).toInt(), kCl2FreqMaxMHz);
+    // A saved frequency that is not a number loads the default, not the
+    // bottom of the range; one outside the range is clamped to it.
+    int cl2FreqKHz = kDefaultCl2FreqKHz;
+    if (!parseCl2FreqMHz(s.hardwareValue(m_mac, QString::fromLatin1(kKeyCl2FreqMHz),
+                                         cl2FreqMHzText(kDefaultCl2FreqKHz)).toString(),
+                         &cl2FreqKHz)) {
+        cl2FreqKHz = kDefaultCl2FreqKHz;
+    }
+    m_cl2FreqKHz        = qBound(kCl2FreqMinKHz, cl2FreqKHz, kCl2FreqMaxKHz);
     m_ext10MHz          = strBool(s.hardwareValue(m_mac, QString::fromLatin1(kKeyExt10MHz)), false);
     m_disconnectReset   = strBool(s.hardwareValue(m_mac, QString::fromLatin1(kKeyDiscReset)), false);
     m_pttHangMs         = qBound(kPttHangMinMs,
@@ -138,8 +168,8 @@ void Hl2OptionsModel::save() const
     const QString off = boolStr(false);
     store(kKeySwapAudio,  boolStr(m_swapAudioChannels), off);
     store(kKeyCl2Enable,  boolStr(m_cl2Enabled),        off);
-    store(kKeyCl2FreqMHz, QString::number(m_cl2FreqMHz),
-          QString::number(kDefaultCl2FreqMHz));
+    store(kKeyCl2FreqMHz, cl2FreqMHzText(m_cl2FreqKHz),
+          cl2FreqMHzText(kDefaultCl2FreqKHz));
     store(kKeyExt10MHz,   boolStr(m_ext10MHz),          off);
     store(kKeyDiscReset,  boolStr(m_disconnectReset),   off);
     store(kKeyPttHang,    QString::number(m_pttHangMs),
@@ -173,8 +203,8 @@ void Hl2OptionsModel::method(int v)                            \
 
 NEREUS_SETTER_BOOL(setSwapAudioChannels, m_swapAudioChannels, swapAudioChannelsChanged)
 NEREUS_SETTER_BOOL(setCl2Enabled,        m_cl2Enabled,        cl2EnabledChanged)
-NEREUS_SETTER_INT (setCl2FreqMHz,        m_cl2FreqMHz,        cl2FreqMHzChanged,
-                   kCl2FreqMinMHz, kCl2FreqMaxMHz)
+NEREUS_SETTER_INT (setCl2FreqKHz,        m_cl2FreqKHz,        cl2FreqKHzChanged,
+                   kCl2FreqMinKHz, kCl2FreqMaxKHz)
 NEREUS_SETTER_BOOL(setExt10MHz,          m_ext10MHz,          ext10MHzChanged)
 NEREUS_SETTER_BOOL(setDisconnectReset,   m_disconnectReset,   disconnectResetChanged)
 NEREUS_SETTER_INT (setPttHangMs,         m_pttHangMs,         pttHangMsChanged,

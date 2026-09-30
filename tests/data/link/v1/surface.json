@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 9
+            "value": 12
         },
         {
             "kind": "i64",
@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 14
+            "value": 15
         },
         {
             "kind": "i64",
@@ -484,6 +484,26 @@
             "kind": "i64",
             "name": "txInhibitReasonVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "paTransmitBandVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "sliceAccessVersion",
+            "value": 2
+        },
+        {
+            "kind": "i64",
+            "name": "mediaDirectVersion",
+            "value": 1
+        },
+        {
+            "kind": "utf8",
+            "name": "mediaStunUrls",
+            "value": "[\"stun:stun.example.test:3478\"]"
         },
         {
             "kind": "utf8",
@@ -1043,6 +1063,24 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "txEq.resetCurve"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "profileJson",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "expectedRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 15,
+            "minMinor": 11,
+            "verb": "cfc.setProfile"
         },
         {
             "arguments": [
@@ -1864,6 +1902,45 @@
         },
         {
             "arguments": [
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "resetLevelCalibration"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "f64",
+                    "name": "levelDbm",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "frequencyHz",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "startLevelCalibration"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "cancelLevelCalibration"
+        },
+        {
+            "arguments": [
                 {
                     "kind": "i64",
                     "name": "sliceId",
@@ -2627,6 +2704,116 @@
         },
         {
             "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.listen"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.stopListening"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.takeControl"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.release"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "optional": false
+                },
+                {
+                    "kind": "f64",
+                    "name": "level",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "muted",
+                    "optional": false
+                }
+            ],
+            "capability": "sliceAccessVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.setListenLevel"
+        },
+        {
+            "arguments": [
             ],
             "capability": "settingsBackupVersion",
             "capabilityVersion": 1,
@@ -3262,6 +3449,11 @@
             },
             "replace": {
                 "capability": "mediaReplaceVersion",
+                "conditional": {
+                    "mediaDirectVersion": [
+                        "mediaDirectVersion"
+                    ]
+                },
                 "fields": [
                     "connectionId",
                     "op",
@@ -5082,6 +5274,42 @@
                     "kind": "utf8",
                     "name": "txInhibitReason",
                     "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "alexLpfBits",
+                    "ordinal": 29
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "paTransmitBand",
+                    "ordinal": 30
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "levelCalRunning",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "levelCalPercent",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "levelCalMessage",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "levelCalSucceeded",
+                    "ordinal": 34
                 }
             ]
         },
@@ -5365,6 +5593,58 @@
                     "kind": "utf8",
                     "name": "pa",
                     "ordinal": 11
+                }
+            ]
+        },
+        "SliceAccess": {
+            "properties": [
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "incarnation",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "controllerDeviceId",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "controlRevision",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listenerDeviceIds",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "activeRxDeviceIds",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSelected",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "onAir",
+                    "ordinal": 7
                 }
             ]
         },
@@ -7066,6 +7346,12 @@
                     "kind": "i64",
                     "name": "rx2AutoAttUndoDelayMs",
                     "ordinal": 23
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "rx2PreampMode",
+                    "ordinal": 24
                 }
             ]
         },
@@ -7461,13 +7747,13 @@
                     "ordinal": 63
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "utf8",
                     "name": "powerByBandJson",
                     "ordinal": 64
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "utf8",
                     "name": "tunePowerByBandJson",
                     "ordinal": 65
@@ -7608,6 +7894,12 @@
                     "kind": "utf8",
                     "name": "txEqCurve",
                     "ordinal": 87
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "cfcProfile",
+                    "ordinal": 88
                 }
             ]
         },
@@ -8124,6 +8416,10 @@
         {
             "class": "SliceMarker",
             "key": "marker:<id>"
+        },
+        {
+            "class": "SliceAccess",
+            "key": "access:<id>"
         }
     ],
     "settingsScope": {
@@ -8209,6 +8505,10 @@
             "Nr3ModelPath",
             "StationCallsign",
             "RX1_MeterCalOffsetDb",
+            "RX1_DisplayCalOffsetDb",
+            "RxMeterCalOffsetDbByRadio",
+            "RxDisplayCalOffsetDbByRadio",
+            "RX1_PreampOffsetsDb",
             "PeripheralsMigrationDone",
             "SwrProtectionEnabled",
             "SwrProtectionLimit",

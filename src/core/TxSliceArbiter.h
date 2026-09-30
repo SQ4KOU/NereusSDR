@@ -22,6 +22,23 @@
 //              bindForHolder; the first bind among the holder's slices;
 //              the freeze while the station device is keyed. J.J. Boyd
 //              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 Slice control plan Task 2: the owner lookup becomes a
+//              transmit access check (RadioModel sets it to
+//              SliceAccessPolicy::mayTransmitOn), so a slice a device only
+//              listens to never carries its transmit. J.J. Boyd (KG4VCF),
+//              AI-assisted via Anthropic Claude Code.
+//   2026-09-28 Slice control plan, fix wave for the Tasks 1-4 review
+//              (Critical 1): a handoff waiting for the unkey gate is
+//              checked again when the gate answers, against the holder and
+//              the device that asked, and dropped when the slice is no
+//              longer theirs; pendingHandoffSliceId names the waiting
+//              target, and pendingHandoffChanged announces it. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 Slice control fix wave (whole-branch review, Critical 1):
+//              releaseBinding unkeys through the unkey gate before the
+//              binding ends, so the radio is never left keyed with no
+//              transmit slice. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -75,19 +92,26 @@ public:
     void setUnkeyGate(UnkeyGate* gate) { m_unkeyGate = gate; }
     /// A handoff is waiting for the unkey gate.
     bool isHandoffPending() const { return m_pendingHandoffId >= 0; }
+    /// The slice a handoff waiting for the unkey gate moves the flag to,
+    /// or -1. The Core counts it as transmitting while it waits, so its
+    /// control cannot pass before the flag lands (slice control fix wave,
+    /// Critical 1).
+    int pendingHandoffSliceId() const { return m_pendingHandoffId; }
 
     /// Inject the slice list owner (RadioModel) so arbiter can flip txSlice
     /// flags on SliceModel instances.
     void setSliceList(QVector<SliceModel*>* slices);
 
-    /// iPhone app plan Task 77 (ruling 8.13): who owns a slice (its
-    /// subject: the owner, or the device it is held for) and each owner's
-    /// active slice, beside the slice list (RadioModel sets both from its
-    /// SliceOwnership); and who holds transmit (empty while unheld).
-    using OwnerLookup = std::function<QByteArray(int sliceId)>;
+    /// iPhone app plan Task 77 (ruling 8.13), slice control plan Task 2:
+    /// whether a device may carry transmit on a slice (RadioModel:
+    /// SliceAccessPolicy::mayTransmitOn, whose slice it is, never a
+    /// listener's) and each owner's active slice, beside the slice list
+    /// (RadioModel sets both from its SliceOwnership); and who holds
+    /// transmit (empty while unheld).
+    using TransmitAccess = std::function<bool(const QByteArray& device, int sliceId)>;
     using ActiveLookup = std::function<int(const QByteArray& owner)>;
     using HolderLookup = std::function<QByteArray()>;
-    void setOwnerLookup(OwnerLookup owner, ActiveLookup active);
+    void setTransmitAccess(TransmitAccess mayTransmit, ActiveLookup active);
     void setHolderLookup(HolderLookup holder) { m_holder = std::move(holder); }
     /// Ruling 8.11: true while the station device is keyed; the flag then
     /// never moves (the Core's session server sets it).
@@ -152,6 +176,17 @@ public:
     /// last state you want to raise a binding underneath.
     void syncToSliceList();
 
+    /// Slice control plan Task 7: the last slice closed, so there is no
+    /// slice to transmit on. Unlike syncToSliceList() on an empty list
+    /// (which keeps a restored id for the first slice to come), this drops
+    /// the binding and any waiting move, and announces the change with a
+    /// new id of -1. Never keys. Keyed, it unkeys first: through the
+    /// unkey gate when one is set, the -1 following once the radio is in
+    /// receive (or the gate stopped transmit at once); without a gate MOX
+    /// drops before the -1. A slice made on the same id, or a new binding,
+    /// while the gate waits leaves the binding as it is then.
+    void releaseBinding();
+
 public slots:
     /// Request TX handoff to the slice with the stable sliceId.
     /// Returns true if handoff succeeded or was a no-op (already TX-bound).
@@ -159,6 +194,14 @@ public slots:
     bool requestHandoff(int sliceId);
 
 private:
+    /// requestHandoff with the device that asked (empty for the Core's own
+    /// window), remembered while the move waits for the unkey gate.
+    bool requestHandoffFrom(int sliceId, const QByteArray& requester);
+    /// Whether a waiting move to `sliceId` may still land when the gate
+    /// answers: the slice is still the holder's and the asker's.
+    bool pendingMayLand(int sliceId, const QByteArray& requester) const;
+    /// Sets the waiting move's target; pendingHandoffChanged when it differs.
+    void setPending(int sliceId, const QByteArray& requester);
     /// Moves the flag to `target` (the handoff's last step).
     void flipTo(SliceModel* target);
     SliceModel* sliceWithId(int sliceId) const;
@@ -166,6 +209,10 @@ private:
 signals:
     /// Emitted after handoff completes. oldId may be -1 on initial bind.
     void txBoundSliceChanged(int oldId, int newId);
+
+    /// Slice control fix wave: pendingHandoffSliceId() changed (-1 when no
+    /// move waits any more), so what reads it as transmitting refreshes.
+    void pendingHandoffChanged(int sliceId);
 
     /// Emitted when a handoff request is rejected (slice doesn't exist, etc.).
     void handoffBlocked(int requestedId, QString reason);
@@ -178,7 +225,9 @@ private:
     bool                      m_remote {false};    // Remote-daemon R2 Task 5
     UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
     int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
-    OwnerLookup               m_owner;                 // Task 77
+    QByteArray                m_pendingRequester;      // who asked for the waiting move
+    QByteArray                m_pendingHolder;         // who held transmit when it was asked
+    TransmitAccess            m_mayTransmit;           // Task 77, slice control Task 2
     ActiveLookup              m_active;                // Task 77
     HolderLookup              m_holder;                // Task 77
     FrozenLookup              m_frozen;                // Task 77, ruling 8.11

@@ -6,6 +6,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
+//                                    cancelLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: resetLevelCalibration
+//                                    (radioHardwareVersion 12). AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  Parity ruling C4: setRadioSampleRate
 //                                    (radioHardwareVersion 9). AI-assisted
 //                                    via Anthropic Claude Code.
@@ -259,6 +266,37 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18 (paProfileVersion 1): the paProfile
 //                 verbs (handlePaProfile). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-29: transmitSettingsVersion 15: cfc.setProfile, applied by the
+//               station server as its cfcParaEqData write
+//               (CfcProfileAccess). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: the
+//                                    slice access check is the change
+//                                    predicate (SliceAccessPolicy), so a
+//                                    listener's verbs are refused.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    slice.listen, slice.stopListening,
+//                                    slice.takeControl and slice.release;
+//                                    setActiveSliceById on a listened
+//                                    slice; removeSlice as a release from a
+//                                    controller others listen with (ruling
+//                                    Q6). AI-assisted via Anthropic Claude
+//                                    Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control fix wave (Important 4):
+//                                    TransmitAccess::txSliceChosen, a
+//                                    device's explicit tx.setTxSlice
+//                                    choice. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 7: a device
+//                                    closing the Core's last slice with
+//                                    nobody else on it releases it, and it
+//                                    closes. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6:
+//                                    slice.setListenLevel, a listener's own
+//                                    level and mute for a slice it hears.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -273,6 +311,7 @@
 #include "core/SettingsHygiene.h"
 #include "core/session/SettingsHygieneWire.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/SliceAccessController.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
@@ -481,6 +520,12 @@ QString notRepresentableReason()
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
 //   setRadioSampleRate     radioHardwareVersion 9 (requestRadioSampleRate)
+//   resetLevelCalibration  radioHardwareVersion 12
+//                          (requestResetLevelCalibration)
+//   startLevelCalibration, cancelLevelCalibration
+//                          radioHardwareVersion 12
+//                          (requestStartLevelCalibration,
+//                          requestCancelLevelCalibration)
 //   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
 //   records.subscribe, records.unsubscribe, spots.connect, spots.disconnect,
 //   spots.sendCommand, spots.clearAll
@@ -514,6 +559,10 @@ QString notRepresentableReason()
 //   support.collect,
 //   support.setLogCategories supportBundleVersion 1 (the bundle is written
 //                          on a worker thread; its answer comes later)
+//   slice.listen, slice.stopListening, slice.takeControl, slice.release,
+//   slice.setListenLevel   sliceAccessVersion 1, to a device whose hello
+//                          declares sliceAccess with sessionHolder
+//                          (SliceAccessController answers them)
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -625,6 +674,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"txEq.setCurve", {arg("curveJson", kUtf8)}, "txEqCurveVersion", 2,
          kRadioIdentitySessionProtocolMinor},
         {"txEq.resetCurve", {}, "txEqCurveVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The CFC dialog's band editor from an app, applied at once against
+        // the revision it last saw (transmitSettingsVersion 15).
+        {"cfc.setProfile", {arg("profileJson", kUtf8), arg("expectedRevision", kUtf8)},
+         "transmitSettingsVersion", 15, kRadioIdentitySessionProtocolMinor},
         // Setup > PA > PA Gain's profiles and table, as the local page
         // changes them (R-R3-49, R-IOS-18; paProfileVersion 1).
         {"paProfile.select", {arg("name", kUtf8)}, "paProfileVersion", 1,
@@ -764,6 +817,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // radio's own rate, as a local window's Radio Info change.
         {"setRadioSampleRate", {arg("rateHz", kInt)}, "radioHardwareVersion", 9,
          kRadioIdentitySessionProtocolMinor},
+        // Level Cal: Setup's Reset, the meter and display calibration back
+        // to the radio's defaults.
+        {"resetLevelCalibration", {}, "radioHardwareVersion", 12,
+         kRadioIdentitySessionProtocolMinor},
+        // Level Cal: the Core's calibration run on one slice, and its stop.
+        {"startLevelCalibration",
+         {arg("levelDbm", kDouble), arg("frequencyHz", kDouble), arg("sliceId", kInt)},
+         "radioHardwareVersion", 12, kRadioIdentitySessionProtocolMinor},
+        {"cancelLevelCalibration", {}, "radioHardwareVersion", 12,
+         kRadioIdentitySessionProtocolMinor},
         // The filter graph's curve (R-R3-49, parity Task 16).
         {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
          "dspInfoVersion", 1, kRadioIdentitySessionProtocolMinor},
@@ -897,6 +960,26 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // it itself; the dispatcher never routes it.
         {"session.pathTicket", {}, "controlSwitchVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // Slice control plan Task 4: listening to another device's slice
+        // and taking or releasing control of one, each naming the slice by
+        // its id and incarnation (`access:<id>`), take and release with the
+        // control revision the device saw.
+        {"slice.listen", {arg("sliceId", kInt), arg("incarnation", kInt)}, "sliceAccessVersion",
+         1, kRadioIdentitySessionProtocolMinor},
+        {"slice.stopListening", {arg("sliceId", kInt), arg("incarnation", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"slice.takeControl",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("controlRevision", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"slice.release",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("controlRevision", kInt)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Slice control plan Task 6: a listener's own level (0..1) and mute
+        // for a slice it hears; the controller's AF is not touched.
+        {"slice.setListenLevel",
+         {arg("sliceId", kInt), arg("incarnation", kInt), arg("level", kDouble),
+          arg("muted", kBool)},
+         "sliceAccessVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -1117,6 +1200,37 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         return;
     }
 
+    // Slice control plan Task 4: listening and control, answered by the
+    // Core's SliceAccessController, which checks the slice itself.
+    if (invoke.commandVerb == "slice.listen" || invoke.commandVerb == "slice.stopListening"
+        || invoke.commandVerb == "slice.takeControl" || invoke.commandVerb == "slice.release") {
+        handleSliceAccessVerb(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "slice.setListenLevel") {
+        handleSliceListenLevel(invoke);
+        return;
+    }
+    // Slice control plan Task 4: a device that shares slices may make any
+    // slice it listens to its active receive slice
+    // (RadioModel::setActiveRxFor); an older window keeps today's rule.
+    if (invoke.commandVerb == "setActiveSliceById" && m_requesterSharesSlices
+        && !m_requester.isEmpty() && !m_sliceAccessController.isNull()) {
+        int sliceId = -1;
+        if (findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok) {
+            const int previous = m_radioModel->sliceOwnership()->activeRxFor(m_requester);
+            const SliceAccessController::Result result =
+                m_sliceAccessController->selectRx(m_requester, sliceId);
+            QList<QByteArray> affected = result.affected;
+            if (result.accepted && previous >= 0 && previous != sliceId) {
+                affected.append(ObjectRegistry::keyForSlice(previous));
+            }
+            emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                       result.accepted ? affected : QList<QByteArray>{});
+            return;
+        }
+    }
+
     // iPhone app Task 73 (ruling 5.9): a device addresses only its own
     // slices. Refused before anything is looked at or changed.
     if (refusedForAnotherDevice(invoke)) {
@@ -1278,6 +1392,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRadeResetVocoder(invoke);
     } else if (invoke.commandVerb == "txEq.setCurve" || invoke.commandVerb == "txEq.resetCurve") {
         handleTxEqCurve(invoke);
+    } else if (invoke.commandVerb == "cfc.setProfile") {
+        handleCfcProfile(invoke);
     } else if (invoke.commandVerb == "paProfile.select" || invoke.commandVerb == "paProfile.new"
                || invoke.commandVerb == "paProfile.copy" || invoke.commandVerb == "paProfile.delete"
                || invoke.commandVerb == "paProfile.reset"
@@ -1318,6 +1434,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetIoBoardOutput(invoke);
     } else if (invoke.commandVerb == "setRadioSampleRate") {
         handleSetRadioSampleRate(invoke);
+    } else if (invoke.commandVerb == "resetLevelCalibration") {
+        handleResetLevelCalibration(invoke);
+    } else if (invoke.commandVerb == "startLevelCalibration") {
+        handleStartLevelCalibration(invoke);
+    } else if (invoke.commandVerb == "cancelLevelCalibration") {
+        handleCancelLevelCalibration(invoke);
     } else if (invoke.commandVerb == "dsp.filterResponse") {
         handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "records.subscribe"
@@ -1707,6 +1829,12 @@ void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
                    QStringLiteral("That slice is no longer on the Core."), {});
         return;
     }
+    // Slice control fix wave (Important 4): the device's explicit choice.
+    // Without a requester the Core's own window chose, and RadioModel's
+    // txSliceSelected records it.
+    if (!m_requester.isEmpty() && m_transmitAccess.txSliceChosen) {
+        m_transmitAccess.txSliceChosen(m_requester, sliceId);
+    }
     QList<QByteArray> affected;
     for (const SliceModel* slice : m_radioModel->slices()) {
         if (slice != nullptr) {
@@ -1726,6 +1854,8 @@ bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& inv
     // or one held for a device, whatever receivers are in use (fix wave
     // C1). slice.selectBand and notch.addAtSlice (R-IOS-27) joined at the
     // checkpoint merge: a band button or +TNF acts on its own slice only.
+    // Slice control plan Task 2: "its own" is the change predicate, so a
+    // listener's verbs on a slice it hears are refused as well.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
@@ -2125,6 +2255,32 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
+        return;
+    }
+    // Slice control plan Task 4 (ruling Q6): closing a slice other devices
+    // still listen to, from its controller, releases it instead: it stays
+    // for them. An older window's close follows the same rule.
+    if (!m_requester.isEmpty() && !m_sliceAccessController.isNull()
+        && m_sliceAccessController->closeIsRelease(m_requester, sliceId)) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceAccessController::Result result = m_sliceAccessController->release(
+            m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));
+        emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)}
+                                   : QList<QByteArray>{});
+        return;
+    }
+    // Slice control plan Task 7: the Core's last slice closes by the claims
+    // rule when its controller closes it and nobody else is on it (a
+    // release that leaves nobody on it); the Core then has no slice.
+    if (m_radioModel->slices().size() <= 1 && !m_requester.isEmpty()
+        && !m_sliceAccessController.isNull()) {
+        const SliceOwnership* ownership = m_radioModel->sliceOwnership();
+        const SliceAccessController::Result result = m_sliceAccessController->release(
+            m_requester, ownership->refOf(sliceId), ownership->controlRevision(sliceId));
+        emitResult(invoke.commandVerb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)}
+                                   : QList<QByteArray>{});
         return;
     }
     if (m_radioModel->slices().size() <= 1) {
@@ -2816,6 +2972,139 @@ void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
 // iPhone app Task 74 (R-IOS-30): confirm.proceed {id, choice},
 // confirm.cancel {id}, notice.takeBack {id}. The arguments are read here;
 // what they do is the Core's confirm step (StationServer).
+void SessionCommandDispatcher::setSliceAccessController(SliceAccessController* controller)
+{
+    m_sliceAccessController = controller;
+}
+
+// Slice control plan Task 4 (sliceAccessVersion 1): the slice by its id and
+// incarnation, take and release with the control revision the device saw.
+// StationServer refuses these to a device that did not declare
+// sliceAccess before they reach here.
+void SessionCommandDispatcher::handleSliceAccessVerb(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool withRevision = verb == "slice.takeControl" || verb == "slice.release";
+    const auto exactUnsigned = [&invoke](const QByteArray& name, quint64* value) {
+        for (const MirrorUpdate& argument : invoke.arguments) {
+            if (argument.name != name) {
+                continue;
+            }
+            if (argument.kind != MirrorWireKind::Int64
+                || argument.value.typeId() != QMetaType::LongLong
+                || argument.value.toLongLong() < 0) {
+                return false;
+            }
+            *value = static_cast<quint64>(argument.value.toLongLong());
+            return true;
+        }
+        return false;
+    };
+    quint64 sliceId = 0;
+    SliceOwnership::SliceRef ref;
+    quint64 revision = 0;
+    const bool shape = withRevision
+        ? hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation", "controlRevision"})
+        : hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation"});
+    if (!shape || !exactUnsigned("sliceId", &sliceId) || sliceId > 63
+        || !exactUnsigned("incarnation", &ref.incarnation)
+        || (withRevision && !exactUnsigned("controlRevision", &revision))) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    ref.sliceId = static_cast<int>(sliceId);
+    if (m_sliceAccessController.isNull() || m_requester.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot share slices between devices."), {});
+        return;
+    }
+    SliceAccessController::Result result;
+    if (verb == "slice.listen") {
+        result = m_sliceAccessController->listen(m_requester, ref);
+    } else if (verb == "slice.stopListening") {
+        result = m_sliceAccessController->stopListening(m_requester, ref);
+    } else if (verb == "slice.takeControl") {
+        result = m_sliceAccessController->takeControl(m_requester, ref, revision);
+    } else {
+        result = m_sliceAccessController->release(m_requester, ref, revision);
+    }
+    QList<MirrorUpdate> values;
+    if (result.accepted && (verb == "slice.listen" || verb == "slice.takeControl")) {
+        values.append(MirrorUpdate{0, QByteArrayLiteral("controlRevision"), MirrorWireKind::Int64,
+                                   QVariant(static_cast<qlonglong>(result.controlRevision))});
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, values));
+}
+
+// Slice control plan Task 6 (sliceAccessVersion 1): a listener's own level
+// and mute for one slice. The level is 0..1 and is applied in the Core's
+// mixer to this device's audio only (SliceAccessController::setListenLevel).
+void SessionCommandDispatcher::handleSliceListenLevel(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const auto refuseUnread = [this, &invoke, &verb] {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+    };
+    if (!hasExactlyArguments(invoke.arguments, {"sliceId", "incarnation", "level", "muted"})) {
+        refuseUnread();
+        return;
+    }
+    qint64 sliceId = -1;
+    qint64 incarnation = -1;
+    double level = -1.0;
+    bool muted = false;
+    bool haveLevel = false;
+    bool haveMuted = false;
+    for (const MirrorUpdate& argument : invoke.arguments) {
+        if (argument.name == "sliceId" || argument.name == "incarnation") {
+            if (argument.kind != MirrorWireKind::Int64
+                || argument.value.typeId() != QMetaType::LongLong) {
+                refuseUnread();
+                return;
+            }
+            (argument.name == "sliceId" ? sliceId : incarnation) = argument.value.toLongLong();
+        } else if (argument.name == "level") {
+            if (argument.kind != MirrorWireKind::Float64
+                || argument.value.typeId() != QMetaType::Double) {
+                refuseUnread();
+                return;
+            }
+            level = argument.value.toDouble();
+            haveLevel = true;
+        } else if (argument.name == "muted") {
+            if (argument.kind != MirrorWireKind::Bool
+                || argument.value.typeId() != QMetaType::Bool) {
+                refuseUnread();
+                return;
+            }
+            muted = argument.value.toBool();
+            haveMuted = true;
+        }
+    }
+    if (!haveLevel || !haveMuted || sliceId < 0 || sliceId > 63 || incarnation < 0
+        || !std::isfinite(level) || level < 0.0 || level > 1.0) {
+        refuseUnread();
+        return;
+    }
+    if (m_sliceAccessController.isNull() || m_requester.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot share slices between devices."), {});
+        return;
+    }
+    SliceOwnership::SliceRef ref;
+    ref.sliceId = static_cast<int>(sliceId);
+    ref.incarnation = static_cast<quint64>(incarnation);
+    const SliceAccessController::Result result =
+        m_sliceAccessController->setListenLevel(m_requester, ref, level, muted);
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, result.accepted, result.reason,
+        result.accepted ? result.affected : QList<QByteArray>{}, {}));
+}
+
 void SessionCommandDispatcher::handleConfirmAnswer(const SessionMessage& invoke)
 {
     const bool proceed = invoke.commandVerb == "confirm.proceed";
@@ -3519,6 +3808,22 @@ void SessionCommandDispatcher::handleTxEqCurve(const SessionMessage& invoke)
                {});
 }
 
+// transmitSettingsVersion 15: the CFC dialog's band editor from an app. The
+// write is the asking connection's, under every rule a cfcParaEqData write
+// from it meets, so the station server applies it (CfcProfileAccess).
+// Without one (a dispatcher on its own) there is nothing to apply it
+// through.
+void SessionCommandDispatcher::handleCfcProfile(const SessionMessage& invoke)
+{
+    if (m_cfcProfileAccess && m_cfcProfileAccess(invoke)) {
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false,
+               QStringLiteral("This Core cannot change the CFC settings from here. "
+                              "Updating the Core may help."),
+               {});
+}
+
 // R-R3-49 / R-IOS-18 (paProfileVersion 1): PA Gain's profiles and table,
 // through the Core's own PaProfileManager as the local page uses it
 // (RadioModel::paProfileActionForStation). StationServer has already
@@ -3572,6 +3877,8 @@ void SessionCommandDispatcher::handlePaProfile(const SessionMessage& invoke)
     }
     request.band = band;
     request.step = step;
+    request.requesterHoldsTransmit = m_transmitAccess.holdsTransmit
+        && m_transmitAccess.holdsTransmit(m_requester);
     QString reason;
     if (!m_radioModel->paProfileActionForStation(request, &reason)) {
         emitResult(verb, invoke.commandId, false,
@@ -4129,6 +4436,61 @@ void SessionCommandDispatcher::handleSetIoBoardOutput(const SessionMessage& invo
                                        refusal = reason;
                                    });
     emitResult(invoke.commandVerb, invoke.commandId, accepted, refusal, {});
+}
+
+// Level Cal (radioHardwareVersion 12): a remote window's Setup > Hardware >
+// Calibration Reset, the call a local window's Reset makes
+// (RadioModel::resetLevelCalibration, Thetis ResetLevelCalibration,
+// console.cs:46868-46886 [v2.10.3.15]). Thetis has no MOX check there, so
+// it is taken on the air too. The removed keys reach every window as
+// settings.value with no entry.
+void SessionCommandDispatcher::handleResetLevelCalibration(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    m_radioModel->resetLevelCalibration();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// Level Cal (radioHardwareVersion 12): a remote window's Setup > Hardware >
+// Calibration Start, the call a local window makes
+// (RadioModel::requestStartLevelCalibration): the Core runs Thetis
+// CalibrateLevel (console.cs:9856-10232 [v2.10.3.15]) on the slice named.
+// StationServer has already refused a window signed in with the pairing
+// token and a radio on the air. The run's own refusals come back as the
+// result; its progress reaches the window as the levelCal* properties.
+void SessionCommandDispatcher::handleStartLevelCalibration(const SessionMessage& invoke)
+{
+    double levelDbm = 0.0;
+    double frequencyHz = 0.0;
+    int sliceId = -1;
+    if (!hasExactlyArguments(invoke.arguments, {"levelDbm", "frequencyHz", "sliceId"})
+        || !findFiniteDoubleArgument(invoke.arguments, "levelDbm", &levelDbm)
+        || !findFiniteDoubleArgument(invoke.arguments, "frequencyHz", &frequencyHz)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    const QString refusal = m_radioModel->requestStartLevelCalibration(
+        static_cast<float>(levelDbm), frequencyHz, sliceId);
+    emitResult(invoke.commandVerb, invoke.commandId, refusal.isEmpty(), refusal, {});
+}
+
+// Level Cal: Cancel, Thetis closing the progress window. It only stops a
+// run, so any window may send it; with nothing running it does nothing.
+void SessionCommandDispatcher::handleCancelLevelCalibration(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    m_radioModel->requestCancelLevelCalibration();
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 // Parity ruling C4 (radioHardwareVersion 8): a remote window's Setup >

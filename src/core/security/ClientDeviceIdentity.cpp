@@ -13,6 +13,10 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8b: a window run with a profile
+//               other than the default carries the profile in its name and
+//               short name. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/ClientDeviceIdentity.h"
@@ -65,6 +69,43 @@ QString ClientDeviceIdentity::machineShortName()
 QString ClientDeviceIdentity::shortNameFrom(const QString& hostName)
 {
     return cleanedName(hostName.trimmed().section(QLatin1Char('.'), 0, 0), kMaxShortNameBytes);
+}
+
+QString ClientDeviceIdentity::machineName(const QString& profile)
+{
+    return deviceNameFrom(QSysInfo::machineHostName(), profile);
+}
+
+QString ClientDeviceIdentity::machineShortName(const QString& profile)
+{
+    return shortNameFrom(QSysInfo::machineHostName(), profile);
+}
+
+QString ClientDeviceIdentity::deviceNameFrom(const QString& hostName, const QString& profile)
+{
+    return withProfile(hostName, profile, kMaxNameBytes, /*shortName=*/false);
+}
+
+QString ClientDeviceIdentity::shortNameFrom(const QString& hostName, const QString& profile)
+{
+    return withProfile(hostName, profile, kMaxShortNameBytes, /*shortName=*/true);
+}
+
+QString ClientDeviceIdentity::withProfile(const QString& hostName, const QString& profile,
+                                          int maxBytes, bool shortName)
+{
+    const auto plain = [&hostName, shortName](int bytes) {
+        return shortName ? cleanedName(hostName.trimmed().section(QLatin1Char('.'), 0, 0), bytes)
+                         : cleanedName(hostName, bytes);
+    };
+    if (profile.trimmed().isEmpty()) {
+        return plain(maxBytes);
+    }
+    // The profile keeps at most half the room, so the computer's own name
+    // stays readable beside it.
+    const QString label = cleanedName(profile, maxBytes / 2 - 3);
+    const QString suffix = QStringLiteral(" (%1)").arg(label);
+    return plain(maxBytes - static_cast<int>(suffix.toUtf8().size())) + suffix;
 }
 
 QString ClientDeviceIdentity::cleanedName(const QString& text, int maxBytes)

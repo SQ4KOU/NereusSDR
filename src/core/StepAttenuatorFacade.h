@@ -25,6 +25,8 @@
 // 1 yellow, 2 red; both auto-attenuate times are whole seconds in ms.
 // rx2StepAttEnabled, rx2AutoAttEnabled, rx2AutoAttUndo and
 // rx2AutoAttUndoDelayMs are RX2's own enable and auto-attenuate settings.
+// rx2PreampMode is RX2's own preamp mode (a PreampMode integer, the items
+// rx2PreampItemsForBoard offers), the one the slices on the other ADC use.
 // rx2AttenuationDb is the attenuator of the ADC slice A is not on (Thetis
 // RX2's); rx2SliceMask has bit n set for each slice n on that ADC, which
 // reads and sets rx2AttenuationDb rather than attenuationDb (0: every slice
@@ -54,6 +56,9 @@
 //                                    rx2AutoAttEnabled, rx2AutoAttUndo,
 //                                    rx2AutoAttUndoDelayMs. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampMode, RX2's own
+//                                    preamp mode (radioHardwareVersion 12).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -122,6 +127,10 @@ class StepAttenuatorFacade final : public QObject {
                NOTIFY rx2AutoAttUndoChanged)
     Q_PROPERTY(int rx2AutoAttUndoDelayMs READ rx2AutoAttUndoDelayMs
                WRITE setRx2AutoAttUndoDelayMs NOTIFY rx2AutoAttUndoDelayMsChanged)
+    // Level Cal (radioHardwareVersion 12): RX2's own preamp mode (Thetis
+    // RX2PreampMode). Appended last so earlier ordinals stay put.
+    Q_PROPERTY(int rx2PreampMode READ rx2PreampMode WRITE setRx2PreampMode
+               NOTIFY rx2PreampModeChanged)
 
 public:
     /// True when an edit may go ahead; otherwise false with a plain reason.
@@ -189,6 +198,13 @@ public:
     bool rx2AutoAttEnabled() const { return m_values.rx2AutoAttEnabled; }
     bool rx2AutoAttUndo() const { return m_values.rx2AutoAttUndo; }
     int rx2AutoAttUndoDelayMs() const { return m_values.rx2AutoAttUndoDelayMs; }
+    int rx2PreampMode() const { return m_values.rx2PreampMode; }
+    /// The preamp mode slice `sliceId` hears, and its edit.
+    int preampModeForSlice(int sliceId) const
+    {
+        return sliceUsesRx2(sliceId) ? rx2PreampMode() : preampMode();
+    }
+    void setPreampModeForSlice(int sliceId, int mode);
     /// Whether slice `sliceId` reads and sets rx2AttenuationDb.
     bool sliceUsesRx2(int sliceId) const
     {
@@ -225,6 +241,7 @@ public:
     void setRx2AutoAttEnabled(bool on);
     void setRx2AutoAttUndo(bool on);
     void setRx2AutoAttUndoDelayMs(int ms);
+    void setRx2PreampMode(int mode);
 
 signals:
     void enabledChanged(bool on);
@@ -251,6 +268,7 @@ signals:
     void rx2AutoAttEnabledChanged(bool on);
     void rx2AutoAttUndoChanged(bool on);
     void rx2AutoAttUndoDelayMsChanged(int ms);
+    void rx2PreampModeChanged(int mode);
     /// An edit the gate refused, with its plain reason.
     void editRejected(const QString& reason);
     /// setWindowAvailability() changed the availability or its reason.
@@ -284,6 +302,8 @@ private:
         bool rx2AutoAttEnabled{false};
         bool rx2AutoAttUndo{false};
         int rx2AutoAttUndoDelayMs{5000};
+        // StepAttenuatorController's m_rx2PreampMode (PreampMode::On).
+        int rx2PreampMode{1};
     };
 
     /// Starts an edit of `property`: clears its settle reason and asks the

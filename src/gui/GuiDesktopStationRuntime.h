@@ -73,6 +73,9 @@ public:
     bool setStartWithComputer(bool enabled);
     bool renameStation(const QString& name);
     bool revokeDevice(const QByteArray& id);
+    /// Slice control plan Task 8b: the Core stops accepting its pairing
+    /// token, then removes `id` (StationDevicesFacade::retireTokenAndRevoke).
+    bool revokeDeviceStoppingPairingToken(const QByteArray& id);
     bool addDevice();
     bool acknowledgeKeyBackup();
 

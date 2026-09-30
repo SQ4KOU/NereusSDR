@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QPointer>
 #include <QSignalBlocker>
@@ -191,6 +192,18 @@ void RemoteStationPage::setConnectedDevices(RemoteDevicesState* devices)
     m_connectedList->setDevices(devices);
 }
 
+bool RemoteStationPage::confirm(const QString& title, const QString& text, const QString& goAhead)
+{
+    if (m_confirmation) {
+        return m_confirmation(title, text, goAhead);
+    }
+    QMessageBox box(QMessageBox::Warning, title, text, QMessageBox::Cancel, this);
+    QPushButton* proceed = box.addButton(goAhead, QMessageBox::DestructiveRole);
+    box.setDefaultButton(QMessageBox::Cancel);
+    box.exec();
+    return box.clickedButton() == proceed;
+}
+
 void RemoteStationPage::applyGate(QWidget* control, bool allowed, const QString& reason)
 {
     control->setEnabled(allowed);
@@ -258,7 +271,9 @@ void RemoteStationPage::rebuildDevices()
         revoke->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
         revoke->setAutoDefault(false);
         layout->addWidget(revoke);
-        const QString reason = !device.revocable ? tr("This device cannot be revoked here.")
+        const QString reason = !device.revocable
+            ? (device.revokeReason.isEmpty() ? tr("This device cannot be revoked here.")
+                                             : device.revokeReason)
             : allowed ? QString() : unavailable.isEmpty()
                 ? tr("Run a Core on this computer first.") : unavailable;
         applyGate(revoke, allowed && device.revocable, reason);
@@ -266,10 +281,34 @@ void RemoteStationPage::rebuildDevices()
                 [this, revoke, id = device.id, generation = m_deviceGeneration]() {
             if (generation != m_deviceGeneration || !revoke->isEnabled()) { return; }
             for (const Device& current : m_state.devices) {
-                if (current.id == id && current.revocable) {
+                if (current.id != id || !current.revocable) {
+                    continue;
+                }
+                if (!current.removalStopsPairingToken) {
                     emit revokeRequested(id);
                     return;
                 }
+                // Slice control plan Task 8b: it joined with the pairing
+                // token, which still works; while it does, a computer
+                // removed this way could join again, so the Core stops
+                // accepting the token first. Said plainly before it happens.
+                const QPointer<RemoteStationPage> self(this);
+                const QString name = current.name;
+                const bool goAhead = confirm(
+                    tr("Remove %1").arg(name),
+                    tr("%1 joined this Core with its pairing token. While the Core accepts "
+                       "that token, %1 could join again, so the Core stops accepting it "
+                       "first.\n\n"
+                       "This is permanent: the pairing token will never again let anyone "
+                       "join or connect, and anything connected with it now is "
+                       "disconnected. Paired devices keep working, and new devices pair with "
+                       "a code from Add a device.")
+                        .arg(name),
+                    tr("Stop Accepting the Pairing Token and Remove"));
+                // The question runs the event loop: the list may change.
+                if (!self || generation != m_deviceGeneration || !goAhead) { return; }
+                emit revokeStoppingPairingTokenRequested(id);
+                return;
             }
         });
         m_devicesLayout->addWidget(row);

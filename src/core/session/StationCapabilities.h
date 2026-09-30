@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: mediaDirectVersion and
+//               mediaStunUrls, before coreBuildInfo. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -199,12 +202,23 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 2: txInhibitReasonVersion. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - kTransmitSettingsCfcProfileVersion (15): the CFC band
+//                editor published and cfc.setProfile. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 4: sliceAccessVersion, appended
+//                after radioAntennaRowsVersion, only for a peer that
+//                declared sliceAccess with sessionHolder. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QList>
 #include <optional>
 #include <QString>
+#include <QStringList>
 
 #include "core/HpsdrModel.h"
 #include "core/session/MirrorSchema.h"
@@ -226,6 +240,14 @@ inline constexpr int kTransmitSettingsOnAirVersion = 13;
 /// a window shows the Core's value and changes it with transmit permission,
 /// off the air. Against an older Core the box is disabled with the reason.
 inline constexpr int kTransmitSettingsDifferentBandVersion = 14;
+
+/// From this transmitSettingsVersion the Core publishes the CFC dialog's
+/// band editor (transmit's cfcProfile, to a peer that declared cfcProfile 1)
+/// and takes cfc.setProfile: every band's frequency, compression, post-EQ
+/// gain and Q, the range, the pre-compression and the post-EQ gain, applied
+/// at once against the revision the app last saw. Against an older Core a
+/// window keeps writing the CFC properties one by one.
+inline constexpr int kTransmitSettingsCfcProfileVersion = 15;
 
 /// Optional identity of the Core executable, never radio firmware identity.
 struct CoreBuildInfo {
@@ -281,7 +303,10 @@ struct StationCapabilities {
     /// and the Alex tab's three transmit high-pass switches taken from a
     /// window (parity Task 14); 8 the Alex Filters tabs' receive filter
     /// rows (each row's bypass and edges, and Alex-2's master bypass),
-    /// applied to the Core's radio at once. Sent last in the same block as the three above,
+    /// applied to the Core's radio at once; 9 the radio's sample rate
+    /// (setRadioSampleRate); 10 the Alex-1 Filters tab's low-pass rows and
+    /// 6m/ByPass on RX, and radio's alexLpfBits to a peer that declared
+    /// alexLpf 1. Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;
@@ -375,6 +400,22 @@ struct StationCapabilities {
     /// inhibit or none. Only for a peer at minor 11 that declared
     /// txInhibitReason 1, after radeStatusVersion.
     int txInhibitReasonVersion = 0;
+    /// PA on-air gate re-review, Important C: 1 means `radio` carries
+    /// `paTransmitBand`, the PA row the Core holds on the air. Sent after
+    /// radeStatusVersion, only to a peer at minor 11 whose hello declared
+    /// paTransmitBand 1, on a Core with a radio model; any other peer's
+    /// capabilities and radio object are today's.
+    int paTransmitBandVersion = 0;
+    /// Slice control plan Task 4: 1 means the Core sends a `SliceAccess`
+    /// object per slice (`access:<id>`), the joined slices as `slice:<id>`
+    /// and every other as `marker:<id>`, and takes slice.listen,
+    /// slice.stopListening, slice.takeControl and slice.release. Appended
+    /// after paTransmitBandVersion in the minor-11 block, and only to a
+    /// peer whose hello declared `sliceAccess` 1 with sessionHolder and
+    /// deviceAuth (sliceAccessEntry); any other peer is sent no entry and
+    /// reads 0, so its descriptor is exactly today's.
+    bool sliceAccessEntry = false;
+    int sliceAccessVersion = 0;
     /// R-R3-47 / R-R3-22: 1 means the Core mirrors its Power Genius XL
     /// status as the read-only `amplifier` object. Sent after
     /// radioHardwareVersion in the same minor-11 block. 0: a window shows
@@ -510,6 +551,19 @@ struct StationCapabilities {
     // Task 24: Core-owned settings validation and per-MAC hygiene commands.
     int settingsHygieneVersion = 0;
     std::optional<CoreBuildInfo> coreBuildInfo;
+    /// The direct media ladder (link section "Direct media"): 1 means the
+    /// Core takes a media `replace` carrying `mediaDirectVersion` 1 and
+    /// makes that replacement direct only (host and STUN candidates, no
+    /// relay, no tunnel). Sent before coreBuildInfo, only to a peer with
+    /// media whose hello declared `mediaDirect` 1; 0 otherwise.
+    int mediaDirectVersion = 0;
+    /// With mediaDirectVersion: the Core's STUN servers, `stun:` and
+    /// `stuns:` URLs only, as a JSON array (utf8). A device uses them for
+    /// its media connections and never stores them.
+    QStringList mediaStunUrls;
+    /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
+    static constexpr int kMaxMediaStunUrls = 8;
+    static constexpr int kMaxMediaStunUrlBytes = 512;
     /// Version 1 offers read-only paired Core settings XML export.
     int settingsBackupVersion = 0;
     /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends

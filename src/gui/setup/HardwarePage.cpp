@@ -38,6 +38,13 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - R-R3-46 / R-R3-49: the Alex-1 Filters tab's low-pass rows
+//                and 6m/ByPass on RX select the low-pass as Thetis's
+//                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 Options' Enable CL2, CL2 frequency and External 10 MHz
+//                follow radioHardwareVersion 11 in a remote window.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -432,6 +439,20 @@ void HardwarePage::applyTransmitHardwareGates()
         m_antennaAlexTab->setHpfRowsAvailable(
             !m_remote || (link != nullptr && link->radioHardwareAvailable(8)),
             IStationLink::alexHpfRowsUnavailableReason());
+        // radioHardwareVersion 10: the low-pass rows and 6m/ByPass on RX.
+        // No on-air rule: Thetis's spinner and check box handlers have no
+        // MOX check.
+        m_antennaAlexTab->setLpfRowsAvailable(
+            !m_remote || (link != nullptr && link->radioHardwareAvailable(10)),
+            IStationLink::alexLpfRowsUnavailableReason());
+    }
+    // radioHardwareVersion 11: HL2 Options' clock options (Enable CL2, CL2
+    // frequency, External 10 MHz), which the Core sends to its radio. No
+    // on-air rule: mi0bot's handlers have no MOX check.
+    if (m_hl2OptionsTab) {
+        m_hl2OptionsTab->setClockControlAvailable(
+            !m_remote || (link != nullptr && link->radioHardwareAvailable(11)),
+            IStationLink::hl2ClockUnavailableReason());
     }
 }
 

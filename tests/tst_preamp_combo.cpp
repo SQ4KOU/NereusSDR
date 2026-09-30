@@ -186,9 +186,10 @@ private slots:
     {
         auto items = BoardCapsTable::preampItemsForBoard(HPSDRHW::Hermes, /*alexPresent=*/false);
         QCOMPARE(items[0].modeInt, static_cast<int>(PreampMode::On));      // "0dB"
-        QCOMPARE(items[1].modeInt, static_cast<int>(PreampMode::Minus10)); // "-10dB"
-        QCOMPARE(items[2].modeInt, static_cast<int>(PreampMode::Minus20)); // "-20dB"
-        QCOMPARE(items[3].modeInt, static_cast<int>(PreampMode::Minus30)); // "-30dB"
+        // SA step attenuator modes (console.cs:28401-28420 [v2.10.3.15]).
+        QCOMPARE(items[1].modeInt, static_cast<int>(PreampMode::SaMinus10)); // "-10dB"
+        QCOMPARE(items[2].modeInt, static_cast<int>(PreampMode::SaMinus20)); // "-20dB"
+        QCOMPARE(items[3].modeInt, static_cast<int>(PreampMode::SaMinus30)); // "-30dB"
     }
 
     void alex_mode_ints_correct()

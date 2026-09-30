@@ -43,6 +43,11 @@
 //                Ethernet disconnect, as mi0bot setup.cs:21257-21262
 //                [@c26a8a4] sends it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-29 - HL2 clock: Enable CL2, CL2 frequency and External 10 MHz
+//                program the HL2 clock chip over I2C at connect and on a
+//                change (setHl2Clock; mi0bot setup.cs:21558-21756,
+//                console.cs:28033-28040 [@c26a8a4]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - HL2 port part 1: the HL2 I/O board's ongoing poll (mode,
 //                TX frequency, aerial registers, input-pin reads) and mi0bot's
 //                I2C frame spacing with the round-robin kept on an I2C
@@ -54,6 +59,15 @@
 //                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
 //                 wireFrequencyHz). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -101,6 +115,7 @@ namespace NereusSDR { class TxMicSource; }               // forward decl — ful
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QDateTime>
+#include <utility>
 #include <vector>
 
 namespace NereusSDR {
@@ -274,10 +289,15 @@ public slots:
     void setAttenuator(int dB) override;
     void setAttenuatorForAdc(int adc, int dB) override;
     void setPreamp(bool enabled) override;
+    // Level Cal: prn->rx[1].preamp (C1 bit 1 of the bank carrying the
+    // preamp bits), Thetis SetRX2Preamp.
+    void setRx2Preamp(bool enabled) override;
     void setTxDrive(int level) override;
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
+    // Level Cal: the Alex receive attenuator (Thetis SetAlexAtten).
+    void setAlexAtten(int bits) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
     // G-07: Protocol 1 keeps only the full-ring loss count
@@ -293,6 +313,12 @@ public slots:
     // The Alex tab's receive filter rows: the high-pass is re-selected at
     // once (RadioConnection::setAlexHpfEdges).
     void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
+    // The Alex-1 low-pass rows: stored for the next selection
+    // (RadioConnection::setAlexLpfEdges).
+    void setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges) override;
+    // 6m/ByPass on RX: re-selects the low-pass at once
+    // (RadioConnection::setAlexLpfBypass).
+    void setAlexLpfBypass(bool on) override;
     void setTxStepAttenuation(int dB) override;
     void setMicBoost(bool on) override;
     void setLineIn(bool on) override;
@@ -327,6 +353,25 @@ public slots:
     // From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
     //   // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
     void setHl2ResetOnDisconnect(bool on);
+
+    // HL2 only: the clock options External 10 MHz (CL1 input), Enable CL2
+    // and the CL2 frequency (kHz, clamped to 1000..200000: mi0bot's box
+    // holds 1 to 200 MHz to three decimal places). Each is written to the
+    // HL2's clock chip (I2C bus 0, address 0xd4) as a list of register
+    // writes. At connect (when the first ep6 frame arrives) an option that
+    // is on is sent, and so is one whose list did not finish last time; an
+    // option left off sends nothing otherwise, as mi0bot's connect path
+    // does. On an HL2 already connected, a change is sent at once: External
+    // 10 MHz sends its on or off table and then the CL2 table the new
+    // reference needs, and a CL2 change sends the CL2 table (on) or the CL2
+    // off table (off). Lists that have not started when a change arrives
+    // are dropped and rebuilt from the values now wanted. While not
+    // connected the values are only stored.
+    // From mi0bot Console/setup.cs:21558-21756 and console.cs:28033-28040
+    // [@c26a8a4]:
+    //   // MI0BOT: Support for HL2 10MHz input
+    //   // MI0BOT: Support for HL2 Cl2 clock output
+    void setHl2Clock(bool ext10MHz, bool cl2Enable, int cl2FreqKHz);
 
     // HL2 I/O board poll inputs. The TX VFO's DSP mode (Thetis DSPMode
     // value) and frequency in Hz, written to REG_OP_MODE and
@@ -784,6 +829,16 @@ private:
     // whose frequency just moved, or -1 when the stand-in itself moved.
     void recomputeReceiveFilters(int changedSlot);
 
+    // setAlexLPF (codec::alex::setAlexLpf) on m_alexLpfBitsRx / Tx, the Alex0
+    // and Alex1 masks, then reports the low-pass in use. `freqIsTx` is
+    // Thetis's freqIsTX; the keyed state is m_mox.
+    void applyAlexLpf(double freqMhz, bool freqIsTx);
+    // UpdateAlexTXFilter: the receive-frequency selection, unkeyed only.
+    void applyReceiveAlexLpf(quint64 rx1Hz, quint64 fallbackHz);
+    // Whether setAlexLPF's alexpresent holds: an Alex board, or the HL2,
+    // whose firmware and N2ADR board read the same bits.
+    bool alexLpfPresent() const;
+
     // The frequency whose band selects the OC outputs: the transmitting
     // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
     quint64 ocBandFrequencyHz() const;
@@ -820,6 +875,9 @@ private:
     int     m_antennaIdx{0};
     int     m_rxOnlyAnt{0};   // RX-only input mux (0..3). Bank 0 C3 bits 5-6.
     bool    m_rxOut{false};   // _Rx_1_Out relay. Bank 0 C3 bit 7.
+    // Alex attenuator _20_dB_Atten / _10_dB_Atten. Bank 0 C3 bits 1 / 0.
+    bool    m_alex20dB{false};
+    bool    m_alex10dB{false};
 
     // Per-ADC state — initialized from HardwareProfile at connect time
     bool    m_dither[3]{true, true, true};
@@ -836,6 +894,60 @@ private:
     // HL2 bank 18: reset on Ethernet disconnect, off as mi0bot's
     // create_rnet leaves it (netInterface.c:1724 [@c26a8a4]).
     bool    m_hl2ResetOnDisconnect{false};
+    // HL2 clock options (setHl2Clock): off, off and 116 MHz as mi0bot's
+    // designer leaves them (setup.designer.cs:11159 udCl2Freq.Value = 116
+    // [@c26a8a4]) until the saved options arrive.
+    bool    m_hl2Ext10MHz{false};
+    bool    m_hl2Cl2Enable{false};
+    int     m_hl2Cl2FreqKHz{116000};
+    // Clock chip writes waiting for room in the I2C queue, one list per
+    // mi0bot WriteVersaClockAsync call, sent in order. `failures` counts
+    // attempts in a row that found the queue full with nothing leaving it
+    // (`dequeuedAtFailure` is the queue's count at the last one).
+    enum class Hl2ClockKind { Ext10, Cl2 };
+    struct Hl2ClockSequence {
+        Hl2ClockKind kind{Hl2ClockKind::Cl2};
+        bool extOn{false};                               // Ext10 lists only
+        std::vector<std::pair<quint8, quint8>> writes;   // (register, data)
+        std::size_t next{0};
+        int failures{0};
+        quint64 dequeuedAtFailure{0};
+    };
+    std::vector<Hl2ClockSequence> m_hl2ClockPending;
+    QTimer* m_hl2ClockRetryTimer{nullptr};
+    // An option whose list was dropped before it finished (timed out, the
+    // link went down, no I/O board): its current value is sent again at
+    // the next connect even when it is off.
+    bool    m_hl2Ext10Incomplete{false};
+    bool    m_hl2Cl2Incomplete{false};
+    // A list whose writes all went into the I2C queue, not yet known to
+    // have reached the radio: `leavesAt` is the queue's enqueued count
+    // after its last write, and `left` is set by the first ep6 frame that
+    // finds that write gone from the queue. The next ep6 frame after that
+    // clears the option's incomplete flag; a disconnect or a lost link
+    // before then sets it (hl2ClockMarkUnconfirmed), so frames that sat
+    // in the queue, or went out while the radio had stopped answering,
+    // are sent again at the next connect. One entry per kind.
+    struct Hl2ClockSent {
+        Hl2ClockKind kind{Hl2ClockKind::Cl2};
+        quint64 leavesAt{0};
+        bool left{false};
+    };
+    std::vector<Hl2ClockSent> m_hl2ClockUnconfirmed;
+    // The I/O board's clear count last seen (hl2ClockCheckCleared).
+    quint64 m_hl2ClockClearSeen{0};
+    // The first ep6 frame promotes Connecting to Connected; the HL2 clock
+    // options that are on go to the radio then.
+    void enterDataFlowing();
+    void hl2ClockOnDataFlowing();
+    void hl2ClockRequest(bool ext10, bool cl2);
+    void hl2ClockDropPending();
+    void hl2ClockListDone(const Hl2ClockSequence& seq);
+    void hl2ClockListDropped(const Hl2ClockSequence& seq);
+    void hl2ClockPump();
+    void hl2ClockConfirmSent();
+    void hl2ClockMarkUnconfirmed();
+    bool hl2ClockCheckCleared();
 
     // mi0bot prn->i2c.delay: subframes until the next I2C frame may go
     // (composeSubframe).
@@ -905,8 +1017,12 @@ private:
     // setTxFrequency on Connected and queues setReceiverFrequency before
     // connectToRadio, so both masks carry a real selection before the
     // operator can key.
-    quint8  m_alexLpfBitsRx{0};  // from the receive frequency (unkeyed)
-    quint8  m_alexLpfBitsTx{0};  // from the transmit frequency (keyed)
+    // Thetis's two masks (netInterface.c AlexLPFMask / Alex1LPFMask
+    // [v2.10.3.15]), written as SetAlexLPFBits writes them: unkeyed, the
+    // receive selection goes to Alex0 and the transmit selection to Alex1;
+    // keyed, the transmit selection goes to both.
+    quint8  m_alexLpfBitsRx{0};  // Alex0: the receive selection (unkeyed)
+    quint8  m_alexLpfBitsTx{0};  // Alex1: the transmit selection
 
     // Phase 3F: AlexController's decision for the single P1 filter chain.
     // -1 = no decision yet, use the RX0-frequency-derived m_alexHpfBits.
@@ -1175,6 +1291,28 @@ public:
     // the round-robin included), without a socket.
     void composeNextSubframeForTest(quint8 out[5]) { composeSubframe(out, ccMaxBank()); }
     void ioBoardPollTickForTest() { ioBoardPollTick(); }
+    // HL2 clock seams: promote to Connected as the first ep6 frame does
+    // (without a socket), run the clock write pump once, and count the
+    // clock writes still waiting for room in the I2C queue.
+    void simulateDataFlowingForTest() { enterDataFlowing(); }
+    void hl2ClockPumpForTest() { hl2ClockPump(); }
+    int hl2ClockPendingForTest() const
+    {
+        int n = 0;
+        for (const Hl2ClockSequence& seq : m_hl2ClockPending) {
+            n += static_cast<int>(seq.writes.size() - seq.next);
+        }
+        return n;
+    }
+    int hl2Cl2FreqKHzForTest() const { return m_hl2Cl2FreqKHz; }
+    // What an ep6 frame does for the clock lists (hl2ClockConfirmSent),
+    // and what a lost link does (the watchdog's LinkLost branch).
+    void hl2ClockEp6ForTest() { hl2ClockConfirmSent(); }
+    void hl2ClockLinkLostForTest() { hl2ClockMarkUnconfirmed(); }
+    bool hl2ClockIncompleteForTest(bool ext10) const
+    {
+        return ext10 ? m_hl2Ext10Incomplete : m_hl2Cl2Incomplete;
+    }
 
     // forceBank0NextForTest — returns m_forceBank0Next (the flush flag state).
     bool forceBank0NextForTest() const { return m_forceBank0Next; }

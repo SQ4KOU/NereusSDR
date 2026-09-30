@@ -682,6 +682,11 @@ void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
     m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
     m_stepAttController->setIsHpsdrBoard(caps.board == HPSDRHW::Atlas);
     m_stepAttController->setRadioConnection(m_radioModel->connection());
+    // Before loadSettings: the stored preamp modes move to the ten Thetis
+    // modes by the label this board shows.
+    m_stepAttController->setBoardIdentity(caps.board,
+                                          m_radioModel->hardwareProfile().model,
+                                          caps.hasAlexFilters);
 
     // Select the current band before loading, because loadSettings restores
     // the per-band RX attenuation and preamp slot for m_currentBand.

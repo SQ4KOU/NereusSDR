@@ -65,6 +65,20 @@
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                 setActive(bool, const KeyerIdentity&): a remote device's
 //                 two-tone asks and keys as that device. NereusSDR-original.
+//   2026-09-29 : PA on-air gate re-review, item 5, by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. setTxBandFn:
+//                 the PA-gain drive reads the held transmit band, as Thetis's
+//                 GainByBand(TXBand, ...) does (console.cs:46808 [v2.10.3.15]).
+//   2026-09-29 : Two-tone PA wiring, by J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code. restoreSavedPower: the FIXED
+//                 source's stop turns the PWR slider limit back on before
+//                 restoring PWR (setup.cs:11196-11201 [v2.10.3.15]).
+//   2026-09-29 : PA on-air gate branch review, Important 1, by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code. stopNow:
+//                 power off ends the test at once, with no settle wait, so
+//                 the FIXED restore lands before the connection's saves and
+//                 before the held transmit band is cleared (console.cs:27473,
+//                 27492 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -260,6 +274,12 @@ public:
     // [v2.10.3.15]). Unset: TUN is not turned off (a bare MOX release).
     void setTuneOffFn(std::function<void()> fn);
 
+    // setTxBandFn: RadioModel supplies the transmit band the drive math
+    // reads (Thetis TXBand, held while keyed). The start's
+    // SetPowerUsingTargetDBM uses GainByBand(TXBand, new_pwr)
+    // (console.cs:46808 [v2.10.3.15]). Unset: the slice's band.
+    void setTxBandFn(std::function<Band()> fn);
+
     // ── Test seam ──────────────────────────────────────────────────────────
     // Override the default settle / Freq2-delay timer durations.  FOR
     // TESTING ONLY — production code must use the kXxx defaults.
@@ -292,6 +312,13 @@ public slots:
     // for `keyer` (a remote device's two-tone). setActive(true) alone is
     // the station device's. Off ends it as setActive(false).
     void setActive(bool on, const NereusSDR::KeyerIdentity& keyer);
+    // Power off: end the test now, without the settle waits. A start still
+    // waiting on a release settle is dropped; a running test, or a stop
+    // waiting on its settle, is ended through the same stop steps (manual
+    // key off, TwoTone off, the FIXED power restore, generator off) before
+    // this returns. For the connection teardown, where no timer fires
+    // again before the saves run. No-op when nothing is running.
+    void stopNow();
 
 signals:
     // Emitted when m_active actually changes.  Subscribers should mirror
@@ -334,6 +361,9 @@ private slots:
     void onMoxRejected(const QString& reason);
 
 private:
+    // The FIXED source's stop: PWR slider limit on, PWR restored.
+    void restoreSavedPower();
+
     // Continue the activation flow after any pending settle delay.
     // Reads parameters, applies TXPostGen* setters, computes magnitude,
     // engages MOX.
@@ -405,6 +435,7 @@ private:
     std::function<bool()> m_tuneActive;
     // Task 7 follow-up, item 6: see setTuneOffFn.
     std::function<void()> m_tuneOff;
+    std::function<Band()> m_txBand;
     // Stage 2 of activation (release MOX, then continueActivation).
     void releaseMoxThenContinue();
 };

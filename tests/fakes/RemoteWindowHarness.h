@@ -35,6 +35,15 @@
 //   - addSliceCommands() lists every add-slice command the Core received,
 //     so "the window created no slice" is read on the Core's side of the
 //     wire.
+//   - Options::sliceAccess makes the window's bench link declare
+//     sessionHolder and sliceAccess, as a device-key sign-in does, so the
+//     window shares slices with the Core's other devices.
+//   - holdSliceAccessUpdates() holds the Core's `access:<id>` objects (who
+//     controls and who listens to each slice) while everything else goes
+//     through, so a test can make a command's answer arrive before the
+//     access change it caused.
+//   - sliceAccessCommands() lists the slice.* access verbs the Core
+//     received.
 //
 // Why a WebSocket and not tests/fakes/LoopbackTransport: MainWindow has no
 // transport seam. It dials its configured URL, and the acceptance for this
@@ -56,6 +65,14 @@
 //                                    reportRadioOffline(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix:
+//                                    txSliceCommands().
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: options
+//                                    for a window that shares slices,
+//                                    holding the Core's slice-access
+//                                    updates, sliceAccessCommands().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -107,6 +124,12 @@ public:
     /// Sends everything held, in order, and stops holding.
     void release();
 
+    /// Holds every `access:<id>` object message until
+    /// releaseSliceAccessUpdates(); everything else still goes out.
+    void holdSliceAccessUpdates() { m_holdingAccess = true; }
+    void releaseSliceAccessUpdates();
+    int heldSliceAccessCount() const { return m_heldAccess.size(); }
+
     bool holding() const { return m_holding; }
     int heldCount() const { return m_held.size(); }
     bool capabilitiesSent() const { return m_capabilitiesSent; }
@@ -118,6 +141,8 @@ private:
     bool m_capabilitiesSent = false;
     bool m_holding = false;
     QList<QByteArray> m_held;
+    bool m_holdingAccess = false;
+    QList<QByteArray> m_heldAccess;
     QString m_radioName;
 };
 
@@ -132,6 +157,11 @@ public:
         int backoffUnitMs = 50;
         /// The radio name the Core reports in its capabilities.
         QString radioName = QStringLiteral("Bench Saturn");
+        /// The window shares slices: its bench link declares
+        /// sessionHolder and sliceAccess, numbered by the Core as
+        /// sessionHolderId.
+        bool sliceAccess = false;
+        QString sessionHolderId = QStringLiteral("token:1");
     };
 
     /// Points AppSettings at a profile of its own and empties it. Call
@@ -195,6 +225,11 @@ public:
     /// Every addSlice / addSliceOnPan command the Core received, as
     /// "<verb>:<pan>".
     QStringList addSliceCommands() const { return m_addSliceCommands; }
+    /// The slice id of every tx.setTxSlice command the Core received.
+    QList<int> txSliceCommands() const { return m_txSliceCommands; }
+    /// Every slice.listen / slice.stopListening / slice.takeControl /
+    /// slice.release command the Core received, as "<verb>:<sliceId>".
+    QStringList sliceAccessCommands() const { return m_sliceAccessCommands; }
 
     // ---- The window ----
     MainWindow* window() const { return m_window.get(); }
@@ -230,6 +265,8 @@ private:
     bool m_holdNext = false;
     bool m_backendInstalled = false;
     QStringList m_addSliceCommands;
+    QList<int> m_txSliceCommands;
+    QStringList m_sliceAccessCommands;
 };
 
 } // namespace NereusSDR::Test

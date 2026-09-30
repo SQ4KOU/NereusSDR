@@ -35,9 +35,11 @@
 //     interval, and neither it nor the uniform load ever steps back (both are
 //     well under the governor's line of work, so a step-back is the Rock 5C
 //     symptom below);
-//   - the overload reads at least kOverloadMinLoad in every corroborated
-//     interval in which the worker never waited a block period for input
-//     (a fed interval), and steps back within kTicks.
+//   - the overload reads at least kOverloadMinLoad in every interval in
+//     which the worker never waited a block period for input (a fed
+//     interval), never reads under its CPU share, and steps back within
+//     kTicks. It needs kMinFed fed intervals, not corroborated ones: its
+//     claims hold whatever share of a core the worker gets (see the case).
 //
 // The test keeps its own record of the conditions each claim needs, instead
 // of assuming a quiet machine. A busy machine can preempt the feeder, which
@@ -135,6 +137,8 @@ constexpr int kMaxTicks = 60;
 // uniform cases; a busy machine (load 19 to 25) left as few as 4 in the
 // uniform case with the edges right.
 constexpr int kMinCorroborated = 2;
+// Fed intervals the overload case needs before its floor counts.
+constexpr int kMinFed = 2;
 // Time for the worker to settle after a delay changes.
 constexpr std::chrono::milliseconds kSettle{1000};
 
@@ -146,10 +150,16 @@ constexpr double kFrameCpuTolerance = 0.10;     // absolute, busy share and CPU
 // Uniform load well under real time: 900 us of a 1333 us block.
 constexpr int kUniformDelayUs = 900;
 constexpr double kUniformCpuTolerance = 0.10;   // relative, busy share and CPU
-// Real overload: 1400 us of a 1333 us block.
-constexpr int kOverloadDelayUs = 1400;
 // One DSP block period at the Core's settings: 64 samples at 48 kHz.
 constexpr qint64 kBlockPeriodNs = qint64(kDspSize) * 1'000'000'000LL / kDspRate;
+// Real overload: two block periods of work in every block (2666 us of a
+// 1333 us block), so the worker falls behind by a block every block. By the
+// end of kSettle it has about 375 blocks (a second of work) queued, and a
+// feeder the machine holds off for less than that never leaves it waiting
+// for input. At 1400 us (5% over) it had about 40 queued blocks, and a
+// busy machine's feeder stall of tens of ms drained them: the worker then
+// waited for input and read under 0.95 in overload intervals.
+constexpr int kOverloadDelayUs = int(2 * kBlockPeriodNs / 1000);
 constexpr double kOverloadMinLoad = 0.95;
 constexpr double kOverloadCpuTolerance = 0.10;  // absolute, busy share and CPU
 // A reading that is right agrees with the busy-share reference to within
@@ -640,6 +650,26 @@ private slots:
 
     // A worker that really cannot keep up still reads as overloaded, and
     // the step-back still trips.
+    //
+    // This case's claims do not depend on the worker's share of a core. At
+    // load averages of 64 to 95 on an 18-core Mac the worker (already at the
+    // production QoS, USER_INTERACTIVE, from linux_port.c) got 0.14 to 0.35
+    // of a core: preempted inside its blocks in every interval, so no
+    // interval had the busy share within the tolerance of the CPU share, and
+    // requiring kMinCorroborated of them failed the case with the reading
+    // right (every fed interval at least 0.95, the step-back on time). The
+    // corroborated count is how the frame-like and uniform cases catch an
+    // edge that takes waiting time into a block; a fed overload has its
+    // input queued and nothing else takes its lock, so there is no waiting
+    // for such an edge to take in, and the count proves nothing here. The
+    // case holds instead:
+    //   - the CPU share as a floor in every interval: preemption can only
+    //     lower the CPU share against the busy share, never raise it, so an
+    //     edge that misses work fails here however busy the machine is;
+    //   - the CPU share as a ceiling in the corroborated intervals, as before;
+    //   - kOverloadMinLoad in every fed interval, corroborated or not (a
+    //     worker preempted inside a block is still inside it), and at least
+    //     kMinFed of them.
     void aRealOverloadStillStepsBack()
     {
         WDSPSetTestProcessDelayUs(kChannel, kOverloadDelayUs);
@@ -647,36 +677,43 @@ private slots:
         // Fed: the worker never waited a whole block period for input, so
         // the interval was the overload the case sets up.
         const auto fed = [](const Sample& s) { return s.longestWaitNs < kBlockPeriodNs; };
-        const Run run = sampleFor(kTicks, [fed](const Sample& s) {
-            return corroborated(s, kOverloadCpuTolerance) && fed(s);
-        }, kMinCorroborated);
-        logRun("overload-1400us", run);
+        const Run run = sampleFor(kTicks, fed, kMinFed);
+        logRun("overload-2x", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
+        int fedIntervals = 0;
         int corroboratedIntervals = 0;
         for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
                      qPrintable(QStringLiteral("load %1 vs worker busy share %2 at %3 s")
                                     .arg(s.load).arg(s.busyShare).arg(s.atSeconds)));
+            QVERIFY2(s.load >= s.cpuShare - kOverloadCpuTolerance,
+                     qPrintable(QStringLiteral("load %1 under worker CPU %2 at %3 s")
+                                    .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
             if (corroborated(s, kOverloadCpuTolerance)) {
+                ++corroboratedIntervals;
                 QVERIFY2(std::abs(s.load - s.cpuShare) <= kOverloadCpuTolerance,
                          qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
                                         .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
-                if (fed(s)) {
-                    ++corroboratedIntervals;
-                    QVERIFY2(s.load >= kOverloadMinLoad,
-                             qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3, "
-                                                       "longest wait %4 us)")
-                                            .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)
-                                            .arg(s.longestWaitNs / 1000)));
-                }
+            }
+            if (fed(s)) {
+                ++fedIntervals;
+                QVERIFY2(s.load >= kOverloadMinLoad,
+                         qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3, "
+                                                   "longest wait %4 us)")
+                                        .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)
+                                        .arg(s.longestWaitNs / 1000)));
             }
         }
-        QVERIFY2(corroboratedIntervals >= kMinCorroborated,
-                 qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
-                                           "worker's CPU and the worker fed throughout")
-                                .arg(corroboratedIntervals).arg(run.samples.size())
-                                .arg(kOverloadCpuTolerance)));
+        if (corroboratedIntervals < int(run.samples.size())) {
+            qInfo("%d of %zu intervals had the worker preempted inside its blocks "
+                  "(busy share over its CPU share by more than %.2f)",
+                  int(run.samples.size()) - corroboratedIntervals, run.samples.size(),
+                  kOverloadCpuTolerance);
+        }
+        QVERIFY2(fedIntervals >= kMinFed,
+                 qPrintable(QStringLiteral("%1 of %2 intervals had the worker fed throughout")
+                                .arg(fedIntervals).arg(run.samples.size())));
         // Within kTicks, however long the case sampled after.
         const bool steppedInTime = std::any_of(
             run.samples.begin(),

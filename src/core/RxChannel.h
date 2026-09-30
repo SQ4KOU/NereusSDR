@@ -62,6 +62,11 @@
 //                 [v2.10.3.15]; it was inverted); the type cache starts at
 //                 Linear Phase, where WDSP opens the channel. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 6 (JJ's ruling): the WDSP panel
+//                 gain is held at unity and AudioEngine's mixer applies the
+//                 AF level, a departure from Thetis radio.cs, which sets AF
+//                 as SetRXAPanelGain1. By J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1338,6 +1343,10 @@ private:
     // pushes m_afGain via SetRXAPanelGain1 to override the default before
     // any audio flows.
     std::atomic<double> m_afGain{1.0};
+    // Slice control plan Task 6 (JJ's ruling): the WDSP panel gain is held
+    // at unity and AudioEngine's mixer applies the AF level, a departure
+    // from Thetis radio.cs, which sets AF as SetRXAPanelGain1.
+    static constexpr double kPanelGain1Unity = 1.0;
     // binauralEnabled: binaural audio — off by default (dual-mono)
     // From Thetis radio.cs:1145-1162 — bin_on = false
     std::atomic<bool> m_binauralEnabled{false};

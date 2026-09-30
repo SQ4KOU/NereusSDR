@@ -30,6 +30,17 @@
 //   2026-09-28: This Core manages the Core's devices (iPhone app plan Task
 //               25). J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 14b: the hosting desktop's
+//               "Your volume" on a listened flag sets only its own
+//               listening level; the capture of a listened flag's audio
+//               tab. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//   2026-09-29: slice control plan Task 10: the hosting desktop's Add at
+//               full capacity asks with the remote window's chooser. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: a hosting window's empty pan
+//               gets a station-device slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -40,9 +51,12 @@
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
+#include <QSlider>
 #include <QLabel>
 #include <QSignalSpy>
 #include <QTreeWidget>
+
+#include <cmath>
 
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
@@ -51,11 +65,16 @@
 #include "core/WdspEngine.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessController.h"
+#include "core/SliceOwnership.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/HostingSliceActions.h"
+#include "gui/MainWindow.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
 #include "gui/multidevice/ConnectedDevicesList.h"
 #include "gui/multidevice/DeviceWords.h"
@@ -521,6 +540,212 @@ private slots:
         QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
         const QJsonObject told = ofType(appB->received(), QStringLiteral("notice")).last();
         QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("receiverTaken"));
+    }
+
+    // Slice control plan Task 10: the hosting desktop's Add at full
+    // capacity asks with the chooser a remote window shows, and Take sends
+    // the pick as the station device's answer.
+    void theHostingDesktopsAddAsksWithTheSameChooser()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        const QByteArray& station = SliceOwnership::stationDevice();
+        core.server->deviceSessions()->registerHostingDevice(station, QStringLiteral("Mac"),
+                                                              QStringLiteral("Mac"));
+        core.server->setStationDeviceWords(QStringLiteral("Mac"), QStringLiteral("Mac"));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->adoptUnowned(station);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const int bSlice = ownership->ownedBy(b.key.fingerprint()).first();
+        core.model->sliceById(bSlice)->setFrequency(14074000.0);
+
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy asked(&host, &HostingSliceActions::question);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+        host.addOnPan(QStringLiteral("pan-host-2"));
+        QTRY_COMPARE(asked.count(), 1);
+        const SessionMessage question = asked.first().at(0).value<SessionMessage>();
+        std::function<qint64()> choice;
+        QWidget parent;
+        QDialog* dialog = MultiDeviceController::questionDialog(question.prompt, &parent, &choice);
+        auto* chooser = qobject_cast<TakeReceiverDialog*>(dialog);
+        QVERIFY(chooser != nullptr);
+        QVERIFY(chooser->choiceList()->count() >= 2);
+        bool namesIpad = false;
+        for (int i = 0; i < chooser->choiceList()->count(); ++i) {
+            const QString text = chooser->choiceList()->item(i)->text();
+            QVERIFY(OperatorWording::isPlain(text));
+            namesIpad = namesIpad || text.contains(QStringLiteral("iPad"));
+        }
+        QVERIFY(namesIpad);
+        QVERIFY(chooser->pickedChoice() >= 0);
+        QObject::connect(dialog, &QDialog::accepted, &host, [&host, &question, &choice]() {
+            host.proceed(question.prompt.id, choice());
+        });
+        QTest::mouseClick(chooser->takeButton(), Qt::LeftButton);
+        QTRY_VERIFY(!finished.isEmpty()
+                    && finished.last().at(0).toByteArray() == QByteArrayLiteral("confirm.proceed"));
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        bool onNewPan = false;
+        for (int id : ownership->ownedBy(station)) {
+            onNewPan = onNewPan
+                       || core.model->sliceById(id)->panKey() == QStringLiteral("pan-host-2");
+        }
+        QVERIFY(onNewPan);
+        delete dialog;
+    }
+
+    // Slice control plan Task 11: a hosting window filling its empty pans
+    // (MainWindow::populatePanSlices, the path a layout change and connect
+    // take) asks as the station device, so the new slice is the station's
+    // and the other device's slice is left as it was.
+    void aHostingWindowsEmptyPanGetsAStationSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(4, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        const QByteArray& station = SliceOwnership::stationDevice();
+        core.server->deviceSessions()->registerHostingDevice(station, QStringLiteral("Mac"),
+                                                              QStringLiteral("Mac"));
+        core.server->setStationDeviceWords(QStringLiteral("Mac"), QStringLiteral("Mac"));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        ownership->adoptUnowned(station);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const QByteArray bKey = b.key.fingerprint();
+        const int bSlice = ownership->ownedBy(bKey).first();
+        core.model->sliceById(bSlice)->setFrequency(14074000.0);
+        const QString bPan = core.model->sliceById(bSlice)->panKey();
+        const int stationBefore = ownership->ownedBy(station).size();
+
+        HostingSliceActions host(core.server.get(), core.model.get());
+        MainWindow::populatePanSlices(core.model.get(), {QStringLiteral("pan-host-2")},
+                                      false, false, &host);
+        QTRY_COMPARE(ownership->ownedBy(station).size(), stationBefore + 1);
+        bool onNewPan = false;
+        for (int id : ownership->ownedBy(station)) {
+            onNewPan = onNewPan
+                       || core.model->sliceById(id)->panKey() == QStringLiteral("pan-host-2");
+        }
+        QVERIFY(onNewPan);
+        QCOMPARE(ownership->ownedBy(bKey), QList<int>{bSlice});
+        QCOMPARE(core.model->sliceById(bSlice)->panKey(), bPan);
+        QCOMPARE(core.model->sliceById(bSlice)->frequency(), 14074000.0);
+    }
+
+    // Slice control plan Task 14b (ruling U5): the hosting desktop listens
+    // to another device's slice. Its flag's "Your volume" and Mute, wired
+    // as MainWindow::setFlagListenVolume wires them, set only the
+    // station's own listening level: the slice's AF and mute, the
+    // controller's audio and the other listener's level are unchanged. The
+    // controller's AF at zero leaves the station's level where it was.
+    void theHostingFlagsYourVolumeIsItsOwnLevel()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(
+            b, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 1}});
+        QVERIFY(admitted(appB));
+        const int shared = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        SliceModel* slice = core.model->sliceById(shared);
+        slice->setAfGain(80);
+        SliceAccessController* access = core.server->sliceAccessController();
+        QVERIFY(access != nullptr);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceAccessController::Result joined =
+            access->listen(station, core.model->sliceOwnership()->refOf(shared));
+        QVERIFY2(joined.accepted, qPrintable(joined.reason));
+        const SliceAccessController::ListenLevel bBefore =
+            access->listenLevel(b.key.fingerprint(), shared);
+
+        VfoWidget flag;
+        flag.setSliceIndex(shared);
+        flag.setAfGain(slice->afGain());
+        QObject::connect(&flag, &VfoWidget::afGainChanged, slice, &SliceModel::setAfGain);
+        QObject::connect(&flag, &VfoWidget::muteChanged, slice, &SliceModel::setMuted);
+        QObject::connect(&flag, &VfoWidget::listenVolumeRequested, &flag,
+                         [&core, access, station](int id, int level, bool muted) {
+            access->setListenLevel(station, core.model->sliceOwnership()->refOf(id),
+                                   level / 100.0, muted);
+        });
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by iPad");
+        listened.heldReason = QStringLiteral("iPad controls this slice");
+        const SliceAccessController::ListenLevel seeded = access->listenLevel(station, shared);
+        flag.setListenVolume(static_cast<int>(std::lround(seeded.level * 100.0)), seeded.muted);
+        flag.setSliceAccess(listened);
+        QCOMPARE(flag.afNameForTest(), QStringLiteral("Your volume"));
+        QCOMPARE(flag.afSliderForTest()->value(), 80);
+
+        QSignalSpy af(slice, &SliceModel::afGainChanged);
+        QSignalSpy mute(slice, &SliceModel::mutedChanged);
+        flag.afSliderForTest()->setValue(25);
+        flag.muteButtonForTest()->setChecked(true);
+
+        SliceAccessController::ListenLevel mine = access->listenLevel(station, shared);
+        QVERIFY(qAbs(mine.level - 0.25) < 1e-9);
+        QVERIFY(mine.muted);
+        QCOMPARE(af.count(), 0);
+        QCOMPARE(mute.count(), 0);
+        QCOMPARE(slice->afGain(), 80);
+        QVERIFY(!slice->muted());
+        const SliceAccessController::ListenLevel bAfter =
+            access->listenLevel(b.key.fingerprint(), shared);
+        QCOMPARE(bAfter.level, bBefore.level);
+        QCOMPARE(bAfter.muted, bBefore.muted);
+
+        // The controller turns its AF to zero: the station's level stays.
+        flag.muteButtonForTest()->setChecked(false);
+        slice->setAfGain(0);
+        flag.setAfGain(0);
+        mine = access->listenLevel(station, shared);
+        QVERIFY(qAbs(mine.level - 0.25) < 1e-9);
+        QVERIFY(!mine.muted);
+        QCOMPARE(flag.afSliderForTest()->value(), 25);
+    }
+
+    // Slice control plan Task 15 (rulings U5, U6, U7): the RX applet on a
+    // slice this window listens to. Tabs A (controlled here) and B
+    // (listened); B's shared controls are shown disabled with the reason
+    // naming the controlling device, and the applet has no volume or mute.
+    void theRxAppletOnAListenedSliceShowsWhoControlsIt()
+    {
+        SliceModel a(0);
+        SliceModel b(1);
+        b.setFrequency(14225000.0);
+        b.setDspMode(DSPMode::USB);
+        RxApplet applet(&b, nullptr);
+        VfoWidget::SliceAccess controlled;
+        controlled.state = VfoWidget::SliceAccess::State::Controlled;
+        controlled.line = QStringLiteral("You control this slice");
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by iPad");
+        listened.heldReason = QStringLiteral("iPad controls this slice");
+        applet.setSliceTabAccess({{0, controlled}, {1, listened}});
+        applet.setSliceAccess(listened);
+        applet.updateSliceButtons({&a, &b}, 1);
+        QVERIFY(applet.isListening());
+        const QList<QWidget*> held = applet.heldControlsForTest();
+        QVERIFY(!held.isEmpty());
+        for (QWidget* control : held) {
+            QVERIFY(!control->isEnabled());
+            QCOMPARE(control->toolTip(), listened.heldReason);
+        }
+        QVERIFY(applet.sliceTabToolTipForTest(1).contains(QStringLiteral("iPad")));
+        applet.resize(300, applet.sizeHint().height());
+        saveShot(&applet, QStringLiteral("task15-rx-applet-listening"), false);
     }
 
     // A window whose last slice another device takes stays connected with
@@ -1082,6 +1307,74 @@ private slots:
         flag.setSliceIndex(0);
         flag.setInUseByRadio(true);
         saveShot(&flag, QStringLiteral("flag-in-use-by-radio"));
+
+        // Slice control plan Task 14a: a flag says who controls its slice.
+        VfoWidget::SliceAccess controlled;
+        controlled.state = VfoWidget::SliceAccess::State::Controlled;
+        controlled.line = QStringLiteral("You control");
+        VfoWidget::SliceAccess listened;
+        listened.state = VfoWidget::SliceAccess::State::Listening;
+        listened.line = QStringLiteral("Listening · controlled by Jo's iPhone");
+        listened.heldReason = QStringLiteral("Jo's iPhone controls this slice");
+        QVERIFY(OperatorWording::isPlain(listened.line));
+        QVERIFY(OperatorWording::isPlain(listened.heldReason));
+        VfoWidget flagControlled;
+        flagControlled.setSliceIndex(0);
+        flagControlled.setFrequency(14'074'000.0);
+        flagControlled.setSliceAccess(controlled);
+        saveShot(&flagControlled, QStringLiteral("flag-controlled"));
+        VfoWidget flagListened;
+        flagListened.setSliceIndex(1);
+        flagListened.setFrequency(14'230'000.0);
+        flagListened.setSliceAccess(listened);
+        QVERIFY(flagListened.isListening());
+        saveShot(&flagListened, QStringLiteral("flag-listened"));
+        // Task 14b: the listened flag's audio tab, "Your volume" and Mute.
+        VfoWidget flagYourVolume;
+        flagYourVolume.setSliceIndex(1);
+        flagYourVolume.setFrequency(14'230'000.0);
+        flagYourVolume.setListenVolume(60, false);
+        flagYourVolume.setSliceAccess(listened);
+        QPushButton* audioTab = nullptr;
+        for (QPushButton* button : flagYourVolume.findChildren<QPushButton*>()) {
+            if (button->text() == QString::fromUtf8("\xF0\x9F\x94\x8A")) {
+                audioTab = button;
+                break;
+            }
+        }
+        QVERIFY(audioTab != nullptr);
+        audioTab->click();
+        QCOMPARE(flagYourVolume.afNameForTest(), QStringLiteral("Your volume"));
+        QVERIFY(flagYourVolume.afSliderForTest()->isEnabled());
+        QVERIFY(flagYourVolume.muteButtonForTest()->isEnabled());
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.afNameForTest()));
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.afSliderForTest()->toolTip()));
+        QVERIFY(OperatorWording::isPlain(flagYourVolume.muteButtonForTest()->toolTip()));
+        saveShot(&flagYourVolume, QStringLiteral("flag-listened-your-volume"));
+        VfoWidget flagOnAir;
+        flagOnAir.setSliceIndex(1);
+        flagOnAir.setFrequency(14'230'000.0);
+        flagOnAir.setSliceAccess(listened);
+        flagOnAir.setTxSlice(true);
+        QVERIFY(flagOnAir.txSliceShown());
+        saveShot(&flagOnAir, QStringLiteral("flag-listened-on-air"));
+
+        // Two flags on one panadapter: this window controls A and listens
+        // to B; they stack by today's rule.
+        SpectrumWidget stackPan;
+        stackPan.resize(800, 400);
+        stackPan.setFrequencyRange(14'200'000.0, 96'000.0);
+        VfoWidget* stackA = stackPan.addVfoWidget(0);
+        VfoWidget* stackB = stackPan.addVfoWidget(1);
+        QVERIFY(stackA && stackB);
+        stackA->setFrequency(14'190'000.0);
+        stackB->setFrequency(14'215'000.0);
+        stackA->setSliceAccess(controlled);
+        stackB->setSliceAccess(listened);
+        stackPan.setVfoFrequency(14'190'000.0);
+        stackPan.updateVfoPositions();
+        QVERIFY(stackA->x() != stackB->x());
+        saveShot(&stackPan, QStringLiteral("flags-stacked-on-one-pan"), false);
 
         // The markers on a panadapter.
         SpectrumWidget sw;

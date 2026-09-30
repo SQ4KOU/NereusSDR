@@ -222,7 +222,7 @@ private slots:
         // and its I/O board and per-band antenna verb (3) came with it; the
         // attenuator is offered from 1. 4 added the filter policy verb
         // (R-R3-46 / R-R3-21).
-        QCOMPARE(s->client->capabilities().radioHardwareVersion, 9);
+        QCOMPARE(s->client->capabilities().radioHardwareVersion, 12);
         StepAttenuatorFacade* remote = s->remote();
         QVERIFY(!remote->isBound());
         QTRY_COMPARE(remote->maxDb(), 61);
@@ -262,7 +262,9 @@ private slots:
         QTRY_VERIFY(lastResultFor(results, "attenuationDb").seen);
         QVERIFY(lastResultFor(results, "attenuationDb").accepted);
         QCOMPARE(s->controller()->attenuatorDb(), 45);
-        QCOMPARE(s->radio.attenuator.last(), 45);
+        // Above 31 dB an Alex board's step attenuator carries the value + 2
+        // (console.cs:11044-11056 [v2.10.3.15]).
+        QCOMPARE(s->radio.attenuator.last(), 47);
 
         results.clear();
         remote->setAttenuationDb(70);
@@ -273,7 +275,7 @@ private slots:
         QVERIFY(OperatorWording::isPlain(settled.reason));
         QCOMPARE(s->controller()->attenuatorDb(), 61);
         QCOMPARE(remote->attenuationDb(), 61);
-        QCOMPARE(s->radio.attenuator.last(), 61);
+        QCOMPARE(s->radio.attenuator.last(), 63);
     }
 
     void hermesLite2ReportsItsRangeAndSettlesAdaptiveToClassic()
@@ -402,6 +404,24 @@ private slots:
         controller->setRx2AutoAttUndo(false);
         QTRY_VERIFY(!remote->rx2AutoAttUndo());
 
+        // Level Cal: RX2's own preamp mode, for the slice on the other ADC,
+        // leaves slice A's mode alone; a mode RX2's list lacks is refused
+        // with its reason.
+        const int rx1Mode = remote->preampModeForSlice(0);
+        remote->setPreampModeForSlice(1, static_cast<int>(PreampMode::SaMinus20));
+        QTRY_VERIFY(lastResultFor(results, "rx2PreampMode").seen);
+        QVERIFY(lastResultFor(results, "rx2PreampMode").accepted);
+        QTRY_COMPARE(controller->rx2PreampMode(), PreampMode::SaMinus20);
+        QCOMPARE(static_cast<int>(controller->preampMode()), rx1Mode);
+        QCOMPARE(remote->preampModeForSlice(1), static_cast<int>(PreampMode::SaMinus20));
+        controller->setRx2PreampMode(PreampMode::SaMinus10);
+        QTRY_COMPARE(remote->rx2PreampMode(), static_cast<int>(PreampMode::SaMinus10));
+        results.clear();
+        remote->setRx2PreampMode(static_cast<int>(PreampMode::Minus40));
+        QTRY_VERIFY(lastResultFor(results, "rx2PreampMode").seen);
+        QCOMPARE(controller->rx2PreampMode(), PreampMode::SaMinus10);
+        QTRY_COMPARE(remote->rx2PreampMode(), static_cast<int>(PreampMode::SaMinus10));
+
         // Back on one ADC: every slice reads attenuationDb again.
         controller->setAdcRouting(0, -1, Band::Band40m, false);
         QTRY_COMPARE(remote->rx2SliceMask(), 0);
@@ -479,7 +499,7 @@ private slots:
                     for (const SessionSchemaField& f : m.fields) {
                         sawSchemaField = sawSchemaField || f.name == "rx2AttenuationDb"
                             || f.name == "rx2SliceMask" || f.name == "rx2StepAttEnabled"
-                            || f.name == "rx2AutoAttEnabled";
+                            || f.name == "rx2AutoAttEnabled" || f.name == "rx2PreampMode";
                     }
                 } else if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "stepAtt") {
                     sawStepAtt = true;

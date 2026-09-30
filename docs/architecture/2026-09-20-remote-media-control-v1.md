@@ -164,7 +164,7 @@ moved to a better path (the link document, section 21.3).
 
 | Direction | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| GUI to Core | `replaces`: the current peer's `connectionId` |
+| GUI to Core | `replaces`: the current peer's `connectionId`; optional `mediaDirectVersion` 1 (below) |
 | Core to GUI | `replaces`: the peer that retired |
 
 `connectionId` is the new peer's, a new canonical UUID. The new peer takes
@@ -227,6 +227,59 @@ is transmitting or MOX's delay timers run. A key pressed during one goes
 through: the Core keeps taking "tx" keepalives and microphone packets on
 both peers until the old one closes, so the watchdog's 400 ms deadline
 sees no gap the move made.
+
+**A direct-only replace** (the direct media ladder; capability
+`mediaDirectVersion` 1, which a Core sends only to a device with media that
+declared `mediaDirect` 1, the link document sections 6.1 and 6.3). The GUI
+may add `"mediaDirectVersion": 1` to its `replace`. The Core then makes the
+new peer with its STUN server and host candidates only: no media tunnel
+candidate and no relay (`MediaTunnel::directIceFor`). Everything else is
+the replace above: the same refusals, the same overlap, and the Core's own
+`replace` keeps its three fields. A `replace` that names the field when the
+Core did not advertise it, or with any value but 1, is malformed, as any
+other extra key. A direct-only replace that does not become ready is
+dropped as in "When it fails", and the tunnel keeps carrying media. The
+older relay leg's refusal ("This older relay media path cannot move while
+it is still in use.") is judged by how the connection in use was made, so a
+connection that started on the tunnel may always move.
+
+Every media connection, the first one included, gathers with the Core's
+STUN server (the device takes it from `mediaStunUrls`, or the last one its
+rendezvous gave it), and the tunnel candidate stays the lowest priority, so
+a direct path is chosen whenever one works on the first connection. ICE
+never changes its choice afterward, so only a replace moves media off the
+tunnel.
+
+**Trying a direct path while on the tunnel.** While its media runs over the
+tunnel on a Core with `mediaDirectVersion` 1, the desktop window sends a
+direct-only replace at the steps of the control upgrade schedule
+(`PathRacer::kUpgradeRetryMs`: 5, 30, 120 and 300 seconds, the last
+repeating), counted from when media settled on the tunnel. It skips a step
+while it is keyed, has VOX armed or the Core is on the air; a step that is
+skipped, refused or not ready by its deadline leaves media on the tunnel
+and waits for the next. A new media start begins the schedule again.
+
+**Falling back when a direct path goes quiet.** On a direct path (not the
+tunnel, not a relay) with receive audio wanted, when no audio or display
+packet arrives for `RemoteMediaController::kDirectMediaSilenceFallbackMs`
+(5000 ms) while the control session still runs, the window sends the
+normal three-field `replace` and starts the direct schedule again at its
+first step. That replace's new connection offers the tunnel alone
+(`MediaTunnel::tunnelIceFor`): the tunnel's candidate only, no STUN server
+and no host candidates, and it takes none the Core signals, so ICE can only
+nominate the tunnel. Nothing changes on the wire or at the Core. The
+fallback runs once per silence: only a media packet arms it again. If no
+media has arrived one window (5000 ms) after the fallback finished,
+whether it moved media or failed, the window asks for recovery (a new
+media start). Receive audio is wanted when this window's radio is
+connected and it is not muted; the silence while the Core transmits is
+expected, so the return to receive starts the window again. The tunnel
+and the relays keep the stall rule (`kMediaStallMs`, a new media start).
+While the Core is on the air the window does nothing here; the Core's own
+rule for a keyed device whose microphone packets stop ends transmit as a
+lost link. The Core sees
+only the packets it receives: it cannot tell that its own packets stop
+arriving at the device, so the fallback is the device's to start.
 
 ## Display subscriptions
 
@@ -763,8 +816,9 @@ one. Its offer, contexts and packets are exactly as before.
 
 Each stream is one receiver's own audio: 48 kHz stereo taken where local VAX
 takes it, after the transmit gate and before the slice's mute, gain and pan,
-the mix and the speakers' volume, with that slice's AF gain undone as local
-VAX undoes it. While the transmit gate withholds the slice's audio the stream
+the mix and the speakers' volume. The slice's AF gain is applied in the
+Core's mixer, not in the receive channel, so neither local VAX nor this
+stream carries it, and both stay audible at AF 0. While the transmit gate withholds the slice's audio the stream
 sends nothing and its RTP timestamps advance over the gap. A receiver stream
 runs beside the main one; starting, stopping or changing it never restarts or
 re-announces the main stream, and the main `audio` control never touches a
@@ -852,6 +906,19 @@ while it runs; a receiver routed to the headphones is heard only there.
 For any other GUI the main stream carries both mixes added together, as
 before. Neither mix carries master volume or mute; those are the GUI's
 own, on its speakers only.
+
+Shared listening (slice control plan Task 6, `sliceAccessVersion` 1 in
+the station link): a device's main stream carries the slices it controls
+at their AF gain, pan and mute, and each slice it listens to without
+controlling at the device's own listening level (`slice.setListenLevel`),
+centered, and not muted by the controller's mute. Two listeners of one
+slice hear it at their own levels; the controller's AF gain changes only
+the controller's audio. When control of a slice passes to or from the
+device, its audio moves between the two without a gap. The Core's own
+speakers follow the same rule for the Core's own device. This departs
+from Thetis, which sets the AF gain in the receive channel
+(`SetRXAPanelGain1`); the Core holds that gain at 1.0 and applies AF in
+its mixer.
 
 GUI-to-Core `headphones-audio` has exactly these fields:
 

@@ -36,6 +36,10 @@
 //               this peer's candidates, the ones it admits, its states and
 //               its selected pair, redacted. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29: direct media fix wave: a connection on its own candidate
+//               source alone (IceConfiguration::onlySourceCandidates)
+//               takes no signalled candidate and sends none of its own.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -1244,6 +1248,10 @@ bool LibDataChannelMediaTransport::admitCandidate(const QString& candidate,
 
     try {
         rtc::Candidate parsed(candidateBytes.toStdString(), midBytes.toStdString());
+        if (d->ice && d->ice->onlySourceCandidates() && !fromOwnedSource) {
+            // The fallback onto the tunnel: only the tunnel's own candidate.
+            return false;
+        }
         if (d->ice) {
             // Task 27: through the remote access service every candidate
             // type is used, the far end's relay ones only when this side
@@ -1587,6 +1595,11 @@ void LibDataChannelMediaTransport::drainCallbacks()
                                   QString::fromStdString(event.second));
             break;
         case CallbackEvent::Kind::Candidate:
+            if (d->ice && d->ice->onlySourceCandidates()) {
+                // The fallback onto the tunnel: this computer's addresses
+                // stay with it, so the far end has no direct pair to try.
+                break;
+            }
             emit localCandidate(QString::fromStdString(event.first),
                                 QString::fromStdString(event.second));
             break;

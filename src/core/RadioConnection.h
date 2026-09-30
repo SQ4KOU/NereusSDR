@@ -278,6 +278,20 @@ public slots:
         }
     }
     virtual void setPreamp(bool enabled) = 0;
+    // Level Cal: the second receiver's preamp bit (prn->rx[1].preamp), which
+    // Thetis's RX2PreampMode sends on the HPSDR alone.
+    // From Thetis ChannelMaster/netInterface.c:758-767 [v2.10.3.15]:
+    //   void SetRX2Preamp(int bits)
+    //   {
+    //   	if (prn->rx[1].preamp != bits)
+    //   	{
+    //   		prn->rx[1].preamp = bits;
+    //   		if (listenSock != INVALID_SOCKET && prn->sendHighPriority != 0)
+    //   			CmdHighPriority();
+    //   	}
+    //   }
+    // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
+    virtual void setRx2Preamp(bool /*enabled*/) {}
     virtual void setTxDrive(int level) = 0;
     virtual void setMox(bool enabled) = 0;
     virtual void setAntennaRouting(AntennaRouting routing) = 0;
@@ -294,6 +308,20 @@ public slots:
     //
     // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
     virtual void setAlexRxBpf(AlexRxBpf /*bpf*/) {}
+
+    // Level Cal: the Alex receive attenuator, 0 (none), 1 (10 dB), 2 (20 dB)
+    // or 3 (30 dB). The preamp settings and the step attenuator above 31 dB
+    // drive it (StepAttenuatorController).
+    // From Thetis ChannelMaster/netInterface.c:421-432 [v2.10.3.15]:
+    //   void SetAlexAtten(int bits)
+    //   {
+    //   	if (mkiibpf) return;
+    //   	if ((prbpfilter->_20_dB_Atten | prbpfilter->_10_dB_Atten) != bits)
+    //   	{
+    //   		prbpfilter->_20_dB_Atten = (bits & 0x2) == 0x2;
+    //   		prbpfilter->_10_dB_Atten = bits & 0x1;
+    // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
+    virtual void setAlexAtten(int /*bits*/) {}
 
     // Push TX-side step attenuator value to hardware.
     //
@@ -553,6 +581,25 @@ public slots:
     /// Alex1_5BPHPFBypass { ... setAlex1HPF(freq); }).
     virtual void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) { m_alexHpfEdges = edges; }
     const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
+
+    /// The Alex-1 Filters tab's low-pass rows (codec::alex::AlexLpfEdges).
+    /// Thetis's setAlexLPF reads them at its next selection
+    /// (console.cs:7177-7243 [v2.10.3.15]); the udAlex*LPF spinner handlers
+    /// do not re-select (setup.cs:15888-15994 [v2.10.3.15]), so a change is
+    /// stored here and read by the next retune, key or unkey.
+    virtual void setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges) { m_alexLpfEdges = edges; }
+    const codec::alex::AlexLpfEdges& alexLpfEdges() const noexcept { return m_alexLpfEdges; }
+
+    /// "6m/ByPass on RX" (Thetis chkLPFBypass -> console.cs LPFBypass,
+    /// console.cs:18775-18790 [v2.10.3.15]): the 6 m low-pass while
+    /// receiving. The protocols re-select at once, as the setter does.
+    virtual void setAlexLpfBypass(bool on) { m_alexLpfBypass = on; }
+    bool alexLpfBypass() const noexcept { return m_alexLpfBypass; }
+
+    /// The low-pass the radio is using now (the mask the Alex0 word carries,
+    /// the one Thetis lights a rad*LPFled for), or -1 before the first
+    /// selection. Written on the connection thread.
+    int alexLpfBitsInUse() const noexcept { return m_publishedLpfBits; }
 
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///
@@ -870,6 +917,11 @@ signals:
     // [v2.10.3.15]); RadioModel publishes them to every window.
     void bandOutputsComposed(quint8 ocByte, int band, bool keyed);
 
+    // The low-pass in use (alexLpfBitsInUse) changed. Thetis lights one of
+    // the rad*LPFled lamps for each selection (console.cs:7177-7243
+    // [v2.10.3.15]); RadioModel publishes it to every window.
+    void alexLpfBitsComposed(quint8 bits);
+
 private:
     struct ByteSample { qint64 ms; qint64 bytes; };
     mutable QList<ByteSample> m_txSamples;
@@ -882,6 +934,8 @@ private:
     mutable int m_publishedOcByte{-1};
     mutable int m_publishedOcBand{-1};
     mutable int m_publishedOcKeyed{-1};
+    // publishAlexLpfBits: what was last reported. -1 = nothing yet.
+    mutable int m_publishedLpfBits{-1};
 
     // Ping RTT state. Zero means no outstanding ping.
     qint64 m_pingSentMs{0};
@@ -922,6 +976,16 @@ protected:
         m_publishedOcBand  = band;
         m_publishedOcKeyed = keyedInt;
         emit const_cast<RadioConnection*>(this)->bandOutputsComposed(ocByte, band, keyed);
+    }
+
+    // Reports the low-pass in use (alexLpfBitsComposed), once per change.
+    void publishAlexLpfBits(quint8 bits) const
+    {
+        if (m_publishedLpfBits == int(bits)) {
+            return;
+        }
+        m_publishedLpfBits = int(bits);
+        emit const_cast<RadioConnection*>(this)->alexLpfBitsComposed(bits);
     }
 
     void setState(ConnectionState newState);
@@ -1065,6 +1129,11 @@ protected:
     // shipped values until RadioModel hands the saved ones. Written and read
     // on the connection thread.
     codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
+
+    // The Alex-1 low-pass rows (setAlexLpfEdges) and 6m/ByPass on RX
+    // (setAlexLpfBypass). Written and read on the connection thread.
+    codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
+    bool m_alexLpfBypass{false};
 
     // "Disable 6m LNA on RX / TX" (setDisable6mLna). Written and read on the
     // connection thread.

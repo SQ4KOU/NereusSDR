@@ -17,6 +17,11 @@
 //                applied (Thetis DisablePA and hf_tr_relay,
 //                transmitSettingsVersion 11). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot networkproto1.c header (lines 1-19) ===
@@ -76,6 +81,9 @@ void P1CodecHl2::composeCcForBank(int bank, const CodecContext& ctx,
                 default: break;                     // 0 = no RX-only path selected
             }
             if (ctx.rxOut) { c3 |= 0b1000'0000; }  // _Rx_1_Out relay
+            // Bits 0-1: the Alex attenuator, _10_dB_Atten | _20_dB_Atten << 1.
+            // From Thetis networkproto1.c:453 [v2.10.3.15]
+            c3 |= quint8(ctx.alexAttenBits & 0x03);
             out[3] = c3;
             out[4] = quint8((ctx.antennaIdx & 0x03)
                           | (ctx.duplex ? 0x04 : 0)

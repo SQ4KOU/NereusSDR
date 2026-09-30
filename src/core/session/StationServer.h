@@ -181,6 +181,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: the Core's STUN server for media
+//               (setMediaStun, mediaStunUrls) and the direct-only replace
+//               (mediaDirectVersion). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -460,6 +464,55 @@
 //   2026-09-28: R-R3-46 / R-R3-11: peerGetsAdcAttenuators() and
 //               fitAdcAttenuatorsToPeer(). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-29: transmitSettingsVersion 15: handleCfcProfileCommand()
+//               (cfc.setProfile). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               changeRefusal, mediaSessionControlsSlice / HearsSlice /
+//               SeesSlice and listenerChangeReason (SliceAccessPolicy).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4:
+//               sliceAccessVersion(), peerHasSliceAccess(), the
+//               SliceAccess objects, the slice and marker forms on a join
+//               or a leave (onSliceAccessChanged) and the
+//               SliceAccessController behind the listen, stop listening,
+//               take control and release verbs. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: usableSlicesJson(),
+//               questionPlanner(), closeForTake's listenedBy and
+//               tellListeners(). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: invokeAsStationDevice() and
+//               setStationNoticeHandler(): the hosting desktop's slice
+//               requests run as the station device through the same
+//               dispatcher, checks, confirm step and SliceAccessController
+//               as a remote device's, answered through callbacks. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 11: transmitPreferenceFor() and
+//               takenSliceKeyRefusal(), the keying refusal on a slice
+//               taken from another device and not chosen. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-29: slice control plan Task 17: sliceHolderWords(), who holds
+//               a slice as a refusal names it. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control fix wave (whole-branch review, Critical 1):
+//               closeUnclaimedOrDefer() and fireDeferredCloses(), a slice
+//               nobody is on closes only once it is not transmitting.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-30: take-over parity: sliceAccessVersion 2 (Take it back on
+//               controlTaken), peerTakesControlBack(), takeBackControl();
+//               the hosting desktop's slices can pass to a remote device.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal(), a
+//               key never lands on the slice a device lost; re-review
+//               (N-1): keyerSharesSlices(), nor on another device's
+//               slice. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -484,6 +537,7 @@
 #include <utility>
 
 #include "core/DeviceLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "core/session/ConfirmStep.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/ReceiverPlanner.h"
@@ -515,6 +569,8 @@ class StationIdentity;
 class ObjectRegistry;
 class MirrorView;
 class SliceMarkerSet;
+class SliceAccessSet;
+class SliceAccessController;
 class ConnectedDevicesFacade;
 class DeviceSessionRegistry;
 class ModMonitorPublisher;
@@ -539,6 +595,10 @@ class StationVax;
 class RemoteKeying;
 class RemoteTxWatchdog;
 class TxWatchServer;
+
+/// Slice control plan Task 10: how the hosting desktop hears what a
+/// request as the station device answers, asks or tells.
+using StationAnswer = std::function<void(const SessionMessage&)>;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -978,12 +1038,17 @@ public:
     bool fitStationTciSettingsToPeer(SessionTransport* transport,
                                      SessionMessage& message) const;
     /// iPhone app Task 76: the epochs of the media sessions live now, in
-    /// admission order; the device a media session is for; whether a slice
-    /// is that device's own (ruling 9.1: a device subscribes displays and
-    /// receiver streams only for its own slices, and hears only its own).
+    /// admission order; the device a media session is for. Slice control
+    /// plan Task 2 (SliceAccessPolicy): whether that device controls a
+    /// slice (its owner mix, raw I/Q, headphones), may hear it (receiver
+    /// streams) and may see it (display subscriptions). Until Task 3 lets
+    /// devices listen, all three read the same: the device's own slices
+    /// (ruling 9.1).
     QList<quint64> mediaSessionEpochs() const;
     QByteArray mediaSessionDevice(quint64 epoch) const;
-    bool mediaSessionOwnsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionControlsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionHearsSlice(quint64 epoch, int sliceId) const;
+    bool mediaSessionSeesSlice(quint64 epoch, int sliceId) const;
     /// The media session the PureSignal display goes to (the one whose
     /// ps3.subscribeDisplay was last accepted), or 0 for none known.
     quint64 ps3DisplaySubscriberEpoch() const { return m_ps3SubscriberEpoch; }
@@ -1202,6 +1267,25 @@ public:
     /// minor 11 and was told mediaReplaceVersion 1, so it may send
     /// `replace`.
     bool mediaReplaceAvailable(quint64 epoch) const;
+    /// The direct media ladder (link section "Direct media"): the STUN
+    /// servers the rendezvous hello gave this Core (only `stun:` and
+    /// `stuns:` URLs are kept; never TURN, credentials or tokens), and
+    /// what their names resolved to. Every media connection gathers from
+    /// the chosen one, the tunnel's included. A change is told again to
+    /// every session that was told mediaStunUrls.
+    void setMediaStun(const QStringList& urls, const HostFamilies& families = {});
+    QStringList mediaStunUrls() const { return m_mediaStunUrls; }
+    /// The STUN server a media connection uses (none: host candidates).
+    std::optional<IceServerAddress> mediaStunServer() const;
+    /// 1 on every Core of this build: told, with mediaStunUrls, to a peer
+    /// with media whose hello declared `mediaDirect` 1.
+    int mediaDirectVersion() const { return 1; }
+    /// The session with media `epoch` was told mediaDirectVersion 1, so a
+    /// `replace` may carry `mediaDirectVersion` 1.
+    bool mediaDirectAvailable(quint64 epoch) const;
+    /// A direct-only replacement's ICE settings: host candidates and the
+    /// STUN server, no relay and no tunnel.
+    IceConfiguration mediaDirectIceConfiguration() const;
     /// iPhone app plan Task 29: whether this Core allows the relay
     /// (nereusd.conf `relay`), told to every device as `relayAllowed`.
     /// Default true, the setting's default; DaemonApp sets it.
@@ -1273,6 +1357,33 @@ public:
     /// deviceAuth 1, at minor 11 (the design's ruling 10.1), and takes
     /// session.leave.
     int sessionHolderVersion() const { return 1; }
+    /// Slice control plan Task 4: 1 on a Core that runs its radio: it sends
+    /// the `SliceAccess` objects, each joined slice as `slice:<id>` and
+    /// every other as `marker:<id>`, and takes slice.listen,
+    /// slice.stopListening, slice.takeControl and slice.release, to a peer
+    /// at minor 11 that declared sliceAccess 1 with sessionHolder.
+    /// Take-over parity: 2 adds Take it back on the controlTaken notice
+    /// (notice.takeBack runs slice.takeControl with the notice's slice).
+    /// A peer is sent the lower of this and the version its hello declared.
+    int sliceAccessVersion() const;
+    /// Slice control plan Task 4: sliceAccessVersion 1 reached `transport`
+    /// (sessionHolderVersion 1, and sliceAccess 1 in its hello).
+    bool peerHasSliceAccess(SessionTransport* transport) const;
+    /// Take-over parity: sliceAccessVersion 2 reached `transport` (its hello
+    /// declared sliceAccess 2): its controlTaken notices offer Take it back.
+    bool peerTakesControlBack(SessionTransport* transport) const;
+    /// Slice control plan Task 4: each attached view's `slice:` and
+    /// `marker:` forms of `sliceId` after its controller or its listeners
+    /// changed: object.destroy of the form it had, object.create of the
+    /// form it has now.
+    void onSliceAccessChanged(int sliceId);
+    /// Slice control plan Task 4: the listen, stop listening, take control
+    /// and release checks, for the hosting desktop's own window as for a
+    /// device's command (Task 10). Never null on a Core with a radio model.
+    SliceAccessController* sliceAccessController() const { return m_sliceAccessController; }
+    /// Slice control plan Task 13: whether `sliceId` is transmitting now, as
+    /// the take and release checks read it (the hosting desktop's chooser).
+    bool sliceOnAir(int sliceId) const { return sliceTransmitting(sliceId); }
 
     // ── iPhone app plan Task 34: transmit (R-IOS-02, R-IOS-03, R-IOS-13) ──
 
@@ -1285,6 +1396,22 @@ public:
     bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
     /// Who holds transmit (never null).
     TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
+    /// Test hook (slice control plan Task 4): the transmit slice `device`
+    /// last chose (ruling 8.10), or -1.
+    int chosenTxSliceForTest(const QByteArray& device) const
+    {
+        return m_chosenTxSlice.value(device, -1);
+    }
+    /// Slice control fix wave (Important 4): the slice `device` last chose
+    /// for transmit itself (tx.setTxSlice, or the hosting desktop's own
+    /// selection for the station device), or -1. Never written by the
+    /// binding a holder gets by itself; cleared when control of the slice
+    /// passes from the device, when the slice closes and when the device
+    /// is removed. Task 11 refuses keying without it.
+    int explicitTxSliceFor(const QByteArray& device) const
+    {
+        return m_explicitTxSlice.value(device, -1);
+    }
     /// The Core's model (the conformance runner presses its radio's PTT).
     RadioModel* radioModel() const;
     /// Fix wave 2 (ruling 8.1): a desktop that hosts this Core names the
@@ -1292,6 +1419,23 @@ public:
     /// and refused on the air, in the desktop's words. Unset on a Core no
     /// desktop hosts: the station device's own keys are "Radio".
     void setStationDeviceWords(const QString& name, const QString& shortName);
+    /// Slice control plan Task 10: a command.invoke from the hosting
+    /// desktop, run as the station device through the same dispatcher,
+    /// checks, confirm step and SliceAccessController a remote device's
+    /// goes through. `answer` gets its command.result (now or on a later
+    /// turn); `question` gets any confirm.request it raises, and every
+    /// later one for the station device until another invoke names its
+    /// own. Only the slice verbs the desktop uses are taken (removeSlice,
+    /// addSlice, addSliceOnPan, setActiveSliceById, slice.listen,
+    /// slice.stopListening, slice.takeControl, slice.release,
+    /// slice.setListenLevel, confirm.proceed, confirm.cancel,
+    /// notice.takeBack); any other is refused.
+    void invokeAsStationDevice(const SessionMessage& invoke, StationAnswer answer,
+                               StationAnswer question);
+    /// Slice control plan Task 10: where the station device's notices go
+    /// (a slice it listened to closed, a take of its slice). Unset, they
+    /// wait as an away device's do; set, any waiting are handed over.
+    void setStationNoticeHandler(StationAnswer notice);
     /// iPhone app plan Task 77 (ruling 8.9a, D64): the hosting desktop's
     /// MOX or TUNE while another device holds transmit takes only through
     /// tx.take's rules. AtOnce runs the take (`done(taken)` when it ends;
@@ -1421,6 +1565,12 @@ private:
     /// remove of a key on isTransmitSettingKeyAcceptedOffAir's list on a
     /// receive-only Core; empty when the key may be applied now.
     QString transmitSettingOnAirRefusal(const QString& key) const;
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): a raw PA profile
+    // key on the air (RadioModel::paSettingOnAirRefusal), for this peer:
+    // taken only for the active profile's transmitting band, from the
+    // device that holds transmit. `value` is null for a remove.
+    QString paSettingOnAirRefusalFor(SessionTransport* transport, const QString& key,
+                                     const QString* value) const;
     /// Addendum G-42 (JJ's ruling 2026-09-28): a key the transmit gate
     /// reads (RadioModel::kExtendedTransmitKey). Its write or removal needs
     /// this session's transmit permission (txDecisionFor), waits while the
@@ -1593,6 +1743,10 @@ private:
     // txEq.resetCurve, applied as this peer's txEqParaEqData write
     // (applyPropertyWrite), so every rule that write meets applies.
     void handleTxEqCurveCommand(SessionTransport* transport, const SessionMessage& message);
+    // transmitSettingsVersion 15: cfc.setProfile, the CFC band editor
+    // applied at once against an expected revision, as the asking
+    // connection's cfcParaEqData write.
+    void handleCfcProfileCommand(SessionTransport* transport, const SessionMessage& message);
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
@@ -1608,6 +1762,9 @@ private:
     /// otherwise to the writer as settings.reject. True when applied.
     bool applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
                             QString* refusal);
+    /// R-R3-46 / R-R3-49: after a low-pass edge write or removal, stores the
+    /// neighbouring edges the Filters tab's rule moves (no-op for other keys).
+    void applyAlexLpfNeighbourRule(const QString& key);
     void handleSettingsRemove(SessionTransport* transport, const SessionMessage& message);
     // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
     void handlePairStart(SessionTransport* transport, const SessionMessage& message);
@@ -1811,17 +1968,28 @@ private:
     // ── iPhone app Task 73: slice ownership ─────────────────────────────
     /// Ruling 5.2: held slices, saved slices, adoption, a first slice.
     void placeSlicesForAdmission(const QByteArray& deviceId);
-    /// Rulings 4.11, 4.12: a device's slices when its 180 s end or it
-    /// leaves (a token window: when its session ends).
-    void releaseDeviceSlices(const QByteArray& deviceId);
+    /// Slice control plan Task 8 (approved policy 6): every claim of
+    /// `deviceId` goes when its 180 s end (`awayGeneration`, acted on only
+    /// while that absence is still the current one), it leaves, a token
+    /// window's session ends, it is revoked, or a fifth device takes its
+    /// place (nullopt). Each slice it controlled keeps running with no
+    /// controller for its other listeners, or closes with nobody left
+    /// (saved for a paired device); it leaves every slice it only listened
+    /// to, which closes with nobody left. No slice is held for it (Q12).
+    /// Its C-Tune pins go.
+    void releaseDeviceClaims(const QByteArray& deviceId,
+                             std::optional<quint64> awayGeneration);
     /// Fix wave 2: at the end of an away device's 180 s, the slices other
     /// devices took from it (kept by its waiting Take it back notices) are
     /// saved in its DeviceLayoutStore, so its next admission restores them.
     void saveTakenSlicesFor(const QByteArray& deviceId);
     /// Closes slice `sliceId` for a reason other than its owner's own
     /// request, saving it for `saveFor` when set; false (nothing done)
-    /// when it is the Core's last slice.
-    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr);
+    /// when it is the Core's last slice. Slice control plan Task 8:
+    /// `unclaimed` closes only a slice nobody controls or listens to,
+    /// whatever the count (RadioModel::closeUnclaimedSlice).
+    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr,
+                       bool unclaimed = false);
     /// Fix wave C2 (ruling 5.2, its last paragraph): the paired device a
     /// slice another device's take, pan move or rate change is about to
     /// close must be saved for, because it has left (no registry entry)
@@ -1850,9 +2018,59 @@ private:
     /// Ruling 5.6: whether `transport`'s view receives `message`'s slice or
     /// marker (any other message: yes).
     bool ownershipAllows(SessionTransport* transport, const SessionMessage& message) const;
-    /// Ruling 5.9: the plain refusal when `requester` names another
-    /// device's slice, else empty.
-    QString sliceRefusal(const QByteArray& requester, int sliceId) const;
+    /// Slice control plan Task 4: which forms of a slice with `mark` and
+    /// `listeners` (SliceOwnership::listenersOf) `device`'s view has: its
+    /// `slice:` while it is joined; its `marker:` to a view with
+    /// sessionHolderVersion, for a view that shares slices while it is not
+    /// joined, for any other while the slice is not its own (today's rule).
+    struct SliceForms {
+        bool slice = false;
+        bool marker = false;
+    };
+    SliceForms sliceFormsFor(SessionTransport* transport, const QByteArray& device,
+                             const SliceOwnership::Mark& mark,
+                             const QList<QByteArray>& listeners) const;
+    /// Slice control plan Task 4: `device`'s id as connectedDevices names
+    /// it; "station" for the Core's own operating position.
+    QString wireIdOf(const QByteArray& device) const;
+    /// Slice control plan Task 4: the slice is the transmit slice while a
+    /// holder is on the air (or MOX has not yet read off), or the one the
+    /// station freeze holds; fix wave (Critical 1): or the slice a transmit
+    /// move waits for the unkey gate to land on.
+    bool sliceTransmitting(int sliceId) const;
+    /// Slice control plan Task 4 (ruling Q7): why control of `sliceId`
+    /// cannot pass from `controller`, or empty.
+    QString handOffRefusal(const QByteArray& controller, int sliceId) const;
+    /// Slice control plan Task 4 (ruling Q8): `former`'s transmit selection
+    /// of `sliceId` cleared before control passes from it (`former` may be
+    /// empty for a slice with no controller); fix wave: whoever holds
+    /// transmit with the flag on `sliceId` loses that selection, not only
+    /// `former`.
+    void clearTransmitSelection(const QByteArray& former, int sliceId);
+    /// Slice control plan Task 4: closes a slice nobody is on (false: the
+    /// Core's last slice stays).
+    bool closeSliceNobodyIsOn(int sliceId);
+    /// Slice control fix wave (whole-branch review, Critical 1): closes a
+    /// slice nobody is on (saving it for `saveFor` when set and
+    /// `saveLayout`), or, while it transmits (sliceTransmitting), records
+    /// the close for fireDeferredCloses and returns false.
+    bool closeUnclaimedOrDefer(int sliceId, const QByteArray& saveFor, bool saveLayout);
+    /// Runs each deferred close whose slice no longer transmits, if it is
+    /// still the same slice (incarnation) and still nobody is on it; a
+    /// slice someone came back to drops its record.
+    void fireDeferredCloses();
+    /// Queues fireDeferredCloses once on the event loop (MOX, transmit
+    /// holder and pending hand-off changes).
+    void scheduleDeferredCloses();
+    /// Slice control plan Task 4: the former controller is told.
+    void tellControlTaken(int sliceId, const QByteArray& former, const QByteArray& taker);
+    /// Ruling 5.9, slice control plan Task 2: the plain refusal when
+    /// `requester` may not change `sliceId` (SliceAccessPolicy::mayChange:
+    /// another device's slice, or one it only listens to), else empty.
+    QString changeRefusal(const QByteArray& requester, int sliceId) const;
+    /// Slice control plan Task 4: `device`'s live session shares slices
+    /// (peerHasSliceAccess).
+    bool deviceSharesSlices(const QByteArray& device) const;
 
     // ── iPhone app plan Task 34: transmit ───────────────────────────────
     SessionPeerInfo peerInfoFor(SessionTransport* transport) const;
@@ -1914,7 +2132,16 @@ private:
     /// the air.
     TxRefusal onAirPropertyRefusal(const QByteArray& requester, const QByteArray& objectKey,
                                    const QByteArray& property) const;
+    /// Slice control plan Task 17: who holds a slice, as a refusal names
+    /// it: the device's name, "a phone" / "a tablet" / "a computer" for a
+    /// device with no name, "another device" for one the Core does not
+    /// know, and "the Core" for nobody or the station device.
+    QString sliceHolderWords(const QByteArray& device) const;
     QString ownedElsewhereReason(int sliceId) const;
+    /// Slice control plan Task 2: a listener's refusal ("Slice A is
+    /// controlled by <name>. Take control to change it."), for a window
+    /// that listens; Task 4 sends it.
+    QString listenerChangeReason(int sliceId) const;
     /// What `deviceId` owns, for connectedDevices.listeningOn.
     QJsonArray listeningOn(const QByteArray& deviceId) const;
     /// At most the board's maxSlices saved slices per device.
@@ -1982,8 +2209,16 @@ private:
     PanMoveCheck checkPanMove(const QByteArray& requester, const SessionMessage& original) const;
     ReceiverPlanner::DeviceInfo planDevice(const QByteArray& deviceId) const;
     ReceiverPlanner receiverPlanner() const;
+    /// Slice control plan Task 9: receiverPlanner() naming each slice's
+    /// listeners when `transport` shares slices.
+    ReceiverPlanner questionPlanner(SessionTransport* transport) const;
     SessionTransport* liveTransportFor(const QByteArray& deviceId) const;
     QString withHolderNames(const QString& reason, const QByteArray& requester) const;
+    /// Slice control plan Task 9: the usableSlices result value, a JSON
+    /// array of {sliceId, incarnation, letter, controllerDeviceId} for every
+    /// live slice in id order ("" for a slice with no controller the link
+    /// can name).
+    QString usableSlicesJson() const;
     QString namesOf(const QList<ReceiverPlanner::Disturbed>& disturbed) const;
     void answerHere(SessionTransport* transport, const SessionMessage& result);
     void answerWrite(SessionTransport* transport, const SessionMessage& write,
@@ -2006,7 +2241,15 @@ private:
     SessionMessage applyHeld(SessionTransport* transport, const ConfirmStep::Question& question,
                              int stream, const SessionMessage& invoke);
     bool heldFitsNow(const ConfirmStep::Question& question) const;
-    QHash<QByteArray, QList<SavedSlice>> closeForTake(const QList<int>& sliceIds);
+    /// Slice control plan Task 9: `listenedBy`, when given, gets each
+    /// closed slice under every other device that was listening to it.
+    QHash<QByteArray, QList<SavedSlice>> closeForTake(
+        const QList<int>& sliceIds, QHash<QByteArray, QList<SavedSlice>>* listenedBy = nullptr);
+    /// Slice control plan Task 9: a sliceClosed notice to each listener of
+    /// a slice `by` closed, never to `by`. `why` is receiverTaken,
+    /// sliceTaken or panMove.
+    void tellListeners(const QHash<QByteArray, QList<SavedSlice>>& listenedBy,
+                       const QByteArray& by, const QString& why);
     void tellTaken(const QHash<QByteArray, QList<SavedSlice>>& closedBy, const QByteArray& taker,
                    const QString& kind, int stream, int takerSlice);
     void endOlderWindowsWithoutSlices(const QList<QByteArray>& devices, const QByteArray& taker);
@@ -2080,6 +2323,12 @@ private:
     /// usual confirmation (section 8.6).
     SessionMessage takeBackTransmit(SessionTransport* transport, const SessionMessage& invoke,
                                     qint64 noticeId);
+    /// Take-over parity: notice.takeBack for a controlTaken notice:
+    /// SliceAccessController::takeControl with the slice, incarnation and
+    /// control revision the notice named, under the same checks as
+    /// slice.takeControl. Transmit does not move with it (ruling Q8).
+    SessionMessage takeBackControl(SessionTransport* transport, const SessionMessage& invoke,
+                                   const ConfirmStep::Notice& record);
     /// The words of the station device as a taker or holder: "Radio" after
     /// the radio's PTT, otherwise a hosting desktop's own name.
     TransmitHolder::Words stationTakerWords(TransmitHolder::Source source) const;
@@ -2090,10 +2339,45 @@ private:
     /// slice goes to its chosen transmit slice, else its active slice (not
     /// for the radio's own PTT, which transmits where the flag is).
     void bindTransmitSliceForHolder();
+    /// Slice control plan Task 11: the slice `device`'s binding prefers
+    /// when it holds transmit: its remembered choice, unless that is a
+    /// slice it took and has not chosen, then its active slice, then its
+    /// first other slice it may transmit on. -1 lets the arbiter pick.
+    int transmitPreferenceFor(const QByteArray& device) const;
+    /// Slice control plan Task 11 (ruling Q8, narrow reading): the refusal
+    /// for a key from `device` that would land on a slice it took control
+    /// of from another device and has not chosen, when it has no other
+    /// slice it may transmit on; empty otherwise. A holder bound on such a
+    /// slice with another of its own is moved there first (unkeyed only).
+    TxRefusal takenSliceKeyRefusal(const QByteArray& device);
+    /// Take-over fix wave (I-2, ruling Q8) and re-review (N-1): the
+    /// refusal for a key from `device` that would land on another device's
+    /// slice, when `device` shares slices (keyerSharesSlices) or the slice
+    /// is the one it lost (m_lostTxSlice): noTransmitSlice when it has no
+    /// slice it may transmit on. With one, nothing is refused and
+    /// `moveTo` names it; the gate moves the flag there once askKey admits
+    /// the key (N-2). A slice nobody owns is left as it was. The radio's
+    /// own PTT is not asked (ruling 8.11).
+    TxRefusal othersSliceKeyRefusal(const QByteArray& device, int* moveTo);
+    /// Take-over re-review (N-1): the hosting desktop once it takes its
+    /// notices, or a device that declared sliceAccess.
+    bool keyerSharesSlices(const QByteArray& device) const;
     /// Ruling 8.12: the holder's last slice closed: transmit is released.
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.
     QHash<QByteArray, int> m_chosenTxSlice;
+    /// Slice control fix wave (Important 4): each device's explicit
+    /// transmit choice (explicitTxSliceFor).
+    QHash<QByteArray, int> m_explicitTxSlice;
+    /// Slice control fix wave (whole-branch review, Critical 1): closes of
+    /// a slice nobody is on, waiting for it to stop transmitting, by id.
+    struct DeferredClose {
+        quint64 incarnation = 0;
+        QByteArray saveFor;
+        bool saveLayout = false;
+    };
+    QHash<int, DeferredClose> m_deferredCloses;
+    bool m_deferredClosesQueued = false;
     /// The holder epoch the transmit slice was last bound for.
     quint64 m_txSliceBoundEpoch = 0;
     /// Section 7.3's refusal for an older window, naming who a change
@@ -2362,6 +2646,32 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
+    /// Slice control plan Task 10: the station device as a peer for the
+    /// hosting desktop's requests. Never in m_peers, so every loop over
+    /// the peers skips it; peerFor() and peerPtr() find it by its sentinel
+    /// transport, and send() hands what reaches that transport to the
+    /// callbacks below.
+    std::unique_ptr<SessionTransport> m_stationTransport;
+    Peer m_stationPeer;
+    QHash<ResultKey, StationAnswer> m_stationAnswers;
+    StationAnswer m_stationQuestion;
+    StationAnswer m_stationNotice;
+    /// The peer for `transport` (a copy, empty when none): the station
+    /// peer for its sentinel, else m_peers' entry.
+    Peer peerFor(SessionTransport* transport) const;
+    /// The same by pointer, through peerKey(), or nullptr.
+    const Peer* peerPtr(SessionTransport* transport) const;
+    bool hasPeer(SessionTransport* transport) const;
+    bool isStationTransport(SessionTransport* transport) const
+    {
+        return transport != nullptr && transport == m_stationTransport.get();
+    }
+    void deliverToStation(const SessionMessage& message);
+    /// The command.invoke dispatch every admitted peer's request and the
+    /// station device's share: the owner, requester and sharing set for
+    /// it, the refusals, the confirm step, the dispatcher, and a result
+    /// still owed routed back to it.
+    void runInvoke(SessionTransport* transport, const SessionMessage& message);
     struct SettingsExportJob {
         SettingsBackupTransferSource source;
         QByteArray transferId;
@@ -2436,6 +2746,26 @@ private:
     TransmitState* m_transmitState = nullptr;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
+    // Slice control plan Task 4: one SliceAccess object per slice, and the
+    // verbs' checks (both Qt-parented to this).
+    SliceAccessSet* m_sliceAccessSet = nullptr;
+    SliceAccessController* m_sliceAccessController = nullptr;
+    // Slice control plan Task 4: each slice's mark and listeners as every
+    // view's forms of it were last decided, so a join, a leave or a change
+    // of controller sends each view only the difference.
+    struct SliceFormState {
+        SliceOwnership::Mark mark;
+        QList<QByteArray> listeners;
+    };
+    QHash<int, SliceFormState> m_sliceForms;
+    // Slice control plan Task 4 (ruling Q8): slices each device took
+    // control of and has not chosen to transmit on since; its transmit
+    // binding never picks one up by itself.
+    QHash<QByteArray, QSet<int>> m_takenNotChosenForTx;
+    // Take-over fix wave (I-2, ruling Q8): the slice the transmit flag was
+    // on when control of it passed from each device. A key from that device
+    // never lands there while another device controls it.
+    QHash<QByteArray, QSet<int>> m_lostTxSlice;
     // True while a restored layout's owners are settled just before every
     // view's burst is sent again (receiveLayoutHydrated).
     bool m_ownerChangesInBurst = false;
@@ -2455,6 +2785,9 @@ private:
     int m_authDeadlineMs = kDefaultAuthDeadlineMs;
     // iPhone app plan Task 29.
     bool m_relayAllowed = true;
+    // The direct media ladder: the rendezvous hello's STUN servers.
+    QStringList m_mediaStunUrls;
+    HostFamilies m_mediaStunFamilies;
     int m_pathTicketLifetimeMs = kPathTicketLifetimeMs;
     int m_pathSwitchDeadlineMs = 0;
     int m_sessionsMoved = 0;

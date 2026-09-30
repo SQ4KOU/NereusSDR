@@ -115,6 +115,10 @@
 //                 re-appends it to each fresh SNR, since a remote window's
 //                 Core sends the offset only when it moves. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 14b (ruling U5): on a listened
+//                 flag the AF slider and Mute return as this device's own
+//                 volume and mute ("Your volume"), never the slice's AF.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -820,6 +824,15 @@ void VfoWidget::buildHeaderRow()
     hdr->addWidget(m_sliceBadge);
 
     static_cast<QVBoxLayout*>(layout())->addLayout(hdr);
+
+    // Task 14a: who controls this slice. Hidden while nobody else shares it.
+    m_accessLine = new QLabel(this);
+    m_accessLine->setObjectName(QStringLiteral("VfoAccessLine"));
+    m_accessLine->setWordWrap(true);
+    m_accessLine->setStyleSheet(
+        QStringLiteral("color: #c8d8e8; font-size: 10px;"));
+    m_accessLine->setVisible(false);
+    static_cast<QVBoxLayout*>(layout())->addWidget(m_accessLine);
 }
 
 void VfoWidget::buildFrequencyRow()
@@ -1239,6 +1252,7 @@ void VfoWidget::buildTabBar()
 void VfoWidget::buildAudioTab()
 {
     auto* audioWidget = new QWidget;
+    m_audioPage = audioWidget;
     auto* audioLayout = new QVBoxLayout(audioWidget);
     audioLayout->setContentsMargins(4, 4, 4, 4);
     audioLayout->setSpacing(4);
@@ -1250,6 +1264,7 @@ void VfoWidget::buildAudioTab()
         label->setStyleSheet(QStringLiteral("color: %1; font-size: 11px;").arg(NereusSDR::Style::kLabelMid));
         label->setFixedWidth(24);
         row->addWidget(label);
+        m_afNameLabel = label;
 
         m_afGainSlider = new QSlider(Qt::Horizontal, audioWidget);
         m_afGainSlider->setRange(ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
@@ -1263,9 +1278,10 @@ void VfoWidget::buildAudioTab()
         // only this slice's received audio (SliceModel::afGain ->
         // RxChannel::setAfGain -> WDSP SetRXAPanelGain1). Your own
         // transmitted audio is set by Mon Vol on the TX applet.
-        m_afGainSlider->setToolTip(QStringLiteral(
+        m_afToolTip = QStringLiteral(
             "How loud you hear this slice's received audio. 0 to 100. "
-            "Your own transmitted audio has its own slider, Mon Vol, on the TX applet."));
+            "Your own transmitted audio has its own slider, Mon Vol, on the TX applet.");
+        m_afGainSlider->setToolTip(m_afToolTip);
         row->addWidget(m_afGainSlider);
 
         m_afGainLabel = new QLabel(QStringLiteral("50"), audioWidget);
@@ -1276,9 +1292,15 @@ void VfoWidget::buildAudioTab()
 
         connect(m_afGainSlider, &QSlider::valueChanged, this, [this](int val) {
             m_afGainLabel->setText(QString::number(val));
-            if (!m_updatingFromModel) {
-                emit afGainChanged(val);
+            if (m_updatingFromModel) { return; }
+            if (isListening()) {
+                // Task 14b: this device's own volume, never the slice's AF.
+                m_listenVolume = val;
+                emit listenVolumeRequested(m_sliceIndex, val, m_listenMuted);
+                return;
             }
+            m_modelAfGain = val;
+            emit afGainChanged(val);
         });
         audioLayout->addLayout(row);
     }
@@ -1380,7 +1402,8 @@ void VfoWidget::buildAudioTab()
         m_muteBtn->setStyleSheet(vfoDspToggleStyle());
         // From Thetis dsp.cs:393 SetRXAPanelRun [v2.10.3.15]; WDSP
         // patchpanel.c:136 (cites moved from the tooltip, R-R3-17).
-        m_muteBtn->setToolTip(QStringLiteral("Mute the receive audio"));
+        m_muteToolTip = QStringLiteral("Mute the receive audio");
+        m_muteBtn->setToolTip(m_muteToolTip);
         row->addWidget(m_muteBtn);
 
         m_binBtn = new QPushButton(QStringLiteral("BIN"), audioWidget);
@@ -1395,9 +1418,15 @@ void VfoWidget::buildAudioTab()
         row->addStretch();
 
         connect(m_muteBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel) {
-                emit muteChanged(on);
+            if (m_updatingFromModel) { return; }
+            if (isListening()) {
+                // Task 14b: mutes this slice on this device only.
+                m_listenMuted = on;
+                emit listenVolumeRequested(m_sliceIndex, m_listenVolume, on);
+                return;
             }
+            m_modelMuted = on;
+            emit muteChanged(on);
         });
         connect(m_binBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel) {
@@ -2427,6 +2456,9 @@ void VfoWidget::setAgcMode(AGCMode mode)
 
 void VfoWidget::setAfGain(int gain)
 {
+    m_modelAfGain = gain;
+    // Task 14b: a listened flag shows this device's own volume instead.
+    if (isListening()) { return; }
     m_updatingFromModel = true;
     m_afGainSlider->setValue(gain);
     m_afGainLabel->setText(QString::number(gain));
@@ -2475,6 +2507,9 @@ void VfoWidget::onTxBadgeClicked()
         return;
     }
     if (!m_transmitPermitted) { return; }
+    // Task 14a: a slice another device controls is not this window's to
+    // make the TX slice.
+    if (isListening()) { return; }
     emit txHandoffRequested(m_sliceIndex);
 }
 
@@ -2728,6 +2763,9 @@ void VfoWidget::applyModeVisibility(DSPMode mode)
 
 void VfoWidget::setMuted(bool v)
 {
+    m_modelMuted = v;
+    // Task 14b: a listened flag shows this device's own mute instead.
+    if (isListening()) { return; }
     if (m_muteBtn && m_muteBtn->isChecked() != v) {
         m_updatingFromModel = true;
         m_muteBtn->setChecked(v);
@@ -3037,6 +3075,12 @@ void VfoWidget::buildFloatingButtons()
     // NereusSDR native — Thetis has no per-slice close button
     m_closeBtn->setToolTip(QStringLiteral("Close slice"));
     connect(m_closeBtn, &QPushButton::clicked, this, [this]() {
+        // Task 14a: on a slice this window only listens to, the close
+        // button stops listening; it never removes another device's slice.
+        if (isListening()) {
+            emit stopListeningRequested(m_sliceIndex);
+            return;
+        }
         emit closeRequested(m_sliceIndex);
     });
     // Phase 3F (Bug 2): Slice A (index 0) is the last-slice invariant —
@@ -3045,7 +3089,7 @@ void VfoWidget::buildFloatingButtons()
     // teardown is deliberately skipped on sliceRemoved. Hiding the close
     // button on Slice A keeps the affordance honest (a button that does
     // nothing reads as broken) and avoids the fragile slice-0 removal path.
-    if (m_sliceIndex == 0) {
+    if (m_sliceIndex == 0 && !isListening()) {
         m_closeBtn->hide();
     }
 
@@ -3059,6 +3103,12 @@ void VfoWidget::buildFloatingButtons()
             applyLockedState(locked);
         }
     });
+    // Task 14a: the lock writes the slice too, so it is held on a listened
+    // flag; the close button's words follow the access.
+    if (isListening()) {
+        holdForListening(m_lockBtn);
+        m_closeBtn->setToolTip(tr("Stop listening"));
+    }
 
     // Record button: checkable, disabled (no consumer yet)
     m_recBtn = makeBtn(QStringLiteral("\u23FA"), kFloatingBtn);
@@ -3170,7 +3220,9 @@ void VfoWidget::positionFloatingButtons()
     // Phase 3F (Bug 2): the close button is hidden on Slice A (index 0);
     // keep it hidden here and let the remaining buttons fill the gap so the
     // strip has no empty slot at the top.
-    const bool closeShown = (m_sliceIndex != 0);
+    // Task 14a: on a listened flag the close button stops listening, which
+    // is fine on Slice A too.
+    const bool closeShown = (m_sliceIndex != 0) || isListening();
 
     // R-R3-49: record and play take no slot while the voice recorder is
     // not built.
@@ -3297,8 +3349,9 @@ void VfoWidget::mousePressEvent(QMouseEvent* event)
     event->accept();
     emit sliceActivationRequested(m_sliceIndex);
 
-    // Double-click on frequency area → enter edit mode
-    if (event->type() == QEvent::MouseButtonDblClick) {
+    // Double-click on frequency area → enter edit mode. Task 14a: not on a
+    // slice another device controls.
+    if (event->type() == QEvent::MouseButtonDblClick && !isListening()) {
         QRect freqRect = m_freqStack->geometry();
         if (freqRect.contains(event->pos())) {
             // Format current frequency as MHz for editing
@@ -3314,7 +3367,7 @@ void VfoWidget::mousePressEvent(QMouseEvent* event)
 void VfoWidget::wheelEvent(QWheelEvent* event)
 {
     event->accept();
-    if (m_locked) {
+    if (m_locked || isListening()) {
         return;
     }
     int delta = event->angleDelta().y();
@@ -3342,6 +3395,37 @@ void VfoWidget::wheelEvent(QWheelEvent* event)
 void VfoWidget::contextMenuEvent(QContextMenuEvent* event)
 {
     QMenu menu(this);
+    populateContextMenu(menu);
+    menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
+    menu.exec(event->globalPos());
+}
+
+void VfoWidget::populateContextMenu(QMenu& menu)
+{
+    // Task 14a: the access actions come first. While a request waits for
+    // the Core they are shown disabled with what the flag is waiting for.
+    const bool listening = isListening();
+    const auto addAccessAction = [this, &menu](const QString& text,
+                                               void (VfoWidget::*signal)(int)) {
+        QAction* act = menu.addAction(text);
+        if (!m_accessPending.isEmpty()) {
+            act->setEnabled(false);
+            act->setToolTip(m_accessPending);
+        }
+        connect(act, &QAction::triggered, this, [this, signal]() {
+            if (!m_accessPending.isEmpty()) { return; }
+            emit (this->*signal)(m_sliceIndex);
+        });
+    };
+    if (listening) {
+        addAccessAction(tr("Take control"), &VfoWidget::takeControlRequested);
+        addAccessAction(tr("Stop listening"), &VfoWidget::stopListeningRequested);
+        menu.addSeparator();
+    } else if (m_sliceAccess.state == SliceAccess::State::Controlled) {
+        addAccessAction(tr("Release"), &VfoWidget::releaseRequested);
+        menu.addSeparator();
+    }
+    const int firstSharedAction = menu.actions().size();
 
     // Make this the TX slice
     QAction* makeTxAct = menu.addAction(QStringLiteral("Make this the TX slice"));
@@ -3350,7 +3434,7 @@ void VfoWidget::contextMenuEvent(QContextMenuEvent* event)
         makeTxAct->setToolTip(m_transmitPermissionReason);
     }
     connect(makeTxAct, &QAction::triggered, this, [this]() {
-        if (!m_transmitPermitted) { return; }
+        if (!m_transmitPermitted || isListening()) { return; }
         emit txHandoffRequested(m_sliceIndex);
     });
 
@@ -3447,8 +3531,19 @@ void VfoWidget::contextMenuEvent(QContextMenuEvent* event)
         emit removeSliceRequested(m_sliceIndex);
     });
 
-    menu.setStyleSheet(QString::fromLatin1(kPopupMenu));   // Phase 3P-I-a T15 — issue #98
-    menu.exec(event->globalPos());
+    // Task 14a: every entry below the access actions changes the shared
+    // slice (or the radio for it), so on a listened flag each is shown
+    // disabled with who controls the slice.
+    if (listening) {
+        const QList<QAction*> actions = menu.actions();
+        for (int i = firstSharedAction; i < actions.size(); ++i) {
+            QAction* act = actions.at(i);
+            if (act->isSeparator()) { continue; }
+            act->setEnabled(false);
+            act->setToolTip(m_sliceAccess.heldReason);
+        }
+    }
+    menu.setToolTipsVisible(true);
 }
 
 // ---- Helpers ----
@@ -3736,15 +3831,20 @@ void VfoWidget::updateTransmitControlAvailability()
         static constexpr auto kSavedTooltip = "VfoSavedTransmitTooltip";
         static constexpr auto kSavedDescription = "VfoSavedTransmitDescription";
         static constexpr auto kSavedEnabled = "VfoSavedTransmitEnabled";
-        if (!m_transmitPermitted) {
+        // Task 14a: a listened slice holds the TX badge too; the checked
+        // (red on the air) state is left alone so it still shows.
+        const bool held = !m_transmitPermitted || isListening();
+        const QString reason = !m_transmitPermitted
+            ? m_transmitPermissionReason : m_sliceAccess.heldReason;
+        if (held) {
             if (!control->property(kSavedTooltip).isValid()) {
                 control->setProperty(kSavedTooltip, control->toolTip());
                 control->setProperty(kSavedDescription, control->accessibleDescription());
                 control->setProperty(kSavedEnabled, control->isEnabled());
             }
             control->setEnabled(false);
-            control->setToolTip(m_transmitPermissionReason);
-            control->setAccessibleDescription(m_transmitPermissionReason);
+            control->setToolTip(reason);
+            control->setAccessibleDescription(reason);
             return;
         }
         if (control->property(kSavedTooltip).isValid()) {
@@ -3760,6 +3860,186 @@ void VfoWidget::updateTransmitControlAvailability()
     // R-R3-49 (parity Task 11): XIT is not here; it writes the slice.
     // Group B fix wave: nor is BYPS (setRxBypassPermitted).
     apply(m_txBadge);
+}
+
+// ---- Task 14a: slice access ----
+
+void VfoWidget::setSliceAccess(const SliceAccess& access)
+{
+    if (m_sliceAccess == access) { return; }
+    m_sliceAccess = access;
+    applySliceAccess();
+}
+
+void VfoWidget::setSliceAccessPending(const QString& text)
+{
+    if (m_accessPending == text) { return; }
+    m_accessPending = text;
+    applySliceAccess();
+}
+
+QString VfoWidget::accessLineText() const
+{
+    return m_accessPending.isEmpty() ? m_sliceAccess.line : m_accessPending;
+}
+
+QList<QWidget*> VfoWidget::heldControlsForTest() const
+{
+    QList<QWidget*> controls = listeningHeldControls();
+    if (m_txBadge) { controls.append(m_txBadge); }
+    return controls;
+}
+
+QString VfoWidget::afNameForTest() const
+{
+    return m_afNameLabel ? m_afNameLabel->text() : QString();
+}
+
+QList<QWidget*> VfoWidget::listeningHeldControls() const
+{
+    // The shared tuning controls. BYPS is not here: it is the radio's
+    // hardware, gated by setRxBypassPermitted. Task 14b: every tab page is
+    // held but the audio page, where only the AF slider (with its name and
+    // value) and Mute stay live, as this device's own volume and mute.
+    QList<QWidget*> controls;
+    for (QWidget* control : {static_cast<QWidget*>(m_rxAntBtn),
+                             static_cast<QWidget*>(m_txAntBtn),
+                             static_cast<QWidget*>(m_freqStack),
+                             static_cast<QWidget*>(m_lockBtn)}) {
+        if (control) { controls.append(control); }
+    }
+    if (!m_tabStack) { return controls; }
+    for (int i = 0; i < m_tabStack->count(); ++i) {
+        QWidget* page = m_tabStack->widget(i);
+        if (page != m_audioPage) {
+            controls.append(page);
+            continue;
+        }
+        const QList<QWidget*> children =
+            page->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly);
+        for (QWidget* child : children) {
+            if (child == m_afNameLabel || child == m_afGainSlider
+                || child == m_afGainLabel || child == m_muteBtn) {
+                continue;
+            }
+            controls.append(child);
+        }
+    }
+    return controls;
+}
+
+QRect VfoWidget::frequencyAreaForTest() const
+{
+    return m_freqStack ? m_freqStack->geometry() : QRect();
+}
+
+bool VfoWidget::frequencyEditOpen() const
+{
+    return m_freqStack && m_freqStack->currentIndex() == 1;
+}
+
+void VfoWidget::holdForListening(QWidget* control) const
+{
+    if (!control) { return; }
+    static constexpr auto kSavedTooltip = "VfoSavedAccessTooltip";
+    static constexpr auto kSavedDescription = "VfoSavedAccessDescription";
+    static constexpr auto kSavedEnabled = "VfoSavedAccessEnabled";
+    if (isListening()) {
+        if (!control->property(kSavedTooltip).isValid()) {
+            control->setProperty(kSavedTooltip, control->toolTip());
+            control->setProperty(kSavedDescription, control->accessibleDescription());
+            control->setProperty(kSavedEnabled, control->isEnabled());
+        }
+        control->setEnabled(false);
+        control->setToolTip(m_sliceAccess.heldReason);
+        control->setAccessibleDescription(m_sliceAccess.heldReason);
+        return;
+    }
+    if (control->property(kSavedTooltip).isValid()) {
+        control->setEnabled(control->property(kSavedEnabled).toBool());
+        control->setToolTip(control->property(kSavedTooltip).toString());
+        control->setAccessibleDescription(control->property(kSavedDescription).toString());
+        control->setProperty(kSavedTooltip, QVariant());
+        control->setProperty(kSavedDescription, QVariant());
+        control->setProperty(kSavedEnabled, QVariant());
+    }
+}
+
+void VfoWidget::applySliceAccess()
+{
+    const bool listening = isListening();
+
+    // A frequency typed before the access changed is abandoned rather than
+    // sent for a slice this window no longer controls.
+    if (listening && m_freqStack && m_freqStack->currentIndex() == 1) {
+        m_freqStack->setCurrentIndex(0);
+    }
+
+    for (QWidget* control : listeningHeldControls()) {
+        holdForListening(control);
+    }
+    updateTransmitControlAvailability();
+    applyAudioBinding();
+
+    if (m_accessLine) {
+        const QString text = accessLineText();
+        m_accessLine->setText(text);
+        const bool shown = !text.isEmpty();
+        if (m_accessLine->isVisibleTo(this) != shown) {
+            m_accessLine->setVisible(shown);
+            adjustSize();
+        }
+    }
+
+    if (m_closeBtn) {
+        m_closeBtn->setToolTip(listening ? tr("Stop listening")
+                                         : QStringLiteral("Close slice"));
+        positionFloatingButtons();
+    }
+}
+
+void VfoWidget::setListenVolume(int level, bool muted)
+{
+    m_listenVolume = std::clamp(level, 0, 100);
+    m_listenMuted = muted;
+    if (isListening()) {
+        applyAudioBinding();
+    }
+}
+
+void VfoWidget::applyAudioBinding()
+{
+    // Task 14b (ruling U5): a listened flag's slider and Mute are this
+    // device's own volume and mute; any other flag's are the slice's AF
+    // and mute, as before.
+    if (!m_afGainSlider || !m_muteBtn) { return; }
+    const bool listening = isListening();
+    const int value = listening ? m_listenVolume : m_modelAfGain;
+    const bool muted = listening ? m_listenMuted : m_modelMuted;
+    const bool wasUpdating = m_updatingFromModel;
+    m_updatingFromModel = true;
+    m_afGainSlider->setValue(value);
+    m_afGainLabel->setText(QString::number(value));
+    m_muteBtn->setChecked(muted);
+    m_updatingFromModel = wasUpdating;
+
+    if (m_afNameLabel) {
+        if (listening) {
+            m_afNameLabel->setText(tr("Your volume"));
+            m_afNameLabel->setMinimumWidth(24);
+            m_afNameLabel->setMaximumWidth(QWIDGETSIZE_MAX);
+        } else {
+            m_afNameLabel->setText(QStringLiteral("AF"));
+            m_afNameLabel->setFixedWidth(24);
+        }
+    }
+    m_afGainSlider->setToolTip(listening
+        ? tr("How loud you hear this slice on this device. 0 to 100. "
+             "The controller and other listeners do not hear the change.")
+        : m_afToolTip);
+    m_muteBtn->setToolTip(listening
+        ? tr("Mute this slice on this device only.")
+        : m_muteToolTip);
 }
 
 SliceModel* VfoWidget::contextMenuSliceForTest() const

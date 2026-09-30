@@ -14,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: A remote RX DSP > Options apply waits while the radio is on
+//               the air, as the TX half does. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -49,6 +52,12 @@
 //                 the tune power, TX profile and RADE reset commands take
 //                 `takenOnAir`. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - applyTransmitBand ports Thetis's TXBand setter
+//                 (console.cs:17511-17545 [v2.10.3.15]): the Core loads the
+//                 transmit band's stored power on a band change and at
+//                 connect, with or without a window, and the MOX-edge
+//                 restore saves PWR into the band as ptbPWR_Scroll does.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - The MOX band-plan check uses the XIT-shifted TX carrier,
 //                 matching the TX chain and Thetis console.cs:29440-29486.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
@@ -679,6 +688,121 @@
 //                 as mi0bot's SetI2CPollingPause callers do (setup.cs
 //                 21457-21529, 30014-30052 [@c26a8a4]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - HL2 clock: applyHl2Options hands the saved External
+//                 10 MHz, Enable CL2 and CL2 frequency to the connection
+//                 (mi0bot setup.cs:21732-21756 [@c26a8a4]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: a disconnect forgets the transmit
+//                 band (the next band seen is an initializing pass), and
+//                 the connect-time tune-power refresh before the per-MAC
+//                 load is gone. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand publishes the PA
+//                 row the Core holds on the air, and a remote window whose
+//                 Core sends it opens and locks that row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: a disconnect also forgets the
+//                 tune power's transmit band (clearTuneTxBand). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Two-tone PA wiring (found bug): the two-tone controller
+//                 gets the PA profile manager, so the start drives the PA
+//                 gain for the held transmit band (setup.cs:11153
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate branch review, Important 1: the teardown
+//                 ends a two-tone test at once (TwoToneController::stopNow),
+//                 so the FIXED power restore lands in the held band before
+//                 the saves (console.cs:27473, 27492 [v2.10.3.15]). TUNE
+//                 under the FIXED source turns the PWR limit off and sets
+//                 PWR to the tune power, and TUN-off restores both, only
+//                 under FIXED (console.cs:30094-30104, 30180-30185
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 2: the transmit arbiter's access
+//                check, the holder's fallback on a close and
+//                setActiveSliceByIdFor ask SliceAccessPolicy.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave, round 2: a layout entry with no
+//                owner restores with nobody listening, so a lone device
+//                adopts it again. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 7: zero slices is a valid idle
+//                Core. closeUnclaimedSlice closes an unclaimed slice
+//                whatever the count, the transmit binding is released with
+//                the last slice, hasTransmitSlice gates keying, and a Core
+//                with no slice saves no layout (ruling Q10).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 8, Amendment 8a: a slice of a
+//                device that is not here does not count in the preselector
+//                choice. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 6: the slice audio view carries
+//                the AF level, and an AF change republishes it; the mixer
+//                applies AF (JJ's ruling). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 11 fix: the transmit band's tune
+//                power does not change while transmitting (Thetis's MOX
+//                gate on TXBand, console.cs [v2.10.3.15]). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - Slice control fix wave (whole-branch review, Minor 3):
+//                requestTxHandoffToSlice checks the station's access, as
+//                the remote tx.setTxSlice does. NereusSDR-original. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration (console.cs:46868-46886 [v2.10.3.15]),
+//                requestResetLevelCalibration and levelCalibrationChanged;
+//                TCI calibration_ex reads the meter and display offsets.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress properties and
+//                the start and cancel calls of both windows.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: meter and display calibration kept per radio
+//                model (rx_meter_cal_offset_by_radio /
+//                rx_display_cal_offset_by_radio, console.cs:196-197,
+//                3183-3193, 4974-5000, 10182, 10190, 14892-14895,
+//                46868-46886 [v2.10.3.15]); a one-value calibration of an
+//                earlier build moves to the connected model.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: RX2's meter offset reads
+//                rx2_preamp_offset[rx2_preamp_mode] from RX2's own mode
+//                (console.cs:21052 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal fix wave: rx2PreampModeAvailable; the step
+//                attenuator's ceiling on connect is the Core's
+//                (BoardCapsTable::stepAttMaxDb).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -919,6 +1043,7 @@ warren@wpratt.com
 #include "core/IoBoardHl2Facade.h"
 #include "core/PureSignal.h"
 #include "core/PsFeedbackChannel.h"
+#include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 #include "core/TxAnalyzer.h"
@@ -1016,6 +1141,7 @@ warren@wpratt.com
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
@@ -1305,6 +1431,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         };
         connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
         connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);
+        // Slice control plan Task 8, Amendment 8a: an away device's slices
+        // leave the preselector choice and count again when it is back
+        // (its hold returns, or it is no longer away).
+        connect(m_sliceOwnership, &SliceOwnership::awayChanged, this,
+                [this]() { republishAlexAdcSlices(); });
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this,
+                [this](int sliceId, const QByteArray&, const QByteArray& oldHeldFor) {
+                    if (!oldHeldFor.isEmpty() || m_sliceOwnership->mark(sliceId).isHeld()) {
+                        republishAlexAdcSlices();
+                    }
+                });
     }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
@@ -2002,8 +2139,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // iPhone app plan Task 77 (ruling 8.13): whose each slice is, each
     // owner's active slice and who holds transmit, for tx.setTxSlice, the
     // bind at a change of holder and the first bind.
-    m_txSliceArbiter->setOwnerLookup(
-        [this](int sliceId) { return m_sliceOwnership->mark(sliceId).subject(); },
+    // Slice control plan Task 2: transmit follows SliceAccessPolicy (whose
+    // slice it is; a slice a device only listens to never carries its
+    // transmit).
+    m_txSliceArbiter->setTransmitAccess(
+        [this](const QByteArray& device, int sliceId) {
+            return SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, device, sliceId);
+        },
         [this](const QByteArray& owner) { return m_sliceOwnership->activeFor(owner); });
     m_txSliceArbiter->setHolderLookup([this]() { return m_sliceOwnership->transmitHolder(); });
 
@@ -2041,12 +2183,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // The arbiter drops MOX before it flips the binding, so this always runs
     // with the transmitter unkeyed.
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
-            this, [this](int, int) {
+            this, [this](int, int newId) {
         rebindAccessorySlice();
         rebindIoBoardSlice();
         // R-R3-49 (parity Task 2): the transmit band's tune power.
         refreshTransmitTuneBand();
-        pushTxFrequencyFromTxSlice();
+        // Slice control plan Task 7: the binding released with the last
+        // slice has no frequency to push.
+        if (newId >= 0) {
+            pushTxFrequencyFromTxSlice();
+        }
         pushTxModeAndBandpass();
         applyTxAntennaFromBoundSlice();
         if (m_moxController) {
@@ -2201,6 +2347,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RxOnly")) {
                     applyRxOnlySetting(rxOnlySetting());
+                }
+            });
+    // Level Cal: a remote window follows the Core's meter and display
+    // calibration (an empty key is a snapshot), so its TCI and Setup read
+    // the Core's values.
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (key.isEmpty() || key == QLatin1String("RX1_MeterCalOffsetDb")
+                    || key == QLatin1String("RX1_DisplayCalOffsetDb")
+                    || key == QLatin1String("RxMeterCalOffsetDbByRadio")
+                    || key == QLatin1String("RxDisplayCalOffsetDbByRadio")) {
+                    emit levelCalibrationChanged();
                 }
             });
     // D79 (R-IOS-11, R-R3-49): the band plan is the station's. A remote
@@ -2464,6 +2622,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // through its own TUN-off path first (console.cs:44805-44813
     // [v2.10.3.15]), so RadioModel stops counting TUN on at tune power.
     m_twoToneController->setTuneOffFn([this]() { setTune(false); });
+    // PA on-air gate re-review: the start drives Thetis TXBand, the band
+    // the drive math holds while keyed (driveTxBand).
+    m_twoToneController->setTxBandFn([this]() { return driveTxBand(); });
+    // Two-tone PA wiring: Thetis's start computes the drive through
+    // SetPowerUsingTargetDBM with the PA gain (setup.cs:11153 [v2.10.3.15],
+    // //MW0LGE_22b), so the controller needs the PA profile manager.
+    m_twoToneController->setPaProfileManager(m_paProfileManager);
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key
@@ -3644,10 +3809,39 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Pre-hotfix: ANAN-8000DLE 80m TUN at slider=50 produced wire_byte=127
     // (=> ~300W on a 200W radio).  Post-hotfix: wire_byte=49 (=> ~85W).
     // Ratio matches the band's 50.5 dB PA gain compensation.
-    // Body extracted to RadioModel::restoreNormalTxDrive so the MOX-edge
-    // restore below can share it. Behaviour on this path is unchanged.
+    // drivePowerScroll is shared with the MOX-edge restore below, which
+    // keeps upstream's TUNE and two-tone guard.
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll whatever the tx mode, so a PWR change during TUNE or
+    // two-tone recomputes that mode's drive and saves the band's power.
+    // A PWR set before any transmit band is known (no slice yet, no
+    // connect) is a value set for the band the Core would transmit on, so
+    // that band becomes _tx_band and the save lands there. The MOX-edge
+    // restore, which sets nothing, saves nothing until a band is known.
     connect(&m_transmitModel, &TransmitModel::powerChanged, this,
-            [this](int /*power*/) { restoreNormalTxDrive(); });
+            [this](int /*power*/) {
+        if (ownsLocalDsp() && !m_txBandKnown) {
+            // The initializing TXBand pass for the adopted band, less the
+            // power load (this PWR set is the band's value): its limits,
+            // tune power and FM TX offset (console.cs:17539-17550
+            // [v2.10.3.15]).
+            m_txBand = transmitSliceBand();
+            m_txBandKnown = true;
+            emit transmitBandChanged();
+            m_transmitModel.setPowerLimit(
+                m_transmitModel.limitPowerForBand(m_txBand));
+            m_transmitModel.setTunePowerLimit(
+                m_transmitModel.limitTunePowerForBand(m_txBand));
+            m_transmitModel.setTuneTxBand(m_txBand);
+            m_transmitModel.setFmTxOffsetMhz(
+                m_transmitModel.fmTxOffsetForBandMhz(m_txBand));
+        }
+        drivePowerScroll();
+    });
+    // PA on-air gate re-review, Important C: the PA row the Core holds on
+    // the air reaches its windows (paTransmitBandVersion 1).
+    connect(this, &RadioModel::transmitBandChanged,
+            this, &RadioModel::announcePaTransmitBand);
 
     // From mi0bot console.cs:30272 [v2.10.3.13-beta2]: the drive byte is
     // recomputed through the normal path on every MOX-to-TX transition, so a
@@ -3925,6 +4119,23 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_remoteTxInhibited != value.toBool()) {
                 m_remoteTxInhibited = value.toBool();
                 emit txInhibitedChanged(m_remoteTxInhibited);
+            }
+            return {};
+        }
+        if (propertyName == "paTransmitBand") {
+            // PA on-air gate re-review, Important C: the PA row the Core
+            // holds on the air, observed (paTransmitBandVersion 1).
+            bool ok = false;
+            const int band = value.toInt(&ok);
+            if (!ok || band < -1 || band >= PaProfile::kBandCount) {
+                return QStringLiteral("Expected a band number.");
+            }
+            const int before = paOnAirBandIndex();
+            m_stationPaTransmitBand = band;
+            m_stationPaTransmitBandKnown = true;
+            if (paOnAirBandIndex() != before) {
+                emit paTransmitBandChanged(band);
+                emit transmitBandChanged();
             }
             return {};
         }
@@ -4691,6 +4902,8 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
                 this, [this](int) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx1PreampChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
+        connect(c, &StepAttenuatorController::rx2PreampModeChanged,
+                this, [this](PreampMode) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::rx2StepAttEnabledChanged,
                 this, [this](bool) { emit rxAdcMeterOffsetsChanged(); });
         connect(c, &StepAttenuatorController::adcRoutingChanged,
@@ -5424,6 +5637,291 @@ QString RadioModel::onAirReason()
     return QStringLiteral("The radio is on the air. Try again when it stops.");
 }
 
+QString RadioModel::paOnAirLockedReason()
+{
+    return QStringLiteral("Can't change while transmitting.");
+}
+
+QString RadioModel::dspBufferOnAirLockedReason()
+{
+    return paOnAirLockedReason();
+}
+
+bool RadioModel::isRxDspBufferSizeKey(const QString& key)
+{
+    return key == QLatin1String("DspOptionsBufferSizePhoneRx")
+        || key == QLatin1String("DspOptionsBufferSizeFmRx")
+        || key == QLatin1String("DspOptionsBufferSizeCwRx")
+        || key == QLatin1String("DspOptionsBufferSizeDigRx");
+}
+
+QString RadioModel::paHolderOnlyReason()
+{
+    return QStringLiteral("Only the device that is transmitting can change this.");
+}
+
+int RadioModel::paOnAirBandIndex() const
+{
+    // PA on-air gate re-review, Important C: a remote window holds no
+    // transmit band of its own (m_txBand moves only on the Core), so it
+    // takes the row its Core reports (paTransmitBandVersion 1). An older
+    // Core never sends it and the window falls back as below.
+    if (m_role == Role::Remote && m_stationPaTransmitBandKnown) {
+        return m_stationPaTransmitBand;
+    }
+    // The band the Core transmits on: m_txBand (Thetis _tx_band) once known,
+    // the band the drive math reads (driveTxBand). It holds while keyed, as
+    // _adjustingBand does: that moves only in OnTXBandChanged, raised by the
+    // TXBand setter, which returns while MOX
+    // (//[2.10.3.6]MW0LGE no band change on TX fix). Before the first
+    // transmit band is known, and on a remote window whose Core sends no
+    // paTransmitBand, the transmit slice's band, else the last band.
+    const Band txBand = driveTxBand();
+    // From Thetis setup.cs:23836-23852 [v2.10.3.15] OnTXBandChanged / setAdjustingBand:
+    //   setAdjustingBand(newBand);
+    //   lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   if (!((b >= Band.B160M && b <= Band.B6M) || (b >= Band.VHF0 && b <= Band.VHF13)))
+    //       _adjustingBand = Band.FIRST; // MW0LGE_[2.9.0.7] reset
+    // NereusSDR's XVTR row stands for Thetis's VHF0..VHF13.
+    const bool adjustable = (txBand >= Band::Band160m && txBand <= Band::Band6m)
+                            || txBand == Band::XVTR;
+    const int index = static_cast<int>(txBand);
+    return (adjustable && index >= 0 && index < PaProfile::kBandCount) ? index : -1;
+}
+
+int RadioModel::paTransmitBand() const
+{
+    return paOnAirBandIndex();
+}
+
+// The Core's paTransmitBand follows transmitBandChanged: the transmit band
+// moves only through applyTransmitBand (held while keyed) and the
+// disconnect reset, and each emits it.
+void RadioModel::announcePaTransmitBand()
+{
+    if (m_role != Role::Local) { return; }
+    const int band = paOnAirBandIndex();
+    if (band == m_announcedPaTransmitBand) { return; }
+    m_announcedPaTransmitBand = band;
+    emit paTransmitBandChanged(band);
+}
+
+bool RadioModel::paOnAirNow() const
+{
+    // From Thetis setup.cs:23826-23834 [v2.10.3.15] OnMoxChangeHandler (the
+    // page's lock follows MOX) and setup.cs:24210-24222 [v2.10.3.15]
+    // nudAdjustGain_ValueChanged:
+    //   if (console.MOX)
+    // The next handler, OnTXBandChanged (ported in paOnAirBandIndex above),
+    // carries: //[2.3.10.6]MW0LGE added (also in ATTOnTX)
+    //   [original inline comment from setup.cs:23838]
+    // The lock and the live apply follow MOX itself: an edit in the
+    // controller's TX to RX handover after MOX drops is an off-air edit.
+    // TUNE and the two-tone test key MOX in Thetis, so they count too.
+    return mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
+        || m_transmitModel.isTwoToneActive()
+        || (m_twoToneController && m_twoToneController->isActive());
+}
+
+QString RadioModel::paOnAirEditRefusal(bool profileAction, int band,
+                                       bool requesterHoldsTransmit) const
+{
+    if (!paOnAirNow()) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    const int txBand = paOnAirBandIndex();
+    if (profileAction || txBand < 0 || band != txBand) {
+        return paOnAirLockedReason();
+    }
+    // JJ's ruling: only the device that holds transmit changes the
+    // transmitting band's values while it transmits.
+    if (!requesterHoldsTransmit) {
+        return paHolderOnlyReason();
+    }
+    return {};
+}
+
+namespace {
+
+// Why a PA value is out of range, or empty when it is in range: the page's
+// spin boxes, which hold one decimal place. The phone verbs and a window's
+// raw profile key share these checks.
+//   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
+//          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
+//   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
+//   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
+//          one decimal (setup.designer.cs:47541)
+QString paValueRangeRefusal(RadioModel::PaProfileAction action, double value)
+{
+    const double rounded = std::round(value * 10.0) / 10.0;
+    const bool finite = std::isfinite(value);
+    switch (action) {
+    case RadioModel::PaProfileAction::SetGain:
+        if (!finite || rounded < 38.8 || rounded > 100.0) {
+            return QStringLiteral("Choose a PA gain from 38.8 to 100 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetAdjust:
+        if (!finite || rounded < -10.0 || rounded > 10.0) {
+            return QStringLiteral("Choose a drive-step adjust from -10 to 10 dB.");
+        }
+        break;
+    case RadioModel::PaProfileAction::SetMaxPower:
+        if (!finite || rounded < 0.0 || rounded > 1500.0) {
+            return QStringLiteral("Choose a max power from 0 to 1500 W.");
+        }
+        break;
+    default:
+        break;
+    }
+    return {};
+}
+
+// The range refusal for PA row `band` of `incoming`, checking only the
+// values that differ from `current` (what the window changed).
+QString paRowRangeRefusal(const PaProfile& incoming, const PaProfile& current, int band)
+{
+    using Action = RadioModel::PaProfileAction;
+    const Band b = static_cast<Band>(band);
+    if (incoming.getGainForBand(b) != current.getGainForBand(b)) {
+        if (const QString r = paValueRangeRefusal(Action::SetGain, incoming.getGainForBand(b));
+            !r.isEmpty()) {
+            return r;
+        }
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(b, step) != current.getAdjust(b, step)) {
+            if (const QString r = paValueRangeRefusal(Action::SetAdjust,
+                                                      incoming.getAdjust(b, step));
+                !r.isEmpty()) {
+                return r;
+            }
+        }
+    }
+    if (incoming.getMaxPower(b) != current.getMaxPower(b)) {
+        return paValueRangeRefusal(Action::SetMaxPower, incoming.getMaxPower(b));
+    }
+    return {};
+}
+
+// hardware/<mac>/pa/<rest>: true, with <rest>, for a PA key of `mac`.
+bool paKeyRest(const QString& key, const QString& mac, QString* rest)
+{
+    const QString prefix = QStringLiteral("hardware/%1/pa/").arg(mac);
+    if (mac.isEmpty() || !key.startsWith(prefix, Qt::CaseInsensitive)) {
+        return false;
+    }
+    *rest = key.mid(prefix.size());
+    return true;
+}
+
+// True when `a` and `b` differ anywhere but PA row `band`.
+bool paProfilesDifferOutsideBand(const PaProfile& a, const PaProfile& b, int band)
+{
+    if (a.name() != b.name() || a.model() != b.model()
+        || a.isFactoryDefault() != b.isFactoryDefault()) {
+        return true;
+    }
+    for (int i = 0; i < PaProfile::kBandCount; ++i) {
+        if (i == band) {
+            continue;
+        }
+        const Band b0 = static_cast<Band>(i);
+        if (a.getGainForBand(b0) != b.getGainForBand(b0)
+            || a.getMaxPower(b0) != b.getMaxPower(b0)
+            || a.getMaxPowerUse(b0) != b.getMaxPowerUse(b0)) {
+            return true;
+        }
+        for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+            if (a.getAdjust(b0, step) != b.getAdjust(b0, step)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+QString RadioModel::paSettingOnAirRefusal(const QString& key, const QString* value,
+                                          bool requesterHoldsTransmit) const
+{
+    QString rest;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()) {
+        return {};
+    }
+    // From Thetis setup.cs:23479-23496 [v2.10.3.15] PAProfileEnableControls:
+    //   //prevent profile switch during a tx
+    //   //user can only tweak the NUD's
+    // The list, the active name, another profile and a remove are the
+    // profile controls Thetis greys; only the active profile's values stay.
+    const PaProfileManager* const bank = m_paProfileManager;
+    const QString profilePrefix = QStringLiteral("profile/");
+    const QString name = rest.startsWith(profilePrefix) ? rest.mid(profilePrefix.size())
+                                                        : QString();
+    const int txBand = paOnAirBandIndex();
+    if (value == nullptr || bank == nullptr || bank->activeProfile() == nullptr
+        || name.isEmpty() || name != bank->activeProfileName() || txBand < 0) {
+        return paOnAirLockedReason();
+    }
+    PaProfile incoming;
+    if (!incoming.dataFromString(*value)) {
+        return paOnAirLockedReason();
+    }
+    // From Thetis setup.cs:24169-24192 [v2.10.3.15] enabledAllPAnuds:
+    //   // ignore current band
+    //   if (b != _adjustingBand) c.Enabled = false;
+    if (paProfilesDifferOutsideBand(incoming, *bank->activeProfile(), txBand)) {
+        return paOnAirLockedReason();
+    }
+    if (const QString refusal = paOnAirEditRefusal(false, txBand, requesterHoldsTransmit);
+        !refusal.isEmpty()) {
+        return refusal;
+    }
+    // The key's text is not clamped on the way in (PaProfile::dataFromString)
+    // and applyPaSettingOnAir drives the radio from it: the phone verbs'
+    // range checks apply here too.
+    return paRowRangeRefusal(incoming, *bank->activeProfile(), txBand);
+}
+
+void RadioModel::applyPaSettingOnAir(const QString& key, const QString& value)
+{
+    QString rest;
+    PaProfileManager* const bank = m_paProfileManager;
+    if (!paKeyRest(key, currentRadioMac(), &rest) || !paOnAirNow()
+        || bank == nullptr || bank->activeProfile() == nullptr
+        || rest != QStringLiteral("profile/") + bank->activeProfileName()) {
+        return;
+    }
+    const int txBand = paOnAirBandIndex();
+    PaProfile incoming;
+    if (txBand < 0 || !incoming.dataFromString(value)) {
+        return;
+    }
+    const PaProfile before = *bank->activeProfile();
+    if (!bank->saveProfile(bank->activeProfileName(), incoming)) {
+        return;
+    }
+    // What Thetis does after each value box's change on the transmitting
+    // band (applyPaEditOnAir): a gain re-applies the drive, an adjust moves
+    // the drive to its step. A window changes one box at a time.
+    const Band band = static_cast<Band>(txBand);
+    if (incoming.getGainForBand(band) != before.getGainForBand(band)) {
+        applyPaEditOnAir(PaProfileAction::SetGain, -1);
+    }
+    for (int step = 0; step < PaProfile::kDriveSteps; ++step) {
+        if (incoming.getAdjust(band, step) != before.getAdjust(band, step)) {
+            applyPaEditOnAir(PaProfileAction::SetAdjust, step);
+        }
+    }
+}
+
 bool RadioModel::stationOnAirRefusal(QString* reason) const
 {
     // On the air: MOX (the controller's or the transmit model's), TUNE, or
@@ -5702,8 +6200,20 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     if (m_role != Role::Local || bank == nullptr || bank->activeProfile() == nullptr) {
         return fail(QStringLiteral("The Core has no PA profiles for a radio."));
     }
-    if (stationOnAirRefusal(reason)) {
-        return false;
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): on the air only the
+    // transmitting band's values, from the device that holds transmit.
+    const bool onAir = paOnAirNow();
+    if (onAir) {
+        const bool profileAction = request.action == PaProfileAction::Select
+            || request.action == PaProfileAction::New
+            || request.action == PaProfileAction::Copy
+            || request.action == PaProfileAction::Delete
+            || request.action == PaProfileAction::Reset;
+        const QString refusal = paOnAirEditRefusal(profileAction, request.band,
+                                                   request.requesterHoldsTransmit);
+        if (!refusal.isEmpty()) {
+            return fail(refusal);
+        }
     }
     const HPSDRModel model = m_hardwareProfile.model;
     const QString active = bank->activeProfileName();
@@ -5724,14 +6234,10 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         }
         return {};
     };
-    // The page's spin boxes, which hold one decimal place:
-    //   gain   From Thetis setup.designer.cs:48537-48546 [v2.10.3.13] nudVHF1
-    //          Maximum = 100, Minimum = 38.8 (and the 24 sibling boxes)
-    //   adjust -10 .. 10 dB (PaGainByBandPage's drive-step matrix)
-    //   max    From Thetis nudMaxPowerForBandPA [v2.10.3.13]: 0 .. 1500 W,
-    //          one decimal (setup.designer.cs:47541)
+    // The page's spin boxes, which hold one decimal place
+    // (paValueRangeRefusal).
     const double rounded = std::round(request.value * 10.0) / 10.0;
-    const bool finite = std::isfinite(request.value);
+    const QString rangeRefusal = paValueRangeRefusal(request.action, request.value);
     const bool bandOk = request.band >= 0 && request.band < PaProfile::kBandCount;
     const Band band = static_cast<Band>(bandOk ? request.band : 0);
 
@@ -5807,8 +6313,8 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     PaProfile edited = *bank->activeProfile();
     switch (request.action) {
     case PaProfileAction::SetGain:
-        if (!finite || rounded < 38.8 || rounded > 100.0) {
-            return fail(QStringLiteral("Choose a PA gain from 38.8 to 100 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setGainForBand(band, static_cast<float>(rounded));
         break;
@@ -5816,14 +6322,14 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
         if (request.step < 0 || request.step >= PaProfile::kDriveSteps) {
             return fail(QStringLiteral("Choose a drive step from 10% to 90%."));
         }
-        if (!finite || rounded < -10.0 || rounded > 10.0) {
-            return fail(QStringLiteral("Choose a drive-step adjust from -10 to 10 dB."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setAdjust(band, request.step, static_cast<float>(rounded));
         break;
     case PaProfileAction::SetMaxPower:
-        if (!finite || rounded < 0.0 || rounded > 1500.0) {
-            return fail(QStringLiteral("Choose a max power from 0 to 1500 W."));
+        if (!rangeRefusal.isEmpty()) {
+            return fail(rangeRefusal);
         }
         edited.setMaxPower(band, static_cast<float>(rounded));
         break;
@@ -5833,8 +6339,80 @@ bool RadioModel::paProfileActionForStation(const PaProfileRequest& request, QStr
     default:
         break;
     }
-    return bank->saveProfile(active, edited)
-        || fail(QStringLiteral("The Core did not save the PA profile."));
+    if (!bank->saveProfile(active, edited)) {
+        return fail(QStringLiteral("The Core did not save the PA profile."));
+    }
+    if (onAir) {
+        applyPaEditOnAir(request.action, request.step);
+    }
+    return true;
+}
+
+// R-R3-49 / R-IOS-27: what Thetis does after an on-the-air PA edit, for the
+// Core's phone verbs, a window's profile key and the local page alike.
+void RadioModel::applyPaEditOnAir(PaProfileAction action, int step)
+{
+    // Only while MOX is on (paOnAirNow): an edit made after MOX drops, in
+    // the controller's TX to RX handover, is an off-air edit.
+    if (!paOnAirNow()) {
+        return;
+    }
+    switch (action) {
+    case PaProfileAction::SetGain:
+        // From Thetis setup.cs:23351-23352 [v2.10.3.15] nudPAProfileGain_ValueChanged:
+        //   if (p.GetGainForBand(b) != fOld) console.PWR = console.PWR; // update the power, which causes these gain values to be queried
+        // The PWR setter runs ptbPWR_Scroll whatever the tx mode, so a gain
+        // edit during TUNE or the two-tone test recomputes their drive too,
+        // and saves the band's power as ptbPWR_Scroll does.
+        drivePowerScroll();
+        break;
+    case PaProfileAction::SetAdjust: {
+        if (step < 0 || step >= PaProfile::kDriveSteps) {
+            break;
+        }
+        // From Thetis setup.cs:24210-24222 [v2.10.3.15] nudAdjustGain_ValueChanged:
+        //   p.SetAdjust(_adjustingBand, nNumber / 10, (float)nud.Value);
+        //   if (console.MOX)
+        //   {
+        //       switch (console.TuneDrivePowerOrigin)
+        //       {
+        //           case DrivePowerSource.DRIVE_SLIDER:
+        //               console.PWR = nNumber + 10; // set drive to the value we are adjusting
+        //               break;
+        //           case DrivePowerSource.TUNE_SLIDER:
+        //               console.TunePWR = nNumber + 10;
+        //               break;
+        //       }
+        //   }
+        // nNumber is 0 for the 10% step, so the drive is (step + 1) * 10.
+        const int drive = (step + 1) * 10;
+        switch (m_transmitModel.tuneDrivePowerSource()) {
+        case DrivePowerSource::DriveSlider:
+            // The PWR setter runs ptbPWR_Scroll once, whatever the tx mode,
+            // and the adjust itself changed: at the same slider value the
+            // scroll still runs (setPower emits, and so scrolls, only on a
+            // change).
+            if (m_transmitModel.power() == drive) {
+                drivePowerScroll();
+            } else {
+                m_transmitModel.setPower(drive); // set drive to the value we are adjusting
+            }
+            break;
+        case DrivePowerSource::TuneSlider:
+            refreshTransmitTuneBand();
+            m_transmitModel.setTunePowerForTxBand(drive);
+            break;
+        case DrivePowerSource::Fixed:
+            break;
+        }
+        break;
+    }
+    default:
+        // Max power and use-max change Thetis's labels only
+        // (nudMaxPowerForBandPA_ValueChanged, setup.cs:24248-24262
+        // [v2.10.3.15]); the next drive computation reads them.
+        break;
+    }
 }
 
 bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
@@ -5858,16 +6436,131 @@ bool RadioModel::resetRadeVocoderForStation(QString* reason, bool takenOnAir)
     return true;
 }
 
-// The band the Core transmits on, as the TUNE path reads it (the transmit
-// slice's frequency, else the last band), for tunePowerForTxBand.
+// The band the Core transmits on (the transmit slice's frequency, else the
+// last band) through applyTransmitBand: PWR's band, and the TUNE path's for
+// tunePowerForTxBand.
 void RadioModel::refreshTransmitTuneBand()
 {
     if (m_role != Role::Local) {
         return;
     }
+    applyTransmitBand(transmitSliceBand(), /*initializing=*/false);
+}
+
+Band RadioModel::transmitSliceBand() const
+{
     const SliceModel* const txSlice = txBoundSlice();
-    m_transmitModel.setTuneTxBand(txSlice ? bandFromFrequency(txSlice->frequency())
-                                          : m_lastBand);
+    return txSlice ? bandFromFrequency(txSlice->frequency()) : m_lastBand;
+}
+
+// From Thetis console.cs:17511-17545 [v2.10.3.15] TXBand setter:
+//   //[2.10.3.6]MW0LGE no band change on TX fix
+//   if (MOX) return;
+//   Band old_band = _tx_band;
+//   if (initializing) old_band = value; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+//   _tx_band = value;
+//   if (_tx_band != old_band || initializing)
+//   {
+//       int old_pwr = ptbPWR.Value;
+//       if (initializing) old_pwr = power_by_band[(int)old_band]; // ... MW0LGE
+//       power_by_band[(int)old_band] = old_pwr;
+//       ptbPWR.LimitValue = limitPower_by_band[(int)value];
+//       ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+//       PWR = power_by_band[(int)value];
+//       TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+//       // save FM TX Offset
+//       if (!initializing)
+//       {
+//           fm_tx_offset_by_band_mhz[(int)old_band] = fm_tx_offset_mhz;
+//       }
+//       FMTXOffsetMHz = fm_tx_offset_by_band_mhz[(int)value]; //MW0LGE_21k9
+//   }
+// TunePWR is TransmitModel::setTuneTxBand, inside the same MOX guard: a
+// retune while keyed (TUNE keys MOX) holds the tune power too.
+// The rest of the setter (the 60 m TX filter save and restore,
+// DisplayAriesTXAntenna and TXBandChangeHandlers) is not power and is not
+// ported here.
+void RadioModel::applyTransmitBand(Band band, bool initializing)
+{
+    if (m_role != Role::Local) {
+        return;
+    }
+    //[2.10.3.6]MW0LGE no band change on TX fix
+    if (m_moxController && m_moxController->isMox()) {
+        return;
+    }
+
+    // Upstream's _tx_band starts unset (GEN) and its first real value comes
+    // with initializing. The first band seen here is that value: PWR loads
+    // the band's stored power, so the next save (drivePowerScroll, the
+    // start-of-transmit restore) writes back what was loaded, never a PWR
+    // that belongs to no band. The connect-time call loads it again once
+    // the per-MAC store is in.
+    if (!m_txBandKnown) {
+        initializing = true;
+    }
+    Band oldBand = m_txBandKnown ? m_txBand : band;
+    if (initializing) {
+        oldBand = band; // we cant use tx_band, because it is unset (GEN), unless we save it out it is irrelevant MW0LGE
+    }
+    const bool bandMoved = !m_txBandKnown || m_txBand != band;
+    m_txBand = band;
+    m_txBandKnown = true;
+    // OnTXBandChanged (setup.cs:23835-23839 [v2.10.3.15]) moves the PA
+    // page's adjusting band (setAdjustingBand(newBand);
+    // lblTXattBand.Text = newBand.ToString(); //[2.3.10.6]MW0LGE added (also in ATTOnTX));
+    // paOnAirBandIndex readers follow this.
+    if (bandMoved) {
+        emit transmitBandChanged();
+    }
+
+    // From Thetis console.cs:17525-17528 [v2.10.3.15]:
+    //   Band lo_band = Band.FIRST;
+    //   if (tx_xvtr_index >= 0)
+    //       // Fix Penny O/C VHF control Vk4xv
+    //       lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+    // lo_band is never read again in the setter, so the lookup changes
+    // nothing here. NereusSDR has no transverter form to translate through
+    // (the XVTR band is Band::XVTR, a per-band state slot of its own).
+
+    if (band == oldBand && !initializing) {
+        return;
+    }
+
+    // save values for old band
+    int oldPwr = m_transmitModel.power();
+    if (initializing) {
+        oldPwr = m_transmitModel.powerForBand(oldBand); // we cant use what is set on the trackbar if we are initialisting, becase it is irrelevent, old_band will = value at this point MW0LGE
+    }
+    m_transmitModel.setPowerForBand(oldBand, oldPwr);
+
+    // ptbPWR.LimitValue = limitPower_by_band[(int)value];
+    // ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setPowerLimit(m_transmitModel.limitPowerForBand(band));
+    m_transmitModel.setTunePowerLimit(
+        m_transmitModel.limitTunePowerForBand(band));
+
+    // PWR = power_by_band[(int)value]; powerChanged runs drivePowerScroll,
+    // which recomputes the drive and saves the same value to m_txBand.
+    // The PWR setter (console.cs:18437-18448 [v2.10.3.15]) runs
+    // ptbPWR_Scroll even when the value is unchanged, so the new band's
+    // limit and gain reach the drive; setPower only signals a change.
+    const int newPwr = m_transmitModel.powerForBand(band);
+    if (m_transmitModel.power() == newPwr) {
+        drivePowerScroll();
+    } else {
+        m_transmitModel.setPower(newPwr);
+    }
+    // TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+    m_transmitModel.setTuneTxBand(band);
+
+    // save FM TX Offset
+    if (!initializing) {
+        m_transmitModel.setFmTxOffsetForBandMhz(
+            oldBand, m_transmitModel.fmTxOffsetMhz());
+    }
+    m_transmitModel.setFmTxOffsetMhz(
+        m_transmitModel.fmTxOffsetForBandMhz(band)); //MW0LGE_21k9
 }
 
 // ---------------------------------------------------------------------------
@@ -7318,6 +8011,18 @@ void RadioModel::updateCoreOnAir()
 void RadioModel::clearRemoteTransmittingState()
 {
     if (m_role != Role::Remote) { return; }
+    // PA on-air gate re-review, Important C: the Core's PA row too, so the
+    // next Core (perhaps an older one that never sends it) starts from the
+    // window's own fallback.
+    if (m_stationPaTransmitBandKnown) {
+        const int before = paOnAirBandIndex();
+        m_stationPaTransmitBandKnown = false;
+        m_stationPaTransmitBand = -1;
+        if (paOnAirBandIndex() != before) {
+            emit paTransmitBandChanged(paOnAirBandIndex());
+            emit transmitBandChanged();
+        }
+    }
     // R-R3-49 (parity Task 6): the Core's TX inhibit too.
     if (m_remoteTxInhibited) {
         m_remoteTxInhibited = false;
@@ -8946,6 +9651,11 @@ QString RadioModel::hfPaSwitchUnavailableReason()
     return QStringLiteral("This radio cannot switch off its HF PA from here.");
 }
 
+QString RadioModel::lpfBypassUnavailableReason()
+{
+    return QStringLiteral("This radio does not have the 6m low-pass bypass on receive.");
+}
+
 // The HL2 options a Hermes Lite 2 takes on the wire, pushed whole to the
 // P1 connection on its own thread (each setter is idempotent):
 //   Band Volts and Disable PS Sync, bank 0 C3 bits 3 and 4
@@ -8960,6 +9670,20 @@ QString RadioModel::hfPaSwitchUnavailableReason()
 //   Reset on Ethernet disconnect, bank 18 C4
 //     From mi0bot Console/setup.cs:21257-21262 [@c26a8a4]:
 //       // MI0BOT: Controls if the HL2 will reset after an Ethernet disconnect
+//   External 10 MHz, Enable CL2 and CL2 frequency, the clock chip over I2C
+//   (P1RadioConnection::setHl2Clock)
+//     From mi0bot Console/setup.cs:21732-21756 [@c26a8a4]:
+//       // MI0BOT: Support for HL2 Cl2 clock output
+//       // MI0BOT: Support for HL2 10MHz clock input
+void RadioModel::connectHl2OptionsToConnection()
+{
+    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+        applyHl2Options();
+        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
+                [this]() { applyHl2Options(); });
+    }
+}
+
 void RadioModel::applyHl2Options()
 {
     auto* p1 = qobject_cast<P1RadioConnection*>(m_connection);
@@ -8971,13 +9695,17 @@ void RadioModel::applyHl2Options()
     const int txLatencyMs = m_hl2Options.txLatencyMs();
     const int pttHangMs = m_hl2Options.pttHangMs();
     const bool resetOnDisconnect = m_hl2Options.disconnectReset();
+    const bool ext10MHz = m_hl2Options.ext10MHz();
+    const bool cl2Enabled = m_hl2Options.cl2Enabled();
+    const int cl2FreqKHz = m_hl2Options.cl2FreqKHz();
     QMetaObject::invokeMethod(p1, [p1, bandVolts, psSync, txLatencyMs, pttHangMs,
-                                   resetOnDisconnect]() {
+                                   resetOnDisconnect, ext10MHz, cl2Enabled, cl2FreqKHz]() {
         p1->setHl2BandVolts(bandVolts);
         p1->setHl2PsSync(psSync);
         p1->setHl2TxLatency(txLatencyMs);
         p1->setHl2PttHang(pttHangMs);
         p1->setHl2ResetOnDisconnect(resetOnDisconnect);
+        p1->setHl2Clock(ext10MHz, cl2Enabled, cl2FreqKHz);
     });
 }
 
@@ -9035,6 +9763,13 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // Follow-up 3: the command is over, so no page's claim on it remains
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
+    // Level Cal: the Core refused the start this window sent.
+    if (commandId != 0 && commandId == m_levelCalStartCommandId) {
+        m_levelCalStartCommandId = 0;
+        if (!accepted) {
+            emit levelCalibrationRefused(reason);
+        }
+    }
     emit stationCommandFinished(commandId, accepted, reason);
 }
 
@@ -9112,23 +9847,252 @@ double RadioModel::rxMeterOffsetDb() const
     return rxPreampOffsetDb() + rxMeterCalOffsetDb() + rx6mGainOffsetDb();
 }
 
+namespace {
+const QString kRx1MeterCalOffsetKey = QStringLiteral("RX1_MeterCalOffsetDb");
+const QString kRx1DisplayCalOffsetKey = QStringLiteral("RX1_DisplayCalOffsetDb");
+// Thetis rx_meter_cal_offset_by_radio[] and rx_display_cal_offset_by_radio[]
+// (console.cs:196-197 [v2.10.3.15]): one entry per HPSDRModel, `|` joined
+// as Thetis saves them (console.cs:3183-3193 [v2.10.3.15]). An empty
+// entry reads the model's factory default.
+const QString kRxMeterCalByRadioKey = QStringLiteral("RxMeterCalOffsetDbByRadio");
+const QString kRxDisplayCalByRadioKey = QStringLiteral("RxDisplayCalOffsetDbByRadio");
+constexpr int kModelCount = static_cast<int>(HPSDRModel::LAST);
+
+using CalByRadio = std::array<std::optional<float>, static_cast<size_t>(HPSDRModel::LAST)>;
+
+CalByRadio readCalByRadio(const QString& key)
+{
+    CalByRadio out{};
+    const QStringList list = AppSettings::instance().value(key).toString().split(QLatin1Char('|'));
+    // From Thetis console.cs:4974-4986 [v2.10.3.15]:
+    //   //[2.10.3.7]MW0LGE changed to <= from == so that if a new radio model is added, we will still use the data for the existing radios.
+    //   //This assumes the new radio model is added to the end of the HPSDRModel list. If a model is remove this will cause issues.
+    //   if (numVals <= (int)HPSDRModel.LAST)  //-W2PA  The number of rig types in the imported DB matches the number in this version
+    //   }  //-W2PA  else the number has changed so don't import, leave the defaults alone
+    if (list.size() > kModelCount) {
+        return out;
+    }
+    for (int i = 0; i < list.size(); ++i) {
+        bool ok = false;
+        const float v = list.at(i).toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            out[static_cast<size_t>(i)] = v;
+        }
+    }
+    return out;
+}
+
+void writeCalByRadio(const QString& key, const CalByRadio& values)
+{
+    QStringList parts;
+    parts.reserve(kModelCount);
+    bool any = false;
+    for (const std::optional<float>& v : values) {
+        parts.append(v.has_value() ? QString::number(static_cast<double>(*v), 'f', 6) : QString());
+        any = any || v.has_value();
+    }
+    if (any) {
+        AppSettings::instance().setValue(key, parts.join(QLatin1Char('|')));
+    } else {
+        AppSettings::instance().remove(key);
+    }
+}
+
+int modelSlot(HPSDRModel model)
+{
+    const int i = static_cast<int>(model);
+    return (i >= 0 && i < kModelCount) ? i : -1;
+}
+
+// The model's own entry; before the per-model keys exist (a value saved by
+// an earlier build, or an older Core's), the one saved value.
+std::optional<float> calOverrideFor(const QString& byRadioKey, const QString& legacyKey,
+                                    HPSDRModel model)
+{
+    AppSettings& s = AppSettings::instance();
+    if (s.contains(byRadioKey)) {
+        const int slot = modelSlot(model);
+        return slot < 0 ? std::nullopt : readCalByRadio(byRadioKey)[static_cast<size_t>(slot)];
+    }
+    if (s.contains(legacyKey)) {
+        bool ok = false;
+        const float v = s.value(legacyKey).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            return v;
+        }
+    }
+    return std::nullopt;
+}
+}  // namespace
+
+std::optional<double> RadioModel::rxMeterCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
+std::optional<double> RadioModel::rxDisplayCalOverrideDb() const
+{
+    const std::optional<float> v =
+        calOverrideFor(kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey, m_hardwareProfile.model);
+    return v.has_value() ? std::optional<double>(static_cast<double>(*v)) : std::nullopt;
+}
+
 double RadioModel::rxMeterCalOffsetDb() const
 {
-    const HPSDRModel model = m_hardwareProfile.model;
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1MeterCalOffset = rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // The connected model's entry, or its factory default
+    // (RXMeterCalbrationOffsetDefaults, clsHardwareSpecific.cs:408-423
+    // [v2.10.3.15]).
+    const std::optional<double> saved = rxMeterCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxMeterCalOffsetDefaultFor(m_hardwareProfile.model));
+}
 
-    // Per-radio factory cal default + user override (AppSettings key
-    // RX1_MeterCalOffsetDb).  Default = Thetis factory value per model.
-    const float factoryDefault = ::NereusSDR::rxMeterCalOffsetDefaultFor(model);
-    bool keyOk = false;
-    const double userOverride = AppSettings::instance()
-        .value(QStringLiteral("RX1_MeterCalOffsetDb"),
-               QString::number(static_cast<double>(factoryDefault), 'f', 6))
-        .toString()
-        .toDouble(&keyOk);
-    const float meterCalOffset = keyOk
-        ? static_cast<float>(userOverride)
-        : factoryDefault;
-    return static_cast<double>(meterCalOffset);
+double RadioModel::rxDisplayCalOffsetDb() const
+{
+    // From Thetis console.cs:996-997 [v2.10.3.15]:
+    //   RX1DisplayCalOffset = rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt];
+    // absent, the model's factory default (RXDisplayCalbrationOffsetDefauls,
+    // clsHardwareSpecific.cs:424-440 [v2.10.3.15]).
+    const std::optional<double> saved = rxDisplayCalOverrideDb();
+    return saved.has_value()
+        ? *saved
+        : static_cast<double>(::NereusSDR::rxDisplayCalOffsetDefaultFor(m_hardwareProfile.model));
+}
+
+void RadioModel::writeLevelCalOverride(bool meter, std::optional<double> db)
+{
+    const QString& key = meter ? kRxMeterCalByRadioKey : kRxDisplayCalByRadioKey;
+    const QString& legacy = meter ? kRx1MeterCalOffsetKey : kRx1DisplayCalOffsetKey;
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return;
+    }
+    // Start from what the model reads now, so a value saved by an earlier
+    // build stays with the model that was connected.
+    foldLegacyLevelCal();
+    CalByRadio values = readCalByRadio(key);
+    // From Thetis console.cs:10182 and 10190 [v2.10.3.15]:
+    //   rx_meter_cal_offset_by_radio[HardwareSpecific.ModelInt] = _rx1_meter_cal_offset;  // MW0LGE_[2.9.0.7] re-instated
+    //   rx_display_cal_offset_by_radio[HardwareSpecific.ModelInt] = RX1DisplayCalOffset;
+    values[static_cast<size_t>(slot)] = db.has_value()
+        ? std::optional<float>(static_cast<float>(*db)) : std::nullopt;
+    writeCalByRadio(key, values);
+    AppSettings::instance().remove(legacy);
+}
+
+void RadioModel::setRxMeterCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(true, db);
+    applyLevelCalibrationSetting(kRxMeterCalByRadioKey);
+}
+
+void RadioModel::setRxDisplayCalOverrideDb(std::optional<double> db)
+{
+    writeLevelCalOverride(false, db);
+    applyLevelCalibrationSetting(kRxDisplayCalByRadioKey);
+}
+
+bool RadioModel::foldLegacyLevelCal()
+{
+    // A value saved under the one key of an earlier build (or written by an
+    // older window) belongs to the model connected now: move it to that
+    // model's entry, keeping every other model's.
+    if (m_role == Role::Remote) {
+        return false;
+    }
+    const int slot = modelSlot(m_hardwareProfile.model);
+    if (slot < 0) {
+        return false;
+    }
+    AppSettings& s = AppSettings::instance();
+    bool moved = false;
+    for (const auto& [byRadio, legacy] : { std::pair{ kRxMeterCalByRadioKey, kRx1MeterCalOffsetKey },
+                                           std::pair{ kRxDisplayCalByRadioKey, kRx1DisplayCalOffsetKey } }) {
+        if (!s.contains(legacy)) {
+            continue;
+        }
+        bool ok = false;
+        const float v = s.value(legacy).toString().toFloat(&ok);
+        if (ok && std::isfinite(v)) {
+            CalByRadio values = readCalByRadio(byRadio);
+            values[static_cast<size_t>(slot)] = v;
+            writeCalByRadio(byRadio, values);
+        }
+        s.remove(legacy);
+        moved = true;
+    }
+    return moved;
+}
+
+bool RadioModel::applyLevelCalibrationSetting(const QString& key)
+{
+    // From Thetis console.cs:21089-21099 [v2.10.3.15]:
+    //   // Added 6/11/05 BT to support CAT //[2.10.3.11]MW0LGE included setter
+    //   public float RX1MeterCalOffset { ... set { ...
+    //       if (_rx1_meter_cal_offset != oldData) MeterCalOffsetChangedHandlers?.Invoke(1, ...); } }
+    // and RX1DisplayCalOffset (console.cs:21113-21122 [v2.10.3.15]) fires
+    // DisplayOffsetChangedHandlers the same way. The meter offset moves
+    // the meter and the panadapter (refreshRxMeterOffset); the display
+    // offset reaches TCI only (levelCalibrationChanged).
+    if (key != kRx1MeterCalOffsetKey && key != kRx1DisplayCalOffsetKey
+        && key != kRxMeterCalByRadioKey && key != kRxDisplayCalByRadioKey) {
+        return false;
+    }
+    // A window that writes the one-value key of an earlier build: the
+    // value goes to the connected model's entry.
+    if (key == kRx1MeterCalOffsetKey || key == kRx1DisplayCalOffsetKey) {
+        foldLegacyLevelCal();
+    }
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+    return true;
+}
+
+void RadioModel::resetLevelCalibration()
+{
+    // From Thetis console.cs:46868-46886 [v2.10.3.15] (ResetLevelCalibration):
+    //   rx_meter_cal_offset_by_radio[i] = HardwareSpecific.RXMeterCalbrationOffsetDefaults((HPSDRModel)i);
+    //   rx_display_cal_offset_by_radio[i] = HardwareSpecific.RXDisplayCalbrationOffsetDefauls((HPSDRModel)i);
+    //   RX1MeterCalOffset = ...; RX1DisplayCalOffset = ...;
+    //   UpdateRX1DisplayOffsets(); UpdateRX2DisplayOffsets();
+    // Every model's entry goes back to its default: removing the keys does
+    // that, since an absent entry reads the model's factory default.
+    AppSettings& settings = AppSettings::instance();
+    settings.remove(kRxMeterCalByRadioKey);
+    settings.remove(kRxDisplayCalByRadioKey);
+    settings.remove(kRx1MeterCalOffsetKey);
+    settings.remove(kRx1DisplayCalOffsetKey);
+    refreshRxMeterOffset();
+    emit levelCalibrationChanged();
+}
+
+bool RadioModel::levelCalibrationResetAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationResetAvailable();
+}
+
+QString RadioModel::requestResetLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        resetLevelCalibration();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration reset"));
+    }
+    if (!m_station->levelCalibrationResetAvailable()) {
+        return IStationLink::levelCalibrationResetUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestResetLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
 }
 
 double RadioModel::rxPreampOffsetDbForAdc(int adc) const
@@ -9152,15 +10116,117 @@ double RadioModel::rxPreampOffsetDbForAdc(int adc) const
     //       {
     //           fOffset = _rx2_step_att_enabled ? (float)rx2_attenuator_data : rx2_preamp_offset[(int)rx2_preamp_mode];
     //       }
-    // RX2 has its own step attenuator enable (_rx2_step_att_enabled). The
-    // second ADC's preamp is one switch (rx1Preamp): rx2_preamp_offset
-    // HPSDR_ON 0 dB, HPSDR_OFF 20 dB (console.cs:2011-2013 [v2.10.3.15]), the
-    // same two entries rxPreampOffsetDbFor holds for RX1.
+    // RX2 has its own step attenuator enable (_rx2_step_att_enabled) and,
+    // since the Level Cal fix wave, its own preamp mode (rx2_preamp_mode).
     if (m_stepAttController->rx2StepAttEnabled()) {
         return static_cast<double>(m_stepAttController->attenuatorDbForAdc(adc));
     }
-    const PreampMode rx2Preamp = m_stepAttController->rx1Preamp() ? PreampMode::On : PreampMode::Off;
-    return static_cast<double>(::NereusSDR::rxPreampOffsetDbFor(static_cast<int>(rx2Preamp)));
+    const PreampMode rx2Preamp = m_stepAttController->rx2PreampMode();
+    // Level Cal: rx2_preamp_offset[] as CalibrateLevel left it.
+    return static_cast<double>(rx2PreampOffsetDbFor(rx2Preamp));
+}
+
+namespace {
+const QString kRx1PreampOffsetsKey = QStringLiteral("RX1_PreampOffsetsDb");
+constexpr int kPreampModeCount = 10;
+
+// Thetis rx2_preamp_offset[] defaults.
+// From Thetis console.cs:2011-2019 [v2.10.3.15]:
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_OFF] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_ON] = 0.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS10] = 10.0f;
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS20] = 20.0f;  //MW0LGE_21d step atten
+//   rx2_preamp_offset[(int)PreampMode.HPSDR_MINUS30] = 30.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS10] = 10.0f;  //MW0LGE_21d SA stuff
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS20] = 20.0f;
+//   rx2_preamp_offset[(int)PreampMode.SA_MINUS30] = 30.0f;
+// HPSDR_MINUS40 and HPSDR_MINUS50 are never set, so they stay 0.
+float rx2PreampOffsetDefault(int idx)
+{
+    if (idx == static_cast<int>(PreampMode::Minus40)
+        || idx == static_cast<int>(PreampMode::Minus50)) {
+        return 0.0f;
+    }
+    return ::NereusSDR::rxPreampOffsetDbFor(idx);
+}
+
+// The saved RX1 list, or Thetis's defaults when it is absent or is not
+// ten numbers.
+std::array<float, kPreampModeCount> readRx1PreampOffsets()
+{
+    std::array<float, kPreampModeCount> out{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        out[static_cast<size_t>(i)] = ::NereusSDR::rxPreampOffsetDbFor(i);
+    }
+    const QString raw = AppSettings::instance().value(kRx1PreampOffsetsKey).toString();
+    if (raw.isEmpty()) {
+        return out;
+    }
+    const QStringList parts = raw.split(QLatin1Char('|'));
+    if (parts.size() != kPreampModeCount) {
+        return out;
+    }
+    std::array<float, kPreampModeCount> saved{};
+    for (int i = 0; i < kPreampModeCount; ++i) {
+        bool ok = false;
+        const double v = parts.at(i).trimmed().toDouble(&ok);
+        if (!ok || !std::isfinite(v)) {
+            return out;
+        }
+        saved[static_cast<size_t>(i)] = static_cast<float>(v);
+    }
+    return saved;
+}
+}  // namespace
+
+float RadioModel::rx1PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    return readRx1PreampOffsets()[static_cast<size_t>(idx)];
+}
+
+float RadioModel::rx2PreampOffsetDbFor(PreampMode mode) const
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount) {
+        return 0.0f;
+    }
+    const float held = m_rx2PreampOffsetDb[static_cast<size_t>(idx)];
+    return std::isnan(held) ? rx2PreampOffsetDefault(idx) : held;
+}
+
+void RadioModel::setRx1PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    // From Thetis console.cs:3202-3203 [v2.10.3.15]:
+    //   for (int i = (int)PreampMode.FIRST + 1; i < (int)PreampMode.LAST; i++)
+    //       a.Add("rx1_preamp_offset[" + i.ToString() + "]/" + rx1_preamp_offset[i].ToString("f3"));
+    // and the load rounds to three places (console.cs:4781-4785 [v2.10.3.15]).
+    std::array<float, kPreampModeCount> values = readRx1PreampOffsets();
+    values[static_cast<size_t>(idx)] = db;
+    QStringList parts;
+    parts.reserve(kPreampModeCount);
+    for (float v : values) {
+        parts.append(QString::number(static_cast<double>(v), 'f', 3));
+    }
+    AppSettings::instance().setValue(kRx1PreampOffsetsKey, parts.join(QLatin1Char('|')));
+    refreshRxMeterOffset();
+}
+
+void RadioModel::setRx2PreampOffsetDb(PreampMode mode, float db)
+{
+    const int idx = static_cast<int>(mode);
+    if (idx < 0 || idx >= kPreampModeCount || !std::isfinite(db)) {
+        return;
+    }
+    m_rx2PreampOffsetDb[static_cast<size_t>(idx)] = db;
+    refreshRxMeterOffset();
 }
 
 double RadioModel::rxMeterOffsetDbForAdc(int adc) const
@@ -9227,7 +10293,8 @@ double RadioModel::rxPreampOffsetDb() const
             // Preamp-mode path: lookup table per console.cs:1991-2001.
             const int modeIdx = static_cast<int>(
                 m_stepAttController->preampMode());
-            preampOffset = ::NereusSDR::rxPreampOffsetDbFor(modeIdx);
+            // Level Cal: rx1_preamp_offset[] as CalibrateLevel left it.
+            preampOffset = rx1PreampOffsetDbFor(static_cast<PreampMode>(modeIdx));
         }
     }
 
@@ -9866,6 +10933,10 @@ bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
         return false;
     }
     if (role() == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            if (reason) { *reason = slice->readOnlyListenerReason(); }
+            return false;
+        }
         const auto result = m_station ? m_station->requestNnrDiagnostics(sliceId, testMode, outputMode)
             : IStationLink::CommandOutcome{false, tr("This app is not connected to the Core.")};
         if (reason) { *reason = result.reason; }
@@ -11138,6 +12209,18 @@ QVector<int> RadioModel::allowedStreamSampleRates() const
     return out;
 }
 
+bool RadioModel::holdSliceRequestForListener(int sliceId)
+{
+    // Slice control plan Task 5. The Core refuses these from a listener as
+    // it refuses any change; holding them here keeps the window from
+    // showing a change that never happened.
+    if (m_role != Role::Remote) {
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    return slice != nullptr && slice->holdForListener();
+}
+
 // Codex review round 7, PR #293. See RadioModel.h.
 void RadioModel::applyRestoredSampleRate(SliceModel* slice)
 {
@@ -11227,6 +12310,9 @@ void RadioModel::applySavedSliceSampleRates(const QHash<int, int>& saved,
 bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(QStringLiteral("the C-Tune pin change")));
             return false;
@@ -11249,6 +12335,9 @@ bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
 bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
 {
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return false;
+        }
         if (m_station == nullptr) {
             emit sliceRetuneRejected(sliceId,
                 noStationReason(QStringLiteral("the C-Tune center change")));
@@ -11422,6 +12511,9 @@ void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
     // allocator) is the one worth putting in front of an operator. It
     // comes back through reportStationRetuneRejected().
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action =
             QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000);
         if (m_station == nullptr) {
@@ -12246,6 +13338,9 @@ void RadioModel::publishSliceAudioView()
         v.muted = s->muted();
         v.headphones = s->outputRoute() == SliceModel::OutputRoute::Headphones;
         v.vaxChannel = s->vaxChannel();
+        // Slice control plan Task 6: the AF level, applied in the mix to
+        // the controller's audio (JJ's ruling), 0..100 as 0..1.
+        v.afGain = static_cast<float>(std::clamp(s->afGain(), 0, 100)) / 100.0f;
     }
     for (int id = 0; id < AudioEngine::kMaxSliceAudioViews; ++id) {
         m_audioEngine->setSliceAudioView(id, views[static_cast<size_t>(id)]);
@@ -12438,7 +13533,25 @@ void RadioModel::clearNnrLimit(SliceModel* slice)
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
 {
     if (m_txSliceArbiter == nullptr) { return false; }
-    return m_txSliceArbiter->requestHandoff(sliceId);
+    // Slice control fix wave (whole-branch review, Minor 3): the Core's own
+    // window moves transmit only onto a slice it may carry transmit on, or
+    // one nobody is on (the station's rule, as StationTciController's);
+    // another device's slice, or one the window only listens to, is
+    // refused as the remote verb refuses it.
+    if (m_role == Role::Local && m_sliceOwnership != nullptr
+        && m_sliceOwnership->isLive(sliceId)
+        && !SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership,
+                                             SliceOwnership::stationDevice(), sliceId)
+        && !SliceAccessPolicy::stationMayChangeUnclaimed(*m_sliceOwnership, sliceId)) {
+        emit m_txSliceArbiter->handoffBlocked(sliceId,
+                                              QStringLiteral("That slice is another device's."));
+        return false;
+    }
+    if (!m_txSliceArbiter->requestHandoff(sliceId)) {
+        return false;
+    }
+    emit txSliceSelected(sliceId);
+    return true;
 }
 
 int RadioModel::addSlice(const QString& initialPanId)
@@ -12534,6 +13647,11 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // once, as an ordinary new slice does, instead of waiting for
     // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
+    // Slice control plan Task 5: a change held back on a slice a remote
+    // window only listens to is announced once, here, for the window.
+    connect(slice, &SliceModel::listenerWriteHeld, this, [this, slice](const QString& reason) {
+        emit sliceRequestHeldForListener(slice->sliceIndex(), reason);
+    });
     // Most persisted slice signals are wired by wireSliceSignals only once a
     // radio connects. A disconnected station still exposes writable receiver
     // properties, so track their edits while layout persistence is held.
@@ -12671,6 +13789,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     connect(slice, &SliceModel::outputRouteChanged, this,
             [this](SliceModel::OutputRoute) { publishSliceAudioView(); });
     connect(slice, &SliceModel::vaxChannelChanged, this, [this](int) { publishSliceAudioView(); });
+    connect(slice, &SliceModel::afGainChanged, this, [this](int) { publishSliceAudioView(); });
     publishSliceAudioView();
 
     // ── The transmitter needs a home the moment one exists ───────────────
@@ -12998,7 +14117,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         if (slice == txBoundSlice()) {
             pushTxFrequencyFromTxSlice();
             // R-R3-49 (parity Task 2): the transmit band's tune power.
-            refreshTransmitTuneBand();
+            // Slice control plan Task 11 fix: the band holds while the
+            // Core transmits (MOX, TUNE or two-tone), as Thetis's TXBand
+            // setter and SetTXBand refuse a change under MOX:
+            // From Thetis console.cs:17517-17518 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // From Thetis console.cs:6512-6513 [v2.10.3.15]
+            //     //[2.10.3.6]MW0LGE no band change on TX fix
+            //     if (MOX) return;
+            // Nothing re-evaluates on the unkey; the next retune carries
+            // the band, as in Thetis. A move of the binding is not gated:
+            // the arbiter unkeys before it moves transmit (ruling 8.10).
+            if (!isTransmitting()) {
+                refreshTransmitTuneBand();
+            }
         }
     });
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
@@ -13141,6 +14274,9 @@ void RadioModel::removeSlice(int sliceId)
     // STATION made. removeSliceWithStationId() is the door the session's
     // own inbound object.destroy comes through.
     if (m_role == Role::Remote) {
+        if (holdSliceRequestForListener(sliceId)) {
+            return;
+        }
         const QString action = QStringLiteral("the request to close this slice");
         if (m_station == nullptr) {
             emit sliceAddRejected(noStationReason(action));
@@ -13155,7 +14291,24 @@ void RadioModel::removeSlice(int sliceId)
     removeSliceImpl(sliceId);
 }
 
-void RadioModel::removeSliceImpl(int sliceId, bool persist)
+bool RadioModel::closeUnclaimedSlice(int sliceId)
+{
+    // Slice control plan Task 7: the claims rule. A slice closes when it has
+    // no controller and nobody on it, whatever the count.
+    if (m_role != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->unclaimed().contains(sliceId)) {
+        return false;
+    }
+    removeSliceImpl(sliceId, true, true);
+    return sliceById(sliceId) == nullptr;
+}
+
+bool RadioModel::hasTransmitSlice() const
+{
+    return txBoundSlice() != nullptr;
+}
+
+void RadioModel::removeSliceImpl(int sliceId, bool persist, bool mayCloseLast)
 {
     const int position = m_slices.indexOf(sliceById(sliceId));
     if (position < 0) {
@@ -13169,7 +14322,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // window's last slice when the window shares the Core as a device
     // (another device took its receiver); the window shows an empty band
     // that offers a take (the several-devices design, section 12).
-    if (m_slices.size() == 1
+    // Slice control plan Task 7: and the claims rule's close of an
+    // unclaimed slice (closeUnclaimedSlice), which may leave none.
+    if (m_slices.size() == 1 && !mayCloseLast
         && !(m_role == Role::Remote && m_stationMayCloseLastSlice)) {
         return;
     }
@@ -13202,7 +14357,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         // from being re-admitted on the victim's behalf.
         clearRadeRxTarget(m_radeRxTarget.ownerSerial);
     }
-    if (victim->isTxSlice() && m_txSliceArbiter) {
+    // Slice control plan Task 7: the last slice has no other slice to hand
+    // transmit to; the binding is released once it has left the list.
+    if (victim->isTxSlice() && m_txSliceArbiter && m_slices.size() > 1) {
         const int fallbackPosition = (position == 0) ? 1 : 0;
         SliceModel* fallback = m_slices.at(fallbackPosition);
         // iPhone app plan Task 77 (ruling 8.12): the holder's transmit slice
@@ -13215,7 +14372,7 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
                 for (int id : m_sliceOwnership->ownedBy(holder)) {
                     SliceModel* own = sliceById(id);
                     if (own != nullptr && own != victim
-                        && m_sliceOwnership->mark(id).subject() == holder) {
+                        && SliceAccessPolicy::mayTransmitOn(*m_sliceOwnership, holder, id)) {
                         fallback = own;
                         break;
                     }
@@ -13252,6 +14409,10 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // Reassert the invariant after the victim leaves the list.
     if (m_txSliceArbiter) {
         m_txSliceArbiter->syncToSliceList();
+        // Slice control plan Task 7: no slice left, so no transmit slice.
+        if (m_slices.isEmpty()) {
+            m_txSliceArbiter->releaseBinding();
+        }
     }
 
     // No explicit wideband push here. removeSlice reaches
@@ -14419,11 +15580,27 @@ void RadioModel::refreshFreedvReportedFrequency()
 
 bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
 {
+    // Slice control plan Task 2: only a slice `owner` may change.
     if (role() != Role::Local || sliceById(sliceId) == nullptr
-        || m_sliceOwnership->mark(sliceId).owner != owner) {
+        || !SliceAccessPolicy::mayChange(*m_sliceOwnership, owner, sliceId)) {
         return false;
     }
     m_sliceOwnership->setActive(owner, sliceId);
+    applyActiveSlices();
+    return true;
+}
+
+bool RadioModel::setActiveRxFor(const QByteArray& device, int sliceId)
+{
+    // Slice control plan Task 3: any joined slice may be the device's
+    // receive focus; only one it may change is also its active slice.
+    if (role() != Role::Local || sliceById(sliceId) == nullptr
+        || !m_sliceOwnership->setActiveRx(device, sliceId)) {
+        return false;
+    }
+    if (SliceAccessPolicy::mayChange(*m_sliceOwnership, device, sliceId)) {
+        m_sliceOwnership->setActive(device, sliceId);
+    }
     applyActiveSlices();
     return true;
 }
@@ -14766,6 +15943,12 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
         return;
     }
 
+    // Slice control plan Task 5: a band change on a slice a remote window
+    // only listens to is held back, whichever path would carry it.
+    if (m_role == Role::Remote && holdSliceRequestForListener(slice->sliceIndex())) {
+        return;
+    }
+
     // Parity Task 18 (B3.1, R-IOS-27): a remote window asks the Core to run
     // this same band change on the named slice (slice.selectBand), so the
     // band memory, seed and lock refusal are the Core's, as for a band
@@ -15016,6 +16199,15 @@ void RadioModel::connectBandOutputsReport()
                 onBandOutputsComposed(ocByte, band, keyed);
             },
             Qt::QueuedConnection);
+    // The low-pass in use, for the Alex tab's lamps in every window.
+    connect(conn, &RadioConnection::alexLpfBitsComposed, this,
+            [this, conn](quint8 bits) {
+                if (m_connection != conn) {
+                    return;
+                }
+                onAlexLpfBitsComposed(bits);
+            },
+            Qt::QueuedConnection);
     // Fix wave M2: a pin edit (this window's, or a remote window's through
     // the "oc" reload, which reloads this same matrix) reaches the
     // connection, which sends it at once on Protocol 2.
@@ -15099,6 +16291,205 @@ void RadioModel::clearStationBandOutputs()
         return;
     }
     resetBandOutputs();
+}
+
+// The Alex-1 low-pass the connection selected (Thetis lights the matching
+// rad*LPFled at each selection, console.cs:7177-7243 [v2.10.3.15]).
+void RadioModel::onAlexLpfBitsComposed(quint8 bits)
+{
+    if (!ownsLocalDsp() || m_alexLpfBits == int(bits)) {
+        return;
+    }
+    m_alexLpfBits = int(bits);
+    emit alexLpfBitsChanged();
+}
+
+bool RadioModel::applyStationAlexLpfValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp() || name != "alexLpfBits") {
+        return false;
+    }
+    bool ok = false;
+    const int bits = value.toInt(&ok);
+    if (!ok || bits < -1 || bits > 0x7F) {
+        return false;
+    }
+    if (m_alexLpfBits != bits) {
+        m_alexLpfBits = bits;
+        emit alexLpfBitsChanged();
+    }
+    return true;
+}
+
+void RadioModel::clearStationAlexLpf()
+{
+    if (ownsLocalDsp() || m_alexLpfBits == -1) {
+        return;
+    }
+    m_alexLpfBits = -1;
+    emit alexLpfBitsChanged();
+}
+
+// --- Level Cal: the calibration run ---
+
+LevelCalibrationService* RadioModel::levelCalibrationService()
+{
+    if (m_role == Role::Remote) {
+        return nullptr;
+    }
+    if (m_levelCalService == nullptr) {
+        m_levelCalService = new LevelCalibrationService(this, this);
+        connect(m_levelCalService, &LevelCalibrationService::stateChanged,
+                this, &RadioModel::levelCalStateChanged);
+    }
+    return m_levelCalService;
+}
+
+LevelCalibrationService* RadioModel::levelCalibrationServiceForTest()
+{
+    return levelCalibrationService();
+}
+
+bool RadioModel::levelCalibrationRunAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->levelCalibrationRunAvailable();
+}
+
+bool RadioModel::rx2PreampModeAvailable() const
+{
+    if (m_role != Role::Remote) {
+        return true;
+    }
+    return m_station != nullptr && m_station->rx2PreampModeAvailable();
+}
+
+QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)
+{
+    if (m_role != Role::Remote) {
+        return levelCalibrationService()->start(levelDbm, frequencyHz, sliceId);
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+    if (!outcome.sent) {
+        return outcome.reason;
+    }
+    m_levelCalStartCommandId = outcome.commandId;
+    return {};
+}
+
+QString RadioModel::requestCancelLevelCalibration()
+{
+    if (m_role != Role::Remote) {
+        levelCalibrationService()->cancel();
+        return {};
+    }
+    if (m_station == nullptr) {
+        return noStationReason(QStringLiteral("the level calibration cancel"));
+    }
+    if (!m_station->levelCalibrationRunAvailable()) {
+        return IStationLink::levelCalibrationRunUnavailableReason();
+    }
+    const IStationLink::CommandOutcome outcome = m_station->requestCancelLevelCalibration();
+    return outcome.sent ? QString() : outcome.reason;
+}
+
+bool RadioModel::levelCalRunning() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalRunning;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->running();
+}
+
+int RadioModel::levelCalPercent() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalPercent;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->percent() : 0;
+}
+
+QString RadioModel::levelCalMessage() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalMessage;
+    }
+    return m_levelCalService != nullptr ? m_levelCalService->message() : QString();
+}
+
+bool RadioModel::levelCalSucceeded() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationLevelCalSucceeded;
+    }
+    return m_levelCalService != nullptr && m_levelCalService->succeeded();
+}
+
+bool RadioModel::applyStationLevelCalValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) {
+        return false;
+    }
+    if (name == "levelCalRunning") {
+        if (m_stationLevelCalRunning != value.toBool()) {
+            m_stationLevelCalRunning = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalPercent") {
+        bool ok = false;
+        const int percent = value.toInt(&ok);
+        if (!ok || percent < 0 || percent > 100) {
+            return false;
+        }
+        if (m_stationLevelCalPercent != percent) {
+            m_stationLevelCalPercent = percent;
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalMessage") {
+        if (m_stationLevelCalMessage != value.toString()) {
+            m_stationLevelCalMessage = value.toString();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    if (name == "levelCalSucceeded") {
+        if (m_stationLevelCalSucceeded != value.toBool()) {
+            m_stationLevelCalSucceeded = value.toBool();
+            emit levelCalStateChanged();
+        }
+        return true;
+    }
+    return false;
+}
+
+void RadioModel::clearStationLevelCal()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    m_levelCalStartCommandId = 0;
+    if (!m_stationLevelCalRunning && m_stationLevelCalPercent == 0
+        && m_stationLevelCalMessage.isEmpty() && !m_stationLevelCalSucceeded) {
+        return;
+    }
+    m_stationLevelCalRunning = false;
+    m_stationLevelCalPercent = 0;
+    m_stationLevelCalMessage.clear();
+    m_stationLevelCalSucceeded = false;
+    emit levelCalStateChanged();
 }
 
 
@@ -15220,9 +16611,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // the spinbox UI clamps any negative dB the user types back to 0 even
     // though BoardCapabilities advertises the wider range.
     if (m_stepAttController) {
-        const auto& atten = boardCapabilities().attenuator;
-        m_stepAttController->setMinAttenuation(atten.minDb);
-        m_stepAttController->setMaxAttenuation(atten.maxDb);
+        const auto& caps = boardCapabilities();
+        m_stepAttController->setMinAttenuation(caps.attenuator.minDb);
+        // Level Cal fix wave: the Core's ceiling (BoardCapsTable::
+        // stepAttMaxDb, as DaemonApp and the RX applet use): 61 dB on the
+        // Alex boards, the board row's own maximum otherwise.
+        m_stepAttController->setMaxAttenuation(
+            BoardCapsTable::stepAttMaxDb(caps.board, caps.hasAlexFilters));
     }
 
     // Load per-MAC OC matrix state so the codec layer (P1/P2 buildCodecContext)
@@ -15334,13 +16729,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // is what the issue #175 fix required.
         m_transmitModel.setMacAddress(info.macAddress);
         m_transmitModel.load();
-        // R-R3-49 (parity Task 2): the loaded tune power for the transmit band.
-        refreshTransmitTuneBand();
 
         // Load per-MAC mic/VOX/MON properties (15 properties, 3 excluded for safety).
         // Phase 3M-1b L.2. After setMacAddress so auto-persist uses the correct MAC.
         // voxEnabled, monEnabled, micMute are NOT loaded — always start at safe defaults.
         m_transmitModel.loadFromSettings(info.macAddress);
+        // The TXBand setter's initializing pass (console.cs:17511-17545
+        // [v2.10.3.15]): PWR takes the loaded power for the transmit band.
+        applyTransmitBand(transmitSliceBand(), /*initializing=*/true);
 
         // ── 3M-1c L.1: per-MAC MicProfileManager scope ────────────────────────
         //
@@ -16823,22 +18219,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // SetOutputPower + cmaster.CMSetTXOutputLevel
             // (audio.cs:262-271 + NetworkIO.cs:201-211 + cmaster.cs:
             // 1115-1119 [v2.10.3.13]).
-            if (m_paProfileManager) {
-                const PaProfile* prof = m_paProfileManager->activeProfile();
-                const SliceModel* const txSlice = txBoundSlice();
-                if (prof && txSlice) {
-                    const Band currentBand =
-                        bandFromFrequency(txSlice->frequency());
-                    (void)m_transmitModel.setPowerUsingTargetDbm(
-                        *prof, currentBand, /*bSetPower=*/true,
-                        /*bFromTune=*/false, /*bTwoTone=*/false,
-                        m_hardwareProfile.model);
-                    qCInfo(lcDsp)
-                        << "Initial audioVolume seed pumped — first MOX "
-                           "drive byte / IQ scalar now non-zero without "
-                           "requiring TUN priming";
-                }
-            }
+            seedInitialAudioVolume();
         };  // end of txSetup lambda
         txSetup();
 
@@ -16928,11 +18309,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // loaded above, before the connection thread starts; later changes
     // follow on that thread (applyHl2Options). changed() also fires when a
     // remote window's edit reloads them on the Core (reload "hl2").
-    if (auto* p1 = qobject_cast<class P1RadioConnection*>(m_connection)) {
-        applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
-    }
+    connectHl2OptionsToConnection();
     // The HL2 I/O board's poll writes the TX VFO's mode and frequency.
     rebindIoBoardSlice();
 
@@ -18044,6 +19421,15 @@ void RadioModel::installBandPlanMoxCheck()
             refused.refusalCode = TxRefusals::kNotReady;
             return refused;
         }
+        // Slice control plan Task 7: a Core with no slice has nothing to
+        // transmit on; every key is refused, the radio's own PTT included,
+        // before any other check.
+        if (!hasTransmitSlice()) {
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
+        }
 
         bool regionOk = false;
         const int regionInt = AppSettings::instance()
@@ -18060,7 +19446,12 @@ void RadioModel::installBandPlanMoxCheck()
 
         const SliceModel* slice = txBoundSlice();
         if (!slice) {
-            return {false, QStringLiteral("No slice is set to transmit.")};
+            // Checked above (hasTransmitSlice); kept as the guard for the
+            // dereference below.
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, TxRefusals::noTransmitSlice().text};
+            refused.refusalCode = TxRefusals::kNoTransmitSlice;
+            return refused;
         }
 
         // Thetis console.cs:29440-29450 [v2.10.3.15] adds XIT to the TX
@@ -20411,6 +21802,14 @@ void RadioModel::republishAlexAdcSlices()
     for (SliceModel* s : std::as_const(m_slices)) {
         if (s == nullptr) { continue; }
 
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it)
+        // never widens a filter for the devices that are.
+        if (m_role == Role::Local && m_sliceOwnership != nullptr
+            && m_sliceOwnership->isAwaySlice(s->sliceIndex())) {
+            continue;
+        }
+
         // An unbound slice has no DDC, so it is not on any chain and must not
         // drag a filter wide on behalf of a receiver that is not running.
         // chainForStream returns -1 for exactly that case.
@@ -21378,6 +22777,17 @@ bool RadioModel::captureReceiveLayout(QString* error)
     if (!m_receiveLayoutManaged) {
         return true;
     }
+    // Slice control plan Task 7 (ruling Q10): a Core left with no slice
+    // saves no layout, so a restart starts as a first start does, with one
+    // Slice A nobody owns. Never reached before admission (the pending and
+    // protected guards of every caller).
+    if (m_slices.isEmpty()) {
+        ReceiveLayoutStore::forget(AppSettings::instance(), m_receiveLayoutMac);
+        if (error) {
+            error->clear();
+        }
+        return true;
+    }
     QList<ReceiveSliceState> slices;
     bool hasRadeMode = false;
     for (const SliceModel* slice : std::as_const(m_slices)) {
@@ -21530,6 +22940,16 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
             m_sliceOwnership->hold(state.id, state.owner);
         } else {
             m_sliceOwnership->setOwner(state.id, QByteArray());
+            // Slice control fix wave, round 2: listeners are not part of a
+            // layout (ruling Q11), so an entry with no owner restores with
+            // nobody on it. Its former controller stays joined through the
+            // owner change, which left the slice released to a listener
+            // that ruling Q9 never lets adopt it: the lone device read
+            // "Nobody controls" on its own slice.
+            const QList<QByteArray> listeners = m_sliceOwnership->listenersOf(state.id);
+            for (const QByteArray& device : listeners) {
+                m_sliceOwnership->leave(device, state.id);
+            }
         }
     }
     m_sliceOwnership->setOrder(order);
@@ -21875,7 +23295,7 @@ void RadioModel::teardownConnection()
     //   chkTUN.Enabled = false;
     //   chk2TONE.Checked = false;  // MW0LGE_21a
     // chkTUN.Checked = false runs chkTUN_CheckedChanged's TUN-off branch.
-    // Two-tone is released further down (m_twoToneController). NereusSDR
+    // Two-tone ends right after the TUN-off below (stopNow). NereusSDR
     // glue: the TUN-off completion runs at once, because the MoxController
     // timers that would deliver rxReady cannot fire during this teardown.
     // Task 7: no PTT source reports once the connection goes, so the levels
@@ -21909,6 +23329,20 @@ void RadioModel::teardownConnection()
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
+    }
+    // PA on-air gate branch review, Important 1: the two-tone test ends
+    // here, at once. From Thetis console.cs:27473 [v2.10.3.15]:
+    //   SetupForm.TestIMD = false;
+    // and console.cs:27492 [v2.10.3.15]:
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    // The FIXED source's stop puts the PWR limit back on and PWR back to
+    // its saved value, into the held transmit band (setup.cs:11196-11201
+    // [v2.10.3.15]). Its 200 ms settle cannot fire during this teardown, so
+    // stopNow runs it now: before the saves below persist the band powers,
+    // and before m_txBandKnown is cleared. MOX is already off above. A start
+    // still waiting on its release settle is dropped the same way.
+    if (m_twoToneController) {
+        m_twoToneController->stopNow();
     }
     // Task 13: the radio's TX inhibit input goes with the radio. Nothing is
     // keyed by now (the PTT sources are cleared and MOX is off above), so
@@ -22129,11 +23563,8 @@ void RadioModel::teardownConnection()
         m_twoToneController->setTxChannel(nullptr);
         m_twoToneController->setSliceModel(nullptr);
         m_twoToneController->setPowerOn(false);
-        // If a two-tone test is currently running, force it off so the
-        // restored MOX-release doesn't hold over the disconnect.
-        if (m_twoToneController->isActive()) {
-            m_twoToneController->setActive(false);
-        }
+        // Ended above (stopNow); a no-op unless something restarted it.
+        m_twoToneController->stopNow();
     }
 
     // 3M-4 Task 7: tear down PureSignal before the TxChannel pointer dies.
@@ -22322,6 +23753,20 @@ void RadioModel::teardownConnection()
     // key-up.
     m_alexRoutingTx = false;
 
+    // PA on-air gate review, Minor 2: the transmit band belonged to the
+    // radio that went away. Forget it, so the next band seen (the slice
+    // after a retune, the connect-time pass) is an initializing TXBand pass
+    // (console.cs:17511-17545 [v2.10.3.15]) that loads that band's power
+    // and never saves the old radio's PWR into the old band.
+    if (m_txBandKnown) {
+        m_txBandKnown = false;
+        emit transmitBandChanged();
+    }
+    // PA on-air gate re-review: the tune power's transmit band goes with
+    // it, so the next band seen repaints the Tune Power slider as a first
+    // band does.
+    m_transmitModel.clearTuneTxBand();
+
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the
     // clock at teardown *entry*, but run=0 does not leave until
@@ -22415,6 +23860,10 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
     // The volt calibration's factory values follow the model (Thetis
     // GetDefaultVoltCalibration).
     m_calController.setHardwareModel(m_hardwareProfile.model);
+    // Level Cal: a meter or display calibration saved by an earlier build
+    // belongs to this model (Thetis keeps one per model,
+    // rx_meter_cal_offset_by_radio, console.cs:14892-14895 [v2.10.3.15]).
+    foldLegacyLevelCal();
     // The 6 m LNA gain offset depends on the model.
     refreshRxMeterOffset();
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
@@ -22474,6 +23923,11 @@ void RadioModel::setConnectionState(ConnectionState s)
         // Plan Task 14 fix wave: nothing is on the wire now.
         if (ownsLocalDsp()) {
             resetBandOutputs();
+            // No low-pass is selected with no radio.
+            if (m_alexLpfBits != -1) {
+                m_alexLpfBits = -1;
+                emit alexLpfBitsChanged();
+            }
         }
     }
     // Retirement can notify direct filter observers. A reentrant transition
@@ -22704,7 +24158,74 @@ void RadioModel::restoreNormalTxDrive()
     // the HL2 tune carve-out mid-tune.
     if (m_transmitModel.isTune())          { return; }
     if (m_transmitModel.isTwoToneActive()) { return; }
-    if (!m_connection)                     { return; }
+    // ptbPWR_Scroll, as upstream: the drive, and PWR saved into
+    // power_by_band[_tx_band]. applyTransmitBand keeps PWR equal to the
+    // transmit band's slot across band changes (and holds the band while
+    // keyed), so the save lands on the band PWR belongs to.
+    drivePowerScroll();
+}
+
+void RadioModel::drivePowerScroll()
+{
+    // From Thetis console.cs:28682-28693 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    //   power_by_band[(int)_tx_band] = ptbPWR.Value;
+    // The save follows the drive whatever the tx mode; only
+    // `if (IsSetupFormNull) return;` guards it upstream, so no radio or
+    // profile is needed. setPowerForBand keeps the existing
+    // hardware/<mac>/powerByBand/<band> key.
+    applyDriveSliderPower();
+    if (!ownsLocalDsp()) { return; }
+    // _tx_band is m_txBand. Before applyTransmitBand first runs no band's
+    // power has been loaded into PWR, so there is nothing of a band's to save.
+    if (!m_txBandKnown) { return; }
+    m_transmitModel.setPowerForBand(m_txBand, m_transmitModel.power());
+}
+
+// The first-MOX audioVolume seed (bench 2026-05-11), run by the txSetup
+// lambda in connectToRadio once the TxChannel exists.
+void RadioModel::seedInitialAudioVolume()
+{
+    if (!m_paProfileManager) { return; }
+    const PaProfile* prof = m_paProfileManager->activeProfile();
+    const SliceModel* const txSlice = txBoundSlice();
+    if (prof && txSlice) {
+        // From Thetis console.cs:46750-46752 [v2.10.3.15]:
+        //   case 0: //normal
+        //       new_pwr = ptbPWR.Value;
+        //       power_by_band[(int)_tx_band] = new_pwr;
+        // with gbb = GainByBand(TXBand, new_pwr) (console.cs:46808): the
+        // held transmit band, not the slice's.
+        const Band currentBand = driveTxBand();
+        (void)m_transmitModel.setPowerUsingTargetDbm(
+            *prof, currentBand, /*bSetPower=*/true,
+            /*bFromTune=*/false, /*bTwoTone=*/false,
+            m_hardwareProfile.model);
+        qCInfo(lcDsp)
+            << "Initial audioVolume seed pumped: first MOX "
+               "drive byte / IQ scalar now non-zero without "
+               "requiring TUN priming";
+    }
+}
+
+// Thetis's _tx_band for the drive math (SetPowerUsingTargetDBM reads
+// power_by_band[(int)_tx_band] and GainByBand(TXBand, ...)): m_txBand, held
+// while keyed, else the band applyTransmitBand would take.
+Band RadioModel::driveTxBand() const
+{
+    return m_txBandKnown ? m_txBand : transmitSliceBand();
+}
+
+void RadioModel::applyDriveSliderPower()
+{
+    // From Thetis console.cs:28682-28692 [v2.10.3.15] ptbPWR_Scroll:
+    //   int new_pwr = setPowerFromDriveSlider(out bool bUseConstrain, e != EventArgs.Empty);
+    // From Thetis console.cs:46710-46716 [v2.10.3.15] setPowerFromDriveSlider:
+    //   nDrv = SetPowerUsingTargetDBM(out bool bConstrainOut, out double targetdBm, true, false, false);
+    // SetPowerUsingTargetDBM (console.cs:46724-46747 [v2.10.3.15]) takes
+    // txMode 1 while chkTUN is checked and 2 while chk2TONE is, so this
+    // recomputes the tune or two-tone drive with the new gain.
+    if (!m_connection) { return; }
 
     // Active-profile resolution. Without a loaded PaProfileManager (MAC scope
     // not set, or first-launch state before factory regen), activeProfile()
@@ -22714,11 +24235,15 @@ void RadioModel::restoreNormalTxDrive()
     const PaProfile* activeProfile = m_paProfileManager->activeProfile();
     if (!activeProfile)      { return; }
 
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band currentBand = txSlice ? bandFromFrequency(txSlice->frequency())
-                                     : m_lastBand;
+    // From Thetis console.cs:46750-46752 [v2.10.3.15] SetPowerUsingTargetDBM:
+    //   case 0: //normal
+    //       new_pwr = ptbPWR.Value;
+    //       power_by_band[(int)_tx_band] = new_pwr;
+    // _tx_band, not the slice's band: a retune while keyed does not move it.
+    const Band currentBand = driveTxBand();
 
-    // txMode 0 (normal): bFromTune=false, bTwoTone=false. The wire byte and
+    // bFromTune=false, bTwoTone=false: txMode 0 unless TUNE or the two-tone
+    // test runs, whose own source the transmit model then reads. The wire byte and
     // IQ scalar pump happen inside pumpAudioVolume, wired to
     // TransmitModel::audioVolumeChanged, which setPowerUsingTargetDbm emits.
     const auto result = m_transmitModel.setPowerUsingTargetDbm(
@@ -23387,9 +24912,18 @@ void RadioModel::setTune(bool on)
         m_savedTxDspMode = txSlice ? txSlice->dspMode() : DSPMode::USB;
 
         // ── SAVE power slider value ────────────────────────────────────────────
-        // Cite: console.cs:30033 [v2.10.3.13]: PreviousPWR = ptbPWR.Value;
-        //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-        m_savedPowerPct = m_transmitModel.power();
+        // From Thetis console.cs:30094-30096 [v2.10.3.15]:
+        //   // remember old power //MW0LGE_22b
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //       PreviousPWR = ptbPWR.Value;
+        // Only the FIXED source sets PWR during TUNE, so only it saves and
+        // restores PWR (m_tuneSetFixedPwr, set with the PWR push below).
+        m_tuneSetFixedPwr = false;
+        const bool tuneFixedSource =
+            (m_transmitModel.tuneDrivePowerSource() == DrivePowerSource::Fixed);
+        if (tuneFixedSource) {
+            m_savedPowerPct = m_transmitModel.power();
+        }
 
         // ── COMPUTE tune-tone frequency (sign-selected by current DSP mode) ────
         // Cite: console.cs:30024-30037 [v2.10.3.13] — switch on Audio.TXDSPMode.
@@ -23471,9 +25005,15 @@ void RadioModel::setTune(bool on)
         //   wire = clamp(int(255 * tunePower/100 * swrProtect), 0, 255)
         // shipped K2GX's >300W on 200W radio.  This rewrite is the
         // K2GX safety fix proper.
-        const Band currentBand = txSlice
-                                    ? bandFromFrequency(txSlice->frequency())
-                                    : m_lastBand;
+        //
+        // The band is _tx_band, not the slice's: SetPowerUsingTargetDBM
+        // (console.cs:46762-46808 [v2.10.3.15]) takes ptbTune.Value, which
+        // the TXBand setter loaded (TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b),
+        // and gbb = GainByBand(TXBand, new_pwr). TXBand holds through a
+        // retune while keyed (//[2.10.3.6]MW0LGE no band change on TX fix)
+        // until the next band change, so a TUNE after that unkey drives
+        // the held band.
+        const Band currentBand = driveTxBand();
 
         // tunePower retained as a local for the SwrProtectionController
         // setters below — those setters drive the tune-bypass / alex_fwd
@@ -23483,6 +25023,11 @@ void RadioModel::setTune(bool on)
         // wrapper; the SWR controller stays slider-driven per upstream.
         const int tunePower = m_transmitModel.tunePowerForBand(currentBand);
 
+        // new_pwr of SetPowerUsingTargetDBM(..., true, true, false). Without
+        // a profile no drive is pushed; the FIXED case's new_pwr is then
+        // tune_power, as its switch sets it (console.cs:46766-46768
+        // [v2.10.3.15]: new_pwr = tune_power; bConstrain = false;).
+        int tuneNewPwr = m_transmitModel.tunePower();
         if (m_paProfileManager) {
             const PaProfile* activeProfile = m_paProfileManager->activeProfile();
             if (activeProfile) {
@@ -23498,6 +25043,7 @@ void RadioModel::setTune(bool on)
                     *activeProfile, currentBand, /*bSetPower=*/true,
                     /*bFromTune=*/true, /*bTwoTone=*/false,
                     m_hardwareProfile.model);
+                tuneNewPwr = result.newPower;
 
                 // #202 deep-fix: TXPostGenRun=0 case for new_pwr==0 during TUNE.
                 // Mirrors ramdor Thetis console.cs:46749-46752 [v2.10.3.15]:
@@ -23540,6 +25086,24 @@ void RadioModel::setTune(bool on)
             // push.  The downstream MoxController / setTuneTone path still
             // engages MOX + tone, but no drive byte is sent.  Safer than
             // sending stale wire bytes from a previous radio's profile.
+        }
+
+        // ── FIXED source: PWR shows the tune power ─────────────────────────────
+        // From Thetis console.cs:30099-30104 [v2.10.3.15]:
+        //   //
+        //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+        //   {
+        //       PWRSliderLimitEnabled = false;
+        //       PWR = new_pwr;
+        //   }
+        // (remember old power //MW0LGE_22b, console.cs:30094.) The drive does
+        // not move: TUN is on, so the PWR change takes the tune path, whose
+        // FIXED case drives tune_power unconstrained, the value just pushed.
+        if (tuneFixedSource) {
+            m_transmitModel.setPowerSliderLimitEnabled(false);
+            m_transmitModel.setPower(tuneNewPwr);
+            m_tuneSetFixedPwr = true;
+            // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source at TUN-off): latched so a mid-TUNE source change cannot leave the limit off or restore a stale PreviousPWR.
         }
 
         // ── PUSH TUNE-ADJUSTED TX VFO (carrier-on-dial) ────────────────────────
@@ -24392,17 +25956,6 @@ bool RadioModel::rxNf(int rx) const
     return m_notchModel && m_notchModel->globalEnabled();
 }
 
-// ── Stub DSP toggles (no model state yet) ───────────────────────────────────
-void RadioModel::setRxEnable(int rx, bool on)
-{
-    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxEnable[rx] = on; }
-}
-bool RadioModel::rxEnable(int rx) const
-{
-    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxEnable[rx]; }
-    return false;
-}
-
 // ── Per-slice AF gain (rx_volume: query source) ─────────────────────────────
 //
 // Phase 3F Sub-Epic J Task 10: TCI receiver rx -> slice id rx via
@@ -24520,12 +26073,13 @@ QStringList RadioModel::txProfilesList() const
     return {};
 }
 
-// ── Calibration (getter-only stubs) ─────────────────────────────────────────
-// No calibration model exists yet.  All getters return 0.0 = "no calibration
-// applied".  Real implementation lands when CalibrationModel + per-slice
-// persistence are added.
-double RadioModel::calibrationMeter(int rx) const     { (void)rx; return 0.0; }
-double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return 0.0; }
+// ── Calibration (TCI calibration_ex) ────────────────────────────────────────
+// From Thetis TCIServer.cs:1160-1176 [v2.10.3.15] (CalibrationChanged): the
+// meter and display terms are the receiver's RXnMeterCalOffset and
+// RXnDisplayCalOffset. One receive calibration serves both receivers here.
+// The XVTR, 6 m and TX display terms still return 0.0.
+double RadioModel::calibrationMeter(int rx) const     { (void)rx; return rxMeterCalOffsetDb(); }
+double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return rxDisplayCalOffsetDb(); }
 double RadioModel::calibrationXvtr(int rx) const      { (void)rx; return 0.0; }
 double RadioModel::calibrationSixMeter(int rx) const  { (void)rx; return 0.0; }
 double RadioModel::calibrationTxDisplay(int rx) const { (void)rx; return 0.0; }
@@ -24641,9 +26195,23 @@ void RadioModel::completeTuneOff()
     m_savedTxDspSliceId = -1;
 
     // ── RESTORE POWER ──────────────────────────────────────────────────────
-    // Cite: console.cs:30129-30132 [v2.10.3.13]:
-    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED) PWR = PreviousPWR;
-    //   //MW0LGE_22b  [original inline comment from console.cs:30033]
+    // From Thetis console.cs:30180-30185 [v2.10.3.15]:
+    //   //MW0LGE_22b
+    //   if (_tuneDrivePowerSource == DrivePowerSource.FIXED)
+    //   {
+    //       PWRSliderLimitEnabled = true;
+    //       PWR = PreviousPWR;
+    //   }
+    // m_tuneSetFixedPwr records that TUN-on took the FIXED branch, so the
+    // restore pairs with the save even if the source changed during TUNE.
+    // Another source never touched PWR, and a PWR change made during TUNE
+    // stays.
+    // NereusSDR divergence (console.cs:30180-30185 [v2.10.3.15] re-reads the source here): the latch keeps a mid-TUNE source change from leaving the limit off or restoring a stale PreviousPWR.
+    if (m_tuneSetFixedPwr) {
+        m_transmitModel.setPowerSliderLimitEnabled(true);
+        m_transmitModel.setPower(m_savedPowerPct);
+        m_tuneSetFixedPwr = false;
+    }
     //
     // Codex P1 follow-up to PR #178 — route the restore through the
     // calibrated dBm path, NOT the old linear formula.  Previously
@@ -24662,11 +26230,9 @@ void RadioModel::completeTuneOff()
     // bFromTune=false routes through txMode 0 (drive-slider source)
     // since TUN is now off and the user's saved drive-slider value
     // is the canonical post-restore source.
-    m_transmitModel.setPower(m_savedPowerPct);
-    const SliceModel* const txSlice = txBoundSlice();
-    const Band offBand = txSlice
-                            ? bandFromFrequency(txSlice->frequency())
-                            : m_lastBand;
+    // txMode 0 saves PWR into power_by_band[(int)_tx_band]
+    // (console.cs:46750-46752 [v2.10.3.15]); _tx_band held through the tune.
+    const Band offBand = driveTxBand();
     if (m_paProfileManager) {
         const PaProfile* activeProfile = m_paProfileManager->activeProfile();
         if (activeProfile) {
@@ -26046,7 +27612,13 @@ void RadioModel::flushRemoteDspOptionsApply()
             }
         }
     }
-    if (m_pendingDspOptionsGroups.isEmpty()) {
+    // Setup description version 22: the RX half waits the same way. An RX
+    // buffer size accepted just before the radio keyed would otherwise
+    // reach SetDSPBuffsize's flush on the air, which the on-air lock
+    // refuses to a new write. The whole RX apply waits (it applies a
+    // group's buffer, filter size and filter type together), and
+    // releaseHeldOnAirWork applies it once the radio is back on receive.
+    if (m_pendingDspOptionsGroups.isEmpty() || stationOnAirRefusal(nullptr)) {
         return;
     }
     const QSet<QString> groups = m_pendingDspOptionsGroups;
@@ -26209,10 +27781,14 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
                || rest.startsWith(QLatin1String("alex/bpf1/"), Qt::CaseInsensitive)
                || rest.startsWith(QLatin1String("alex2/hpf/"), Qt::CaseInsensitive)
                || rest.compare(QLatin1String("alex2/master/bypass55MhzBpf"),
+                               Qt::CaseInsensitive) == 0
+               || rest.startsWith(QLatin1String("alex/lpf/"), Qt::CaseInsensitive)
+               || rest.compare(QLatin1String(alexKeys::kLpfBypass),
                                Qt::CaseInsensitive) == 0) {
         // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
         // applied to the connection. radioHardwareVersion 8: and its
-        // receive filter rows (savedAlexHpfEdges).
+        // receive filter rows (savedAlexHpfEdges). radioHardwareVersion 10:
+        // and its low-pass rows and 6m/ByPass on RX (savedAlexLpfEdges).
         reload = QStringLiteral("alex");
     } else {
         return;
@@ -26415,13 +27991,36 @@ void RadioModel::applyAlexHpfSwitchSettings()
     const codec::alex::AlexHpfEdges edges = savedAlexHpfEdges(mac);
     const bool edgesChanged = !(edges == m_alexHpfEdges);
     m_alexHpfEdges = edges;
+    // And the low-pass rows and 6m/ByPass on RX (savedAlexLpfEdges). Thetis
+    // unchecks chkLPFBypass on the boards that hide it, so it is off there
+    // whatever was saved (codec::alex::lpfBypassAvailable).
+    // Thetis also unchecks the box (chkLPFBypass.Checked = false, quoted at
+    // codec::alex::lpfBypassAvailable), so once the model is known the Core
+    // saves "False" and every window and the phone show it off; the gate
+    // below stays as the backstop.
+    if (!codec::alex::lpfBypassAvailable(m_hardwareProfile.model)
+        && AppSettings::instance()
+                   .hardwareValue(mac, QString::fromLatin1(alexKeys::kLpfBypass),
+                                  QStringLiteral("False"))
+                   .toString() != QLatin1String("False")) {
+        AppSettings::instance().setHardwareValue(
+            mac, QString::fromLatin1(alexKeys::kLpfBypass), QStringLiteral("False"));
+    }
+    const codec::alex::AlexLpfEdges lpfEdges = savedAlexLpfEdges(mac);
+    m_alexLpfEdges = lpfEdges;
+    const bool lpfBypass = flag(alexKeys::kLpfBypass, "False")
+        && codec::alex::lpfBypassAvailable(m_hardwareProfile.model);
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges]() {
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx, edges,
+                                     lpfEdges, lpfBypass]() {
         conn->setHpfBypassOnTx(onTx);
         conn->setHpfBypassOnPs(onPs);
         conn->setAlexHpfBypass(bypass);
         conn->setDisable6mLna(lnaOffRx, lnaOffTx);
         conn->setAlexHpfEdges(edges);
+        // Edges first: the bypass setter re-selects with them.
+        conn->setAlexLpfEdges(lpfEdges);
+        conn->setAlexLpfBypass(lpfBypass);
     });
     // Re-review N4: the two receive-side switches also decide what the
     // chain reports (republishAlexAdcSlices), so the WIDE badge and
@@ -26505,8 +28104,49 @@ codec::alex::AlexHpfEdges RadioModel::savedAlexHpfEdges(const QString& mac)
     return edges;
 }
 
+// ---------------------------------------------------------------------------
+// savedAlexLpfEdges: the Alex tab's low-pass rows for one radio.
+//
+// Thetis reads each row's edges from the Setup spinners at every selection
+// (console.cs:7177-7243 [v2.10.3.15], setAlexLPF). The tab saves them per
+// radio: hardware/<mac>/alex/lpf/<slug>/{start,end}. A value never saved is
+// Thetis's default. A saved value outside its spinner's range (a hand-edited
+// file, or one saved before the ranges were enforced) is held to the range,
+// and one that is not a finite number reads as the default
+// (codec::alex::clampAlexLpfEdge, setup.designer.cs [v2.10.3.15]): the
+// selection never sees an edge Thetis's spinners could not hold.
+// ---------------------------------------------------------------------------
+codec::alex::AlexLpfEdges RadioModel::savedAlexLpfEdges(const QString& mac)
+{
+    codec::alex::AlexLpfEdges edges = codec::alex::AlexLpfEdges::thetisDefaults();
+    if (mac.isEmpty()) {
+        return edges;
+    }
+    auto& settings = AppSettings::instance();
+    for (size_t i = 0; i < edges.rows.size(); ++i) {
+        const QString base = QStringLiteral("%1/%2/").arg(
+            QLatin1String(alexKeys::kAlex1LpfPrefix),
+            QLatin1String(codec::alex::kAlexLpfRowSlugs[i]));
+        codec::alex::AlexLpfRow& row = edges.rows[i];
+        bool ok = false;
+        const double start = settings.hardwareValue(
+            mac, base + QLatin1String(alexKeys::kLeafStart), QString()).toString().toDouble(&ok);
+        if (ok) {
+            row.startMhz = codec::alex::clampAlexLpfEdge(static_cast<int>(i), /*isEnd=*/false,
+                                                         start, row.startMhz);
+        }
+        const double end = settings.hardwareValue(
+            mac, base + QLatin1String(alexKeys::kLeafEnd), QString()).toString().toDouble(&ok);
+        if (ok) {
+            row.endMhz = codec::alex::clampAlexLpfEdge(static_cast<int>(i), /*isEnd=*/true,
+                                                       end, row.endMhz);
+        }
+    }
+    return edges;
+}
+
 // Group B fix wave (group A's follow-ups): work a window's change left
-// waiting while the radio was on the air (a DSP > Options TX change, a PA
+// waiting while the radio was on the air (a DSP > Options TX or RX change, a PA
 // profile or calibration reload) applies once the on-air rule clears,
 // whichever way it clears: MOX back to receive, TUNE's completion or the
 // two-tone test's end.
@@ -26515,7 +28155,7 @@ void RadioModel::releaseHeldOnAirWork()
     if (stationOnAirRefusal(nullptr)) {
         return;
     }
-    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+    if (!m_pendingDspOptionsTxGroups.isEmpty() || !m_pendingDspOptionsGroups.isEmpty()) {
         flushRemoteDspOptionsApply();
     }
     if (!m_pendingHardwareReloads.isEmpty()
@@ -28432,7 +30072,8 @@ void RadioModel::stopExternalDiversityRoute()
 
 // Codex review, PR #293. See RadioModel.h for the defect and for why this
 // rehomes instead of removing.
-int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
+int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds,
+                                   const PanScope* scope)
 {
     if (livePanIds.isEmpty()) {
         return 0;
@@ -28442,6 +30083,9 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
     int moved = 0;
     for (SliceModel* s : std::as_const(m_slices)) {
         if (!s) { continue; }
+        // Scoped: only a slice this window controls is its to move. Writing
+        // the shared pan key of any other slice moves it for its controller.
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         if (livePanIds.contains(s->panKey())) { continue; }
         // setPanKey emits panKeyChanged, which is what MainWindow needs in
         // order to move the slice's VfoWidget onto the surviving pan. Its
@@ -28451,6 +30095,19 @@ int RadioModel::rehomeSlicesToPans(const QStringList& livePanIds)
         ++moved;
     }
     return moved;
+}
+
+// Slice control and listening, layout change rule. See RadioModel.h.
+QList<int> RadioModel::listenedOffPans(const QStringList& panIds,
+                                       const PanScope& scope) const
+{
+    QList<int> off;
+    for (auto it = scope.listenedOn.constBegin(); it != scope.listenedOn.constEnd(); ++it) {
+        if (scope.controlled.contains(it.key())) { continue; }
+        if (!panIds.contains(it.value())) { off << it.key(); }
+    }
+    std::sort(off.begin(), off.end());
+    return off;
 }
 
 // See RadioModel.h.
@@ -28479,21 +30136,27 @@ bool RadioModel::panHasSlicesFor(const QString& panId, const QByteArray& owner,
 }
 
 // Codex review round 5, PR #293. See RadioModel.h.
-int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
+int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                          const PanScope* scope)
 {
+    auto movable = [scope](const SliceModel* s) {
+        return s && (!scope || scope->controlled.contains(s->sliceIndex()));
+    };
     int moved = 0;
-    for (const QString& emptyPan : pansWithoutSlices(panIds)) {
+    for (const QString& emptyPan : pansWithoutSlices(panIds, scope)) {
         // Find a pan carrying more than one slice and take one of its
         // extras. Recounted every iteration, because the previous move
-        // changed the occupancy this decision rests on.
+        // changed the occupancy this decision rests on. Scoped, only
+        // controlled slices count and only they may donate: a listened
+        // slice sharing a pan with a controlled one is never moved.
         QHash<QString, int> occupancy;
         for (const SliceModel* s : m_slices) {
-            if (s) { occupancy[s->panKey()] += 1; }
+            if (movable(s)) { occupancy[s->panKey()] += 1; }
         }
 
         SliceModel* donor = nullptr;
         for (SliceModel* s : std::as_const(m_slices)) {
-            if (!s) { continue; }
+            if (!movable(s)) { continue; }
             if (occupancy.value(s->panKey()) > 1) { donor = s; break; }
         }
         if (!donor) {
@@ -28510,13 +30173,22 @@ int RadioModel::spreadSlicesOntoEmptyPans(const QStringList& panIds)
 }
 
 // Codex review round 4, PR #293. See RadioModel.h.
-QStringList RadioModel::pansWithoutSlices(const QStringList& panIds) const
+QStringList RadioModel::pansWithoutSlices(const QStringList& panIds,
+                                          const PanScope* scope) const
 {
     QSet<QString> occupied;
     for (const SliceModel* s : m_slices) {
         if (!s) { continue; }
+        if (scope && !scope->controlled.contains(s->sliceIndex())) { continue; }
         const QString key = s->panKey();
         if (!key.isEmpty()) { occupied.insert(key); }
+    }
+    if (scope) {
+        // A listened slice occupies the pan this window placed it on.
+        for (auto it = scope->listenedOn.constBegin();
+             it != scope->listenedOn.constEnd(); ++it) {
+            if (!it.value().isEmpty()) { occupied.insert(it.value()); }
+        }
     }
 
     QStringList empty;

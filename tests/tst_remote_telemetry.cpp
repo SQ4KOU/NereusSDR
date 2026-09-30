@@ -278,7 +278,9 @@ private slots:
         speakerTimer.start();
 
         h.connectSession();
-        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QTRY_VERIFY2_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing,
+                                  h.mediaStage(remoteMedia).constData(),
+                                  h.kMediaConnectionWaitMs);
         controller.sampleNow();
         QVERIFY(controller.bannerText().contains(QStringLiteral("Audio playing")));
 

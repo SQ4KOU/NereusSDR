@@ -4,6 +4,11 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: a replace may carry
+//               "mediaDirectVersion": 1 (STUN and host candidates, no
+//               tunnel or relay); the older relay-leg refusal judges the
+//               connection in use. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -71,6 +76,19 @@
 //               receive offset of the ADC that stream is on
 //               (RadioModel::rxMeterOffsetDbForStream). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               ownsSlice split into controlsSlice (owner mix, raw I/Q,
+//               headphones), hearsSlice (receiver streams) and seesSlice
+//               (display subscriptions). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 4: the owner
+//               mix and displays follow a leave (listenersChanged) as they
+//               follow a change of controller. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 6: the owner mix sums the slices
+//               this device listens to at its own level and mute
+//               (SliceAccessController::listenLevel), centered.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // Modification history (NereusSDR):
@@ -90,6 +108,7 @@
 #include "core/safety/TransmitHolder.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RemoteKeying.h"
+#include "core/session/SliceAccessController.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
@@ -641,18 +660,27 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         }
     });
     // Task 76: this session's owner mix follows whose each slice is.
-    connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
-            [this](int sliceId, const QByteArray&, const QByteArray&) {
+    // Slice control plan Task 4: and who listens to it, so a leave (stop
+    // listening, the listener half of a claims removal) reaches the media
+    // as a change of controller does.
+    const auto followAccess = [this](int sliceId) {
         const QPointer<DaemonMediaController> self(this);
         refreshOwnerMixMask();
-        // Fix wave: a slice that passed to another owner is gone from this
-        // device's view (ruling 5.8 sends it object.destroy), so its
-        // displays retire as a removed slice's do (ruling 9.1).
+        // Fix wave: a slice this device can no longer see is gone from its
+        // view (ruling 5.8 sends it object.destroy), so its displays
+        // retire as a removed slice's do (ruling 9.1). A former controller
+        // that stays a listener still sees it and keeps them.
         if (self && m_epoch != 0 && m_radioModel && m_radioModel->sliceById(sliceId) != nullptr
-            && !ownsSlice(sliceId)) {
+            && !seesSlice(sliceId)) {
             retireSliceDisplays(sliceId);
         }
-    });
+    };
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
+            [followAccess](int sliceId, const QByteArray&, const QByteArray&) {
+                followAccess(sliceId);
+            });
+    connect(m_radioModel->sliceOwnership(), &SliceOwnership::listenersChanged, this,
+            followAccess);
     // A slice made for this device is noted without a mark change.
     connect(m_radioModel->sliceOwnership(), &SliceOwnership::activeChanged, this,
             [this] { refreshOwnerMixMask(); });
@@ -1351,6 +1379,13 @@ void DaemonMediaController::acquireOwnerMix()
         qCWarning(lcDaemonMedia) << "no owner mix free for media session" << m_epoch;
         return;
     }
+    // Slice control plan Task 6: a level or mute this device sets for a
+    // slice it listens to reaches its mix.
+    if (m_server && m_server->sliceAccessController()) {
+        m_listenLevelConnection = connect(
+            m_server->sliceAccessController(), &SliceAccessController::listenLevelChanged, this,
+            [this](int, const QByteArray&) { refreshOwnerMixMask(); });
+    }
     refreshOwnerMixMask();
     // Parity Task 32: and the transmit monitor, if this device has one.
     refreshTxMonitor();
@@ -1358,6 +1393,8 @@ void DaemonMediaController::acquireOwnerMix()
 
 void DaemonMediaController::releaseOwnerMix()
 {
+    QObject::disconnect(m_listenLevelConnection);
+    m_listenLevelConnection = {};
     if (m_ownerMix < 0) {
         return;
     }
@@ -1369,9 +1406,41 @@ void DaemonMediaController::releaseOwnerMix()
     m_ownerMix = -1;
 }
 
-bool DaemonMediaController::ownsSlice(int sliceId) const
+// Slice control plan Task 2 (SliceAccessPolicy): the controller's (owner
+// mix membership until Task 6, raw I/Q, the headphones mix of its own
+// slices), a listener's too (receiver streams), and what it may show
+// (display subscriptions, ruling Q13).
+bool DaemonMediaController::controlsSlice(int sliceId) const
 {
-    return m_server && m_epoch != 0 && m_server->mediaSessionOwnsSlice(m_epoch, sliceId);
+    return m_server && m_epoch != 0 && m_server->mediaSessionControlsSlice(m_epoch, sliceId);
+}
+
+bool DaemonMediaController::hearsSlice(int sliceId) const
+{
+    return m_server && m_epoch != 0 && m_server->mediaSessionHearsSlice(m_epoch, sliceId);
+}
+
+QList<const DaemonAudioSender*> DaemonMediaController::audioSendersForTest() const
+{
+    QList<const DaemonAudioSender*> senders;
+    if (m_audioSender) {
+        senders.append(m_audioSender.get());
+    }
+    if (m_headphones.sender) {
+        senders.append(m_headphones.sender.get());
+    }
+    for (const auto& [sliceId, stream] : m_receiverStreams) {
+        Q_UNUSED(sliceId);
+        if (stream.sender) {
+            senders.append(stream.sender.get());
+        }
+    }
+    return senders;
+}
+
+bool DaemonMediaController::seesSlice(int sliceId) const
+{
+    return m_server && m_epoch != 0 && m_server->mediaSessionSeesSlice(m_epoch, sliceId);
 }
 
 void DaemonMediaController::refreshOwnerMixMask()
@@ -1380,21 +1449,46 @@ void DaemonMediaController::refreshOwnerMixMask()
     if (m_ownerMix < 0 || !m_radioModel || !m_radioModel->audioEngine()) {
         return;
     }
+    AudioEngine* const engine = m_radioModel->audioEngine();
+    SliceAccessController* const access = m_server ? m_server->sliceAccessController() : nullptr;
+    const QByteArray device =
+        m_server && m_epoch != 0 ? m_server->mediaSessionDevice(m_epoch) : QByteArray();
     quint32 mask = 0;
+    quint32 listened = 0;
     for (SliceModel* slice : m_radioModel->slices()) {
         const int id = slice ? slice->sliceIndex() : -1;
-        if (id >= 0 && id < 32 && ownsSlice(id)) {
+        if (id < 0 || id >= 32) {
+            continue;
+        }
+        if (controlsSlice(id)) {
             mask |= 1u << id;
+        } else if (hearsSlice(id) && access != nullptr && !device.isEmpty()) {
+            // Slice control plan Task 6 (rulings Q3, Q4): a slice this
+            // device only listens to plays centered at its own level and
+            // mute; the controller's AF, mute and pan do not reach it.
+            const SliceAccessController::ListenLevel level = access->listenLevel(device, id);
+            engine->setOwnerMixListen(m_ownerMix, id, static_cast<float>(level.level),
+                                      level.muted);
+            listened |= 1u << id;
         }
     }
-    m_radioModel->audioEngine()->setOwnerMixSliceMask(m_ownerMix, mask);
+    // The controlled mask moves before a listen lane is dropped, and a
+    // listen lane is set before the mask drops the slice: a controlled
+    // slice has no listen lane in the mixer, so a hand-off never leaves a
+    // drain period with neither.
+    engine->setOwnerMixSliceMask(m_ownerMix, mask);
+    for (int id = 0; id < 32; ++id) {
+        if ((listened & (1u << id)) == 0) {
+            engine->clearOwnerMixListen(m_ownerMix, id);
+        }
+    }
     // A slice onto or off this device changes whether its headphones mix
     // has a receiver to carry.
     onOutputRoutesChanged();
     // A receiver stream of a slice no longer this device's stops.
     QList<int> lost;
     for (const auto& [sliceId, stream] : m_receiverStreams) {
-        if (stream.desiredEnabled && !ownsSlice(sliceId)) {
+        if (stream.desiredEnabled && !hearsSlice(sliceId)) {
             lost.append(sliceId);
         }
     }
@@ -1725,7 +1819,14 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // Task 29 step 2b: over the media tunnel when the window declared it.
     m_startTunnel = declaresMediaTunnel;
     m_startRelayRouting = declaresRelayRouting;
-    peer->setIceConfiguration(mediaIceConfiguration());
+    {
+        const auto startIce = mediaIceConfiguration();
+        // Direct media ladder: what a later replacement judges an older
+        // relay leg by is how the connection in use was made.
+        m_currentRouted = startIce && startIce->mediaRouting();
+        m_replacementRouted = false;
+        peer->setIceConfiguration(startIce);
+    }
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
                      declaresHeadphonesMix, declaresRemoteTx, declaresIq)) {
@@ -1939,9 +2040,27 @@ std::optional<IceConfiguration> DaemonMediaController::mediaIceConfiguration()
 
 bool DaemonMediaController::handleReplace(const QJsonObject& control)
 {
-    if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)
-        || !exactKeys(control, {"op", "connectionId", "replaces"})
-        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+    if (!m_server || !m_server->mediaReplaceAvailable(m_epoch)) {
+        return false;
+    }
+    // Direct media ladder: a device the Core told mediaDirectVersion 1 may
+    // add "mediaDirectVersion": 1 to ask for a replacement without the
+    // tunnel or a relay (STUN and host candidates only). Every other shape
+    // stays the exact three fields.
+    const bool direct = control.contains(QStringLiteral("mediaDirectVersion"));
+    if (direct) {
+        quint32 version = 0;
+        if (!exactKeys(control, {"op", "connectionId", "replaces", "mediaDirectVersion"})
+            || !m_server->mediaDirectAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("mediaDirectVersion")), version,
+                              /*nonzero=*/true)
+            || version != 1) {
+            return false;
+        }
+    } else if (!exactKeys(control, {"op", "connectionId", "replaces"})) {
+        return false;
+    }
+    if (!canonicalConnectionId(control.value(QStringLiteral("connectionId")))
         || !canonicalConnectionId(control.value(QStringLiteral("replaces")))) {
         return false;
     }
@@ -1956,9 +2075,18 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
         return refuse(QStringLiteral(
             "The Core did not move audio and display: that connection is not the current one."));
     }
-    if (!m_startRelayRouting) {
+    std::optional<IceConfiguration> nextIce;
+    if (direct) {
+        nextIce = m_server->mediaDirectIceConfiguration();
+    } else {
+        nextIce = mediaIceConfiguration();
+    }
+    // An older relay leg (a connection made without media routing that runs
+    // through the loopback shim) cannot move to a connection that does not
+    // route media either. Judged by the connection in use, not by what the
+    // media start declared: a tunnel start routes media over the tunnel.
+    if (!m_currentRouted) {
         const auto path = m_peer->selectedPath();
-        const auto nextIce = mediaIceConfiguration();
         if (path && path->viaLoopbackShim() && (!nextIce || !nextIce->mediaRouting())) {
             return refuse(QStringLiteral(
                 "This older relay media path cannot move while it is still in use."));
@@ -2026,7 +2154,8 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
             m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
         }
     });
-    peer->setIceConfiguration(mediaIceConfiguration());
+    m_replacementRouted = nextIce && nextIce->mediaRouting();
+    peer->setIceConfiguration(nextIce);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
                      m_startOfferedLossless, m_receiverAudioNegotiated,
                      m_headphonesMixNegotiated, m_startMicLine, m_iqNegotiated)) {
@@ -2106,6 +2235,7 @@ void DaemonMediaController::finishReplacement()
     m_peer = std::move(m_replacement);
     m_replacementId.clear();
     m_replacementReady = false;
+    m_currentRouted = std::exchange(m_replacementRouted, false);
     MediaPeer* const peer = m_peer.get();
     const QString connectionId = peer->connectionId();
     wireCurrentPeer(peer, connectionId);
@@ -2569,7 +2699,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     }
     // Task 76 (ruling 9.1): a device subscribes displays only for its own
     // slices; its pans ride their receivers, shared or not.
-    if (!ownsSlice(sliceId)) {
+    if (!seesSlice(sliceId)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("That slice belongs to another device."));
     }
@@ -3047,7 +3177,7 @@ bool DaemonMediaController::handleReceiverAudio(const QJsonObject& control)
     auto it = m_receiverStreams.find(sliceId);
     if (it == m_receiverStreams.end()) {
         if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
-            || !ownsSlice(sliceId)) {
+            || !hearsSlice(sliceId)) {
             // No such slice, or (Task 76, ruling 9.2) not this device's:
             // answer, but keep no entry, so requests for made-up slice ids
             // cannot grow this map.
@@ -3098,7 +3228,7 @@ bool DaemonMediaController::handleIqStream(const QJsonObject& control)
     const bool enabled = control.value(QStringLiteral("enabled")).toBool();
     auto it = m_iqStreams.find(sliceId);
     if (it == m_iqStreams.end()) {
-        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !ownsSlice(sliceId)) {
+        if (!m_radioModel || !m_radioModel->sliceById(sliceId) || !controlsSlice(sliceId)) {
             IqStream absent;
             absent.revision = revision;
             absent.generation = ++m_nextIqGeneration;
@@ -3167,7 +3297,7 @@ void DaemonMediaController::reconcileIqStream(int sliceId)
     bool budgetRefused = false;
     if (!stream.desired) {
         reason.clear();
-    } else if (!slice || !ownsSlice(sliceId) || stream.streamIndex < 0
+    } else if (!slice || !controlsSlice(sliceId) || stream.streamIndex < 0
                || !m_radioModel->streamActive(stream.streamIndex)) {
         reason = QStringLiteral("This receiver is not available on the Core.");
     } else if (stream.sampleRate < 48000 || stream.sampleRate > 384000) {
@@ -3309,7 +3439,7 @@ void DaemonMediaController::reconcileReceiverAudio(int sliceId)
     if (!stream.desiredEnabled) {
         blockedBy = RemoteAudioOffReason::ClientDisabled;
     } else if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr
-               || !ownsSlice(sliceId)) {
+               || !hearsSlice(sliceId)) {
         // Gone, or (Task 76) no longer this device's.
         stream.desiredEnabled = false;
         blockedBy = RemoteAudioOffReason::SliceRemoved;
@@ -3646,7 +3776,7 @@ bool DaemonMediaController::anySliceOnHeadphones() const
     // its headphones is in that device's mix, not this one's.
     for (SliceModel* slice : m_radioModel->slices()) {
         if (slice && slice->outputRoute() == SliceModel::OutputRoute::Headphones
-            && ownsSlice(slice->sliceIndex())) {
+            && controlsSlice(slice->sliceIndex())) {
             return true;
         }
     }

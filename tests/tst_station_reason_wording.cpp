@@ -50,6 +50,10 @@
 // in use compare as they are ("slice removed", "slice stream binding
 // changed"). The last two are plain as written and are scanned anyway.
 //
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2:
+//                                    changeRefusal replaces sliceRefusal;
+//                                    a listener's refusal words scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
@@ -173,12 +177,42 @@
 //                                    setting's refusal forwards, and the
 //                                    window's transmitPermissionReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: the calibration run's
+//                                    refusals and messages scanned, and the
+//                                    window's reason for an older Core.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  txEq.setCurve's refusals scanned; the
 //                                    This Core page's two device reasons
 //                                    named on the app side. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  cfc.setProfile's refusals scanned
+//                                    (transmitSettingsVersion 15).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The PA on-air gate's refusals scanned
+//                                    (Setup description version 20).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  JJ's rule: a reason that says "yet"
 //                                    fails (it promises a future).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 4:
+//                                    SliceAccessController.cpp scanned;
+//                                    the hand-off and controlTaken words'
+//                                    names and letter are plain inserts.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 5:
+//                                    SliceAccessMirror::listenerReason
+//                                    scanned (the Core's listener words,
+//                                    held back in a remote window);
+//                                    RadioModel forwards it; the link's
+//                                    sliceAccessUnavailableReason and
+//                                    SliceModel's getter are app side.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 9: the
+//                                    notice to a closed slice's listeners
+//                                    (listenedClosedReason), forwarded.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: the kind
+//                                    word sliceHolderWords inserts.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -738,7 +772,22 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("takerName"),
           // R-R3-49: a Watt Meter calibration point's maximum, a number of
           // watts (calibrationKeyValueRefusal).
-          QStringLiteral("spec.maximum")},
+          QStringLiteral("spec.maximum"),
+          // Review C1: alexLpfKeyValueRefusal's band name (160m to 6m),
+          // "start" or "end", and its two limits in MHz ("Choose the %1
+          // low-pass %2 from %3 to %4 MHz."), and the same band and edge
+          // in its refusal of a key written in another case.
+          QStringLiteral("band, edgeName, lowest, highest"),
+          QStringLiteral("band, edgeName"),
+          // Slice control plan Task 2: listenerChangeReason's slice letter
+          // (A to P); the controller's name beside it is `owner` above.
+          QStringLiteral("letter"),
+          // Slice control plan Task 4: the controller's or the taker's
+          // name (the operator's own words, ruling 4.3) and the letter.
+          QStringLiteral("name, letter"), QStringLiteral("planDevice(taker).name, letter"),
+          // Slice control plan Task 17: sliceHolderWords' kind word for a
+          // device with no name (DeviceSessionRegistry::kindWord, lowercase).
+          QStringLiteral("kind")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -789,7 +838,7 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 73: functions of this file, their literals
           // scanned here (the owner's name is the operator's own word,
           // ruling 4.3).
-          QStringLiteral("sliceRefusal(requester, sliceId)"),
+          QStringLiteral("changeRefusal(requester, sliceId)"),
           QStringLiteral("ownedElsewhereReason(sliceId)"),
           // Fix wave I3: a slice's settings key; ownedElsewhereReason's
           // words, scanned here.
@@ -821,6 +870,10 @@ const QList<ReasonSource>& reasonSources()
           // words in StationServer.cpp, each scanned.
           QStringLiteral("transmitGateSettingRefusal(transport, key, &value)"),
           QStringLiteral("transmitGateSettingRefusal(transport, key, nullptr)"),
+          // R-R3-49 / R-IOS-27: a PA key's on-air refusal
+          // (paSettingOnAirRefusalFor), RadioModel::paSettingOnAirRefusal's
+          // words, scanned in RadioModel.cpp's entry.
+          QStringLiteral("pa"),
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
@@ -850,6 +903,14 @@ const QList<ReasonSource>& reasonSources()
         // iPhone app plan Task 77: taking transmit's refusals and the
         // transmitTaken notice's words. The taker's name is the operator's
         // own words or "Radio" (ruling 4.3, ruling 8.1).
+        // Slice control plan Task 4: listen, stop listening, take control
+        // and release. Only the slice letter is inserted.
+        {"src/core/session/SliceAccessController.cpp", {}, {}, 8,
+         {QStringLiteral("letter"), QStringLiteral("letterOf(sliceId)")},
+         {// refused()'s parameter, from this file's calls.
+          QStringLiteral("reason"),
+          // StationServer::handOffRefusal's words (scanned there).
+          QStringLiteral("m_hooks.cannotHandOff(former, sliceId)")}},
         {"src/core/session/StationTransmitTake.cpp", {}, {}, 2,
          {QStringLiteral("takerName")},
          {// This file's own constant and reason function, scanned here;
@@ -878,10 +939,15 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("moved ? QString() : QString::fromLatin1(kCentreRefusedReason)"),
           QStringLiteral("affected.isEmpty() ? QString::fromLatin1(kChangedReason) : QString()"),
           QStringLiteral("pinReason(planDevice(anchor).name)"),
+          // Slice control plan Task 8: the same, the anchor not connected.
+          QStringLiteral("awayPinReason(planDevice(anchor).name)"),
           QStringLiteral("olderWindowAskReason(namesOf(check.named))"),
           QStringLiteral("takenOverReason(planDevice(taker).name)"),
           QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),
           QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
+          // Slice control plan Task 9: a closed slice's listeners are told;
+          // listenedClosedReason's literals, scanned here.
+          QStringLiteral("listenedClosedReason(why, name, lettersOf(it.value()))"),
           QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
                          "sliceTakenReason(takerName, letters)"),
           // Fix wave 2: the on-air and freeze refusals (TxRefusal.cpp's
@@ -891,7 +957,7 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("stationFreezeRefusal(id)"),
           QStringLiteral("touches ? onAirWords(*holder) : TxRefusal{}"),
           // StationServer.cpp's slice refusal, scanned there.
-          QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
+          QStringLiteral("changeRefusal(requester, sliceId)"), QStringLiteral("refusal"),
           // Today's refusals from the model, the allocator and the
           // dispatcher (scanned where they are written), with the holders'
           // names appended in this file's own sentence (holdersSentence).
@@ -974,7 +1040,13 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
-          // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
+          // Level Cal: RadioModel::requestStartLevelCalibration's refusal,
+          // worded in LevelCalibrationService.cpp and LevelCalibrationRun.cpp
+          // (both scanned below) or RadioModel.cpp's on-air words.
+          QStringLiteral("m_radioModel->requestStartLevelCalibration( "
+                         "static_cast<float>(levelDbm), frequencyHz, sliceId)"),
+          // iPhone app Task 73: StationServer::changeRefusal (slice control plan
+          // Task 2; was sliceRefusal), scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
           // Fix wave 2: the same, re-run when a rate change is applied, and
           // StationSharedSettings' kTargetChangedReason, handed over with
@@ -1013,6 +1085,16 @@ const QList<ReasonSource>& reasonSources()
         // sentence. The device name put into two of them is the operator's
         // own word (ruling 4.3); a band plan reason is the band plan's
         // sentence, passed on only when it is plain.
+        // Level Cal: the calibration run's refusals and messages, sent as
+        // startLevelCalibration's result and as radio's levelCalMessage.
+        {"src/core/LevelCalibrationRun.cpp", {}, {}, 8, {},
+         {// A search's failure, one of this file's messages.
+          QStringLiteral("m_failure")}},
+        {"src/core/LevelCalibrationService.cpp", {},
+         {// AppSettings keys, never shown.
+          "RX1_", "DspOptionsBufferSizePhoneRx"},
+         2, {},
+         {QStringLiteral("m_run->start(levelDbm, frequencyHz)"), QStringLiteral("refused")}},
         {"src/core/safety/TxRefusal.cpp", {}, {}, 15,
          {QStringLiteral("holderName"), QStringLiteral("holderShortName")},
          {QStringLiteral("reason"), QStringLiteral("std::move(text)"),
@@ -1117,11 +1199,17 @@ const QList<ReasonSource>& reasonSources()
           // program's key, TxRefusal.cpp's words.
           QStringLiteral("programKeyRefusal")}, {}, 3, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
-         // and TxRefusal.cpp's refusals (scanned there).
-         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
-        {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
-         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
-         {QStringLiteral("m_rxOnlyReason")}},
+         // and TxRefusal.cpp's refusals (scanned there). R-R3-46 (HL2 port
+         // part 2): the reason setTxInhibited was given
+         // (RadioModel::ioBoardFaultReason, scanned).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()"),
+          QStringLiteral("TxRefusals::txInhibited()"), QStringLiteral("m_txInhibitReason")}},
+        {"src/core/MoxController.h",
+         {QStringLiteral("rxOnlyReason"), QStringLiteral("txInhibitReason")}, {}, 0, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
+         // and the one setTxInhibited was given (RadioModel::ioBoardFaultReason,
+         // scanned).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("m_txInhibitReason")}},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
           // iPhone app plan Task 77: a device's Tuner Genius autotune.
@@ -1261,6 +1349,15 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("why")}},
         {"src/models/SliceModel.cpp",
          {QStringLiteral("activeWriteReason"), QStringLiteral("applyMirroredValue")}, {}, 5},
+        // Slice control plan Task 5: a remote window's copy of the Core's
+        // listener words (StationServer::listenerChangeReason), shown when
+        // it holds back a change to a slice it only listens to. The slice
+        // letter (A to P) and the controller's name, the operator's own
+        // word (ruling 4.3).
+        {"src/core/session/SliceAccessMirror.cpp", {QStringLiteral("listenerReason")}, {}, 3,
+         {QStringLiteral("letter"), QStringLiteral("owner"),
+          // Slice control plan Task 17: the controller's kind word.
+          QStringLiteral("kind")}},
         {"src/models/TunerModel.cpp", {QStringLiteral("applyMirroredValue")}, {}, 2},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("applyMirroredValue"), QStringLiteral("setFourO3AEnabledForStation"),
@@ -1350,7 +1447,21 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("ioBoardNoAnswerReason"),
           QStringLiteral("ioBoardI2cUnreachableReason"),
           // R-R3-49 (parity Task 16): dsp.filterResponse's refusals.
-          QStringLiteral("filterResponseForStation")},
+          QStringLiteral("filterResponseForStation"),
+          // R-R3-46 (HL2 port part 2, txInhibitReasonVersion 1): the I/O
+          // board fault's reason, which txInhibitReason sends and the
+          // desktop's transmit block shows.
+          QStringLiteral("ioBoardFaultReason"), QStringLiteral("refreshTxInhibitReason"),
+          QStringLiteral("txInhibitReason"),
+          // R-R3-49 / R-IOS-27 (Setup description version 20): the PA
+          // on-air gate's refusals, for the paProfile verbs and a window's
+          // raw PA keys.
+          QStringLiteral("paOnAirLockedReason"), QStringLiteral("paHolderOnlyReason"),
+          QStringLiteral("paOnAirEditRefusal"), QStringLiteral("paValueRangeRefusal"),
+          QStringLiteral("paRowRangeRefusal"), QStringLiteral("paSettingOnAirRefusal"),
+          // Setup description version 22: the RX buffer sizes' on-air
+          // lock (paOnAirLockedReason's words).
+          QStringLiteral("dspBufferOnAirLockedReason")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1363,7 +1474,9 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 / R-IOS-18: a PA profile's own name.
           QStringLiteral("request.name"),
           // onBandButtonClicked: the band's own label ("40m").
-          QStringLiteral("bandLabel(band)")},
+          QStringLiteral("bandLabel(band)"),
+          // ioBoardFaultReason: the board's fault code, a number.
+          QStringLiteral("code")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
@@ -1389,7 +1502,29 @@ const QList<ReasonSource>& reasonSources()
           // the link's own reason for a request it could not send; and
           // stationOnAirRefusal's reason (onAirReason, scanned here).
           QStringLiteral("unreachable"), QStringLiteral("ioBoardNoAnswerReason()"),
-          QStringLiteral("onAir")}},
+          QStringLiteral("onAir"),
+          // R-R3-46 (HL2 port part 2): ioBoardFaultReason, a function of
+          // this file scanned here, held in m_txInhibitReason; and in a
+          // remote window, the Core's txInhibitReason (that same function's
+          // words) mirrored as it is sent.
+          QStringLiteral("m_txInhibit.inhibited() && m_txInhibit.lastSource() == "
+                         "safety::TxInhibitMonitor::Source::IoBoardFault ? "
+                         "ioBoardFaultReason(m_txInhibit.ioBoardFaultCode()) : QString()"),
+          QStringLiteral("reason"), QStringLiteral("m_txInhibitReason"),
+          QStringLiteral("value.toString()"),
+          // R-R3-49 / R-IOS-27: the PA on-air gate. paOnAirLockedReason,
+          // paHolderOnlyReason, paOnAirEditRefusal, paValueRangeRefusal
+          // and paRowRangeRefusal are functions of this file scanned here;
+          // each expression below passes one of their results on.
+          QStringLiteral("paOnAirEditRefusal(profileAction, request.band, "
+                         "request.requesterHoldsTransmit)"),
+          QStringLiteral("paOnAirEditRefusal(false, txBand, requesterHoldsTransmit)"),
+          QStringLiteral("refusal"),
+          QStringLiteral("paValueRangeRefusal(request.action, request.value)"),
+          QStringLiteral("rangeRefusal"),
+          // Slice control plan Task 5: a held NNR diagnostics request says
+          // the words SliceAccessMirror::listenerReason made (scanned).
+          QStringLiteral("slice->readOnlyListenerReason()")}},
         // iPhone app plan Task 25 (R-IOS-18): a `vax` level outside 0 to 1,
         // in property.result.
         {"src/core/session/StationVaxFacade.cpp", {QStringLiteral("levelRefusal")}, {}, 1},
@@ -1400,6 +1535,10 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/ParaEqCurve.cpp", {QStringLiteral("txEqPointsFromCurveJson")}, {}, 7, {},
          // refuse(why): each literal handed to it is scanned here.
          {QStringLiteral("why")}},
+        // R-R3-49 (transmitSettingsVersion 15): cfc.setProfile's refusals.
+        {"src/core/CfcProfile.cpp", {QStringLiteral("fromPublishedJson")}, {}, 10, {},
+         // refuse(why) and the shared notUnderstood: each literal is scanned here.
+         {QStringLiteral("why"), QStringLiteral("notUnderstood")}},
         {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
          {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
           QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),
@@ -1541,6 +1680,10 @@ const QList<AppSideReason>& appSideReasons()
         // radioHardwareVersion 8: the Alex Filters tabs' receive filter rows.
         {"src/core/session/IStationLink.h", "alexHpfRowsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 11: HL2 Options' Enable CL2, CL2 frequency
+        // and External 10 MHz.
+        {"src/core/session/IStationLink.h", "hl2ClockUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
         // iPhone app plan Task 25: This Core's device list on a Core that
         // does not offer device administration to this window.
         {"src/core/session/IStationLink.h", "deviceAdminUnavailableReason",
@@ -1549,6 +1692,18 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         // Parity ruling C4: the rate box on a Core without setRadioSampleRate.
         {"src/core/session/IStationLink.h", "radioSampleRateUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal: Setup's level calibration Reset on a Core without
+        // resetLevelCalibration.
+        {"src/core/session/IStationLink.h", "levelCalibrationResetUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal: Setup's level calibration Start and Cancel on a Core
+        // without startLevelCalibration.
+        {"src/core/session/IStationLink.h", "levelCalibrationRunUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // Level Cal fix wave: a slice on the other ADC's preamp choice on a
+        // Core without stepAtt's rx2PreampMode.
+        {"src/core/session/IStationLink.h", "rx2PreampModeUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
@@ -1577,6 +1732,11 @@ const QList<AppSideReason>& appSideReasons()
         // R-IOS-26 / R-R3-49: 2 m as its own band.
         {"src/core/session/IStationLink.h", "band2mUnavailableReason",
          "a remote window's own reason when its Core does not have the 2 m band"},
+        // Slice control plan Task 5.
+        {"src/core/session/IStationLink.h", "sliceAccessUnavailableReason",
+         "a remote window's own reason when its Core cannot share slices"},
+        {"src/models/SliceModel.h", "readOnlyListenerReason",
+         "getter of the words SliceAccessMirror::listenerReason made (scanned)"},
         {"src/core/SettingsHygiene.h", "remoteUnavailableReason",
          "getter for desktop state set by StationClient and read by diagnostics pages"},
         {"src/core/station/StationRadios.h", "waitingReason",
@@ -1596,6 +1756,13 @@ const QList<AppSideReason>& appSideReasons()
         // log stream; tst_remote_core_log checks it is plain.
         {"src/core/session/IStationLink.h", "supportBundleUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // radioHardwareVersion 10 (Alex LPF rows): the Alex-1 tab's
+        // low-pass rows on an older Core, and the 6m/ByPass box on a
+        // board without the bypass (both disabled with the reason shown).
+        {"src/core/session/IStationLink.h", "alexLpfRowsUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/models/RadioModel.cpp", "lpfBypassUnavailableReason",
+         "the reason shown on the disabled 6m/ByPass box, not a Core refusal"},
         {"src/models/RadioModel.cpp", "stationSupportUnavailableReason",
          "a remote window's own reason its Core-side support controls are disabled"},
         {"src/models/RadioModel.h", "rxFilter0Reason",

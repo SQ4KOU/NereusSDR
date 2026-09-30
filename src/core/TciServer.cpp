@@ -112,6 +112,13 @@
 //   2026-09-28 - R-R3-46 / R-R3-11: the RX1 sensor takes slice 0's ADC
 //                offset (rxMeterOffsetDbForSlice). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 2: the hosting desktop's TCI
+//                receivers are the slices SliceAccessPolicy lets the
+//                station device change. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: calibration_ex carries the meter and display
+//                calibration and goes to apps when either changes. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -130,6 +137,7 @@
 #include "models/TransmitModel.h"  // Phase 3J-1 closeout (review P2): MON / TUN broadcast wireup.
 #include "MoxController.h"         // Phase 3J-1 closeout (review P2): MOX broadcast wireup.
 #include "SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/safety/TxRefusal.h"
 #include "MicProfileManager.h"     // R-R3-49 (parity Task 3): a remote window's TX profiles.
 #include "TxSliceArbiter.h"        // Codex review round 6: tx_frequency follows the TX-bound slice.
@@ -1213,6 +1221,19 @@ void TciServer::hookGlobalBroadcasts()
         });
     }
 
+    // ── Level Cal (calibration_ex: line) ───────────────────────────────────
+    // From Thetis TCIServer.cs:6785-6786 [v2.10.3.15]:
+    //   console.MeterCalOffsetChangedHandlers += OnCalibrationChanged;
+    //   console.DisplayOffsetChangedHandlers += OnCalibrationChanged;
+    // OnCalibrationChanged (TCIServer.cs:7770-7781 [v2.10.3.15]) calls
+    // CalibrationChanged(rx) with the handler's 1-based rx. NereusSDR keeps
+    // one receive calibration for both receivers, so it sends the line for
+    // receiver 0 and receiver 1 on every change.
+    connect(m_model, &RadioModel::levelCalibrationChanged, this, [this]() {
+        m_protocol->enqueueLocalBroadcast(m_protocol->calibrationExLineFor(0));
+        m_protocol->enqueueLocalBroadcast(m_protocol->calibrationExLineFor(1));
+    });
+
     // ── MOX (trx: line) ────────────────────────────────────────────────────
     // Source: Thetis MoxChangeHandlers at TCIServer.cs:6727 [v2.10.3.15]
     // routed to OnMoxChangeHandler -> sendMOX.  MoxController is the
@@ -1260,12 +1281,12 @@ void TciServer::hookGlobalBroadcasts()
                     // / sendTXEnable at TCIServer.cs:2515-2516 + 2618-2619
                     // [v2.10.3.15].  Re-emit both to mirror the init burst
                     // when MOX flips.
-                    bool rx2en = m_desktopHostMode && desktopSliceForReceiver(1) >= 0;
-                    if (!m_desktopHostMode) {
-                        QMetaObject::invokeMethod(m_model, "rx2Enabled",
-                                                  Qt::DirectConnection,
-                                                  Q_RETURN_ARG(bool, rx2en));
-                    }
+                    // RX2 is on when receiver 1 has a slice, as the
+                    // protocol reads it, not from the connection's active
+                    // RX count (0 until a connect sets it from the
+                    // persisted count, and not tied to slices).  tx_enable
+                    // also follows the init burst's transmitRefused() gate.
+                    const bool rx2en = m_protocol->rx2EnabledNow();
                     const QString notMox =
                         on ? QStringLiteral("false") : QStringLiteral("true");
                     m_protocol->enqueueLocalBroadcast(
@@ -1275,11 +1296,15 @@ void TciServer::hookGlobalBroadcasts()
                             .arg((rx2en && !on) ? QStringLiteral("true")
                                                  : QStringLiteral("false")));
                     m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("tx_enable:0,%1;").arg(notMox));
+                        QStringLiteral("tx_enable:0,%1;")
+                            .arg((!m_protocol->transmitRefused() && !on)
+                                     ? QStringLiteral("true")
+                                     : QStringLiteral("false")));
                     m_protocol->enqueueLocalBroadcast(
                         QStringLiteral("tx_enable:1,%1;")
-                            .arg((rx2en && !on) ? QStringLiteral("true")
-                                                 : QStringLiteral("false")));
+                            .arg((!m_protocol->transmitRefused() && rx2en && !on)
+                                     ? QStringLiteral("true")
+                                     : QStringLiteral("false")));
                 });
     }
 
@@ -1417,42 +1442,57 @@ void TciServer::hookGlobalBroadcasts()
                 }
             });
 
-    // ── RX2 enabled (rx_enable:1 + rx_channel_enable:1,0 + lock:1) ────────
+    // ── RX2 enabled (rx_enable:1 + tx_enable:1) ───────────────────────────
     // Source: Thetis RX2EnabledChangedHandlers at TCIServer.cs:6741
-    // [v2.10.3.15] routed to OnRX2EnabledChanged.  Thetis re-emits the
-    // initial state for the rx==1 lines that depend on bRX2Enabled.
+    // [v2.10.3.15] routed to OnRX2EnabledChanged -> RX2EnabledChange.
+    // RX2 is on when receiver 1 has a slice (TciProtocol::rx2EnabledNow), so
+    // the lines follow every event that can change that: a slice added or
+    // removed, the receiver map moving with slice ownership while hosting,
+    // and the active RX count. They go out only when the answer flips, as
+    // Thetis's handler fires only on a change.
+    m_rx2EnabledSent = m_protocol->rx2EnabledNow();
     connect(m_model, &RadioModel::activeRxCountChanged, this,
-            [this](int newCount) {
-                const bool en = m_desktopHostMode
-                    ? desktopSliceForReceiver(1) >= 0 : (newCount >= 2);
-                const QString boolStr =
-                    en ? QStringLiteral("true") : QStringLiteral("false");
-                bool mox = false;
-                QMetaObject::invokeMethod(m_model, "mox",
-                                          Qt::DirectConnection,
-                                          Q_RETURN_ARG(bool, mox));
-                m_protocol->enqueueLocalBroadcast(
-                    QStringLiteral("rx_enable:1,%1;")
-                        .arg((en && !mox) ? QStringLiteral("true")
-                                          : QStringLiteral("false")));
-                m_protocol->enqueueLocalBroadcast(
-                    QStringLiteral("rx_channel_enable:1,0,%1;").arg(boolStr));
-                if (en) {
-                    bool lock1 = false;
-                    QMetaObject::invokeMethod(m_model, "lock",
-                                              Qt::DirectConnection,
-                                              Q_RETURN_ARG(bool, lock1),
-                                              Q_ARG(int, m_desktopHostMode
-                                                  ? desktopSliceForReceiver(1) : 1));
-                    m_protocol->enqueueLocalBroadcast(
-                        QStringLiteral("lock:%1,%2;")
-                            .arg(m_desktopHostMode ? desktopSliceForReceiver(1) : 1)
-                            .arg(lock1 ? QStringLiteral("true")
-                                        : QStringLiteral("false")));
-                }
-            });
+            [this](int) { refreshRx2Enabled(); });
+    connect(m_model, &RadioModel::sliceAdded, this,
+            [this](int) { refreshRx2Enabled(); });
+    connect(m_model, &RadioModel::sliceRemoved, this, [this](int) {
+        refreshRx2Enabled();
+        // The ownership marks settle after the removal signal.
+        QTimer::singleShot(0, this, [this]() { refreshRx2Enabled(); });
+    });
+    QObject::disconnect(m_rx2OwnershipConnection);
+    if (SliceOwnership* ownership = m_model->sliceOwnership()) {
+        m_rx2OwnershipConnection = connect(ownership, &SliceOwnership::markChanged, this,
+            [this](int, const QByteArray&, const QByteArray&) { refreshRx2Enabled(); });
+    }
 
     m_globalBroadcastsWired = true;
+}
+
+void TciServer::refreshRx2Enabled()
+{
+    // A stopped server queues nothing (stop() also drops the ownership
+    // hook; the singleShot after a slice removal can still land here).
+    if (!m_model || !m_protocol || !m_globalBroadcastsWired) { return; }
+    const bool en = m_protocol->rx2EnabledNow();
+    if (en == m_rx2EnabledSent) { return; }
+    m_rx2EnabledSent = en;
+    // From Thetis TCIServer.cs:842-847 [v2.10.3.15] (RX2EnabledChange):
+    //   sendRXEnable(1, enabled);
+    //   sendTXEnable(1, enabled && !consoleThreadSafe.MOX);
+    // Only those two lines: rx_channel_enable and lock are not re-sent on
+    // this path (console.cs:37522 fires RX2EnabledChangedHandlers alone).
+    // tx_enable also follows transmitRefused(), as the first lines do.
+    bool mox = false;
+    QMetaObject::invokeMethod(m_model, "mox",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, mox));
+    const auto flag = [](bool on) {
+        return on ? QStringLiteral("true") : QStringLiteral("false");
+    };
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("rx_enable:1,%1;").arg(flag(en)));
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("tx_enable:1,%1;")
+        .arg(flag(en && !mox && !m_protocol->transmitRefused())));
 }
 
 TciServer::~TciServer()
@@ -1597,7 +1637,16 @@ int TciServer::desktopSliceForReceiver(int receiver) const
 {
     if (!m_model || !m_model->sliceOwnership() || receiver < 0
         || receiver >= TciProtocol::kExposedReceiverCount) { return -1; }
-    QList<int> owned = m_model->sliceOwnership()->ownedBy(SliceOwnership::stationDevice());
+    // Slice control plan Task 2: the slices the station device may change
+    // (its own, and those it runs held for an absent device), never one it
+    // could only see or hear.
+    const SliceOwnership& ownership = *m_model->sliceOwnership();
+    QList<int> owned;
+    for (int sliceId : ownership.liveSlices()) {
+        if (SliceAccessPolicy::mayChange(ownership, SliceOwnership::stationDevice(), sliceId)) {
+            owned.append(sliceId);
+        }
+    }
     std::sort(owned.begin(), owned.end());
     return receiver < owned.size() ? owned.at(receiver) : -1;
 }
@@ -1685,6 +1734,7 @@ void TciServer::setDesktopHostMode(bool enabled)
         ? [this](int receiver) { return desktopSliceForReceiver(receiver); }
         : std::function<int(int)>{});
     refreshSliceWriteGate();
+    if (m_globalBroadcastsWired) { refreshRx2Enabled(); }
     if (m_desktopHostMode) { hookAudioAndIqTaps(); }
     if (m_desktopHostMode && m_model) {
         for (SliceModel* slice : m_model->slices()) {
@@ -1858,6 +1908,9 @@ void TciServer::stop()
         // / connection-state subscribers (all rooted on m_model and its
         // sub-models).  Reset the guard so start() re-arms them.
         m_globalBroadcastsWired = false;
+        // SliceOwnership is not m_model, so its RX2 hook needs its own
+        // disconnect; hookGlobalBroadcasts reconnects it on start().
+        QObject::disconnect(m_rx2OwnershipConnection);
     }
     // 2026-05-17 crash fix: m_audioTapSources is now QSet<QPointer<RxChannel>>
     // (see TciServer.h).  Skip entries whose underlying RxChannel was

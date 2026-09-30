@@ -33,6 +33,13 @@
 //                                    Power page, ATT on TX and version 5
 //                                    settings are taken on the air.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate review: the per-band
+//                                    power and tune power maps are the
+//                                    Core's own; a peer's write of either
+//                                    is refused and leaves the Core's map
+//                                    as it was, and the Core's change still
+//                                    reaches the window.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -539,37 +546,35 @@ void TstRemoteTransmitSetupPages::version5SettingsReachTheCore()
     QCOMPARE(coreTx.twoToneInvert(), invert);
     QCOMPARE(coreTx.twoToneFreq2Delay(), 40);
 
-    // The window's own per-band change reaches the Core.
-    windowTx.setPowerForBand(Band::Band17m, 61);
-    QTRY_COMPARE(coreTx.powerForBand(Band::Band17m), 61);
-
-    // Per-band power: the whole map, keys in any order.
+    // The per-band power maps are the Core's own (the review of the PA
+    // on-air gate): the window keeps its change to itself and the Core
+    // refuses a peer's write of either map, leaving its map as it was.
+    const int core17 = coreTx.powerForBand(Band::Band17m);
+    windowTx.setPowerForBand(Band::Band17m, core17 == 61 ? 62 : 61);
+    const QString corePowerMap = coreTx.powerByBandJson();
+    const QString coreTuneMap = coreTx.tunePowerByBandJson();
     SessionPropertyResult r = s.writeTransmit(
         "powerByBandJson", MirrorWireKind::Utf8,
         bandMap(50, {{QStringLiteral("40m"), 33}, {QStringLiteral("XVTR"), 7}}));
-    QVERIFY2(r.accepted, qPrintable(r.reason));
-    QCOMPARE(coreTx.powerForBand(Band::Band40m), 33);
-    QCOMPARE(coreTx.powerForBand(Band::XVTR), 7);
-    QCOMPARE(coreTx.powerForBand(Band::Band20m), 50);
+    QVERIFY(!r.accepted);
+    QCOMPARE(r.reason, QStringLiteral("The Core sets this itself; it cannot be changed from here."));
+    QCOMPARE(coreTx.powerByBandJson(), corePowerMap);
     r = s.writeTransmit("tunePowerByBandJson", MirrorWireKind::Utf8,
                         bandMap(10, {{QStringLiteral("160m"), 15}}));
-    QVERIFY2(r.accepted, qPrintable(r.reason));
-    QCOMPARE(coreTx.tunePowerForBand(Band::Band160m), 15);
-    QCOMPARE(coreTx.tunePowerForBand(Band::Band20m), 10);
-    // The Core's whole map, in its own key order.
-    // The writes above carry the 14 bands of a peer built before 2 m; the
-    // Core keeps 2 m's value, and its map has all 15 (R-IOS-26).
-    const QJsonObject map = QJsonDocument::fromJson(coreTx.powerByBandJson().toUtf8()).object();
-    QCOMPARE(map.size(), 15);
-    QCOMPARE(map.value(QStringLiteral("2m")).toInt(), coreTx.powerForBand(Band::Band2m));
-    // A write with all 15 bands sets 2 m's own power.
+    QVERIFY(!r.accepted);
+    QCOMPARE(r.reason, QStringLiteral("The Core sets this itself; it cannot be changed from here."));
+    QCOMPARE(coreTx.tunePowerByBandJson(), coreTuneMap);
+    // A write with all 15 bands is refused the same way.
     QString with2m = bandMap(50, {{QStringLiteral("40m"), 33}, {QStringLiteral("XVTR"), 7}});
     with2m.insert(with2m.size() - 1, QStringLiteral(",\"2m\":44"));
     r = s.writeTransmit("powerByBandJson", MirrorWireKind::Utf8, with2m);
-    QVERIFY2(r.accepted, qPrintable(r.reason));
-    QCOMPARE(coreTx.powerForBand(Band::Band2m), 44);
-    QCOMPARE(coreTx.powerForBand(Band::GEN), 50);
-    QCOMPARE(map.value(QStringLiteral("40m")).toInt(), 33);
+    QVERIFY(!r.accepted);
+    QCOMPARE(coreTx.powerByBandJson(), corePowerMap);
+    QCOMPARE(coreTx.powerForBand(Band::Band17m), core17);
+    // The Core's whole map has all 15 bands (R-IOS-26).
+    const QJsonObject map = QJsonDocument::fromJson(coreTx.powerByBandJson().toUtf8()).object();
+    QCOMPARE(map.size(), 15);
+    QCOMPARE(map.value(QStringLiteral("2m")).toInt(), coreTx.powerForBand(Band::Band2m));
     // A Core-side band change reaches the window.
     coreTx.setPowerForBand(Band::Band30m, 27);
     QTRY_COMPARE(windowTx.powerForBand(Band::Band30m), 27);
@@ -619,18 +624,6 @@ void TstRemoteTransmitSetupPages::version5WritesOutOfRangeAreRefused()
          QStringLiteral("Choose a two-tone power from 0 to 100 percent.")},
         {"twoToneFreq2Delay", MirrorWireKind::Int64, 1001,
          QStringLiteral("Choose a second tone delay from 0 to 1000 ms.")},
-        {"powerByBandJson", MirrorWireKind::Utf8, bandMap(50, {{QStringLiteral("40m"), 101}}),
-         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
-        {"powerByBandJson", MirrorWireKind::Utf8, QStringLiteral("{\"40m\":10}"),
-         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
-        {"powerByBandJson", MirrorWireKind::Utf8,
-         bandMap(50, {{QStringLiteral("40m"), 10}}).replace(QStringLiteral("\"40m\":10"),
-                                                             QStringLiteral("\"40m\":10.5")),
-         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
-        {"powerByBandJson", MirrorWireKind::Utf8, QStringLiteral("[10]"),
-         QStringLiteral("Choose a power from 0 to 100 W for each band.")},
-        {"tunePowerByBandJson", MirrorWireKind::Utf8, bandMap(20, {{QStringLiteral("20m"), -1}}),
-         QStringLiteral("Choose a tune power from 0 to 100 W for each band.")},
     };
     for (const auto& b : bad) {
         const QVariant before = coreTx.property(b.name.constData());
@@ -639,23 +632,11 @@ void TstRemoteTransmitSetupPages::version5WritesOutOfRangeAreRefused()
         QCOMPARE(r.reason, b.reason);
         QCOMPARE(coreTx.property(b.name.constData()), before);
     }
-    // A band map with one bad value, or one key not a band, changes no band.
-    const int power40 = coreTx.powerForBand(Band::Band40m);
-    QVERIFY(!s.writeTransmit("powerByBandJson", MirrorWireKind::Utf8,
-                             bandMap(20, {{QStringLiteral("20m"), 500}})).accepted);
-    QVERIFY(!s.writeTransmit("powerByBandJson", MirrorWireKind::Utf8,
-                             bandMap(20).replace(QStringLiteral("\"GEN\""),
-                                                 QStringLiteral("\"41m\""))).accepted);
-    QCOMPARE(coreTx.powerForBand(Band::Band40m), power40);
     // The ends are taken.
     QVERIFY(s.writeTransmit("dexpAttackTimeMs", MirrorWireKind::Float64, 2.0).accepted);
     QVERIFY(s.writeTransmit("dexpLookAheadMs", MirrorWireKind::Float64, 999.0).accepted);
     QVERIFY(s.writeTransmit("twoToneLevel", MirrorWireKind::Float64, -96.0).accepted);
     QVERIFY(s.writeTransmit("antiVoxGainDb", MirrorWireKind::Int64, -60).accepted);
-    QVERIFY(s.writeTransmit("powerByBandJson", MirrorWireKind::Utf8,
-                            bandMap(0, {{QStringLiteral("20m"), 100}})).accepted);
-    QCOMPARE(coreTx.powerForBand(Band::Band20m), 100);
-    QCOMPARE(coreTx.powerForBand(Band::Band40m), 0);
     // An enum outside the drive source's values is not the Core's.
     QVERIFY(!s.writeTransmit("twoToneDrivePowerSource", MirrorWireKind::Enum, 7).accepted);
 }
@@ -674,8 +655,6 @@ void TstRemoteTransmitSetupPages::version5WritesAreTakenOnTheAir()
         QVariant value;
     } writes[] = {
         {"tuneDrivePowerSource", MirrorWireKind::Enum, 2},
-        {"powerByBandJson", MirrorWireKind::Utf8, bandMap(12)},
-        {"tunePowerByBandJson", MirrorWireKind::Utf8, bandMap(12)},
         {"dexpAttackTimeMs", MirrorWireKind::Float64, 20.0},
         {"dexpDetectorTauMs", MirrorWireKind::Float64, 20.0},
         {"dexpExpansionRatioDb", MirrorWireKind::Float64, 2.0},

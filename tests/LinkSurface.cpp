@@ -12,6 +12,16 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate re-review: the capture
+//                                    declares paTransmitBand, so
+//                                    paTransmitBandVersion and radio's
+//                                    paTransmitBand are captured.
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder: the capture
+//                                    declares mediaDirect, so
+//                                    mediaDirectVersion and mediaStunUrls
+//                                    are captured, and the GUI's replace
+//                                    may carry mediaDirectVersion.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  RADE status: the capture declares
 //                                    radeStatus, so radeStatusVersion and
 //                                    the slice's radeSynced and
@@ -127,6 +137,9 @@
 //                                    coreAddressesVersion and devices'
 //                                    coreAddresses are captured.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The capture declares alexLpf, so
+//                                    radio's alexLpfBits is captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-28  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-11: the capture
 //                                    declares adcAttenuators, so
 //                                    adcAttenuatorVersion and stepAtt's
@@ -141,6 +154,13 @@
 //                                    so txInhibitReasonVersion and radio's
 //                                    txInhibitReason are. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-28: slice control plan Task 4: sliceAccessVersion (the live
+//               client declares sliceAccess), SliceAccess and the
+//               `access:<id>` key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: the live client declares sliceAccess 2,
+//               so sliceAccessVersion reads 2. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -195,6 +215,7 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceAccessSet.h"
 #include "core/session/SliceMarker.h"
 #include "core/session/StationVaxFacade.h"
 #include "core/session/TransmitStateFacade.h"
@@ -626,7 +647,24 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"paProfiles", 1},
                                   // RADE status: each slice's radeSynced
                                   // and radeFreqOffsetHz.
-                                  {"radeStatus", 1}})));
+                                  {"radeStatus", 1},
+                                  // The Alex-1 low-pass in use: radio's
+                                  // alexLpfBits.
+                                  {"alexLpf", 1},
+                                  // PA on-air gate re-review: radio's
+                                  // paTransmitBand.
+                                  {"paTransmitBand", 1},
+                                  // Level Cal: radio's levelCal* run
+                                  // progress.
+                                  {"levelCalibration", 1},
+                                  // Slice control plan Task 4: SliceAccess
+                                  // and the slice.* access verbs; take-over
+                                  // parity: 2, Take it back on
+                                  // controlTaken.
+                                  {"sliceAccess", 2},
+                                  // The direct media ladder:
+                                  // mediaDirectVersion and mediaStunUrls.
+                                  {"mediaDirect", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -692,6 +730,14 @@ QJsonArray captureCapabilities()
     caps.radeStatusVersion = 1;
     // HL2 port part 2: sent to a peer that declared txInhibitReason.
     caps.txInhibitReasonVersion = 1;
+    // PA on-air gate re-review: sent to a peer that declared paTransmitBand.
+    caps.paTransmitBandVersion = 1;
+    // Slice control plan Task 4: sent to a peer that declared sliceAccess.
+    caps.sliceAccessEntry = true;
+    // The direct media ladder: sent to a peer with media that declared
+    // mediaDirect.
+    caps.mediaDirectVersion = 1;
+    caps.mediaStunUrls = {QStringLiteral("stun:stun.example.test:3478")};
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -709,6 +755,9 @@ QJsonArray captureCapabilities()
             server.setDisplayBudgetEnforcementEnabled(true);
             server.setDisplayBudgetLimits(DisplayBudgetLimits{1, 1, 1},
                                           DisplayBudgetReason::CoreBusy);
+            // The direct media ladder: the Core's STUN, as its rendezvous
+            // hello names it (a reserved example name, never a real one).
+            server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
         },
         &error);
     QHash<QString, QJsonObject> live;
@@ -832,6 +881,7 @@ QJsonArray captureObjectKeys()
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
     static const QRegularExpression kMarker(QStringLiteral("^marker:[0-9]+$"));
+    static const QRegularExpression kAccess(QStringLiteral("^access:[0-9]+$"));
     QSet<QString> seen;
     for (const QByteArray& message : *wire) {
         SessionMessage decoded;
@@ -846,6 +896,8 @@ QJsonArray captureObjectKeys()
             pattern = QStringLiteral("slice:<id>");
         } else if (kMarker.match(pattern).hasMatch()) {
             pattern = QStringLiteral("marker:<id>");
+        } else if (kAccess.match(pattern).hasMatch()) {
+            pattern = QStringLiteral("access:<id>");
         }
         if (seen.contains(pattern)) {
             continue;
@@ -1270,9 +1322,13 @@ QJsonObject guiToCoreOps()
                declaredOp(QStringLiteral("audioClockVersion"),
                           peer + QStringList{QStringLiteral("id"), QStringLiteral("t0")}));
     // iPhone app plan Task 29: DaemonMediaController.cpp handleReplace.
+    // The direct media ladder: mediaDirectVersion 1 asks for the
+    // direct-only connection, only from a Core that sent mediaDirectVersion.
     ops.insert(QStringLiteral("replace"),
                declaredOp(QStringLiteral("mediaReplaceVersion"),
-                          peer + QStringList{QStringLiteral("replaces")}));
+                          peer + QStringList{QStringLiteral("replaces")}, {
+        {QStringLiteral("mediaDirectVersion"), {QStringLiteral("mediaDirectVersion")}},
+    }));
     return ops;
 }
 
@@ -1784,6 +1840,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
+            &SliceAccess::staticMetaObject,
             &TransmitState::staticMetaObject,
             &StationVax::staticMetaObject,
             &PaProfilesFacade::staticMetaObject};

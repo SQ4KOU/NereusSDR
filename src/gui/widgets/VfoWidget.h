@@ -46,6 +46,10 @@
 //                 radio's own PTT transmits on shows as in use by the
 //                 radio. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-29 : Slice control plan Task 14b (ruling U5): on a listened
+//                 flag the AF slider and Mute are this device's own
+//                 volume, labeled "Your volume". J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -334,6 +338,7 @@ warren@wpratt.com
 #include <QStackedWidget>
 #include <QLineEdit>
 #include <QPointer>
+#include <QMenu>
 
 #include <array>
 #include <limits>
@@ -569,6 +574,53 @@ public:
     // pointer is the same one contextMenuEvent passes to AntennaPickerMenu.
     NereusSDR::SliceModel* contextMenuSliceForTest() const;
 
+    // Slice control and shared listening plan Task 14a: who controls the
+    // slice this flag shows. Unshared is a slice nobody else reaches (no
+    // line, no access actions). Controlled is this window's own control
+    // ("You control", Release in the menu). Listening is a slice another
+    // device controls: the flag keeps its letter and color, names the
+    // controller, disables the shared tuning controls with heldReason,
+    // never writes the slice, and offers Take control and Stop listening.
+    struct SliceAccess {
+        enum class State { Unshared, Controlled, Listening };
+        State state{State::Unshared};
+        QString line;
+        QString heldReason;
+        bool operator==(const SliceAccess&) const = default;
+    };
+    void setSliceAccess(const SliceAccess& access);
+    const SliceAccess& sliceAccess() const { return m_sliceAccess; }
+    bool isListening() const
+    {
+        return m_sliceAccess.state == SliceAccess::State::Listening;
+    }
+    // A request this flag sent is waiting for the Core. The text replaces
+    // the access line and the access actions are disabled; empty clears it.
+    void setSliceAccessPending(const QString& text);
+    bool sliceAccessPending() const { return !m_accessPending.isEmpty(); }
+    // The line shown under the header (pending text when a request waits).
+    QString accessLineText() const;
+    // Builds the right-click menu; contextMenuEvent shows what this adds.
+    void populateContextMenu(QMenu& menu);
+
+    // Slice control plan Task 14b (ruling U5): on a listened flag the AF
+    // slider and Mute are this device's own volume and mute for the slice,
+    // labeled "Your volume". They emit listenVolumeRequested and never
+    // write the slice; the slice's AF and mute (setAfGain, setMuted) are
+    // kept and shown again when the flag stops listening. level is 0..100.
+    void setListenVolume(int level, bool muted);
+    int listenVolume() const { return m_listenVolume; }
+    bool listenMuted() const { return m_listenMuted; }
+
+    // Test seams for Task 14a.
+    QList<QWidget*> heldControlsForTest() const;
+    // Test seams for Task 14b.
+    QSlider* afSliderForTest() const { return m_afGainSlider; }
+    QPushButton* muteButtonForTest() const { return m_muteBtn; }
+    QString afNameForTest() const;
+    QRect frequencyAreaForTest() const;
+    bool frequencyEditOpen() const;
+
 public slots:
     // Phase 3P-I-a T15 — hide Blue/Red ANT buttons when the connected
     // board has no Alex filter (HL2 / Atlas). Called by MainWindow on
@@ -687,6 +739,15 @@ signals:
     // R-R3-21: the right-click Diversity entry. MainWindow opens the
     // Diversity dialog, the same one Tools > Diversity opens.
     void diversityRequested();
+
+    // Task 14a: the flag's access actions. MainWindow sends each as the
+    // matching slice request and shows the Core's answer on the flag.
+    void takeControlRequested(int sliceIndex);
+    void releaseRequested(int sliceIndex);
+    void stopListeningRequested(int sliceIndex);
+    // Task 14b: "Your volume" or Mute moved on a listened flag. level is
+    // 0..100; MainWindow sends it as this device's listening level.
+    void listenVolumeRequested(int sliceIndex, int level, bool muted);
 
 private slots:
     // Phase 3F Sub-Epic C Task 9: TX badge click slot. Emits
@@ -877,8 +938,18 @@ private:
     QWidget*            m_filterBtnContainer{nullptr};
 
     // --- Audio tab ---
+    QWidget*            m_audioPage{nullptr};
+    QLabel*             m_afNameLabel{nullptr};
     QSlider*            m_afGainSlider{nullptr};
     QLabel*             m_afGainLabel{nullptr};
+    // Task 14b: the slice's AF and mute (from the model) and this device's
+    // own listening volume and mute; the slider and Mute show one pair.
+    int                 m_modelAfGain{50};
+    bool                m_modelMuted{false};
+    int                 m_listenVolume{50};
+    bool                m_listenMuted{false};
+    QString             m_afToolTip;
+    QString             m_muteToolTip;
     QPushButton*        m_agcBtns[5]{};          // Off/Long/Slow/Med/Fast — replaces m_agcCmb
     QSlider*            m_panSlider{nullptr};
     QLabel*             m_panLabel{nullptr};
@@ -957,6 +1028,15 @@ private:
     QPushButton* m_playBtn{nullptr};
     bool m_locked{false};
     bool m_onLeft{false};  // track flag side for button placement
+
+    // --- Task 14a: slice access ---
+    QLabel*     m_accessLine{nullptr};
+    SliceAccess m_sliceAccess;
+    QString     m_accessPending;
+    void applySliceAccess();
+    void applyAudioBinding();
+    QList<QWidget*> listeningHeldControls() const;
+    void holdForListening(QWidget* control) const;
     void buildFloatingButtons();
     void positionFloatingButtons();
 };

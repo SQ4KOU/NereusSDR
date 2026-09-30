@@ -29,6 +29,7 @@
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "gui/setup/hardware/CalibrationTab.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
+#include "gui/setup/hardware/Hl2OptionsTab.h"
 #include "gui/setup/hardware/RadioInfoTab.h"
 #include "core/PaCalProfile.h"
 #include "core/codec/AlexFilterMap.h"
@@ -197,6 +198,12 @@ void compareControl(QWidget& page, const QJsonObject& control)
                                                            : options.at(i).toObject().value("label").toString());
             }
         }
+    } else if (kind == "table" && id == "dsp.cfc.bands") {
+        // Version 19: the band editor is the desktop's Configure CFC bands
+        // button, which opens the same editor (TxCfcDialog).
+        auto* button = qobject_cast<QAbstractButton*>(object);
+        QVERIFY2(button != nullptr, qPrintable(id));
+        QCOMPARE(button->text(), control.value("label").toString());
     } else if (kind == "table" && id == "dsp.filterPresets.presets") {
         // Version 15: the Filter Presets table's columns, in the desktop's order.
         auto* table = qobject_cast<QTableWidget*>(object);
@@ -769,7 +776,7 @@ private slots:
         QCOMPARE(check->toolTip(), control.value("tooltip").toString());
         QVERIFY(!check->isHidden());
         QVERIFY(SetupDescriptionService::validatePaBypassBinding(control));
-        QCOMPARE(control.value("gate").toObject().value("offAir"), QJsonValue(true));
+        QVERIFY(!control.value("gate").toObject().contains("offAir"));
         QVERIFY(!control.value("gate").toObject().contains("transmit"));
 
         RadioModel other;
@@ -1068,6 +1075,128 @@ private slots:
         // Radio Info's seven, its sample rate and copy button, TX Display
         // Cal, N2ADR.
         QCOMPARE(compared, 11);
+    }
+
+    // Version 16, with version 18's clock rows: the HL2 Options rows match
+    // the desktop's HL2 Options tab: its group, row label, range and unit,
+    // default, and whether the box is enabled. A disabled box's tooltip is
+    // the row's availability reason. A row enabled only while another row
+    // holds a value (enabledWhen) is enabled on the desktop exactly then.
+    void describedV18Hl2OptionsMatchNativeTab()
+    {
+        AppSettings::instance().clear();
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::HERMESLITE);
+        Hl2OptionsTab tab(&model);
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model,
+                                RadioInfo{});
+        const QJsonObject hardware = projectedCategory(service.hardware(), 18);
+        QCOMPARE(hardware.value("version"), QJsonValue(18));
+        QJsonObject page;
+        for (const QJsonValue& rawPage : hardware.value("pages").toArray()) {
+            if (rawPage.toObject().value("id") == QJsonValue("hardware.hl2Io")) {
+                page = rawPage.toObject();
+            }
+        }
+        int compared = 0;
+        for (const QJsonValue& rawSection : page.value("sections").toArray()) {
+            const QJsonObject section = rawSection.toObject();
+            if (section.value("title") != QJsonValue("Hermes Lite Options")) { continue; }
+            for (const QJsonValue& raw : section.value("controls").toArray()) {
+                const QJsonObject control = raw.toObject();
+                const QString id = control.value("id").toString();
+                auto* widget = qobject_cast<QWidget*>(bySetupId(tab, id));
+                QVERIFY2(widget != nullptr, qPrintable(id + " has no desktop widget"));
+                auto* group = qobject_cast<QGroupBox*>(widget->parentWidget());
+                QVERIFY2(group != nullptr, qPrintable(id));
+                QCOMPARE(group->title(), section.value("title").toString());
+                const QJsonObject availability = control.value("availability").toObject();
+                const QJsonObject enabledWhen = control.value("enabledWhen").toObject();
+                if (availability.isEmpty() && !enabledWhen.isEmpty()) {
+                    // The row named by the dependency, by its binding.
+                    QWidget* source = nullptr;
+                    for (const QJsonValue& other : section.value("controls").toArray()) {
+                        if (other.toObject().value("binding").toObject().value("radioSetting")
+                            == enabledWhen.value("radioSetting")) {
+                            source = qobject_cast<QWidget*>(
+                                bySetupId(tab, other.toObject().value("id").toString()));
+                        }
+                    }
+                    auto* sourceBox = qobject_cast<QCheckBox*>(source);
+                    QVERIFY2(sourceBox != nullptr, qPrintable(id));
+                    QCOMPARE(enabledWhen.value("oneOf"), QJsonValue(QJsonArray{true}));
+                    QVERIFY2(!sourceBox->isChecked(), qPrintable(id));
+                    QVERIFY2(!widget->isEnabled(), qPrintable(id));
+                    sourceBox->setChecked(true);
+                    QVERIFY2(widget->isEnabled(), qPrintable(id));
+                    sourceBox->setChecked(false);
+                    QVERIFY2(!widget->isEnabled(), qPrintable(id));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                } else if (availability.isEmpty()) {
+                    QVERIFY2(widget->isEnabled(), qPrintable(id));
+                    QCOMPARE(widget->toolTip(), control.value("tooltip").toString());
+                } else {
+                    QCOMPARE(availability.value("enabled"), QJsonValue(false));
+                    QVERIFY2(!widget->isEnabled(), qPrintable(id));
+                    QCOMPARE(widget->toolTip(), availability.value("reason").toString());
+                }
+                if (control.value("kind") == QJsonValue("toggle")) {
+                    auto* box = qobject_cast<QCheckBox*>(widget);
+                    QVERIFY2(box != nullptr, qPrintable(id));
+                    QCOMPARE(box->text(), control.value("label").toString());
+                    QCOMPARE(box->isChecked(), control.value("default").toBool());
+                } else {
+                    // An integer row is a QSpinBox; a decimal row (the CL2
+                    // frequency) is a QDoubleSpinBox with the row's decimals.
+                    const bool decimal = control.value("kind") == QJsonValue("decimal");
+                    if (!decimal) {
+                        QCOMPARE(control.value("kind"), QJsonValue("integer"));
+                    }
+                    auto* spin = qobject_cast<QAbstractSpinBox*>(widget);
+                    QVERIFY2(spin != nullptr, qPrintable(id));
+                    // The row label: the grid's label beside the box, or the
+                    // box's accessible name where a check box sits there.
+                    QString label = spin->accessibleName();
+                    if (label.isEmpty()) {
+                        auto* grid = qobject_cast<QGridLayout*>(group->layout());
+                        QVERIFY(grid != nullptr);
+                        int row = -1;
+                        int column = -1;
+                        int rowSpan = 0;
+                        int columnSpan = 0;
+                        grid->getItemPosition(grid->indexOf(spin), &row, &column, &rowSpan,
+                                              &columnSpan);
+                        auto* text = qobject_cast<QLabel*>(
+                            grid->itemAtPosition(row, 0)->widget());
+                        QVERIFY2(text != nullptr, qPrintable(id));
+                        label = text->text();
+                    }
+                    QCOMPARE(label, control.value("label").toString());
+                    const QString suffix = QStringLiteral(" ") + control.value("unit").toString();
+                    if (decimal) {
+                        auto* box = qobject_cast<QDoubleSpinBox*>(widget);
+                        QVERIFY2(box != nullptr, qPrintable(id));
+                        QCOMPARE(box->minimum(), control.value("min").toDouble());
+                        QCOMPARE(box->maximum(), control.value("max").toDouble());
+                        QCOMPARE(box->singleStep(), control.value("step").toDouble());
+                        QCOMPARE(box->decimals(), control.value("decimals").toInt());
+                        QCOMPARE(box->suffix(), suffix);
+                        QCOMPARE(box->value(), control.value("default").toDouble());
+                    } else {
+                        auto* box = qobject_cast<QSpinBox*>(widget);
+                        QVERIFY2(box != nullptr, qPrintable(id));
+                        QCOMPARE(box->minimum(), control.value("min").toInt());
+                        QCOMPARE(box->maximum(), control.value("max").toInt());
+                        QCOMPARE(box->singleStep(), control.value("step").toInt());
+                        QCOMPARE(box->suffix(), suffix);
+                        QCOMPARE(box->value(), control.value("default").toInt());
+                    }
+                }
+                ++compared;
+            }
+        }
+        QCOMPARE(compared, 9);
     }
 
     // Version 13 (R-R3-46, R-R3-49): every Alex receive filter row the

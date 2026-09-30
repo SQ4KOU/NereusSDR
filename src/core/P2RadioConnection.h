@@ -78,6 +78,15 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal fix wave: setRx2Preamp, the second receiver's
+//                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -297,6 +306,10 @@ public slots:
     void setAlexHpfBypass(bool on) override;
     void setPaDisabled(bool disabled) override;
     void setAlexHpfEdges(const codec::alex::AlexHpfEdges& edges) override;
+    // The Alex-1 low-pass rows (stored for the next selection) and
+    // 6m/ByPass on RX (re-selects at once).
+    void setAlexLpfEdges(const codec::alex::AlexLpfEdges& edges) override;
+    void setAlexLpfBypass(bool on) override;
     void setDisable6mLna(bool onRx, bool onTx) override;
     void onBandOutputPinsChanged() override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
@@ -309,6 +322,8 @@ public slots:
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
+    // Level Cal: the Alex receive attenuator (Thetis SetAlexAtten).
+    void setAlexAtten(int bits) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
     void setTrxRelay(bool enabled) override;
@@ -370,6 +385,8 @@ public slots:
     // P2CodecOrionMkII::composeCmdHighPriority byte 1403 bit 1.
     // ADC0 preamp uses the existing setPreamp(bool) (byte 1403 bit 0).
     void setRx1Preamp(bool enabled);
+    // Level Cal: Thetis SetRX2Preamp is the same prn->rx[1].preamp.
+    void setRx2Preamp(bool enabled) override { setRx1Preamp(enabled); }
 
     // Wire RadioModel's OcMatrix so buildCodecContext() can set ctx.ocByte
     // from maskFor(currentBand, mox).  No P2 codec reads ocByte yet — this
@@ -1001,8 +1018,8 @@ private:
         // Defaults are 0x10 (6 m, the widest low-pass) rather than 0 —
         // the LPF has no bypass encoding, and Thetis's fall-through arm
         // picks 6 m too (console.cs:7237-7241 [v2.10.3.15]).
-        int lpfBitsRx{0x10};  // Alex0 LPF — from the receive frequency
-        int lpfBitsTx{0x10};  // Alex1 LPF — from the transmit frequency
+        int lpfBitsRx{0x10};  // Alex0 LPF: the receive selection (unkeyed)
+        int lpfBitsTx{0x10};  // Alex1 LPF: the transmit selection
 
         // Phase 3F: per-ADC RX band-pass decision from AlexController, which
         // reviews every slice band on a chain instead of taking whichever
@@ -1022,6 +1039,11 @@ private:
         // _Rx_1_Out relay (K36 RL17 RX-Bypass-Out) — from Thetis
         // ChannelMaster/network.h:282 [v2.10.3.13 @501e3f5]. Alex0 bit 11.
         bool rxOut{false};
+
+        // Alex attenuator _20_dB_Atten / _10_dB_Atten (Thetis SetAlexAtten),
+        // Alex0 bits 13 / 14, network.h:284-285 [v2.10.3.15].
+        bool atten20dB{false};
+        bool atten10dB{false};
     };
     AlexState m_alex;
 
@@ -1058,6 +1080,12 @@ private:
     // Recompute m_alex.hpfBits and m_alex.lpfBitsRx from the RX1 stand-in
     // (and, for the low-pass, the receiver beside it).
     void recomputeReceiveFilters();
+
+    // setAlexLPF (codec::alex::setAlexLpf) on m_alex.lpfBitsRx / Tx, the
+    // Alex0 and Alex1 masks, then reports the low-pass in use.
+    void applyAlexLpf(double freqMhz, bool freqIsTx);
+    // UpdateAlexTXFilter: the receive-frequency selection, unkeyed only.
+    void applyReceiveAlexLpf();
 
     // Each DDC's slice VFO frequency (setReceiverVfoFrequencies); 0 = not
     // told, and the band falls back to the DDC's centre.

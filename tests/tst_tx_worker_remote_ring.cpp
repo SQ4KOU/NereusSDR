@@ -56,6 +56,10 @@
 //               silence, by the pump skipping whole blocks; the key waits
 //               for the smaller 30 ms target. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2:
+//               mediaSessionOwnsSlice is mediaSessionControlsSlice.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -957,7 +961,7 @@ void TestTxWorkerRemoteRing::stalledIqDoesNotDelayTxWatchdog()
     const SliceModel* slice = nullptr;
     for (const SliceModel* candidate : station.core.model->slices()) {
         if (candidate->streamIndex() >= 0
-            && station.core.server->mediaSessionOwnsSlice(
+            && station.core.server->mediaSessionControlsSlice(
                 station.core.server->mediaSessionEpoch(), candidate->sliceIndex())) {
             slice = candidate;
             break;

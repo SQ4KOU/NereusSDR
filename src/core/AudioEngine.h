@@ -176,6 +176,14 @@
 //                 atomic word per slice id that RadioModel publishes on the
 //                 main thread (setSliceAudioView), never from the slice list
 //                 or a SliceModel. NereusSDR-original.
+//   2026-09-29: Slice control plan Task 6 by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. The slice view
+//                 carries the slice's AF level, applied in the mix to the
+//                 controller's sums only (JJ's ruling: WDSP's panel gain
+//                 stays at 1.0). Listening: setOwnerMixListen /
+//                 setLocalListen add a slice to a device's own sum at that
+//                 device's level. The VAX tee and the receiver taps no
+//                 longer undo the AF gain. NereusSDR-original.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -312,8 +320,7 @@ public:
 
     // Non-owning back-pointer. rxBlockReady reads a slice's mute / route /
     // VAX-channel state from setSliceAudioView (R-R3-49), not through this
-    // pointer; it uses it only for the AF-gain lookup and as the "is there
-    // a radio" gate. Null is safe (unit tests that construct AudioEngine
+    // pointer; it uses it only as the "is there a radio" gate. Null is safe (unit tests that construct AudioEngine
     // without a RadioModel): rxBlockReady becomes a no-op.
     void setRadioModel(RadioModel* radio);
 
@@ -330,6 +337,11 @@ public:
         bool muted{false};
         bool headphones{false};
         int vaxChannel{0};  // 0 = off, 1..4 = VAX N
+        // Slice control plan Task 6: the slice's AF level, 0..1 (the
+        // slider's 0..100). The mix applies it to the controller's sums;
+        // a listener hears its own level instead, and VAX and the
+        // receiver taps neither.
+        float afGain{1.0f};
     };
     static constexpr int kMaxSliceAudioViews = 32;  // the VAX slice mask's width
     // Main thread only. Ids outside the range are ignored.
@@ -599,6 +611,27 @@ public:
     MasterMixer::OwnerMonitor ownerMixMonitor(int slot) const;
     /// Owner mixes taken now; diagnostics and leak checks.
     int ownerMixCount() const;
+
+    // Slice control plan Task 6: listening. An owner mix (or the local
+    // output, for the station device) hears a slice it does not control
+    // at its own level, 0..1, the listener's own and never the slice's AF
+    // level; muted is level 0. The level ramps, and a sum that controlled
+    // the slice and now listens starts from where the controller's gain
+    // was, so the hand-off neither gaps nor steps. A slice the sum also
+    // controls plays at the controller's level only. Nothing is acquired
+    // or released: a listener adds no stream and no owner mix. Any
+    // thread; the audio thread reads the atomics at the next drain.
+    void setOwnerMixListen(int slot, int sliceId, float level, bool muted);
+    void clearOwnerMixListen(int slot, int sliceId);
+    quint32 ownerMixListenMask(int slot) const;
+    // The stored level (0 when muted), for tests and diagnostics.
+    float ownerMixListenLevel(int slot, int sliceId) const;
+    void setLocalListen(int sliceId, float level, bool muted);
+    void clearLocalListen(int sliceId);
+    quint32 localListenMask() const
+    {
+        return m_localListenMask.load(std::memory_order_acquire);
+    }
 
     // A remote window opens the four VAX receive outputs start() opens (the
     // engine itself never starts there), skipping a slot that already has
@@ -1160,7 +1193,9 @@ private:
     // R-R3-49: setSliceAudioView's packed words, one per slice id. Written
     // on the main thread, read on the audio thread; lock-free, and they
     // live as long as the engine, so no block can outlive them.
-    std::array<std::atomic<quint32>, kMaxSliceAudioViews> m_sliceAudioViews{};
+    // Slice control plan Task 6: 64 bits, the AF level's float in the high
+    // half.
+    std::array<std::atomic<quint64>, kMaxSliceAudioViews> m_sliceAudioViews{};
 
     // Sub-Phase 12 Task 12.2 — live-reconfig safety mutex for the speakers
     // bus. setSpeakersConfig() acquires this during tear-down + rebuild.
@@ -1323,10 +1358,18 @@ private:
         MixTapGate headphones;
         // Task 32: MasterMixer::OwnerMonitor, as an int for the atomic.
         std::atomic<int> monitor{0};
+        // Slice control plan Task 6: the slices this owner listens to, and
+        // its level for each (0 when muted).
+        std::atomic<quint32> listenMask{0};
+        std::array<std::atomic<float>, kMaxSliceAudioViews> listenLevels{};
     };
     std::array<OwnerMixSlot, kMaxOwnerMixes> m_ownerMixes;
     mutable std::mutex m_ownerMixControlMutex;
     std::atomic<quint32> m_localOutputSliceMask{0xFFFFFFFFu};
+    // Slice control plan Task 6: the local output's listening, as an
+    // owner's.
+    std::atomic<quint32> m_localListenMask{0};
+    std::array<std::atomic<float>, kMaxSliceAudioViews> m_localListenLevels{};
     // Each owner's two sums and one program scratch, sized with the mix
     // scratch (ensureMixScratchFrames), never on the DSP thread.
     std::array<std::vector<float>, kMaxOwnerMixes> m_ownerSpeakersScratch;
@@ -1344,13 +1387,11 @@ private:
     // while no slice is a barrier member (MON alone is queued), and never
     // the anti-VOX mixer, which MON is not in.
     void drainMixes(int frames, bool monitorOnly = false);
-    // DSP thread. Hands each tap for `sliceId` the block with the slice's AF
-    // gain undone (afGainInverseForSlice).
+    // DSP thread. Hands each tap for `sliceId` the block as the slice's
+    // receiver produced it: the AF level is applied in the mix, after the
+    // taps (slice control plan Task 6).
     void feedSliceTaps(int sliceId, const float* samples, int frames) noexcept;
     void skipSliceTaps(int sliceId, int frames) noexcept;
-    // DSP thread: 1 / the slice's own AF gain (its WDSP RX channel's), or 1
-    // with no channel or an AF gain at or below 0.001.
-    float afGainInverseForSlice(int sliceId) const noexcept;
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_withdrawalPublishedHookForTest;

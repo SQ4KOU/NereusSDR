@@ -17,14 +17,25 @@
 //   2026-09-27: moved out of tst_rendezvous_client for Task 29 by J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: LocalService waits for the service's own "listening on"
+//               line, fails at once if it exits, and says why with its
+//               output (startFailure). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-29: EndWatch, waitUntil and waitForHandshake, moved here from
+//               tst_relay_session: a wait that ends when what it waits on
+//               closes or fails, stops at its bound (QTRY_* runs on for
+//               twice its timeout after it expires) and says why. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
+#include <QPointer>
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QTcpServer>
@@ -34,6 +45,8 @@
 #include "core/session/RendezvousDialer.h"
 #include <QUrl>
 
+#include <algorithm>
+#include <functional>
 #include <memory>
 
 #ifdef Q_OS_UNIX
@@ -45,7 +58,10 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/RendezvousClient.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/IMediaTransport.h"
 #include "models/RadioModel.h"
 
 #include "fakes/UpgradedCoreToken.h"
@@ -111,6 +127,16 @@ inline quint16 freeTcpPort()
 
 class LocalService {
 public:
+    /// How long a live service may take to be listening. A test executable
+    /// gets ctest's default TIMEOUT of 120 s (tests/CMakeLists.txt,
+    /// nereus_add_test); half of it leaves the other half for the test
+    /// body, so a service that is merely slow to start is reported here,
+    /// with its output, before ctest kills the executable with none. A
+    /// service that fails exits and is reported at once, and a ready one
+    /// returns as soon as it says so, so the bound costs nothing when all
+    /// is well.
+    static constexpr int kServiceReadyBoundMs = 60000;
+
     /// `stun`: the service's hello names the fake's STUN server. `relay`:
     /// the service mints relay credentials for the fake's TURN server.
     explicit LocalService(bool stun = true, bool relay = true) : m_stun(stun), m_relay(relay) {}
@@ -131,7 +157,9 @@ public:
 
     bool start()
     {
+        m_startFailure.clear();
         if ((m_stun || m_relay) && !startTurn()) {
+            m_startFailure = QStringLiteral("the fake TURN server did not start");
             return false;
         }
         m_port = freeTcpPort();
@@ -154,6 +182,7 @@ public:
         }
         QFile config(m_dir.filePath(QStringLiteral("rendezvous.conf")));
         if (!config.open(QIODevice::WriteOnly)) {
+            m_startFailure = QStringLiteral("could not write %1").arg(config.fileName());
             return false;
         }
         const QString stun = m_stun ? QStringLiteral("stun:127.0.0.1:%1").arg(m_turnPort)
@@ -177,32 +206,75 @@ public:
     }
 
     // Starts the service again on the same port, as after a restart.
+    //
+    // Ready means the service's own "listening on" line (nereus_rendezvous
+    // __main__.run logs it once every listening socket is serving), read
+    // from its standard error. A process that exits first fails at once,
+    // with its output. The bound only governs a service still starting;
+    // see kServiceReadyBoundMs.
     bool launch()
     {
+        m_startFailure.clear();
+        const qsizetype logFrom = m_log.size();
         m_process = std::make_unique<QProcess>();
         QProcessEnvironment env = pythonEnvironment();
         env.insert(QStringLiteral("PYTHONPATH"),
                    QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/server"));
+        env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
         m_process->setProcessEnvironment(env);
         m_process->setWorkingDirectory(m_dir.path());
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QDeadlineTimer deadline(kServiceReadyBoundMs);
         m_process->start(QStringLiteral("python3"),
                          {QStringLiteral("-m"), QStringLiteral("nereus_rendezvous"),
                           QStringLiteral("--config"),
                           m_dir.filePath(QStringLiteral("rendezvous.conf"))});
-        if (!m_process->waitForStarted(10000)) {
+        if (!m_process->waitForStarted(static_cast<int>(deadline.remainingTime()))) {
+            m_startFailure = QStringLiteral("python3 did not start: %1")
+                                 .arg(m_process->errorString());
             return false;
         }
-        QDeadlineTimer deadline(15000);
-        while (!deadline.hasExpired()) {
-            QTcpSocket probe;
-            probe.connectToHost(QHostAddress::LocalHost, m_port);
-            if (probe.waitForConnected(200)) {
+        while (true) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_stdout += QString::fromUtf8(m_process->readAllStandardOutput());
+            if (m_log.indexOf(QLatin1String("listening on "), logFrom) >= 0) {
+                m_readyMs = elapsed.elapsed();
                 return true;
             }
-            QTest::qWait(50);
+            if (m_process->state() == QProcess::NotRunning) {
+                m_startFailure = QStringLiteral("the service exited (code %1) before it was "
+                                                "listening, after %2 ms")
+                                     .arg(m_process->exitCode())
+                                     .arg(elapsed.elapsed());
+                return false;
+            }
+            if (deadline.hasExpired()) {
+                m_startFailure = QStringLiteral("the service was not listening after %1 ms")
+                                     .arg(elapsed.elapsed());
+                return false;
+            }
+            m_process->waitForReadyRead(
+                static_cast<int>(qMin<qint64>(100, deadline.remainingTime())));
         }
-        return false;
     }
+
+    /// Why start() or launch() returned false, with everything the service
+    /// wrote, for QVERIFY2.
+    QString startFailure()
+    {
+        if (m_process) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_stdout += QString::fromUtf8(m_process->readAllStandardOutput());
+        }
+        return QStringLiteral("%1\n--- service stderr ---\n%2\n--- service stdout ---\n%3")
+            .arg(m_startFailure.isEmpty() ? QStringLiteral("(no failure recorded)")
+                                          : m_startFailure,
+                 m_log, m_stdout);
+    }
+
+    /// How long the last launch took to be ready.
+    qint64 readyMs() const { return m_readyMs; }
 
     void stop()
     {
@@ -291,6 +363,9 @@ private:
     std::unique_ptr<QProcess> m_process;
     std::unique_ptr<QProcess> m_turn;
     QString m_log;
+    QString m_stdout;
+    QString m_startFailure;
+    qint64 m_readyMs = -1;
     QString m_turnLog;
 };
 
@@ -353,5 +428,152 @@ struct Core {
     }
 };
 
+
+// What a wait is waiting on, closing or failing first. The first such
+// reason is kept; a wait ends as soon as there is one. Declared after the
+// objects it watches, so it lets go of them before they are destroyed.
+class EndWatch {
+public:
+    EndWatch() = default;
+    EndWatch(const EndWatch&) = delete;
+    EndWatch& operator=(const EndWatch&) = delete;
+    ~EndWatch()
+    {
+        for (const QMetaObject::Connection& connection : m_connections) {
+            QObject::disconnect(connection);
+        }
+    }
+
+    void watch(StationClient* window)
+    {
+        m_connections.append(QObject::connect(
+            window, &StationClient::sessionEnded, [this](const QString& reason) {
+                note(QStringLiteral("the session ended: %1")
+                         .arg(reason.isEmpty() ? QStringLiteral("(no reason given)") : reason));
+            }));
+    }
+    void watch(IMediaTransport* transport, const QString& name)
+    {
+        m_connections.append(QObject::connect(
+            transport, &IMediaTransport::connectionFailed, [this, name](const QString& message) {
+                note(QStringLiteral("the %1 media connection failed: %2").arg(name, message));
+            }));
+        m_connections.append(QObject::connect(
+            transport, &IMediaTransport::errorOccurred, [this, name](const QString& message) {
+                note(QStringLiteral("the %1 media connection hit an error: %2").arg(name, message));
+            }));
+        m_connections.append(QObject::connect(transport, &IMediaTransport::closed, [this, name] {
+            note(QStringLiteral("the %1 media connection closed").arg(name));
+        }));
+    }
+    void watch(RendezvousClient* client)
+    {
+        m_connections.append(QObject::connect(client, &RendezvousClient::connectionLost, [this] {
+            note(QStringLiteral("the Core lost the remote access service"));
+        }));
+    }
+
+    bool ended() const { return !m_reason.isEmpty(); }
+    QString reason() const { return m_reason; }
+
+private:
+    void note(const QString& reason)
+    {
+        if (m_reason.isEmpty()) {
+            m_reason = reason;
+        }
+    }
+
+    QString m_reason;
+    QList<QMetaObject::Connection> m_connections;
+};
+
+// Waits until `done`, until `ends` has a reason, or for `boundMs`, whichever
+// is first, and says which through `why`. Unlike QTRY_*, which after its
+// timeout waits twice as long again to report whether more time would have
+// helped, it stops at the bound, and it stops at once when what it waits on
+// has closed or failed.
+inline bool waitUntil(const std::function<bool()>& done, int boundMs, const EndWatch& ends,
+               const QString& what, QString* why, qint64* elapsedMs = nullptr)
+{
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const QDeadlineTimer deadline(boundMs);
+    while (!done() && !ends.ended() && !deadline.hasExpired()) {
+        QTest::qWait(int(std::clamp<qint64>(deadline.remainingTime(), 1, 50)));
+    }
+    if (elapsedMs != nullptr) {
+        *elapsedMs = elapsed.elapsed();
+    }
+    if (done()) {
+        return true;
+    }
+    if (why != nullptr) {
+        *why = ends.ended()
+            ? QStringLiteral("waiting for %1, %2 after %3 ms")
+                  .arg(what, ends.reason())
+                  .arg(elapsed.elapsed())
+            : QStringLiteral("%1 had not happened after %2 ms (the bound)")
+                  .arg(what)
+                  .arg(elapsed.elapsed());
+    }
+    return false;
+}
+
+// Adds the window's own account of its attempt to a failed wait's reason.
+inline QString withAttempt(const QString& why, const StationClient& window)
+{
+    return QStringLiteral("%1\nlast error: %2\nattempt: %3")
+        .arg(why, window.lastError(), window.connectionAttempt().summary());
+}
+
+// Waits for `window`'s handshake for `boundMs`, ending at once if its
+// session ends first (StationClient::sessionEnded: the handshake deadline,
+// a heartbeat, a failed dial or race, a refusal), with the reason, the
+// window's last error and its attempt summary in `why`. Pass `armed`, a
+// watch already on the window, to see a session that ends inside the
+// connect call itself; without it the watch starts here, and such an end
+// runs the wait to its bound.
+inline bool waitForHandshake(StationClient& window, int boundMs, QString* why,
+                             qint64* elapsedMs = nullptr, const EndWatch* armed = nullptr)
+{
+    EndWatch own;
+    if (armed == nullptr) {
+        own.watch(&window);
+    }
+    const EndWatch& ends = armed != nullptr ? *armed : own;
+    const bool ok = waitUntil([&window] { return window.isHandshakeComplete(); }, boundMs,
+                              ends, QStringLiteral("the window's handshake"), why, elapsedMs);
+    if (!ok && why != nullptr) {
+        *why = withAttempt(*why, window);
+    }
+    return ok;
+}
+
+// The same for a window that is still being created: `find` returns its
+// client once there is one (nullptr until then), and the session watch
+// starts from that moment. One bound covers both.
+inline bool waitForHandshake(const std::function<StationClient*()>& find, int boundMs,
+                             QString* why)
+{
+    QPointer<StationClient> client;
+    EndWatch ends;
+    const bool ok = waitUntil(
+        [&] {
+            if (!client) {
+                client = find();
+                if (client) {
+                    ends.watch(client);
+                }
+            }
+            return client && client->isHandshakeComplete();
+        },
+        boundMs, ends, QStringLiteral("the window's handshake"), why);
+    if (!ok && why != nullptr) {
+        *why = client ? withAttempt(*why, *client)
+                      : QStringLiteral("%1 (no window client was ever created)").arg(*why);
+    }
+    return ok;
+}
 
 } // namespace NereusSDR::Test::Rendezvous

@@ -73,6 +73,11 @@
 //               the end of a device's 180 s does to its slices. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: slice control plan Task 8: each away period's generation
+//               (awayGeneration), carried by graceEnded and checked by
+//               isCurrentAbsence, so an old expiry never acts on a device
+//               that came back. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -137,6 +142,9 @@ public:
         /// The live session (a connection); null while away and for the
         /// hosting desktop's window.
         const QObject* session = nullptr;
+        /// Slice control plan Task 8: this away period's generation, a new
+        /// one each time the device drops; 0 while listening.
+        quint64 awayGeneration = 0;
     };
 
     enum class Admission {
@@ -209,6 +217,12 @@ public:
     /// When the next away device's time runs out; nullopt with none away.
     std::optional<qint64> nextExpiryMs() const;
 
+    /// Slice control plan Task 8: whether the absence `awayGeneration` of
+    /// `deviceId` is still the current one: the device holds no place
+    /// (its time ran out, or it left), or it is away in that same absence.
+    /// False once it came back (or dropped again, a newer absence).
+    bool isCurrentAbsence(const QByteArray& deviceId, quint64 awayGeneration) const;
+
     /// A command, property write or settings write from `deviceId` (never a
     /// heartbeat). The reported activity moves at most once a minute.
     void noteActivity(const QByteArray& deviceId);
@@ -265,9 +279,10 @@ signals:
     void changed();
     void placesTakenChanged(int placesTaken);
     /// Task 73 (ruling 4.11): `deviceId`'s 180 s ended and its place was
-    /// freed (after changed()). Its slices close and are saved, or pass to
-    /// the station device held for it.
-    void graceEnded(const QByteArray& deviceId);
+    /// freed (after changed()). Slice control plan Task 8: its claims go
+    /// (StationServer::releaseDeviceClaims), for the away period
+    /// `awayGeneration` only.
+    void graceEnded(const QByteArray& deviceId, quint64 awayGeneration);
 
 private:
     int indexOf(const QByteArray& deviceId) const;
@@ -281,6 +296,7 @@ private:
     quint32 m_revision = 1;
     quint64 m_nextOrder = 1;
     quint64 m_nextToken = 1;
+    quint64 m_nextAwayGeneration = 1;
 };
 
 } // namespace NereusSDR

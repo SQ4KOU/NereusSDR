@@ -53,6 +53,15 @@
 //                board's fault code, say), as Thetis's TXInhibit setter
 //                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-28  J.J. Boyd / KG4VCF  Slice control plan Task 2: sliceFor
+//                                    asks SliceAccessPolicy. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 15 fix round
+//                                    1: the sliceRefusal hook refuses a
+//                                    slice another device controls with
+//                                    the RX applet's reason, in remote and
+//                                    hosting windows. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -61,6 +70,7 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
+#include "core/session/SliceAccessPolicy.h"
 #include "core/TwoToneController.h"
 #include "core/session/IStationLink.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -115,11 +125,19 @@ SliceModel* ContainerButtonDispatcher::sliceFor(int rxSource) const
     if (!m_model) { return nullptr; }
     const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
     SliceModel* slice = m_model->sliceById(sliceId);
+    // Slice control plan Task 15 fix round 1: a slice this window listens
+    // to (another device controls it) is refused as the RX applet refuses
+    // it, in a remote window and a hosting one alike.
+    if (slice && m_hooks.sliceRefusal && !m_hooks.sliceRefusal(sliceId).isEmpty()) {
+        return nullptr;
+    }
     if (slice && m_hooks.desktopHosting && m_hooks.desktopHosting()) {
         SliceOwnership* ownership = m_model->sliceOwnership();
         if (!ownership) { return nullptr; }
-        const SliceOwnership::Mark mark = ownership->mark(sliceId);
-        if (mark.owner != SliceOwnership::stationDevice() || !mark.heldFor.isEmpty()) {
+        // Slice control plan Task 2: a slice the station device may change
+        // as its own (not one it runs held for an absent device).
+        if (!SliceAccessPolicy::mayChange(*ownership, SliceOwnership::stationDevice(), sliceId)
+            || ownership->mark(sliceId).isHeld()) {
             return nullptr;
         }
     }
@@ -135,6 +153,13 @@ QString ContainerButtonDispatcher::noSliceReason(int rxSource)
 
 QString ContainerButtonDispatcher::sliceUnavailableReason(int rxSource) const
 {
+    if (m_model && m_hooks.sliceRefusal) {
+        const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
+        if (m_model->sliceById(sliceId)) {
+            const QString refusal = m_hooks.sliceRefusal(sliceId);
+            if (!refusal.isEmpty()) { return refusal; }
+        }
+    }
     if (m_model && m_hooks.desktopHosting && m_hooks.desktopHosting()) {
         const int sliceId = ContainerWidget::sliceIdForRxSource(rxSource);
         if (m_model->sliceById(sliceId)) {

@@ -417,6 +417,57 @@
 //                 while the I2C tool waits on a read (mi0bot
 //                 SetI2CPollingPause [@c26a8a4]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review, item 5: TUNE-on drive, the
+//                 first-MOX seed (seedInitialAudioVolume) and the two-tone
+//                 start read the held transmit band (driveTxBand), as
+//                 Thetis reads _tx_band. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate re-review: paTransmitBand, the PA row the
+//                 Core holds on the air (paTransmitBandVersion 1), so a
+//                 remote window opens and locks the Core's row. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - PA on-air gate review: paOnAirBandIndex is the transmit
+//                 band (driveTxBand), held while keyed as Thetis's
+//                 _adjustingBand is; transmitBandChanged tells the PA page
+//                 and the station's PA publish. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 3: setActiveRxFor, each
+//                device's active receive slice among the slices it has
+//                joined. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control plan Task 5: a remote window holds back a
+//                slice request for a slice it only listens to (close, band,
+//                sample rate, C-Tune pin and center, NNR diagnostics) and
+//                announces it, and every held change of a slice, as
+//                sliceRequestHeldForListener. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - Slice control fix wave (Important 4): txSliceSelected,
+//                emitted when the Core's own window selects a transmit
+//                slice (requestTxHandoffToSlice), so the session server
+//                records an explicit choice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Slice control plan Task 16: PanScope scoped rehome,
+//                spread and occupancy plus listenedOffPans, so a layout
+//                change moves only slices this window controls.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29 - Level Cal: rxDisplayCalOffsetDb, applyLevelCalibrationSetting,
+//                resetLevelCalibration, levelCalibrationResetAvailable,
+//                requestResetLevelCalibration and levelCalibrationChanged.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the ten preamp offsets (rx1_preamp_offset,
+//                rx2_preamp_offset, console.cs:1999-2019 [v2.10.3.15]),
+//                RX1's saved under RX1_PreampOffsetsDb.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the calibration run as a Core procedure
+//                (LevelCalibrationService), its progress as
+//                levelCalRunning / levelCalPercent / levelCalMessage /
+//                levelCalSucceeded, and the start and cancel calls a
+//                local and a remote window both make.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal: rx2PreampModeAvailable, whether a slice on the
+//                other ADC can change RX2's own preamp mode.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -557,6 +608,7 @@ namespace NereusSDR { class VoltsAmpsLog; }
 namespace NereusSDR {
 
 class AppSettings;
+enum class PreampMode;
 
 class ReceiverManager;
 class RemoteDevicesState;
@@ -761,6 +813,29 @@ class RadioModel : public QObject {
     // only, and only to a peer that declared txInhibitReason. Declared
     // after logCategoryList so every earlier property keeps its wire ordinal.
     Q_PROPERTY(QString txInhibitReason READ txInhibitReason NOTIFY txInhibitReasonChanged)
+    // The Alex-1 low-pass filter bits (Thetis SetAlexLPFBits: 0x01 20m,
+    // 0x02 40m, 0x04 80m, 0x08 160m, 0x10 6m, 0x20 10m, 0x40 15m) the Core's
+    // connection last selected, or -1 before any. Station-owned, never
+    // remotely writable; every window's Alex tab lamp shows it. Sent only
+    // to a peer that declared alexLpf. Declared after txInhibitReason so
+    // every earlier property keeps its wire ordinal.
+    Q_PROPERTY(int alexLpfBits READ alexLpfBits NOTIFY alexLpfBitsChanged)
+    // PA on-air gate re-review, Important C (paTransmitBandVersion 1): the
+    // PA row the Core holds on the air (paOnAirBandIndex, Thetis
+    // _adjustingBand), -1 when its transmit band has no PA values. Core to
+    // window only, and only to a peer that declared paTransmitBand; a
+    // window opens and locks this row, not its own slice's. Declared last
+    // so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(int paTransmitBand READ paTransmitBand NOTIFY paTransmitBandChanged)
+    // Level Cal (levelCalibrationVersion 1): the Core's calibration run.
+    // Running, its percent done, the sentence it ended with (empty while
+    // it runs or before one ran) and whether it finished. Core to window
+    // only, and only to a peer that declared levelCalibration. Declared
+    // last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(bool levelCalRunning READ levelCalRunning NOTIFY levelCalStateChanged)
+    Q_PROPERTY(int levelCalPercent READ levelCalPercent NOTIFY levelCalStateChanged)
+    Q_PROPERTY(QString levelCalMessage READ levelCalMessage NOTIFY levelCalStateChanged)
+    Q_PROPERTY(bool levelCalSucceeded READ levelCalSucceeded NOTIFY levelCalStateChanged)
 
 
 public:
@@ -1105,6 +1180,10 @@ public:
     static constexpr const char* kDisableHfPaKey = "DisableHfPa";
     static bool hfPaSwitchAvailable(HPSDRModel model) noexcept;
     static QString hfPaSwitchUnavailableReason();
+    // Alex-1 Filters' "6m/ByPass on RX" on a radio Thetis hides it on
+    // (codec::alex::lpfBypassAvailable): the desktop's box and the Setup
+    // description's row are shown disabled with this reason.
+    static QString lpfBypassUnavailableReason();
     // Reads this computer's saved value.
     void applyDisableHfPaSetting();
     // `value` is the saved string; an invalid QVariant (the key removed)
@@ -1112,7 +1191,8 @@ public:
     void applyDisableHfPaSetting(const QVariant& value);
     // Pushes the saved HL2 options the radio takes on the wire (Band Volts,
     // Disable PS Sync, TX buffer latency, PTT hang, reset on Ethernet
-    // disconnect) to a P1 connection. Nothing without one.
+    // disconnect, External 10 MHz, Enable CL2, CL2 frequency) to a P1
+    // connection. Nothing without one.
     void applyHl2Options();
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)
@@ -1623,6 +1703,20 @@ public:
     // Test seam: the production connection -> model report, for a test that
     // injects a connection (injectConnectionForTest does no wiring).
     void wireBandOutputsReportForTest() { connectBandOutputsReport(); }
+    // Test seam: the production HL2 options -> connection push, for a test
+    // that injects a connection.
+    void wireHl2OptionsForTest() { connectHl2OptionsToConnection(); }
+
+    // The Alex-1 low-pass filter bits the Core's connection selected (see
+    // the Q_PROPERTY), or -1 before any.
+    int alexLpfBits() const noexcept { return m_alexLpfBits; }
+    // Remote role: the value from the Core. False for any other name or an
+    // out-of-range value.
+    bool applyStationAlexLpfValue(const QByteArray& name, const QVariant& value);
+    // Remote role: the session ended; nothing is known until the next one.
+    void clearStationAlexLpf();
+    // Test seam: stands in for the connection's report (local role).
+    void reportAlexLpfBitsForTest(quint8 bits) { onAlexLpfBitsComposed(bits); }
 
     // ── Phase 3F: per-panadapter RX preselector bypass state (WIDE badge) ────
     // NereusSDR-original; no upstream port. Design doc
@@ -1819,6 +1913,8 @@ public:
     /// Factored out of the MainWindow badge handler so both the pan TX badge
     /// and a test can reach it without standing up a MainWindow, the same way
     /// requestSliceSampleRate is.
+    /// Slice control fix wave (Important 4): an accepted request emits
+    /// txSliceSelected, the Core's own window's explicit transmit choice.
     bool requestTxHandoffToSlice(int sliceId);
 
     /// Phase 3F: hardware-capped user-facing slice count. Reads BoardCapabilities.maxSlices
@@ -2114,6 +2210,11 @@ public:
     /// rate is a stream-wide transaction rather than a slice property.
     void applyRestoredSampleRate(SliceModel* slice);
 
+    /// Slice control plan Task 5: on a Remote model, true (and announced)
+    /// when slice `sliceId` is one this window only listens to, so a
+    /// request for it is held back instead of sent.
+    bool holdSliceRequestForListener(int sliceId);
+
     /// R-R3-49: each slice's saved per-band sample rate for the band it is
     /// on (SliceModel::savedSampleRateHz), keyed by slice id; slices with
     /// none saved are left out. connectToRadio reads it before it binds the
@@ -2189,6 +2290,17 @@ public:
     /// call that one, never this.
     void removeSlice(int sliceId);
 
+    /// Slice control plan Task 7 (Local role): closes the slice only when
+    /// SliceOwnership reports it unclaimed (no controller, nobody
+    /// listening, not held for anyone), whatever the slice count, the
+    /// Core's last slice included, and saves its settings as a removal
+    /// does. Returns whether it closed. Zero slices is a valid idle Core.
+    bool closeUnclaimedSlice(int sliceId);
+
+    /// Slice control plan Task 7: whether a slice is bound for transmit.
+    /// With none (a Core with no slice) every key is refused.
+    bool hasTransmitSlice() const;
+
     /// NOTE: still a LIST POSITION, unlike sliceById / removeSlice above.
     /// This API remains positional for internal list navigation only.
     ///
@@ -2237,6 +2349,14 @@ public:
     /// `owner` makes one of its own slices its active slice (ruling 5.10).
     /// False, changing nothing, when the slice is not `owner`'s. Local only.
     bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
+
+    /// Slice control plan Task 3: `device` makes one of the slices it has
+    /// joined (controlled or listened) its active receive slice
+    /// (SliceOwnership::activeRxFor). When it controls the slice this is
+    /// also its active slice, as setActiveSliceByIdFor; a listened slice
+    /// never moves a slice's `active` or the station-level active slice.
+    /// False, changing nothing, when `device` has not joined it. Local only.
+    bool setActiveRxFor(const QByteArray& device, int sliceId);
 
     /// The device holding transmit, empty for none (Task 34 calls this).
     /// While one holds it, its active slice is the station-level one
@@ -2386,7 +2506,31 @@ public:
     /// Lives here rather than in the MainWindow lambda that has the defect,
     /// because MainWindow is not constructible in the test harness and logic
     /// put there cannot be tested at all.
-    int rehomeSlicesToPans(const QStringList& livePanIds);
+    /// Slice control and listening, layout change rule: which slices one
+    /// window may place, and where it shows the ones it only listens to.
+    ///
+    /// A slice's pan key is shared by every device (it mirrors both ways),
+    /// so a window that rehomes or spreads a slice it does not control moves
+    /// that slice for the device that does. A scoped call moves only
+    /// `controlled` slices and counts a pan as occupied when a controlled
+    /// slice has its key or a listened slice is placed there (`listenedOn`,
+    /// slice id to this window's pan id). Every other slice is invisible to
+    /// the scoped calls. A null scope keeps the unscoped behavior, which is
+    /// what a window with no other devices has always had.
+    struct PanScope {
+        QSet<int> controlled;
+        QHash<int, QString> listenedOn;
+    };
+
+    int rehomeSlicesToPans(const QStringList& livePanIds,
+                           const PanScope* scope = nullptr);
+
+    /// The listened slices in `scope` whose placement is not one of
+    /// `panIds`, in slice order. A layout change that returns any of these
+    /// has taken them out of view, and a device hears only slices it can
+    /// see, so the caller stops listening to each one. Nothing about the
+    /// slice itself changes here.
+    QList<int> listenedOffPans(const QStringList& panIds, const PanScope& scope) const;
 
     /// Which of `panIds` currently host no slice, in the order given.
     ///
@@ -2402,7 +2546,8 @@ public:
     /// Occupancy is the question the caller is actually asking, so it is the
     /// question answered here. Co-hosted slices count once: a pan with three
     /// slices on it is occupied, not three-times occupied.
-    QStringList pansWithoutSlices(const QStringList& panIds) const;
+    QStringList pansWithoutSlices(const QStringList& panIds,
+                                  const PanScope* scope = nullptr) const;
 
     /// Slices currently living on `panId`, optionally skipping one.
     ///
@@ -2436,7 +2581,8 @@ public:
     /// The slices needed are already there, so they are moved before any are
     /// made. Only genuinely surplus ones move: a pan holding a single slice is
     /// never raided, or expanding would just relocate the hole.
-    int spreadSlicesOntoEmptyPans(const QStringList& panIds);
+    int spreadSlicesOntoEmptyPans(const QStringList& panIds,
+                                  const PanScope* scope = nullptr);
 
     /// Phase 3F closeout — public helper for invoking the antennaAutoSwitched
     /// signal from operator surfaces (Tools menu "Test antenna switch toast"
@@ -2734,6 +2880,50 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+    // R-R3-49 / R-IOS-27 (JJ's ruling, follow Thetis): the PA Gain page's
+    // on-the-air lock (Thetis OnMoxChangeHandler, setup.cs:23826-23834
+    // [v2.10.3.15]). While the radio is on the air only the transmitting
+    // band's gain, drive-step adjust, max power and use-max change, and
+    // only from the device that holds transmit.
+    static QString paOnAirLockedReason();   // "Can't change while transmitting."
+    static QString paHolderOnlyReason();    // "Only the device that is transmitting ..."
+    // The DSP > Options RX buffer sizes' on-the-air lock (Thetis greys
+    // grpDSPBufferSize while MOX is on, setup.cs:5159 [v2.10.3.15]); the
+    // same words as PA Gain's lock.
+    static QString dspBufferOnAirLockedReason(); // "Can't change while transmitting."
+    // True for the four DSP > Options RX buffer size keys
+    // (DspOptionsBufferSize{Phone,Fm,Cw,Dig}Rx).
+    static bool isRxDspBufferSizeKey(const QString& key);
+    // The PA band the radio transmits on (Thetis _adjustingBand): the
+    // transmit slice's band, else the last band, when it is 160 m..6 m or
+    // XVTR; -1 when that band has no PA values. A remote window whose Core
+    // sends paTransmitBand takes the Core's row.
+    int paOnAirBandIndex() const;
+    // The paTransmitBand property: paOnAirBandIndex().
+    int paTransmitBand() const;
+    // True while the PA Gain page's on-the-air lock holds: MOX (the
+    // controller's or the transmit model's), TUNE or the two-tone test.
+    // Unlike stationOnAirRefusal it ends when MOX drops, not after the
+    // controller's TX to RX handover: Thetis gates these edits on
+    // console.MOX alone (setup.cs:24210-24222 [v2.10.3.15]).
+    bool paOnAirNow() const;
+    // Why an on-the-air PA edit is refused, or empty when it is taken (and
+    // empty off the air). `profileAction`: select, new, copy, delete or
+    // reset. `band`: the PA row the edit changes. `requesterHoldsTransmit`:
+    // the device asking holds transmit.
+    QString paOnAirEditRefusal(bool profileAction, int band, bool requesterHoldsTransmit) const;
+    // The same rule for a window's raw PA profile keys
+    // (hardware/<mac>/pa/profile/...): on the air only a change to the
+    // active profile's transmitting band, from the device that holds
+    // transmit, is taken; the list, the active name, another profile, a
+    // remove (`value` null) and any other band are refused. Empty off the
+    // air and for every other key.
+    QString paSettingOnAirRefusal(const QString& key, const QString* value,
+                                  bool requesterHoldsTransmit) const;
+    // After such a change was stored: the Core's bank takes it at once and
+    // the drive follows it, as applyPaEditOnAir does for the verbs. Off the
+    // air (and for any other key) it does nothing: the PA reload does it.
+    void applyPaSettingOnAir(const QString& key, const QString& value);
     // iPhone app plan Task 77 fix round 3: the Power Genius's OPERATE and
     // STANDBY also wait while a Tuner Genius cycle runs (the Core's own
     // cycle, from its standby wait to its restore, or the tuner reporting
@@ -2781,7 +2971,8 @@ public:
     bool isCoreOnAir() const;
     // R-R3-49: the window's copy of the Core's `transmitting` goes back to
     // false when the session ends, so a Core that does not send it never
-    // inherits an old "on the air".
+    // inherits an old "on the air". Its TX inhibit and paTransmitBand go
+    // with it.
     void clearRemoteTransmittingState();
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
@@ -3515,8 +3706,15 @@ public:
         int step = -1;     // drive step 0 (10%) .. 8 (90%)
         double value = 0.0;
         bool on = false;
+        // The device asking holds transmit (paOnAirEditRefusal).
+        bool requesterHoldsTransmit = false;
     };
     bool paProfileActionForStation(const PaProfileRequest& request, QString* reason);
+    // R-R3-49 / R-IOS-27: after a PA edit taken on the air, what Thetis
+    // does: a gain re-applies the drive; an adjust moves the drive (or the
+    // tune power) to the step being adjusted (setup.cs:24210-24222
+    // [v2.10.3.15]). Max power and use-max: nothing more.
+    void applyPaEditOnAir(PaProfileAction action, int step);
     // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
     // RADE transmit vocoder of the active slice's RADE channel
     // (RadeChannel::resetTx), as the local button does. Keys nothing.
@@ -3631,8 +3829,82 @@ public:
     // The meter cal term of the receive calibration: Setup's value
     // (RX1_MeterCalOffsetDb) or the radio's factory default.
     double rxMeterCalOffsetDb() const;
+    // Level Cal: the RX1 display calibration (RX1_DisplayCalOffsetDb) or
+    // the radio's factory default, Thetis RX1DisplayCalOffset
+    // (console.cs:21113-21122 [v2.10.3.15]). As in Thetis it reaches TCI
+    // calibration_ex only (TCIServer.cs:1160-1176 [v2.10.3.15]); the
+    // panadapter follows the meter cal (console.cs:12305-12311
+    // [v2.10.3.15], rxMeterOffsetDb), so this never moves it.
+    double rxDisplayCalOffsetDb() const;
+    // Level Cal: the connected model's own saved meter or display
+    // calibration (RxMeterCalOffsetDbByRadio / RxDisplayCalOffsetDbByRadio,
+    // Thetis rx_meter_cal_offset_by_radio and rx_display_cal_offset_by_radio,
+    // console.cs:196-197 [v2.10.3.15]); nullopt reads the factory default.
+    // The setters change only the connected model's entry.
+    std::optional<double> rxMeterCalOverrideDb() const;
+    std::optional<double> rxDisplayCalOverrideDb() const;
+    void setRxMeterCalOverrideDb(std::optional<double> db);
+    void setRxDisplayCalOverrideDb(std::optional<double> db);
+    // Level Cal: `key` is RX1_MeterCalOffsetDb or RX1_DisplayCalOffsetDb
+    // (just written or removed): refresh the meter offset and emit
+    // levelCalibrationChanged, as Thetis's setters fire their changed
+    // handlers (console.cs:21091-21122 [v2.10.3.15]). Returns false for any
+    // other key. The Core calls it for a window's write too.
+    bool applyLevelCalibrationSetting(const QString& key);
+    // Level Cal Reset, Thetis ResetLevelCalibration (console.cs:46868-46886
+    // [v2.10.3.15]): the meter and display offsets return to the radio's
+    // defaults (both keys removed). Nothing else changes.
+    void resetLevelCalibration();
+    // Whether this window can reset the level calibration: always locally,
+    // in a remote window when its Core offers resetLevelCalibration.
+    bool levelCalibrationResetAvailable() const;
+    // The one call both windows make for Setup's Reset. Empty when it was
+    // done (locally) or sent (remote); otherwise the reason it was not.
+    QString requestResetLevelCalibration();
+    // Level Cal, Thetis CalibrateLevel (console.cs:9856-10232
+    // [v2.10.3.15]) run by the Core on one slice (Thetis RX1 and VFO A;
+    // -1 the active slice). Whether this window can start one: always
+    // locally, in a remote window when its Core offers
+    // startLevelCalibration.
+    bool levelCalibrationRunAvailable() const;
+    // Whether a slice on the other ADC can change RX2's own preamp mode
+    // (Thetis RX2PreampMode): always locally, in a remote window when its
+    // Core carries stepAtt's rx2PreampMode (radioHardwareVersion 12).
+    bool rx2PreampModeAvailable() const;
+    // The calls both windows make. Empty when it started or was sent;
+    // otherwise the reason it was not. A refusal the Core sends later
+    // arrives as levelCalibrationRefused.
+    QString requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId);
+    QString requestCancelLevelCalibration();
+    bool levelCalRunning() const;
+    int levelCalPercent() const;
+    QString levelCalMessage() const;
+    bool levelCalSucceeded() const;
+    // Remote window: a levelCal* value from the Core. False on a local
+    // model or for any other name.
+    bool applyStationLevelCalValue(const QByteArray& name, const QVariant& value);
+    // Remote window: the session ended, nothing is known about a run.
+    void clearStationLevelCal();
+    // The Core's run (created on first use). Null on a Remote model.
+    class LevelCalibrationService* levelCalibrationServiceForTest();
     // Recompute rxMeterOffsetDb() and emit rxMeterOffsetChanged if it moved.
     void refreshRxMeterOffset();
+    // Level Cal: moves a one-value calibration of an earlier build to the
+    // connected model's entry. True when a key moved.
+    bool foldLegacyLevelCal();
+    void writeLevelCalOverride(bool meter, std::optional<double> db);
+    // Level Cal: the receive offset of each preamp setting, Thetis
+    // rx1_preamp_offset[] (console.cs:1999-2009 [v2.10.3.15]), which
+    // CalibrateLevel measures (console.cs:10026-10140 [v2.10.3.15]). RX1's
+    // ten are saved under RX1_PreampOffsetsDb as ten values at three
+    // decimals separated by '|' (Thetis saves them the same way,
+    // console.cs:3202-3203 [v2.10.3.15]); absent, or not ten numbers, they
+    // read Thetis's defaults. RX2's are held while the program runs, as
+    // Thetis never saves rx2_preamp_offset. Setting one refreshes the meter.
+    float rx1PreampOffsetDbFor(PreampMode mode) const;
+    float rx2PreampOffsetDbFor(PreampMode mode) const;
+    void setRx1PreampOffsetDb(PreampMode mode, float db);
+    void setRx2PreampOffsetDb(PreampMode mode, float db);
     // Parity Task 31 (A11): the display's calibration while keyed, Thetis
     // RX1Offset (display.cs:4820-4850 [v2.10.3.15]) for the transmitting
     // receiver: the TX Display Cal Offset, plus with display duplex on the
@@ -3648,6 +3920,13 @@ signals:
     // bandOutputsByte / bandOutputsBand / bandOutputsKeyed / bandOutputsKnown
     // changed.
     void bandOutputsChanged();
+    // alexLpfBits() changed.
+    void alexLpfBitsChanged();
+    // levelCalRunning / levelCalPercent / levelCalMessage /
+    // levelCalSucceeded changed.
+    void levelCalStateChanged();
+    // Remote window: the Core refused a start this window sent.
+    void levelCalibrationRefused(const QString& reason);
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -3657,6 +3936,10 @@ signals:
     // moved: the other ADC's attenuator or preamp, or which ADC carries
     // which attenuator. Emitted with rxMeterOffsetChanged too.
     void rxAdcMeterOffsetsChanged();
+    // Level Cal: the meter or display calibration changed (a write, a
+    // Reset, or in a remote window the Core's copy). TCI sends
+    // calibration_ex on it.
+    void levelCalibrationChanged();
 
 public:
 
@@ -3851,6 +4134,10 @@ public:
     // bypass, and the Alex-2 master bypass), each default Thetis's.
     static codec::alex::AlexHpfEdges savedAlexHpfEdges(const QString& mac);
     const codec::alex::AlexHpfEdges& alexHpfEdges() const noexcept { return m_alexHpfEdges; }
+    // The Alex tab's low-pass filter rows saved for `mac` (each row's start
+    // and end), each default Thetis's.
+    static codec::alex::AlexLpfEdges savedAlexLpfEdges(const QString& mac);
+    const codec::alex::AlexLpfEdges& alexLpfEdges() const noexcept { return m_alexLpfEdges; }
     // Task 14's name for the same apply, kept for its callers.
     void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
 
@@ -3920,6 +4207,9 @@ public:
     // directly after setting the connection state via
     // setConnectionStateForTest + setLastRadioInfoForTest.
     void applyPeripheralsForTest() { applyPeripheralsForCurrentMac(); }
+    // The first-MOX audioVolume seed, which connectToRadio runs only with a
+    // live WDSP TxChannel.
+    void seedInitialAudioVolumeForTest() { seedInitialAudioVolume(); }
     void teardownPeripheralsForTest() { teardownPeripherals(); }
     // R-R3-22: the FlexRadio beacon as connectToRadio leaves it, in a mode
     // that sends nothing (FlexRadioDiscoveryBroadcaster::setNoSendForTesting),
@@ -4855,13 +5145,6 @@ public slots:
     Q_INVOKABLE void setRxNf(int rx, bool on);
     Q_INVOKABLE bool rxNf(int rx) const;
 
-    // ── Stub categories: SliceModel doesn't expose these as Q_PROPERTYs yet ─
-    // Each stub stores the requested value in a small per-slice array so
-    // round-trip (set then get) returns the operator's last value.  Real
-    // wiring to WDSP comes when the underlying feature lands.
-    Q_INVOKABLE void setRxEnable(int rx, bool on);
-    Q_INVOKABLE bool rxEnable(int rx) const;
-
     // ── Per-slice AF gain (rx_volume: query source) ──────────────────────
     // Distinct from afLinear() below: afLinear is the single radio-global
     // master volume slider (Thetis console AF field, handleVolume /
@@ -4911,11 +5194,11 @@ public slots:
     Q_INVOKABLE QString     txProfile() const;
     Q_INVOKABLE QStringList txProfilesList() const;
 
-    // ── Calibration (getter-only stubs returning 0.0) ────────────────────
-    // No calibration model in RadioModel yet.  Mock semantics: set/get pair;
-    // production has setters absent (caller side never sets these), so
-    // getters return 0.0.  Real calibration data would live in a future
-    // CalibrationModel + per-slice persistence.
+    // ── Calibration (TCI calibration_ex) ─────────────────────────────────
+    // calibrationMeter is rxMeterCalOffsetDb() and calibrationDisplay is
+    // rxDisplayCalOffsetDb(), for either rx: NereusSDR keeps one receive
+    // calibration, which Thetis starts RX2 from too (console.cs:999
+    // [v2.10.3.15]). The XVTR, 6 m and TX display terms still return 0.0.
     Q_INVOKABLE double calibrationMeter(int rx) const;
     Q_INVOKABLE double calibrationDisplay(int rx) const;
     Q_INVOKABLE double calibrationXvtr(int rx) const;
@@ -5102,8 +5385,14 @@ signals:
     void endOfOverTailChanged(bool active);
     // R-R3-49 (parity Task 1): isCoreOnAir() changed.
     void coreOnAirChanged(bool onAir);
+    // R-R3-49: the Core's transmit band (Thetis _tx_band, m_txBand) changed
+    // or became known or unknown. It holds while keyed, so paOnAirBandIndex
+    // follows this, not a slice's band.
+    void transmitBandChanged();
     // R-R3-32 (parity Task 6): paReadings() changed.
     void paReadingsChanged();
+    // paTransmitBand() changed (paTransmitBandVersion 1).
+    void paTransmitBandChanged(int band);
     // Parity Task 33: paRawAdc() changed.
     void paRawAdcChanged();
     // Parity Task 33: stationTxReadingsVersion() changed.
@@ -5138,6 +5427,10 @@ signals:
     void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);
+    /// Slice control fix wave (Important 4): the Core's own window chose
+    /// `sliceId` for transmit (requestTxHandoffToSlice accepted it). Never
+    /// emitted for a binding the transmitter gets by itself.
+    void txSliceSelected(int sliceId);
     // A restored shared slice may have changed many preferences silently.
     // Consumers must publish a complete snapshot, not duplicate sliceAdded.
     void receiveLayoutHydrated();
@@ -5196,6 +5489,11 @@ signals:
     /// offset all agree again. `reason` is plain English, ready for a status
     /// bar, and names the frequency the slice stayed on.
     void sliceRetuneRejected(int sliceIndex, const QString& reason);
+    /// Slice control plan Task 5: a remote window held back a change to
+    /// slice `sliceId` (one of its setters, or a slice request) because it
+    /// only listens to that slice; nothing was sent. `reason` is the Core's
+    /// listener words (SliceModel::readOnlyListenerReason()).
+    void sliceRequestHeldForListener(int sliceId, const QString& reason);
     /// Parity Task 21 (R-IOS-18): the Core's radios changed (a remote
     /// window), or the Core refused a radio request.
     void stationRadiosChanged();
@@ -5519,6 +5817,19 @@ private slots:
     /// powers at or below 51 and carries the level in the post-gen tone
     /// magnitude instead, so a TUNE silences every following SSB transmit.
     void restoreNormalTxDrive();
+    /// Thetis ptbPWR_Scroll's power path (console.cs:28682-28692
+    /// [v2.10.3.15]): SetPowerUsingTargetDBM with bFromTune=false and no
+    /// TUNE or two-tone guard, so the transmit model's own tx mode picks
+    /// the tune or two-tone drive source while either runs. The drive half
+    /// of drivePowerScroll.
+    void applyDriveSliderPower();
+    /// All of Thetis ptbPWR_Scroll (console.cs:28682-28693 [v2.10.3.15]):
+    /// applyDriveSliderPower, then the per-band save
+    /// `power_by_band[(int)_tx_band] = ptbPWR.Value;` in every tx mode and
+    /// with or without a radio. The PWR setter (console.cs:18437-18448) runs
+    /// it, so TransmitModel::powerChanged does too. Only a model that owns
+    /// its radio saves; a remote window gets the Core's saved values.
+    void drivePowerScroll();
 
     // ── Phase 3J-2 H2: per-source spot-adapter slots ────────────────────────
     //
@@ -5607,6 +5918,20 @@ private:
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
+    // The transmit slice's band, else m_lastBand: the band refreshTransmitTuneBand
+    // hands the TUNE path and applyTransmitBand.
+    Band transmitSliceBand() const;
+    // Port of Thetis's TXBand setter (console.cs:17511-17545 [v2.10.3.15]):
+    // on a transmit band change, saves PWR into the old band's slot and
+    // loads the new band's stored power into PWR. `initializing` is the
+    // connect-time call after the per-band store loads. Local role only.
+    void applyTransmitBand(Band band, bool initializing);
+    // m_txBand once known, else transmitSliceBand(): the band the drive math
+    // reads and saves PWR to (Thetis _tx_band).
+    Band driveTxBand() const;
+    // The first-MOX audioVolume seed: PWR's drive, pushed once the TxChannel
+    // exists so the first key is not silent (txSetup in connectToRadio).
+    void seedInitialAudioVolume();
     // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
     // and list onto `transmit` (activeTxProfile, txProfilesJson).
     void publishTxProfiles();
@@ -5846,7 +6171,11 @@ private:
     // bandOutputsByte (onBandOutputsComposed). Called from
     // wireConnectionSignals.
     void connectBandOutputsReport();
+    // Pushes the saved HL2 options to a P1 connection now and again each
+    // time they change (applyHl2Options). Nothing without one.
+    void connectHl2OptionsToConnection();
     void onBandOutputsComposed(quint8 ocByte, int band, bool keyed);
+    void onAlexLpfBitsComposed(quint8 bits);
     void resetBandOutputs();
 
     // Issue #177 — deferred completion of the TUN-off path.
@@ -6377,7 +6706,9 @@ private:
     /// is shared. removeSlice() now sends a verb on a Role::Remote model,
     /// so the session's own inbound destroy needs a way past that branch
     /// to the removal itself.
-    void removeSliceImpl(int sliceId, bool persist = true);
+    /// `mayCloseLast` (slice control plan Task 7): the claims rule's close
+    /// of an unclaimed slice, which may leave the Core with no slice.
+    void removeSliceImpl(int sliceId, bool persist = true, bool mayCloseLast = false);
     void bindReceiveLayoutSlices();
     bool activateRestoredRadeReceiveOwner(QString* error);
     void setReceiveLayoutRestoreStatus(const QString& state, const QString& message);
@@ -6794,6 +7125,14 @@ private:
     std::unique_ptr<TxDisplayFeed> m_txDisplayFeed;
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
+    // Level Cal: Thetis rx2_preamp_offset[] (console.cs:2011-2019
+    // [v2.10.3.15]), never saved; NaN reads the default.
+    std::array<float, 10> m_rx2PreampOffsetDb{
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::quiet_NaN()};
     // R-R3-46: followReceiveSliceWithStepAttenuator() has wired its connects.
     bool m_stepAttFollowsSlices{false};
 
@@ -6919,6 +7258,11 @@ private:
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
+    // Thetis's _tx_band (console.cs:17511 [v2.10.3.15]): the band PWR was
+    // last loaded for, which drivePowerScroll saves to. Unknown until
+    // applyTransmitBand first runs.
+    Band m_txBand{Band::Band20m};
+    bool m_txBandKnown{false};
     /// iPhone app Task 75 (ruling 5.11a): the band whose receive antenna the
     /// relay keeps while another device listens through it; empty when the
     /// relay follows m_lastBand as always.
@@ -6980,6 +7324,19 @@ private:
     // (applyAlexHpfSwitchSettings): the chain decisions select each chain's
     // high-pass from them, as the connection does.
     codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
+    codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
+    // alexLpfBits(): -1 until the connection (or the Core) reports one.
+    int m_alexLpfBits{-1};
+    // Level Cal: the Core's run (local role), created on first use.
+    class LevelCalibrationService* levelCalibrationService();
+    class LevelCalibrationService* m_levelCalService{nullptr};
+    // A remote window's copy of the Core's run.
+    bool m_stationLevelCalRunning{false};
+    int m_stationLevelCalPercent{0};
+    QString m_stationLevelCalMessage;
+    bool m_stationLevelCalSucceeded{false};
+    // The start this window sent, whose refusal it reports.
+    quint32 m_levelCalStartCommandId{0};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;
@@ -7050,11 +7407,17 @@ private:
     // m_savedPowerPct: power slider value (0-100) before the tune-power push.
     //   Cite: Thetis console.cs:30033 [v2.10.3.13] — PreviousPWR = ptbPWR.Value.
     //   //MW0LGE_22b  [original inline comment from console.cs:30033]
-    //   Restored to the connection on TUN-off so the slider snaps back.
+    //   Saved and restored only under the FIXED tune source
+    //   (console.cs:30094-30104 and 30180-30185 [v2.10.3.15]); see
+    //   m_tuneSetFixedPwr.
     // Default 100 matches TransmitModel::m_power default (TransmitModel.h).
     // G.4 fixup: changed from 50 (initial value mismatch with TransmitModel);
     // harmless after the cold-off guard in setTune(false) but kept for hygiene.
     int m_savedPowerPct{100};
+    // m_tuneSetFixedPwr: TUN-on took the FIXED branch (PWR limit off, PWR set
+    //   to the tune power), so TUN-off turns the limit back on and restores
+    //   m_savedPowerPct. Cleared by that restore.
+    bool m_tuneSetFixedPwr{false};
     //
     // m_isTuning: True while TUN is engaged (between setTune(true) and
     //   setTune(false)).  Used as the idempotent guard at the top of
@@ -7150,7 +7513,7 @@ private:
     // values so the production path passes the existing matrix tests.
     //
     // Per-slice stub state for DSP toggles SliceModel doesn't yet expose
-    // as Q_PROPERTYs: rxCtun / rxEnable.  Sized to the max RX count
+    // as Q_PROPERTYs: rxCtun.  Sized to the max RX count
     // NereusSDR supports today (4 for the four-DDC SKUs); the setter clamps
     // the index so an out-of-range slice silently no-ops.
     // rxNf left this set in TNF section 6.4: it is the global notch master
@@ -7191,7 +7554,6 @@ private:
     // reads. NF followed them out in TNF section 6.4, onto
     // NotchModel::globalEnabled -- see the setRxNf comment in RadioModel.cpp.
     std::array<bool, kTciStubSliceMax> m_tciStubRxCtun{};
-    std::array<bool, kTciStubSliceMax> m_tciStubRxEnable{ {true, false, false, false} };
 
     // Non-owning view of the WDSP TX channel (WdspEngine::kTxChannelId,
     // == WDSP.id(1, 0)).
@@ -7730,6 +8092,14 @@ private:
     QString m_txInhibitReason;
     void refreshTxInhibitReason();
     static QString ioBoardFaultReason(quint8 code);
+    // On the Core: emit paTransmitBandChanged when paOnAirBandIndex moved.
+    void announcePaTransmitBand();
+    // PA on-air gate re-review, Important C: the Core's paTransmitBand as a
+    // remote window last heard it, and whether it has (an older Core never
+    // sends it). On the Core, the value last announced.
+    int m_stationPaTransmitBand{-1};
+    bool m_stationPaTransmitBandKnown{false};
+    int m_announcedPaTransmitBand{-2};
     // Remote-window parity Task 16: the Core's dspInfoVersion and
     // dspAssetVersion as a remote window last heard them; the last DSP
     // Options apply time; the filter curve.

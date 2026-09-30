@@ -3,6 +3,9 @@
 // 2026-09-28: parity ruling C4: setRadioSampleRate is asked of the other
 // devices as a radio-wide change and answers later, off the air.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: a held RX buffer size write rechecks the on-air lock
+// before it applies. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 // no-port-check: NereusSDR-original.
 // =================================================================
 // src/core/session/StationSharedSettings.cpp  (NereusSDR)
@@ -98,6 +101,18 @@
 //               slice A's ADC, rx2AttenuationDb the other ADC's (both while
 //               diversity links them). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-28: slice control and shared listening plan Task 2: a verb
+//               naming a slice the requester may not change
+//               (changeRefusal) is left to the dispatcher's refusal.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8, Amendment 8a: a slice of a
+//               device that is not here is never named in a question. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 10: requesters are read through
+//               peerFor, so the station device is one. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -264,6 +279,12 @@ QString preampWords(int mode)
         return QStringLiteral("-40 dB");
     case PreampMode::Minus50:
         return QStringLiteral("-50 dB");
+    case PreampMode::SaMinus10:
+        return QStringLiteral("-10 dB");
+    case PreampMode::SaMinus20:
+        return QStringLiteral("-20 dB");
+    case PreampMode::SaMinus30:
+        return QStringLiteral("-30 dB");
     }
     return QString::number(mode);
 }
@@ -393,6 +414,12 @@ DisturbanceCheck::Topology StationServer::sharedTopology() const
         if (slice == nullptr) {
             continue;
         }
+        // Slice control plan Task 8, Amendment 8a (JJ approved): a slice of
+        // a device that is not here (away in its 180 s, or kept for it) is
+        // never named in a question; the change still reaches it. It stays
+        // in the topology so ruling 7.1a can tell its device on its return
+        // (and close it when a rate cannot keep it); connectedAffected()
+        // leaves it out of the question.
         DisturbanceCheck::SliceInfo info;
         info.sliceId = slice->sliceIndex();
         info.device = ownership != nullptr ? ownership->mark(info.sliceId).subject() : QByteArray();
@@ -521,7 +548,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 const bool adc1 = n == "rx1Preamp";
                 // RX2's value, enable and auto-attenuate settings reach RX2's ADC.
                 const bool rx2Att = n == "rx2AttenuationDb" || n == "rx2StepAttEnabled"
-                    || n.startsWith("rx2AutoAtt");
+                    || n.startsWith("rx2AutoAtt") || n == "rx2PreampMode";
                 const bool known = n == "attenuationDb" || n == "enabled" || n == "preampMode"
                     || adc1 || rx2Att || n.startsWith("autoAtt");
                 if (!known) {
@@ -556,7 +583,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 } else if (n == "enabled" || n == "rx2StepAttEnabled") {
                     words(QStringLiteral("Attenuator, %1").arg(adc), currentWords(u, {}),
                           valueWords(u.value, u.kind));
-                } else if (n == "preampMode") {
+                } else if (n == "preampMode" || n == "rx2PreampMode") {
                     words(QStringLiteral("Preamp, %1").arg(adc),
                           preampWords(current.value(n).value.toInt()),
                           preampWords(u.value.toInt()));
@@ -1334,8 +1361,22 @@ QList<DisturbanceCheck::Affected> StationServer::connectedAffected(
     const QList<DisturbanceCheck::Affected>& affected) const
 {
     QList<DisturbanceCheck::Affected> connected;
+    const SliceOwnership* ownership =
+        m_radioModel.isNull() ? nullptr : m_radioModel->sliceOwnership();
     for (const DisturbanceCheck::Affected& a : affected) {
-        if (planDevice(a.device).state != QLatin1String("away")) {
+        if (planDevice(a.device).state == QLatin1String("away")) {
+            continue;
+        }
+        // Slice control plan Task 8, Amendment 8a: a device whose disturbed
+        // slices are all away slices (kept for it) is not here to ask.
+        bool here = ownership == nullptr || a.slices.isEmpty();
+        for (const DisturbanceCheck::AffectedSlice& s : a.slices) {
+            if (ownership == nullptr || !ownership->isAwaySlice(s.sliceId)) {
+                here = true;
+                break;
+            }
+        }
+        if (here) {
             connected.append(a);
         }
     }
@@ -1497,7 +1538,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     if (m_radioModel.isNull() || m_radioModel->role() != RadioModel::Role::Local) {
         return false;
     }
-    const QByteArray requester = m_peers.value(transport).sessionDeviceId;
+    const QByteArray requester = peerFor(transport).sessionDeviceId;
     if (requester.isEmpty()) {
         return false;
     }
@@ -1505,7 +1546,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     // own check (ruling 5.9), before anything is asked.
     if (message.kind == SessionMessageKind::CommandInvoke) {
         const int sliceId = intArgument(message.arguments, "sliceId");
-        if (sliceId >= 0 && !sliceRefusal(requester, sliceId).isEmpty()) {
+        if (sliceId >= 0 && !changeRefusal(requester, sliceId).isEmpty()) {
             return false;
         }
     }
@@ -1639,9 +1680,14 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                                                   false, onAir, {});
         }
     }
+    // Setup description version 22: and before a DSP > Options RX buffer
+    // size write or removal, which waits while the radio is on the air
+    // (DisturbanceCheck::refusedOnAir does not cover receive options).
+    const QString heldKey = QString::fromUtf8(question.original.objectKey);
     if (question.held == ConfirmStep::Held::SettingsWrite
-        && question.original.objectKey == "BandPlanRegion") {
-        const QString onAir = transmitSettingOnAirRefusal(QStringLiteral("BandPlanRegion"));
+        && (heldKey == QLatin1String("BandPlanRegion")
+            || RadioModel::isRxDspBufferSizeKey(heldKey))) {
+        const QString onAir = transmitSettingOnAirRefusal(heldKey);
         if (!onAir.isEmpty()) {
             return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
                                                   false, onAir, {});
@@ -1749,7 +1795,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         later.closedDevices = closedDevices;
         // Fix wave I1: keyed by the asking session, so another device's
         // rate change with the same command id never finishes this one.
-        const quint64 session = m_peers.value(transport).sessionId;
+        const quint64 session = peerFor(transport).sessionId;
         m_deferredProceeds.insert(
             ResultKey{session, question.original.commandVerb, question.original.commandId},
             later);
@@ -1819,7 +1865,7 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     if (result.accepted && m_holdingRadioChange && !m_heldRadioChange
         && question.target == QLatin1String("radio")) {
         HeldRadioChange held;
-        held.key = ResultKey{m_peers.value(transport).sessionId, invoke.commandVerb,
+        held.key = ResultKey{peerFor(transport).sessionId, invoke.commandVerb,
                              invoke.commandId};
         held.result = result;
         held.proceed = true;
@@ -1867,7 +1913,7 @@ bool StationServer::finishDeferredProceed(const ResultKey& key, const SessionMes
     // The proceed's own route (recorded because its answer came later) is
     // used here, and goes.
     m_resultRoutes.remove(ResultKey{key.sessionId, later.proceedVerb, later.proceedId});
-    if (!later.transport.isNull() && m_peers.contains(later.transport.data())) {
+    if (!later.transport.isNull() && hasPeer(later.transport.data())) {
         sendToPeer(later.transport.data(),
                    SessionMessages::commandResult(later.proceedVerb, later.proceedId,
                                                   result.accepted, result.reason,

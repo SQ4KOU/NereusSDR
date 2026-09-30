@@ -2,7 +2,11 @@
 
 #include <QChar>
 #include <QPointer>
+#include <QString>
 #include <QWidget>
+
+class QLabel;
+class QPushButton;
 
 class QHBoxLayout;
 class QLabel;
@@ -67,6 +71,13 @@ public:
     /// Mode badge text, for tests and for the overflow tooltip.
     QString modeText() const;
 
+    /// Slice control plan Task 13: the picker's words beside the letter
+    /// ("You control", "Listening", "Choose a slice" with none), and the
+    /// picker itself, which opens the all-slice chooser.
+    void setChooserState(const QString& words);
+    QString chooserState() const;
+    QPushButton* chooserButton() const noexcept { return m_picker; }
+
     /// Badge that folds at this rung, or nullptr if the rung is not ours.
     /// 5 SQL, 6 APF, 7 NB, 8 NR, 9 AGC. Mode and filter never fold.
     StatusBadge* badgeForRung(int rung) const;
@@ -90,6 +101,9 @@ public:
     enum class Badge { Mode, Filter, Agc, Nr, Nb, Apf, Squelch };
 
 signals:
+    /// Slice control plan Task 13: the picker was clicked.
+    void chooserRequested();
+
     /// R-R3-21: a badge was left-clicked.
     void badgeClicked(NereusSDR::RxDashboard::Badge badge);
 
@@ -127,6 +141,8 @@ private:
 
     QChar        m_sliceLetter{QLatin1Char('A')};
     QLabel*      m_sliceTag{nullptr};
+    QPushButton* m_picker{nullptr};
+    QLabel*      m_pickerState{nullptr};
     QPointer<SliceModel> m_slice;
     StatusBadge* m_modeBadge{nullptr};
     StatusBadge* m_filterBadge{nullptr};

@@ -19,6 +19,9 @@
 // Modification history (NereusSDR):
 //   2026-09-28: original test for NereusSDR by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: Level Cal fix wave: RX2's preamp mode cases, by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -26,6 +29,7 @@
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#include "core/HpsdrModel.h"
 #include "core/P1RadioConnection.h"
 #include "core/P2RadioConnection.h"
 #include "core/RadioConnection.h"
@@ -60,6 +64,7 @@ public:
 
     Sends sends;
     QList<bool> preamp;
+    QList<bool> rx2Preamp;
 
     void init() override {}
     void connectToRadio(const NereusSDR::RadioInfo&) override {}
@@ -71,6 +76,7 @@ public:
     void setAttenuator(int dB) override { sends.append({0, dB}); }
     void setAttenuatorForAdc(int adc, int dB) override { sends.append({adc, dB}); }
     void setPreamp(bool on) override { preamp.append(on); }
+    void setRx2Preamp(bool on) override { rx2Preamp.append(on); }
     void setTxDrive(int) override {}
     void sendTxIq(const float*, int) override {}
     void setWatchdogEnabled(bool) override {}
@@ -644,6 +650,150 @@ private slots:
         QCOMPARE(radio.sends, (Sends{{0, 9}}));
         QCOMPARE(ctrl.attenuatorDbForAdc(1), 9);  // an unused ADC reads RX1's
         ctrl.setRadioConnection(nullptr);
+    }
+
+    // Level Cal fix wave: RX2's preamp mode, as Thetis's RX2PreampMode
+    // setter drives it (console.cs:19431-19505 [v2.10.3.15]). On a G2 with
+    // RX2's step attenuator off, each mode puts its attenuation on RX2's
+    // ADC; no board but the HPSDR takes a preamp bit.
+    void rx2PreampModeDrivesTheOtherAdcOnAG2()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:20"));
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(false);
+        struct Row { PreampMode mode; int att; };
+        const Row rows[] = {
+            {PreampMode::Minus10,   10},
+            {PreampMode::Off,       20},
+            {PreampMode::Minus20,   20},
+            {PreampMode::Minus30,   30},
+            {PreampMode::SaMinus10, 10},
+            {PreampMode::SaMinus20, 20},
+            {PreampMode::SaMinus30, 30},
+            {PreampMode::On,        0},
+        };
+        const PreampMode rx1 = ctrl.preampMode();
+        for (const Row& row : rows) {
+            radio.sends.clear();
+            ctrl.setRx2PreampMode(row.mode);
+            QCOMPARE(ctrl.rx2PreampMode(), row.mode);
+            QCOMPARE(radio.sends, (Sends{{1, row.att}}));
+            QCOMPARE(ctrl.preampMode(), rx1);  // on its own ADC: RX1 untouched
+        }
+        QVERIFY(radio.preamp.isEmpty());
+        QVERIFY(radio.rx2Preamp.isEmpty());
+        // RX2's step attenuator on: the mode sends nothing to the ADC.
+        ctrl.setRx2StepAttEnabled(true);
+        radio.sends.clear();
+        ctrl.setRx2PreampMode(PreampMode::SaMinus20);
+        QVERIFY(radio.sends.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // The HPSDR takes RX2's preamp bit (NetworkIO.SetRX2Preamp) and no
+    // attenuation from it; its one ADC keeps the two modes one.
+    void rx2PreampModeOnTheHpsdrSendsTheSecondPreampBit()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Atlas, HPSDRModel::HPSDR, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:21"));
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setStepAttEnabled(false);
+        radio.sends.clear();
+        radio.rx2Preamp.clear();
+        ctrl.setRx2PreampMode(PreampMode::Minus10);
+        QCOMPARE(radio.rx2Preamp, QList<bool>{true});
+        ctrl.setRx2PreampMode(PreampMode::Off);
+        QCOMPARE(radio.rx2Preamp, (QList<bool>{true, false}));
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
+        ctrl.setPreampMode(PreampMode::On);
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::On);
+        QCOMPARE(radio.rx2Preamp.last(), true);
+        QVERIFY(radio.sends.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // RX2's mode is kept per band (rx2_preamp_by_band) and for the radio.
+    void rx2PreampModeKeepsItsBandMemoryAndSurvivesARestart()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:22");
+        {
+            StepAttenuatorController ctrl;
+            ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+            loadController(ctrl, mac);
+            ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+            ctrl.setRx2PreampMode(PreampMode::SaMinus20);
+            ctrl.setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+            ctrl.setRx2PreampMode(PreampMode::Off);
+            ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+            QCOMPARE(ctrl.rx2PreampMode(), PreampMode::SaMinus20);
+            ctrl.setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+            ctrl.saveSettings(mac);
+        }
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        ctrl.setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::Off);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::SaMinus20);
+    }
+
+    // On one ADC the two modes are one, whichever is set (Thetis links
+    // them when nRX1ADCinUse == nRX2ADCinUse, console.cs:19384-19394 and
+    // 19509-19519 [v2.10.3.15]); RX2 moving back to slice A's ADC takes
+    // RX1's mode.
+    void onOneAdcTheTwoPreampModesMoveTogether()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:23"));
+        ctrl.setAdcRouting(0, -1, Band::Band20m, false);
+        ctrl.setPreampMode(PreampMode::SaMinus10);
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::SaMinus10);
+        ctrl.setRx2PreampMode(PreampMode::On);
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2PreampMode(PreampMode::SaMinus30);
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+        ctrl.setAdcRouting(0, -1, Band::Band20m, false);
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::On);
+    }
+
+    // RX2's auto-attenuate with its step attenuator off steps RX2's mode to
+    // the SA settings, and the undo puts it back (console.cs:21693-21716,
+    // 21737-21740 [v2.10.3.15]).
+    void rx2AutoAttenuateStepsThePreampWithTheStepAttenuatorOff()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:24"));
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(false);
+        ctrl.setRx2AutoAttEnabled(true);
+        ctrl.setRx2AutoAttUndo(true);
+        ctrl.setRx2AutoUndoDelaySec(0);
+        const auto overload = [&ctrl]() {
+            for (int i = 0; i < 4; ++i) {
+                ctrl.onAdcOverflow(1);
+                ctrl.tick();
+            }
+        };
+        ctrl.setRx2PreampMode(PreampMode::On);
+        overload();
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::SaMinus10);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 0);
+        for (int i = 0; i < 40 && ctrl.rx2PreampMode() != PreampMode::On; ++i) {
+            ctrl.tick();
+        }
+        QCOMPARE(ctrl.rx2PreampMode(), PreampMode::On);
     }
 };
 

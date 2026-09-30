@@ -274,16 +274,16 @@ See [docs/MASTER-PLAN.md](docs/MASTER-PLAN.md) for the full implementation plan.
 ```bash
 # Ubuntu 24.04+ / Debian
 sudo apt install qt6-base-dev qt6-base-private-dev \
-  qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev \
+  qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev \
   cmake ninja-build pkg-config \
   libfftw3-dev libgl1-mesa-dev \
   libasound2-dev libjack-jackd2-dev \
-  libpipewire-0.3-dev
+  libpipewire-0.3-dev libssl-dev
 
 # Arch / CachyOS / Manjaro
-sudo pacman -S qt6-base qt6-multimedia qt6-svg \
+sudo pacman -S qt6-base qt6-multimedia qt6-svg qt6-websockets \
   cmake ninja pkgconf fftw \
-  alsa-lib jack2 pipewire
+  alsa-lib jack2 pipewire openssl
 
 # macOS (Homebrew)
 brew install qt@6 ninja cmake pkgconf fftw
@@ -295,6 +295,8 @@ don't use those audio backends at runtime. `libpipewire-0.3-dev` (≥ 0.3.50) is
 strongly recommended on PipeWire-default distributions (Ubuntu 24.04+, Fedora 39+,
 Arch) — without it the Linux audio path falls back from the native libpipewire-0.3
 bridge to the older pactl route.
+
+`openssl` / `libssl-dev` (≥ 3.0) is hard-required (`find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)`) since Remote Daemon R2 Task 17: `src/core/security/CertificateStore` links libcrypto directly to mint nereusd's self-signed TLS certificate, because Qt6 has no certificate-*generation* API. macOS resolves this through Homebrew's `openssl@3` formula with no extra hints; it is not keg-only (verified via `brew info --json=v2 openssl@3` fix round 3), its files are ordinary live symlinks into `${HOMEBREW_PREFIX}/lib` and `.../include`, the same path already searched for every other Homebrew library. The macOS Intel release row (no arm64 keg to link against) and both Windows rows source OpenSSL differently; see the `find_package(OpenSSL)` block in `CMakeLists.txt` and `vcpkg.json` for the full per-platform acquisition story.
 
 ### Windows (FFTW3 Setup)
 
@@ -309,6 +311,21 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
 ./build/NereusSDR
 ```
+
+The build produces **two** binaries. `NereusSDR` is the GUI. `nereusd` is the
+headless daemon added in remote-daemon R1: it links `NereusCore` only, no GUI
+object code, and is guarded by `tst_core_has_no_gui_includes`. It is installed
+separately so the GUI's release artifacts are unaffected:
+
+```
+cmake --install build --component nereusd
+```
+
+A plain `cmake --install` deliberately installs neither `nereusd` nor its
+systemd unit. Note that `release.yml` is the only workflow that runs
+`cmake --install` and it triggers only on `v*` tags, so **the daemon's install
+path has no PR-CI coverage**. Always pass `--profile <name>` when running
+`nereusd` by hand, or it writes the same settings the GUI reads.
 
 On first run, NereusSDR generates FFTW wisdom (optimized FFT plans). This takes ~15 minutes and shows a progress dialog. The wisdom file is cached for subsequent launches.
 

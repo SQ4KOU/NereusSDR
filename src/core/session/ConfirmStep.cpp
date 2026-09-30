@@ -11,6 +11,8 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over parity: forgetTakeBacks(). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ConfirmStep.h"
@@ -95,6 +97,19 @@ void ConfirmStep::forgetTakeBack(const QByteArray& device, qint64 id)
         return;
     }
     it->removeIf([id](const Notice& notice) { return notice.id == id; });
+    if (it->isEmpty()) {
+        m_takeBack.erase(it);
+    }
+}
+
+void ConfirmStep::forgetTakeBacks(const QByteArray& device,
+                                  const std::function<bool(const Notice&)>& which)
+{
+    auto it = m_takeBack.find(device);
+    if (it == m_takeBack.end() || !which) {
+        return;
+    }
+    it->removeIf(which);
     if (it->isEmpty()) {
         m_takeBack.erase(it);
     }

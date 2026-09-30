@@ -35,6 +35,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 9: Disturbed::listeners and
+//               setShowListeners (listenerDeviceIds). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -79,12 +82,20 @@ public:
     };
     void setOnAirTransmit(OnAirTransmit onAir) { m_onAir = std::move(onAir); }
 
+    /// Slice control plan Task 9: whether the JSON below names each slice's
+    /// listeners (`listenerDeviceIds`, controller first). Only a device
+    /// that shares slices is sent them.
+    void setShowListeners(bool on) { m_showListeners = on; }
+
     enum class Effect { Moves, Closes };
     struct Disturbed {
         int sliceId = -1;
         /// Whose it is (Mark::subject()).
         QByteArray device;
         Effect effect = Effect::Closes;
+        /// Slice control plan Task 9: every device joined to the slice
+        /// when planned, its controller first (SliceOwnership::listenersOf).
+        QList<QByteArray> listeners;
     };
 
     struct WindowMove {
@@ -180,10 +191,12 @@ public:
 private:
     bool windowCovers(int stream, double centreHz, double frequencyHz) const;
     QByteArray subjectOf(int sliceId) const;
+    QJsonArray listenerIdsJson(const QList<QByteArray>& listeners) const;
 
     const RadioModel& m_model;
     Describe m_describe;
     OnAirTransmit m_onAir;
+    bool m_showListeners = false;
 };
 
 } // namespace NereusSDR

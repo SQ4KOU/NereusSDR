@@ -157,6 +157,30 @@
 //                board's fault code, say), as Thetis's TXInhibit setter
 //                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-29 - Setup publication (CFC band editor): in a remote window
+//                the CFC dialog sends its band table as the Core's
+//                cfc.setProfile command when the Core takes it, and hears
+//                that command's answer. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  setCurrentBand no longer recalls PWR
+//                and a local window's RF Power slider no longer saves the
+//                band slot: RadioModel does both (applyTransmitBand,
+//                drivePowerScroll). AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate review: the local Tune
+//                Power slider writes and shows the transmit band's tune
+//                power (Thetis ptbTune_Scroll, console.cs:46618
+//                [v2.10.3.15]), not the pan band's. AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 (Q15, U8):
+//                the TX band, per-band power, MOX mode tooltip and TX filter
+//                status follow the transmit slice (setTransmitSliceResolver,
+//                followTransmitSlice), never a listened slice; the
+//                transmit-slice letter row. AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: ports
+//                Thetis's MOX gate on the TX band: the band (and the power
+//                the slider recalls and writes) holds while transmitting.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -274,9 +298,11 @@
 #include "core/PureSignal.h"
 #include "core/RadioStatus.h"
 #include "core/session/IStationLink.h"
+#include "core/session/StationCapabilities.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
+#include "core/TxSliceArbiter.h"
 #include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -545,6 +571,13 @@ void TxApplet::buildUI()
         row->addWidget(m_moxBtn, 1);
 
         vbox->addLayout(row);
+
+        // Slice control plan Task 11 (U8): which slice transmits, one letter
+        // per slice this window controls; the checked one is the transmit
+        // slice (refreshTransmitSliceChoices fills it).
+        m_txSliceRow = new QHBoxLayout;
+        m_txSliceRow->setSpacing(2);
+        vbox->addLayout(m_txSliceRow);
 
         // Fix wave I4: who holds transmit on the Core, in a remote window
         // (setTransmitHolderText). Empty, and so not shown, otherwise.
@@ -1159,27 +1192,22 @@ void TxApplet::wireControls()
         updatePowerSliderLabels();
         if (m_updatingFromModel) { return; }
         tx.setPower(val);
-        // Per-band write: matches Thetis ptbPWR_Scroll at console.cs:28642
-        // [v2.10.3.13] (`power_by_band[(int)_tx_band] = ptbPWR.Value;`).
-        // Without this, the per-band slot only updates indirectly via the
-        // setPowerUsingTargetDbm txMode-0 side-effect (TransmitModel.cpp:825),
-        // which is gated on connected radio + loaded PA profile + !TUNE.
-        // Result: slider moves while disconnected (or before profiles load)
-        // never persist across restart.  setPowerForBand auto-persists to
-        // hardware/<mac>/powerByBand/<band> when m_persistMac is non-empty.
-        //
-        // Source the band from the active slice (the canonical TX band per
-        // RadioModel.cpp:903-905), NOT m_currentBand.  m_currentBand tracks
-        // UI state and is fed by both PanadapterModel::bandChanged AND
-        // SliceModel::frequencyChanged, so it can drift to the panadapter
-        // band on CTUN pans without slice retune — writing through it would
-        // silently corrupt other bands' stored values.  txBand() falls back
-        // to m_currentBand when the active slice is unavailable.
-        // R-R3-49 (group A fix wave, M3): a remote window writes the band
-        // slot and the drive source only to a Core that takes them
-        // (transmitSettingsVersion 5); an older Core takes `power` alone.
+        // The per-band slot (Thetis ptbPWR_Scroll, console.cs:28682-28693
+        // [v2.10.3.15]: `power_by_band[(int)_tx_band] = ptbPWR.Value;`) has
+        // one writer: RadioModel on the radio's side, which saves PWR into
+        // its transmit band on powerChanged (drivePowerScroll). A local
+        // window leaves it there; a remote window sends the power setting
+        // alone and the Core saves it. Writing the slot here too could pick
+        // a different band (this applet's active slice) from the one that
+        // transmits.
+        if (m_model && m_model->role() == RadioModel::Role::Local) {
+            tx.setTuneDrivePowerSource(DrivePowerSource::DriveSlider);
+            return;
+        }
+        // R-R3-49 (group A fix wave, M3): a Core below
+        // transmitSettingsVersion 5 refuses tuneDrivePowerSource and takes
+        // `power` alone.
         if (!m_powerByBandPermitted) { return; }
-        tx.setPowerForBand(txBand(), val);
         // Symmetric to the tune-slider auto-switch above: touching the RF
         // Power slider restores the tune source to DriveSlider so the
         // setPowerUsingTargetDbm txMode 1 branch reads tx.power() during
@@ -1197,10 +1225,15 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── Tune Power slider → TransmitModel::setTunePowerForBand ──────────────
+    // ── Tune Power slider → TransmitModel::setTunePowerForTxBand ────────────
     // Per-band tune power, ported from Thetis console.cs:12094 [v2.10.3.13]:
     //   private int[] tunePower_by_band;
-    // The current band is tracked by m_currentBand (updated by setCurrentBand).
+    // The slider writes and shows the transmit band's slot, as Thetis
+    // ptbTune_Scroll does (PA on-air gate review):
+    // From Thetis console.cs:46618 [v2.10.3.15]
+    //   tunePower_by_band[(int)_tx_band] = ptbTune.Value;
+    // m_currentBand (the pan or slice band) is used only before RadioModel
+    // knows the transmit band.
     //
     // Issue #175 Task 7: label text routed through updatePowerSliderLabels()
     // for the HL2 (slider/3.0 - 33.0)/2.0 dB conversion.
@@ -1216,6 +1249,7 @@ void TxApplet::wireControls()
             }
             return;
         }
+        if (tx.setTunePowerForTxBand(val)) { return; }
         tx.setTunePowerForBand(m_currentBand, val);
         // When the user touches the tune slider, switch the tune drive
         // source so TUNE actually reads from tunePowerForBand instead of
@@ -1236,10 +1270,11 @@ void TxApplet::wireControls()
     });
 
     // R-R3-49 (parity Task 2): in a remote window the slider shows the
-    // Core's tune power for its transmit band.
+    // Core's tune power for its transmit band; a local window shows its own
+    // transmit band's (PA on-air gate review).
     connect(&tx, &TransmitModel::tunePowerForTxBandChanged,
-            this, [this](int watts) {
-        if (!remoteTunePower()) { return; }
+            this, [this, &tx](int watts) {
+        if (!remoteTunePower() && !tx.tuneTxBandKnown()) { return; }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -1247,10 +1282,12 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for current band)
+    // Reverse: TransmitModel::tunePowerByBandChanged → slider (only for
+    // current band, and only before the transmit band is known; after that
+    // tunePowerForTxBandChanged above repaints it).
     connect(&tx, &TransmitModel::tunePowerByBandChanged,
-            this, [this](Band band, int watts) {
-        if (band != m_currentBand || remoteTunePower()) { return; }
+            this, [this, &tx](Band band, int watts) {
+        if (band != m_currentBand || remoteTunePower() || tx.tuneTxBandKnown()) { return; }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
@@ -1379,9 +1416,30 @@ void TxApplet::wireControls()
         // Task 16 fix wave (M3): the MOX tooltip, and the receive-only lock
         // over it, follow the active slice when it changes, not only the
         // slice that was active here.
-        followActiveSliceMode();
+        // Slice control plan Task 11 (Q15): the transmit slice, not the
+        // active one; re-followed whenever either may have moved.
+        followTransmitSlice();
+        refreshTransmitSliceChoices();
         connect(m_model, &RadioModel::activeSliceChanged,
-                this, [this](int) { followActiveSliceMode(); });
+                this, [this](int) { followTransmitSlice(); });
+        if (TxSliceArbiter* arbiter = m_model->txSliceArbiter()) {
+            connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this, [this](int, int) {
+                followTransmitSlice();
+                refreshTransmitSliceChoices();
+            });
+        }
+        // A remote window's flag arrives mirrored from the Core onto the
+        // slice, so each slice's own flag change re-follows too.
+        watchTransmitFlags();
+        connect(m_model, &RadioModel::sliceAdded, this, [this](int) {
+            watchTransmitFlags();
+            followTransmitSlice();
+            refreshTransmitSliceChoices();
+        });
+        connect(m_model, &RadioModel::sliceRemoved, this, [this](int) {
+            followTransmitSlice();
+            refreshTransmitSliceChoices();
+        });
         // Task 16: receive only turning on or off, or its reason changing
         // (a radio with no transmitter).
         connect(m_model, &RadioModel::rxOnlyChanged, this, [this](bool) {
@@ -1713,13 +1771,7 @@ void TxApplet::wireControls()
     // Model → UI: TransmitModel::filterChanged(int,int) → QSignalBlocker on
     //             both spinboxes, then setValue + refresh status label.
     // Status label refresh helper (shared by filterChanged and dspModeChanged).
-    auto refreshFilterStatus = [this]() {
-        if (!m_txFilterStatusLabel || !m_model) { return; }
-        SliceModel* slice = activeSliceForControls();
-        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
-        m_txFilterStatusLabel->setText(
-            m_model->transmitModel().filterDisplayText(mode));
-    };
+    auto refreshFilterStatus = [this]() { refreshTxFilterStatus(); };
 
     if (m_txFilterLowSpin) {
         connect(m_txFilterLowSpin, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -1752,16 +1804,9 @@ void TxApplet::wireControls()
         refreshFilterStatus();
     });
 
-    // Status label refresh on DSP mode change (symmetric ↔ asymmetric format).
-    // Piggybacks on the same active-slice connect block used by K.2 above.
-    if (SliceModel* slice = activeSliceForControls()) {
-        connect(slice, &SliceModel::dspModeChanged,
-                this, [refreshFilterStatus](DSPMode) {
-            refreshFilterStatus();
-        });
-        // Set initial status label text.
-        refreshFilterStatus();
-    }
+    // Status label refresh on DSP mode change (symmetric ↔ asymmetric format)
+    // rides followTransmitSlice's connection (slice control plan Task 11).
+    refreshFilterStatus();
 
     // ── Phase 3M-1c J.2 ─ 2-TONE button wiring ───────────────────────────────
     // toggled → TwoToneController::setActive.  Echo-guarded.
@@ -1966,11 +2011,7 @@ void TxApplet::syncFromModel()
         QSignalBlocker bHi(m_txFilterHighSpin);
         m_txFilterHighSpin->setValue(tx.filterHigh());
     }
-    if (m_txFilterStatusLabel) {
-        SliceModel* slice = activeSliceForControls();
-        const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
-        m_txFilterStatusLabel->setText(tx.filterDisplayText(mode));
-    }
+    refreshTxFilterStatus();
 
     // Mic-source badge (J.3 Phase 3M-1b; extended to 3-way in Phase 3M-VAX-toggle)
     if (m_micSourceBadge) {
@@ -2001,16 +2042,77 @@ void TxApplet::syncFromModel()
 void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
                                      std::function<void(bool)> tune,
                                      std::function<bool()> moxOn,
-                                     std::function<bool()> tuneOn,
-                                     std::function<SliceModel*()> activeSlice)
+                                     std::function<bool()> tuneOn)
 {
     m_desktopMoxRequest = std::move(mox);
     m_desktopTuneRequest = std::move(tune);
     m_desktopMoxOn = std::move(moxOn);
     m_desktopTuneOn = std::move(tuneOn);
-    m_desktopActiveSlice = std::move(activeSlice);
-    followActiveSliceMode();
     syncFromModel();
+}
+
+void TxApplet::setTransmitSliceResolver(std::function<SliceModel*()> resolver)
+{
+    m_transmitSliceResolver = std::move(resolver);
+    followTransmitSlice();
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::setTransmitSliceChoices(std::function<bool(int)> controlled,
+                                       std::function<void(int)> choose,
+                                       std::function<QString()> unavailableReason)
+{
+    m_txSliceControlled = std::move(controlled);
+    m_txSliceChoose = std::move(choose);
+    m_txSliceUnavailable = std::move(unavailableReason);
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::refreshTransmitSliceChoices()
+{
+    if (!m_txSliceRow) { return; }
+    for (QPushButton* button : std::as_const(m_txSliceButtons)) {
+        m_txSliceRow->removeWidget(button);
+        button->deleteLater();
+    }
+    m_txSliceButtons.clear();
+    if (!m_model) { return; }
+    const SliceModel* current = transmitSlice();
+    const QString reason = m_txSliceUnavailable ? m_txSliceUnavailable() : QString();
+    const QString btnStyle = Style::buttonBaseStyle()
+        + QStringLiteral("QPushButton { padding: 2px; }") + Style::greenCheckedStyle();
+    for (SliceModel* slice : m_model->slices()) {
+        if (!slice) { continue; }
+        const int id = slice->sliceIndex();
+        // U8: only the slices this window controls, never one it listens to.
+        if (m_txSliceControlled && !m_txSliceControlled(id)) { continue; }
+        auto* button = new QPushButton(slice->sliceLetter(), this);
+        button->setObjectName(QStringLiteral("TxSliceButton%1").arg(slice->sliceLetter()));
+        button->setCheckable(true);
+        button->setChecked(slice == current);
+        button->setFixedHeight(20);
+        button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        button->setStyleSheet(btnStyle);
+        button->setProperty("sliceId", id);
+        button->setAccessibleName(QStringLiteral("Transmit on slice %1").arg(slice->sliceLetter()));
+        // Disabled, never hidden: the reason is the tooltip.
+        button->setEnabled(reason.isEmpty());
+        button->setToolTip(reason.isEmpty()
+            ? QStringLiteral("Transmit on slice %1").arg(slice->sliceLetter()) : reason);
+        connect(button, &QPushButton::clicked, this, [this, button, id](bool) {
+            // The model's answer checks the row; the press alone does not.
+            if (button) { button->setChecked(transmitSlice()
+                                             && transmitSlice()->sliceIndex() == id); }
+            if (m_txSliceChoose) {
+                m_txSliceChoose(id);
+            } else if (m_model) {
+                // Ruling 8.10: the arbiter drops MOX before it moves the flag.
+                m_model->requestTxHandoffToSlice(id);
+            }
+        });
+        m_txSliceRow->addWidget(button, 1);
+        m_txSliceButtons.append(button);
+    }
 }
 
 void TxApplet::syncDesktopKeyState()
@@ -2170,15 +2272,26 @@ void TxApplet::updatePowerSliderLabels()
 Band TxApplet::txBand() const
 {
     if (!m_model) { return m_currentBand; }
-    SliceModel* slice = activeSliceForControls();
+    SliceModel* slice = transmitSlice();
     if (!slice) { return m_currentBand; }
+    // Slice control plan Task 11 fix: the band followTransmitSlice holds
+    // (Thetis's _tx_band), which a retune under MOX does not change.
+    if (m_txBandKnown && slice == m_followedTxSlice.data()) { return m_txBand; }
     return bandFromFrequency(slice->frequency());
 }
 
-SliceModel* TxApplet::activeSliceForControls() const
+SliceModel* TxApplet::transmitSlice() const
 {
-    return m_desktopActiveSlice ? m_desktopActiveSlice()
-                                : (m_model ? m_model->activeSlice() : nullptr);
+    if (m_transmitSliceResolver) { return m_transmitSliceResolver(); }
+    if (!m_model) { return nullptr; }
+    if (TxSliceArbiter* arbiter = m_model->txSliceArbiter()) {
+        if (SliceModel* bound = arbiter->txBoundSlice()) { return bound; }
+    }
+    // A remote window's flag is mirrored from the Core onto the slice.
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice && slice->isTxSlice()) { return slice; }
+    }
+    return m_model->activeSlice();
 }
 
 void TxApplet::setCurrentBand(Band band)
@@ -2196,8 +2309,6 @@ void TxApplet::setCurrentBand(Band band)
 
     if (!m_model) { return; }
 
-    auto& tx = m_model->transmitModel();
-
     // Update the Tune Power slider to reflect the per-band stored value.
     {
         const int tunePwr = shownTunePower(band);
@@ -2212,27 +2323,12 @@ void TxApplet::setCurrentBand(Band band)
         m_updatingFromModel = false;
     }
 
-    // Update the RF Power slider to reflect the per-band stored value —
-    // ONLY when the band passed in is the canonical TX band (i.e. the
-    // active slice's band).  Matches Thetis TXBand setter at
-    // console.cs:17513 [v2.10.3.13] (`PWR = power_by_band[(int)value];`),
-    // where `_tx_band` is single-source-of-truth for TX state.
-    //
-    // Why the gate: setCurrentBand is wired in MainWindow to BOTH
-    // PanadapterModel::bandChanged and SliceModel::frequencyChanged, so it
-    // can fire from a CTUN pan that does NOT change the slice.  Recalling
-    // the panadapter band's RF power into the live slider would (a) jump
-    // the displayed value off the actual TX band, and (b) leak that
-    // wrong value back into the active slice's band slot via the
-    // setPowerUsingTargetDbm txMode-0 side-effect on the next powerChanged
-    // emission — silently corrupting per-band storage.
-    //
-    // Routed through setPower so the existing reverse-binding lambda
-    // (TxApplet.cpp:905) paints the slider; setPower's same-value
-    // early-return makes the no-band-change call free.
-    if (band == txBand()) {
-        tx.setPower(tx.powerForBand(band));
-    }
+    // The RF Power slider is not recalled here. RadioModel loads the
+    // transmit band's stored power into PWR on a transmit band change and
+    // at connect (applyTransmitBand, the Thetis TXBand setter port at
+    // console.cs:17511-17545 [v2.10.3.15]), and powerChanged paints the
+    // slider. A second recall here would load the band twice, and on a
+    // panadapter-only band change (CTUN) would load the wrong band.
 }
 
 // ── Phase 3M-1b K.2: tooltipForMode ──────────────────────────────────────────
@@ -2293,17 +2389,90 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 // ---------------------------------------------------------------------------
 // Wires the active slice's dspModeChanged to onMoxModeChanged, dropping the
 // previous slice's connection, and sets the tooltip from its mode.
-void TxApplet::followActiveSliceMode()
+// Slice control plan Task 11 (Q15): the TX band follows the transmit slice's
+// frequency, as Thetis sets TXBand from the transmit VFO:
+// From Thetis console.cs:35753 [v2.10.3.15]
+//     TXBand = BandByFreq(VFOBFreq, tx_xvtr_index, current_region);
+// and its setter recalls the band's power and tune power:
+// From Thetis console.cs:17542 [v2.10.3.15]
+//     // initialisting, becase it is irrelevent, old_band will = value at this point MW0LGE
+//     ptbTune.LimitValue = limitTunePower_by_band[(int)value]; //MW0LGE_22b
+//     PWR = power_by_band[(int)value];
+//     TunePWR = tunePower_by_band[(int)value]; //MW0LGE_22b
+// setCurrentBand is that recall (tune power by m_currentBand, RF power by
+// txBand()). Slice control plan Task 11 fix: the setter's MOX gate is
+// ported to the retune path. While this window's model says the radio
+// transmits (MOX, TUNE or two-tone; a remote window's is the Core's), a
+// retune of the transmit slice leaves m_txBand and the recall alone:
+// From Thetis console.cs:17517-17518 [v2.10.3.15]
+//     //[2.10.3.6]MW0LGE no band change on TX fix
+//     if (MOX) return;
+// From Thetis console.cs:6512-6513 [v2.10.3.15]
+//     //[2.10.3.6]MW0LGE no band change on TX fix
+//     if (MOX) return;
+// Nothing re-evaluates on the unkey; the next retune carries the band, as
+// in Thetis. A move of the binding is not gated: a keyed move unkeys
+// first (ruling 8.10).
+void TxApplet::followTransmitSlice()
 {
+    SliceModel* slice = transmitSlice();
+    const bool moved = slice != m_followedTxSlice.data();
     disconnect(m_moxModeConnection);
     m_moxModeConnection = {};
-    SliceModel* slice = activeSliceForControls();
+    disconnect(m_txFreqConnection);
+    m_txFreqConnection = {};
+    m_followedTxSlice = slice;
+    refreshTxFilterStatus();
     if (!slice) {
+        m_txBandKnown = false;
         return;
     }
+    if (moved || !m_txBandKnown) {
+        m_txBand = bandFromFrequency(slice->frequency());
+        m_txBandKnown = true;
+    }
     m_moxModeConnection = connect(slice, &SliceModel::dspModeChanged,
-                                  this, &TxApplet::onMoxModeChanged);
+                                  this, [this](DSPMode mode) {
+        onMoxModeChanged(mode);
+        refreshTxFilterStatus();
+    });
+    m_txFreqConnection = connect(slice, &SliceModel::frequencyChanged,
+                                 this, [this](double hz) {
+        if (m_model && m_model->isTransmitting()) { return; }
+        const Band band = bandFromFrequency(hz);
+        m_txBand = band;
+        m_txBandKnown = true;
+        if (band != m_currentBand) { setCurrentBand(band); }
+    });
     onMoxModeChanged(slice->dspMode());
+    if (moved) {
+        setCurrentBand(bandFromFrequency(slice->frequency()));
+    }
+}
+
+void TxApplet::watchTransmitFlags()
+{
+    if (!m_model) { return; }
+    for (SliceModel* slice : m_model->slices()) {
+        if (slice) {
+            connect(slice, &SliceModel::txSliceChanged, this,
+                    &TxApplet::onSliceTransmitFlagChanged, Qt::UniqueConnection);
+        }
+    }
+}
+
+void TxApplet::onSliceTransmitFlagChanged(bool)
+{
+    followTransmitSlice();
+    refreshTransmitSliceChoices();
+}
+
+void TxApplet::refreshTxFilterStatus()
+{
+    if (!m_txFilterStatusLabel || !m_model) { return; }
+    SliceModel* slice = transmitSlice();
+    const DSPMode mode = slice ? slice->dspMode() : DSPMode::USB;
+    m_txFilterStatusLabel->setText(m_model->transmitModel().filterDisplayText(mode));
 }
 
 void TxApplet::onMoxModeChanged(DSPMode mode)
@@ -2532,6 +2701,42 @@ void TxApplet::requestOpenCfcDialog()
             &m_model->transmitModel(),
             m_model->txChannel(),
             host ? host : static_cast<QWidget*>(this));
+        // Setup publication (CFC band editor): a remote window sends the
+        // whole table to a Core that takes it, and hears the answer. The
+        // link is looked up on every call, so a dialog built before the
+        // window reached a Core sends whole once it has.
+        {
+            QPointer<RadioModel> model(m_model);
+            m_cfcDialog->setStationProfileSender(
+                [model] {
+                    IStationLink* link = model ? model->stationLink() : nullptr;
+                    return link && link->transmitSettingsAvailable(
+                                       kTransmitSettingsCfcProfileVersion);
+                },
+                [model](const QString& profileJson, const QString& expectedRevision) {
+                    TxCfcDialog::StationProfileSend result;
+                    IStationLink* link = model ? model->stationLink() : nullptr;
+                    if (!link) {
+                        result.reason = IStationLink::transmitSettingsUnavailableReason();
+                        return result;
+                    }
+                    const IStationLink::CommandOutcome outcome =
+                        link->requestCfcProfile(profileJson, expectedRevision);
+                    result.sent = outcome.sent;
+                    result.reason = outcome.reason;
+                    result.commandId = outcome.commandId;
+                    return result;
+                });
+            connect(m_model, &RadioModel::stationCommandFinished,
+                    m_cfcDialog, &TxCfcDialog::onStationCommandFinished);
+            QPointer<TxCfcDialog> dialog(m_cfcDialog);
+            connect(m_model, &RadioModel::stationLinkStateChanged, m_cfcDialog,
+                    [model, dialog] {
+                        if (!dialog) { return; }
+                        const IStationLink* link = model ? model->stationLink() : nullptr;
+                        dialog->onStationLinkChanged(link && link->stationLinkReady());
+                    });
+        }
     } else {
         // Connection may have come up since the dialog was created.
         // Refresh the TxChannel pointer so the bar chart timer can poll WDSP.
@@ -2793,7 +2998,10 @@ int TxApplet::shownTunePower(Band band) const
 {
     if (!m_model) { return 0; }
     const TransmitModel& tx = m_model->transmitModel();
-    return remoteTunePower() ? tx.tunePowerForTxBand() : tx.tunePowerForBand(band);
+    // The transmit band's tune power once it is known (PA on-air gate
+    // review; Thetis shows TunePWR, the transmit band's).
+    return (remoteTunePower() || tx.tuneTxBandKnown()) ? tx.tunePowerForTxBand()
+                                                       : tx.tunePowerForBand(band);
 }
 
 void TxApplet::requestRemoteTunePower(int watts)

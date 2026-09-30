@@ -42,6 +42,9 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-29: slice control plan Task 8b: touch() keeps a signed-in
+//               device's current name too. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -122,10 +125,12 @@ public:
     /// An authenticated connection: lastSeen becomes now and lastAddress
     /// `address` (empty over the relay), and the short name becomes
     /// `shortName` when that is a usable one (isValidShortName); an absent
-    /// or unusable one leaves the stored one as it is. Nothing for an
-    /// unknown id.
+    /// or unusable one leaves the stored one as it is. Slice control plan
+    /// Task 8b: the name likewise becomes `name` when usable (isValidName),
+    /// so a device that now tells its profile is listed by it. Nothing for
+    /// an unknown id.
     void touch(const QByteArray& id, const QString& address,
-               const QString& shortName = QString());
+               const QString& shortName = QString(), const QString& name = QString());
 
     /// Any paired device, or a pairing token not yet retired (or a token
     /// file that could not be read), or a store that could not be read

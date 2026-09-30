@@ -331,11 +331,12 @@ private slots:
         delete mock;
     }
 
-    // ── Test 8: HPSDR board, isTx=true → saves preamp, sets Minus20 ─────────
+    // ── Test 8: HPSDR board, isTx=true → saves preamp, sets Off ─────────────
+    // Level Cal: Off is Thetis's HPSDR_OFF, the HPSDR's "-20dB" item.
     // From Thetis console.cs:29550-29554 [v2.10.3.13]:
     //   temp_mode = RX1PreampMode;
     //   RX1PreampMode = PreampMode.HPSDR_OFF;  // set to -20dB
-    void isTxTrue_hpsdrBoard_savesPreampAndForcesMinus20()
+    void isTxTrue_hpsdrBoard_savesPreampAndForcesHpsdrOff()
     {
         StepAttenuatorController ctrl;
         ctrl.setTickTimerEnabled(false);
@@ -351,8 +352,8 @@ private slots:
         // Saved mode must be the pre-TX mode (On).
         QCOMPARE(ctrl.savedPreampModeForTest(), PreampMode::On);
 
-        // Current mode must now be Minus20 (≡ HPSDR_OFF).
-        QCOMPARE(ctrl.preampMode(), PreampMode::Minus20);
+        // Current mode must now be Off (≡ HPSDR_OFF, the "-20dB" item).
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
 
         // No TX step ATT push on HPSDR path.
         QCOMPARE(mock->txStepAttCallCount, 0);
@@ -374,9 +375,9 @@ private slots:
         auto* mock = new MockTxConnection();
         ctrl.setRadioConnection(mock);
 
-        // Go TX: saves On, sets Minus20.
+        // Go TX: saves On, sets Off (HPSDR_OFF).
         ctrl.onMoxHardwareFlipped(true);
-        QCOMPARE(ctrl.preampMode(), PreampMode::Minus20);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
 
         // Go RX: should restore On.
         ctrl.onMoxHardwareFlipped(false);
@@ -384,6 +385,47 @@ private slots:
 
         ctrl.setRadioConnection(nullptr);
         delete mock;
+    }
+
+    // Level Cal fix wave: the HPSDR's key also turns RX1's step attenuator
+    // off, and the unkey leaves it off, as Thetis does.
+    // From Thetis console.cs:29599-29603 [v2.10.3.15]:
+    //   temp_mode = RX1PreampMode;
+    //   SetupForm.RX1EnableAtt = false;
+    //   RX1PreampMode = PreampMode.HPSDR_OFF;			// set to -20dB
+    // (the unkey, console.cs:29688-29692, restores only the preamp modes).
+    void hpsdrKeyTurnsTheStepAttenuatorOffAndLeavesItOff()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(true);
+        ctrl.setAttOnTxEnabled(true);
+        ctrl.setStepAttEnabled(true);
+        ctrl.setPreampMode(PreampMode::On);
+
+        ctrl.onMoxHardwareFlipped(true);
+        QVERIFY(!ctrl.stepAttEnabled());
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
+
+        ctrl.onMoxHardwareFlipped(false);
+        QVERIFY(!ctrl.stepAttEnabled());
+        QCOMPARE(ctrl.preampMode(), PreampMode::On);
+    }
+
+    // With ATT on TX off the HPSDR's key saves nothing, and its unkey puts
+    // nothing back (Thetis gates both on m_bATTonTX, console.cs:29597 and
+    // 29686 [v2.10.3.15]): the operator's mode stays.
+    void hpsdrUnkeyWithAttOnTxOffLeavesTheMode()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setIsHpsdrBoard(true);
+        ctrl.setAttOnTxEnabled(false);
+        ctrl.setPreampMode(PreampMode::Minus20);
+
+        ctrl.onMoxHardwareFlipped(true);
+        ctrl.onMoxHardwareFlipped(false);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Minus20);
     }
 
     // ── Test 10: shouldForce31Db predicate — table-driven ────────────────────
