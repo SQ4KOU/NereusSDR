@@ -1077,6 +1077,51 @@ private slots:
         QCOMPARE(compared, 11);
     }
 
+    // Version 23: Calibration's Rx1 6m LNA row matches the desktop tab's
+    // box: its group, label, tooltip, range, step, places and default.
+    void describedV23Rx1SixMeterLnaMatchesNativeTab()
+    {
+        RadioModel model;
+        model.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+        CalibrationTab calibration(&model);
+        SetupDescriptionService service;
+        service.setRadioContext(model.boardCapabilities(), model.hardwareProfile().model);
+        const QJsonObject hardware = projectedCategory(service.hardware(), 23);
+        QJsonObject control;
+        QString sectionTitle;
+        for (const QJsonValue& page : hardware.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    if (raw.toObject().value("requiresDescriptionVersion") == QJsonValue(23)) {
+                        QVERIFY(control.isEmpty());
+                        control = raw.toObject();
+                        sectionTitle = section.toObject().value("title").toString();
+                    }
+                }
+            }
+        }
+        QCOMPARE(control.value("id"), QJsonValue("hardware.calibration.rx1_6mLna"));
+        auto* spin = qobject_cast<QDoubleSpinBox*>(
+            bySetupId(calibration, control.value("id").toString()));
+        QVERIFY(spin != nullptr);
+        QCOMPARE(spin->objectName(), QStringLiteral("rx1SixMeterLnaSpin"));
+        QCOMPARE(spin->toolTip(), control.value("tooltip").toString());
+        auto* group = qobject_cast<QGroupBox*>(spin->parentWidget());
+        QVERIFY(group != nullptr);
+        QCOMPARE(group->title(), sectionTitle);
+        auto* form = qobject_cast<QFormLayout*>(group->layout());
+        QVERIFY(form != nullptr);
+        auto* label = qobject_cast<QLabel*>(form->labelForField(spin));
+        QVERIFY(label != nullptr);
+        QCOMPARE(label->text(), control.value("label").toString());
+        QCOMPARE(spin->minimum(), control.value("min").toDouble());
+        QCOMPARE(spin->maximum(), control.value("max").toDouble());
+        QCOMPARE(spin->singleStep(), control.value("step").toDouble());
+        QCOMPARE(spin->decimals(), control.value("decimals").toInt());
+        QCOMPARE(spin->suffix(), QStringLiteral(" ") + control.value("unit").toString());
+        QCOMPARE(control.value("default").toDouble(), 13.0);
+    }
+
     // Version 16, with version 18's clock rows: the HL2 Options rows match
     // the desktop's HL2 Options tab: its group, row label, range and unit,
     // default, and whether the box is enabled. A disabled box's tooltip is

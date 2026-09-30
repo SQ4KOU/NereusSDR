@@ -66,6 +66,8 @@
 //                 complete, and is disabled with its reason where the
 //                 Core cannot run it. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Rx1 6m LNA carries its Setup description id (version 23).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -303,6 +305,8 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // step 1, one decimal, 13 dB.
     m_rx1LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
     m_rx1LnaSpin->setObjectName(QStringLiteral("rx1SixMeterLnaSpin"));
+    // Setup description version 23 describes this box to remote windows.
+    m_rx1LnaSpin->setProperty("nereusSetupId", "hardware.calibration.rx1_6mLna");
     m_rx1LnaSpin->setSuffix(tr(" dB"));
     levelCalForm->addRow(tr("Rx1 6m LNA:"), m_rx1LnaSpin);
 
