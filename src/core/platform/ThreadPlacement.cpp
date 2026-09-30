@@ -140,14 +140,6 @@ bool assignedPerChannel(ThreadRole role)
     return role == ThreadRole::RxWorker || role == ThreadRole::RadeDecoder;
 }
 
-// Transmit-only roles are idle while receiving, so they weigh light when a
-// RADE decoder picks a core.
-bool transmitOnly(ThreadRole role)
-{
-    return role == ThreadRole::TxWorker || role == ThreadRole::TxWorkerThread
-        || role == ThreadRole::TxIqSender;
-}
-
 } // namespace
 
 // ---------------------------------------------------------------- CPU lists
@@ -463,11 +455,18 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
         }
     }
 
-    // RADE decoders (JJ's ruling of 2026-09-30): after every other role,
-    // each shares the least busy signal processing core, judged from the
-    // plan. Busy: threads that run while receiving. Ties: fewer decoders
-    // (decoders spread before any core takes a second), a core without the
-    // DSP thread, fewer transmit roles, then signalPool order.
+    // RADE decoders (JJ's ruling of 2026-09-30: the least busy fast core),
+    // after every other role, each sharing a signal processing core, judged
+    // from the plan. The key, smallest first:
+    //  1. decoders already on the core, so decoders spread across cores
+    //     before any core takes a second;
+    //  2. busy: every role the plan gives the core. Transmit roles count in
+    //     full: they are in the plan only while transmitting, and then they
+    //     are working (G-06 keeps their cores for them);
+    //  3. the DSP thread's core last among equals: it runs fexchange2 for
+    //     every slice, so it is the one core whose single thread is not
+    //     like the others. It stays a candidate;
+    //  4. signalPool order (fastest first).
     // In the order given (the registry's: the order the decoders started),
     // so a decoder added later never moves one already placed.
     QList<int> rade;
@@ -479,17 +478,12 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     if (!rade.isEmpty()) {
         QMap<int, int> busy;
         QMap<int, int> decoders;
-        QMap<int, int> light;
         std::set<int> dspCores;
         for (const RoleAssignment& a : std::as_const(order)) {
             if (a.cpu < 0) {
                 continue;
             }
-            if (transmitOnly(a.role)) {
-                ++light[a.cpu];
-            } else {
-                ++busy[a.cpu];
-            }
+            ++busy[a.cpu];
             if (a.role == ThreadRole::DspThread) {
                 dspCores.insert(a.cpu);
             }
@@ -502,8 +496,8 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
                     continue;
                 }
                 const auto key = [&](int c) {
-                    return std::make_tuple(busy.value(c), decoders.value(c),
-                                           dspCores.count(c), light.value(c));
+                    return std::make_tuple(decoders.value(c), busy.value(c),
+                                           dspCores.count(c));
                 };
                 // Strictly less: an equal core keeps the earlier one.
                 if (key(cpu) < key(best)) {

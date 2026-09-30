@@ -139,16 +139,13 @@ struct PlacementPlan {
 /// role left without a core runs on the housekeeping cores.
 ///
 /// RADE decoders come after every other role and share a core rather
-/// than own one: each goes to the signal processing core with the fewest
-/// threads that run while receiving (receive workers, the DSP thread,
-/// decoders already placed). Ties go to the core with fewer decoders,
-/// then to a core without the DSP thread,
-/// then to one without a transmit role (idle while receiving, so light),
-/// then to the earlier core in signalPool (fastest first). Decoders so
-/// spread across cores before any core takes a second one. Decoders are
-/// placed in the order given, so a later one never moves an earlier one.
-/// Judged from the
-/// plan only: nothing moves on live load.
+/// than own one, on the least busy signal processing core: first the core
+/// with the fewest decoders (they spread before any core takes a second),
+/// then the fewest roles of any kind (transmit roles included), then a
+/// core without the DSP thread, then the earlier core in signalPool
+/// (fastest first). Decoders are placed in the order given, so a later one
+/// never moves an earlier one. Judged from the plan only: nothing moves on
+/// live load.
 PlacementPlan planThreadPlacement(const CpuTopology& topology,
                                   const PlacementDemand& demand);
 
