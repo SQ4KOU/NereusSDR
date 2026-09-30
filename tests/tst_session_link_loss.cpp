@@ -147,6 +147,7 @@ private slots:
 
     // ---- Step 3a ----
     void silentlyDeadPeerIsDetectedNotJustACleanClose();
+    void aStationStillSendingIsAliveWhileItsPongsLag();
 
     // ---- Step 3's mechanism (TLS-specific: QSKIP when unusable) ----
     void autoReconnectUsesOwnedCancellableTimerWithExponentialBackoff();
@@ -496,6 +497,70 @@ void TstSessionLinkLoss::silentlyDeadPeerIsDetectedNotJustACleanClose()
     QTRY_COMPARE(completed.count(), 2);
     QVERIFY(!client.isStale());
     QVERIFY(clientModel.isConnected());
+}
+
+// A late pong on a busy link is not a dead station (tst_relay_session: a
+// session over the web relay under load was declared dead mid-snapshot
+// and dialled again, joining the relay twice from each end). The station
+// answers no pings but keeps sending; the session stays. Once it goes
+// quiet as well, the heartbeat still finds it.
+void TstSessionLinkLoss::aStationStillSendingIsAliveWhileItsPongsLag()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    server.setHeartbeatIntervalMs(0);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    // Two missed pongs span more than the station's delta flush
+    // (StationServer::kDefaultDeltaFlushMs), so a busy station sends a
+    // frame inside every heartbeat window.
+    client.setHeartbeatIntervalMs(StationServer::kDefaultDeltaFlushMs * 2);
+    client.setMaxMissedPongs(2);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("busy-station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy timedOut(&client, &StationClient::stationHeartbeatTimeout);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    // The station stops answering pings but keeps sending: a slice's
+    // frequency moves every 5 ms, each change a delta to this client.
+    stationEnd->setAnswersPings(false);
+    SliceModel* slice = stationModel->slices().first();
+    QSignalSpy frames(clientEnd, &SessionTransport::textReceived);
+    double frequency = 14000000.0;
+    QTimer traffic;
+    traffic.setInterval(5);
+    connect(&traffic, &QTimer::timeout, this, [&] {
+        frequency += 10.0;
+        slice->setFrequency(frequency);
+    });
+    traffic.start();
+
+    // Five times the interval and miss count the heartbeat allows.
+    const int window = client.heartbeatIntervalMs() * client.maxMissedPongs() * 5;
+    QTest::qWait(window);
+    const int pingsWhileBusy = stationEnd->pingsSeen();
+    QVERIFY2(pingsWhileBusy > client.maxMissedPongs(),
+             qPrintable(QStringLiteral("only %1 unanswered pings").arg(pingsWhileBusy)));
+    QCOMPARE(timedOut.count(), 0);
+    QVERIFY(client.isHandshakeComplete());
+    QVERIFY2(frames.count() > 10, qPrintable(QString::number(frames.count())));
+
+    // Quiet as well: now the station is dead to this client.
+    traffic.stop();
+    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, window);
+    QVERIFY(!client.isHandshakeComplete());
 }
 
 // ── Step 3's mechanism ───────────────────────────────────────────────────

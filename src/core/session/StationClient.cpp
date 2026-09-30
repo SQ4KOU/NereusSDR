@@ -1786,6 +1786,16 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
         // observation or snapshot from a replaced transport cannot become part
         // of its successor, even if a later allocation reuses the address.
         if (m_transport == transport && m_sessionEpoch == epoch) {
+            // Any frame from the station proves it is alive, as a pong
+            // does. A pong travels in order behind whatever the station is
+            // already sending, so on a slow link (the web relay under
+            // load, a large snapshot) it can come later than two relayed
+            // heartbeat intervals while the station's frames keep
+            // arriving. Counting only pongs then declared a live link dead
+            // and dialled again: a second relay join from each end
+            // (tst_relay_session). A station that stops answering stops
+            // sending too, so silence is still detected.
+            m_pingsAwaitingPong = 0;
             onTransportText(wire);
         }
     });
