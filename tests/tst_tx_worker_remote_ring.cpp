@@ -514,6 +514,21 @@ void TestTxWorkerRemoteRing::radePathTakesTheRing()
     pump.feed.setInUse(true);
     constexpr float kAmplitude = 0.3f;
     qint64 written = 0;
+    // Unkeyed, the ring's audio never reaches the RADE encoder: the worker
+    // hands the microphone to RADE only while keyed (setRadeMicKeyed).
+    for (int b = 0; b < 150; ++b) {
+        if (b % 15 == 0) {
+            const std::vector<float> frame = tone(written, 960, kAmplitude);
+            QVERIFY(pump.feed.write(frame.data(), 960));
+            written += 960;
+        }
+        pump.block();
+    }
+    QCOMPARE(blocks.count(), 0);
+    // Keyed as the Core keys for a remote device: RemoteKeying::keyNow
+    // keys MoxController as a local key does, and its moxStateChanged(true)
+    // sets this (RadioModel::wireTxWorkerRade).
+    pump.worker.setRadeMicKeyed(true);
     for (int b = 0; b < 1500; ++b) {
         if (b % 15 == 0) {
             const std::vector<float> frame = tone(written, 960, kAmplitude);

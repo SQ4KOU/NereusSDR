@@ -55,9 +55,11 @@
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsScope.h"
+#include "fakes/CapacityLimitedTransport.h"
 #include "fakes/PacedAudioBus.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "gui/OperatorReasonText.h"
+#include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteVaxRouter.h"
 #include "models/RadioModel.h"
@@ -244,6 +246,106 @@ QList<QJsonObject> receiverRequests(const QSignalSpy& coreControls, int sliceId)
         }
     }
     return found;
+}
+
+// How many times this computer's lossless link trial failed and moved the
+// session to Opus. RemoteMediaController::fallBackToOpus logs "lossless link
+// trial failed ...; asking Core for Opus" and reports it with its one notice,
+// NetworkTooSlow; nothing else reports that notice. -1 when the controller
+// reported any other error.
+int losslessFallbacks(const QSignalSpy& errors)
+{
+    const QString tooSlow =
+        remoteAudioQualityReasonText(RemoteAudioQualityReason::NetworkTooSlow);
+    int fallbacks = 0;
+    for (const auto& call : errors) {
+        if (call.at(0).toString() != tooSlow) {
+            return -1;
+        }
+        ++fallbacks;
+    }
+    return fallbacks;
+}
+
+// The streams the Core was asked for, for one slice, before it is released:
+// exactly one at the session's quality; or, only after the lossless link
+// trial failed, exactly two, the lossless one and then the Opus one the
+// fallback asks for.
+void verifyStreamRequests(const QSignalSpy& coreControls, int sliceId, bool lossless,
+                          int fallbacks)
+{
+    QVERIFY2(fallbacks == 0 || fallbacks == 1,
+             qPrintable(QStringLiteral("lossless fallbacks: %1").arg(fallbacks)));
+    const QList<QJsonObject> requests = receiverRequests(coreControls, sliceId);
+    for (const QJsonObject& request : requests) {
+        QVERIFY(request.value(QStringLiteral("enabled")).toBool());
+    }
+    const auto profile = [&requests](int i) {
+        return requests.at(i).value(QStringLiteral("profile")).toString();
+    };
+    if (fallbacks == 0) {
+        QCOMPARE(requests.size(), 1);
+        QCOMPARE(profile(0), lossless ? QStringLiteral("lossless") : QStringLiteral("opus"));
+        return;
+    }
+    QVERIFY2(lossless, "an Opus session has no lossless link trial to fail");
+    QCOMPARE(requests.size(), 2);
+    QCOMPARE(profile(0), QStringLiteral("lossless"));
+    QCOMPARE(profile(1), QStringLiteral("opus"));
+}
+
+// Waits for the Opus request a lossless fallback sends for `sliceId` to
+// reach the Core, when there was one.
+void waitForFallbackRequest(const QSignalSpy& coreControls, int sliceId, int fallbacks)
+{
+    if (fallbacks != 1) {
+        return;
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(receiverRequests(coreControls, sliceId).size() >= 2, 5000);
+}
+
+// A receiver the status shows as receiving in `profile` (the pattern in
+// tst_remote_media_controller).
+bool receivesIn(const RemoteMediaController& media, int sliceId, RemoteAudioProfile profile)
+{
+    for (const RemoteReceiverAudioStatus& receiver : media.audioStatus().receivers) {
+        if (receiver.sliceId == sliceId) {
+            return receiver.state == RemoteReceiverAudioStatus::State::Receiving
+                && receiver.runningProfile == profile;
+        }
+    }
+    return false;
+}
+
+// The window's media transport: the real one, or, for a row that forces the
+// lossless link trial to fail, CapacityLimitedTransport (Opus fits, lossless
+// does not) through the controller's MediaPeer::TransportFactory seam.
+MediaPeer::TransportFactory transportFor(bool forceFallback)
+{
+    if (!forceFallback) {
+        return {};
+    }
+    return [](QObject* parent) -> IMediaTransport* {
+        return new CapacityLimitedTransport(parent);
+    };
+}
+
+// A row that forces the fallback: the lossless trial fails once, with its one
+// notice and the NetworkTooSlow reason, and each slice then receives Opus
+// before anything is measured.
+void waitForForcedFallback(const RemoteMediaController& media, const QSignalSpy& errors,
+                           const QSignalSpy& coreControls, const QList<int>& slices)
+{
+    QTRY_VERIFY_WITH_TIMEOUT(errors.count() >= 1, 20000);
+    QCOMPARE(errors.count(), 1);
+    QCOMPARE(errors.constFirst().at(0).toString(),
+             QStringLiteral("The network could not carry lossless audio; staying on Opus."));
+    QCOMPARE(losslessFallbacks(errors), 1);
+    QCOMPARE(media.audioStatus().qualityReason, RemoteAudioQualityReason::NetworkTooSlow);
+    for (int slice : slices) {
+        waitForFallbackRequest(coreControls, slice, 1);
+        QTRY_VERIFY_WITH_TIMEOUT(receivesIn(media, slice, RemoteAudioProfile::Opus), 10000);
+    }
 }
 
 RemoteVaxRouter::ReceiverAudio sourceFor(RemoteMediaController& media)
@@ -1081,15 +1183,19 @@ private slots:
     {
         QTest::addColumn<bool>("lossless");
         QTest::addColumn<bool>("delayedRoute");
-        QTest::newRow("opus") << false << false;
-        QTest::newRow("lossless") << true << false;
-        QTest::newRow("lossless-delayed-route") << true << true;
+        QTest::addColumn<bool>("forceFallback");
+        QTest::newRow("opus") << false << false << false;
+        QTest::newRow("lossless") << true << false << false;
+        QTest::newRow("lossless-delayed-route") << true << true << false;
+        // The link cannot carry lossless: the trial fails every time.
+        QTest::newRow("lossless-forced-fallback") << true << false << true;
     }
 
     void sliceBOnVax1PlaysAtTheLocalLevel()
     {
         QFETCH(bool, lossless);
         QFETCH(bool, delayedRoute);
+        QFETCH(bool, forceFallback);
         AppSettings::instance().setValue(
             QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
             lossless ? QStringLiteral("Lossless") : QStringLiteral("Opus"));
@@ -1098,7 +1204,8 @@ private slots:
                 QLatin1String(RemoteMediaController::kAudioProfileSettingKey));
         });
         Test::RemoteAudioSessionHarness h;
-        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+                                          transportFor(forceFallback));
         DaemonMediaController daemonMedia(&h.server, &h.station);
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
@@ -1159,21 +1266,53 @@ private slots:
         // The operator puts slice B on VAX 1 in the remote window.
         h.remote.sliceById(h.sliceB)->setVaxChannel(1);
         QCOMPARE(router.requestedSlice(1), h.sliceB);
+        if (forceFallback) {
+            waitForForcedFallback(remoteMedia, remoteErrors, coreControls, {h.sliceB});
+            if (QTest::currentTestFailed()) {
+                return;
+            }
+        }
         // Measure a fixed window after the stream starts. Connection setup
         // and time before the operator routes audio are not playback samples.
         // Keep the original one-second settling interval within this window;
         // any subsequent silence or discontinuity still affects the level.
         QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
                                  && router.feeder(1)->stats().writtenFrames > 0, 20000);
-        const qsizetype remoteStart = remoteVax->heard.size();
-        const qsizetype localStart = stationVax->samples().size();
+        qsizetype remoteStart = remoteVax->heard.size();
+        qsizetype localStart = stationVax->samples().size();
         constexpr qsizetype measurementSamples = 3 * 48000 * 2;
         QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
         QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
-        const QList<QJsonObject> requests = receiverRequests(coreControls, h.sliceB);
-        QCOMPARE(requests.size(), 1);
-        QCOMPARE(requests.constFirst().value(QStringLiteral("profile")).toString(),
-                 lossless ? QStringLiteral("lossless") : QStringLiteral("opus"));
+        // A lossless link trial that failed on this machine moved the stream
+        // to Opus, as designed: its window may hold the switch, so the level
+        // is measured again on the Opus stream, held to Opus's tolerance.
+        const int fallbacks = losslessFallbacks(remoteErrors);
+        waitForFallbackRequest(coreControls, h.sliceB, fallbacks);
+        verifyStreamRequests(coreControls, h.sliceB, lossless, fallbacks);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        if (fallbacks == 1 && !forceFallback) {
+            qInfo() << "the lossless link trial failed; measuring again on Opus";
+            // The window may hold the switchover gap or the lossless tail:
+            // wait until the slice actually receives Opus, then measure.
+            QTRY_VERIFY_WITH_TIMEOUT(receivesIn(remoteMedia, h.sliceB, RemoteAudioProfile::Opus),
+                                     10000);
+            QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state
+                                         == RemoteVaxFeederStats::State::Playing, 20000);
+            remoteStart = remoteVax->heard.size();
+            localStart = stationVax->samples().size();
+            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
+            QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
+            // No second fallback: the trial ended with the first.
+            QCOMPARE(losslessFallbacks(remoteErrors), 1);
+            verifyStreamRequests(coreControls, h.sliceB, lossless, fallbacks);
+        }
+        if (forceFallback) {
+            // Exactly two requests, lossless then Opus, and one fallback.
+            QCOMPARE(fallbacks, 1);
+        }
+        const bool playedLossless = lossless && fallbacks == 0;
         QCOMPARE(router.feeder(1)->stats().state, RemoteVaxFeederStats::State::Playing);
 
         // The same level as the Core's own VAX 1 for the same signal.
@@ -1183,11 +1322,11 @@ private slots:
         const double remoteB = Test::toneAmplitude(heard, 0, Test::RemoteAudioSessionHarness::kSliceBToneHz, skip);
         const double remoteA = Test::toneAmplitude(heard, 0, Test::RemoteAudioSessionHarness::kSliceAToneHz, skip);
         const double localB = Test::toneAmplitude(local, 0, Test::RemoteAudioSessionHarness::kSliceBToneHz, skip);
-        qInfo() << (lossless ? "lossless" : "opus") << "remote VAX 1 slice B" << remoteB
+        qInfo() << (playedLossless ? "lossless" : "opus") << "remote VAX 1 slice B" << remoteB
                 << "slice A" << remoteA << "Core's own VAX 1 slice B" << localB;
         QVERIFY(localB > 0.09);
         // Lossless is the same samples; Opus measured within 2 % of it.
-        QVERIFY2(std::abs(remoteB - localB) < (lossless ? 0.0005 : 0.005),
+        QVERIFY2(std::abs(remoteB - localB) < (playedLossless ? 0.0005 : 0.005),
                  qPrintable(QStringLiteral("remote %1 local %2").arg(remoteB).arg(localB)));
         QVERIFY(remoteB > 20.0 * remoteA);
 
@@ -1197,12 +1336,24 @@ private slots:
         QVERIFY(!AppSettings::instance().contains(
             QStringLiteral("Slice%1/VaxChannel").arg(h.sliceB)));
 
+        // A trial that failed after the measurement (its window was all
+        // lossless) still asked for exactly the one Opus stream.
+        const int fallbacksBeforeRelease = losslessFallbacks(remoteErrors);
+        waitForFallbackRequest(coreControls, h.sliceB, fallbacksBeforeRelease);
+        verifyStreamRequests(coreControls, h.sliceB, lossless, fallbacksBeforeRelease);
+
         // Off again: released at the Core.
         h.remote.sliceById(h.sliceB)->setVaxChannel(0);
         QTRY_VERIFY_WITH_TIMEOUT(!receiverRequests(coreControls, h.sliceB).constLast()
                                       .value(QStringLiteral("enabled")).toBool(), 5000);
         QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.activeReceiverAudioStreamCount(), 0, 5000);
-        QCOMPARE(remoteErrors.count(), 0);
+        // No error but a lossless fallback's one notice.
+        const int fallbacksAtEnd = losslessFallbacks(remoteErrors);
+        QVERIFY2(fallbacksAtEnd == 0 || (lossless && fallbacksAtEnd == 1),
+                 qPrintable(QStringLiteral("errors: %1").arg(remoteErrors.count())));
+        if (forceFallback) {
+            QCOMPARE(fallbacksAtEnd, 1);
+        }
         AppSettings::instance().remove(RemoteVaxRouter::settingsKey(coreKey, h.sliceB));
     }
 
@@ -1213,15 +1364,19 @@ private slots:
     {
         QTest::addColumn<bool>("lossless");
         QTest::addColumn<bool>("delayedRoute");
-        QTest::newRow("opus") << false << false;
-        QTest::newRow("lossless") << true << false;
-        QTest::newRow("lossless-delayed-route") << true << true;
+        QTest::addColumn<bool>("forceFallback");
+        QTest::newRow("opus") << false << false << false;
+        QTest::newRow("lossless") << true << false << false;
+        QTest::newRow("lossless-delayed-route") << true << true << false;
+        // The link cannot carry lossless: the trial fails every time.
+        QTest::newRow("lossless-forced-fallback") << true << false << true;
     }
 
     void slicesAAndBOnVax1MixAsTheLocalVaxDoes()
     {
         QFETCH(bool, lossless);
         QFETCH(bool, delayedRoute);
+        QFETCH(bool, forceFallback);
         AppSettings::instance().setValue(
             QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
             lossless ? QStringLiteral("Lossless") : QStringLiteral("Opus"));
@@ -1230,7 +1385,8 @@ private slots:
                 QLatin1String(RemoteMediaController::kAudioProfileSettingKey));
         });
         Test::RemoteAudioSessionHarness h;
-        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+                                          transportFor(forceFallback));
         DaemonMediaController daemonMedia(&h.server, &h.station);
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
@@ -1289,19 +1445,57 @@ private slots:
         QList<int> both{h.sliceA, h.sliceB};
         std::sort(both.begin(), both.end());
         QCOMPARE(router.requestedSlices(1), both);
+        if (forceFallback) {
+            waitForForcedFallback(remoteMedia, remoteErrors, coreControls, both);
+            if (QTest::currentTestFailed()) {
+                return;
+            }
+        }
         // Measure a fixed window after the stream starts. Connection setup
         // and time before the operator routes audio are not playback samples.
         // Keep the original one-second settling interval within this window;
         // any subsequent silence or discontinuity still affects the level.
         QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state == RemoteVaxFeederStats::State::Playing
                                  && router.feeder(1)->stats().writtenFrames > 0, 20000);
-        const qsizetype remoteStart = remoteVax->heard.size();
-        const qsizetype localStart = stationVax->samples().size();
+        qsizetype remoteStart = remoteVax->heard.size();
+        qsizetype localStart = stationVax->samples().size();
         constexpr qsizetype measurementSamples = 3 * 48000 * 2;
         QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
         QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
-        QCOMPARE(receiverRequests(coreControls, h.sliceA).size(), 1);
-        QCOMPARE(receiverRequests(coreControls, h.sliceB).size(), 1);
+        // As in sliceBOnVax1PlaysAtTheLocalLevel: a failed lossless link
+        // trial moves both streams to Opus, and the mix is measured again.
+        const int fallbacks = losslessFallbacks(remoteErrors);
+        for (int slice : {h.sliceA, h.sliceB}) {
+            waitForFallbackRequest(coreControls, slice, fallbacks);
+            verifyStreamRequests(coreControls, slice, lossless, fallbacks);
+        }
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        if (fallbacks == 1 && !forceFallback) {
+            qInfo() << "the lossless link trial failed; measuring again on Opus";
+            // The window may hold the switchover gap or the lossless tail:
+            // wait until both slices actually receive Opus, then measure.
+            for (int slice : {h.sliceA, h.sliceB}) {
+                QTRY_VERIFY_WITH_TIMEOUT(receivesIn(remoteMedia, slice, RemoteAudioProfile::Opus),
+                                         10000);
+            }
+            QTRY_VERIFY_WITH_TIMEOUT(router.feeder(1)->stats().state
+                                         == RemoteVaxFeederStats::State::Playing, 20000);
+            remoteStart = remoteVax->heard.size();
+            localStart = stationVax->samples().size();
+            QTRY_VERIFY_WITH_TIMEOUT(remoteVax->heard.size() >= remoteStart + measurementSamples, 20000);
+            QTRY_VERIFY_WITH_TIMEOUT(stationVax->samples().size() >= localStart + measurementSamples, 20000);
+            QCOMPARE(losslessFallbacks(remoteErrors), 1);
+            for (int slice : {h.sliceA, h.sliceB}) {
+                verifyStreamRequests(coreControls, slice, lossless, fallbacks);
+            }
+        }
+        if (forceFallback) {
+            // Exactly two requests, lossless then Opus, and one fallback.
+            QCOMPARE(fallbacks, 1);
+        }
+        const bool playedLossless = lossless && fallbacks == 0;
         QCOMPARE(router.feeder(1)->stats().state, RemoteVaxFeederStats::State::Playing);
 
         const QVector<float> heard = remoteVax->heard.mid(remoteStart, measurementSamples);
@@ -1312,21 +1506,32 @@ private slots:
         const double remoteB = Test::toneAmplitude(heard, 0, H::kSliceBToneHz, skip);
         const double localA = Test::toneAmplitude(local, 0, H::kSliceAToneHz, skip);
         const double localB = Test::toneAmplitude(local, 0, H::kSliceBToneHz, skip);
-        qInfo() << (lossless ? "lossless" : "opus") << "remote VAX 1 slice A" << remoteA
+        qInfo() << (playedLossless ? "lossless" : "opus") << "remote VAX 1 slice A" << remoteA
                 << "slice B" << remoteB << "Core's own VAX 1 slice A" << localA
                 << "slice B" << localB;
         QVERIFY(localA > 0.09);
         QVERIFY(localB > 0.09);
-        const double tolerance = lossless ? 0.0005 : 0.005;
+        const double tolerance = playedLossless ? 0.0005 : 0.005;
         QVERIFY2(std::abs(remoteA - localA) < tolerance,
                  qPrintable(QStringLiteral("A: remote %1 local %2").arg(remoteA).arg(localA)));
         QVERIFY2(std::abs(remoteB - localB) < tolerance,
                  qPrintable(QStringLiteral("B: remote %1 local %2").arg(remoteB).arg(localB)));
 
+        const int fallbacksBeforeRelease = losslessFallbacks(remoteErrors);
+        for (int slice : {h.sliceA, h.sliceB}) {
+            waitForFallbackRequest(coreControls, slice, fallbacksBeforeRelease);
+            verifyStreamRequests(coreControls, slice, lossless, fallbacksBeforeRelease);
+        }
+
         h.remote.sliceById(h.sliceA)->setVaxChannel(0);
         h.remote.sliceById(h.sliceB)->setVaxChannel(0);
         QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.activeReceiverAudioStreamCount(), 0, 5000);
-        QCOMPARE(remoteErrors.count(), 0);
+        const int fallbacksAtEnd = losslessFallbacks(remoteErrors);
+        QVERIFY2(fallbacksAtEnd == 0 || (lossless && fallbacksAtEnd == 1),
+                 qPrintable(QStringLiteral("errors: %1").arg(remoteErrors.count())));
+        if (forceFallback) {
+            QCOMPARE(fallbacksAtEnd, 1);
+        }
         for (int slice : {h.sliceA, h.sliceB}) {
             AppSettings::instance().remove(RemoteVaxRouter::settingsKey(coreKey, slice));
         }

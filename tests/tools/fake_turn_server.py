@@ -23,7 +23,7 @@ Reached), as a full relay refuses one (the relay is sized by allocations,
 four for each Core's id), so a test can show a full relay is not fatal.
 
 Usage: fake_turn_server.py --secret-file FILE --port-file FILE [--listen ADDR]
-                           [--quota-full]
+                           [--quota-full] [--parent-pid PID]
 It writes the UDP port it bound to --port-file, then prints one line to
 standard output for each allocation (ALLOCATED n) and, for datagrams it
 relays, at 1, 2, 4, 8 ... of them each way (RELAYED OUT n from a client to
@@ -31,6 +31,13 @@ a peer, RELAYED IN n from a peer to a client), so a test can see the relay
 was used, and RELEASED n for each allocation a client gives back with a
 Refresh of LIFETIME 0 (iPhone app plan Task 28). It never prints a
 credential.
+
+With --parent-pid (the test process that started it) it exits within half a
+second of that process ending, however it ended: a test killed at its ctest
+timeout, or one that crashed, runs no destructor to stop its helper, and
+before this the helper was left running with parent 1 for as long as the
+computer stayed up (tst_path_racer's, found 22 hours on). POSIX only; on
+Windows the option is accepted and does nothing.
 """
 
 from __future__ import annotations
@@ -193,9 +200,12 @@ class Server:
         self.relayed_out += 1
         self.count("OUT", self.relayed_out)
 
-    def run(self) -> None:
+    def run(self, parent_pid: int | None = None) -> None:
         while True:
-            for key, _ in self.selector.select():
+            if parent_pid is not None and not process_alive(parent_pid):
+                return
+            timeout = PARENT_POLL_S if parent_pid is not None else None
+            for key, _ in self.selector.select(timeout):
                 sock = key.fileobj
                 data, addr = sock.recvfrom(65535)
                 if key.data is None:
@@ -324,12 +334,33 @@ class Server:
         self.sock.sendto(build(CHANNEL_BIND, SUCCESS, txid, [], key), client)
 
 
+# How often the server looks for its parent while nothing arrives.
+PARENT_POLL_S = 0.5
+
+
+def process_alive(pid: int) -> bool:
+    """True while process `pid` exists (POSIX; always True on Windows, where
+    os.kill with signal 0 would end the process instead of probing it)."""
+    if os.name != "posix":
+        return True
+    if os.getppid() == 1:
+        return False  # re-parented to init: the parent is gone
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--secret-file", required=True)
     parser.add_argument("--port-file", required=True)
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--quota-full", action="store_true")
+    parser.add_argument("--parent-pid", type=int, default=None)
     args = parser.parse_args()
     with open(args.secret_file, "rb") as handle:
         secret = handle.read().rstrip(b"\r\n")
@@ -338,7 +369,7 @@ def main() -> int:
         handle.write(str(server.port()))
     os.replace(args.port_file + ".part", args.port_file)
     try:
-        server.run()
+        server.run(args.parent_pid)
     except KeyboardInterrupt:
         pass
     return 0

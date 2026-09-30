@@ -3645,7 +3645,7 @@ private slots:
         VaxApplet remoteApplet(&remote, remote.localAudioDevices());
         QVERIFY(remoteApplet.isEnabled());
         QVERIFY(remoteApplet.toolTip().isEmpty());
-        // This computer's own rows, not the "Station computer" section's
+        // This computer's own rows, not the "Core computer" section's
         // (iPhone app plan Task 25), which holds the Core computer's VAX.
         const auto ownRows = [](const VaxApplet& applet, auto* tag) {
             using W = std::remove_pointer_t<decltype(tag)>;
@@ -3687,13 +3687,19 @@ private slots:
         QVERIFY(txRow->isEnabled());
         QVERIFY(txRow->toolTip() != reason);
 
-        // The "Station computer" section: built with its own four RX rows
-        // and TX row, apart from this computer's, and shown only while a
-        // Core sends its `vax` object. None has here. Its TX row follows
-        // the transmit permission, disabled with the gate's reason.
+        // The "Core computer" section: built with its own four RX rows
+        // and TX row, apart from this computer's, and usable only while a
+        // Core sends its `vax` object. None has here, so it stays in place
+        // disabled with the plain reason (disabled, never hidden). Its TX
+        // row keeps following the transmit permission, but while the
+        // section cannot be used the row shows the section's reason.
+        const QString noCoreVax =
+            QStringLiteral("The Core computer is not sharing its VAX channels.");
         QWidget* const station = remoteApplet.stationSectionForTest();
         QVERIFY(station != nullptr);
-        QVERIFY(!station->isVisibleTo(&remoteApplet));
+        QVERIFY(station->isVisibleTo(&remoteApplet));
+        QVERIFY(!station->isEnabled());
+        QCOMPARE(station->toolTip(), noCoreVax);
         const QList<MeterSlider*> stationSliders = station->findChildren<MeterSlider*>();
         QCOMPARE(stationSliders.size(), 5);
         for (int channel = 1; channel <= 4; ++channel) {
@@ -3707,14 +3713,16 @@ private slots:
         QVERIFY(stationSliders.contains(stationTx));
         QVERIFY(stationTx != txRow);
         remoteApplet.setStationTransmitPermitted(false, reason);
+        QVERIFY(!stationTx->isEnabledTo(station));
         QVERIFY(!stationTx->isEnabled());
-        QCOMPARE(stationTx->toolTip(), reason);
+        QCOMPARE(stationTx->toolTip(), noCoreVax);
         remoteApplet.setStationTransmitPermitted(false, QString());
-        QVERIFY(!stationTx->isEnabled());
+        QVERIFY(!stationTx->isEnabledTo(station));
         QVERIFY2(OperatorWording::isPlain(stationTx->toolTip()), qPrintable(stationTx->toolTip()));
         remoteApplet.setStationTransmitPermitted(true, QString());
-        QVERIFY(stationTx->isEnabled());
-        QVERIFY(stationTx->toolTip() != reason);
+        QVERIFY(stationTx->isEnabledTo(station));
+        QVERIFY(!stationTx->isEnabled());
+        QCOMPARE(stationTx->toolTip(), noCoreVax);
         // Its permission is its own: this computer's TX row is untouched.
         QVERIFY(txRow->isEnabled());
 
@@ -3724,6 +3732,8 @@ private slots:
             ownRows(localApplet, static_cast<MeterSlider*>(nullptr));
         QCOMPARE(localSliders.size(), 5);
         QVERIFY(localSliders.constLast()->isEnabled());
+        // JJ's ruling (2026-09-30): a window that runs the radio directly
+        // can never have the section, so it is hidden there.
         QVERIFY(localApplet.stationSectionForTest() != nullptr);
         QVERIFY(!localApplet.stationSectionForTest()->isVisibleTo(&localApplet));
 

@@ -11,6 +11,11 @@
 //   2026-09-28  J.J. Boyd / KG4VCF  Created (iPhone app plan Task 25,
 //                                    R-IOS-18). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  JJ's ruling: a local window hides the
+//                                    section; a remote one shows it disabled
+//                                    with its reason, labels greyed, while
+//                                    the Core shares no VAX. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -145,16 +150,20 @@ private slots:
         QFile::remove(path + QStringLiteral(".bak"));
     }
 
-    // A local window's applet has no "Station computer" section: its own
-    // rows are the station computer's.
-    void aLocalWindowShowsNoStationSection()
+    // JJ's ruling (2026-09-30): a window that runs the radio directly can
+    // never have a "Core computer" section (its own rows are the Core
+    // computer's), so the section is hidden there; a remote window keeps
+    // it, disabled with its reason while the Core shares no VAX.
+    void aLocalWindowHidesTheSection()
     {
         RadioModel local;
         AudioEngine audio;
         VaxApplet applet(&local, &audio);
         applet.show();
-        QVERIFY(applet.stationSectionForTest() != nullptr);
-        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QWidget* const section = applet.stationSectionForTest();
+        QVERIFY(section != nullptr);
+        QVERIFY(!section->isVisibleTo(&applet));
+        QVERIFY(!section->isEnabled());
         QVERIFY(!applet.stationLevelsWanted());
     }
 
@@ -174,6 +183,16 @@ private slots:
         VaxApplet applet(&s.window, &ownAudio);
         wire(applet, *s.client);
         QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(applet.stationSectionForTest()->isEnabled());
+        for (QLabel* label : applet.stationSectionForTest()->findChildren<QLabel*>()) {
+            QVERIFY2(label->isEnabled(), qPrintable(label->text()));
+        }
+        // Built disabled with the reason, the controls get their own
+        // tooltips back once the Core sends its VAX.
+        QCOMPARE(applet.stationMuteButtonForTest(3)->toolTip(),
+                 QStringLiteral("Mute VAX channel 3 on the computer the Core runs on"));
+        QVERIFY(applet.stationRxMeterForTest(1)->toolTip().isEmpty());
+        QVERIFY(applet.stationSectionForTest()->toolTip().isEmpty());
         StationVax* copy = s.client->stationVax();
         QTRY_COMPARE(copy->rxGain(2), 0.4);
         QTRY_COMPARE(applet.stationRxMeterForTest(2)->gain(), 0.4f);
@@ -288,8 +307,10 @@ private slots:
         QTRY_VERIFY(!s.server->vaxLevelsPollingForTest());
     }
 
-    // A Core that publishes no VAX devices (nereusd): no section.
-    void aHeadlessCoreShowsNoSection()
+    // A remote window whose Core publishes no VAX devices (nereusd): the
+    // section stays in place, disabled, with the plain reason on each
+    // control and its labels greyed.
+    void aHeadlessCoreShowsTheSectionDisabled()
     {
         Session s(m_securityDir.path(), this);
         s.coreAudio()->setVaxOutputsAllowed(false);
@@ -300,8 +321,12 @@ private slots:
         VaxApplet applet(&s.window, &ownAudio);
         wire(applet, *s.client);
         applet.show();
-        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(!applet.stationSectionForTest()->isEnabled());
         QVERIFY(!applet.stationLevelsWanted());
+        verifyDisabledWithReason(
+            applet, QStringLiteral("The Core computer is not sharing its VAX channels."));
+        QVERIFY(!QTest::currentTestFailed());
     }
 
     // A level slider that cannot act looks disabled: the style guide's
@@ -341,7 +366,7 @@ private slots:
         slider.setEnabled(true);
         QCOMPARE(pixel(0.75), QStringLiteral("#0a0a18"));
 
-        // The applet: this computer's TX row and the Station computer's.
+        // The applet: this computer's TX row and the Core computer's.
         Session s(m_securityDir.path(), this);
         QVERIFY(s.connect());
         QTRY_VERIFY(s.client->stationVaxHeld());
@@ -390,6 +415,45 @@ private slots:
     }
 
 private:
+    // The section cannot be used: titled "Core computer", and it and every
+    // control in it (title, RX rows, mutes, TX row) show `reason`, which
+    // is plain and does not call the Core a station.
+    static void verifyDisabledWithReason(const VaxApplet& applet, const QString& reason)
+    {
+        QWidget* const section = applet.stationSectionForTest();
+        QVERIFY(!section->isEnabled());
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QVERIFY2(OperatorWording::coreCalledStationIn(reason).isEmpty(), qPrintable(reason));
+        QCOMPARE(section->toolTip(), reason);
+        bool titled = false;
+        for (QLabel* label : section->findChildren<QLabel*>()) {
+            if (label->text() == QStringLiteral("Core computer")) {
+                titled = true;
+                QCOMPARE(label->toolTip(), reason);
+            }
+        }
+        QVERIFY(titled);
+        // Every label greys with the section, as the title does: the VAX
+        // and TX labels, the tag labels and the device labels.
+        const QString greyed =
+            QStringLiteral("QLabel:disabled { color: %1; }").arg(QLatin1String(Style::kDisabledText));
+        const QList<QLabel*> labels = section->findChildren<QLabel*>();
+        QCOMPARE(labels.size(), 1 + 4 * 3 + 2);
+        for (QLabel* label : labels) {
+            QVERIFY2(!label->isEnabled(), qPrintable(label->text()));
+            QVERIFY2(label->styleSheet().contains(greyed),
+                     qPrintable(label->text() + QStringLiteral(": ") + label->styleSheet()));
+        }
+        for (int channel = 1; channel <= 4; ++channel) {
+            QCOMPARE(applet.stationRxMeterForTest(channel)->toolTip(), reason);
+            QCOMPARE(applet.stationMuteButtonForTest(channel)->toolTip(), reason);
+            QVERIFY(!applet.stationRxMeterForTest(channel)->isEnabled());
+            QVERIFY(!applet.stationMuteButtonForTest(channel)->isEnabled());
+        }
+        QCOMPARE(applet.stationTxMeterForTest()->toolTip(), reason);
+        QVERIFY(!applet.stationTxMeterForTest()->isEnabled());
+    }
+
     QTemporaryDir m_securityDir;
 };
 
