@@ -7887,6 +7887,11 @@ nereus_add_test(tst_remote_window_harness fakes/RemoteWindowHarness.cpp)
 # R3 Setup fix wave (R-R3-21): SetupDialog's test seams (page scopes by
 # registry index) for the case that realizes every Core page.
 target_compile_definitions(tst_remote_window_harness PRIVATE NEREUS_BUILD_TESTS)
+# Load findings 4: about 37 s on a quiet machine, past the 120 s limit under
+# 150 busy loops (200 s at load 180); six entries of the same binary (the
+# limit is not raised; groups in the test's main()).
+nereus_split_test(tst_remote_window_harness
+    ENV NEREUS_REMOTE_WINDOW_HARNESS_GROUP GROUPS connect disconnect links setup radio)
 
 # Remote-window parity Task 18 (R-R3-09, R-R3-24, R-R3-34, R-R3-49): a
 # control drawn on a pan acts on that pan, in a local window and a remote
@@ -9355,6 +9360,13 @@ endif()
 # real window, real DTLS/SRTP over an in-process link. Plays real-time
 # audio, so REALTIME.
 nereus_add_test(tst_media_tunnel fakes/LoopbackTransport.cpp REALTIME EXTRA_LABELS session)
+# R-R3-49: its direct-pair and tunnel-pair waits each allow the product's
+# own ICE bound (IceConfiguration::kConnectDeadlineMs, 63 s), so one that
+# stalls reports its stage before ctest ends the binary. Two such waits
+# pass the default 120 s, which would end it first, silently.
+if(TEST tst_media_tunnel)
+    set_tests_properties(tst_media_tunnel PROPERTIES TIMEOUT 300)
+endif()
 
 # ── R-R3-49: the audio thread reads a published view of the slices ───────────
 # rxBlockReady used to walk RadioModel's slice list on the DSP thread while

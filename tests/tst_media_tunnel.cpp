@@ -18,6 +18,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: load finding: the tunnel-only replacement case waits the
+//               product's ICE connect bound (IceConfiguration::
+//               kConnectDeadlineMs) for both pairs and on failure prints
+//               what each end got to. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: direct media follow-up: the tunnel-only transport's
 //               refusal checked with a remote description set, and a real
 //               tunnel-only replacement carrying media after the direct
@@ -465,8 +470,18 @@ private slots:
         QSignalSpy directRtp(&directWindow, &IMediaTransport::rtpReceived);
         QVERIFY(directWindow.start({IMediaTransport::Role::Answerer, kWindowSsrc}));
         QVERIFY(directCore.start({IMediaTransport::Role::Offerer, kCoreSsrc}));
-        QTRY_VERIFY_WITH_TIMEOUT(directCoreReady.size() == 1 && directWindowReady.size() == 1,
-                                 20000);
+        // The product's bound for an ICE connection: gathering, then the
+        // connectivity checks, after which failure is certain
+        // (IceConfiguration::kConnectDeadlineMs; RemoteMediaController gives
+        // a replacement the same bound after its description).
+        QTRY_VERIFY2_WITH_TIMEOUT(
+            directCoreReady.size() == 1 && directWindowReady.size() == 1,
+            qPrintable(QStringLiteral("direct pair: core ready %1, window ready %2; forwarder "
+                                      "dropped %3")
+                           .arg(directCoreReady.size())
+                           .arg(directWindowReady.size())
+                           .arg(forwarder.dropped())),
+            IceConfiguration::kConnectDeadlineMs);
         const auto directPath = directWindow.selectedPath();
         QVERIFY(directPath);
         QVERIFY(!directPath->viaLoopbackShim());
@@ -523,7 +538,28 @@ private slots:
         coreOptions.ice = MediaTunnel::iceFor(coreTunnel, std::nullopt);
         QVERIFY(window.start(windowOptions));
         QVERIFY(core.start(coreOptions));
-        QTRY_VERIFY_WITH_TIMEOUT(coreReady.size() == 1 && windowReady.size() == 1, 20000);
+        // What each end of the tunnel-only pair got to, for a failure.
+        const auto describeTunnelPair = [&] {
+            QStringList errors;
+            for (const QList<QVariant>& error : std::as_const(windowErrors)) {
+                errors.append(error.value(0).toString());
+            }
+            return QStringLiteral("core ready %1, window ready %2, core gathered %3; core "
+                                  "candidates %4 (window refused %5), window candidates %6; "
+                                  "tunnel messages at the window %7; window errors: %8")
+                .arg(coreReady.size())
+                .arg(windowReady.size())
+                .arg(coreGathered.size())
+                .arg(coreCandidates)
+                .arg(refused)
+                .arg(windowCandidates.size())
+                .arg(atWindow.messages)
+                .arg(errors.join(QStringLiteral(" | ")));
+        };
+        // The product's ICE connect bound, as for the direct pair above.
+        QTRY_VERIFY2_WITH_TIMEOUT(coreReady.size() == 1 && windowReady.size() == 1,
+                                  qPrintable(describeTunnelPair()),
+                                  IceConfiguration::kConnectDeadlineMs);
         const auto tunnelPath = window.selectedPath();
         QVERIFY(tunnelPath);
         QVERIFY(tunnelPath->viaLoopbackShim());

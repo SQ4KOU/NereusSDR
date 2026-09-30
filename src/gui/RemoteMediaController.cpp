@@ -1,5 +1,11 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 // Modification history (NereusSDR):
+//   2026-09-29: a refused replace keeps the session move it carried: a
+//               move folded into a waiting fallback, or one that came
+//               while the fallback's replace was under way, stays pending
+//               when the Core refuses that replace for transmitting, so
+//               media still follows it after the Core unkeys. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: holdAudioRestartForTest, so a test can hold an audio
 //               restart's backoff step instead of racing its timer; a
 //               refused fallback waiting to be retried ends when media
@@ -903,6 +909,9 @@ struct RemoteMediaController::Private {
     // A session move came while that refused fallback waited: when media
     // comes back the move is still followed, as a normal replace.
     bool pendingMoveFolded = false;
+    // The replace under way carries a session move folded into a waiting
+    // fallback (a refusal while transmitting keeps that move pending).
+    bool replacementMoveFolded = false;
     int replaceRearms = 0;
     // Task 29 step 2b: this media start declared the media tunnel.
     bool tunnelNegotiated = false;
@@ -2764,6 +2773,7 @@ void RemoteMediaController::stop()
     d->replacePending = false;
     d->pendingReplaceKind = ReplaceKind::Normal;
     d->pendingMoveFolded = false;
+    d->replacementMoveFolded = false;
     d->replaceRearms = 0;
     d->replaceRetry->stop();
     if (d->stallTimer) {
@@ -3046,7 +3056,7 @@ bool RemoteMediaController::upgradeToDirectConnection()
     return startReplacement(ReplaceKind::Direct);
 }
 
-bool RemoteMediaController::startReplacement(ReplaceKind kind)
+bool RemoteMediaController::startReplacement(ReplaceKind kind, bool carriesFoldedMove)
 {
     const bool direct = kind == ReplaceKind::Direct;
     if (!d->client || !d->client->mediaAvailable() || !d->peer || !d->peer->isReady()
@@ -3134,6 +3144,7 @@ bool RemoteMediaController::startReplacement(ReplaceKind kind)
     d->replacementRouted = nextIce && nextIce->mediaRouting();
     d->replacementDirect = direct;
     d->replacementFallback = kind == ReplaceKind::TunnelFallback;
+    d->replacementMoveFolded = carriesFoldedMove;
     peer->setIceConfiguration(nextIce);
     const QPointer<MediaPeer> started(peer);
     const bool ok = peer->start(IMediaTransport::Role::Answerer, id,
@@ -3190,6 +3201,7 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
         const QString reason = payload.value(QStringLiteral("reason")).toString();
         const bool wasDirect = d->replacementDirect;
         const bool wasFallback = d->replacementFallback;
+        const bool wasMoveFolded = d->replacementMoveFolded;
         dropReplacement(reason.left(512));
         // The direct media ladder: a refused direct-only replace waits for
         // the next step of its own schedule; it never marks a move pending.
@@ -3201,10 +3213,15 @@ void RemoteMediaController::receiveReplacementControl(const QJsonObject& payload
         // is back on receive (tryPendingReplace waits while the window sees
         // it transmitting). Only that refusal: any other stays refused.
         if (reason == QLatin1String(DaemonMediaController::kReplaceTransmittingReason)) {
+            // A session move this replace carried (folded into the waiting
+            // fallback), or one that came while it was under way (pending
+            // now), is still followed when media comes back on the direct
+            // pair: the refusal keeps it folded into the retried fallback.
+            const bool moveWaiting = wasMoveFolded || d->replacePending;
             d->replacePending = true;
             d->pendingReplaceKind = wasFallback ? ReplaceKind::TunnelFallback
                                                 : ReplaceKind::Normal;
-            d->pendingMoveFolded = false;
+            d->pendingMoveFolded = wasFallback && moveWaiting;
             d->replaceRetry->start();
         }
         return;
@@ -3240,6 +3257,7 @@ void RemoteMediaController::promoteReplacement()
     // and its silence is counted from here.
     d->currentRouted = std::exchange(d->replacementRouted, false);
     d->replacementDirect = false;
+    d->replacementMoveFolded = false;
     d->lastMediaMs = d->allocationClock();
     // The fix wave: a finished fallback waits one window for media; the
     // tunnel's stall rule counts from here too, not from the old silence.
@@ -3373,7 +3391,11 @@ void RemoteMediaController::tryPendingReplace()
         return;
     }
     d->replaceStartFailed = false;
-    if (startReplacement(d->pendingReplaceKind)) {
+    // The move folded into a fallback rides with the replace; a refusal
+    // while transmitting puts it back (even one that arrives during the
+    // send, when startReplacement returns false and this leaves it pending).
+    if (startReplacement(d->pendingReplaceKind, d->pendingMoveFolded)) {
+        d->pendingMoveFolded = false;
         d->replacePending = false;
         d->replaceRetry->stop();
         return;
@@ -3401,6 +3423,7 @@ void RemoteMediaController::dropReplacement(const QString& why)
     d->replacementId.clear();
     d->replacementRouted = false;
     d->replacementDirect = false;
+    d->replacementMoveFolded = false;
     if (std::exchange(d->replacementFallback, false)) {
         d->fallbackFinishedMs = d->allocationClock();
     }

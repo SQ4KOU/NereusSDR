@@ -15,6 +15,13 @@
 #include <thread>
 #include <vector>
 
+#ifndef Q_OS_WIN
+#include <time.h>
+#endif
+#ifdef Q_OS_MAC
+#include <pthread/qos.h>
+#endif
+
 #include "core/wdsp_api.h"
 
 namespace {
@@ -86,10 +93,27 @@ constexpr double kSchedulingMarginMs = 10.0;
 // cannot allow for; seen: 0.897 at load 35 with every call served after one
 // block. Because that allowance grows with what the worker held off, the
 // hold-off after a call is also checked on its own: its median must stay
-// within the 1 ms burst grace plus the scheduling margin, so a worker that
-// holds off longer than the calls need (up to its whole budget, say) fails.
+// within the 1 ms burst grace plus the scheduling margin (or the same run's
+// idle grace median plus that margin, below), so a worker that holds off
+// longer than the calls need (up to its whole budget, say) fails.
 constexpr double kWindowEdgeShare = 0.02;
 constexpr double kBurstGraceMs = 1.0;
+// JJ's transmit-twin ruling (applied in tst_dsp_control_receive, 745aca33e)
+// for a fixed wall-clock bound that load stretches: the median hold-off
+// after a call may be no more than the larger of kBurstGraceMs +
+// kSchedulingMarginMs and the same run's idle median plus
+// kSchedulingMarginMs. The hold-off after a call is the worker's burst
+// grace (dsplock.c worker_defer: kDspWorkerBurstGraceUs, checked between
+// kDspWorkerPauseNs nanosleeps) plus however late the worker thread wakes
+// from those sleeps; on a busy computer the wake alone takes milliseconds
+// (median 13.01 ms against 11.0 at load 97, and failing alone at load 24
+// to 41). The idle probe times the same grace wait (after the same block
+// of work, with the same pause and QoS class on macOS) on a thread of this
+// process during the baseline
+// window, when the worker runs blocks and nothing asks for the lock: a
+// median against a median, so a worker that holds off its whole 20 ms
+// budget still fails on a computer that wakes a thread in under 10 ms.
+constexpr int kIdleProbes = kSingleCalls;
 constexpr std::chrono::milliseconds kPostCallWatch{60};
 constexpr double kMinThroughputRatio = 0.90;
 
@@ -151,9 +175,13 @@ private slots:
         std::this_thread::sleep_for(kWarmup);
 
         // Baseline: worker throughput with no control calls.
+        // The same run's idle hold-off, timed during the baseline window.
         double baselineUtilization = 0.0;
-        const double baselineRate = outputRateOver([] {
-            std::this_thread::sleep_for(kBaselineWindow);
+        std::vector<double> idleGraceMs;
+        const double baselineRate = outputRateOver([&idleGraceMs] {
+            const auto windowEnd = Clock::now() + kBaselineWindow;
+            idleGraceMs = idleGraceWaits();
+            std::this_thread::sleep_until(windowEnd);
         }, baselineUtilization);
 
         double worstSingleMs = 0.0;
@@ -210,18 +238,24 @@ private slots:
         std::nth_element(afterCallMs.begin(),
                          afterCallMs.begin() + afterCallMs.size() / 2, afterCallMs.end());
         const double medianAfterCallMs = afterCallMs[afterCallMs.size() / 2];
+        QCOMPARE(static_cast<int>(idleGraceMs.size()), kIdleProbes);
+        std::nth_element(idleGraceMs.begin(),
+                         idleGraceMs.begin() + idleGraceMs.size() / 2, idleGraceMs.end());
+        const double idleMedianMs = idleGraceMs[idleGraceMs.size() / 2];
+        const double afterCallLimitMs = std::max(kBurstGraceMs + kSchedulingMarginMs,
+                                                 idleMedianMs + kSchedulingMarginMs);
         const double minRatio = std::min(
             kMinThroughputRatio, 1.0 - handoffMs / m_loadedWindowMs - kWindowEdgeShare);
         qInfo("longest block %.2f ms; worst single call %.2f ms (limit %.1f), %lld block(s) "
               "(max %lld); %d-call burst %.2f ms (limit %.1f), %lld block(s) (max %lld); "
               "worker %.1f vs baseline %.1f outputs/s; utilization %.3f vs baseline %.3f, "
               "ratio %.3f (min %.3f; worker held off %.2f ms of %.0f ms; median after a "
-              "call %.2f ms, limit %.1f)",
+              "call %.2f ms, limit %.1f: idle grace median %.2f ms over %d waits)",
               longestBlockMs, worstSingleMs, singleLimitMs, worstSingleBlocks,
               kMaxBlocksPerCall, kBurstCalls, burstMs, burstLimitMs, burstBlocks,
               kMaxBlocksPerBurst, loadedRate, baselineRate, loadedUtilization,
               baselineUtilization, ratio, minRatio, handoffMs, m_loadedWindowMs,
-              medianAfterCallMs, kBurstGraceMs + kSchedulingMarginMs);
+              medianAfterCallMs, afterCallLimitMs, idleMedianMs, kIdleProbes);
 
         QVERIFY(baselineRate > 0.0);
         QVERIFY(longestBlockMs > 0.0);
@@ -237,7 +271,7 @@ private slots:
         // same run measured, so a worker that holds off its whole budget
         // lowers its own bar and still passes (seen: ratio 0.651 against a
         // minimum of 0.628). Keep this check even if the ratio is loosened.
-        QVERIFY2(medianAfterCallMs <= kBurstGraceMs + kSchedulingMarginMs,
+        QVERIFY2(medianAfterCallMs <= afterCallLimitMs,
                  "the worker held off too long after control calls finished");
         QVERIFY2(ratio >= minRatio, "control calls cost the worker too much throughput");
     }
@@ -386,6 +420,48 @@ private:
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
         return std::chrono::duration<double, std::milli>(kPostCallWatch).count();
+    }
+
+    // kIdleProbes waits shaped as the worker's burst grace after a call:
+    // busy for kBlockDelayUs as a block is, then nanosleep the worker's own
+    // pause (WDSPGetTestWorkerPauseNs, dsplock.c kDspWorkerPauseNs)
+    // (a yield on Windows, as the worker does) until kBurstGraceMs has
+    // passed, on a thread with the worker's QoS class (linux_port.c starts
+    // RX workers QOS_CLASS_USER_INTERACTIVE on macOS). A probe that only
+    // sleeps is not like the worker: under 150 spinners it woke in 1.03 ms
+    // while the worker's hold-off ran 12 to 18 ms; with the block's work
+    // first it tracked the worker (11.5 to 21 ms against 13.8 to 22 ms).
+    // Each is how long the wait took, grace included.
+    static std::vector<double> idleGraceWaits()
+    {
+        std::vector<double> waits;
+        waits.reserve(kIdleProbes);
+        std::thread probe([&waits] {
+#ifdef Q_OS_MAC
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+            for (int i = 0; i < kIdleProbes; ++i) {
+                // A block's worth of work first, as the worker does before
+                // it holds off: the scheduler treats a thread that has just
+                // used its time slice differently from one that slept.
+                const auto blockStart = Clock::now();
+                while (Clock::now() - blockStart < std::chrono::microseconds(kBlockDelayUs)) {
+                    // busy-wait, as WDSPSetTestBlockDelayUs does in the worker
+                }
+                const auto start = Clock::now();
+                while (msSince(start) < kBurstGraceMs) {
+#ifdef Q_OS_WIN
+                    std::this_thread::yield();   // dsplock.c: SwitchToThread on Windows
+#else
+                    const timespec pause{0, WDSPGetTestWorkerPauseNs()};
+                    nanosleep(&pause, nullptr);
+#endif
+                }
+                waits.push_back(msSince(start));
+            }
+        });
+        probe.join();
+        return waits;
     }
 
     // The part of a control call's wait (callMs) the worker spent outside

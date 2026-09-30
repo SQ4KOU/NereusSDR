@@ -3,6 +3,9 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: startReplacement takes whether the replace carries a
+//               folded session move, recorded before it is sent. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: holdAudioRestartForTest and audioRestartStepHeldForTest;
 //               endWaitingFallback.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -626,7 +629,10 @@ private:
     // The direct media ladder: a plain replace, a direct-only one, and the
     // silence fallback's plain replace onto the tunnel alone.
     enum class ReplaceKind { Normal, Direct, TunnelFallback };
-    bool startReplacement(ReplaceKind kind);
+    // carriesFoldedMove: the replace carries a session move folded into a
+    // waiting fallback; it is recorded before the replace is sent, so a
+    // refusal that arrives during the send keeps the move.
+    bool startReplacement(ReplaceKind kind, bool carriesFoldedMove = false);
     // Media arrived while a refused fallback waits to be retried.
     void endWaitingFallback();
     void updateDirectUpgrade(bool viaTunnel);
