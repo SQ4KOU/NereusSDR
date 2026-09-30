@@ -17,6 +17,9 @@
 //               a controlTaken card goes (control came back, or never can
 //               now) or stays (may be tried again). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over re-review (N-3): forgetNotice(), a closed
+//               card's Take it back record goes. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/HostingSliceActions.h"
@@ -165,6 +168,12 @@ void HostingSliceActions::proceed(qint64 questionId, qint64 choice)
 void HostingSliceActions::cancel(qint64 questionId)
 {
     run(QByteArrayLiteral("confirm.cancel"), -1, {intArg("id", questionId)});
+}
+
+void HostingSliceActions::forgetNotice(qint64 noticeId)
+{
+    // Take-over re-review (N-3): a closed card is never answered.
+    m_takeBackNotices.remove(noticeId);
 }
 
 void HostingSliceActions::takeBack(qint64 noticeId)

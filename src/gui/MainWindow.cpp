@@ -465,6 +465,9 @@
 //               controlTaken card stays when Take it back may be tried
 //               again. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30 - Take-over re-review (N-3): a closed hosting card
+//               forgets its Take it back record. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -3056,7 +3059,9 @@ void MainWindow::showHostingNotice(const SessionMessage& notice)
         }
         if (HostingSliceActions* actions = hostingSlices()) { actions->takeBack(id); }
     });
-    connect(card, &NoticeCard::dismissed, this, [this, guard](qint64) {
+    connect(card, &NoticeCard::dismissed, this, [this, guard](qint64 id) {
+        // Take-over re-review (N-3): its Take it back record goes with it.
+        if (HostingSliceActions* actions = hostingSlices()) { actions->forgetNotice(id); }
         m_hostingNoticeCards.removeAll(guard);
         if (guard) { guard->hide(); guard->deleteLater(); }
         layoutHostingNoticeCards();

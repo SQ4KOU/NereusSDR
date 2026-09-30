@@ -14,7 +14,7 @@
 //               is shown off, with the reason as its tooltip. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: take-over fix wave: a disabled button draws in the style
-//               guide's disabled colours. J.J. Boyd (KG4VCF), AI-assisted
+//               guide's disabled colors. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
 // =================================================================
 
@@ -53,7 +53,7 @@ NoticeCard::NoticeCard(const RemotePrompt& notice, QWidget* parent,
         "QPushButton { background: #1e3048; color: #d8e4f0; border: 1px solid #5078a0;"
         " border-radius: 3px; padding: 2px 10px; }"
         // Take-over fix wave: a Take it back that is off reads as off, in
-        // the style guide's disabled colours; its reason is its tooltip.
+        // the style guide's disabled colors; its reason is its tooltip.
         "QPushButton:disabled { background: %1; color: %2; border-color: %3; }")
                       .arg(Style::kDisabledBg, Style::kDisabledText, Style::kDisabledBorder));
     auto* layout = new QHBoxLayout(this);
