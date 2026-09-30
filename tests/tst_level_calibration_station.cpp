@@ -24,6 +24,9 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: another device's slice is refused, the
+//                device's own slice runs. J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -208,6 +211,52 @@ private slots:
         QVERIFY(!accepted(noSlice));
         QCOMPARE(reason(noSlice), kNoSlice);
         QVERIFY(fake.log.isEmpty());
+    }
+
+    // Level Cal 2: a run retunes its slice and switches the preamp, so a
+    // device calibrates a slice it controls and no other. Another device's
+    // slice, named or reached as the Core's active slice (-1), is refused
+    // with the ownership words and nothing moves; its own slice runs.
+    void anotherDevicesSlice_refused_ownSliceRuns()
+    {
+        Core core;
+        FakeHost fake;
+        QVERIFY(fakeReceiver(core, fake) != nullptr);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, withLevelCal());
+        LoopbackTransport* appB = core.signIn(b, withLevelCal());
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        const QStringList bKeys = heldKeys(appB, QStringLiteral("slice:"));
+        QCOMPARE(bKeys.size(), 1);
+        const int bSlice = bKeys.first().mid(6).toInt();
+        QVERIFY(bSlice != 0);
+        const QString belongsToA = ownedElsewhere(QStringLiteral("iPhone"));
+
+        const QJsonObject named =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, 0));
+        QVERIFY(!accepted(named));
+        QCOMPARE(reason(named), belongsToA);
+
+        core.model->setActiveSliceById(0);
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 0);
+        const QJsonObject active =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, -1));
+        QVERIFY(!accepted(active));
+        QCOMPARE(reason(active), belongsToA);
+        QVERIFY(fake.log.isEmpty());
+        QVERIFY(!core.model->levelCalRunning());
+
+        const QJsonObject own =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, bSlice));
+        QVERIFY2(accepted(own), qPrintable(reason(own)));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("radio"),
+                            QStringLiteral("levelCalSucceeded")).toBool(false), true);
+        QVERIFY(fake.meterReads > 0);
+        QVERIFY(!fake.log.isEmpty());
     }
 
     // Cancel stops the run and puts everything back (Thetis closing the
