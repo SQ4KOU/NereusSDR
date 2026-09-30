@@ -7,13 +7,17 @@
 // (CalibrateLevel saves GridMinFollowsNFRX1/RX2, turns them off, and
 // restores them at the end).
 
+#include "core/AppSettings.h"
 #include "gui/LevelCalGridFollowGuard.h"
+#include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
 
 #include <QtTest/QtTest>
 
 using NereusSDR::LevelCalGridFollowGuard;
 using NereusSDR::RadioModel;
+using NereusSDR::SpectrumWidget;
+using NereusSDR::AppSettings;
 
 namespace {
 
@@ -82,6 +86,41 @@ private slots:
         QVERIFY(model.applyStationLevelCalValue("levelCalRunning", true));
         model.clearStationLevelCal();
         QCOMPARE(grid.follow, true);
+    }
+
+    // Level Cal fix wave: the window quits (its closing save) or crashes
+    // while a run holds the follow off. The saved setting is still the
+    // user's, so the next launch follows the noise floor again.
+    void quitMidRunKeepsTheUsersSetting()
+    {
+        const QString key = QStringLiteral("DisplayAdjustGridMinToNoiseFloor");
+        RadioModel model(RadioModel::Role::Remote);
+        SpectrumWidget pan;
+        pan.setAdjustGridMinToNoiseFloor(true);
+        pan.saveSettingsForTest();
+        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("True"));
+
+        LevelCalGridFollowGuard guard(&model);
+        guard.setAccess([&pan]() { return pan.adjustGridMinToNoiseFloor(); },
+                        [&pan](bool on) { pan.setAdjustGridMinToNoiseFloor(on); },
+                        [](std::optional<bool> saved) {
+                            SpectrumWidget::setGridFollowSaveHold(saved);
+                        });
+        QVERIFY(model.applyStationLevelCalValue("levelCalRunning", true));
+        QVERIFY(!pan.adjustGridMinToNoiseFloor());
+
+        // Any save during the run (the closing one on a quit, or the
+        // debounced one a crash leaves on disk) stores the user's value.
+        pan.saveSettingsForTest();
+        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("True"));
+
+        // The run ends: the follow is back and the hold is gone.
+        QVERIFY(model.applyStationLevelCalValue("levelCalRunning", false));
+        QVERIFY(pan.adjustGridMinToNoiseFloor());
+        QVERIFY(!SpectrumWidget::gridFollowSaveHold().has_value());
+        pan.setAdjustGridMinToNoiseFloor(false);
+        pan.saveSettingsForTest();
+        QCOMPARE(AppSettings::instance().value(key).toString(), QStringLiteral("False"));
     }
 };
 

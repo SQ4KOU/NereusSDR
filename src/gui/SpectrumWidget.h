@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 : setGridFollowSaveHold, the saved grid noise floor follow
+//                 held at the user's value while the level calibration
+//                 holds the follow off. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-29 : setCoreWaterfallLevelsAvailable / setCoreWaterfallLevels, a
 //                 remote window's waterfall AGC levels from the Core. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -1133,6 +1137,13 @@ public:
     //   with per-pan override via ContainerSettings dialog (3G-6 pattern).
     void setAdjustGridMinToNoiseFloor(bool on);
     bool adjustGridMinToNoiseFloor() const { return m_adjustGridMinToNF; }
+    // Level Cal: while the level calibration holds the follow off, every
+    // pan saves `saved` (the user's value) for it instead of the live one,
+    // so a quit or a crash in the middle of a run never stores the held
+    // value. std::nullopt ends the hold. One setting for every pan, so one
+    // hold for the process.
+    static void setGridFollowSaveHold(std::optional<bool> saved);
+    static std::optional<bool> gridFollowSaveHold();
 
     // Offset added to the NF estimate to compute the new grid min.
     // From Thetis console.cs:46035 _RX1NFoffsetGridFollow = 5f [v2.10.3.13]

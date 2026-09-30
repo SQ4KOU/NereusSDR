@@ -18,6 +18,10 @@
 //                Claude Code. Level Cal: the run lives on the Core, so the
 //                window that shows the grid saves, turns off and restores
 //                its noise floor follow as the Core's run starts and ends.
+//   2026-09-30 - Level Cal fix wave: while it holds the follow off, the
+//                saved value stays the user's (the hold callback), so a
+//                quit or a crash mid-run never leaves the follow off.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -92,10 +96,12 @@ LevelCalGridFollowGuard::LevelCalGridFollowGuard(RadioModel* model, QObject* par
 }
 
 void LevelCalGridFollowGuard::setAccess(std::function<bool()> read,
-                                        std::function<void(bool)> write)
+                                        std::function<void(bool)> write,
+                                        std::function<void(std::optional<bool>)> hold)
 {
     m_read = std::move(read);
     m_write = std::move(write);
+    m_hold = std::move(hold);
 }
 
 void LevelCalGridFollowGuard::onStateChanged()
@@ -111,11 +117,18 @@ void LevelCalGridFollowGuard::onStateChanged()
         // setting, SpectrumWidget::setAdjustGridMinToNoiseFloor.)
         m_saved = m_read();
         m_holding = true;
+        // The saved setting stays the user's while the follow is held off.
+        if (m_hold) {
+            m_hold(m_saved);
+        }
         m_write(false);
     } else if (!running && m_holding) {
         // From Thetis console.cs:10230-10231 [v2.10.3.15]
         m_holding = false;
         m_write(m_saved); //MW0LGE_[2.9.0.6]
+        if (m_hold) {
+            m_hold(std::nullopt);
+        }
     }
 }
 

@@ -18,6 +18,10 @@
 //                Claude Code. Level Cal: the run lives on the Core, so the
 //                window that shows the grid saves, turns off and restores
 //                its noise floor follow as the Core's run starts and ends.
+//   2026-09-30 - Level Cal fix wave: while it holds the follow off, the
+//                saved value stays the user's (the hold callback), so a
+//                quit or a crash mid-run never leaves the follow off.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -81,6 +85,7 @@
 #include <QObject>
 
 #include <functional>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -95,8 +100,12 @@ class LevelCalGridFollowGuard : public QObject {
 public:
     explicit LevelCalGridFollowGuard(RadioModel* model, QObject* parent = nullptr);
 
-    // How the guard reads and writes the grid's noise floor follow.
-    void setAccess(std::function<bool()> read, std::function<void(bool)> write);
+    // How the guard reads and writes the grid's noise floor follow, and
+    // (optional) how it keeps the saved setting at the user's value while
+    // it holds the follow off: hold(the user's value) as the run starts,
+    // hold(std::nullopt) once the value is put back.
+    void setAccess(std::function<bool()> read, std::function<void(bool)> write,
+                   std::function<void(std::optional<bool>)> hold = {});
 
 private:
     void onStateChanged();
@@ -104,6 +113,7 @@ private:
     RadioModel* m_model = nullptr;
     std::function<bool()> m_read;
     std::function<void(bool)> m_write;
+    std::function<void(std::optional<bool>)> m_hold;
     bool m_holding = false;
     bool m_saved = false;
 };

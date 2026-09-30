@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Level Cal fix wave: the grid follow
+//                guard holds the saved follow at the user's value while a
+//                run holds it off. AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - J.J. Boyd (KG4VCF). A regained RADE lock repaints the VFO
 //                flag from the slice's SNR, which a remote window's Core
 //                does not resend when it is unchanged. AI-assisted via
@@ -1054,7 +1057,9 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
                 if (SpectrumWidget* w = activeSpectrumWidget()) {
                     w->setAdjustGridMinToNoiseFloor(on);
                 }
-            });
+            },
+            // Level Cal: a quit or a crash mid-run saves the user's value.
+            [](std::optional<bool> saved) { SpectrumWidget::setGridFollowSaveHold(saved); });
     }
     // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
     // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
