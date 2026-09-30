@@ -184,6 +184,7 @@
         {"id": "session-verbs-radio-bound-antenna-rows", "file": "sessions/verbs-radio-bound-antenna-rows.json", "kind": "session", "requires": {"radioAntennaRowsVersion": 1}},
         {"id": "session-verbs-io-board", "file": "sessions/verbs-io-board.json", "kind": "session", "requires": {"radioHardwareVersion": 7}},
         {"id": "session-verbs-radio-sample-rate", "file": "sessions/verbs-radio-sample-rate.json", "kind": "session", "requires": {"radioHardwareVersion": 9}},
+        {"id": "session-verbs-level-calibration", "file": "sessions/verbs-level-calibration.json", "kind": "session", "requires": {"radioHardwareVersion": 12}},
         {"id": "session-verbs-dsp-info", "file": "sessions/verbs-dsp-info.json", "kind": "session", "requires": {"dspInfoVersion": 1}},
         {"id": "session-verbs-records", "file": "sessions/verbs-records.json", "kind": "session", "requires": {"recordStreamVersion": 1}},
         {"id": "session-verbs-support", "file": "sessions/verbs-support.json", "kind": "session", "requires": {"supportBundleVersion": 1}},

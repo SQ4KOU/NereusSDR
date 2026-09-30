@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 11
+            "value": 12
         },
         {
             "kind": "i64",
@@ -1889,6 +1889,14 @@
             "capabilityVersion": 9,
             "minMinor": 11,
             "verb": "setRadioSampleRate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 12,
+            "minMinor": 11,
+            "verb": "resetLevelCalibration"
         },
         {
             "arguments": [
@@ -8421,6 +8429,7 @@
             "Nr3ModelPath",
             "StationCallsign",
             "RX1_MeterCalOffsetDb",
+            "RX1_DisplayCalOffsetDb",
             "PeripheralsMigrationDone",
             "SwrProtectionEnabled",
             "SwrProtectionLimit",
