@@ -20,8 +20,7 @@
 //   2026-09-30: desktop listening lane: a slice the station device holds
 //               names the desktop that hosts the Core (its connectedDevices
 //               entry with hostsCore), and "the Core itself" only on a Core
-//               no desktop hosts; the station marker (ownerKind "station")
-//               is the Core's desktop; a slice the Core keeps for an away
+//               no desktop hosts; a slice the Core keeps for an away
 //               device names that device. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
 // =================================================================
@@ -54,9 +53,6 @@ namespace {
 
 // The wire id the Core sends for its own position (the station device).
 const QString kStationWireId = QStringLiteral("station");
-// A marker's ownerKind for a slice the station device holds (its
-// ownerDeviceId is empty).
-const QString kStationMarkerKind = QStringLiteral("station");
 
 // The dashboard's own convention (RxDashboard::onFilterChanged): the whole
 // passband, "2.4k" or "800".
@@ -594,15 +590,14 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
         row.frequencyHz = marker.frequencyHz;
         row.mode = modeWords(marker.dspMode);
         row.filter = filterWords(marker.filterLowHz, marker.filterHighHz);
-        // The station marker sends no ownerDeviceId, only ownerKind
-        // "station": the Core's desktop, named for the desktop that hosts
-        // the Core.
-        const bool stationMarker = marker.ownerDeviceId.isEmpty()
-            && marker.ownerKind == kStationMarkerKind;
-        row.controller = stationMarker                          ? Controller::CoreDesktop
-            : marker.ownerDeviceId.isEmpty()                    ? Controller::Nobody
-            : marker.ownerDeviceId == kStationWireId            ? Controller::CoreDesktop
-                                                                : Controller::OtherDevice;
+        // A marker with no ownerDeviceId is read as nobody's: the Core
+        // sends ownerKind "station" both for a slice the station device
+        // holds and for a slice nobody holds, so the marker alone cannot
+        // tell them apart. The access entry decides (fill): a controller
+        // of "station" is the Core's desktop.
+        row.controller = marker.ownerDeviceId.isEmpty()      ? Controller::Nobody
+            : marker.ownerDeviceId == kStationWireId         ? Controller::CoreDesktop
+                                                             : Controller::OtherDevice;
         row.controllerName =
             row.controller == Controller::CoreDesktop ? hostName : marker.ownerName;
         row.controllerAway = row.controller == Controller::OtherDevice && marker.ownerAway;

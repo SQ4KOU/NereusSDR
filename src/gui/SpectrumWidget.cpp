@@ -8,6 +8,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 J.J. Boyd / KG4VCF : desktop listening lane review: a
+//                 marker's click says who controls the slice and offers
+//                 Take control, in the listener words; nobody's slice says
+//                 so. AI-assisted via Anthropic Claude Code.
 //   2026-09-30 J.J. Boyd / KG4VCF : Level Cal fix wave: while the level
 //                 calibration holds the grid's noise floor follow off, the
 //                 saved value stays the user's (setGridFollowSaveHold).
@@ -7089,11 +7093,18 @@ QString SpectrumWidget::foreignMarkerLabel(const ForeignSliceMarker& marker)
 
 QString SpectrumWidget::foreignMarkerExplanation(const ForeignSliceMarker& marker)
 {
+    // Any slice can be taken except while it transmits, so the words are
+    // the listener's (SliceAccessMirror::listenerReason, as the Core words
+    // its refusal): who controls it, and Take control.
+    if (marker.unowned) {
+        return QStringLiteral("Nobody controls slice %1. Take control to change it.")
+            .arg(marker.letter);
+    }
     const QString name = marker.ownerName.isEmpty()
         ? (marker.ownerShortName.isEmpty() ? QStringLiteral("another device")
                                            : marker.ownerShortName)
         : marker.ownerName;
-    return QStringLiteral("Slice %1 belongs to %2. Only %2 can tune it or close it.")
+    return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
         .arg(marker.letter, name);
 }
 

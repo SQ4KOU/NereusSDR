@@ -861,9 +861,13 @@ private slots:
         QSignalSpy tuned(&sw, &SpectrumWidget::frequencyClicked);
         QTest::mouseClick(&sw, Qt::LeftButton, Qt::NoModifier, label.center());
         QCOMPARE(clicked.count(), 1);
+        // Desktop listening lane review (JJ, 2026-09-30): any slice can be
+        // taken except while it transmits, so the click says who controls
+        // it and offers Take control, in the listener words. It used to say
+        // only the owner could tune or close it.
         QCOMPARE(clicked.first().at(1).toString(),
-                 QStringLiteral("Slice B belongs to Jo's iPhone. Only Jo's iPhone can "
-                                "tune it or close it."));
+                 QStringLiteral("Slice B is controlled by Jo's iPhone. Take control to "
+                                "change it."));
         QVERIFY(OperatorWording::isPlain(clicked.first().at(1).toString()));
         // A drag from the label moves nothing.
         QTest::mousePress(&sw, Qt::LeftButton, Qt::NoModifier, label.center());

@@ -32,9 +32,11 @@
 #include "models/SliceModel.h"
 #include "models/NotchModel.h"
 
+#include <QImage>
 #include <QLabel>
 #include <QMenu>
 #include <QPointer>
+#include <QPainter>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -1249,6 +1251,8 @@ private slots:
         QCOMPARE(model->slices().size(), 3);
         SliceModel* b = model->sliceById(bId);
         QVERIFY(b);
+        // B sits well away from A, so the pan that remains cannot show it.
+        b->setFrequency(model->sliceById(aId)->frequency() + 1'000'000.0);
         DesktopStationController controller(model, optionsFor(settings, directory.path()));
         window.setDesktopStationController(&controller);
         QVERIFY(controller.start(true));
@@ -1321,6 +1325,38 @@ private slots:
         QCOMPARE(flagB->parentWidget(), stack->spectrum(QStringLiteral("pan-0")));
         QCOMPARE(flagCountFor(window, bId), 1);
         QVERIFY(stack->panadapter(QStringLiteral("pan-0"))->associatedSlices().contains(bId));
+        // The pan that takes B follows it, as it does for any slice moved
+        // onto a pan, so B is shown there as its flag.
+        SpectrumWidget* remaining = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(remaining);
+        QCOMPARE(remaining->centerFrequency(), b->frequency());
+        // Panned back to A, B is off that pan's span: its flag hides and the
+        // pan's edge marker points at it, in B's colour, on the right.
+        const double aFrequency = model->sliceById(aId)->frequency();
+        remaining->setFrequencyRange(aFrequency, remaining->bandwidth());
+        QVERIFY(b->frequency() > remaining->centerFrequency() + remaining->bandwidth() / 2.0);
+        QVERIFY(flagB->isHidden());
+        {
+            QImage image(800, 400, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::black);
+            {
+                QPainter painter(&image);
+                remaining->drawOffScreenIndicatorForTest(painter, QRect(0, 0, 800, 180),
+                                                         QRect(0, 200, 800, 180));
+            }
+            const QRgb bColour = VfoWidget::sliceColor(bId).rgb();
+            int rightPixels = 0;
+            int leftPixels = 0;
+            for (int y = 0; y < 180; ++y) {
+                for (int x = 0; x < 800; ++x) {
+                    if (image.pixel(x, y) == bColour) { ++(x < 400 ? leftPixels : rightPixels); }
+                }
+            }
+            QVERIFY2(rightPixels > 0, "no edge marker in slice B's colour on the right edge");
+            QCOMPARE(leftPixels, 0);
+        }
+        // Still listening while it is off the span.
+        QVERIFY(ownership->isListening(station, bId));
         // Its row still offers Stop listening.
         const QList<SliceChooser::Row> rows =
             SliceChooser::rowsForHostingDesktop(*model, *server);

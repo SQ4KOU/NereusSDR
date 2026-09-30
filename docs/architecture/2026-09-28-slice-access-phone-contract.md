@@ -197,8 +197,12 @@ desktop". "The Core" (or "the Core itself") is only for a headless Core.
   wire is base64url("station"), `c3RhdGlvbg`, not `station`, so looking the
   id `station` up in `connectedDevices` never matches.
 - **The station marker.** A `marker:<id>` for a slice the station device
-  holds sends no `ownerDeviceId`, only `ownerKind` `station`; it is the
-  Core's desktop, named the same way.
+  holds sends no `ownerDeviceId`, only `ownerKind` `station`, and a slice
+  nobody controls sends the same marker. The marker alone cannot tell the
+  two apart; the `access:<id>` entry decides. When its `controllerDeviceId`
+  is `station`, it is the Core's desktop, named the same way, on the
+  spectrum marker as in the slice list. When it names no controller, or
+  there is no entry, nobody controls the slice: "Available to control".
 - **A slice kept for an away device.** Its `access:<id>` names `station`
   and its `marker:<id>` names the away device: name that device, never the
   Core.
@@ -394,9 +398,10 @@ receive-slice UI follows the same actions and states.
   only slices it can see"). The phone does not send `slice.stopListening`
   when it leaves a slice's band; the edge marker and the Slice list row
   count as showing the slice. On the desktop, a listened slice whose pan a
-  layout change removes moves onto a pan that remains and keeps listening,
-  shown as its flag, or as an edge marker when it is off that pan's span,
-  and its slice chooser row keeps Stop listening. Controlled slices keep
+  layout change removes moves onto a pan that remains and keeps listening.
+  That pan follows it, as for any slice moved onto a pan, and shows it as
+  its flag, or as the pan's edge marker once the pan is moved off it. Its
+  slice chooser row keeps Stop listening. Controlled slices keep
   today's rehoming into a remaining pan. The Core never ends a listening
   claim on a pan, layout or band change; only the verbs, a claims drop or
   the slice closing end it.
@@ -434,10 +439,10 @@ These are not settled. Do not build them as decided.
   and the disabled look for controls a listener cannot change. ATT and preamp
   are held on a listened slice (JJ, 2026-09-30).
 - Task 16 (placement) items owed to JJ: the order the main window grows in
-  (1 to 2v, 2 to 3v, 3 to 2x2, 4 to 3h2), the look and wording of the destination menu, floating pans re-docking when
-  the layout grows, whether a listened slice follows its controller's pan
-  move, and whether taking control makes this window's placement the slice's
-  pan for every device.
+  (1 to 2v, 2 to 3v, 3 to 2x2, 4 to 3h2), the look and wording of the
+  destination menu, floating pans re-docking when the layout grows, whether a
+  listened slice follows its controller's pan move, and whether taking control
+  makes this window's placement the slice's pan for every device.
 - The phone's own layout for the receive-slice UI belongs to the phone crew and
   to JJ's review.
 - The session conformance fixture for `slice.setListenLevel`, as noted above.

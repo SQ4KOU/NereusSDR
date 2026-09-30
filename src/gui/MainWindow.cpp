@@ -476,6 +476,11 @@
 //               remains and keeps listening; stopListeningOffWindow and its
 //               toast are gone. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30 - Desktop listening review: a remote window's marker for a
+//               slice the station device holds names the hosting desktop
+//               (foreignMarkers reads the access entries), refreshed when
+//               access or the connected devices change. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): a remote window's VAX
 //                applet gains the "Station computer" section, the Core
 //                computer's VAX through the Core's `vax` object, its TX row
@@ -2692,7 +2697,10 @@ void MainWindow::refreshForeignMarkers()
             markers.append(marker);
         }
     } else if (m_stationClient) {
-        markers = MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices());
+        // A marker for a slice the station device holds names no device;
+        // its access entry says so, and the hosting desktop is named.
+        markers = MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices(),
+                                                        m_stationClient->sliceAccess());
     }
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
         if (applet && applet->spectrumWidget()) {
@@ -3436,13 +3444,19 @@ void MainWindow::ensureRemoteSession()
                 refreshSliceChooser();
                 refreshContainerControls();
                 reconcileListenPlacements();
+                // A marker's owner words come from the access entry.
+                refreshForeignMarkers();
             });
         }
         if (RemoteDevicesState* devices = m_stationClient->remoteDevices()) {
             connect(devices, &RemoteDevicesState::markersChanged, this,
                     [this]() { refreshSliceChooser(); });
             connect(devices, &RemoteDevicesState::connectedDevicesChanged, this,
-                    [this]() { refreshSliceChooser(); });
+                    [this]() {
+                refreshSliceChooser();
+                // The hosting desktop's name, on a station-held marker.
+                refreshForeignMarkers();
+            });
         }
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();

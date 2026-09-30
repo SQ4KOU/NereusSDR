@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 : ForeignSliceMarker::unowned; a marker's click words say
+//                 who controls the slice and offer Take control (desktop
+//                 listening lane review). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-30 : setGridFollowSaveHold, the saved grid noise floor follow
 //                 held at the user's value while the level calibration
 //                 holds the follow off. J.J. Boyd (KG4VCF), AI-assisted via
@@ -1502,6 +1506,9 @@ public:
         QString ownerName;
         bool    tx{false};
         bool    away{false};
+        /// Nobody controls the slice (the Core's access entry names no
+        /// controller, or the Core sends no access data for it).
+        bool    unowned{false};
     };
     void setForeignSliceMarkers(const QVector<ForeignSliceMarker>& markers);
     const QVector<ForeignSliceMarker>& foreignSliceMarkers() const { return m_foreignMarkers; }
