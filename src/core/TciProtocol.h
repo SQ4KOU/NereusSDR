@@ -512,6 +512,14 @@ private:
     // sendRXEnable at TCIServer.cs:2279-2283 [v2.10.3.13]: "rx_enable:rx,bool;"
     QString handleRxEnableCommand(const QStringList& args);
 
+    // From Thetis TCIServer.cs:5456-5458 [v2.10.3.15] — rx_channel_enable case;
+    // handleRxChannelEnable at TCIServer.cs:6252-6291 [v2.10.3.15]:
+    //   2-arg = query (rx, chan), 3-arg = set (rx, chan, bool).
+    // The reply goes to the asking app only (sendTextFrame on its listener).
+    QString handleRxChannelEnableCommand(const QStringList& args);
+    // The value a rx_channel_enable query answers for rx, chan.
+    bool rxChannelEnabledNow(int rx, int chan) const;
+
     // From Thetis TCIServer.cs:5118 [v2.10.3.13] — rx_ctun_ex case in set switch.
     // handleCTUN at TCIServer.cs:4696-4710 [v2.10.3.13]:
     //   1-arg = query (rx → sendCTUN(rx, GetCTUN(rx+1)))

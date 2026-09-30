@@ -536,6 +536,98 @@ private slots:
         QCOMPARE(radio.vfoHz(0, 0), qint64(7'150'000));
     }
 
+    // rx_channel_enable, from Thetis handleRxChannelEnable,
+    // TCIServer.cs:6252-6291 [v2.10.3.15]. Receiver 0: channel 0 is always
+    // on, channel 1 is a sub receiver NereusSDR does not have, so it
+    // answers false and a set of it changes nothing and echoes, as Thetis
+    // does for channel 0, which it cannot set.
+    void rxChannelEnableFirstReceiver()
+    {
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/false);
+        TciProtocol protocol(&radio);
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,0;")),
+                 QStringLiteral("rx_channel_enable:0,0,true;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1;")),
+                 QStringLiteral("rx_channel_enable:0,1,false;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,0,false;")),
+                 QStringLiteral("rx_channel_enable:0,0,false;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1,true;")),
+                 QStringLiteral("rx_channel_enable:0,1,true;"));
+        // Nothing changed: the answers are the same, and nothing is broadcast.
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,0;")),
+                 QStringLiteral("rx_channel_enable:0,0,true;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1;")),
+                 QStringLiteral("rx_channel_enable:0,1,false;"));
+        QVERIFY(radio.rxEnable(0));
+        QCOMPARE(drainLines(protocol), QStringList{});
+        // Thetis answers any receiver, and drops what does not parse.
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:3,0;")),
+                 QStringLiteral("rx_channel_enable:3,0,false;"));
+        for (const QString& bad : {QStringLiteral("rx_channel_enable:0;"),
+                                   QStringLiteral("rx_channel_enable:0,0,true,1;"),
+                                   QStringLiteral("rx_channel_enable:x,0;"),
+                                   QStringLiteral("rx_channel_enable:0,1,yes;")}) {
+            QCOMPARE(protocol.handleCommand(bad), QString());
+        }
+    }
+
+    // Receiver 1: channel 0 is RX2 on or off, channel 1 always false
+    // ("no subrx"). A set writes what rx_enable:1 writes, since both are
+    // RX2Enabled in Thetis, and only while receiver 1 has a slice; TCI does
+    // not create one. The requested value is echoed either way.
+    void rxChannelEnableSecondReceiver_data()
+    {
+        QTest::addColumn<bool>("rx2On");
+        QTest::newRow("RX2 on") << true;
+        QTest::newRow("RX2 off") << false;
+    }
+    void rxChannelEnableSecondReceiver()
+    {
+        QFETCH(bool, rx2On);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        TciProtocol protocol(&radio);
+        const QString on = rx2On ? QStringLiteral("true") : QStringLiteral("false");
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0;")),
+                 QStringLiteral("rx_channel_enable:1,0,%1;").arg(on));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,1;")),
+                 QStringLiteral("rx_channel_enable:1,1,false;"));
+
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
+                 QStringLiteral("rx_channel_enable:1,0,false;"));
+        QCOMPARE(radio.rxEnable(1), !rx2On);
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),
+                 QStringLiteral("rx_enable:1,%1;").arg(rx2On ? QStringLiteral("false")
+                                                              : QStringLiteral("true")));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,1,true;")),
+                 QStringLiteral("rx_channel_enable:1,1,true;"));
+        QVERIFY(radio.rxEnable(1));
+        QCOMPARE(drainLines(protocol), QStringList{});
+    }
+
+    // A set on a slice the write gate refuses changes nothing and answers
+    // the value held, as the other per-receiver sets do.
+    void rxChannelEnableSetIsGated()
+    {
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, /*rx2On=*/true);
+        TciProtocol protocol(&radio);
+        int refused = 1;
+        protocol.setSliceWriteGate([&refused](int slice) { return slice != refused; });
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
+                 QStringLiteral("rx_channel_enable:1,0,true;"));
+        QVERIFY(radio.rxEnable(1));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1,true;")),
+                 QStringLiteral("rx_channel_enable:0,1,true;"));
+        refused = 0;
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1,true;")),
+                 QStringLiteral("rx_channel_enable:0,1,false;"));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
+                 QStringLiteral("rx_channel_enable:1,0,false;"));
+        QVERIFY(!radio.rxEnable(1));
+    }
+
     // ...and in the first lines, from Thetis sendVFO,
     // TCIServer.cs:2101-2122 [v2.10.3.15]: vfo:1,0 carries the first
     // receiver's VFO; vfo:1,1 and the if lines are unchanged.

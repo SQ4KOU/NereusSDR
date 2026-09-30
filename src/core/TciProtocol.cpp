@@ -1936,6 +1936,8 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // Phase 13: bespoke _ex commands.
     // From Thetis TCIServer.cs:5010 [v2.10.3.13] — rx_enable case in set switch.
     if (name == QStringLiteral("rx_enable"))     { return handleRxEnableCommand(args); }
+    // From Thetis TCIServer.cs:5456-5458 [v2.10.3.15] — rx_channel_enable case.
+    if (name == QStringLiteral("rx_channel_enable")) { return handleRxChannelEnableCommand(args); }
     // From Thetis TCIServer.cs:5118 [v2.10.3.13] — rx_ctun_ex case in set switch.
     if (name == QStringLiteral("rx_ctun_ex"))    { return handleRxCtunExCommand(args); }
     // From Thetis TCIServer.cs:5121 [v2.10.3.13] — tx_profile_ex case in set switch.
@@ -3555,6 +3557,81 @@ QString TciProtocol::handleRxEnableCommand(const QStringList& args)
     }
 
     return {};
+}
+
+// Porting from Thetis TCIServer.cs:6252-6295 [v2.10.3.15] — handleRxChannelEnable
+// and sendRxChannelEnable. Original C# logic:
+//   args.Length < 2 || > 3 -> return; receiver and channel must parse as int.
+//   2 args (get): receiver 0 -> channel 0 true, else GetSubRX(1);
+//                 receiver 1 -> channel 0 RX2Enabled, else false;
+//                 any other receiver -> false. Always answered.
+//   3 args (set): enabled must parse as bool.
+//                 receiver 0 channel 1 -> SetSubRX(1, enabled);
+//                 receiver 1 (either channel) -> RX2Enabled = enabled;
+//                 anything else changes nothing.
+//                 The requested value is echoed in every case.
+//   sendRxChannelEnable -> "rx_channel_enable:rx,channel,bool;" to the
+//   asking app only.
+// NereusSDR: a slice has one channel and there is no sub receiver, so
+// receiver 0 channel 1 answers false and a set of it changes nothing and is
+// echoed, as Thetis does for receiver 0 channel 0, which it cannot set.
+// RX2 is receiver 1 having a slice, which TCI does not create or remove, so
+// a receiver 1 set writes what rx_enable:1 writes (both are RX2Enabled in
+// Thetis) and only while receiver 1 has a slice. A set the slice write gate
+// refuses changes nothing and answers the value held, as the other
+// per-receiver sets do.
+bool TciProtocol::rxChannelEnabledNow(int rx, int chan) const
+{
+    // From Thetis TCIServer.cs:6260-6271 [v2.10.3.15]
+    //get
+    if (rx == 0) {
+        // GetSubRX(1): NereusSDR has no sub receiver.
+        return chan == 0;
+    }
+    if (rx == 1) {
+        //just return rx2 state as no subrx
+        return chan == 0 && rx2EnabledNow();
+    }
+    return false;
+}
+
+QString TciProtocol::handleRxChannelEnableCommand(const QStringList& args)
+{
+    // From Thetis TCIServer.cs:6254-6255 [v2.10.3.15]
+    if (args.size() < 2 || args.size() > 3) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+    const int chan = args.at(1).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+
+    if (args.size() == 2) {
+        // From Thetis TCIServer.cs:6256-6272 [v2.10.3.15]
+        return buildRxChannelEnableLine(rx, chan, rxChannelEnabledNow(rx, chan));
+    }
+
+    //set len 3
+    // From Thetis TCIServer.cs:6276-6278 [v2.10.3.15]: bool.TryParse.
+    const QString value = args.at(2).trimmed().toLower();
+    if (value != QStringLiteral("true") && value != QStringLiteral("false")) { return {}; }
+    const bool enabled = value == QStringLiteral("true");
+
+    // The slice this set names. Receiver 1 has one only while RX2 is on.
+    const bool hasSlice = rx == 0 || (rx == 1 && rx2EnabledNow());
+    if (hasSlice && m_sliceWriteGate && !m_sliceWriteGate(receiverSlice(rx))) {
+        return buildRxChannelEnableLine(rx, chan, rxChannelEnabledNow(rx, chan));
+    }
+
+    // From Thetis TCIServer.cs:6280-6287 [v2.10.3.15]
+    if (rx == 0 && chan == 1) {  // rx1 sub rx, cant disable rx1
+        // SetSubRX(1, enabled): NereusSDR has no sub receiver; nothing changes.
+    } else if (rx == 1 && hasSlice) { // main or sub will set state
+        QMetaObject::invokeMethod(m_radio, "setRxEnable", Qt::DirectConnection,
+                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, enabled));
+    }
+
+    // From Thetis TCIServer.cs:6289 [v2.10.3.15]
+    return buildRxChannelEnableLine(rx, chan, enabled);
 }
 
 // Porting from Thetis TCIServer.cs:4696-4710 [v2.10.3.13] — handleCTUN.

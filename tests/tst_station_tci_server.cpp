@@ -789,6 +789,43 @@ private slots:
         app.socket.close();
     }
 
+    // rx_channel_enable on the Core's server (Thetis handleRxChannelEnable,
+    // TCIServer.cs:6252-6291 [v2.10.3.15]): receiver 1 is slice 1, owned
+    // by another device here, so a set changes nothing and answers what
+    // slice 1 holds. Slice 0 is the station device's own.
+    void stationRxChannelEnableRespectsTheOwnerOfSlice1()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        SliceOwnership* ownership = station.sliceOwnership();
+        ownership->hold(0, QByteArray(32, '\x42'));
+        ownership->setOwner(1, QByteArray(32, '\x41'));
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+        QVERIFY(!station.rxEnable(1));
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:1,0,false;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,0,true;")), 3000);
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:1,1,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:1,1,false;")), 3000);
+        QTest::qWait(150);
+        QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,0,false;")));
+        QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,1,true;")));
+        QVERIFY(!station.rxEnable(1));
+
+        // Slice 0 is writable: its set is echoed.
+        app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:0,1,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:0,1,true;")), 3000);
+        app.socket.close();
+    }
+
     // Thetis re-sends the RX2 lines when RX2 is turned on or off
     // (RX2EnabledChangedHandlers, TCIServer.cs:6741 and 842-847
     // [v2.10.3.15]): rx_enable:1 and tx_enable:1 only. On the Core RX2 is
