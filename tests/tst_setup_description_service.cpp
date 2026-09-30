@@ -774,7 +774,7 @@ private slots:
         QCOMPARE(valid.value("binding").toObject().value("property").toObject()
                      .value("name"), QJsonValue("paSettingsBypass"));
         QCOMPARE(valid.value("gate"), QJsonValue(QJsonObject{
-            {"capability", "transmitSettingsVersion"}, {"min", 6}, {"offAir", true}}));
+            {"capability", "transmitSettingsVersion"}, {"min", 6}}));
         QVERIFY(!valid.value("gate").toObject().contains("transmit"));
         const auto reject = [&valid](const QString& field, const QJsonValue& value) {
             QJsonObject bad = valid;
@@ -785,11 +785,11 @@ private slots:
         reject(QStringLiteral("label"), QStringLiteral("Bypass PA"));
         reject(QStringLiteral("tooltip"), QStringLiteral("Wrong tooltip"));
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 5}, {"offAir", true}});
+                                                   {"min", 5}});
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 6}, {"offAir", true}, {"transmit", true}});
+                                                   {"min", 6}, {"transmit", true}});
         reject(QStringLiteral("gate"), QJsonObject{{"capability", "transmitSettingsVersion"},
-                                                   {"min", 6}});
+                                                   {"min", 6}, {"offAir", true}});
         QJsonObject bad = valid;
         QJsonObject binding = bad.value("binding").toObject();
         QJsonObject ref = binding.value("property").toObject();
@@ -1444,6 +1444,101 @@ private slots:
         QCOMPARE(paSpy.count(), 2);
     }
 
+    // Version 22: DSP > Options' four RX buffer size rows carry their
+    // on-the-air lock and its reason, as Thetis greys grpDSPBufferSize
+    // while MOX is on (setup.cs:5159 [v2.10.3.15]). A peer below 22 reads
+    // the rows exactly as before; the TX rows keep their offAir gate.
+    void dspRxBufferSizesLockOnTheAirFromVersion22()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+
+        QStringList rxIds;
+        for (const char* mode : {"Phone", "Fm", "Cw", "Dig"}) {
+            rxIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Rx").arg(QLatin1String(mode));
+        }
+        QStringList txIds;
+        for (const char* mode : {"Phone", "Fm", "Dig"}) {
+            txIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Tx").arg(QLatin1String(mode));
+        }
+        const QJsonObject locked{{"enabled", false},
+                                 {"reason", "Can't change while transmitting."}};
+        QCOMPARE(RadioModel::dspBufferOnAirLockedReason(), locked.value("reason").toString());
+
+        // Off the air: no row carries a lock at any version.
+        for (const int version : {19, 21, 22}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : rxIds) {
+                const QJsonObject row = controlById(dsp, id);
+                QVERIFY2(!row.isEmpty(), qPrintable(id));
+                QVERIFY2(!row.contains("availability"), qPrintable(id));
+                QVERIFY2(!row.contains("gate"), qPrintable(id));
+            }
+        }
+        QCOMPARE(projectedCategory(service.dsp(), 22).value("version"), QJsonValue(22));
+        QCOMPARE(projectedCategory(service.dsp(), 21).value("version"), QJsonValue(19));
+        const QString olderOffAir = SetupDescriptionService::fitCategoryForVersion(service.dsp(), 21);
+        const QJsonObject txGate = controlById(projectedCategory(service.dsp(), 22), txIds.first())
+                                       .value("gate").toObject();
+        QCOMPARE(txGate.value("offAir"), QJsonValue(true));
+
+        // On the air (the Core's on-air edge, PA's lock with it): DSP is
+        // sent again and PA once with the revision, one revision for the
+        // edge; the other categories are not sent.
+        const quint32 before = service.revision();
+        const QString paOffAir = service.pa();
+        QSignalSpy dspSpy(&service, &SetupDescriptionService::dspDescriptionChanged);
+        QSignalSpy paSpy(&service, &SetupDescriptionService::paDescriptionChanged);
+        QSignalSpy allSpy(&service, &SetupDescriptionService::descriptionsChanged);
+        service.setOnAirState(true, 5);
+        QCOMPARE(dspSpy.count(), 1);
+        QCOMPARE(paSpy.count(), 1);
+        QCOMPARE(allSpy.count(), 0);
+        QCOMPARE(service.revision(), before + 1);
+        QVERIFY(service.pa() != paOffAir);
+        const QJsonObject onAir = projectedCategory(service.dsp(), 22);
+        int lockedRows = 0;
+        for (const QJsonValue& page : onAir.value("pages").toArray()) {
+            for (const QJsonValue& section : page.toObject().value("sections").toArray()) {
+                for (const QJsonValue& raw : section.toObject().value("controls").toArray()) {
+                    if (raw.toObject().value("availability") == QJsonValue(locked)) {
+                        QVERIFY2(rxIds.contains(raw.toObject().value("id").toString()),
+                                 qPrintable(raw.toObject().value("id").toString()));
+                        ++lockedRows;
+                    }
+                }
+            }
+        }
+        QCOMPARE(lockedRows, 4);
+        for (const QString& id : txIds) {
+            const QJsonObject row = controlById(onAir, id);
+            QVERIFY2(!row.contains("availability"), qPrintable(id));
+            QCOMPARE(row.value("gate").toObject(), txGate);
+        }
+        // A version 21 peer reads the same DSP as off the air.
+        QCOMPARE(SetupDescriptionService::fitCategoryForVersion(service.dsp(), 21), olderOffAir);
+
+        // The same state again sends nothing.
+        const quint32 onAirRevision = service.revision();
+        service.setOnAirState(true, 5);
+        QCOMPARE(dspSpy.count(), 1);
+        QCOMPARE(paSpy.count(), 1);
+        QCOMPARE(service.revision(), onAirRevision);
+
+        // Back on receive: the lock is gone, again in one revision.
+        service.setOnAirState(false, -1);
+        QCOMPARE(dspSpy.count(), 2);
+        QCOMPARE(paSpy.count(), 2);
+        QCOMPARE(service.revision(), onAirRevision + 1);
+        QCOMPARE(service.pa(), paOffAir);
+        for (const QString& id : rxIds) {
+            QVERIFY2(!controlById(projectedCategory(service.dsp(), 22), id).contains("availability"),
+                     qPrintable(id));
+        }
+    }
+
     // Version 13: Hardware Config's Radio Info (the Core's radio, as the
     // desktop tab shows it), TX Display Cal and the HL2's N2ADR switch.
     void hardwareV13PublishesRadioInfoCalibrationAndN2adr()
@@ -1868,6 +1963,153 @@ private slots:
         }
         QVERIFY(!controlById(projectedCategory(service.dsp(), 19), "dsp.cfc.bands")
                      .value("gate").toObject().contains("offAir"));
+    }
+
+    // The off-air sweep: the Core has taken these transmit settings on the
+    // air since transmitSettingsVersion 13, and Thetis disables none of them
+    // during MOX (setup.cs:5132-5161 [v2.10.3.15]), so they carry no off-air
+    // rule at any description version. Thetis greys only grpDSPBufferSize
+    // (setup.cs:5159 [v2.10.3.15]), so the TX buffer sizes keep theirs.
+    void transmitSettingsTakenOnTheAirCarryNoOffAirRule()
+    {
+        RadioModel radio;
+        radio.setHpsdrModelForTest(HPSDRModel::ANAN_G2E);
+        SetupDescriptionService service;
+        service.setRadioContext(radio.boardCapabilities(), radio.hardwareProfile().model);
+
+        QStringList audioIds;
+        for (const char* name : {"micGain", "hermesLineIn", "hermesMicBoost", "hermesLineInGain",
+                                 "orionMicTipRing", "orionMicBias", "orionMicPttDisabled",
+                                 "orionMicBoost", "saturnMicXlr", "saturnMicPttDisabled",
+                                 "saturnMicBias", "saturnMicBoost"}) {
+            audioIds << QStringLiteral("audio.txInput.") + QLatin1String(name);
+        }
+        for (const char* name : {"activeProfile", "save", "delete", "filterLow", "filterHigh",
+                                 "amCarrierLevel"}) {
+            audioIds << QStringLiteral("audio.txProfile.") + QLatin1String(name);
+        }
+        QStringList transmitIds;
+        for (const char* name : {"power", "attOnTx", "attOnTxValue", "forceAttWhenPsOff",
+                                 "tuneDriveSource", "fixedTunePower", "SwrProtectionEnabled",
+                                 "SwrProtectionLimit", "SwrTuneProtectionEnabled",
+                                 "TunePowerSwrIgnore", "WindBackPowerSwr",
+                                 "TxInhibitMonitorEnabled", "TxInhibitMonitorReversed"}) {
+            transmitIds << QStringLiteral("transmit.power.") + QLatin1String(name);
+        }
+        for (const char* name : {"dexpEnabled", "dexpAttackTimeMs", "voxHangTimeMs",
+                                 "dexpReleaseTimeMs", "voxThresholdDb", "dexpExpansionRatioDb",
+                                 "dexpHysteresisRatioDb", "dexpDetectorTauMs",
+                                 "dexpLookAheadEnabled", "dexpLookAheadMs",
+                                 "dexpSideChannelFilterEnabled", "dexpLowCutHz", "dexpHighCutHz",
+                                 "antiVoxRun", "antiVoxGainDb", "antiVoxTauMs"}) {
+            transmitIds << QStringLiteral("transmit.dexpVox.") + QLatin1String(name);
+        }
+        QStringList dspIds;
+        QStringList bufferIds;
+        for (const char* mode : {"Phone", "Fm", "Dig"}) {
+            dspIds << QStringLiteral("dsp.options.DspOptionsFilterSize%1Tx").arg(QLatin1String(mode))
+                   << QStringLiteral("dsp.options.DspOptionsFilterType%1Tx").arg(QLatin1String(mode));
+            bufferIds << QStringLiteral("dsp.options.DspOptionsBufferSize%1Tx").arg(QLatin1String(mode));
+        }
+        QStringList paIds{QStringLiteral("pa.gain.bypassPaSettings")};
+        for (int point = 1; point <= 10; ++point) {
+            paIds << QStringLiteral("pa.wattMeter.calPoint%1").arg(point);
+        }
+        QCOMPARE(audioIds.size() + transmitIds.size() + dspIds.size() + paIds.size(),
+                 18 + 29 + 6 + 11);
+
+        const auto withOffAir = [](QJsonObject row) {
+            QJsonObject gate = row.value("gate").toObject();
+            gate.insert("offAir", true);
+            row.insert("gate", gate);
+            return row;
+        };
+        QSet<QString> seen;
+        const auto check = [&](const QString& description, const QStringList& ids, int version) {
+            const QJsonObject category = projectedCategory(description, version);
+            for (const QString& id : ids) {
+                const QJsonObject row = controlById(category, id);
+                const QString where = QStringLiteral("%1 at %2").arg(id).arg(version);
+                if (row.isEmpty()) {
+                    continue;   // another board family's row; see `seen` below
+                }
+                seen.insert(where);
+                QVERIFY2(!row.value("gate").toObject().contains("offAir"), qPrintable(where));
+                // The closed validators refuse the row with the rule put back.
+                const QJsonObject locked = withOffAir(row);
+                if (SetupDescriptionService::validateTransmitPropertyBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateTransmitPropertyBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateTransmitSettingBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateTransmitSettingBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateAudioPropertyBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateAudioPropertyBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validateDspSettingBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validateDspSettingBinding(locked),
+                             qPrintable(where));
+                }
+                if (SetupDescriptionService::validatePaBypassBinding(row)) {
+                    QVERIFY2(!SetupDescriptionService::validatePaBypassBinding(locked),
+                             qPrintable(where));
+                }
+            }
+        };
+        for (const int version : {15, 19, 20}) {
+            check(service.transmit(), transmitIds, version);
+            check(service.dsp(), dspIds, version);
+            check(service.pa(), paIds, version);
+        }
+        // The TX Input page describes the connected radio's Radio Mic
+        // family only: read it on a Hermes, an Orion-MkII and a Saturn.
+        for (const HPSDRHW board : {HPSDRHW::Hermes, HPSDRHW::OrionMKII, HPSDRHW::Saturn}) {
+            SetupDescriptionService family;
+            family.setRadioContext(BoardCapsTable::forBoard(board), radio.hardwareProfile().model);
+            for (const int version : {15, 19, 20}) {
+                check(family.audio(), audioIds, version);
+            }
+        }
+        for (const int version : {15, 19, 20}) {
+            for (const QStringList* ids : {&audioIds, &transmitIds, &dspIds, &paIds}) {
+                for (const QString& id : *ids) {
+                    QVERIFY2(seen.contains(QStringLiteral("%1 at %2").arg(id).arg(version)),
+                             qPrintable(QStringLiteral("%1 at %2 is not described")
+                                            .arg(id).arg(version)));
+                }
+            }
+        }
+        // The closed validators accept each family's row without the rule.
+        const QJsonObject current = projectedCategory(service.transmit(), 20);
+        QVERIFY(SetupDescriptionService::validateTransmitPropertyBinding(
+            controlById(current, "transmit.dexpVox.dexpEnabled")));
+        QVERIFY(SetupDescriptionService::validateTransmitSettingBinding(
+            controlById(current, "transmit.power.SwrProtectionEnabled")));
+        QVERIFY(SetupDescriptionService::validateAudioPropertyBinding(
+            controlById(projectedCategory(service.audio(), 20), "audio.txProfile.filterLow")));
+        QVERIFY(SetupDescriptionService::validatePaBypassBinding(
+            controlById(projectedCategory(service.pa(), 20), "pa.gain.bypassPaSettings")));
+
+        // The TX buffer sizes keep the rule, and the validator requires it.
+        for (const int version : {15, 19, 20}) {
+            const QJsonObject dsp = projectedCategory(service.dsp(), version);
+            for (const QString& id : bufferIds) {
+                const QJsonObject row = controlById(dsp, id);
+                const QString where = QStringLiteral("%1 at %2").arg(id).arg(version);
+                QVERIFY2(!row.isEmpty(), qPrintable(where));
+                QCOMPARE(row.value("gate").toObject().value("offAir"), QJsonValue(true));
+                QVERIFY2(SetupDescriptionService::validateDspSettingBinding(row), qPrintable(where));
+                QJsonObject unlocked = row;
+                QJsonObject gate = unlocked.value("gate").toObject();
+                gate.remove("offAir");
+                unlocked.insert("gate", gate);
+                QVERIFY2(!SetupDescriptionService::validateDspSettingBinding(unlocked),
+                         qPrintable(where));
+            }
+        }
     }
 
     // Version 13 (R-R3-49): Transmit > Power's "Disable HF PA", which the
@@ -2623,7 +2865,7 @@ private slots:
         invalid.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
         gate.insert(QStringLiteral("transmit"), true);
-        gate.remove(QStringLiteral("offAir"));
+        gate.insert(QStringLiteral("offAir"), true);
         invalid.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateTransmitPropertyBinding(invalid));
     }
@@ -2647,7 +2889,7 @@ private slots:
         bad.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
         gate.insert(QStringLiteral("transmit"), true);
-        gate.remove(QStringLiteral("offAir"));
+        gate.insert(QStringLiteral("offAir"), true);
         bad.insert(QStringLiteral("gate"), gate);
         QVERIFY(!SetupDescriptionService::validateAudioPropertyBinding(bad));
         bad = described.first().toObject();
@@ -3227,7 +3469,8 @@ private slots:
             }
             const QJsonObject category = QJsonDocument::fromJson(dsp.toUtf8()).object();
             QCOMPARE(category.value("version").toInt(),
-                     expected >= 19 ? 19 : expected >= 15 ? 15 : qMin(expected, 3));
+                     expected >= 22 ? 22 : expected >= 19 ? 19
+                         : expected >= 15 ? 15 : qMin(expected, 3));
             QCOMPARE(category.value("pages").toArray().size(), expected >= 15 ? 10 : 9);
             bool hasTable = false;
             bool hasAdd = false;
@@ -3276,8 +3519,11 @@ private slots:
         check(18, kSessionProtocolMinor, 18);
         check(19, kSessionProtocolMinor, 19);
         check(20, kSessionProtocolMinor, 20);
+        // 21 is CAT & Network's TCI Forget enabledWhen; 22 is the RX
+        // buffer sizes' on-the-air lock and the cap.
         check(21, kSessionProtocolMinor, 21);
-        check(22, kSessionProtocolMinor, 21);
+        check(22, kSessionProtocolMinor, 22);
+        check(23, kSessionProtocolMinor, 22);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

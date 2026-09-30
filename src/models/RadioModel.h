@@ -2860,6 +2860,13 @@ public:
     // only from the device that holds transmit.
     static QString paOnAirLockedReason();   // "Can't change while transmitting."
     static QString paHolderOnlyReason();    // "Only the device that is transmitting ..."
+    // The DSP > Options RX buffer sizes' on-the-air lock (Thetis greys
+    // grpDSPBufferSize while MOX is on, setup.cs:5159 [v2.10.3.15]); the
+    // same words as PA Gain's lock.
+    static QString dspBufferOnAirLockedReason(); // "Can't change while transmitting."
+    // True for the four DSP > Options RX buffer size keys
+    // (DspOptionsBufferSize{Phone,Fm,Cw,Dig}Rx).
+    static bool isRxDspBufferSizeKey(const QString& key);
     // The PA band the radio transmits on (Thetis _adjustingBand): the
     // transmit slice's band, else the last band, when it is 160 m..6 m or
     // XVTR; -1 when that band has no PA values. A remote window whose Core

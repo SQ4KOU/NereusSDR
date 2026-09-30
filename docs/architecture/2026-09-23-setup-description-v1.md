@@ -165,16 +165,17 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 21. PA has a version-20 ceiling (version 14
+future declaration at version 22. PA has a version-20 ceiling (version 14
 for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
 for V17, version 16 for V16, version 13
 for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
-V4–V6 and version-7 projection for V7–V11. DSP is version 19 to a V19 or
-later peer (see Version 19) and version 15 to a V15 to V18 peer; Transmit,
-Audio and Diagnostics are version 15 to a V15 or later peer (see Version
-15); CAT & Network is version 21 to a V21 or later peer (see Version 21) and
-version 15 to a V15 to V20 peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
+V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
+later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19)
+and version 15 to a V15 to V18 peer; Transmit, Audio and Diagnostics are
+version 15 to a V15 or later peer (see Version 15); CAT & Network is version
+21 to a V21 or later peer (see Version 21) and version 15 to a V15 to V20
+peer; Transmit is version 13 to a V13 or V14 peer and version 3 to
 a V3 to V12 peer (with the Power page's earlier coverage text), and DSP,
 Audio, Diagnostics and CAT & Network are version 3 to a V3 to V14 peer.
 General and Test retain version 3.
@@ -829,7 +830,7 @@ family's Radio Mic section: Hermes / Atlas (Mic In or Line In, +20 dB Mic
 Boost, Line In Gain -34 to 12 dB), Orion-MkII (Mic Tip-Ring, Mic Bias, Mic PTT
 Disabled, +20 dB Mic Boost) or Saturn G2 (3.5 mm Jack or XLR, Mic PTT
 Disabled, Mic Bias, +20 dB Mic Boost). They gate on `transmitSettingsVersion`
-3 and off the air, as the desktop does. The microphone source and the
+3 and carry no off-air rule (see the off-air sweep below). The microphone source and the
 microphone device, buffer and test are each computer's own and are not
 described (the source is not on the link). TX Profile gains the profile
 choice (`txProfile.select`, with the unsaved-changes question), Save... (a
@@ -1035,6 +1036,23 @@ served by the Core that applies the edit. With a radio that Core reports
 transmitSettingsVersion 15 and takes these settings on the air; without one it
 reports 0, which fails the `min` and disables the rows anyway.
 
+The off-air sweep applies the same rule to the other transmit rows the Core
+has taken on the air since transmitSettingsVersion 13. These lose their
+off-air rule at every description version, and the Core refuses one that
+carries `offAir`: Audio's TX Input rows (Mic Gain and the twelve Radio Mic
+rows across the three families), TX Profile's profile choice, Save, Delete,
+Filter Low, Filter High and AM Carrier Level; DSP > Options' Filter Size TX
+and Filter Type TX (Phone, FM, Digital); PA Gain's Bypass ANAN PA Settings;
+Transmit > Power's thirteen rows (drive, ATT on TX, tune power, SWR
+protection and External TX Inhibit); and Transmit > DEXP/VOX's sixteen rows.
+Thetis disables none of these while MOX is on: its MOX setter
+(setup.cs:5132-5161 [v2.10.3.15]) greys only the VAC controls and
+`grpDSPBufferSize`. So the DSP > Options Buffer Size TX rows keep their
+`offAir` rule (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled =
+!mox`), and the Core refuses one without it. The PA Watt Meter points never
+carried the rule. No description version changes: a peer at any version reads
+the rows without the lock, and the Core still applies its own on-air checks.
+
 DSP's category coverage becomes "partial: the NR3 and NNR model files are
 not described" and the CFC page carries no coverage (`coverageV19`). A V15
 to V18 peer receives DSP at version 15 without the row, with version 15's
@@ -1079,6 +1097,21 @@ without `enabledWhen` (always enabled, as before), and CAT & Network at
 version 15. The Core rejects `enabledWhen` on any other CAT & Network row
 and any altered dependency. This version adds no mirror field, ordinal or
 verb.
+
+Version 22 locks DSP > Options' four RX Buffer Size rows (Phone, FM, CW,
+Digital) while the radio is on the air. Thetis greys the whole buffer group
+under MOX (setup.cs:5159 [v2.10.3.15], `grpDSPBufferSize.Enabled = !mox`).
+Version 21 is CAT & Network's TCI Forget row (above). The rows keep their gate
+(no `offAir`, since a peer that did not declare remote transmit receives no
+`txState`); instead, while on the air, the Core adds the existing
+`availability` object `{"enabled":false,"reason":"Can't change while
+transmitting."}` to each of the four rows, and off the air they carry none.
+Keying and unkeying advance `revision` and resend `dsp` (DSP has its own
+notify). The Core refuses a write or removal of any of the four keys on the
+air with the same reason, at every version. A V21 or older peer receives DSP
+at its earlier version without the `availability` objects. The desktop Setup
+greys the four RX rows and the three TX Buffer Size rows on the air with the
+same reason.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
@@ -1133,9 +1166,9 @@ On the ANAN-G2E only, the partial `PA Gain` page also describes the existing
 `transmit.paSettingsBypass` Boolean toggle. The Core projects that page away
 unless its board capabilities include both an integrated PA and
 `showsBypassPaSettingsUi`, and the SKU is not RX-only. Its gate is
-`transmitSettingsVersion:6` plus `offAir:true`, with no `transmit:true` gate:
-the Core already permits negotiated transmit *settings* on a receive-only
-station while it is off the air. The Core still applies its own property-write
+`transmitSettingsVersion:6`, with no `transmit:true` gate and no `offAir`:
+the Core permits negotiated transmit *settings* on a receive-only station,
+and takes this one on the air (see the off-air sweep below). The Core still applies its own property-write
 authority and on-air checks. This one toggle does not describe the PA profile
 grid, calibration, or auto-calibration sweep.
 

@@ -32,8 +32,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "unit": "dB",
               "rangeFrom": {
@@ -62,8 +61,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "options": [
                 {
@@ -92,8 +90,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -112,8 +109,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": -34,
               "max": 12,
@@ -142,8 +138,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -162,8 +157,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -182,8 +176,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -202,8 +195,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             }
           ]
@@ -228,8 +220,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "options": [
                 {
@@ -258,8 +249,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -278,8 +268,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             },
             {
@@ -298,8 +287,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               }
             }
           ]
@@ -339,8 +327,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "choicesFrom": {
                 "jsonNames": {
@@ -397,8 +384,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "prompt": {
                 "title": "Save TX Profile",
@@ -442,8 +428,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 3,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "confirm": "Delete profile \"%1\"?"
             }
@@ -467,8 +452,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 1,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 0,
               "max": 5000,
@@ -489,8 +473,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 1,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 200,
               "max": 10000,
@@ -511,8 +494,7 @@
               "gate": {
                 "capability": "transmitSettingsVersion",
                 "min": 2,
-                "transmit": true,
-                "offAir": true
+                "transmit": true
               },
               "min": 0,
               "max": 100,

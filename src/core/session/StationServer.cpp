@@ -1,6 +1,9 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-29: One setup description revision per on-air edge (PA and the
+//               DSP RX buffer lock together). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: Setup description version 20 (R-R3-49, R-IOS-18): PA Gain
 //               publishes its on-the-air lock per row, the transmitting band
 //               open to the transmit holder only. J.J. Boyd (KG4VCF),
@@ -1654,10 +1657,14 @@ bool isTransmitHardwareKey(const QString& rawKey)
 
 // R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection and
 // External TX Inhibit groups, Station keys (SettingsScope.cpp) that gate
-// the Core's own transmitting. Taken while the radio is off the air.
+// the Core's own transmitting, and (transmitSettingsVersion 11) "Disable
+// HF PA" (DisableHfPa). On isTransmitSettingKeyAcceptedOffAir's list, so a
+// receive-only Core takes them; since transmitSettingsVersion 13 they are
+// taken on the air as well and apply at once (transmitSettingOnAirRefusal
+// holds back only the OC transmit pins). Thetis's MOX setter greys none of
+// them (setup.cs:5132-5161 [v2.10.3.15]).
 bool isPowerPageTransmitKey(const QString& key)
 {
-    // transmitSettingsVersion 11: and "Disable HF PA" (DisableHfPa).
     return RadioModel::isSwrProtectionSettingKey(key)
         || key == QLatin1String("TxInhibitMonitorEnabled")
         || key == QLatin1String("TxInhibitMonitorReversed")
@@ -1668,8 +1675,13 @@ bool isPowerPageTransmitKey(const QString& key)
 // (hardware/<mac>/pa/..., PaProfileManager: PA Gain's profiles, per-band
 // gains, adjust matrix and max power) and the PA forward-power table
 // (hardware/<mac>/paCalibration/..., CalibrationController: the Watt Meter
-// page). Taken while the radio is off the air and applied at once
-// (RadioModel::scheduleRemoteHardwareApply). The Calibration tab's own
+// page). Taken on the air since transmitSettingsVersion 13, as a local
+// window takes them. On the air a PA profile write goes through
+// RadioModel::paSettingOnAirRefusal (the version 20 lock: only the active
+// profile's transmitting-band row, from the transmit holder); the Watt
+// Meter points are taken and applied once the radio is back on receive
+// (RadioModel::scheduleRemoteHardwareApply, flushRemoteHardwareApply).
+// Off the air both apply at once. The Calibration tab's own
 // copies of its transmit fields (paCalibration/cal/...) are Hardware
 // Config's, not the PA pages': parity Task 13 takes them
 // (isTransmitHardwareKeyTakenOnAir).
@@ -2779,7 +2791,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // why, with the transmitting band open to the transmit holder only.
         const auto applyPaOnAir = [this](bool onAir) {
             if (m_radioModel && m_setupDescription) {
-                m_setupDescription->setPaOnAirState(
+                // Version 22: and DSP > Options' RX buffer sizes (Thetis
+                // setup.cs:5159 [v2.10.3.15], grpDSPBufferSize), in the
+                // same revision.
+                m_setupDescription->setOnAirState(
                     onAir, onAir ? m_radioModel->paOnAirBandIndex() : -1);
             }
         };
@@ -8504,8 +8519,9 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
             // (radioHardwareVersion 11). 19: DSP > CFC's band editor
             // (cfcProfile, cfc.setProfile). 20: PA Gain's on-the-air lock
             // per row. 21: CAT & Network's TCI Forget row greys out while
-            // Duplicate is off.
-            const int version = qMin(declared, 21);
+            // Duplicate is off. 22: DSP > Options' RX buffer sizes'
+            // on-the-air lock.
+            const int version = qMin(declared, 22);
             // Version 20: the transmit holder's own PA band stays live.
             const QByteArray deviceId = peerInfoFor(transport).deviceId;
             const bool holdsTransmit = m_transmitHolder && !deviceId.isEmpty()
@@ -10871,6 +10887,15 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
 QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 {
     QString reason;
+    // Setup description version 22: the DSP > Options RX buffer sizes wait
+    // while the radio is on the air, whoever asks, as Thetis greys the
+    // whole Buffer Size (IQcomp) group while MOX is on:
+    // From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+    // The words are the ones the description's lock shows.
+    if (RadioModel::isRxDspBufferSizeKey(key) && m_radioModel
+        && m_radioModel->stationOnAirRefusal(nullptr)) {
+        return RadioModel::dspBufferOnAirLockedReason();
+    }
     // Changing a transmit region, including removing it to restore the
     // default, always waits for RX, regardless of who holds transmit. So
     // do Extended transmit and Prevent transmitting on a different band
@@ -12171,7 +12196,7 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.stationCatalogVersion = stationCatalogVersion();
             caps.setupDescriptionVersion = peerDeclares(
                 transport, QByteArrayLiteral("setupDescription"), 1)
-                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 21) : 0;
+                ? qMin(peer->features.value(QByteArrayLiteral("setupDescription")), 22) : 0;
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.

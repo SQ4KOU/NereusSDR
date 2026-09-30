@@ -10,6 +10,8 @@
 #include <QMetaObject>
 #include <QTimer>
 
+#include <utility>
+
 namespace NereusSDR::Test {
 
 LoopbackTransport::LoopbackTransport(const QString& description, QObject* parent)
@@ -45,10 +47,39 @@ void LoopbackTransport::sendText(const QByteArray& wire)
     // nothing in that case, and this fake has to behave the same or it
     // turns a correct production behaviour into a test crash.
     QPointer<LoopbackTransport> peer(m_peer);
-    QMetaObject::invokeMethod(
-        peer, [peer, wire]() {
-            if (!peer.isNull()) { peer->deliver(wire); }
-        }, Qt::QueuedConnection);
+    sendOrHold([peer, wire]() {
+        if (!peer.isNull()) { peer->deliver(wire); }
+    });
+}
+
+void LoopbackTransport::sendOrHold(std::function<void()> delivery)
+{
+    if (m_holdsOutgoing) {
+        m_heldOutgoing.append(std::move(delivery));
+        return;
+    }
+    // Queued on the far end, so a delivery outlives this end as before.
+    if (m_peer.isNull()) {
+        return;
+    }
+    QMetaObject::invokeMethod(m_peer.data(), std::move(delivery), Qt::QueuedConnection);
+}
+
+void LoopbackTransport::setHoldsOutgoing(bool holds)
+{
+    m_holdsOutgoing = holds;
+    if (holds) {
+        return;
+    }
+    // Released in the order sent, each on a later turn as a send is.
+    const QList<std::function<void()>> held = std::move(m_heldOutgoing);
+    m_heldOutgoing.clear();
+    if (m_peer.isNull()) {
+        return;
+    }
+    for (const std::function<void()>& delivery : held) {
+        QMetaObject::invokeMethod(m_peer.data(), delivery, Qt::QueuedConnection);
+    }
 }
 
 void LoopbackTransport::deliver(const QByteArray& wire)
@@ -66,25 +97,24 @@ bool LoopbackTransport::sendBinary(const QByteArray& message)
         return false;
     }
     QPointer<LoopbackTransport> peer(m_peer);
-    QMetaObject::invokeMethod(
-        peer, [peer, message]() {
-            if (!peer.isNull() && peer->m_open && !peer->m_severed) {
-                emit peer->binaryReceived(message);
-            }
-        }, Qt::QueuedConnection);
+    sendOrHold([peer, message]() {
+        if (!peer.isNull() && peer->m_open && !peer->m_severed) {
+            emit peer->binaryReceived(message);
+        }
+    });
     return true;
 }
 
 void LoopbackTransport::ping()
 {
-    if (!m_open || m_peer.isNull() || m_severed) {
+    // A dead direction loses the ping as it loses text.
+    if (!m_open || m_peer.isNull() || m_severed || m_dropsOutgoing) {
         return;
     }
     QPointer<LoopbackTransport> peer(m_peer);
-    QMetaObject::invokeMethod(
-        peer, [peer]() {
-            if (!peer.isNull()) { peer->receivePing(); }
-        }, Qt::QueuedConnection);
+    sendOrHold([peer]() {
+        if (!peer.isNull()) { peer->receivePing(); }
+    });
 }
 
 void LoopbackTransport::receivePing()
@@ -97,11 +127,16 @@ void LoopbackTransport::receivePing()
         // QWebSocket cannot produce it.
         return;
     }
+    if (m_dropsOutgoing) {
+        // The pong is this end's outgoing traffic too.
+        return;
+    }
     QPointer<LoopbackTransport> peer(m_peer);
-    QMetaObject::invokeMethod(
-        peer, [peer]() {
-            if (!peer.isNull()) { emit peer->pongReceived(); }
-        }, Qt::QueuedConnection);
+    // Held with this end's text, so a pong waits behind what was sent
+    // before it, as on a real socket.
+    sendOrHold([peer]() {
+        if (!peer.isNull()) { emit peer->pongReceived(); }
+    });
 }
 
 void LoopbackTransport::closeLink(const QString& reason)

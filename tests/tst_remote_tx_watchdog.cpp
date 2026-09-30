@@ -23,6 +23,9 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), iPhone
 //               app plan Task 37 (R-IOS-13), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-29: a trip's warning names the device id in hex, by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -91,6 +94,7 @@ private slots:
     void theNumbersAreStatedTogether();
     void keepalivesHoldTenMinutesAndOneMissedStopsBetween400And410();
     void theLinkClosingStopsAtOnce();
+    void aTripLogsTheDeviceIdAsHex();
     void voxArmedIsWatchedAndStops();
     void watchingStartsWithAFresh400ms();
     void copiesAndOvertakenKeepalivesDoNotCount();
@@ -170,6 +174,21 @@ void TestRemoteTxWatchdog::theLinkClosingStopsAtOnce()
     // A device that was not watched: nothing.
     rig.watchdog.linkClosed(kTablet);
     QCOMPARE(rig.stops.size(), size_t(1));
+}
+
+// A device id is raw bytes (the link's binary id), so the trip's warning
+// names it in hex; the raw bytes read as garbage in a log.
+void TestRemoteTxWatchdog::aTripLogsTheDeviceIdAsHex()
+{
+    Rig rig;
+    const QByteArray binaryId = QByteArray::fromHex("00ff10a1c3");
+    rig.watchdog.setKeyed(binaryId, true, 1);
+    QTest::ignoreMessage(QtWarningMsg,
+                         QRegularExpression(QStringLiteral("^Transmit watchdog: the link closed +"
+                                                           "from 00ff10a1c3 - ")));
+    rig.watchdog.linkClosed(binaryId);
+    QCOMPARE(rig.stops.size(), size_t(1));
+    QCOMPARE(rig.stops.front().device, binaryId);
 }
 
 void TestRemoteTxWatchdog::voxArmedIsWatchedAndStops()

@@ -450,7 +450,7 @@ private slots:
     void withEveryPathOpenTheDirectPathWins()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -461,7 +461,11 @@ private slots:
         window.route(service, rendezvous.client()->stationId());
         window.client->connectToStation(core.url(), QString(), QString(), false,
                                         identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.client->pathRank(), int(PathRacer::ThisNetwork));
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork),
                  StationConnectionAttempt::Outcome::Connected);
@@ -481,7 +485,7 @@ private slots:
     void withOnlyTheServiceTheServiceWinsThenMovesToTheAddress()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         const quint16 port = closedPort();
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -497,7 +501,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)), QString(), QString(), false,
             identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QVERIFY(window.client->pathRank() == int(PathRacer::ServiceDirect)
                 || window.client->pathRank() == int(PathRacer::ServiceRelayed));
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::ThisNetwork),
@@ -527,7 +535,7 @@ private slots:
     void anUpgradeWaitsWhileKeyedOrVoxArmed()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         const quint16 port = closedPort();
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -541,7 +549,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)), QString(), QString(), false,
             identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QVERIFY(window.client->pathRank() > int(PathRacer::ThisNetwork));
 
         // VOX armed at this window: its keepalives run, and no look starts.
@@ -594,7 +606,7 @@ private slots:
     void theRankIsTheSettledPairsAtSnapshotComplete()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -621,7 +633,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         const QString summary = window.client->connectionAttempt().summary();
         DataChannelTransport::setSelectedPathOverrideForTest({});
         QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
@@ -640,7 +656,7 @@ private slots:
     void aTicketRefusedForNowKeepsTheLookStep()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -652,7 +668,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QVERIFY(window.client->pathRank() > int(PathRacer::ThisNetwork));
         QCOMPARE(window.client->upgradeAttemptForTest(), 0);
 
@@ -705,7 +725,7 @@ private slots:
     {
         LocalService service(/*stun=*/true, /*relay=*/false);
         service.setRelayGrants(true);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -717,7 +737,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QTRY_COMPARE(granted.size(), 1);
         QVERIFY2(!window.hasOutcome(StationConnectionAttempt::Outcome::RelayOff),
                  qPrintable(window.client->connectionAttempt().summary()));
@@ -736,7 +760,7 @@ private slots:
     {
         QFETCH(bool, recorded);
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
         core.server->setRelayAllowed(false);
@@ -748,7 +772,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
         QVERIFY2(window.hasOutcome(StationConnectionAttempt::Outcome::RelayOff),
                  qPrintable(window.client->connectionAttempt().summary()));
@@ -788,7 +816,7 @@ private slots:
         QFETCH(bool, tooOld);
         QVERIFY(OperatorWording::isPlain(words));
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         rendezvous.setAnswersIntroductionsForTest(false);
@@ -814,7 +842,7 @@ private slots:
     {
         Core core;
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Window window(core);
         window.route(service, RendezvousWire::rendezvousId(
                                   core.server->stationIdentity().publicKeySpki()),
@@ -834,7 +862,7 @@ private slots:
     void aStaleNegativeRouteIsRecheckedWhenTheRaceStarts()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
         core.server->setRelayAllowed(false);
@@ -867,7 +895,11 @@ private slots:
         window.client->connectToStation(
             QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(closedPort())), QString(), QString(),
             false, identityOf(core));
-        QTRY_VERIFY_WITH_TIMEOUT(window.client->isHandshakeComplete(), 60000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(*window.client, 60000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QVERIFY(routeChecks > 0);
         QCOMPARE(window.client->pathRank(), int(PathRacer::ServiceDirect));
         QCOMPARE(window.outcomeFor(StationConnectionAttempt::Path::Service),

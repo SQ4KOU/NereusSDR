@@ -2151,7 +2151,7 @@ private slots:
     {
         // STUN only: the service has no relay, so the connection is direct.
         LocalService service(/*stun=*/true, /*relay=*/false);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2193,7 +2193,7 @@ private slots:
     void aDirectPathIsPreferredOverTheRelay()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2222,7 +2222,7 @@ private slots:
     {
         LocalService service;
         service.setRelayFull(true);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2259,7 +2259,7 @@ private slots:
     void withOnlyRelayCandidatesTheRelayCarriesTheConnection()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2302,7 +2302,7 @@ private slots:
     void relayDeniedAsksForNoCredentials()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2328,7 +2328,7 @@ private slots:
     void unpairedAndRevokedDevicesGetNoAnswerAndAreCounted()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto stranger = makeKey();
         auto revoked = makeKey();
@@ -2369,7 +2369,7 @@ private slots:
     {
         QVERIFY(SpakeExchange::isAvailable());
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         RecordingRelay relay(service.url());
         Core core;
         QVERIFY(core.server->pairingWindow()->isOpen());
@@ -2473,7 +2473,7 @@ private slots:
     {
         QVERIFY(SpakeExchange::isAvailable());
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
         rendezvous.setAnswersIntroductionsForTest(false);
@@ -2527,7 +2527,11 @@ private slots:
         window.setServiceRoute(route);
         window.connectToStation(QUrl(), QString(), QString(), false,
                                 saved->connection.identityFingerprint);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectionAttempt().tries.size(), 1);
         QVERIFY(window.connectionAttempt().tries.first().path
                 == StationConnectionAttempt::Path::Service
@@ -2542,7 +2546,7 @@ private slots:
     void aSessionOutlivesTheService()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2572,7 +2576,7 @@ private slots:
         QVERIFY(pair.answerer()->isReady());
 
         // The Core registers again once the service is back.
-        QVERIFY(service.launch());
+        QVERIFY2(service.launch(), qPrintable(service.startFailure()));
         QTRY_VERIFY_WITH_TIMEOUT(registered.size() >= 2, 20000);
         QVERIFY(pair.offerer()->isReady());
     }
@@ -2584,7 +2588,7 @@ private slots:
                   "loopback one reaches no server).");
         }
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2647,7 +2651,11 @@ private slots:
         const QUrl saved(QStringLiteral("wss://127.0.0.1:%1").arg(freeTcpPort()));
         window.connectToStation(saved, QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         // Task 29 (the link document, section 21.1): a paired Core's
         // addresses are raced, so the saved one is tried too, beside the
@@ -2690,7 +2698,11 @@ private slots:
         window.setCachedAddresses({dead, other.url()});
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 3);
@@ -2734,7 +2746,11 @@ private slots:
         window.setCachedAddressOpenTimeoutMs(60000);
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
         QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::AnotherPathFirst);
@@ -2793,7 +2809,11 @@ private slots:
         QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
         window.connectToStation(core.url(), core.server->token(),
                                 core.server->certificateFingerprint(), false);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
@@ -2865,7 +2885,11 @@ private slots:
         QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
         window.connectToStation(core.url(), core.server->token(),
                                 core.server->certificateFingerprint(), false);
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, 20000, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(window.connectedUrl(), core.url());
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
@@ -2947,7 +2971,7 @@ private slots:
     void aSessionRunsThroughTheServiceAndGivesTheRelayBack()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -2967,7 +2991,11 @@ private slots:
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
         QVERIFY(window.isConnectionActive());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         QCOMPARE(ended.size(), 0);
         QCOMPARE(introduced.size(), 1);
         QVERIFY(core.server->hasAuthenticatedSession());
@@ -3051,7 +3079,7 @@ private slots:
     void aRelayDeniedCoresMediaSettingsAreSettled()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -3068,7 +3096,11 @@ private slots:
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
         const quint64 epoch = core.server->mediaSessionEpoch();
         const std::optional<IceConfiguration> coreIce = core.server->sessionIceConfiguration(epoch);
         QVERIFY(coreIce.has_value());
@@ -3086,7 +3118,7 @@ private slots:
     void aSessionOutlivesTheCoresRegisteringAgain()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         LossyLink link(service.port());
         Core core;
         QTemporaryDir keyDir;
@@ -3111,7 +3143,11 @@ private slots:
         QSignalSpy results(&window, &StationClient::commandResult);
         window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
                                      core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        {
+            QString handshakeWhy;
+            QVERIFY2(waitForHandshake(window, kServiceConnectBudgetMs, &handshakeWhy),
+                     qPrintable(handshakeWhy));
+        }
 
         // The Core's pongs stop: it leaves the service and registers again.
         link.setDropAllPongs(true);
@@ -3444,8 +3480,8 @@ private slots:
     {
         LocalService first(/*stun=*/false, /*relay=*/false);
         LocalService second(/*stun=*/false, /*relay=*/false);
-        QVERIFY(first.start());
-        QVERIFY(second.start());
+        QVERIFY2(first.start(), qPrintable(first.startFailure()));
+        QVERIFY2(second.start(), qPrintable(second.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));

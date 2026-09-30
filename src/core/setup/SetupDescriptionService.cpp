@@ -1,4 +1,6 @@
 // no-port-check: NereusSDR-original Setup description transport.
+// 2026-09-29: setOnAirState, one revision per on-air edge. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
@@ -1938,7 +1940,10 @@ bool SetupDescription::validateTransmitPropertyBinding(const QJsonObject& contro
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        // The Core takes these on the air (transmitSettingsVersion 13) and
+        // Thetis disables none of them during MOX (setup.cs:5132-5161
+        // [v2.10.3.15]), so they carry no offAir rule.
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -2168,7 +2173,7 @@ bool SetupDescription::validatePaBypassBinding(const QJsonObject& control)
         || control.value(QStringLiteral("applies")) != QJsonValue(QStringLiteral("live"))
         || control.value(QStringLiteral("gate")).toObject() != QJsonObject{
             {QStringLiteral("capability"), QStringLiteral("transmitSettingsVersion")},
-            {QStringLiteral("min"), 6}, {QStringLiteral("offAir"), true}}) {
+            {QStringLiteral("min"), 6}}) {
         return false;
     }
     const QByteArray name = QByteArrayLiteral("paSettingsBypass");
@@ -2249,7 +2254,7 @@ bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")).toInt() < 5
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     if (key == QLatin1String("SwrProtectionLimit")) {
@@ -2290,7 +2295,7 @@ bool SetupDescription::validateAudioPropertyBinding(const QJsonObject& control)
         || gate.value(QStringLiteral("transmit")) != QJsonValue(true)
         || gate.value(QStringLiteral("capability")) != QJsonValue(QStringLiteral("transmitSettingsVersion"))
         || gate.value(QStringLiteral("min")) != QJsonValue(version)
-        || gate.value(QStringLiteral("offAir")) != QJsonValue(true)) {
+        || gate.contains(QStringLiteral("offAir"))) {
         return false;
     }
     const MirrorProperty* property = MirrorSchema::forMetaObject(&TransmitModel::staticMetaObject).byName(name);
@@ -2339,7 +2344,10 @@ bool SetupDescription::validateDspSettingBinding(const QJsonObject& control)
                                         QStringLiteral("Low Latency")};
                     const QJsonObject gate = control.value(QStringLiteral("gate")).toObject();
                     if (choices.size() != expected.size()
-                        || (side == QLatin1String("Tx")
+                        // Only the TX buffer sizes stay off-air: Thetis
+                        // greys grpDSPBufferSize during MOX (setup.cs:5159
+                        // [v2.10.3.15]); the TX filter size and type are not.
+                        || (side == QLatin1String("Tx") && family == QLatin1String("BufferSize")
                             ? gate.value(QStringLiteral("offAir")) != QJsonValue(true)
                             : gate.contains(QStringLiteral("offAir")))
                         || (side == QLatin1String("Tx")
@@ -2794,6 +2802,39 @@ QString paWithOnAirState(const QString& description, bool onAir, int transmittin
     return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
 }
 
+// Version 22: DSP > Options' RX buffer size rows lock on the air. The TCI
+// lane holds version 21; this branch's description skips it.
+constexpr int kDspOnAirLockVersion = 22;
+
+bool isRxBufferSizeControl(const QJsonObject& control)
+{
+    const QString id = control.value(QStringLiteral("id")).toString();
+    return id.startsWith(QLatin1String("dsp.options."))
+        && RadioModel::isRxDspBufferSizeKey(id.mid(int(qstrlen("dsp.options."))));
+}
+
+// The Core's DSP description in its version 22 shape: on the air the four
+// RX buffer size rows say why they are locked. Thetis greys the whole
+// Buffer Size (IQcomp) group, RX combos included, while MOX is on:
+// From Thetis setup.cs:5159 [v2.10.3.15] grpDSPBufferSize.Enabled = !mox;
+// The TX rows keep their offAir gate. The lock is published rather than
+// gated on offAir because offAir needs txState, which a receive-only
+// peer (no remoteTx) never gets.
+QString dspWithOnAirState(const QString& description, bool onAir)
+{
+    if (description.isEmpty() || !onAir) { return description; }
+    const QJsonDocument document = QJsonDocument::fromJson(description.toUtf8());
+    if (!document.isObject()) { return description; }
+    const QJsonObject fitted = mapCategoryControls(document.object(), [](QJsonObject control) {
+        if (isRxBufferSizeControl(control)) {
+            control.insert(QStringLiteral("availability"),
+                           lockedAvailability(RadioModel::dspBufferOnAirLockedReason()));
+        }
+        return control;
+    });
+    return QString::fromUtf8(QJsonDocument(fitted).toJson(QJsonDocument::Compact));
+}
+
 } // namespace
 
 QString SetupDescription::fitCategoryForVersion(const QString& description, int version,
@@ -2915,10 +2956,23 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
             return control;
         });
     }
-    // DSP changed at 15 and 19 (CFC's band editor): 15 to 18 see 15.
+    // Before version 22 a peer keeps DSP's RX buffer size rows unlocked,
+    // as it always read them.
+    if (categoryId == QLatin1String("dsp") && version < kDspOnAirLockVersion) {
+        category = mapCategoryControls(category, [](QJsonObject control) {
+            if (isRxBufferSizeControl(control)) {
+                control.remove(QStringLiteral("availability"));
+            }
+            return control;
+        });
+    }
+    // DSP changed at 15, 19 (CFC's band editor) and 22 (the RX buffer
+    // sizes' on-the-air lock): 15 to 18 see 15, 19 to 21 see 19.
     // CAT & Network changed at 15 and 21 (TCI Forget's enabledWhen): 15 to
     // 20 see 15.
-    const int ceiling = categoryId == QLatin1String("dsp") && version >= 19 ? 19
+    const int ceiling = categoryId == QLatin1String("dsp") && version >= kDspOnAirLockVersion
+            ? kDspOnAirLockVersion
+        : categoryId == QLatin1String("dsp") && version >= 19 ? 19
         : categoryId == QLatin1String("catNetwork") && version >= 21 ? 21
         : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
@@ -3046,7 +3100,15 @@ void SetupDescription::rebuild()
     update(QStringLiteral("general"), m_general);
     update(QStringLiteral("hardware"), m_hardware);
     update(QStringLiteral("audio"), m_audio);
-    update(QStringLiteral("dsp"), m_dsp);
+    bool dspChanged = false;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp != m_dsp) {
+        m_dsp = dsp;
+        changed = true;
+        dspChanged = true;
+    }
     update(QStringLiteral("display"), m_display);
     update(QStringLiteral("transmit"), m_transmit);
     update(QStringLiteral("appearance"), m_appearance);
@@ -3063,21 +3125,52 @@ void SetupDescription::rebuild()
     if (changed) {
         ++m_revision;
         emit descriptionsChanged();
+        if (dspChanged) { emit dspDescriptionChanged(); }
         emit paDescriptionChanged();
     }
 }
 
-void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+bool SetupDescription::applyDspOnAir(bool onAir)
+{
+    if (onAir == m_dspOnAir) { return false; }
+    m_dspOnAir = onAir;
+    const QString dsp = dspWithOnAirState(loadCategory(QStringLiteral("dsp"), m_caps, m_model,
+                                                       m_radioInfo),
+                                          m_dspOnAir);
+    if (dsp == m_dsp) { return false; }
+    m_dsp = dsp;
+    return true;
+}
+
+bool SetupDescription::applyPaOnAir(bool onAir, int transmittingBand)
 {
     const int band = onAir ? transmittingBand : -1;
-    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return; }
+    if (onAir == m_paOnAir && band == m_paTransmittingBand) { return false; }
     m_paOnAir = onAir;
     m_paTransmittingBand = band;
     const QString pa = paWithOnAirState(loadCategory(QStringLiteral("pa"), m_caps, m_model,
                                                      m_radioInfo),
                                         m_paOnAir, m_paTransmittingBand);
-    if (pa == m_pa) { return; }
+    if (pa == m_pa) { return false; }
     m_pa = pa;
+    return true;
+}
+
+void SetupDescription::setOnAirState(bool onAir, int transmittingBand)
+{
+    const bool paChanged = applyPaOnAir(onAir, transmittingBand);
+    const bool dspChanged = applyDspOnAir(onAir);
+    if (!paChanged && !dspChanged) { return; }
+    // One edge, one revision: PA and DSP are sent again together, and PA
+    // carries the revision (its notify), so a peer sees one new revision.
+    ++m_revision;
+    if (dspChanged) { emit dspDescriptionChanged(); }
+    emit paDescriptionChanged();
+}
+
+void SetupDescription::setPaOnAirState(bool onAir, int transmittingBand)
+{
+    if (!applyPaOnAir(onAir, transmittingBand)) { return; }
     ++m_revision;
     emit paDescriptionChanged();
 }

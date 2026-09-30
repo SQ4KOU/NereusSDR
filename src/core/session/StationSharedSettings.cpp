@@ -3,6 +3,9 @@
 // 2026-09-28: parity ruling C4: setRadioSampleRate is asked of the other
 // devices as a radio-wide change and answers later, off the air.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-29: a held RX buffer size write rechecks the on-air lock
+// before it applies. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 // no-port-check: NereusSDR-original.
 // =================================================================
 // src/core/session/StationSharedSettings.cpp  (NereusSDR)
@@ -1671,9 +1674,14 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                                                   false, onAir, {});
         }
     }
+    // Setup description version 22: and before a DSP > Options RX buffer
+    // size write or removal, which waits while the radio is on the air
+    // (DisturbanceCheck::refusedOnAir does not cover receive options).
+    const QString heldKey = QString::fromUtf8(question.original.objectKey);
     if (question.held == ConfirmStep::Held::SettingsWrite
-        && question.original.objectKey == "BandPlanRegion") {
-        const QString onAir = transmitSettingOnAirRefusal(QStringLiteral("BandPlanRegion"));
+        && (heldKey == QLatin1String("BandPlanRegion")
+            || RadioModel::isRxDspBufferSizeKey(heldKey))) {
+        const QString onAir = transmitSettingOnAirRefusal(heldKey);
         if (!onAir.isEmpty()) {
             return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
                                                   false, onAir, {});

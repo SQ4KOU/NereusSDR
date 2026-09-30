@@ -17,7 +17,9 @@ class SetupDescription final : public QObject {
     Q_PROPERTY(QString general READ general NOTIFY descriptionsChanged)
     Q_PROPERTY(QString hardware READ hardware NOTIFY descriptionsChanged)
     Q_PROPERTY(QString audio READ audio NOTIFY descriptionsChanged)
-    Q_PROPERTY(QString dsp READ dsp NOTIFY descriptionsChanged)
+    // Version 22: DSP also changes alone (the RX buffer sizes' on-the-air
+    // lock), so it has its own notify and a key sends DSP and the revision.
+    Q_PROPERTY(QString dsp READ dsp NOTIFY dspDescriptionChanged)
     Q_PROPERTY(QString display READ display NOTIFY descriptionsChanged)
     Q_PROPERTY(QString transmit READ transmit NOTIFY descriptionsChanged)
     Q_PROPERTY(QString appearance READ appearance NOTIFY descriptionsChanged)
@@ -85,6 +87,11 @@ public:
     /// The device that holds transmit changed: on the air PA is sent again
     /// so each peer's projection opens or locks the transmitting band.
     void noteTransmitHolderChanged();
+    /// Version 22: an on-the-air edge (isCoreOnAir). PA Gain's rows as
+    /// setPaOnAirState, and DSP > Options' four RX buffer size rows carry
+    /// their lock and its reason, as Thetis greys grpDSPBufferSize while
+    /// MOX is on. One revision per edge; PA is sent once.
+    void setOnAirState(bool onAir, int transmittingBand);
     void setBoardCapabilities(const BoardCapabilities& caps);
     void setRadioContext(const BoardCapabilities& caps, HPSDRModel model);
     /// Version 13: also the radio Radio Info describes (its name, protocol,
@@ -109,13 +116,21 @@ signals:
     /// PA and the revision (version 20). Emitted with descriptionsChanged
     /// on a rebuild, and alone for the on-the-air lock.
     void paDescriptionChanged();
+    /// DSP (version 22). Emitted with descriptionsChanged on a rebuild, and
+    /// with one paDescriptionChanged (the revision) for the on-the-air lock.
+    void dspDescriptionChanged();
 
 private:
     void rebuild();
+    /// Set the on-air state of one category; true if its text changed.
+    /// The caller bumps the revision and emits.
+    bool applyDspOnAir(bool onAir);
+    bool applyPaOnAir(bool onAir, int transmittingBand);
     BoardCapabilities m_caps{};
     HPSDRModel m_model = HPSDRModel::FIRST;
     RadioInfo m_radioInfo{};
     bool m_paOnAir = false;
+    bool m_dspOnAir = false;
     int m_paTransmittingBand = -1;
     quint32 m_revision = 0;
     QString m_general;

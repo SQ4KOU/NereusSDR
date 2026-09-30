@@ -25,16 +25,25 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: every wait ends as soon as what it waits on closes or
+//               fails, and says why (EndWatch, waitUntil). A QTRY_* wait
+//               runs on for twice its timeout after it expires, so a session
+//               the handshake deadline had closed held the test to QTest's
+//               300 s function timeout with no reason given.
 // =================================================================
 
 #include <QtTest>
 
+#include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QPointer>
 #include <QSignalSpy>
 #include <QWebSocket>
 #include <QWebSocketServer>
 
+#include <algorithm>
+#include <functional>
 #include <memory>
 
 #include "RendezvousTestHarness.h"
@@ -148,16 +157,40 @@ private:
 struct CoreThroughService {
     Core core;
     std::unique_ptr<StationRendezvous> rendezvous;
+    QString failure;
 
     bool start(LocalService& service)
     {
         rendezvous = std::make_unique<StationRendezvous>(core.server.get(),
                                                          QList<QUrl>{service.url()},
                                                          /*relayAllowed=*/true);
-        QSignalSpy registered(rendezvous->client(), &RendezvousClient::registered);
-        return rendezvous->start() && registered.wait(10000);
+        bool registered = false;
+        QObject::connect(rendezvous->client(), &RendezvousClient::registered,
+                         rendezvous->client(), [&registered] { registered = true; });
+        EndWatch ends;
+        ends.watch(rendezvous->client());
+        if (!rendezvous->start()) {
+            failure = QStringLiteral("the Core's rendezvous did not start");
+            return false;
+        }
+        // The bound this fixture always had for registering.
+        return waitUntil([&registered] { return registered; }, 10000, ends,
+                         QStringLiteral("the Core to register with the service"), &failure);
     }
 };
+
+// Connects `window` to `station` through `service` and waits for the
+// handshake, ending early if the session closes or fails. The watch is
+// set before the connect call, so a failure inside it is seen too.
+bool connectWindow(StationClient& window, LocalService& service, CoreThroughService& station,
+                   QString* why, qint64* elapsedMs = nullptr)
+{
+    EndWatch ends;
+    ends.watch(&window);
+    window.connectThroughService({service.url()}, station.rendezvous->client()->stationId(),
+                                 station.core.server->stationIdentity().fingerprint());
+    return waitForHandshake(window, kServiceConnectBudgetMs, why, elapsedMs, &ends);
+}
 
 } // namespace
 
@@ -182,9 +215,9 @@ private slots:
         LocalService service(/*stun=*/false, /*relay=*/false);
         service.setRelayGrants(true);
         RelayLeg::setRelayUrlForTest(QUrl(relay.url()));
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         CoreThroughService station;
-        QVERIFY(station.start(service));
+        QVERIFY2(station.start(service), qPrintable(station.failure));
         IceConfiguration::setOnlyLoopbackShimCandidatesForTest(true);
 
         QTemporaryDir keyDir;
@@ -195,9 +228,8 @@ private slots:
         SettingsProxy proxy;
         StationClient window(&remote, &proxy);
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
-        window.connectThroughService({service.url()}, station.rendezvous->client()->stationId(),
-                                     station.core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        QString why;
+        QVERIFY2(connectWindow(window, service, station, &why), qPrintable(why));
         QCOMPARE(relay.joins, 2);
         QCOMPARE(window.pathRank(), int(PathRacer::Floor));
         QVERIFY2(window.connectionAttempt().summary().contains(QLatin1String("web relay")),
@@ -242,6 +274,10 @@ private slots:
                              offerer.acceptCandidate(candidate, mid);
                          });
         QSignalSpy received(&answerer, &IMediaTransport::rtpReceived);
+        EndWatch mediaEnds;
+        mediaEnds.watch(&offerer, QStringLiteral("offering"));
+        mediaEnds.watch(&answerer, QStringLiteral("answering"));
+        mediaEnds.watch(&window);
         IMediaTransport::StartOptions core;
         core.role = IMediaTransport::Role::Offerer;
         core.localAudioSsrc = 0x11223344u;
@@ -252,7 +288,9 @@ private slots:
         device.ice = windowIce;
         QVERIFY(answerer.start(device));
         QVERIFY(offerer.start(core));
-        QTRY_VERIFY_WITH_TIMEOUT(offerer.isReady() && answerer.isReady(), 30000);
+        QVERIFY2(waitUntil([&] { return offerer.isReady() && answerer.isReady(); }, 30000,
+                           mediaEnds, QStringLiteral("both media connections to be ready"), &why),
+                 qPrintable(why));
         QVERIFY(offerer.selectedPath() && offerer.selectedPath()->viaLoopbackShim());
         QVERIFY(answerer.selectedPath() && answerer.selectedPath()->viaLoopbackShim());
         QByteArray rtp(12 + 60, '\0');
@@ -260,12 +298,15 @@ private slots:
         rtp[1] = static_cast<char>(111);
         qToBigEndian<quint32>(core.localAudioSsrc, rtp.data() + 8);
         rtp.replace(12, 16, QByteArrayLiteral("NEREUS-PLAINTEXT"));
-        for (int i = 0; i < 20 && received.isEmpty(); ++i) {
+        for (int i = 0; i < 20 && received.isEmpty() && !mediaEnds.ended(); ++i) {
             qToBigEndian<quint16>(static_cast<quint16>(i + 1), rtp.data() + 2);
             offerer.sendRtp(rtp);
             QTest::qWait(50);
         }
-        QTRY_VERIFY(!received.isEmpty());
+        // QTRY_VERIFY's default timeout, without its doubled overrun.
+        QVERIFY2(waitUntil([&received] { return !received.isEmpty(); }, 5000, mediaEnds,
+                           QStringLiteral("the media packet to arrive"), &why),
+                 qPrintable(why));
         QVERIFY(received.first().first().toByteArray().contains("NEREUS-PLAINTEXT"));
         QVERIFY(!relay.forwarded[RelayLeg::kTagMedia].isEmpty());
         for (const QByteArray& datagram : relay.forwarded[RelayLeg::kTagMedia]) {
@@ -285,9 +326,9 @@ private slots:
         LocalService service(/*stun=*/false, /*relay=*/false);
         service.setRelayGrants(true);
         RelayLeg::setRelayUrlForTest(QUrl(relay.url()));
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         CoreThroughService station;
-        QVERIFY(station.start(service));
+        QVERIFY2(station.start(service), qPrintable(station.failure));
 
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -297,15 +338,50 @@ private slots:
         SettingsProxy proxy;
         StationClient window(&remote, &proxy);
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
-        window.connectThroughService({service.url()}, station.rendezvous->client()->stationId(),
-                                     station.core.server->stationIdentity().fingerprint());
-        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), kServiceConnectBudgetMs);
+        QString why;
+        QVERIFY2(connectWindow(window, service, station, &why), qPrintable(why));
         QCOMPARE(window.pathRank(), int(PathRacer::ServiceDirect));
         const auto* channel = qobject_cast<const DataChannelTransport*>(window.transport());
         QVERIFY(channel != nullptr && channel->selectedPath().has_value());
         QVERIFY(!channel->selectedPath()->viaLoopbackShim());
         // Both legs joined at the introduction all the same.
-        QTRY_COMPARE(relay.joins, 2);
+        EndWatch ends;
+        ends.watch(&window);
+        QVERIFY2(waitUntil([&relay] { return relay.joins == 2; }, 5000, ends,
+                           QStringLiteral("both relay legs to join"), &why),
+                 qPrintable(QStringLiteral("%1 (joins: %2)").arg(why).arg(relay.joins)));
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // The waits above end when the session does: a session the handshake
+    // deadline closes (the close seen under load) ends the handshake wait
+    // at once with that reason, not at the connect budget.
+    void aClosedSessionEndsTheWaitWithItsReason()
+    {
+        StandInRelay relay;
+        LocalService service(/*stun=*/false, /*relay=*/false);
+        service.setRelayGrants(true);
+        RelayLeg::setRelayUrlForTest(QUrl(relay.url()));
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
+        CoreThroughService station;
+        QVERIFY2(station.start(service), qPrintable(station.failure));
+
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(station.core.pairComputer(*key));
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        // Forces the close: no sign-in finishes in a millisecond.
+        window.setHandshakeDeadlineMs(1);
+        QString why;
+        qint64 elapsedMs = -1;
+        QVERIFY(!connectWindow(window, service, station, &why, &elapsedMs));
+        QVERIFY2(why.contains(StationClient::handshakeDeadlineReason()), qPrintable(why));
+        QVERIFY2(elapsedMs < kServiceConnectBudgetMs,
+                 qPrintable(QStringLiteral("ended after %1 ms: %2").arg(elapsedMs).arg(why)));
         window.disconnectFromStation(QStringLiteral("test done"));
     }
 };
