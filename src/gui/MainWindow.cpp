@@ -678,6 +678,7 @@ warren@wpratt.com
 #include "gui/multidevice/MultiDeviceController.h"
 #include "gui/multidevice/NoticeCard.h"
 #include "gui/HostingSliceActions.h"
+#include "gui/LevelCalGridFollowGuard.h"
 #include "core/session/RemoteDevicesState.h"
 #include "ConnectionPanel.h"
 #include "NetworkDiagnosticsDialog.h"
@@ -1039,6 +1040,22 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             }
         }
     });
+    // A level calibration turns the grid's noise-floor follow off while it
+    // runs and puts it back after, for a run started here or one this
+    // window's Core runs.
+    {
+        auto* gridGuard = new LevelCalGridFollowGuard(m_radioModel, this);
+        gridGuard->setAccess(
+            [this]() {
+                SpectrumWidget* w = activeSpectrumWidget();
+                return w != nullptr && w->adjustGridMinToNoiseFloor();
+            },
+            [this](bool on) {
+                if (SpectrumWidget* w = activeSpectrumWidget()) {
+                    w->setAdjustGridMinToNoiseFloor(on);
+                }
+            });
+    }
     // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
     // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
     // (called from buildUI), gated on `if (m_tciServer)`. The original Phase

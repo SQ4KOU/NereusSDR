@@ -15,13 +15,84 @@
 //  - Changing a UI spinbox updates the controller (UI -> controller write)
 
 #include "gui/setup/hardware/CalibrationTab.h"
+#include "core/AppSettings.h"
 #include "core/CalibrationController.h"
+#include "core/LevelCalibrationService.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
+
+#include "FakeLevelCalibrationHost.h"
 
 #include <QtTest/QtTest>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
+#include <QLabel>
 #include <QList>
+#include <QProgressBar>
+#include <QPushButton>
+
+using namespace NereusSDR::LevelCalTest;
+
+namespace {
+
+// What the tab put in front of the operator, in place of a message box.
+struct Prompts {
+    int asked = 0;
+    bool answer = true;
+    QStringList titles;
+    QStringList texts;
+    QList<bool> warnings;
+
+    void attach(NereusSDR::CalibrationTab& tab)
+    {
+        tab.setLevelCalPromptsForTest(
+            [this]() { ++asked; return answer; },
+            [this](const QString& title, const QString& text, bool warning) {
+                titles << title;
+                texts << text;
+                warnings << warning;
+            });
+    }
+};
+
+struct LevelCalControls {
+    QPushButton* start = nullptr;
+    QPushButton* reset = nullptr;
+    QPushButton* cancel = nullptr;
+    QProgressBar* progress = nullptr;
+    QLabel* status = nullptr;
+    QDoubleSpinBox* freq = nullptr;
+    QDoubleSpinBox* level = nullptr;
+
+    explicit LevelCalControls(NereusSDR::CalibrationTab& tab)
+        : start(tab.findChild<QPushButton*>(QStringLiteral("levelCalStartButton")))
+        , reset(tab.findChild<QPushButton*>(QStringLiteral("levelCalResetButton")))
+        , cancel(tab.findChild<QPushButton*>(QStringLiteral("levelCalCancelButton")))
+        , progress(tab.findChild<QProgressBar*>(QStringLiteral("levelCalProgressBar")))
+        , status(tab.findChild<QLabel*>(QStringLiteral("levelCalStatusLabel")))
+        , freq(tab.findChild<QDoubleSpinBox*>(QStringLiteral("levelCalFrequencySpin")))
+        , level(tab.findChild<QDoubleSpinBox*>(QStringLiteral("levelCalLevelSpin")))
+    {
+    }
+    bool found() const { return start && reset && cancel && progress && status && freq && level; }
+};
+
+// The local model's service on the fake receiver; `holdMs` keeps the run
+// going at its last wait.
+bool useFakeReceiver(NereusSDR::RadioModel& model, FakeHost& fake, int holdMs)
+{
+    NereusSDR::LevelCalibrationService* service = model.levelCalibrationServiceForTest();
+    if (service == nullptr) {
+        return false;
+    }
+    service->setHostForTest(&fake);
+    NereusSDR::LevelCalibrationRun::Timings timings = instant();
+    timings.finalSettleMs = holdMs;
+    service->setTimingsForTest(timings);
+    return true;
+}
+
+} // namespace
 
 class TstCalibrationTab : public QObject {
     Q_OBJECT
@@ -33,6 +104,15 @@ private slots:
     void uiToController_rx1LnaOffset();
     void sixMeterLnaSpinsTakeThetisRangeAndRx2IsDisabled();
     void correctionFactorSpinsTakeThetisRange();
+
+    // Level Cal: the Start, Cancel and progress of the Core's run.
+    void levelCalRemoteWithoutCoreShowsDisabledWithReason();
+    void levelCalLocalIdleState();
+    void levelCalStartAsksFirst();
+    void levelCalRefusalIsShown();
+    void levelCalRunShowsProgressAndCompletes();
+    void levelCalCancelStopsTheRun();
+    void levelCalFollowsTheCoresRunInARemoteWindow();
 };
 
 void TstCalibrationTab::construction_doesNotCrash()
@@ -130,6 +210,162 @@ void TstCalibrationTab::correctionFactorSpinsTakeThetisRange()
         QCOMPARE(spin->minimum(), 0.0);
         QCOMPARE(spin->maximum(), 65.0);
     }
+}
+
+// Level Cal: a remote window whose Core cannot run the calibration shows
+// Start and Cancel disabled with the reason, never hidden.
+void TstCalibrationTab::levelCalRemoteWithoutCoreShowsDisabledWithReason()
+{
+    NereusSDR::RadioModel model(NereusSDR::RadioModel::Role::Remote);
+    NereusSDR::CalibrationTab tab(&model);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    for (QWidget* w : {static_cast<QWidget*>(c.start), static_cast<QWidget*>(c.cancel)}) {
+        QVERIFY(!w->isHidden());
+        QVERIFY(!w->isEnabled());
+        QCOMPARE(w->toolTip(), NereusSDR::IStationLink::levelCalibrationRunUnavailableReason());
+    }
+}
+
+// A local window: Start is live, Cancel waits for a run, nothing measured.
+void TstCalibrationTab::levelCalLocalIdleState()
+{
+    NereusSDR::RadioModel model;
+    NereusSDR::CalibrationTab tab(&model);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    QVERIFY(c.start->isEnabled());
+    QVERIFY(!c.start->toolTip().isEmpty());
+    QVERIFY(!c.cancel->isHidden());
+    QVERIFY(!c.cancel->isEnabled());
+    QVERIFY(!c.cancel->toolTip().isEmpty());
+    QCOMPARE(c.progress->value(), 0);
+    QVERIFY(c.status->text().isEmpty());
+}
+
+// From Thetis setup.cs:6516-6523 [v2.10.3.15]: Start asks whether the
+// signal is there first; No leaves everything as it was.
+void TstCalibrationTab::levelCalStartAsksFirst()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::RadioModel model;
+    FakeHost fake;
+    QVERIFY(useFakeReceiver(model, fake, 0));
+    model.addSlice(QStringLiteral("pan-0"));
+    NereusSDR::CalibrationTab tab(&model);
+    Prompts prompts;
+    prompts.attach(tab);
+    prompts.answer = false;
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    c.start->click();
+    QCOMPARE(prompts.asked, 1);
+    QVERIFY(!model.levelCalRunning());
+    QCOMPARE(fake.meterReads, 0);
+    QVERIFY(prompts.texts.isEmpty());
+    NereusSDR::AppSettings::instance().clear();
+}
+
+// A run that cannot start says why.
+void TstCalibrationTab::levelCalRefusalIsShown()
+{
+    NereusSDR::RadioModel model;
+    NereusSDR::CalibrationTab tab(&model);
+    Prompts prompts;
+    prompts.attach(tab);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    c.start->click();  // no slice open
+    QCOMPARE(prompts.asked, 1);
+    QCOMPARE(prompts.texts,
+             QStringList{QStringLiteral("Open a slice before calibrating the receive level.")});
+    QCOMPARE(prompts.warnings, QList<bool>{true});
+    // A refusal the Core sends after the start arrives the same way.
+    emit model.levelCalibrationRefused(QStringLiteral("Stop transmitting before calibrating the receive level."));
+    QCOMPARE(prompts.texts.size(), 2);
+    QCOMPARE(prompts.texts.last(),
+             QStringLiteral("Stop transmitting before calibrating the receive level."));
+    QVERIFY(c.start->isEnabled());
+}
+
+// From Thetis setup.cs:6525-6558 [v2.10.3.15]: Start and Reset are off
+// while the run goes, the progress shows, and a finished run says
+// "Level Calibration complete." under "Calibration".
+void TstCalibrationTab::levelCalRunShowsProgressAndCompletes()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::RadioModel model;
+    FakeHost fake;
+    QVERIFY(useFakeReceiver(model, fake, 300));
+    model.addSlice(QStringLiteral("pan-0"));
+    NereusSDR::CalibrationTab tab(&model);
+    Prompts prompts;
+    prompts.attach(tab);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    c.freq->setValue(kCentre + 1000.0);
+    c.level->setValue(-50.0);
+    c.start->click();
+    QVERIFY(model.levelCalRunning());
+    QVERIFY(!c.start->isEnabled());
+    QVERIFY(!c.reset->isEnabled());
+    QVERIFY(c.cancel->isEnabled());
+    QTRY_VERIFY(c.progress->value() > 0);
+    QTRY_VERIFY(!model.levelCalRunning());
+    QVERIFY(model.levelCalSucceeded());
+    QCOMPARE(c.progress->value(), 100);
+    QCOMPARE(prompts.titles, QStringList{QStringLiteral("Calibration")});
+    QCOMPARE(prompts.texts, QStringList{QStringLiteral("Level Calibration complete.")});
+    QCOMPARE(prompts.warnings, QList<bool>{false});
+    QVERIFY(c.start->isEnabled());
+    QVERIFY(c.reset->isEnabled());
+    QVERIFY(!c.cancel->isEnabled());
+    NereusSDR::AppSettings::instance().clear();
+}
+
+// Cancel stops the run (Thetis's progress window Abort); the tab says so
+// without a completion message.
+void TstCalibrationTab::levelCalCancelStopsTheRun()
+{
+    NereusSDR::AppSettings::instance().clear();
+    NereusSDR::RadioModel model;
+    FakeHost fake;
+    QVERIFY(useFakeReceiver(model, fake, 5000));
+    model.addSlice(QStringLiteral("pan-0"));
+    NereusSDR::CalibrationTab tab(&model);
+    Prompts prompts;
+    prompts.attach(tab);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    c.freq->setValue(kCentre + 1000.0);
+    c.level->setValue(-50.0);
+    c.start->click();
+    QVERIFY(model.levelCalRunning());
+    c.cancel->click();
+    QTRY_VERIFY(!model.levelCalRunning());
+    QVERIFY(!model.levelCalSucceeded());
+    QCOMPARE(c.status->text(), QStringLiteral("Level calibration was canceled."));
+    QVERIFY(prompts.texts.isEmpty());
+    QVERIFY(c.start->isEnabled());
+    NereusSDR::AppSettings::instance().clear();
+}
+
+// A remote window shows the Core's run as it goes.
+void TstCalibrationTab::levelCalFollowsTheCoresRunInARemoteWindow()
+{
+    NereusSDR::RadioModel model(NereusSDR::RadioModel::Role::Remote);
+    NereusSDR::CalibrationTab tab(&model);
+    LevelCalControls c(tab);
+    QVERIFY(c.found());
+    QVERIFY(model.applyStationLevelCalValue("levelCalRunning", true));
+    QVERIFY(model.applyStationLevelCalValue("levelCalPercent", 40));
+    QCOMPARE(c.progress->value(), 40);
+    QVERIFY(!c.start->isEnabled());
+    QVERIFY(!c.reset->isEnabled());
+    QVERIFY(model.applyStationLevelCalValue("levelCalMessage",
+                                            QStringLiteral("Level calibration finished.")));
+    QVERIFY(model.applyStationLevelCalValue("levelCalRunning", false));
+    QCOMPARE(c.status->text(), QStringLiteral("Level calibration finished."));
 }
 
 QTEST_MAIN(TstCalibrationTab)

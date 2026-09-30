@@ -8220,6 +8220,9 @@ nereus_add_test(tst_confirm_step
 nereus_add_test(tst_level_calibration_station
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Level Cal: the window's grid stops following the noise floor while a run
+# goes and is put back after (Thetis CalibrateLevel).
+nereus_add_test(tst_level_cal_grid_follow_guard)
 # Slice control and shared listening plan Task 10: the hosting desktop's
 # slice requests run as the station device (HostingSliceActions).
 nereus_add_test(tst_hosting_slice_operations

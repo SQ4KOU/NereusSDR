@@ -139,9 +139,13 @@
 #include <QVariant>
 #include <QWidget>
 
+#include <functional>
+
 class QCheckBox;
 class QDoubleSpinBox;
 class QGroupBox;
+class QLabel;
+class QProgressBar;
 class QPushButton;
 
 namespace NereusSDR {
@@ -192,6 +196,11 @@ public:
 #ifdef NEREUS_BUILD_TESTS
     // Test seam: counts QGroupBox children of the main layout.
     int groupBoxCountForTest() const;
+    // Test seam: Level Cal's question before a run and its messages, in
+    // place of the message boxes.
+    void setLevelCalPromptsForTest(
+        std::function<bool()> confirm,
+        std::function<void(const QString& title, const QString& text, bool warning)> tell);
 #endif
 
 signals:
@@ -220,6 +229,18 @@ private:
     QDoubleSpinBox* m_rx2LnaSpin{nullptr};         // ud6mRx2LNAGainOffset
     QPushButton*    m_levelCalStartBtn{nullptr};   // btnGeneralCalLevelStart
     QPushButton*    m_levelCalResetBtn{nullptr};   // btnResetLevelCal
+    // Level Cal: Thetis's progress window (Progress, its bar and Abort),
+    // shown in the group as a Cancel button, a bar and the run's last word.
+    QPushButton*    m_levelCalCancelBtn{nullptr};
+    QProgressBar*   m_levelCalProgress{nullptr};
+    QLabel*         m_levelCalStatusLabel{nullptr};
+    // True from this tab's Start until the run it started ends.
+    bool            m_levelCalStartedHere{false};
+    bool            m_levelCalWasRunning{false};
+    std::function<bool()> m_levelCalConfirm;
+    std::function<void(const QString&, const QString&, bool)> m_levelCalTell;
+    void refreshLevelCalControls();
+    void startLevelCalibration();
 
     // -- Group 3: HPSDR Freq Cal Diagnostic ------------------------------------
     // Source: setup.cs:5137-5144; 14036-14050; 22690-22706 [@501e3f5]
