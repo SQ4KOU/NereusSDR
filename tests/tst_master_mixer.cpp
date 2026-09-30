@@ -16,6 +16,10 @@
 //   2026-09-23 -- R-R3-45: two mixes from one barrier, speakers or
 //                 headphones per slice. J.J. Boyd / KG4VCF, with AI
 //                 assistance from Anthropic Claude Code.
+//   2026-09-30 -- Radio codec (JJ's ruling): the radio sum takes every
+//                 receiving slice whatever the local mask, and MON only
+//                 while it is local. J.J. Boyd / KG4VCF, with AI
+//                 assistance from Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -40,6 +44,63 @@ using namespace NereusSDR;
 class TstMasterMixer : public QObject {
     Q_OBJECT
 private slots:
+    // ── Radio codec (JJ's ruling 2026-09-30): the radio's speaker sum ──
+    //
+    // Every receiving slice reaches the radio sum, both routes, whatever
+    // the local mask; the local sums stay masked.
+    void radioSumTakesEverySliceWhateverTheLocalMask() {
+        MasterMixer mix;
+        mix.setRampFrames(1);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(0, 1.0f, 0.0f);
+        mix.setSliceGain(1, 1.0f, 0.0f);
+        std::array<float, 2> a = {0.3f, 0.3f};
+        std::array<float, 2> b = {0.2f, 0.2f};
+        mix.accumulate(0, a.data(), 1, /*muted*/ false, /*headphones*/ false);
+        mix.accumulate(1, b.data(), 1, /*muted*/ false, /*headphones*/ true);
+
+        std::array<float, 2> spk{};
+        std::array<float, 2> hp{};
+        std::array<float, 2> radio{};
+        QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 1, /*localMask*/ 0u, nullptr, 0,
+                              true, false, 0u, nullptr, radio.data()),
+                 1);
+        QCOMPARE(spk[0], 0.0f);
+        QCOMPARE(spk[1], 0.0f);
+        QCOMPARE(hp[0], 0.0f);
+        QCOMPARE(hp[1], 0.0f);
+        QVERIFY(qAbs(radio[0] - 0.5f) < 1e-6f);
+        QVERIFY(qAbs(radio[1] - 0.5f) < 1e-6f);
+    }
+
+    // The transmit monitor's slot (an id outside 0..31) reaches the radio
+    // sum exactly while it is local: off while a remote device holds
+    // transmit, as off the local sums.
+    void radioSumTakesMonitorOnlyWhileLocal() {
+        for (const bool monitorLocal : {true, false}) {
+            MasterMixer mix;
+            mix.setRampFrames(1);
+            mix.setSlewUpFrames(0);
+            mix.setSliceGain(0, 1.0f, 0.0f);
+            mix.setSliceGain(-2, 1.0f, 0.0f);
+            std::array<float, 2> a = {0.3f, 0.3f};
+            std::array<float, 2> m = {0.1f, 0.1f};
+            mix.accumulate(0, a.data(), 1, false, false);
+            mix.accumulate(-2, m.data(), 1, false, false);
+
+            std::array<float, 2> spk{};
+            std::array<float, 2> hp{};
+            std::array<float, 2> radio{};
+            QCOMPARE(mix.tryDrain(spk.data(), hp.data(), 1, /*localMask*/ 0u, nullptr, 0,
+                                  monitorLocal, false, 0u, nullptr, radio.data()),
+                     1);
+            const float expectRadio = monitorLocal ? 0.4f : 0.3f;
+            const float expectSpk = monitorLocal ? 0.1f : 0.0f;
+            QVERIFY(qAbs(radio[0] - expectRadio) < 1e-6f);
+            QVERIFY(qAbs(spk[0] - expectSpk) < 1e-6f);
+        }
+    }
+
     // ── R-R3-45: speakers OR headphones per slice (VAX design 6.2) ────
     //
     // Slice A on the speakers, slice B on the headphones: each sum carries

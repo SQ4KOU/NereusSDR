@@ -30,6 +30,10 @@
 //                                    diagnostics counters, and the P2
 //                                    sequence number across a restart.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  JJ's ruling: the radio tap takes
+//                                    remote-owned slices while the local
+//                                    output stays masked. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -382,6 +386,59 @@ private slots:
         tap.received.clear();
         engine->rxBlockReady(slice, block.data(), 64);
         QVERIFY(tap.received.empty());
+    }
+
+    // JJ's ruling (2026-09-30): with every slice owned by remote devices
+    // (this computer's mask empty), the radio's speaker still carries their
+    // audio, as Thetis's mixer 0, while the local output stays masked; the
+    // master mute still gives zeros.
+    void engine_radioOutputTap_takesRemoteOwnedSlices()
+    {
+        RadioModel radio;
+        AudioEngine* engine = radio.audioEngine();
+        auto bus = std::make_unique<FakeAudioBus>(QStringLiteral("FakeSpeakers"));
+        AudioFormat format;
+        format.sampleRate = 48000;
+        format.channels = 2;
+        format.sample = AudioFormat::Sample::Float32;
+        bus->open(format);
+        engine->setSpeakersBusForTest(std::move(bus));
+        radio.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
+                                  /*defaultRateHz=*/192000);
+        engine->masterMixForTest().setRampFrames(1);
+        engine->masterMixForTest().setSlewUpFrames(0);
+        const int slice = radio.addSlice();
+        engine->setSliceStreaming(slice, true);
+        radio.sliceById(slice)->setAfGain(100);
+        engine->setLocalOutputSliceMask(0u);
+
+        RecordingTap tap;
+        RecordingTap local;
+        engine->setRadioOutputTap(&tap);
+        engine->setMasterMixAudioTap(&local);
+        auto clear = qScopeGuard([&] {
+            engine->clearRadioOutputTap(&tap);
+            engine->clearMasterMixAudioTap(&local);
+        });
+        const std::vector<float> block = stereo(64, 0.5f, 0.5f);
+
+        engine->setVolume(0.5f);
+        engine->rxBlockReady(slice, block.data(), 64);
+        QVERIFY(!tap.received.empty());
+        QVERIFY(qAbs(tap.received.back() - 0.25f) < 1e-4f);
+        QVERIFY(!local.received.empty());
+        for (const float v : local.received) {
+            QCOMPARE(v, 0.0f);
+        }
+
+        tap.received.clear();
+        engine->setMasterMuted(true);
+        engine->rxBlockReady(slice, block.data(), 64);
+        QVERIFY(!tap.received.empty());
+        for (const float v : tap.received) {
+            QCOMPARE(v, 0.0f);
+        }
+        engine->setMasterMuted(false);
     }
 
     // RadioModel installs the tap for a connection that carries the audio,

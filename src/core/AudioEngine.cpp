@@ -24,6 +24,11 @@
 //                                    volume for the radio's own speaker
 //                                    out. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec (JJ's ruling): the radio
+//                                    tap takes the mixer's radio sum,
+//                                    every receiving slice whichever
+//                                    device owns it, as Thetis's mixer 0.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 6: the AF
 //                                    level is applied in the mix to the
 //                                    controller's sums (JJ's ruling, a
@@ -274,6 +279,7 @@ AudioEngine::AudioEngine(QObject* parent)
     m_mixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_hpMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_programScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    m_radioOutScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_avMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_vaxScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     for (int k = 0; k < kMaxOwnerMixes; ++k) {
@@ -2489,11 +2495,17 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
     }
     // Task 32 (JJ's MON ruling): MON stays off this computer's outputs, and
     // the master taps, while a remote device holds transmit.
+    // Radio codec (JJ's ruling 2026-09-30): the radio's speaker out is a
+    // second sum built beside the local ones, every receiving slice whatever
+    // the local mask says; summed only while the radio tap is installed.
+    std::vector<float>& radioSum = m_radioOutScratch;
+    const bool radioTapped =
+        m_radioOutputTap.tap.load(std::memory_order_acquire) != nullptr;
     const int mixed = m_masterMix.tryDrain(
         mix.data(), hpMix.data(), drainFrames,
         m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount,
         m_txMonitorLocal.load(std::memory_order_acquire), monitorOnly, localListen,
-        localListenLevels.data());
+        localListenLevels.data(), radioTapped ? radioSum.data() : nullptr);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -2664,20 +2676,26 @@ void AudioEngine::drainMixes(int frames, bool monitorOnly)
     //   {
     //       cmaster.SetAAudioMixVolume((void*)0, 0, volume);
     //   }
-    // Here: the station's program (the speakers' mix, already at master
-    // volume above, plus the headphones' at master volume), or silence
-    // while the master is muted, so the radio's stream never stops.
-    if (m_radioOutputTap.tap.load(std::memory_order_acquire) != nullptr) {
-        std::vector<float>& radioOut = m_programScratch;
+    // Mixer 0 takes RX1, RX1S and RX2 whoever listens to them
+    // (console.cs:27650-27664 [v2.10.3.15], UpdateAAudioMixerStates), and
+    // MON on the same mixer (audio.cs:417-418 [v2.10.3.15]:
+    // SetAAudioMixWhat(0, 0, WDSP.id(1, 0), mon)), so what the radio plays
+    // while transmitting is the receivers plus the transmit monitor.
+    // Here (JJ's ruling 2026-09-30): the mixer's radio sum, every receiving
+    // slice whichever device owns it, both routes, and MON exactly while
+    // this computer's outputs carry it: while a remote device holds
+    // transmit MON stays off the radio's speaker as off the local ones
+    // (Task 32). At the master volume, or silence while the master is
+    // muted, so the radio's stream never stops.
+    if (radioTapped) {
         if (m_masterMuted.load(std::memory_order_acquire)) {
-            std::fill(radioOut.begin(), radioOut.begin() + stereoFloats, 0.0f);
-        } else {
+            std::fill(radioSum.begin(), radioSum.begin() + stereoFloats, 0.0f);
+        } else if (vol != 1.0f) {
             for (int i = 0; i < stereoFloats; ++i) {
-                radioOut[static_cast<size_t>(i)] =
-                    mix[static_cast<size_t>(i)] + hpMix[static_cast<size_t>(i)] * vol;
+                radioSum[static_cast<size_t>(i)] *= vol;
             }
         }
-        invokeMixTap(m_radioOutputTap, radioOut.data(), mixed);
+        invokeMixTap(m_radioOutputTap, radioSum.data(), mixed);
     }
 
     // Same snapshot idiom as the VAX tap: one load into a local so the
@@ -3252,6 +3270,7 @@ void AudioEngine::ensureMixScratchFrames(int frames)
     m_mixScratch.assign(floats, 0.0f);
     m_hpMixScratch.assign(floats, 0.0f);
     m_programScratch.assign(floats, 0.0f);
+    m_radioOutScratch.assign(floats, 0.0f);
     m_avMixScratch.assign(floats, 0.0f);
     m_vaxScratch.assign(floats, 0.0f);
     for (int k = 0; k < kMaxOwnerMixes; ++k) {
