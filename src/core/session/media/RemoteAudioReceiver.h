@@ -277,11 +277,25 @@ public:
     // Thread-safe observational snapshot.  It neither reads worker-owned
     // jitter/resampler state nor synchronizes with the audio callback.
     RemoteAudioReceiverTelemetry telemetry() const;
+#ifdef NEREUS_BUILD_TESTS
+    /// Test-only step mode, set before start(): start() runs the receive
+    /// worker's setup on the calling thread and starts no worker thread,
+    /// and each runWorkerPassForTest() then runs exactly one pass of its
+    /// loop on the calling thread, at the receiver clock's time and with no
+    /// wait. With an injected clock and a paced test bus on the same clock,
+    /// the whole receive path runs on virtual time. Off: nothing changes.
+    void setStepModeForTest(bool on);
+    /// One worker pass (step mode). False once the context has ended: not
+    /// started, stopped, or ended by a fault (its signal is queued).
+    bool runWorkerPassForTest();
+#endif
 signals:
     void restartRequested(const QString& reason, NereusSDR::RemoteAudioReceiver::Fault fault);
     void errorOccurred(const QString& reason, NereusSDR::RemoteAudioReceiver::Fault fault);
 private:
     struct Private;
+    // The receive worker's loop state and its one pass (in the .cpp).
+    struct WorkerState;
     std::unique_ptr<Private> d;
 };
 } // namespace NereusSDR
