@@ -59,6 +59,11 @@
 //                 does on Protocol 1 [v2.10.3.15] (setCalibrationController,
 //                 wireFrequencyHz). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -284,6 +289,8 @@ public slots:
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
+    // Level Cal: the Alex receive attenuator (Thetis SetAlexAtten).
+    void setAlexAtten(int bits) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
     // G-07: Protocol 1 keeps only the full-ring loss count
@@ -861,6 +868,9 @@ private:
     int     m_antennaIdx{0};
     int     m_rxOnlyAnt{0};   // RX-only input mux (0..3). Bank 0 C3 bits 5-6.
     bool    m_rxOut{false};   // _Rx_1_Out relay. Bank 0 C3 bit 7.
+    // Alex attenuator _20_dB_Atten / _10_dB_Atten. Bank 0 C3 bits 1 / 0.
+    bool    m_alex20dB{false};
+    bool    m_alex10dB{false};
 
     // Per-ADC state — initialized from HardwareProfile at connect time
     bool    m_dither[3]{true, true, true};

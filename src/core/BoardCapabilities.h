@@ -18,6 +18,11 @@
 //                 maxSampleRateFor and widebandAdcsFor, per board row and
 //                 protocol, by J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -711,6 +716,16 @@ namespace BoardCapsTable {
     // ALEX-equipped boards not in the exclusion list (OrionMKII/Saturn/HL2).
     // Exception: HL2 returns 63 (6-bit LNA range, mi0bot [@c26a8a4]).
     int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept;
+
+    // Level Cal: the highest step attenuator value a connection sends.
+    // Above 31 dB an Alex board's step attenuator carries the value + 2
+    // (the Alex attenuator taking 30 dB), so a board with the 61 dB range
+    // accepts up to 63; every other board keeps its own attenuator.maxDb.
+    // From Thetis console.cs:11044-11056 [v2.10.3.15] (the Alex list just
+    // above it ends //DH1KLM):
+    //   NetworkIO.SetAlexAtten(3); // -30dB Alex Attenuator
+    //   if (nRX1ADCinUse == 0) NetworkIO.SetADC1StepAttenData(_rx1_attenuator_data + 2);
+    int stepAttWireMaxDb(const BoardCapabilities& caps) noexcept;
 }
 
 } // namespace NereusSDR

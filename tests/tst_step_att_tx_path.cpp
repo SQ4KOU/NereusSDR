@@ -331,11 +331,12 @@ private slots:
         delete mock;
     }
 
-    // ── Test 8: HPSDR board, isTx=true → saves preamp, sets Minus20 ─────────
+    // ── Test 8: HPSDR board, isTx=true → saves preamp, sets Off ─────────────
+    // Level Cal: Off is Thetis's HPSDR_OFF, the HPSDR's "-20dB" item.
     // From Thetis console.cs:29550-29554 [v2.10.3.13]:
     //   temp_mode = RX1PreampMode;
     //   RX1PreampMode = PreampMode.HPSDR_OFF;  // set to -20dB
-    void isTxTrue_hpsdrBoard_savesPreampAndForcesMinus20()
+    void isTxTrue_hpsdrBoard_savesPreampAndForcesHpsdrOff()
     {
         StepAttenuatorController ctrl;
         ctrl.setTickTimerEnabled(false);
@@ -351,8 +352,8 @@ private slots:
         // Saved mode must be the pre-TX mode (On).
         QCOMPARE(ctrl.savedPreampModeForTest(), PreampMode::On);
 
-        // Current mode must now be Minus20 (≡ HPSDR_OFF).
-        QCOMPARE(ctrl.preampMode(), PreampMode::Minus20);
+        // Current mode must now be Off (≡ HPSDR_OFF, the "-20dB" item).
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
 
         // No TX step ATT push on HPSDR path.
         QCOMPARE(mock->txStepAttCallCount, 0);
@@ -374,9 +375,9 @@ private slots:
         auto* mock = new MockTxConnection();
         ctrl.setRadioConnection(mock);
 
-        // Go TX: saves On, sets Minus20.
+        // Go TX: saves On, sets Off (HPSDR_OFF).
         ctrl.onMoxHardwareFlipped(true);
-        QCOMPARE(ctrl.preampMode(), PreampMode::Minus20);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
 
         // Go RX: should restore On.
         ctrl.onMoxHardwareFlipped(false);

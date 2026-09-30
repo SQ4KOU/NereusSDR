@@ -265,10 +265,12 @@ private slots:
         QCOMPARE(readStored(mac, Band::Band10m), 8);
 
         // A later value in the new numbering is not moved again.
+        // The HL2 has no Alex, so Minus20 reads as Off (console.cs:19220-19227
+        // [v2.10.3.15]); the stored value stays as written.
         writeStored(mac, Band::Band20m, 3);
         QCOMPARE(loadedMode(mac, HPSDRHW::HermesLite, HPSDRModel::HERMESLITE,
                             false, Band::Band20m),
-                 PreampMode::Minus20);
+                 PreampMode::Off);
         QCOMPARE(readStored(mac, Band::Band20m), 3);
         s.clearHardwareValues(mac);
     }

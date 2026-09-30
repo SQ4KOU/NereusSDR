@@ -295,6 +295,20 @@ public slots:
     // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
     virtual void setAlexRxBpf(AlexRxBpf /*bpf*/) {}
 
+    // Level Cal: the Alex receive attenuator, 0 (none), 1 (10 dB), 2 (20 dB)
+    // or 3 (30 dB). The preamp settings and the step attenuator above 31 dB
+    // drive it (StepAttenuatorController).
+    // From Thetis ChannelMaster/netInterface.c:421-432 [v2.10.3.15]:
+    //   void SetAlexAtten(int bits)
+    //   {
+    //   	if (mkiibpf) return;
+    //   	if ((prbpfilter->_20_dB_Atten | prbpfilter->_10_dB_Atten) != bits)
+    //   	{
+    //   		prbpfilter->_20_dB_Atten = (bits & 0x2) == 0x2;
+    //   		prbpfilter->_10_dB_Atten = bits & 0x1;
+    // Non-pure so existing test mocks compile unchanged; P1 and P2 override.
+    virtual void setAlexAtten(int /*bits*/) {}
+
     // Push TX-side step attenuator value to hardware.
     //
     // From Thetis ChannelMaster/netInterface.c:1006 [v2.10.3.13]

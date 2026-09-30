@@ -42,6 +42,14 @@
 //                added), setBoardIdentity and the once-per-radio move of
 //                stored preamp modes to that numbering. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: each preamp mode drives the step attenuator,
+//                the preamp bit and the Alex attenuator (console.cs:
+//                19218-19330 [v2.10.3.15]); the step attenuator enable
+//                switches between the two (console.cs:10952-10972); above
+//                31 dB an Alex board takes the Alex attenuator and the
+//                value + 2 (console.cs:11027-11065); the HPSDR's MOX
+//                preamp is HPSDR_OFF. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -279,6 +287,31 @@ void StepAttenuatorController::setStepAttEnabled(bool on)
 {
     if (m_stepAttEnabled != on) {
         m_stepAttEnabled = on;
+        // Level Cal: turning the step attenuator on sends its value, off
+        // sends the preamp mode's drive and its Alex bits.
+        // From Thetis console.cs:10959-10972 [v2.10.3.15] (RX1StepAttEnabled):
+        //   if (_rx1_step_att_enabled)
+        //   {
+        //       udRX1StepAttData.Value = validateRX1StepAttData(getRX1stepAttenuatorForBand(rx1_band)); //MW0LGE [2.10.3.6] added //[2.10.3.9]MW0LGE validated
+        //       udRX1StepAttData_ValueChanged(this, EventArgs.Empty);
+        //   }
+        //   else
+        //   {
+        //       comboPreamp_SelectedIndexChanged(this, EventArgs.Empty);
+        //
+        //       if (alexpresent)
+        //           NetworkIO.SetAlexAtten(alex_atten); // normal up alex attenuator setting
+        //   }
+        // (applyPreampDrive sends the Alex bits itself. m_attDb already
+        // holds the band's value. Nothing is sent before a radio's settings
+        // load, or while keyed, when the TX values are on the wire.)
+        if (m_boardKnown && m_connection && !m_isMox && !m_loadedMac.isEmpty()) {
+            if (on) {
+                sendRx1Attenuation(m_attDb);
+            } else {
+                applyPreampDrive();
+            }
+        }
         emit stepAttEnabledChanged(on);
         scheduleSave();
     }
@@ -338,14 +371,12 @@ void StepAttenuatorController::setBand(Band band)
             }
             emit attenuationChanged(m_attDb);
         }
-        if (it->second.preamp != m_preampMode) {
-            m_preampMode = it->second.preamp;
-            if (m_bandRestoreToRadio && !m_isMox && m_connection) {
-                RadioConnection* conn = m_connection.get();
-                const bool enabled = (m_preampMode != PreampMode::Off);
-                QMetaObject::invokeMethod(conn, [conn, enabled]() {
-                    conn->setPreamp(enabled);
-                });
+        const PreampMode restoredPreamp = clampPreampForBoard(it->second.preamp);
+        if (restoredPreamp != m_preampMode) {
+            m_preampMode = restoredPreamp;
+            if (m_bandRestoreToRadio && !m_isMox) {
+                // Level Cal: the mode's whole drive, as RX1PreampMode sends.
+                applyPreampDrive();
             }
             emit preampModeChanged(m_preampMode);
         }
@@ -442,22 +473,15 @@ void StepAttenuatorController::setAttenuation(int dB, int rx)
 
 void StepAttenuatorController::setPreampMode(PreampMode mode)
 {
+    // Level Cal: a board without Alex takes Off for the Alex settings.
+    mode = clampPreampForBoard(mode);
     if (m_preampMode == mode) { return; }
     m_preampMode = mode;
 
-    // Send to hardware — from Thetis console.cs comboPreamp_SelectedIndexChanged.
-    //
-    // v0.4.1 hotfix — marshal via QMetaObject::invokeMethod so the
-    // connection-thread state (m_rxPreamp[0] + m_forceBank11Next) is
-    // written on the connection thread, not the controller thread.
-    // Same rationale as setAttenuation above.
-    if (m_connection) {
-        RadioConnection* conn = m_connection.get();
-        const bool enabled = (mode != PreampMode::Off);
-        QMetaObject::invokeMethod(conn, [conn, enabled]() {
-            conn->setPreamp(enabled);
-        });
-    }
+    // Send to hardware: Thetis's RX1PreampMode setter, which
+    // comboPreamp_SelectedIndexChanged calls (applyPreampDrive). Each send
+    // is marshalled to the connection thread (v0.4.1 hotfix).
+    applyPreampDrive();
 
     emit preampModeChanged(m_preampMode);
     scheduleSave();
@@ -465,11 +489,8 @@ void StepAttenuatorController::setPreampMode(PreampMode mode)
 
 void StepAttenuatorController::setMaxAttenuation(int dB)
 {
-    if (m_maxAttDb == dB) {
-        return;
-    }
-    m_maxAttDb = dB;
-    emit attenuationRangeChanged(m_minAttDb, m_maxAttDb);
+    m_rawMaxAttDb = dB;
+    recomputeMaxAtt();
 }
 
 void StepAttenuatorController::setMinAttenuation(int dB)
@@ -780,13 +801,15 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
 
         if (m_isHpsdrBoard) {
             // HPSDR variant: save preamp mode, then force PreampMode::Off
-            // (≡ Thetis PreampMode.HPSDR_OFF, −20 dB).
+            // (Thetis PreampMode.HPSDR_OFF, -20 dB).
             // From Thetis console.cs:29550-29556 [v2.10.3.13]:
             //   temp_mode = RX1PreampMode;
             //   SetupForm.RX1EnableAtt = false;
             //   RX1PreampMode = PreampMode.HPSDR_OFF;  // set to -20dB
+            // Level Cal: PreampMode::Off is HPSDR_OFF now that the ten
+            // Thetis modes are held (Minus20 is HPSDR_MINUS20).
             saveRxPreampMode();
-            setPreampMode(PreampMode::Minus20);  // -20 dB ≡ HPSDR_OFF
+            setPreampMode(PreampMode::Off);
         } else {
             // Non-HPSDR standard board: TX ATT lookup + force-31 override.
             // From Thetis console.cs:29562-29568 [v2.10.3.13]:
@@ -907,7 +930,7 @@ void StepAttenuatorController::onMoxHardwareFlipped(bool isTx)
             m_adcSendsHeldForMox = false;
             for (int adc = 0; adc < kMaxAdcs; ++adc) {
                 if (adc == m_rx1Adc || adc == m_rx2Adc) {
-                    sendAttenuatorToAdc(adc, attenuatorDbForAdc(adc));
+                    sendAttenuatorToAdc(adc, wireAttDbForAdc(adc));
                 }
             }
         }
@@ -1361,9 +1384,9 @@ void StepAttenuatorController::applyAttToHardware(int dB)
 //   if (!_mox || (_mox && VFOATX)) //[2.10.3.9]MW0LGE we should be able to do this if txing on rx1
 //
 // Above 31 dB on an Alex board Thetis also switches the Alex attenuator and
-// sends the value + 2 (console.cs 11044-11056); NereusSDR's connections clamp
-// every board to its own step attenuator's range, so that branch has nothing
-// to act on here, for either value.
+// sends RX1's value + 2 (console.cs 11044-11056); sendRx1Attenuation does
+// that on a known board (Level Cal). RX2's value goes as it is: Thetis's RX2
+// setter has no Alex attenuator of its own.
 
 bool StepAttenuatorController::adcUsesRx1Attenuator(int adc) const noexcept
 {
@@ -1390,7 +1413,7 @@ StepAttenuatorController::AdcAttSnapshot StepAttenuatorController::adcAttSnapsho
     for (int adc = 0; adc < kMaxAdcs; ++adc) {
         const auto i = static_cast<size_t>(adc);
         snap.inUse[i] = adc == m_rx1Adc || adc == m_rx2Adc;
-        snap.dB[i] = attenuatorDbForAdc(adc);
+        snap.dB[i] = wireAttDbForAdc(adc);
     }
     return snap;
 }
@@ -1423,10 +1446,235 @@ void StepAttenuatorController::sendAdcAttenuatorChanges(const AdcAttSnapshot& be
 
 void StepAttenuatorController::sendRx1Attenuation(int dB)
 {
-    sendAttenuatorToAdc(m_rx1Adc, dB);
-    if (m_adcAttLinked && m_rx2Adc >= 0 && m_rx2Adc != m_rx1Adc) {
-        sendAttenuatorToAdc(m_rx2Adc, dB);
+    // Level Cal: on a known board, Thetis's RX1AttenuatorData sends only
+    // while the step attenuator is on, and on an Alex board above 31 dB
+    // switches in the Alex attenuator and sends the value + 2.
+    // From Thetis console.cs:11030-11065 [v2.10.3.15]:
+    //   (the per-band store that follows carries //[2.10.3.9]MW0LGE)
+    //   if (_rx1_step_att_enabled)
+    //   {
+    //       if (alexpresent &&
+    //           ...
+    //           HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //           ...
+    //           HardwareSpecific.Model != HPSDRModel.REDPITAYA) //DH1KLM
+    //       {
+    //           if (_rx1_attenuator_data <= 31)
+    //           {
+    //               NetworkIO.SetAlexAtten(0); // 0dB Alex Attenuator
+    //           ...
+    //               NetworkIO.SetAlexAtten(3); // -30dB Alex Attenuator
+    //               if (nRX1ADCinUse == 0) NetworkIO.SetADC1StepAttenData(_rx1_attenuator_data + 2);
+    //           ...
+    //       else
+    //       {
+    //           NetworkIO.SetAlexAtten(0);
+    // (The linked other ADC takes the same value, as NereusSDR has done.)
+    int wireDb = dB;
+    if (m_boardKnown) {
+        if (!m_stepAttEnabled) {
+            return;
+        }
+        const bool alexOn = stepAttAlexEligible() && dB > 31;
+        sendAlexAtten(alexOn ? 3 : 0);
+        wireDb = rx1WireAttDbFor(dB);
     }
+    sendAttenuatorToAdc(m_rx1Adc, wireDb);
+    if (m_adcAttLinked && m_rx2Adc >= 0 && m_rx2Adc != m_rx1Adc) {
+        sendAttenuatorToAdc(m_rx2Adc, wireDb);
+    }
+}
+
+// --- Level Cal: the preamp mode's drive ---
+
+StepAttenuatorController::PreampDrive
+StepAttenuatorController::preampDriveFor(PreampMode mode) noexcept
+{
+    // From Thetis console.cs:19232-19284 [v2.10.3.15]:
+    //   case PreampMode.HPSDR_ON:  //0dB
+    //       rx1_att_value = 0;
+    //       merc_preamp = 1; //no attn
+    //       alex_atten = 0;
+    //   case PreampMode.HPSDR_OFF: //-20dB
+    //       rx1_att_value = 20;
+    //       merc_preamp = 0; //attn inline
+    //       alex_atten = 0;
+    //   HPSDR_MINUS10 0/1/1, HPSDR_MINUS20 0/1/2, HPSDR_MINUS30 0/1/3,
+    //   HPSDR_MINUS40 20/0/2, HPSDR_MINUS50 20/0/3, SA_MINUS10 10/0/0,
+    //   SA_MINUS20 20/0/0, SA_MINUS30 30/0/0 (att / merc_preamp / alex_atten)
+    switch (mode) {
+    case PreampMode::On:        return {0, true, 0};
+    case PreampMode::Off:       return {20, false, 0};
+    case PreampMode::Minus10:   return {0, true, 1};
+    case PreampMode::Minus20:   return {0, true, 2};
+    case PreampMode::Minus30:   return {0, true, 3};
+    case PreampMode::Minus40:   return {20, false, 2};
+    case PreampMode::Minus50:   return {20, false, 3};
+    case PreampMode::SaMinus10: return {10, false, 0};
+    case PreampMode::SaMinus20: return {20, false, 0};
+    case PreampMode::SaMinus30: return {30, false, 0};
+    }
+    return {0, false, 0};
+}
+
+bool StepAttenuatorController::isHpsdrModel() const noexcept
+{
+    return m_boardKnown ? (m_hpsdrModel == HPSDRModel::HPSDR) : m_isHpsdrBoard;
+}
+
+bool StepAttenuatorController::stepAttAlexEligible() const noexcept
+{
+    // From Thetis console.cs:11031-11043 [v2.10.3.15] (//N1GP, //DH1KLM):
+    //   if (alexpresent &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN10 &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN10E &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN7000D &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN8000D &&
+    //       HardwareSpecific.Model != HPSDRModel.ORIONMKII &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN_G2E && //N1GP G2E added
+    //       HardwareSpecific.Model != HPSDRModel.ANAN_G2 &&
+    //       HardwareSpecific.Model != HPSDRModel.ANAN_G2_1K &&
+    //       HardwareSpecific.Model != HPSDRModel.ANVELINAPRO3 &&
+    //       HardwareSpecific.Model != HPSDRModel.REDPITAYA) //DH1KLM
+    if (!m_boardKnown || !m_alexPresent) {
+        return false;
+    }
+    switch (m_hpsdrModel) {
+    case HPSDRModel::ANAN10:
+    case HPSDRModel::ANAN10E:
+    case HPSDRModel::ANAN7000D:
+    case HPSDRModel::ANAN8000D:
+    case HPSDRModel::ORIONMKII:
+    case HPSDRModel::ANAN_G2E: //N1GP G2E added
+    case HPSDRModel::ANAN_G2:
+    case HPSDRModel::ANAN_G2_1K:
+    case HPSDRModel::ANVELINAPRO3:
+    case HPSDRModel::REDPITAYA: //DH1KLM
+        return false;
+    default:
+        return true;
+    }
+}
+
+PreampMode StepAttenuatorController::clampPreampForBoard(PreampMode mode) const noexcept
+{
+    // From Thetis console.cs:19220-19227 [v2.10.3.15]:
+    //   if (!alexpresent && ((rx1_preamp_mode == PreampMode.HPSDR_MINUS10) ||
+    //                       ...
+    //                       (rx1_preamp_mode == PreampMode.HPSDR_MINUS50)))
+    //   {
+    //       rx1_preamp_mode = PreampMode.HPSDR_OFF;
+    //   }
+    if (!m_boardKnown || m_alexPresent) {
+        return mode;
+    }
+    switch (mode) {
+    case PreampMode::Minus10:
+    case PreampMode::Minus20:
+    case PreampMode::Minus30:
+    case PreampMode::Minus40:
+    case PreampMode::Minus50:
+        return PreampMode::Off;
+    default:
+        return mode;
+    }
+}
+
+void StepAttenuatorController::recomputeMaxAtt()
+{
+    // Above 31 dB is the Alex attenuator plus the step attenuator, which
+    // Thetis uses only on a board in its Alex list (stepAttAlexEligible);
+    // any other known board stops at its own 31 dB.
+    int effective = m_rawMaxAttDb;
+    if (m_boardKnown && !stepAttAlexEligible() && effective > 31) {
+        effective = 31;
+    }
+    if (effective == m_maxAttDb) {
+        return;
+    }
+    m_maxAttDb = effective;
+    emit attenuationRangeChanged(m_minAttDb, m_maxAttDb);
+}
+
+int StepAttenuatorController::rx1WireAttDbFor(int dB) const noexcept
+{
+    if (!m_boardKnown) {
+        return dB;
+    }
+    if (!m_stepAttEnabled) {
+        return preampDriveFor(m_preampMode).attDb;
+    }
+    return (stepAttAlexEligible() && dB > 31) ? dB + 2 : dB;
+}
+
+int StepAttenuatorController::wireAttDbForAdc(int adc) const noexcept
+{
+    return adcUsesRx1Attenuator(adc) ? rx1WireAttDbFor(m_attDb) : m_rx2AttDb;
+}
+
+void StepAttenuatorController::applyPreampDrive()
+{
+    if (!m_connection) {
+        return;
+    }
+    RadioConnection* conn = m_connection.get();
+    if (!m_boardKnown) {
+        // Before the board is known: the preamp bit alone, as before.
+        const bool enabled = (m_preampMode != PreampMode::Off);
+        QMetaObject::invokeMethod(conn, [conn, enabled]() {
+            conn->setPreamp(enabled);
+        });
+        return;
+    }
+    const PreampDrive drive = preampDriveFor(m_preampMode);
+    // From Thetis console.cs:19293-19330 [v2.10.3.15] (the Alex list in it
+    // carries //N1GP G2E added and //DH1KLM):
+    //   if (HardwareSpecific.Model != HPSDRModel.HPSDR)
+    //   {
+    //       if (!_rx1_step_att_enabled)
+    //       {
+    //           if (nRX1ADCinUse == 0) NetworkIO.SetADC1StepAttenData(rx1_att_value);
+    //           ...
+    //   }
+    //   else
+    //   {
+    //       NetworkIO.SetRX1Preamp(merc_preamp);
+    //   }
+    //
+    //   if (_rx1_step_att_enabled)
+    //   {
+    //       (the Alex list) ... SetAlexAtten(_rx1_attenuator_data <= 31 ? 0 : 3)
+    //       else NetworkIO.SetAlexAtten(0);
+    //   }
+    //   else
+    //   {
+    //       NetworkIO.SetAlexAtten(alex_atten);
+    if (!isHpsdrModel()) {
+        if (!m_stepAttEnabled) {
+            sendAttenuatorToAdc(m_rx1Adc, drive.attDb);
+        }
+    } else {
+        const bool merc = drive.mercPreamp;
+        QMetaObject::invokeMethod(conn, [conn, merc]() {
+            conn->setPreamp(merc);
+        });
+    }
+    if (m_stepAttEnabled) {
+        sendAlexAtten((stepAttAlexEligible() && m_attDb > 31) ? 3 : 0);
+    } else {
+        sendAlexAtten(drive.alexAtten);
+    }
+}
+
+void StepAttenuatorController::sendAlexAtten(int bits)
+{
+    if (!m_connection) {
+        return;
+    }
+    RadioConnection* conn = m_connection.get();
+    QMetaObject::invokeMethod(conn, [conn, bits]() {
+        conn->setAlexAtten(bits);
+    });
 }
 
 void StepAttenuatorController::sendRx2Attenuation()
@@ -1434,7 +1682,7 @@ void StepAttenuatorController::sendRx2Attenuation()
     if (m_rx2Adc < 0 || m_rx2Adc == m_rx1Adc) {
         return;
     }
-    sendAttenuatorToAdc(m_rx2Adc, attenuatorDbForAdc(m_rx2Adc));
+    sendAttenuatorToAdc(m_rx2Adc, wireAttDbForAdc(m_rx2Adc));
 }
 
 void StepAttenuatorController::setRx2Attenuation(int dB)
@@ -1631,6 +1879,8 @@ void StepAttenuatorController::setBoardIdentity(HPSDRHW board, HPSDRModel model,
     m_hpsdrModel = model;
     m_alexPresent = alexPresent;
     m_boardKnown = true;
+    // Level Cal: a board outside Thetis's Alex list stops at 31 dB.
+    recomputeMaxAtt();
 }
 
 void StepAttenuatorController::setReceiverManager(ReceiverManager* mgr)
@@ -1948,6 +2198,10 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // m_stepAttEnabled is correct but the checkbox stays at its
     // constructor default (unchecked) until the user clicks it — so
     // persistence appears broken even when the round-trip works.
+    // Level Cal: a stored Alex setting reads Off on a board without Alex,
+    // as Thetis's RX1PreampMode setter makes it (console.cs:19220-19227
+    // [v2.10.3.15]).
+    m_preampMode = clampPreampForBoard(m_preampMode);
     emit attenuationChanged(m_attDb);
     emit preampModeChanged(m_preampMode);
     emit stepAttEnabledChanged(m_stepAttEnabled);
@@ -1972,12 +2226,10 @@ void StepAttenuatorController::loadSettings(const QString& mac)
     // attenuation and preamp were not sent until they next changed. The
     // second ADC's preamp is not held per band here (rx1Preamp), so there
     // is no stored value of it to send.
+    // Level Cal: the preamp mode's whole drive (applyPreampDrive), then the
+    // step attenuator, in InitConsole's order.
     if (m_connection && !m_isMox) {
-        RadioConnection* conn = m_connection.get();
-        const bool preampOn = (m_preampMode != PreampMode::Off);
-        QMetaObject::invokeMethod(conn, [conn, preampOn]() {
-            conn->setPreamp(preampOn);
-        });
+        applyPreampDrive();
         sendRx1Attenuation(m_attDb);
     }
     // The other ADC in use takes its restored value now (its byte is not

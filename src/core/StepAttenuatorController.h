@@ -52,6 +52,12 @@
 //                 that file's header is now carried below) and
 //                 setBoardIdentity feeds the stored-mode move. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: each preamp mode drives the step attenuator,
+//                 the preamp bit and the Alex attenuator as Thetis does
+//                 (console.cs:19218-19330 [v2.10.3.15]), and above 31 dB an
+//                 Alex board switches in the Alex attenuator and sends the
+//                 value + 2 (console.cs:11027-11065). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -695,6 +701,9 @@ private:
     PreampMode m_preampMode = PreampMode::Off;
     bool m_stepAttEnabled = true;
     int m_maxAttDb = kDefaultMaxAttDb;
+    // The range the caller set; m_maxAttDb is it, held at 31 on a known
+    // board outside Thetis's Alex list (recomputeMaxAtt).
+    int m_rawMaxAttDb = kDefaultMaxAttDb;
     int m_minAttDb = kDefaultMinAttDb;
 
     // Issue #259 — guards saveSettings against pre-load clobber.
@@ -878,7 +887,29 @@ private:
     // Send each ADC in use whose value or use differs from `before`.
     void sendAdcAttenuatorChanges(const AdcAttSnapshot& before);
     // Send RX1's value to slice A's ADC, and to the other ADC while linked.
+    // On a known board: nothing while the step attenuator is off, and the
+    // Alex attenuator plus the value + 2 above 31 dB on an Alex board.
     void sendRx1Attenuation(int dB);
+    // Level Cal: what one preamp mode sends (Thetis RX1PreampMode setter).
+    struct PreampDrive {
+        int attDb{0};
+        bool mercPreamp{false};
+        int alexAtten{0};
+    };
+    static PreampDrive preampDriveFor(PreampMode mode) noexcept;
+    bool isHpsdrModel() const noexcept;
+    // Thetis's Alex list for the step attenuator above 31 dB.
+    bool stepAttAlexEligible() const noexcept;
+    // Alex settings become Off on a known board without Alex.
+    PreampMode clampPreampForBoard(PreampMode mode) const noexcept;
+    void recomputeMaxAtt();
+    // The step attenuator value RX1's ADC receives for dB.
+    int rx1WireAttDbFor(int dB) const noexcept;
+    // attenuatorDbForAdc as it goes on the wire.
+    int wireAttDbForAdc(int adc) const noexcept;
+    // Send the current preamp mode's drive.
+    void applyPreampDrive();
+    void sendAlexAtten(int bits);
     // Send the other ADC's own value to it (nothing while linked or unused).
     void sendRx2Attenuation();
     void sendAttenuatorToAdc(int adc, int dB);

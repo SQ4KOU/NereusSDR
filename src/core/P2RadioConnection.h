@@ -78,6 +78,11 @@
 //                receive high-pass as Thetis's setAlexHPF /
 //                setBPF1ForOrionIISaturn / setAlex2HPF do (radioHardwareVersion
 //                8). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -313,6 +318,8 @@ public slots:
     void setMox(bool enabled) override;
     void setAntennaRouting(AntennaRouting routing) override;
     void setAlexRxBpf(AlexRxBpf bpf) override;
+    // Level Cal: the Alex receive attenuator (Thetis SetAlexAtten).
+    void setAlexAtten(int bits) override;
     void setWatchdogEnabled(bool enabled) override;
     void sendTxIq(const float* iq, int n) override;
     void setTrxRelay(bool enabled) override;
@@ -1026,6 +1033,11 @@ private:
         // _Rx_1_Out relay (K36 RL17 RX-Bypass-Out) — from Thetis
         // ChannelMaster/network.h:282 [v2.10.3.13 @501e3f5]. Alex0 bit 11.
         bool rxOut{false};
+
+        // Alex attenuator _20_dB_Atten / _10_dB_Atten (Thetis SetAlexAtten),
+        // Alex0 bits 13 / 14, network.h:284-285 [v2.10.3.15].
+        bool atten20dB{false};
+        bool atten10dB{false};
     };
     AlexState m_alex;
 

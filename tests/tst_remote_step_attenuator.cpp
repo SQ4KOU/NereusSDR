@@ -262,7 +262,9 @@ private slots:
         QTRY_VERIFY(lastResultFor(results, "attenuationDb").seen);
         QVERIFY(lastResultFor(results, "attenuationDb").accepted);
         QCOMPARE(s->controller()->attenuatorDb(), 45);
-        QCOMPARE(s->radio.attenuator.last(), 45);
+        // Above 31 dB an Alex board's step attenuator carries the value + 2
+        // (console.cs:11044-11056 [v2.10.3.15]).
+        QCOMPARE(s->radio.attenuator.last(), 47);
 
         results.clear();
         remote->setAttenuationDb(70);
@@ -273,7 +275,7 @@ private slots:
         QVERIFY(OperatorWording::isPlain(settled.reason));
         QCOMPARE(s->controller()->attenuatorDb(), 61);
         QCOMPARE(remote->attenuationDb(), 61);
-        QCOMPARE(s->radio.attenuator.last(), 61);
+        QCOMPARE(s->radio.attenuator.last(), 63);
     }
 
     void hermesLite2ReportsItsRangeAndSettlesAdaptiveToClassic()

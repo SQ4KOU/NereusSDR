@@ -47,6 +47,11 @@
 //                 map; preampModeFromV1 moves a mode stored before the SA
 //                 modes existed. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-29 - Level Cal: the Alex receive attenuator (Thetis SetAlexAtten,
+//                netInterface.c:421-432 [v2.10.3.15]) on the wire, and the step
+//                attenuator range above 31 dB on Alex boards (value + 2,
+//                console.cs:11044-11056 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -1742,6 +1747,13 @@ std::span<const PreampItem> rx2PreampItemsForBoard(HPSDRHW hw) noexcept
     default:
         return items(kOnOff);
     }
+}
+
+int stepAttWireMaxDb(const BoardCapabilities& caps) noexcept
+{
+    const int boardMax = caps.attenuator.maxDb;
+    const int stepMax = stepAttMaxDb(caps.board, caps.hasAlexFilters);
+    return stepMax > boardMax ? stepMax + 2 : boardMax;
 }
 
 int stepAttMaxDb(HPSDRHW hw, bool alexPresent) noexcept

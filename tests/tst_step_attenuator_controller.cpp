@@ -70,6 +70,7 @@
 #include <QSignalSpy>
 
 #include "core/AppSettings.h"
+#include "core/HpsdrModel.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
 #include "models/Band.h"
@@ -90,6 +91,8 @@ public:
 
     QList<int> attenuator;
     QList<bool> preamp;
+    // Level Cal: the Alex attenuator bits (Thetis SetAlexAtten).
+    QList<int> alexAtten;
 
     void init() override {}
     void connectToRadio(const NereusSDR::RadioInfo&) override {}
@@ -100,6 +103,7 @@ public:
     void setSampleRate(int) override {}
     void setAttenuator(int dB) override { attenuator.append(dB); }
     void setPreamp(bool on) override { preamp.append(on); }
+    void setAlexAtten(int bits) override { alexAtten.append(bits); }
     void setTxDrive(int) override {}
     void sendTxIq(const float*, int) override {}
     void setWatchdogEnabled(bool) override {}
@@ -1019,6 +1023,171 @@ private slots:
         ctrl.setRadioConnection(nullptr);
         s.clearHardwareValues(oldRadio);
         s.clearHardwareValues(newRadio);
+    }
+
+    // Level Cal: each preamp setting drives the step attenuator, the preamp
+    // bit and the Alex attenuator as Thetis's RX1PreampMode setter does.
+    // From Thetis console.cs:19232-19284 [v2.10.3.15] (the switch) and
+    // 19298-19330 (the sends). ANAN-100 with Alex, step attenuator off:
+    // the attenuator and the Alex bits follow the table, and a board other
+    // than the HPSDR never receives the preamp bit.
+    void preampDriveOnAnAlexBoard()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Hermes, HPSDRModel::ANAN100, true);
+        ctrl.setStepAttEnabled(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        struct Row { PreampMode mode; int att; int alex; };
+        const Row rows[] = {
+            {PreampMode::On,        0,  0},
+            {PreampMode::Minus10,   0,  1},
+            {PreampMode::Minus20,   0,  2},
+            {PreampMode::Minus30,   0,  3},
+            {PreampMode::Minus40,   20, 2},
+            {PreampMode::Minus50,   20, 3},
+            {PreampMode::SaMinus10, 10, 0},
+            {PreampMode::SaMinus20, 20, 0},
+            {PreampMode::SaMinus30, 30, 0},
+            {PreampMode::Off,       20, 0},
+        };
+        for (const Row& row : rows) {
+            ctrl.setPreampMode(row.mode);
+            QVERIFY(!radio.attenuator.isEmpty());
+            QVERIFY(!radio.alexAtten.isEmpty());
+            QCOMPARE(radio.attenuator.last(), row.att);
+            QCOMPARE(radio.alexAtten.last(), row.alex);
+        }
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // The HPSDR (Atlas) takes the preamp bit and the Alex bits, and no
+    // step attenuator from the preamp setting.
+    void preampDriveOnTheHpsdr()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Atlas, HPSDRModel::HPSDR, true);
+        ctrl.setStepAttEnabled(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setPreampMode(PreampMode::Minus30);
+        QCOMPARE(radio.preamp, QList<bool>{true});
+        QCOMPARE(radio.alexAtten, QList<int>{3});
+        ctrl.setPreampMode(PreampMode::Off);
+        QCOMPARE(radio.preamp, (QList<bool>{true, false}));
+        QCOMPARE(radio.alexAtten, (QList<int>{3, 0}));
+        QVERIFY(radio.attenuator.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // A board without Alex turns the Alex settings into Off, as Thetis
+    // does (console.cs:19220-19227 [v2.10.3.15]); the HL2's SA settings
+    // drive its step attenuator.
+    void preampDriveWithoutAlex()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::HermesLite, HPSDRModel::HERMESLITE, false);
+        ctrl.setStepAttEnabled(false);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setPreampMode(PreampMode::SaMinus10);
+        QCOMPARE(radio.attenuator.last(), 10);
+        ctrl.setPreampMode(PreampMode::Minus20);
+        QCOMPARE(ctrl.preampMode(), PreampMode::Off);
+        QCOMPARE(radio.attenuator.last(), 20);
+        ctrl.setPreampMode(PreampMode::SaMinus30);
+        QCOMPARE(radio.attenuator.last(), 30);
+        QVERIFY(radio.preamp.isEmpty());
+        QCOMPARE(radio.alexAtten.last(), 0);
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Step attenuator on, an Alex board with the 61 dB range: above 31 dB
+    // the Alex attenuator takes 30 dB and the step attenuator the value
+    // + 2 (console.cs:11031-11056 [v2.10.3.15]); a preamp setting sends
+    // only the Alex bits that match the attenuation.
+    void stepAttenuatorAbove31UsesTheAlexAttenuator()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Hermes, HPSDRModel::ANAN100, true);
+        ctrl.setMaxAttenuation(61);
+        QCOMPARE(ctrl.maxAttenuation(), 61);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.setAttenuation(47);
+        QCOMPARE(radio.attenuator.last(), 49);
+        QCOMPARE(radio.alexAtten.last(), 3);
+        ctrl.setAttenuation(20);
+        QCOMPARE(radio.attenuator.last(), 20);
+        QCOMPARE(radio.alexAtten.last(), 0);
+        const int sends = radio.attenuator.size();
+        ctrl.setPreampMode(PreampMode::Minus20);
+        QCOMPARE(radio.attenuator.size(), sends);
+        QCOMPARE(radio.alexAtten.last(), 0);
+        QVERIFY(radio.preamp.isEmpty());
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // The G2 and the ANAN-10 are outside Thetis's Alex list: their step
+    // attenuator stops at 31 whatever range the caller sets, before or
+    // after the board is known.
+    void boardsOutsideTheAlexListStopAt31()
+    {
+        StepAttenuatorController g2;
+        g2.setTickTimerEnabled(false);
+        g2.setBoardIdentity(HPSDRHW::Saturn, HPSDRModel::ANAN_G2, true);
+        g2.setMaxAttenuation(61);
+        QCOMPARE(g2.maxAttenuation(), 31);
+        RecordingConnection radio;
+        g2.setRadioConnection(&radio);
+        g2.setAttenuation(45);
+        QCOMPARE(radio.attenuator.last(), 31);
+        QCOMPARE(radio.alexAtten.last(), 0);
+        g2.setRadioConnection(nullptr);
+
+        StepAttenuatorController anan10;
+        anan10.setTickTimerEnabled(false);
+        anan10.setMaxAttenuation(61);
+        QSignalSpy range(&anan10, &StepAttenuatorController::attenuationRangeChanged);
+        anan10.setBoardIdentity(HPSDRHW::HermesII, HPSDRModel::ANAN10, true);
+        QCOMPARE(anan10.maxAttenuation(), 31);
+        QCOMPARE(range.count(), 1);
+    }
+
+    // Turning the step attenuator off sends the preamp setting's values;
+    // turning it on sends the step attenuator's (Thetis RX1StepAttEnabled,
+    // console.cs:10952-10972 [v2.10.3.15]). While it is off the step
+    // attenuator value is not sent.
+    void stepAttenuatorEnableSwitchesWhatIsSent()
+    {
+        const QString mac = QStringLiteral("aa:bb:cc:de:ad:40");
+        auto& s = AppSettings::instance();
+        s.clearHardwareValues(mac);
+        StepAttenuatorController ctrl;
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setBoardIdentity(HPSDRHW::Hermes, HPSDRModel::ANAN100, true);
+        RecordingConnection radio;
+        ctrl.setRadioConnection(&radio);
+        ctrl.loadSettings(mac);
+        ctrl.setPreampMode(PreampMode::SaMinus20);
+        ctrl.setAttenuation(12);
+        radio.attenuator.clear();
+        radio.alexAtten.clear();
+        ctrl.setStepAttEnabled(false);
+        QCOMPARE(radio.attenuator, QList<int>{20});
+        QCOMPARE(radio.alexAtten.last(), 0);
+        ctrl.setAttenuation(15);
+        QCOMPARE(radio.attenuator, QList<int>{20});
+        ctrl.setStepAttEnabled(true);
+        QCOMPARE(radio.attenuator, (QList<int>{20, 15}));
+        QCOMPARE(radio.alexAtten.last(), 0);
+        ctrl.setRadioConnection(nullptr);
+        s.clearHardwareValues(mac);
     }
 };
 

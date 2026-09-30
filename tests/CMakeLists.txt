@@ -2094,6 +2094,7 @@ nereus_add_test(tst_disable_hf_pa)
 # do (console.cs:6839-7175). NereusSDR-original tests.
 nereus_add_test(tst_alex_hpf_rows)
 nereus_add_test(tst_alex_lpf_rows)
+nereus_add_test(tst_alex_atten_wire)
 # Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window
@@ -3886,7 +3887,7 @@ target_compile_definitions(tst_general_options_time_out PRIVATE NEREUS_BUILD_TES
 #   5. CWU mode → force 31 dB
 #   6. USB mode + PS on → applies stored TX ATT (no force)
 #   7. isTx=false → clears TX ATT to 0 dB (TX→RX restore)
-#   8. HPSDR board, isTx=true → saves preamp, forces Minus20 (HPSDR_OFF)
+#   8. HPSDR board, isTx=true → saves preamp, forces Off (HPSDR_OFF)
 #   9. HPSDR board, isTx=false → restores saved preamp
 #  10. shouldForce31Db predicate table-driven (12 cases)
 #  11. TX ATT per-band storage round-trip (14 bands)
