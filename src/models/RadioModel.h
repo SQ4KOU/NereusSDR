@@ -503,6 +503,11 @@
 //                (refreshRadeTxSelection). Removing a slice destroys its
 //                RadeChannel. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - RADE gaps: publishRadeModeSlices hands the DSP worker the
+//                slices in RADE mode, on every mode change, slice list
+//                change and worker attach, so a RADE slice with no route
+//                yet plays silence, not its sideband. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -6779,6 +6784,12 @@ private:
     // change, so the audio thread never walks m_slices or touches a
     // SliceModel the main thread may be deleting.
     void publishSliceAudioView();
+    // RADE gaps (2026-09-30): the slices in RADE mode (bit n for id n), and
+    // their hand-off to the DSP worker (RxDspWorker::setRadeModeSlices).
+    // Main thread; called from publishSliceAudioView, on each slice's mode
+    // change, and when a worker is attached.
+    quint32 radeModeSliceMask() const;
+    void publishRadeModeSlices();
     int addSliceImpl(int requestedId, const QString& initialPanId,
                      const ReceiveSliceState* restoreSeed = nullptr,
                      bool bindRestored = false);

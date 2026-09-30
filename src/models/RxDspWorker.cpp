@@ -28,6 +28,14 @@
 //                 its main-thread hop (radeIqReady, routeRadeSpeech).
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 - RADE gaps: a slice in RADE mode that has no route on this
+//                 worker yet (the blocks before the queued route lands, a
+//                 new worker before the replay, a decoder that could not be
+//                 made) plays silence, not its WDSP sideband. RadioModel
+//                 publishes the RADE-mode slices as one atomic bit mask
+//                 (setRadeModeSlices); the DSP thread only loads it.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1046,6 +1054,16 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                 // [RADE threads: the decoded speech now reaches AudioEngine
                 // from processRadeRxBlock above, on this thread.]
                 if (!routesToRade) {
+                    // RADE gaps (2026-09-30): a slice in RADE mode whose
+                    // route is not here (yet) keeps its place in the mix
+                    // with silence. Its WDSP audio is the sideband, which
+                    // a RADE slice never plays (setRadeModeSlices).
+                    static_assert(WdspEngine::kMaxSliceChannels <= kRadeModeMaskSlices,
+                                  "every slice id needs a RADE mode bit");
+                    const bool radeWithoutRoute = sliceIdx >= 0
+                        && sliceIdx < kRadeModeMaskSlices
+                        && ((m_radeModeSlices.load(std::memory_order_acquire)
+                             >> sliceIdx) & 1u) != 0;
                     // Phase 3F Sub-Epic I Task 4: slice 0 keeps
                     // m_interleavedOut to itself because the anti-VOX fork
                     // below reads it as the cancellation reference; a
@@ -1059,9 +1077,13 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                         scratch.resize(outSize * 2);
                     }
                     float* interleaved = scratch.data();
-                    for (int i = 0; i < outSize; ++i) {
-                        interleaved[i * 2 + 0] = outI[i];
-                        interleaved[i * 2 + 1] = outQ[i];
+                    if (radeWithoutRoute) {
+                        std::fill(interleaved, interleaved + outSize * 2, 0.0f);
+                    } else {
+                        for (int i = 0; i < outSize; ++i) {
+                            interleaved[i * 2 + 0] = outI[i];
+                            interleaved[i * 2 + 1] = outQ[i];
+                        }
                     }
                     // MasterMixer sums every registered slice into the one
                     // global output, so each slice pushes under its own id.
