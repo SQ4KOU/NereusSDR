@@ -122,6 +122,11 @@ answer. The result:
   a take-back that worked, the same `id` is refused with "That can no longer
   be taken back."
 
+Keep the notice's card up after a refusal that may be tried again (the
+slice transmitting): the slice is still the one the entry names, at the
+entry's `controlRevision`, and the Core still holds the take-back. Take the
+card down when the take-back works, and after any other refusal.
+
 Transmit never moves with a take-back: the phone does not hold transmit or
 choose the slice for it by taking control back, and its first key on the
 slice is refused until it picks the slice with `tx.setTxSlice`, exactly as
@@ -229,6 +234,11 @@ The verbs:
 Keying (link section 18):
 
 - `noTransmitSlice`: "There is no slice to transmit on. Add a slice first."
+  Also the answer to a key whose binding would land on the slice the phone
+  lost (the slice the flag was on when another device took it, while the
+  phone did not hold transmit) while the phone has no slice of its own it
+  may transmit on. With one, the Core moves the unkeyed flag there and the
+  key goes ahead.
 - `chooseTransmitSlice`: "You took this slice from another device. Choose it
   for transmit first with its TX button." This refusal applies to a key whose
   binding would land on a slice this device took and has not chosen with
