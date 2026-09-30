@@ -50,6 +50,11 @@
 //                                    computer's now. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  A slow snapshot is not a dead
+//                                    station; a dead window-to-Core
+//                                    direction is found while the Core
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -147,7 +152,8 @@ private slots:
 
     // ---- Step 3a ----
     void silentlyDeadPeerIsDetectedNotJustACleanClose();
-    void aStationStillSendingIsAliveWhileItsPongsLag();
+    void aSlowSnapshotIsNotADeadStation();
+    void aDeadWindowToCoreDirectionIsFoundWhileTheCoreStreams();
 
     // ---- Step 3's mechanism (TLS-specific: QSKIP when unusable) ----
     void autoReconnectUsesOwnedCancellableTimerWithExponentialBackoff();
@@ -499,12 +505,77 @@ void TstSessionLinkLoss::silentlyDeadPeerIsDetectedNotJustACleanClose()
     QVERIFY(clientModel.isConnected());
 }
 
-// A late pong on a busy link is not a dead station (tst_relay_session: a
-// session over the web relay under load was declared dead mid-snapshot
-// and dialled again, joining the relay twice from each end). The station
-// answers no pings but keeps sending; the session stays. Once it goes
-// quiet as well, the heartbeat still finds it.
-void TstSessionLinkLoss::aStationStillSendingIsAliveWhileItsPongsLag()
+// A pong queued behind the snapshot is not a dead station
+// (tst_relay_session: a session over the web relay under load was declared
+// dead mid-snapshot and dialled again, joining the relay twice from each
+// end). Everything the station sends after its Hello arrives late and in
+// order, pongs included; the heartbeat runs from the Hello but counts no
+// missed pong before the snapshot-complete marker (the handshake deadline
+// bounds that window). Once the session is up, only a pong counts again.
+void TstSessionLinkLoss::aSlowSnapshotIsNotADeadStation()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    server.setHeartbeatIntervalMs(0);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    client.setHeartbeatIntervalMs(20);
+    client.setMaxMissedPongs(2);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("slow-station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    // The station's first frame (its Hello) goes through and starts the
+    // client's heartbeat; from its second frame on the link is slow.
+    int stationFrames = 0;
+    connect(stationEnd, &LoopbackTransport::outboundText, this, [&](const QByteArray&) {
+        if (++stationFrames == 2) {
+            stationEnd->setHoldsOutgoing(true);
+        }
+    });
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy timedOut(&client, &StationClient::stationHeartbeatTimeout);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_VERIFY(stationFrames >= 2);
+    QCOMPARE(clientEnd->received().size(), 1);
+
+    // Ten times the interval and miss count the heartbeat allows once the
+    // session is up: pings keep going out, their pongs wait behind the
+    // snapshot, and nothing is counted against the link.
+    const int window = client.heartbeatIntervalMs() * client.maxMissedPongs() * 10;
+    QTest::qWait(window);
+    QVERIFY2(stationEnd->pingsSeen() > client.maxMissedPongs(),
+             qPrintable(QStringLiteral("only %1 pings").arg(stationEnd->pingsSeen())));
+    QCOMPARE(timedOut.count(), 0);
+    QCOMPARE(completed.count(), 0);
+
+    // The snapshot arrives: the session is up, with no second dial.
+    stationEnd->setHoldsOutgoing(false);
+    QTRY_COMPARE(completed.count(), 1);
+    QCOMPARE(timedOut.count(), 0);
+
+    // From here a missed pong counts: a silent station is found in time.
+    stationEnd->setAnswersPings(false);
+    const int detectionDeadlineMs =
+        std::max(500, client.heartbeatIntervalMs() * client.maxMissedPongs() * 10);
+    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, detectionDeadlineMs);
+}
+
+// Only a pong counts once the session is up (StationServer.h, heartbeat
+// section): the window-to-Core direction dies while the Core keeps
+// streaming to the window. The window's pings are lost, so no pong comes
+// back, and the heartbeat finds the link dead within its interval and
+// miss count although frames keep arriving.
+void TstSessionLinkLoss::aDeadWindowToCoreDirectionIsFoundWhileTheCoreStreams()
 {
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
@@ -518,24 +589,24 @@ void TstSessionLinkLoss::aStationStillSendingIsAliveWhileItsPongsLag()
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
     // Two missed pongs span more than the station's delta flush
-    // (StationServer::kDefaultDeltaFlushMs), so a busy station sends a
-    // frame inside every heartbeat window.
+    // (StationServer::kDefaultDeltaFlushMs), so the Core's frames keep
+    // arriving inside the window the heartbeat allows.
     client.setHeartbeatIntervalMs(StationServer::kDefaultDeltaFlushMs * 2);
     client.setMaxMissedPongs(2);
 
-    auto* stationEnd = new LoopbackTransport(QStringLiteral("busy-station"), this);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("streaming-station"), this);
     auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
     stationEnd->linkTo(clientEnd);
 
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     QSignalSpy timedOut(&client, &StationClient::stationHeartbeatTimeout);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
     client.startSession(clientEnd, server.token());
     server.acceptTransport(stationEnd);
     QTRY_COMPARE(completed.count(), 1);
 
-    // The station stops answering pings but keeps sending: a slice's
-    // frequency moves every 5 ms, each change a delta to this client.
-    stationEnd->setAnswersPings(false);
+    // The Core keeps streaming: a slice's frequency moves every 5 ms, each
+    // change a delta to this window.
     SliceModel* slice = stationModel->slices().first();
     QSignalSpy frames(clientEnd, &SessionTransport::textReceived);
     double frequency = 14000000.0;
@@ -546,21 +617,30 @@ void TstSessionLinkLoss::aStationStillSendingIsAliveWhileItsPongsLag()
         slice->setFrequency(frequency);
     });
     traffic.start();
+    QTRY_VERIFY(frames.count() > 0);
 
-    // Five times the interval and miss count the heartbeat allows.
-    const int window = client.heartbeatIntervalMs() * client.maxMissedPongs() * 5;
-    QTest::qWait(window);
-    const int pingsWhileBusy = stationEnd->pingsSeen();
-    QVERIFY2(pingsWhileBusy > client.maxMissedPongs(),
-             qPrintable(QStringLiteral("only %1 unanswered pings").arg(pingsWhileBusy)));
-    QCOMPARE(timedOut.count(), 0);
-    QVERIFY(client.isHandshakeComplete());
-    QVERIFY2(frames.count() > 10, qPrintable(QString::number(frames.count())));
+    // Read inside the timeout handler: the close that follows lets the
+    // station delete its end (see silentlyDeadPeerIsDetectedNotJustACleanClose).
+    int pingsSeenAtTimeout = -1;
+    int framesAtTimeout = -1;
+    connect(&client, &StationClient::stationHeartbeatTimeout, this, [&]() {
+        pingsSeenAtTimeout = stationEnd->pingsSeen();
+        framesAtTimeout = frames.count();
+    });
 
-    // Quiet as well: now the station is dead to this client.
+    // The window-to-Core direction dies without a close.
+    clientEnd->setDropsOutgoing(true);
+    const int pingsBefore = stationEnd->pingsSeen();
+    const int framesBefore = frames.count();
+    const int detectionDeadlineMs =
+        std::max(500, client.heartbeatIntervalMs() * client.maxMissedPongs() * 10);
+    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, detectionDeadlineMs);
     traffic.stop();
-    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, window);
-    QVERIFY(!client.isHandshakeComplete());
+    QVERIFY2(framesAtTimeout > framesBefore,
+             "the Core stopped streaming; the test proves nothing");
+    QCOMPARE(pingsSeenAtTimeout, pingsBefore);
+    QTRY_COMPARE(ended.count(), 1);
+    QCOMPARE(ended.first().first().toString(), QStringLiteral("heartbeat timeout"));
 }
 
 // ── Step 3's mechanism ───────────────────────────────────────────────────

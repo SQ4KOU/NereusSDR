@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  The heartbeat does not count missed
+//                                    pongs before the snapshot-complete
+//                                    marker. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  The older-Core reason for the 2 m band
 //                                    no longer says "yet". AI-assisted via
 //                                    Anthropic Claude Code.
@@ -1786,16 +1790,6 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
         // observation or snapshot from a replaced transport cannot become part
         // of its successor, even if a later allocation reuses the address.
         if (m_transport == transport && m_sessionEpoch == epoch) {
-            // Any frame from the station proves it is alive, as a pong
-            // does. A pong travels in order behind whatever the station is
-            // already sending, so on a slow link (the web relay under
-            // load, a large snapshot) it can come later than two relayed
-            // heartbeat intervals while the station's frames keep
-            // arriving. Counting only pongs then declared a live link dead
-            // and dialled again: a second relay join from each end
-            // (tst_relay_session). A station that stops answering stops
-            // sending too, so silence is still detected.
-            m_pingsAwaitingPong = 0;
             onTransportText(wire);
         }
     });
@@ -2277,6 +2271,19 @@ void StationClient::onHeartbeatTick()
     // Step 2b: the cadence follows the path (a move or a settled pair may
     // have changed it since the last tick).
     m_heartbeatTimer->setInterval(effectiveHeartbeatIntervalMs());
+    // Before the snapshot-complete marker a missed pong is not counted. The
+    // station sends its whole snapshot in order ahead of any pong, so on a
+    // slow link (the web relay under load) the pong can arrive later than
+    // kMaxMissedPongs relayed intervals while the snapshot is still coming.
+    // Counting it then declared a live link dead and dialled again (a
+    // second relay join from each end, tst_relay_session). The handshake
+    // deadline already bounds this window: it runs until the marker and
+    // ends a connect that stalls. The ping is still sent; only a pong
+    // counts once the session is up (StationServer.h, heartbeat section).
+    if (!m_handshakeComplete && m_handshakeDeadlineTimer->isActive()) {
+        m_transport->ping();
+        return;
+    }
     if (m_pingsAwaitingPong >= m_maxMissedPongs) {
         qCWarning(lcStationClient)
             << "Station missed" << m_pingsAwaitingPong
@@ -2512,6 +2519,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         m_handshakeComplete = true;
         // R-R3-16/17: the connect sequence finished inside its deadline.
         m_handshakeDeadlineTimer->stop();
+        // The heartbeat counts missed pongs from here (onHeartbeatTick);
+        // pings sent during the snapshot are not held against the link.
+        if (firstSnapshot) {
+            m_pingsAwaitingPong = 0;
+        }
         if (m_radioModel) {
             // R-R3-49 (parity Task 7): and arming off the air from a Core
             // at transmitSettingsVersion 7.
