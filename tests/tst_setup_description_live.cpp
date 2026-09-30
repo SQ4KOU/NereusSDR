@@ -37,9 +37,10 @@ private slots:
     // Options rows on HL2 I/O, the stored-only ones disabled with their
     // reason; a version 15 phone keeps version 13's Hardware. Version 17
     // (the Alex-1 low-pass rows) keeps them, and version 18 (HL2 Options'
-    // clock rows) opens the clock rows and is Hardware's cap; the
-    // description's own cap is version 22 (21: CAT & Network's Forget row
-    // follows Duplicate; 22: DSP's RX buffer size lock).
+    // clock rows) opens the clock rows; version 23 (Calibration's Rx1 6m
+    // LNA row) is Hardware's cap and the description's own (21: CAT &
+    // Network's Forget row follows Duplicate; 22: DSP's RX buffer size
+    // lock).
     void pairedV16PhoneReadsHl2Options()
     {
         const auto hl2OptionsOf = [](const QJsonObject& hardware) {
@@ -56,7 +57,7 @@ private slots:
         // {declared, capability sent back, Hardware version the phone reads}
         const QList<std::tuple<int, int, int>> declarations{
             {16, 16, 16}, {17, 17, 17}, {18, 18, 18}, {19, 19, 18}, {20, 20, 18},
-            {21, 21, 18}, {22, 22, 18}, {99, 22, 18}, {15, 15, 13}};
+            {21, 21, 18}, {22, 22, 18}, {23, 23, 23}, {99, 23, 23}, {15, 15, 13}};
         for (const auto& [declared, granted, received] : declarations) {
             // One Core per phone: five phones are more than a Core's places.
             Core core;
@@ -86,9 +87,65 @@ private slots:
                 const QJsonObject cl2 = rows.at(2).toObject();
                 QCOMPARE(cl2.value("id"), QJsonValue("hardware.hl2Io.cl2Enable"));
                 QCOMPARE(cl2.contains("availability"), received < 18);
-                QCOMPARE(rows.at(3).toObject().contains("enabledWhen"), received == 18);
+                QCOMPARE(rows.at(3).toObject().contains("enabledWhen"), received >= 18);
             }
         }
+    }
+
+    // Version 23: a version 23 phone reads Calibration's Rx1 6m LNA row and
+    // its write reaches the Core's per-radio key, on a receive-only Core too
+    // (a receive calibration, not a transmit setting); a version 22 phone's
+    // Calibration page is unchanged.
+    void pairedV23PhoneReadsAndWritesRx1SixMeterLna()
+    {
+        Core core;
+        const QString mac = core.model->currentRadioInfo().macAddress;
+        core.model->setReceiveOnlyStationPolicy(true);
+        core.server->setupDescription()->setRadioContext(core.model->boardCapabilities(),
+                                                         core.model->hardwareProfile().model,
+                                                         core.model->currentRadioInfo());
+        Device current(QStringLiteral("LNA V23 iPhone"), QStringLiteral("phone"));
+        Device older(QStringLiteral("LNA V22 iPhone"), QStringLiteral("phone"));
+        core.pair(current);
+        core.pair(older);
+        QHash<QByteArray, int> v23 = kHolder;
+        v23.insert("setupDescription", 23);
+        QHash<QByteArray, int> v22 = kHolder;
+        v22.insert("setupDescription", 22);
+        auto* app = core.signIn(current, v23);
+        auto* olderApp = core.signIn(older, v22);
+        QVERIFY(admitted(app) && admitted(olderApp));
+        QCOMPARE(capability(app->received(), QStringLiteral("setupDescriptionVersion")),
+                 std::optional<qint64>(23));
+
+        const auto calibrationOf = [](LoopbackTransport* peer) {
+            const QJsonObject hardware = QJsonDocument::fromJson(latest(peer->received(),
+                QStringLiteral("setup"), QStringLiteral("hardware")).toString().toUtf8()).object();
+            for (const QJsonValue& page : hardware.value("pages").toArray()) {
+                if (page.toObject().value("id") == QJsonValue("hardware.calibration")) {
+                    return page.toObject();
+                }
+            }
+            return QJsonObject{};
+        };
+        const QJsonArray sections = calibrationOf(app).value("sections").toArray();
+        QCOMPARE(sections.size(), 2);
+        QCOMPARE(sections.at(0).toObject().value("title"), QJsonValue("Level Cal"));
+        const QJsonArray rows = sections.at(0).toObject().value("controls").toArray();
+        QCOMPARE(rows.size(), 1);
+        const QJsonObject row = rows.first().toObject();
+        QCOMPARE(row.value("id"), QJsonValue("hardware.calibration.rx1_6mLna"));
+        QCOMPARE(row.value("binding"), QJsonValue(QJsonObject{{"radioSetting", "cal/rx1_6mLna"}}));
+        QVERIFY(SetupDescriptionService::validateHardwareV23Control(row));
+
+        const QJsonArray olderSections = calibrationOf(olderApp).value("sections").toArray();
+        QCOMPARE(olderSections.size(), 1);
+        QCOMPARE(olderSections.at(0).toObject().value("title"), QJsonValue("TX Display Cal"));
+
+        const QString key = QStringLiteral("hardware/%1/cal/rx1_6mLna").arg(mac);
+        app->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(key, QStringLiteral("7"), QStringLiteral("phone"))));
+        QTRY_COMPARE(core.settings->value(key).toString(), QStringLiteral("7"));
     }
 
     // Version 13 (R-R3-49, R-IOS-18): a paired phone reads PA and Hardware

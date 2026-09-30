@@ -51,6 +51,10 @@
 //               receiver, the station TCI server, VAX devices, antenna
 //               control). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: Level Cal 2: board.rx2Attenuator, rx2PreampItems and
+//               rx2AttenuatorReason, RX2's own input control per model
+//               (rx2AttenuatorVersion 1). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -568,6 +572,58 @@ QJsonObject relaysObject(const StationCatalog::Inputs& inputs, const SkuUiProfil
     };
 }
 
+// Level Cal 2 (JJ's ruling of 2026-09-30): RX2's own input control, every
+// step the hardware has. On the two-ADC radios that is the second ADC's
+// 0-31 dB step attenuator in 1 dB steps, which the Core already sets
+// through stepAtt's rx2AttenuationDb with rx2StepAttEnabled on.
+//   ANAN-100D (Angelia): TAPR-OpenHPSDR-Firmware @e7c6584, "Protocol 1/
+//     ANAN-100D/Metis_Angelia_v6.0.qar" Angelia.v:2318-2321 (C0 0001_011x,
+//     C1[4:0] input attenuator 2 for ADC2, C1[5] its enable), 2442, 2447.
+//   ANAN-200D (Orion): same repo, "Protocol 1/ANAN-200D/
+//     Metis_Orion_v5.2.qar" Orion.v:2295 ("0-31 dB"), 2417-2421, 2564, 2571.
+//   OrionMKII family: n1gp-Anvelina_PROIII @8e86a61 High_Priority_CC.v:69-70,
+//     272, 276 (P2 bytes 1442/1443) and Orion.v:738-744 (second attenuator).
+//   ANAN-G2 and G2 1K (Saturn): P2 byte 1442, the same protocol field.
+constexpr int kRx2AttenuatorMinDb = 0;
+constexpr int kRx2AttenuatorMaxDb = 31;
+constexpr int kRx2AttenuatorStepDb = 1;
+
+enum class Rx2Input { StepAttenuator, MercuryPreamp, SharesRx1, Unknown };
+
+Rx2Input rx2InputFor(HPSDRModel model)
+{
+    switch (model) {
+    case HPSDRModel::ANAN100D:
+    case HPSDRModel::ANAN200D:
+    case HPSDRModel::ORIONMKII:
+    case HPSDRModel::ANAN7000D:
+    case HPSDRModel::ANAN8000D:
+    case HPSDRModel::ANVELINAPRO3:
+    case HPSDRModel::ANAN_G2:
+    case HPSDRModel::ANAN_G2_1K:
+        return Rx2Input::StepAttenuator;
+    case HPSDRModel::HPSDR:
+        // A second Mercury board's front end: C0 0001_010x C1 bit 1 is
+        // Mercury 2's preamp (TAPR-OpenHPSDR-Firmware @e7c6584, "Protocol 1/
+        // Mercury/Source/Mercury_V3.4/Mercury.v":765, 803-807), two states,
+        // no attenuator (preamp ON) or 20 dB inserted (OFF) (Mercury.v:192,
+        // 200). The Core sends it as RX2's preamp mode.
+        return Rx2Input::MercuryPreamp;
+    case HPSDRModel::REDPITAYA:
+        // No Red Pitaya gateware in the local sources: nothing says what
+        // its second input has, so no control is offered.
+        return Rx2Input::Unknown;
+    default:
+        // One ADC shared with RX1: Hermes and HermesII (Thetis
+        // clsHardwareSpecific.cs:87-116 SetRxADC(1) [v2.10.3.15]), the G2E
+        // (clsHardwareSpecific.cs:129-130; its gateware has one ADC input,
+        // TAPR-OpenHPSDR-Firmware "Protocol 1/ANAN-G2E/
+        // Hermes_3.3_C10_P1_Mk2PA.qar" Hermes.v:236), the HL2 (mi0bot
+        // clsHardwareSpecific.cs:94-95, console.cs:14846-14849 [@c26a8a4]).
+        return Rx2Input::SharesRx1;
+    }
+}
+
 int boardMaxSlices(const BoardCapabilities& caps)
 {
     return caps.maxSlices > 0 ? caps.maxSlices : 1;
@@ -592,6 +648,34 @@ QJsonObject boardObject(const StationCatalog::Inputs& inputs)
     for (const auto& item : BoardCapsTable::preampItemsForBoard(caps.board, caps.hasAlexFilters)) {
         preampItems.append(QJsonObject{{QStringLiteral("id"), item.modeInt},
                                        {QStringLiteral("label"), QString::fromLatin1(item.label)}});
+    }
+
+    // RX2's own input control: a slider on RX2's step attenuator, the
+    // Mercury preamp's two states (the items stepAtt's rx2PreampMode takes,
+    // BoardCapsTable::rx2PreampItemsForBoard), or neither with the reason.
+    QJsonValue rx2Attenuator = QJsonValue::Null;
+    QJsonArray rx2PreampItems;
+    QJsonValue rx2AttenuatorReason = QJsonValue::Null;
+    switch (rx2InputFor(inputs.model)) {
+    case Rx2Input::StepAttenuator:
+        rx2Attenuator = rangeObject(kRx2AttenuatorMinDb, kRx2AttenuatorMaxDb,
+                                    kRx2AttenuatorStepDb);
+        break;
+    case Rx2Input::MercuryPreamp:
+        for (const auto& item : BoardCapsTable::rx2PreampItemsForBoard(HPSDRHW::Atlas)) {
+            rx2PreampItems.append(QJsonObject{{QStringLiteral("id"), item.modeInt},
+                                              {QStringLiteral("label"),
+                                               QString::fromLatin1(item.label)}});
+        }
+        break;
+    case Rx2Input::SharesRx1:
+        rx2AttenuatorReason =
+            QStringLiteral("RX2 uses RX1's input on this radio. Set it with RX1's attenuator.");
+        break;
+    case Rx2Input::Unknown:
+        rx2AttenuatorReason =
+            QStringLiteral("NereusSDR cannot set RX2's input on this radio.");
+        break;
     }
 
     // The main antenna ports, ANT1 upwards (AntennaLabels' names), which
@@ -633,6 +717,10 @@ QJsonObject boardObject(const StationCatalog::Inputs& inputs)
         // The RX applet's RX1 preamp toggle: dual-ADC boards alone.
         {QStringLiteral("rx1Preamp"), caps.p2PreampPerAdc},
         {QStringLiteral("relays"), relaysObject(inputs, sku)},
+        // Level Cal 2 (rx2AttenuatorVersion 1): RX2's own input control.
+        {QStringLiteral("rx2Attenuator"), rx2Attenuator},
+        {QStringLiteral("rx2PreampItems"), rx2PreampItems},
+        {QStringLiteral("rx2AttenuatorReason"), rx2AttenuatorReason},
     };
 }
 

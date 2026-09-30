@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 23,
   "category": {
     "id": "hardware",
     "title": "Hardware Config",
@@ -2740,6 +2740,32 @@
       "where": "station",
       "coverage": "partial",
       "sections": [
+        {
+          "title": "Level Cal",
+          "controls": [
+            {
+              "id": "hardware.calibration.rx1_6mLna",
+              "label": "Rx1 6m LNA:",
+              "tooltip": "",
+              "kind": "decimal",
+              "binding": {
+                "radioSetting": "cal/rx1_6mLna"
+              },
+              "applies": "live",
+              "gate": {
+                "capability": "radioHardwareVersion",
+                "min": 1
+              },
+              "requiresDescriptionVersion": 23,
+              "min": 0,
+              "max": 25,
+              "step": 1,
+              "decimals": 1,
+              "unit": "dB",
+              "default": 13
+            }
+          ]
+        },
         {
           "title": "TX Display Cal",
           "controls": [

@@ -6,6 +6,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal 2: startLevelCalibration
+//                                    calibrates only a slice the device may
+//                                    change, named or active. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  Level Cal: startLevelCalibration and
 //                                    cancelLevelCalibration
 //                                    (radioHardwareVersion 12). AI-assisted
@@ -1856,13 +1860,15 @@ bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& inv
     // checkpoint merge: a band button or +TNF acts on its own slice only.
     // Slice control plan Task 2: "its own" is the change predicate, so a
     // listener's verbs on a slice it hears are refused as well.
+    // startLevelCalibration (Level Cal 2): a run retunes the slice and
+    // switches its preamp, so a device calibrates only a slice it may change.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
         QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add"),
         QByteArrayLiteral("requestSliceSampleRate"), QByteArrayLiteral("requestStreamCentre"),
         QByteArrayLiteral("requestStreamCtunPinned"), QByteArrayLiteral("slice.selectBand"),
-        QByteArrayLiteral("notch.addAtSlice")};
+        QByteArrayLiteral("notch.addAtSlice"), QByteArrayLiteral("startLevelCalibration")};
     if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
         return false;
     }
@@ -4474,6 +4480,18 @@ void SessionCommandDispatcher::handleStartLevelCalibration(const SessionMessage&
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The Core could not read this request."), {});
         return;
+    }
+    // A named slice was checked in refusedForAnotherDevice. No slice named
+    // (-1) means the Core's active slice, which may be another device's:
+    // a device calibrates it only when it may change it.
+    if (sliceId < 0 && !m_requester.isEmpty() && m_sliceAccess) {
+        const SliceModel* active = m_radioModel->activeSlice();
+        const QString reason =
+            active != nullptr ? m_sliceAccess(m_requester, active->sliceIndex()) : QString();
+        if (!reason.isEmpty()) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+            return;
+        }
     }
     const QString refusal = m_radioModel->requestStartLevelCalibration(
         static_cast<float>(levelDbm), frequencyHz, sliceId);

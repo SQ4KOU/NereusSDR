@@ -24,16 +24,24 @@
 // Modification history (NereusSDR):
 //   2026-09-29 - Written for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: another device's slice is refused, the
+//                device's own slice runs; a paired remote window names
+//                its own active slice; rx2AttenuatorVersion reaches
+//                only a peer that declared it. J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 
 #include "FakeLevelCalibrationHost.h"
+#include "core/BuildIdentity.h"
 #include "core/LevelCalibrationService.h"
 #include "core/StepAttenuatorController.h"
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "core/settings/SettingsProxy.h"
 
@@ -210,6 +218,52 @@ private slots:
         QVERIFY(fake.log.isEmpty());
     }
 
+    // Level Cal 2: a run retunes its slice and switches the preamp, so a
+    // device calibrates a slice it controls and no other. Another device's
+    // slice, named or reached as the Core's active slice (-1), is refused
+    // with the ownership words and nothing moves; its own slice runs.
+    void anotherDevicesSlice_refused_ownSliceRuns()
+    {
+        Core core;
+        FakeHost fake;
+        QVERIFY(fakeReceiver(core, fake) != nullptr);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, withLevelCal());
+        LoopbackTransport* appB = core.signIn(b, withLevelCal());
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        const QStringList bKeys = heldKeys(appB, QStringLiteral("slice:"));
+        QCOMPARE(bKeys.size(), 1);
+        const int bSlice = bKeys.first().mid(6).toInt();
+        QVERIFY(bSlice != 0);
+        const QString belongsToA = ownedElsewhere(QStringLiteral("iPhone"));
+
+        const QJsonObject named =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, 0));
+        QVERIFY(!accepted(named));
+        QCOMPARE(reason(named), belongsToA);
+
+        core.model->setActiveSliceById(0);
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 0);
+        const QJsonObject active =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, -1));
+        QVERIFY(!accepted(active));
+        QCOMPARE(reason(active), belongsToA);
+        QVERIFY(fake.log.isEmpty());
+        QVERIFY(!core.model->levelCalRunning());
+
+        const QJsonObject own =
+            core.invoke(appB, "startLevelCalibration", startArgs(-50.0, kCentre + 1000.0, bSlice));
+        QVERIFY2(accepted(own), qPrintable(reason(own)));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("radio"),
+                            QStringLiteral("levelCalSucceeded")).toBool(false), true);
+        QVERIFY(fake.meterReads > 0);
+        QVERIFY(!fake.log.isEmpty());
+    }
+
     // Cancel stops the run and puts everything back (Thetis closing the
     // progress window); with nothing running it is accepted and does
     // nothing.
@@ -322,6 +376,116 @@ private slots:
         QVERIFY(!remote.levelCalSucceeded());
         QVERIFY(remote.levelCalMessage().isEmpty());
         QCOMPARE(remote.levelCalPercent(), 0);
+    }
+
+    // Level Cal 2: rx2AttenuatorVersion 1 reaches a peer that declared
+    // rx2Attenuator, as the last entry before coreBuildInfo; a peer that
+    // did not is sent none. The entry reads back.
+    void rx2AttenuatorVersion_onlyToADeclaringPeer()
+    {
+        const QString savedVersion = QCoreApplication::applicationVersion();
+        const auto restore = qScopeGuard([&savedVersion]() {
+            QCoreApplication::setApplicationVersion(savedVersion);
+        });
+        QCoreApplication::setApplicationVersion(QStringLiteral("0.5.2"));
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        QHash<QByteArray, int> asks = kHolder;
+        asks.insert(QByteArrayLiteral("rx2Attenuator"), 1);
+        asks.insert(QByteArrayLiteral("coreBuildInfo"), 1);
+        LoopbackTransport* appA = core.signIn(a, asks);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QCOMPARE(capability(appA->received(), QStringLiteral("rx2AttenuatorVersion")), 1);
+        QVERIFY(!capability(appB->received(), QStringLiteral("rx2AttenuatorVersion")).has_value());
+        const QJsonArray caps = firstOfType(appA->received(), QStringLiteral("capabilities"))
+                                    .value(QStringLiteral("properties")).toArray();
+        QVERIFY(caps.size() >= 2);
+        QCOMPARE(caps.at(caps.size() - 2).toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("rx2AttenuatorVersion"));
+        QCOMPARE(caps.last().toObject().value(QStringLiteral("name")).toString(),
+                 QStringLiteral("coreBuildInfo"));
+
+        StationCapabilities sent;
+        sent.rx2AttenuatorVersion = 1;
+        QCOMPARE(StationCapabilities::fromUpdates(sent.toUpdates()).rx2AttenuatorVersion, 1);
+        QCOMPARE(StationCapabilities::fromUpdates(StationCapabilities{}.toUpdates())
+                     .rx2AttenuatorVersion, 0);
+    }
+
+    // Level Cal 2 (remote parity): a paired remote window's Start names
+    // its own active slice, as the phone does. With the station's active
+    // slice another device's, the run goes on the window's own slice
+    // instead of being refused (-1 would have named the other device's).
+    void remoteWindow_namesItsOwnSlice()
+    {
+        Core core;
+        StepAttenuatorController stepAtt;
+        core.model->setStepAttController(&stepAtt);
+        const auto unbind = qScopeGuard([&core]() { core.model->setStepAttController(nullptr); });
+        FakeHost fake;
+        QVERIFY(fakeReceiver(core, fake) != nullptr);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, withLevelCal());
+        QVERIFY(admitted(appA));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+
+        QTemporaryDir keyDir;
+        const auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        PairedDevice record;
+        record.id = key->fingerprint();
+        record.publicKeySpki = key->publicKeySpki();
+        record.name = QStringLiteral("Shack MacBook");
+        record.kind = QStringLiteral("computer");
+        QVERIFY(core.server->deviceStore()->add(record));
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setDeviceIdentity(key, QStringLiteral("Shack MacBook"), QStringLiteral("MacBook"));
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+        auto* windowEnd = new LoopbackTransport(QStringLiteral("window"), this);
+        stationEnd->setPeerAddress(QStringLiteral("192.0.2.30"));
+        windowEnd->setPeerCertificateSha256(core.certSha256());
+        stationEnd->linkTo(windowEnd);
+        client.startSession(windowEnd, QString(), QString(),
+                            core.server->stationIdentity().fingerprint());
+        core.server->acceptTransport(stationEnd);
+        QVERIFY(QTest::qWaitFor([&client]() { return client.stationLinkReady(); }, 5000));
+        QTRY_VERIFY(remote.levelCalibrationRunAvailable());
+
+        const QList<int> own = core.model->sliceOwnership()->ownedBy(key->fingerprint());
+        QCOMPARE(own.size(), 1);
+        QVERIFY(own.first() != 0);
+        QTRY_VERIFY(remote.activeSlice() != nullptr
+                    && remote.activeSlice()->sliceIndex() == own.first());
+        core.model->setActiveSliceById(0);
+        QCOMPARE(core.model->activeSlice()->sliceIndex(), 0);
+
+        QSignalSpy refused(&remote, &RadioModel::levelCalibrationRefused);
+        QCOMPARE(remote.requestStartLevelCalibration(-50.0f, kCentre + 1000.0, -1), QString());
+        QTRY_VERIFY(remote.levelCalSucceeded());
+        QCOMPARE(refused.count(), 0);
+        QVERIFY(fake.meterReads > 0);
+        // The window sent its own slice's id.
+        QList<QJsonObject> starts;
+        for (const QJsonObject& o : ofType(stationEnd->received(), QStringLiteral("command.invoke"))) {
+            if (o.value(QStringLiteral("verb")).toString() == QStringLiteral("startLevelCalibration")) {
+                starts.append(o);
+            }
+        }
+        QCOMPARE(starts.size(), 1);
+        qint64 sentSlice = -2;
+        for (const QJsonValue& arg : starts.first().value(QStringLiteral("args")).toArray()) {
+            if (arg.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("sliceId")) {
+                sentSlice = arg.toObject().value(QStringLiteral("value")).toInteger();
+            }
+        }
+        QCOMPARE(sentSlice, qint64(own.first()));
     }
 };
 

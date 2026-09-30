@@ -1834,9 +1834,67 @@ private slots:
             QVERIFY(!SetupDescriptionService::validateHardwareV18Control(dependent));
         }
 
-        // A later declaration is capped at 18.
+        // Versions 19 to 22 read version 18.
         QCOMPARE(projectedCategory(service.hardware(), 19), current);
-        QCOMPARE(projectedCategory(service.hardware(), 99), current);
+        QCOMPARE(projectedCategory(service.hardware(), 22), current);
+    }
+
+    // Version 23: Calibration gains the desktop tab's Level Cal "Rx1 6m
+    // LNA" row, bound to the per-radio key the Core applies to its receive
+    // calibration, with the tab's range, step, places and default (Thetis
+    // setup.designer.cs:12089-12116 [v2.10.3.15] ud6mLNAGainOffset: 0..25,
+    // step 1, one decimal, 13). It is on every board, as the tab is. A peer
+    // below 23 reads version 18 without it; a later declaration is capped
+    // at 23.
+    void hardwareV23AddsRx1SixMeterLnaRow()
+    {
+        for (const auto& [board, model] : {std::pair{HPSDRHW::HermesLite, HPSDRModel::HERMESLITE},
+                                           std::pair{HPSDRHW::OrionMKII, HPSDRModel::ANAN7000D}}) {
+            SetupDescriptionService service;
+            service.setRadioContext(BoardCapsTable::forBoard(board), model, RadioInfo{});
+            const QJsonObject current = projectedCategory(service.hardware(), 23);
+            QCOMPARE(current.value("version"), QJsonValue(23));
+            const QJsonArray sections = pageById(current, "hardware.calibration")
+                .value("sections").toArray();
+            QCOMPARE(sections.size(), 2);
+            const QJsonObject levelCal = sections.at(0).toObject();
+            QCOMPARE(levelCal.value("title"), QJsonValue("Level Cal"));
+            QCOMPARE(sections.at(1).toObject().value("title"), QJsonValue("TX Display Cal"));
+            const QJsonArray rows = levelCal.value("controls").toArray();
+            QCOMPARE(rows.size(), 1);
+            const QJsonObject row = rows.first().toObject();
+            QCOMPARE(row, (QJsonObject{
+                {"id", "hardware.calibration.rx1_6mLna"},
+                {"label", "Rx1 6m LNA:"},
+                {"tooltip", ""},
+                {"kind", "decimal"},
+                {"binding", QJsonObject{{"radioSetting", "cal/rx1_6mLna"}}},
+                {"applies", "live"},
+                {"gate", QJsonObject{{"capability", "radioHardwareVersion"}, {"min", 1}}},
+                {"requiresDescriptionVersion", 23},
+                {"min", 0}, {"max", 25}, {"step", 1}, {"decimals", 1},
+                {"unit", "dB"}, {"default", 13}}));
+            QVERIFY(SetupDescriptionService::validateHardwareV23Control(row));
+
+            // Below 23: version 18 exactly, without the row.
+            const QJsonObject older = projectedCategory(service.hardware(), 22);
+            QCOMPARE(older.value("version"), QJsonValue(18));
+            QJsonObject expected = withoutRowsOf(current, 23);
+            expected.insert("version", 18);
+            QCOMPARE(older, expected);
+            QCOMPARE(projectedCategory(service.hardware(), 99), current);
+        }
+
+        // The resource's row is closed.
+        const QList<QJsonObject> resource = resourceRows(QStringLiteral("hardware"), 23);
+        QCOMPARE(resource.size(), 1);
+        for (const QJsonObject& row : resource) {
+            QVERIFY(SetupDescriptionService::validateHardwareV23Control(row));
+            for (const QJsonObject& changed : mutationsOf(row)) {
+                QVERIFY2(!SetupDescriptionService::validateHardwareV23Control(changed),
+                         qPrintable(QJsonDocument(changed).toJson(QJsonDocument::Compact)));
+            }
+        }
     }
 
     // Version 19 (R-R3-49): DSP > CFC's band editor, bound to transmit's
@@ -3520,10 +3578,12 @@ private slots:
         check(19, kSessionProtocolMinor, 19);
         check(20, kSessionProtocolMinor, 20);
         // 21 is CAT & Network's TCI Forget enabledWhen; 22 is the RX
-        // buffer sizes' on-the-air lock and the cap.
+        // buffer sizes' on-the-air lock; 23 is Calibration's Rx1 6m LNA
+        // row and the cap.
         check(21, kSessionProtocolMinor, 21);
         check(22, kSessionProtocolMinor, 22);
-        check(23, kSessionProtocolMinor, 22);
+        check(23, kSessionProtocolMinor, 23);
+        check(24, kSessionProtocolMinor, 23);
         check(2, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
         check(3, quint16(kRadioIdentitySessionProtocolMinor - 1), 0);
     }

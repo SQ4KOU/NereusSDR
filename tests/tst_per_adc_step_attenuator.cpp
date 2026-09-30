@@ -22,6 +22,16 @@
 //   2026-09-29: Level Cal fix wave: RX2's preamp mode cases, by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Level Cal 2: every 1 dB step of RX2's step attenuator on
+//               the wire per protocol and model, and the HPSDR's two
+//               Mercury states. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-30: Level Cal 2 review: RX2 above its 0-31 dB field never
+//               wraps on either protocol. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: Level Cal 2 re-review: a stored RX2 value above 31 loads
+//               and restores as 31. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -34,9 +44,13 @@
 #include "core/P2RadioConnection.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "OperatorWording.h"
+
+#include <memory>
 
 using namespace NereusSDR;
 
@@ -794,6 +808,249 @@ private slots:
             ctrl.tick();
         }
         QCOMPARE(ctrl.rx2PreampMode(), PreampMode::On);
+    }
+
+    // Level Cal 2 (JJ's ruling of 2026-09-30): RX2's slider is RX2's own
+    // step attenuator, and every 1 dB step from 0 to 31 reaches the second
+    // ADC's attenuator on the wire. Protocol 1 carries it in C0 0001_011x
+    // C1[4:0] with the enable in C1[5] (bank 12; TAPR-OpenHPSDR-Firmware
+    // @e7c6584 Angelia.v:2318-2321, Orion.v:2417-2421); Protocol 2 in
+    // CmdHighPriority byte 1442 (Anvelina High_Priority_CC.v:69-70, 272).
+    void rx2StepAttenuatorCarriesEveryStepOnProtocol1_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("model");
+        QTest::newRow("ANAN-100D") << int(HPSDRHW::Angelia) << int(HPSDRModel::ANAN100D);
+        QTest::newRow("ANAN-200D") << int(HPSDRHW::Orion) << int(HPSDRModel::ANAN200D);
+        QTest::newRow("OrionMKII") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ORIONMKII);
+        QTest::newRow("ANAN-7000D") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANAN7000D);
+        QTest::newRow("ANAN-8000D") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANAN8000D);
+        QTest::newRow("AnvelinaPro3") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANVELINAPRO3);
+    }
+    void rx2StepAttenuatorCarriesEveryStepOnProtocol1()
+    {
+        QFETCH(int, board);
+        QFETCH(int, model);
+        P1RadioConnection conn;
+        conn.setBoardForTest(static_cast<HPSDRHW>(board));
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(static_cast<HPSDRHW>(board), static_cast<HPSDRModel>(model), true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:30"));
+        ctrl.setRadioConnection(&conn);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(true);
+        QList<int> steps;
+        for (int dB = 1; dB <= 31; ++dB) {
+            steps.append(dB);
+        }
+        steps.append(0);
+        for (int dB : steps) {
+            ctrl.setRx2Attenuation(dB);
+            QCOMPARE(ctrl.rx2AttenuatorDb(), dB);
+            quint8 bank12[5] = {};
+            conn.composeCcForBankForTest(12, bank12);
+            QCOMPARE(int(bank12[0] & 0xFE), 0x16);
+            QCOMPARE(int(bank12[1]), dB | 0x20);
+        }
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    void rx2StepAttenuatorCarriesEveryStepOnProtocol2_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("model");
+        QTest::newRow("OrionMKII") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ORIONMKII);
+        QTest::newRow("ANAN-7000D") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANAN7000D);
+        QTest::newRow("ANAN-8000D") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANAN8000D);
+        QTest::newRow("AnvelinaPro3") << int(HPSDRHW::OrionMKII) << int(HPSDRModel::ANVELINAPRO3);
+        QTest::newRow("ANAN-G2") << int(HPSDRHW::Saturn) << int(HPSDRModel::ANAN_G2);
+        QTest::newRow("ANAN-G2 1K") << int(HPSDRHW::Saturn) << int(HPSDRModel::ANAN_G2_1K);
+    }
+    void rx2StepAttenuatorCarriesEveryStepOnProtocol2()
+    {
+        QFETCH(int, board);
+        QFETCH(int, model);
+        P2RadioConnection conn;
+        conn.setBoardForTest(static_cast<HPSDRHW>(board));
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(static_cast<HPSDRHW>(board), static_cast<HPSDRModel>(model), true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:31"));
+        ctrl.setRadioConnection(&conn);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(true);
+        QList<int> steps;
+        for (int dB = 1; dB <= 31; ++dB) {
+            steps.append(dB);
+        }
+        steps.append(0);
+        for (int dB : steps) {
+            ctrl.setRx2Attenuation(dB);
+            QCOMPARE(byteAt(highPriority(conn), kAdc1AttByte), dB);
+        }
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Level Cal 2: on the HPSDR, RX2's two Mercury states reach C0
+    // 0001_010x C1 bit 1, the second Mercury's preamp (TAPR-OpenHPSDR-
+    // Firmware @e7c6584 Mercury_V3.4/Mercury.v:765, 803-807): 0 dB sets it
+    // (no attenuator), -20 dB clears it (the 20 dB attenuator in).
+    void rx2MercuryStatesReachCaseElevenBitOne()
+    {
+        P1RadioConnection conn;
+        conn.setBoardForTest(HPSDRHW::Atlas);
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Atlas, HPSDRModel::HPSDR, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:32"));
+        ctrl.setRadioConnection(&conn);
+        ctrl.setRx2PreampMode(PreampMode::Off);
+        quint8 bank11[5] = {};
+        conn.composeCcForBankForTest(11, bank11);
+        QCOMPARE(int(bank11[0] & 0xFE), 0x14);
+        QCOMPARE(int(bank11[1] & 0x02), 0);
+        ctrl.setRx2PreampMode(PreampMode::On);
+        conn.composeCcForBankForTest(11, bank11);
+        QCOMPARE(int(bank11[1] & 0x02), 0x02);
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Level Cal 2 review: on an Alex board RX1 reaches 61 dB with the Alex
+    // attenuator in, but RX2's own value is the second ADC's 5-bit field
+    // (Angelia.v:2319, Orion.v:2295 and :2419): Thetis's RX2 setter never
+    // switches the Alex attenuator in (console.cs:11176-11222
+    // [v2.10.3.15]), so above 31 its value + 2 wrapped in the gateware.
+    // NereusSDR holds RX2 to 0-31: asking 32, 40 or 61 keeps 31 and the
+    // wire carries 31, on both protocols; a linked value above 31, once
+    // unlinked, comes back to 31 too.
+    void rx2AboveItsFieldNeverWraps_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("model");
+        QTest::addColumn<int>("protocol");
+        QTest::newRow("ANAN-100D P1") << int(HPSDRHW::Angelia) << int(HPSDRModel::ANAN100D) << 1;
+        QTest::newRow("ANAN-200D P1") << int(HPSDRHW::Orion) << int(HPSDRModel::ANAN200D) << 1;
+        QTest::newRow("ANAN-100D P2") << int(HPSDRHW::Angelia) << int(HPSDRModel::ANAN100D) << 2;
+        QTest::newRow("ANAN-200D P2") << int(HPSDRHW::Orion) << int(HPSDRModel::ANAN200D) << 2;
+    }
+    void rx2AboveItsFieldNeverWraps()
+    {
+        QFETCH(int, board);
+        QFETCH(int, model);
+        QFETCH(int, protocol);
+        std::unique_ptr<P1RadioConnection> p1;
+        std::unique_ptr<P2RadioConnection> p2;
+        RadioConnection* conn = nullptr;
+        if (protocol == 1) {
+            p1 = std::make_unique<P1RadioConnection>();
+            p1->setBoardForTest(static_cast<HPSDRHW>(board));
+            conn = p1.get();
+        } else {
+            p2 = std::make_unique<P2RadioConnection>();
+            p2->setBoardForTest(static_cast<HPSDRHW>(board));
+            conn = p2.get();
+        }
+        const auto rx2Wire = [&p1, &p2]() {
+            if (p1) {
+                quint8 bank12[5] = {};
+                p1->composeCcForBankForTest(12, bank12);
+                return int(bank12[1]);
+            }
+            return byteAt(highPriority(*p2), kAdc1AttByte);
+        };
+        const int enable = protocol == 1 ? 0x20 : 0;
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(static_cast<HPSDRHW>(board), static_cast<HPSDRModel>(model), true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:33"));
+        ctrl.setMaxAttenuation(61);
+        QCOMPARE(ctrl.maxAttenuation(), 61);
+        QCOMPARE(ctrl.rx2MaxAttenuation(), 31);
+        ctrl.setRadioConnection(conn);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRx2StepAttEnabled(true);
+
+        ctrl.setRx2Attenuation(31);
+        QCOMPARE(rx2Wire(), 31 | enable);
+        for (int asked : {32, 40, 61}) {
+            QSignalSpy changed(&ctrl, &StepAttenuatorController::rx2AttenuationChanged);
+            ctrl.setRx2Attenuation(asked);
+            QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+            QCOMPARE(rx2Wire(), 31 | enable);
+            // The kept value is said again, so a box showing the asked
+            // value returns to it.
+            QCOMPARE(changed.count(), 1);
+            QCOMPARE(changed.first().first().toInt(), 31);
+        }
+        ctrl.setRx2Attenuation(8);
+        QCOMPARE(rx2Wire(), 8 | enable);
+
+        // Linked (diversity): RX2 takes RX1's 45; unlinked, RX2's own value
+        // comes back within its field and the wire carries 31.
+        ctrl.setAdcRouting(0, 1, Band::Band20m, true);
+        ctrl.setAttenuation(45, 0);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 45);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        QCOMPARE(rx2Wire(), 31 | enable);
+        ctrl.setRadioConnection(nullptr);
+    }
+
+    // Level Cal 2 re-review: a stored RX2 value above 31 (saved before RX2
+    // was held to its field, on an Alex board's 61 dB range) comes back as
+    // 31, both when the settings load and when a band restores it, and the
+    // radio is sent 31.
+    void rx2StoredAboveItsFieldLoadsAndRestoresAs31()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:35");
+        startFromNothing(mac);
+        AppSettings& s = AppSettings::instance();
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx2Value"), 45);
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx2Band/")
+                                    + bandKeyName(Band::Band40m), 50);
+        s.save();
+
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Angelia, HPSDRModel::ANAN100D, true);
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMinAttenuation(0);
+        ctrl.setMaxAttenuation(61);
+        RecordingConnection radio;
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRadioConnection(&radio);
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        ctrl.setRx2StepAttEnabled(true);
+
+        ctrl.setRx2Attenuation(10);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 10);
+        radio.sends.clear();
+        ctrl.setBandRestoreToRadio(true);
+        ctrl.setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        QVERIFY2(radio.sends.contains(QPair<int, int>(1, 31)),
+                 qPrintable(QStringLiteral("%1 sends").arg(radio.sends.size())));
+        for (const auto& send : radio.sends) {
+            QVERIFY(send.second <= 31 || send.first != 1);
+        }
+        ctrl.setRadioConnection(nullptr);
+        startFromNothing(mac);
+    }
+
+    // Level Cal 2 review: a write of RX2's value above 31 through stepAtt
+    // (a window or the phone) keeps 31 and says RX2's range.
+    void rx2FacadeWriteAboveItsFieldSaysItsRange()
+    {
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Angelia, HPSDRModel::ANAN100D, true);
+        loadController(ctrl, QStringLiteral("02:00:00:00:ad:34"));
+        ctrl.setMaxAttenuation(61);
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        StepAttenuatorFacade facade(nullptr);
+        facade.bindController(&ctrl);
+        facade.setRx2AttenuationDb(40);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        QCOMPARE(facade.rx2AttenuationDb(), 31);
+        QCOMPARE(facade.settleReason("rx2AttenuationDb"),
+                 QStringLiteral("RX2's attenuator goes from 0 to 31 dB."));
+        QVERIFY(OperatorWording::isPlain(facade.settleReason("rx2AttenuationDb")));
     }
 };
 
