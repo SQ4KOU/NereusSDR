@@ -205,6 +205,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    mediaTunnelOnlyIceConfiguration, the
+//                                    tunnel alone for the fallback;
+//                                    mediaTunnelInUse.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  The direct media ladder:
+//                                    mediaStunServer, mediaDirectAvailable,
+//                                    mediaDirectIceConfiguration.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the GUI half
 //                                    of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
@@ -582,6 +591,7 @@ public:
     /// Step 2b: media runs in the WebSocket tunnel (the media controller
     /// says so), which counts as a relayed path for the heartbeat.
     void setMediaTunnelInUse(bool inUse);
+    bool mediaTunnelInUse() const { return m_mediaTunnelInUse; }
 
     /// How often locally-observed property changes are drained toward the
     /// station. See StationServer::kDefaultDeltaFlushMs for the same
@@ -719,6 +729,20 @@ public:
     /// The ICE settings for media over the tunnel (made on first use on
     /// this session's transport); none unless the current path carries binary.
     std::optional<IceConfiguration> mediaTunnelIceConfiguration();
+    /// The direct media ladder (link section 21): the STUN server every
+    /// media connection uses. The first stun: entry of the Core's
+    /// mediaStunUrls; without one, this session's service STUN server, or
+    /// the last one a session through the service used (in memory only).
+    std::optional<IceServerAddress> mediaStunServer() const;
+    /// The Core told mediaDirectVersion 1: a media replace may add
+    /// "mediaDirectVersion": 1 for a connection without tunnel or relay.
+    bool mediaDirectAvailable() const;
+    /// STUN and host candidates only: no relay, no tunnel.
+    IceConfiguration mediaDirectIceConfiguration() const;
+    /// The fallback from a silent direct path: the tunnel's candidates
+    /// alone, no STUN and no host candidates (none unless the tunnel is
+    /// usable, as mediaTunnelIceConfiguration()).
+    std::optional<IceConfiguration> mediaTunnelOnlyIceConfiguration();
 
     /// iPhone app plan Task 29 (R-IOS-16; link section 21): where the
     /// paired Core can be reached through the internet service: the
@@ -1970,6 +1994,9 @@ private:
     /// The ICE settings of the connection through the service this session
     /// left, so its media keeps the service's STUN server (link 21.3).
     std::optional<IceConfiguration> m_serviceIce;
+    /// The last STUN server a session through the service used (the
+    /// direct media ladder's fallback); never saved.
+    mutable std::optional<IceServerAddress> m_lastServiceStun;
     /// Task 29 step 2b: the media tunnel on this session's transport.
     std::shared_ptr<MediaTunnel> m_mediaTunnel;
     bool m_serviceDialing = false;

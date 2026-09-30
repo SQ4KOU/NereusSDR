@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: mediaDirectVersion and
+//               mediaStunUrls, before coreBuildInfo. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -215,6 +218,7 @@
 #include <QList>
 #include <optional>
 #include <QString>
+#include <QStringList>
 
 #include "core/HpsdrModel.h"
 #include "core/session/MirrorSchema.h"
@@ -547,6 +551,19 @@ struct StationCapabilities {
     // Task 24: Core-owned settings validation and per-MAC hygiene commands.
     int settingsHygieneVersion = 0;
     std::optional<CoreBuildInfo> coreBuildInfo;
+    /// The direct media ladder (link section "Direct media"): 1 means the
+    /// Core takes a media `replace` carrying `mediaDirectVersion` 1 and
+    /// makes that replacement direct only (host and STUN candidates, no
+    /// relay, no tunnel). Sent before coreBuildInfo, only to a peer with
+    /// media whose hello declared `mediaDirect` 1; 0 otherwise.
+    int mediaDirectVersion = 0;
+    /// With mediaDirectVersion: the Core's STUN servers, `stun:` and
+    /// `stuns:` URLs only, as a JSON array (utf8). A device uses them for
+    /// its media connections and never stores them.
+    QStringList mediaStunUrls;
+    /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
+    static constexpr int kMaxMediaStunUrls = 8;
+    static constexpr int kMaxMediaStunUrlBytes = 512;
     /// Version 1 offers read-only paired Core settings XML export.
     int settingsBackupVersion = 0;
     /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends

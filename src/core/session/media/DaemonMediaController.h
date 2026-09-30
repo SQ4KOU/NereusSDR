@@ -7,6 +7,9 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-29: the direct media ladder: m_currentRouted and
+//               m_replacementRouted. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -751,6 +754,11 @@ private:
     /// Task 29 step 2b: the media start declared the tunnel.
     bool m_startTunnel = false;
     bool m_startRelayRouting = false;
+    /// Direct media ladder: whether the connection in use (and the one
+    /// replacing it) was made with media routing (the tunnel or a routed
+    /// relay). An unrouted shim leg is an older relay leg that cannot move.
+    bool m_currentRouted = false;
+    bool m_replacementRouted = false;
     bool m_startMicLine{false};
     std::unique_ptr<DaemonAudioSender> m_audioSender;
     int m_audioTargetBitrate{OpusAudioCodecConfig{}.bitrate};

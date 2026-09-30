@@ -31,6 +31,28 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: media back on the direct pair ends a refused fallback
+//               waiting to be retried (a folded move is still followed, as
+//               a normal replace). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-29: a session move while a refused fallback waits keeps the
+//               retry on the tunnel alone. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-09-29: direct media follow-up: a fallback refused while the Core
+//               transmits is retried onto the tunnel alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: direct media fix wave: the silence fallback on the tunnel
+//               alone, once per silence, then recovery; none while muted
+//               or disconnected; the return to receive restarts the
+//               silence clock; a direct replace after a move onto the
+//               tunnel; ordering barriers in place of fixed waits.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: the direct media ladder: the direct-only replace (STUN and
+//               host candidates, no tunnel or relay), the older relay-leg
+//               refusal judged by the connection in use, the window's
+//               direct schedule, a refused direct step, the no-packets
+//               fallback and an older Core's three-field replace. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -38,12 +60,14 @@
 
 #include <QtTest>
 
+#include <QJsonDocument>
 #include <QPointer>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtEndian>
 
 #include <cmath>
+#include <functional>
 #include <map>
 #include <memory>
 
@@ -53,6 +77,7 @@
 #include "core/MoxController.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/DaemonAudioSource.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -80,6 +105,7 @@ namespace {
 
 constexpr char kFirst[] = "11111111-2222-4333-8444-555555555555";
 constexpr char kSecond[] = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+constexpr char kThird[] = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 constexpr int kDspFrames = 64;
 
 class FakeTransport final : public IMediaTransport {
@@ -162,6 +188,23 @@ QJsonObject replaceControl(const QString& connectionId, const QString& replaces)
             {QStringLiteral("replaces"), replaces}};
 }
 
+// The direct media ladder: a replace asking for the direct-only connection.
+QJsonObject directReplaceControl(const QString& connectionId, const QString& replaces,
+                                 int version = 1)
+{
+    QJsonObject replace = replaceControl(connectionId, replaces);
+    replace.insert(QStringLiteral("mediaDirectVersion"), version);
+    return replace;
+}
+
+MediaIcePath tunnelShimPath()
+{
+    MediaIcePath path;
+    path.remoteAddress = QStringLiteral("127.0.0.1");
+    path.ownedLoopbackShim = true;
+    return path;
+}
+
 QList<QJsonObject> controlsNamed(const QSignalSpy& spy, const QString& op)
 {
     QList<QJsonObject> out;
@@ -188,6 +231,10 @@ struct CoreHarness {
     DaemonMediaController controller;
     AudioEngine* engine{nullptr};
     int slice{-1};
+    // The Core's end of the session link, and whether it carries binary
+    // messages (false: a data channel, where the media tunnel cannot run).
+    Test::LoopbackTransport* stationLink = nullptr;
+    bool stationCarriesBinary = true;
 
     CoreHarness()
         : settings(directory.filePath(QStringLiteral("station.settings")))
@@ -211,9 +258,10 @@ struct CoreHarness {
         server.setMediaEnabled(true);
     }
 
-    bool establishWithAudio()
+    bool establishWithAudio(const QJsonObject& startExtra = {})
     {
-        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        stationLink->setCarriesBinary(stationCarriesBinary);
         auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
         stationLink->linkTo(clientLink);
         client.startSession(clientLink, server.token());
@@ -223,8 +271,11 @@ struct CoreHarness {
             qWarning() << "media never available";
             return false;
         }
-        const bool sent = client.sendMediaControl(
-            control(QStringLiteral("start"), QLatin1String(kFirst)), client.sessionEpoch());
+        QJsonObject start = control(QStringLiteral("start"), QLatin1String(kFirst));
+        for (auto it = startExtra.begin(); it != startExtra.end(); ++it) {
+            start.insert(it.key(), it.value());
+        }
+        const bool sent = client.sendMediaControl(start, client.sessionEpoch());
         if (!QTest::qWaitFor([this] { return !transports.isEmpty(); }, 5000)) {
             qWarning() << "no transport; start sent" << sent;
             return false;
@@ -248,6 +299,123 @@ struct CoreHarness {
                 engine->rxBlockReady(slice, tone.constData(), kDspFrames);
             }
         }
+    }
+};
+
+// The direct media ladder: the window's media controller against the Core
+// above, both with transports fake at the network and the window's clock
+// injected, so the schedule and the silence window run without waiting.
+struct GuiHarness {
+    CoreHarness core;
+    QList<QPointer<FakeTransport>> guiTransports;
+    qint64 now = 0;
+    Test::LoopbackTransport* stationLink = nullptr;
+    QList<QByteArray> toCore;
+    std::unique_ptr<RemoteMediaController> gui;
+    // Audio keeps arriving on the first connection (every 100 ms) while
+    // `feeding`, so the tunnel's own stall rule never starts media over
+    // underneath a test; a test on a direct path turns it off to go silent.
+    QTimer feeder;
+    bool feeding = true;
+    QTemporaryDir windowKeyDir;
+    std::shared_ptr<const ClientDeviceIdentity> windowKey;
+
+    GuiHarness()
+    {
+        feeder.setInterval(100);
+        QObject::connect(&feeder, &QTimer::timeout, &feeder, [this] {
+            if (feeding && !guiTransports.isEmpty() && guiTransports.first()) { audioOn(0); }
+        });
+        core.server.setRemoteTransmitAllowed(true);
+        gui = std::make_unique<RemoteMediaController>(
+            &core.client, &core.remote, nullptr, nullptr,
+            [this](QObject* parent) -> IMediaTransport* {
+                auto* transport = new FakeTransport(parent);
+                guiTransports.append(transport);
+                return transport;
+            },
+            [this] { return now; });
+    }
+
+    // Signs in; media starts as the window starts it (with the tunnel), and
+    // one audio packet arrives on `path`.
+    bool connect(const MediaIcePath& path)
+    {
+        stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        QObject::connect(stationLink, &SessionTransport::textReceived, stationLink,
+                         [this](const QByteArray& wire) { toCore.append(wire); });
+        // The window signs in by its own paired key, as a desktop remote
+        // that may transmit does, so VOX armed counts.
+        windowKey = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(windowKeyDir.path()));
+        core.client.setDeviceIdentity(windowKey, QStringLiteral("Shack MacBook"),
+                                      QStringLiteral("MacBook"));
+        PairedDevice device;
+        device.id = windowKey->fingerprint();
+        device.publicKeySpki = windowKey->publicKeySpki();
+        device.name = QStringLiteral("Shack MacBook");
+        device.kind = QStringLiteral("computer");
+        if (!core.server.deviceStore()->add(device)) {
+            qWarning() << "the window could not be paired";
+            return false;
+        }
+        QString pin = core.server.certificateFingerprint();
+        pin.remove(QLatin1Char(':'));
+        clientLink->setPeerCertificateSha256(QByteArray::fromHex(pin.toLatin1()));
+        core.client.startSession(clientLink, QString(), QString(),
+                                 core.server.stationIdentity().fingerprint());
+        core.server.acceptTransport(stationLink);
+        if (!QTest::qWaitFor([this] {
+                return !guiTransports.isEmpty() && !core.transports.isEmpty();
+            }, 10000)) {
+            qWarning() << "media never started";
+            return false;
+        }
+        guiTransports.first()->path = path;
+        core.transports.first()->path = path;
+        guiTransports.first()->becomeReady();
+        core.transports.first()->becomeReady();
+        audioOn(0);
+        feeder.start();
+        return true;
+    }
+
+    // One audio packet on connection `index`, under its own main SSRC.
+    void audioOn(int index)
+    {
+        FakeTransport* transport = guiTransports.at(index);
+        QByteArray packet(12 + 3, '\0');
+        packet[0] = char(0x80);
+        packet[1] = char(111);
+        qToBigEndian<quint32>(transport->startOptions.localAudioSsrc, packet.data() + 8);
+        emit transport->rtpReceived(packet);
+    }
+
+    // The replaces this window sent, as the Core read them.
+    QList<QJsonObject> replacesSent() const
+    {
+        QList<QJsonObject> out;
+        for (const QByteArray& wire : toCore) {
+            if (!wire.contains("\"replace\"")) { continue; }
+            const QJsonObject envelope = QJsonDocument::fromJson(wire).object();
+            // The media control rides inside the control envelope.
+            std::function<void(const QJsonValue&)> find = [&](const QJsonValue& value) {
+                if (value.isObject()) {
+                    const QJsonObject object = value.toObject();
+                    if (object.value(QStringLiteral("op")) == QStringLiteral("replace")) {
+                        out.append(object);
+                        return;
+                    }
+                    for (auto it = object.begin(); it != object.end(); ++it) { find(*it); }
+                } else if (value.isArray()) {
+                    for (const QJsonValue& item : value.toArray()) { find(item); }
+                }
+            };
+            find(envelope);
+        }
+        return out;
     }
 };
 
@@ -404,6 +572,770 @@ private slots:
         QVERIFY(first->rtpPackets.size() > sentBefore);
     }
 
+    // ── The direct media ladder (the Core) ────────────────────────────
+
+    // A window that declared `mediaDirect` is told mediaDirectVersion and
+    // the Core's STUN (never a TURN server); its four-key replace starts a
+    // connection with STUN and host candidates only (no tunnel, no relay),
+    // and the Core's echo keeps its three fields.
+    void aDirectReplaceStartsWithStunAndNoTunnel()
+    {
+        CoreHarness h;
+        h.server.setMediaStun({QStringLiteral("stun:stun.example.test:3478"),
+                               QStringLiteral("turn:relay.example.test:3478")});
+        QVERIFY(h.establishWithAudio());
+        QCOMPARE(h.client.capabilities().mediaDirectVersion, 1);
+        QCOMPARE(h.client.capabilities().mediaStunUrls,
+                 QStringList{QStringLiteral("stun:stun.example.test:3478")});
+        QVERIFY(h.client.mediaDirectAvailable());
+        const IceConfiguration clientDirect = h.client.mediaDirectIceConfiguration();
+        QVERIFY(clientDirect.stunServer().has_value());
+        QCOMPARE(clientDirect.stunServer()->host, QStringLiteral("stun.example.test"));
+        QVERIFY(!clientDirect.hasCandidateSourceFactory());
+
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                               QLatin1String(kFirst)),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(h.transports.size(), 2);
+        FakeTransport* second = h.transports.at(1);
+        QVERIFY(second->startOptions.ice.has_value());
+        const IceConfiguration& ice = *second->startOptions.ice;
+        QVERIFY(ice.stunServer().has_value());
+        QCOMPARE(ice.stunServer()->host, QStringLiteral("stun.example.test"));
+        QCOMPARE(ice.stunServer()->port, quint16(3478));
+        QVERIFY(!ice.hasCandidateSourceFactory());
+        QVERIFY(!ice.mediaRouting());
+        QVERIFY(!ice.relayAllowed());
+        second->becomeReady();
+        h.feed(3);
+        QTRY_COMPARE_WITH_TIMEOUT(controlsNamed(controls, QStringLiteral("replace")).size(), 1,
+                                  DaemonMediaController::kReplaceOverlapMs + 3000);
+        const QJsonObject done = controlsNamed(controls, QStringLiteral("replace")).first();
+        QCOMPARE(done.size(), 3);
+        QCOMPARE(done.value(QStringLiteral("connectionId")).toString(), QLatin1String(kSecond));
+        QVERIFY(controlsNamed(controls, QStringLiteral("rejected")).isEmpty());
+    }
+
+    // Any other version, and a window that never declared `mediaDirect`,
+    // start nothing; the undeclared window hears of neither capability.
+    void aDirectReplaceNeedsVersionOneAndTheDeclaration()
+    {
+        {
+            CoreHarness h;
+            QVERIFY(h.establishWithAudio());
+            QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+            h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                           QLatin1String(kFirst), 2),
+                                      h.client.sessionEpoch());
+            // An ordering barrier, not a wait: a replace naming a connection
+            // that is not the current one is refused, and that reply comes
+            // after the Core handled the control before it.
+            h.client.sendMediaControl(replaceControl(QLatin1String(kThird),
+                                                     QLatin1String(kSecond)),
+                                      h.client.sessionEpoch());
+            QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+            QCOMPARE(h.transports.size(), 1);
+            QVERIFY(!h.transports.first()->stopped);
+        }
+        {
+            CoreHarness h;
+            h.server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
+            h.client.withholdFeatureForTest(QByteArrayLiteral("mediaDirect"));
+            QVERIFY(h.establishWithAudio());
+            QCOMPARE(h.client.capabilities().mediaDirectVersion, 0);
+            QVERIFY(h.client.capabilities().mediaStunUrls.isEmpty());
+            QVERIFY(!h.client.mediaDirectAvailable());
+            QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+            // Nor does a later change of the Core's STUN reach it.
+            h.server.setMediaStun({QStringLiteral("stun:other.example.test:3478")});
+            h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                           QLatin1String(kFirst)),
+                                      h.client.sessionEpoch());
+            // The same barrier: the refused replace's reply comes after the
+            // STUN change and the direct replace were handled.
+            h.client.sendMediaControl(replaceControl(QLatin1String(kThird),
+                                                     QLatin1String(kSecond)),
+                                      h.client.sessionEpoch());
+            QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+            QVERIFY(h.client.capabilities().mediaStunUrls.isEmpty());
+            QCOMPARE(h.transports.size(), 1);
+            // The three-field replace still works for it.
+            h.client.sendMediaControl(replaceControl(QLatin1String(kSecond),
+                                                     QLatin1String(kFirst)),
+                                      h.client.sessionEpoch());
+            QTRY_COMPARE(h.transports.size(), 2);
+        }
+    }
+
+    // A STUN change reaches a declared window while it is connected.
+    void theCoreRepublishesItsStun()
+    {
+        CoreHarness h;
+        h.server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
+        QVERIFY(h.establishWithAudio());
+        h.server.setMediaStun({QStringLiteral("stuns:secure.example.test:5349"),
+                               QStringLiteral("turn:relay.example.test:3478"),
+                               QStringLiteral("stun:user@stun.example.test:3478"),
+                               QStringLiteral("stun:stun.example.test:3478?transport=udp")});
+        QTRY_COMPARE(h.client.capabilities().mediaStunUrls,
+                     QStringList{QStringLiteral("stuns:secure.example.test:5349")});
+    }
+
+    // An older relay leg in use (a plain start on the relay's raw tag-2
+    // pair) still refuses a direct replace; the audio carries on.
+    void aDirectReplaceOnTheOlderRelayLegIsRefused()
+    {
+        CoreHarness h;
+        QVERIFY(h.establishWithAudio());
+        FakeTransport* const first = h.transports.first();
+        first->path = tunnelShimPath();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                       QLatin1String(kFirst)),
+                                  h.client.sessionEpoch());
+        QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+        QCOMPARE(controlsNamed(controls, QStringLiteral("rejected")).first()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("This older relay media path cannot move while it is still "
+                                "in use."));
+        QCOMPARE(h.transports.size(), 1);
+        QVERIFY(!first->stopped);
+        const qsizetype before = first->rtpPackets.size();
+        h.feed(2);
+        QTRY_VERIFY(first->rtpPackets.size() > before);
+    }
+
+    // A media start that declared the tunnel (without the relay's routing)
+    // runs over the tunnel's own framing: a direct replace is taken, and
+    // the tunnel keeps carrying media until the new connection is ready.
+    void aDirectReplaceFromTheTunnelIsTaken()
+    {
+        CoreHarness h;
+        QVERIFY(h.establishWithAudio({{QStringLiteral("mediaTunnelVersion"), 1}}));
+        FakeTransport* const first = h.transports.first();
+        QVERIFY(first->startOptions.ice.has_value());
+        QVERIFY(first->startOptions.ice->mediaRouting());
+        QVERIFY(first->startOptions.ice->hasCandidateSourceFactory());
+        first->path = tunnelShimPath();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                       QLatin1String(kFirst)),
+                                  h.client.sessionEpoch());
+        QTRY_COMPARE(h.transports.size(), 2);
+        QVERIFY(controlsNamed(controls, QStringLiteral("rejected")).isEmpty());
+        FakeTransport* const second = h.transports.at(1);
+        QVERIFY(!second->startOptions.ice->hasCandidateSourceFactory());
+        // The new connection fails: the tunnel still carries the audio.
+        second->close();
+        QTRY_VERIFY(second->stopped || h.transports.at(1).isNull());
+        QVERIFY(!first->stopped);
+        const qsizetype before = first->rtpPackets.size();
+        h.feed(2);
+        QTRY_VERIFY(first->rtpPackets.size() > before);
+    }
+
+    // What the older relay-leg refusal judges is the connection in use: a
+    // start made without routing (the tunnel declared, but the session link
+    // carried no binary then) that a plain replace moved onto the tunnel
+    // takes a direct replace. (The start-time flag refused it.)
+    void aDirectReplaceAfterAMoveOntoTheTunnelIsTaken()
+    {
+        CoreHarness h;
+        h.server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
+        h.stationCarriesBinary = false;
+        QVERIFY(h.establishWithAudio({{QStringLiteral("mediaTunnelVersion"), 1}}));
+        FakeTransport* const first = h.transports.first();
+        QVERIFY(!first->startOptions.ice || !first->startOptions.ice->mediaRouting());
+        h.stationLink->setCarriesBinary(true);
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(replaceControl(QLatin1String(kSecond),
+                                                         QLatin1String(kFirst)),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(h.transports.size(), 2);
+        FakeTransport* const second = h.transports.at(1);
+        QVERIFY(second->startOptions.ice.has_value());
+        QVERIFY(second->startOptions.ice->mediaRouting());
+        QVERIFY(second->startOptions.ice->hasCandidateSourceFactory());
+        second->path = tunnelShimPath();
+        second->becomeReady();
+        h.feed(3);
+        QTRY_COMPARE_WITH_TIMEOUT(controlsNamed(controls, QStringLiteral("replace")).size(), 1,
+                                  DaemonMediaController::kReplaceOverlapMs + 3000);
+        QVERIFY(h.client.sendMediaControl(directReplaceControl(QLatin1String(kThird),
+                                                               QLatin1String(kSecond)),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(h.transports.size(), 3);
+        QVERIFY(controlsNamed(controls, QStringLiteral("rejected")).isEmpty());
+        QVERIFY(!h.transports.at(2)->startOptions.ice->mediaRouting());
+    }
+
+    // ── The direct media ladder (the window) ─────────────────────────
+
+    // Media that starts over the tunnel names the Core's STUN beside the
+    // tunnel; a direct-only replace is tried at 5, 30, 120 and 300 s (the
+    // last repeating), never while keyed or with VOX armed; one that fails
+    // is dropped and the tunnel keeps carrying media.
+    void theWindowTriesDirectOnItsScheduleAndKeepsTheTunnel()
+    {
+        GuiHarness g;
+        g.core.server.setMediaStun({QStringLiteral("stun:stun.example.test:3478")});
+        QVERIFY(g.connect(tunnelShimPath()));
+        QVERIFY(g.core.client.mediaDirectAvailable());
+        FakeTransport* const first = g.guiTransports.first();
+        QVERIFY(first->startOptions.ice.has_value());
+        QVERIFY(first->startOptions.ice->hasCandidateSourceFactory());
+        QVERIFY(first->startOptions.ice->stunServer().has_value());
+        QCOMPARE(first->startOptions.ice->stunServer()->host, QStringLiteral("stun.example.test"));
+        const QString firstId = g.gui->mediaConnectionId();
+        // The stall rule's tick (every 500 ms) arms the first step.
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[0],
+                                  3000);
+
+        g.gui->setMicKeyDown(true);
+        g.gui->runDirectUpgradeStep();
+        QCOMPARE(g.guiTransports.size(), 1);
+        QCOMPARE(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[1]);
+        g.gui->setMicKeyDown(false);
+
+        QVERIFY(g.core.client.capabilities().txPermitted);
+        g.gui->setVoxArmed(true);
+        g.gui->runDirectUpgradeStep();
+        QCOMPARE(g.guiTransports.size(), 1);
+        QCOMPARE(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[2]);
+        g.gui->setVoxArmed(false);
+
+        g.gui->runDirectUpgradeStep();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.gui->replacingConnection());
+        const IceConfiguration& direct = *g.guiTransports.at(1)->startOptions.ice;
+        QVERIFY(!direct.hasCandidateSourceFactory());
+        QVERIFY(!direct.mediaRouting());
+        QVERIFY(!direct.relayAllowed());
+        QCOMPARE(direct.stunServer()->host, QStringLiteral("stun.example.test"));
+        QTRY_COMPARE(g.core.transports.size(), 2);
+        QVERIFY(!g.core.transports.at(1)->startOptions.ice->hasCandidateSourceFactory());
+        QTRY_COMPARE(g.replacesSent().size(), 1);
+        QCOMPARE(g.replacesSent().first().value(QStringLiteral("mediaDirectVersion")).toInt(), 1);
+        QCOMPARE(g.replacesSent().first().size(), 4);
+
+        // The direct connection fails: dropped, nothing pending, the tunnel
+        // carries on, and the next step is the last one's.
+        g.guiTransports.at(1)->close();
+        QVERIFY(!g.gui->replacingConnection());
+        QVERIFY(!g.gui->replacePending());
+        QCOMPARE(g.gui->mediaConnectionId(), firstId);
+        QVERIFY(!first->stopped);
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[3],
+                                  3000);
+        g.gui->runDirectUpgradeStep();
+        QCOMPARE(g.guiTransports.size(), 3);
+        g.guiTransports.at(2)->close();
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[3],
+                                  3000);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A Core that refused a direct-only replace leaves nothing pending: the
+    // next try is the next step, not the move-follower's retry.
+    void aRefusedDirectReplaceWaitsForTheNextStep()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        QTRY_VERIFY_WITH_TIMEOUT(g.gui->directUpgradeDelayMs() > 0, 3000);
+        // The Core goes on the air where this window cannot hear it.
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        g.stationLink->setDropsOutgoing(true);
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() != MoxState::Rx);
+        g.stationLink->setDropsOutgoing(false);
+        QSignalSpy controls(&g.core.client, &StationClient::mediaControlReceived);
+        g.gui->runDirectUpgradeStep();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
+        QVERIFY(!g.gui->replacingConnection());
+        QVERIFY(!g.gui->replacePending());
+        QVERIFY(!g.guiTransports.first()->stopped);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A direct path silent for kDirectMediaSilenceFallbackMs (not a moment
+    // less) goes back to the tunnel alone (its candidate only: no STUN, no
+    // host candidates), by the three-field replace, and the direct schedule
+    // starts over; never on the tunnel.
+    void aSilentDirectPathFallsBackToTheTunnel()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[0],
+                                  3000);
+        // Two refused steps (keyed) move the schedule on.
+        g.gui->setMicKeyDown(true);
+        g.gui->runDirectUpgradeStep();
+        g.gui->runDirectUpgradeStep();
+        g.gui->setMicKeyDown(false);
+        QCOMPARE(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[2]);
+        // On the tunnel, silence is the stall rule's, not this one's.
+        g.now += 10 * RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+
+        // Now on a direct pair.
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        const qint64 lastPacket = g.now;
+        g.now = lastPacket + RemoteMediaController::kDirectMediaSilenceFallbackMs - 1;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        g.now = lastPacket + RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        const IceConfiguration& fallback = *g.guiTransports.at(1)->startOptions.ice;
+        QVERIFY(fallback.hasCandidateSourceFactory());
+        QVERIFY(fallback.onlySourceCandidates());
+        QVERIFY(!fallback.stunServer().has_value());
+        QVERIFY(!fallback.relayAllowed());
+        QVERIFY(fallback.mediaRouting());
+        QTRY_COMPARE(g.replacesSent().size(), 1);
+        QCOMPARE(g.replacesSent().first().size(), 3);
+        QVERIFY(!g.replacesSent().first().contains(QStringLiteral("mediaDirectVersion")));
+        QTRY_COMPARE(g.core.transports.size(), 2);
+        QVERIFY(g.core.transports.at(1)->startOptions.ice->hasCandidateSourceFactory());
+
+        // The schedule starts over at its first step once media is back on
+        // the tunnel.
+        g.guiTransports.at(1)->close();
+        g.guiTransports.first()->path = tunnelShimPath();
+        g.feeding = true;
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->directUpgradeDelayMs(), PathRacer::kUpgradeRetryMs[0],
+                                  3000);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The fallback runs once per silence: a Core still silent after it
+    // (here the fallback's connection failed, so media stays on the direct
+    // pair) is not replaced again; a window after the fallback finished the
+    // window asks for recovery instead. Media coming back re-arms it.
+    void theSilenceFallbackRunsOnceThenRecovers()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        QSignalSpy recovery(g.gui.get(), &RemoteMediaController::recoveryRequested);
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        g.guiTransports.at(1)->close();
+        QVERIFY(!g.gui->replacingConnection());
+        const qint64 finished = g.now;
+        // Two more windows of silence: no second replace.
+        g.now = finished + RemoteMediaController::kDirectMediaSilenceFallbackMs - 1;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(recovery.isEmpty());
+        g.now = finished + RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(recovery.size(), 1);
+        g.now += 2 * RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QCOMPARE(recovery.size(), 1);
+        QTRY_COMPARE(g.replacesSent().size(), 1);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A media packet arms the fallback again: the next silence falls back
+    // once more, and no recovery is asked for.
+    void aMediaPacketArmsTheFallbackAgain()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        QSignalSpy recovery(g.gui.get(), &RemoteMediaController::recoveryRequested);
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        g.guiTransports.at(1)->close();
+        QVERIFY(!g.gui->replacingConnection());
+        g.audioOn(0);
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 3);
+        QVERIFY(recovery.isEmpty());
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A fallback that moved media onto the tunnel but brought no media
+    // back asks for recovery one window after the move.
+    void aFallbackThatBringsNoMediaAsksForRecovery()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        QSignalSpy recovery(g.gui.get(), &RemoteMediaController::recoveryRequested);
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        // The Core moves media onto the fallback's connection.
+        QTRY_COMPARE(g.core.transports.size(), 2);
+        g.guiTransports.at(1)->path = tunnelShimPath();
+        g.core.transports.at(1)->path = tunnelShimPath();
+        g.guiTransports.at(1)->becomeReady();
+        g.core.transports.at(1)->becomeReady();
+        const QString fallbackId = g.guiTransports.at(1)->startOptions.connectionId;
+        g.core.feed(3);
+        QTRY_COMPARE_WITH_TIMEOUT(g.gui->mediaConnectionId(), fallbackId,
+                                  DaemonMediaController::kReplaceOverlapMs + 3000);
+        // The old connection's late packets are taken for a while; the
+        // check waits until that connection is let go.
+        QTRY_VERIFY_WITH_TIMEOUT(!g.guiTransports.at(0) || g.guiTransports.at(0)->stopped,
+                                 DaemonMediaController::kReplaceOverlapMs + 3000);
+        const qint64 moved = g.now;
+        g.now = moved + RemoteMediaController::kDirectMediaSilenceFallbackMs - 1;
+        g.gui->checkMediaSilence();
+        QVERIFY(recovery.isEmpty());
+        g.now = moved + RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(recovery.size(), 1);
+        QCOMPARE(g.guiTransports.size(), 2);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Silence the window does not ask for (muted, or its radio not
+    // connected) never falls back.
+    void noFallbackWhileTheWindowWantsNoAudio()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        QVERIFY(g.core.remote.isConnected());
+        g.core.remote.audioEngine()->setMasterMuted(true);
+        g.now += 2 * RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        g.core.remote.audioEngine()->setMasterMuted(false);
+        g.core.remote.setConnectionStateForTest(ConnectionState::Disconnected);
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        g.core.remote.setConnectionStateForTest(ConnectionState::Connected);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Silence while the Core is keyed is expected: back on receive, the
+    // silence clock starts again rather than counting the keyed time.
+    void theReturnToReceiveRestartsTheSilenceClock()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        mox->setMox(true);
+        QTRY_VERIFY(onAir());
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs + 1000;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs - 1;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        g.now += 1;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A fallback the Core refuses because it went on the air as the replace
+    // arrived is tried again once it is back on receive, and the retry is
+    // still a fallback onto the tunnel alone, never a normal replace with
+    // STUN and host candidates.
+    void aFallbackRefusedWhileTransmittingStaysOnTheTunnelAlone()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        // The Core keys the moment the window's replace leaves it, so the
+        // Core reads that replace while it transmits.
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        // Refused while transmitting: the move waits, and the Core started
+        // no connection for it.
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                  RemoteMediaController::kReplaceRetryMs + 5000);
+        QVERIFY(!g.gui->replacePending());
+        // Every connection the window started after the first, the retry
+        // included, has the tunnel's candidate alone (a refused one is
+        // already gone; the retry is live).
+        QVERIFY(g.guiTransports.size() >= 3);
+        QVERIFY(g.guiTransports.last());
+        for (int i = 1; i < g.guiTransports.size(); ++i) {
+            if (!g.guiTransports.at(i)) { continue; }
+            const IceConfiguration& ice = *g.guiTransports.at(i)->startOptions.ice;
+            QVERIFY2(ice.onlySourceCandidates(), qPrintable(QString::number(i)));
+            QVERIFY(!ice.stunServer().has_value());
+        }
+        QVERIFY(g.core.transports.at(1)->startOptions.ice->hasCandidateSourceFactory());
+        for (const QJsonObject& replace : g.replacesSent()) {
+            QCOMPARE(replace.size(), 3);
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The session moves while a refused fallback waits for the Core to be
+    // back on receive: the move is followed, and the replace is still a
+    // fallback onto the tunnel alone, so it cannot pick the silent direct
+    // pair again.
+    void aSessionMoveKeepsAWaitingFallbackOnTheTunnelAlone()
+    {
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        // The session moves while the refused fallback waits.
+        emit g.core.client.pathChanged();
+        QVERIFY(g.gui->replacePending());
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                  RemoteMediaController::kReplaceRetryMs + 5000);
+        QVERIFY(!g.gui->replacePending());
+        // Every connection the window started after the first has the
+        // tunnel's candidate alone, the one that followed the move included.
+        QVERIFY(g.guiTransports.size() >= 3);
+        QVERIFY(g.guiTransports.last());
+        for (int i = 1; i < g.guiTransports.size(); ++i) {
+            if (!g.guiTransports.at(i)) { continue; }
+            const IceConfiguration& ice = *g.guiTransports.at(i)->startOptions.ice;
+            QVERIFY2(ice.onlySourceCandidates(), qPrintable(QString::number(i)));
+            QVERIFY(!ice.stunServer().has_value());
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Media comes back on the direct pair while a refused fallback waits
+    // for the Core to be back on receive: the silence that fallback
+    // answered is over, so it is dropped, and nothing moves to the tunnel
+    // when the Core unkeys. With a session move folded into the wait, the
+    // move is still followed, as a normal replace (the direct pair is no
+    // longer silent, so nothing keeps it to the tunnel alone).
+    void mediaBackOnTheDirectPairEndsAWaitingFallback_data()
+    {
+        QTest::addColumn<bool>("moved");
+        QTest::newRow("no move") << false;
+        QTest::newRow("a move folded in") << true;
+    }
+    void mediaBackOnTheDirectPairEndsAWaitingFallback()
+    {
+        QFETCH(bool, moved);
+        GuiHarness g;
+        QVERIFY(g.connect(tunnelShimPath()));
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        MoxController* mox = g.core.radio.moxController();
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        g.core.radio.transmitModel().setMicSourceLocked(false);
+        g.core.radio.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = g.core.radio.sliceById(g.core.slice)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+        const TransmitState* tx = g.core.client.transmitState();
+        QVERIFY(tx != nullptr);
+        const auto onAir = [tx] { return tx->keyed() || tx->tuning() || tx->txEnding(); };
+        Test::LoopbackTransport* windowLink = g.stationLink->peerForTest();
+        QVERIFY(windowLink != nullptr);
+        bool keyed = false;
+        const QMetaObject::Connection keyOnReplace = QObject::connect(
+            windowLink, &Test::LoopbackTransport::outboundText, windowLink,
+            [&keyed, mox](const QByteArray& wire) {
+                if (!keyed && wire.contains("\"replace\"")) {
+                    keyed = true;
+                    mox->setMox(true);
+                }
+            });
+        g.now += RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 2);
+        QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
+        QVERIFY(keyed);
+        QObject::disconnect(keyOnReplace);
+        QTRY_VERIFY(g.gui->replacePending());
+        QCOMPARE(g.core.transports.size(), 1);
+        if (moved) {
+            emit g.core.client.pathChanged();
+            QVERIFY(g.gui->replacePending());
+        }
+        // Audio arrives again on the direct pair while the retry waits.
+        g.audioOn(0);
+        QCOMPARE(g.gui->replacePending(), moved);
+        mox->setMox(false);
+        QTRY_VERIFY(!onAir());
+        if (!moved) {
+            // Past the retry: no replace, and media stays on the direct pair.
+            QTest::qWait(RemoteMediaController::kReplaceRetryMs + 500);
+            QVERIFY(!g.gui->replacePending());
+            QCOMPARE(g.core.transports.size(), 1);
+            QCOMPARE(g.guiTransports.size(), 2);
+        } else {
+            // The move is followed, by a normal replace.
+            QTRY_COMPARE_WITH_TIMEOUT(g.core.transports.size(), 2,
+                                      RemoteMediaController::kReplaceRetryMs + 5000);
+            QVERIFY(!g.gui->replacePending());
+            QVERIFY(g.guiTransports.size() >= 3);
+            QVERIFY(g.guiTransports.last());
+            QVERIFY(!g.guiTransports.last()->startOptions.ice->onlySourceCandidates());
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // A Core that never took `mediaDirect` (an older one, as the window
+    // sees it) gets the three-field replace only: no direct schedule, no
+    // silence fallback, no new field on the wire.
+    void anOlderCoreKeepsTheThreeFieldReplace()
+    {
+        GuiHarness g;
+        g.core.client.withholdFeatureForTest(QByteArrayLiteral("mediaDirect"));
+        QVERIFY(g.connect(tunnelShimPath()));
+        QVERIFY(!g.core.client.mediaDirectAvailable());
+        // The stall tick that marks the tunnel in use runs the direct
+        // schedule's update right after, in the same tick; wait for a
+        // second mark so that update has run at least once.
+        QTRY_VERIFY_WITH_TIMEOUT(g.core.client.mediaTunnelInUse(), 5000);
+        g.core.client.setMediaTunnelInUse(false);
+        QTRY_VERIFY_WITH_TIMEOUT(g.core.client.mediaTunnelInUse(), 5000);
+        QCOMPARE(g.gui->directUpgradeDelayMs(), -1);
+        QVERIFY(!g.gui->upgradeToDirectConnection());
+        MediaIcePath hostPath;
+        hostPath.remoteAddress = QStringLiteral("127.0.0.1");
+        g.feeding = false;
+        g.guiTransports.first()->path = hostPath;
+        g.audioOn(0);
+        g.now += 10 * RemoteMediaController::kDirectMediaSilenceFallbackMs;
+        g.gui->checkMediaSilence();
+        QCOMPARE(g.guiTransports.size(), 1);
+        QVERIFY(g.gui->replaceConnection());
+        QTRY_COMPARE(g.replacesSent().size(), 1);
+        QCOMPARE(g.replacesSent().first().size(), 3);
+        for (const QByteArray& wire : g.toCore) {
+            QVERIFY(!wire.contains("mediaDirect"));
+        }
+        g.core.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // Nothing moves while the radio is on the air (the media document's
     // "Transmit"): refused in plain words, and the key untouched.
     void noReplacementWhileKeyed()
@@ -426,6 +1358,16 @@ private slots:
                                   h.client.sessionEpoch());
         QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 1);
         QCOMPARE(controlsNamed(controls, QStringLiteral("rejected")).first()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core did not move audio and display: the radio is "
+                                "transmitting."));
+        QCOMPARE(h.transports.size(), 1);
+        // The direct media ladder: a direct-only replace meets the same gate.
+        h.client.sendMediaControl(directReplaceControl(QLatin1String(kSecond),
+                                                       QLatin1String(kFirst)),
+                                  h.client.sessionEpoch());
+        QTRY_COMPARE(controlsNamed(controls, QStringLiteral("rejected")).size(), 2);
+        QCOMPARE(controlsNamed(controls, QStringLiteral("rejected")).at(1)
                      .value(QStringLiteral("reason")).toString(),
                  QStringLiteral("The Core did not move audio and display: the radio is "
                                 "transmitting."));

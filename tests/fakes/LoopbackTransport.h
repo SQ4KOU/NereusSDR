@@ -42,6 +42,11 @@
 //                                    setDropsOutgoing(), one direction
 //                                    dead. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-29  J.J. Boyd / KG4VCF  Direct media fix wave:
+//                                    setCarriesBinary(), a session link
+//                                    without binary messages (a data
+//                                    channel). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -66,7 +71,7 @@ public:
     void sendText(const QByteArray& wire) override;
     /// Task 29 step 2b: binary messages, queued as text is.
     bool sendBinary(const QByteArray& message) override;
-    bool carriesBinary() const override { return true; }
+    bool carriesBinary() const override { return m_carriesBinary; }
     void ping() override;
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
@@ -79,6 +84,11 @@ public:
     /// What peerAddress() reports (the far end's address, as the station
     /// sees it). Default empty, as a relayed connection reports.
     void setPeerAddress(const QString& address) { m_peerAddress = address; }
+
+    /// What carriesBinary() reports. Default true (a WebSocket); false
+    /// stands for a session link that carries no binary messages, where
+    /// the media tunnel cannot run.
+    void setCarriesBinary(bool carries) { m_carriesBinary = carries; }
 
     /// What peerCertificateSha256() reports: the certificate the far end
     /// would have presented over TLS (a Core's, as its pin's 32 bytes).
@@ -127,6 +137,7 @@ private:
     bool m_answersPings = true;
     bool m_severed = false;
     bool m_dropsOutgoing = false;
+    bool m_carriesBinary = true;
     int m_pingsSeen = 0;
     QString m_closeReason;
     QString m_peerAddress;

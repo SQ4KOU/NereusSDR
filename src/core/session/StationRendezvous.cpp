@@ -22,6 +22,9 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: the direct media ladder: the hello's STUN servers handed to
+//               the server for every media connection (mediaStunUrls).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationRendezvous.h"
@@ -129,6 +132,13 @@ bool StationRendezvous::start()
                 }
                 m_stunResolved = true;
                 m_stunFamilies = families;
+                // The direct media ladder: every media connection, the
+                // tunnel's and a direct session's included, gathers from
+                // this STUN server; sessions told mediaStunUrls hear of a
+                // change.
+                if (m_server) {
+                    m_server->setMediaStun(m_client->stunUrls(), families);
+                }
                 const QList<RendezvousIntroduction> waiting = m_waiting;
                 m_waiting.clear();
                 for (const RendezvousIntroduction& introduction : waiting) {

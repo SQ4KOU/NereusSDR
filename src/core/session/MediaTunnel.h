@@ -30,6 +30,12 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-29: the direct media ladder: iceFor takes the Core's STUN
+//               server, and directIceFor makes a direct-only replacement.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-29: direct media fix wave: tunnelIceFor, the tunnel alone for
+//               the window's fallback. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -66,9 +72,22 @@ public:
     ~MediaTunnel() override;
 
     /// ICE settings for a media connection that uses the tunnel (a direct
-    /// session has none of its own): no STUN, no TURN, the tunnel's
-    /// candidate source on the media lane.
-    static IceConfiguration iceFor(std::shared_ptr<MediaTunnel> tunnel);
+    /// session has none of its own): the Core's STUN server when one is
+    /// known (the direct media ladder: a global IPv6 host behind a stateful
+    /// firewall, or an IPv4 NAT, still needs a server-reflexive candidate
+    /// for a direct pair), no TURN, and the tunnel's candidate source on
+    /// the media lane, which libjuice ranks lowest.
+    static IceConfiguration iceFor(std::shared_ptr<MediaTunnel> tunnel,
+                                   std::optional<IceServerAddress> stun);
+    /// The direct media ladder: ICE settings for a direct-only replacement
+    /// (the replace's `mediaDirectVersion`): host candidates and `stun`'s
+    /// server-reflexive one, no relay and no tunnel, so the connection is
+    /// direct or it fails and the tunnel keeps carrying media.
+    static IceConfiguration directIceFor(std::optional<IceServerAddress> stun);
+    /// The direct media ladder's fallback: the tunnel's candidate source
+    /// alone. No STUN, no relay, and none of this computer's host
+    /// candidates, so the replacement runs on the tunnel or not at all.
+    static IceConfiguration tunnelIceFor(std::shared_ptr<MediaTunnel> tunnel);
 
     quint64 datagramsSent() const { return m_sent; }
     quint64 datagramsDelivered() const { return m_delivered; }
