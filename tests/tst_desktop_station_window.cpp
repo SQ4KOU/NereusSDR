@@ -1285,6 +1285,10 @@ private slots:
         QSignalSpy tuned(b, &SliceModel::frequencyChanged);
         QSignalSpy moved(b, &SliceModel::panKeyChanged);
 
+        SpectrumWidget* remaining = stack->spectrum(QStringLiteral("pan-0"));
+        QVERIFY(remaining);
+        const double viewCentre = remaining->centerFrequency();
+        const double viewSpan = remaining->bandwidth();
         QVERIFY(applyLayout(window, QStringLiteral("1")));
         QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
         // Still listening: no stopListening went out, and no notice.
@@ -1325,18 +1329,26 @@ private slots:
         QCOMPARE(flagB->parentWidget(), stack->spectrum(QStringLiteral("pan-0")));
         QCOMPARE(flagCountFor(window, bId), 1);
         QVERIFY(stack->panadapter(QStringLiteral("pan-0"))->associatedSlices().contains(bId));
-        // The pan that takes B follows it, as it does for any slice moved
-        // onto a pan, so B is shown there as its flag.
-        SpectrumWidget* remaining = stack->spectrum(QStringLiteral("pan-0"));
-        QVERIFY(remaining);
-        QCOMPARE(remaining->centerFrequency(), b->frequency());
-        // Panned back to A, B is off that pan's span: its flag hides and the
-        // pan's edge marker points at it, in B's colour, on the right.
-        const double aFrequency = model->sliceById(aId)->frequency();
-        remaining->setFrequencyRange(aFrequency, remaining->bandwidth());
+        // The operator's view of the pan that remains stays where it was.
+        QCOMPARE(stack->spectrum(QStringLiteral("pan-0")), remaining);
+        QCOMPARE(remaining->centerFrequency(), viewCentre);
+        QCOMPARE(remaining->bandwidth(), viewSpan);
+        // The operator's own slices stay in view.
+        for (const int own : {aId, cId}) {
+            const double hz = model->sliceById(own)->frequency();
+            QVERIFY(hz >= viewCentre - viewSpan / 2.0 && hz <= viewCentre + viewSpan / 2.0);
+            VfoWidget* ownFlag = nullptr;
+            for (VfoWidget* flag : remaining->findChildren<VfoWidget*>()) {
+                if (flag->sliceIndex() == own) { ownFlag = flag; }
+            }
+            QVERIFY2(ownFlag, qPrintable(QString::number(own)));
+            QVERIFY2(!ownFlag->isHidden(), qPrintable(QString::number(own)));
+        }
+        // B is off that pan's span: its flag hides and the pan's edge
+        // marker points at it, in B's colour, on the right.
         QVERIFY(b->frequency() > remaining->centerFrequency() + remaining->bandwidth() / 2.0);
         QVERIFY(flagB->isHidden());
-        {
+        const auto edgeMarkerPixels = [remaining, bId](bool rightSide) {
             QImage image(800, 400, QImage::Format_ARGB32_Premultiplied);
             image.fill(Qt::black);
             {
@@ -1345,18 +1357,24 @@ private slots:
                                                          QRect(0, 200, 800, 180));
             }
             const QRgb bColour = VfoWidget::sliceColor(bId).rgb();
-            int rightPixels = 0;
-            int leftPixels = 0;
+            int pixels = 0;
             for (int y = 0; y < 180; ++y) {
-                for (int x = 0; x < 800; ++x) {
-                    if (image.pixel(x, y) == bColour) { ++(x < 400 ? leftPixels : rightPixels); }
+                for (int x = rightSide ? 400 : 0; x < (rightSide ? 800 : 400); ++x) {
+                    if (image.pixel(x, y) == bColour) { ++pixels; }
                 }
             }
-            QVERIFY2(rightPixels > 0, "no edge marker in slice B's colour on the right edge");
-            QCOMPARE(leftPixels, 0);
-        }
+            return pixels;
+        };
+        QVERIFY2(edgeMarkerPixels(true) > 0, "no edge marker in slice B's colour on the right edge");
+        QCOMPARE(edgeMarkerPixels(false), 0);
         // Still listening while it is off the span.
         QVERIFY(ownership->isListening(station, bId));
+        // Panned to B, it is in span and shows as its flag, with no marker.
+        remaining->setFrequencyRange(b->frequency(), viewSpan);
+        QVERIFY(!flagB->isHidden());
+        QCOMPARE(edgeMarkerPixels(true), 0);
+        QCOMPARE(edgeMarkerPixels(false), 0);
+        remaining->setFrequencyRange(viewCentre, viewSpan);
         // Its row still offers Stop listening.
         const QList<SliceChooser::Row> rows =
             SliceChooser::rowsForHostingDesktop(*model, *server);

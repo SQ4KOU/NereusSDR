@@ -1948,6 +1948,10 @@ private slots:
         QObject phoneSession;
         const QByteArray phone = admitPhone(h, phoneSession);
         QVERIFY(!phone.isEmpty());
+        // B sits well away from A, so the pan that remains cannot show it.
+        const double bHz = h.station().sliceById(0)->frequency() + 1'000'000.0;
+        h.station().sliceById(1)->setFrequency(bHz);
+        QTRY_COMPARE(h.remoteModel()->sliceById(1)->frequency(), bHz);
         SliceOwnership* ownership = h.station().sliceOwnership();
         ownership->setOwner(1, phone);
         QVERIFY(ownership->isListening(QByteArrayLiteral("token:1"), 1));
@@ -1955,17 +1959,27 @@ private slots:
         auto* stack = h.window()->findChild<PanadapterStack*>();
         QVERIFY(stack);
         QCOMPARE(stack->currentLayoutId(), QStringLiteral("2v"));
+        PanadapterApplet* remaining = stack->panadapter(QStringLiteral("pan-0"));
+        QVERIFY(remaining);
+        QTest::qWait(kSettleMs);
+        const double viewCentre = remaining->spectrumWidget()->centerFrequency();
+        const double viewSpan = remaining->spectrumWidget()->bandwidth();
 
         QVERIFY(QMetaObject::invokeMethod(h.window(), "applyPanLayout",
                                           Q_ARG(QString, QStringLiteral("1"))));
         QCOMPARE(stack->currentLayoutId(), QStringLiteral("1"));
         // Placed on the pan that remains, as its flag, still listening.
-        PanadapterApplet* remaining = stack->panadapter(QStringLiteral("pan-0"));
-        QVERIFY(remaining);
+        QCOMPARE(stack->panadapter(QStringLiteral("pan-0")), remaining);
         QTRY_VERIFY(remaining->associatedSlices().contains(1));
         QTRY_VERIFY(flagFor(h, 1) && flagFor(h, 1)->parentWidget() == remaining->spectrumWidget());
         QVERIFY(flagFor(h, 1)->isListening());
         QTest::qWait(kSettleMs);
+        // The operator's view of that pan stays where it was, so B, off
+        // its span, is the pan's edge marker rather than a moved view.
+        QCOMPARE(remaining->spectrumWidget()->centerFrequency(), viewCentre);
+        QCOMPARE(remaining->spectrumWidget()->bandwidth(), viewSpan);
+        QVERIFY(bHz > viewCentre + viewSpan / 2.0);
+        QVERIFY(flagFor(h, 1)->isHidden());
         QVERIFY(ownership->isListening(QByteArrayLiteral("token:1"), 1));
         QVERIFY(h.sliceAccessCommands().isEmpty());
         QCOMPARE(ownership->mark(1).subject(), phone);

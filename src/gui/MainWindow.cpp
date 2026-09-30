@@ -481,6 +481,12 @@
 //               (foreignMarkers reads the access entries), refreshed when
 //               access or the connected devices change. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Desktop listening placement: a listened slice placed on
+//               a remaining pan no longer takes that pan's view. It is
+//               placed before the controlled slices rehome, and
+//               rebuildFftRouting does not push its stream window onto a
+//               pan that already shows something. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): a remote window's VAX
 //                applet gains the "Station computer" section, the Core
 //                computer's VAX through the Core's `vax` object, its TX row
@@ -6093,7 +6099,15 @@ void MainWindow::rebuildFftRouting()
         // sharing a stream and a pan collapse to the one subscription
         // applyTo() below actually applies.
         m_topology.subscribe(panId, stream);
-        if (isNewSubscription) {
+        // A listened slice this window placed on a pan that already shows
+        // something keeps that pan's view: it shows as its flag inside the
+        // span and as the pan's edge marker outside it. Every other new
+        // subscription, and a placement onto an empty pan, takes the
+        // stream's window as before.
+        const bool placedOnShownPan =
+            m_listenPlacement.value(slice->sliceIndex()) == panId
+            && slice->panKey() != panId && !before.value(panId).isEmpty();
+        if (isNewSubscription && !placedOnShownPan) {
             applyStreamWindowToPan(panId, stream);
         }
     }
@@ -15415,23 +15429,26 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_radioModel) { return; }
 
     if (shared) {
+        // Listening ends only when the operator ends it (Stop listening,
+        // Release or a close). A listened slice whose pan the layout
+        // retired moves onto a pan that remains, the way a controlled slice
+        // is rehomed, and keeps listening. Only this window's placement
+        // changes; the slice's pan for its controller stays put. Placed
+        // before the controlled slices rehome, so the FFT routing pass
+        // their pan change triggers already finds it on its placed pan and
+        // leaves that pan's view where the operator had it.
+        const QString survivor = ids.value(0);
+        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
+            scope.listenedOn.insert(off, survivor);
+            m_listenPlacement.insert(off, survivor);
+            m_panStack->moveSliceToPan(off, survivor);
+        }
         // Controlled slices rehome as before; nothing else moves, and no
         // stream or DDC is touched.
         const int rehomed = m_radioModel->rehomeSlicesToPans(ids, &scope);
         if (rehomed > 0) {
             qCInfo(lcContainer) << "Layout: rehomed" << rehomed
                                 << "controlled slice(s) onto" << ids.value(0);
-        }
-        // Listening ends only when the operator ends it (Stop listening,
-        // Release or a close). A listened slice whose pan the layout
-        // retired moves onto a pan that remains, the way a controlled slice
-        // is rehomed, and keeps listening. Only this window's placement
-        // changes; the slice's pan for its controller stays put.
-        const QString survivor = ids.value(0);
-        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
-            scope.listenedOn.insert(off, survivor);
-            m_listenPlacement.insert(off, survivor);
-            m_panStack->moveSliceToPan(off, survivor);
         }
         // Flags on a pan the layout retired move to a pan that remains.
         for (SliceModel* slice : m_radioModel->slices()) {

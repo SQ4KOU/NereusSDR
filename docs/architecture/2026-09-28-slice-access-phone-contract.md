@@ -399,9 +399,9 @@ receive-slice UI follows the same actions and states.
   when it leaves a slice's band; the edge marker and the Slice list row
   count as showing the slice. On the desktop, a listened slice whose pan a
   layout change removes moves onto a pan that remains and keeps listening.
-  That pan follows it, as for any slice moved onto a pan, and shows it as
-  its flag, or as the pan's edge marker once the pan is moved off it. Its
-  slice chooser row keeps Stop listening. Controlled slices keep
+  That pan's view stays where the operator had it: the slice shows as its
+  flag inside the span, or as the pan's edge marker outside it. Its slice
+  chooser row keeps Stop listening. Controlled slices keep
   today's rehoming into a remaining pan. The Core never ends a listening
   claim on a pan, layout or band change; only the verbs, a claims drop or
   the slice closing end it.
