@@ -885,6 +885,9 @@
 //                change and worker attach, so a RADE slice with no route
 //                yet plays silence, not its sideband. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - RADE gaps: a slice rolled back at creation (its placement
+//                refused) takes the RADE decoder its seeded mode made.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -14063,6 +14066,21 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // bindSliceToStream already emitted sliceAddRejected with the
         // allocator's reason for this first-bind case, so the operator has
         // been told why; this only has to undo the half-built slice.
+        //
+        // RADE gaps (2026-09-30): the seed above may have put it in RADE,
+        // which made, started and routed a decoder for its id. That goes
+        // with it, as in removeSliceImpl; left behind, it ran on with no
+        // slice and the next slice on the id got "already exists".
+        {
+            const int id = slice->sliceIndex();
+            const auto route = m_radeRxRoutes.constFind(id);
+            if (route != m_radeRxRoutes.cend() && route->slice == slice) {
+                retireRadeRxRoute(id, route->serial);
+            }
+            if (m_wdspEngine && m_wdspEngine->radeChannel(id) != nullptr) {
+                m_wdspEngine->destroyRadeChannel(id);
+            }
+        }
         m_slices.removeAll(slice);
         publishSliceAudioView();
         if (m_txSliceArbiter) {

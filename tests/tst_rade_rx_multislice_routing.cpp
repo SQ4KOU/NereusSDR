@@ -41,6 +41,10 @@
 //                 before the queued route lands, a new DSP worker before the
 //                 replay) is muted. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 -- RADE gaps: a create refused after the seed put the new
+//                 slice in RADE leaves no decoder behind. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -1224,6 +1228,52 @@ private slots:
             QVERIFY(rig.wdsp->radeChannel(b) == nullptr);
             QVERIFY2(peakSince(vaxB, fromB) > kAudible, qPrintable(evidence));
         }
+    }
+
+    // Item C, the refused create: a phone asks for a new pan when no DDC is
+    // left. The half-made slice (seeded into RADE from A) leaves nothing
+    // behind, and A decodes on.
+    void aRefusedNewSliceLeavesADecodingRadeSliceAlone()
+    {
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+
+        const int b = createSlice(rig.radio, CreatePath::PhoneAddSliceOnPan,
+                                  QStringLiteral("pan-new"));
+        QCOMPARE(b, -1);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.radio.slices().size(), 1);
+        for (int id = 0; id < WdspEngine::kMaxSliceChannels; ++id) {
+            if (id != rig.a) {
+                QVERIFY2(rig.wdsp->radeChannel(id) == nullptr,
+                         qPrintable(QStringLiteral("left a decoder on %1").arg(id)));
+            }
+        }
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QCOMPARE(rig.wdsp->radeChannel(rig.a), radeA);
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        const qsizetype fromA = vaxA->buffer().size();
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+        QCOMPARE(peakSince(vaxA, fromA), 0.0f);
+
+        // The id is free for the next slice, with no "already exists".
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        const int next = createSlice(rig.radio, CreatePath::LocalOnPan, rig.sliceA->panKey());
+        QVERIFY(next >= 0);
+        QCoreApplication::processEvents();
+        SliceModel* const sliceNext = rig.radio.sliceById(next);
+        QVERIFY(sliceNext);
+        sliceNext->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(next) && rig.wdsp->radeChannel(next)->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 2);
     }
 
     // Item D, JJ's report 1: two RADE slices on one pan (one DDC) are both
