@@ -25156,17 +25156,6 @@ bool RadioModel::rxNf(int rx) const
     return m_notchModel && m_notchModel->globalEnabled();
 }
 
-// ── Stub DSP toggles (no model state yet) ───────────────────────────────────
-void RadioModel::setRxEnable(int rx, bool on)
-{
-    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxEnable[rx] = on; }
-}
-bool RadioModel::rxEnable(int rx) const
-{
-    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxEnable[rx]; }
-    return false;
-}
-
 // ── Per-slice AF gain (rx_volume: query source) ─────────────────────────────
 //
 // Phase 3F Sub-Epic J Task 10: TCI receiver rx -> slice id rx via

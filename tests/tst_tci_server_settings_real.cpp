@@ -559,7 +559,6 @@ private slots:
                  QStringLiteral("rx_channel_enable:0,0,true;"));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1;")),
                  QStringLiteral("rx_channel_enable:0,1,false;"));
-        QVERIFY(radio.rxEnable(0));
         QCOMPARE(drainLines(protocol), QStringList{});
         // Thetis answers any receiver, and drops what does not parse.
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:3,0;")),
@@ -573,9 +572,9 @@ private slots:
     }
 
     // Receiver 1: channel 0 is RX2 on or off, channel 1 always false
-    // ("no subrx"). A set writes what rx_enable:1 writes, since both are
-    // RX2Enabled in Thetis, and only while receiver 1 has a slice; TCI does
-    // not create one. The requested value is echoed either way.
+    // ("no subrx"). A set would turn RX2 on or off in Thetis (RX2Enabled);
+    // TCI does not open or close receiver 1's slice, so nothing changes,
+    // and the requested value is echoed as Thetis does.
     void rxChannelEnableSecondReceiver_data()
     {
         QTest::addColumn<bool>("rx2On");
@@ -596,13 +595,13 @@ private slots:
 
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
                  QStringLiteral("rx_channel_enable:1,0,false;"));
-        QCOMPARE(radio.rxEnable(1), !rx2On);
-        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),
-                 QStringLiteral("rx_enable:1,%1;").arg(rx2On ? QStringLiteral("false")
-                                                              : QStringLiteral("true")));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,1,true;")),
                  QStringLiteral("rx_channel_enable:1,1,true;"));
-        QVERIFY(radio.rxEnable(1));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0;")),
+                 QStringLiteral("rx_channel_enable:1,0,%1;").arg(on));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),
+                 QStringLiteral("rx_enable:1,%1;").arg(on));
+        QVERIFY(radio.rx2Enabled() == rx2On);
         QCOMPARE(drainLines(protocol), QStringList{});
     }
 
@@ -617,7 +616,6 @@ private slots:
         protocol.setSliceWriteGate([&refused](int slice) { return slice != refused; });
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
                  QStringLiteral("rx_channel_enable:1,0,true;"));
-        QVERIFY(radio.rxEnable(1));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:0,1,true;")),
                  QStringLiteral("rx_channel_enable:0,1,true;"));
         refused = 0;
@@ -625,7 +623,42 @@ private slots:
                  QStringLiteral("rx_channel_enable:0,1,false;"));
         QCOMPARE(protocol.handleCommand(QStringLiteral("rx_channel_enable:1,0,false;")),
                  QStringLiteral("rx_channel_enable:1,0,false;"));
-        QVERIFY(!radio.rxEnable(1));
+    }
+
+    // rx_enable, from Thetis handleRXEnable, TCIServer.cs:4595-4629
+    // [v2.10.3.15]: the query is !MOX for receiver 0 and RX2 on && !MOX for
+    // receiver 1. A set sends nothing and, since TCI does not open or close
+    // receiver 1's slice, changes nothing.
+    void rxEnableAnswersRx2AndMox_data()
+    {
+        QTest::addColumn<bool>("rx2On");
+        QTest::addColumn<bool>("mox");
+        QTest::newRow("RX2 on, receive") << true << false;
+        QTest::newRow("RX2 off, receive") << false << false;
+        QTest::newRow("RX2 on, transmit") << true << true;
+    }
+    void rxEnableAnswersRx2AndMox()
+    {
+        QFETCH(bool, rx2On);
+        QFETCH(bool, mox);
+        CentredMockRadio radio;
+        tuneTwoReceivers(radio, rx2On);
+        radio.setMox(mox);
+        TciProtocol protocol(&radio);
+        const auto word = [](bool b) { return b ? QStringLiteral("true") : QStringLiteral("false"); };
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:0;")),
+                 QStringLiteral("rx_enable:0,%1;").arg(word(!mox)));
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),
+                 QStringLiteral("rx_enable:1,%1;").arg(word(rx2On && !mox)));
+        for (const QString& set : {QStringLiteral("rx_enable:0,false;"),
+                                   QStringLiteral("rx_enable:1,false;"),
+                                   QStringLiteral("rx_enable:1,true;")}) {
+            QCOMPARE(protocol.handleCommand(set), QString());
+        }
+        QCOMPARE(drainLines(protocol), QStringList{});
+        QCOMPARE(radio.rx2Enabled(), rx2On);
+        QCOMPARE(protocol.handleCommand(QStringLiteral("rx_enable:1;")),
+                 QStringLiteral("rx_enable:1,%1;").arg(word(rx2On && !mox)));
     }
 
     // ...and in the first lines, from Thetis sendVFO,

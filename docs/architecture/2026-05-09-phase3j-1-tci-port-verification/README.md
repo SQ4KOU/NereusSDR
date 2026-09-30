@@ -91,8 +91,8 @@ Each row corresponds to a single Thetis behavior exercised by the
 | cw_macros_speed_up_stub | cw_macros_speed_up:1; |  |  | TCIServer.cs:4989 [v2.10.3.13] | STUB; Phase 3M-2 wires real keyer speed |
 | cw_macros_speed_down_stub | cw_macros_speed_down:1; |  |  | TCIServer.cs:4992 [v2.10.3.13] | STUB; Phase 3M-2 wires real keyer speed |
 | cw_msg_stub | cw_msg:CQ DE KG4VCF; |  |  | TCIServer.cs:5001 [v2.10.3.13] | STUB; Phase 3M-2 wires real CW message send |
-| rx_enable_set_rx0_off | rx_enable:0,false; |  | rx_enable:0,false; | TCIServer.cs:5010 [v2.10.3.13] | set rx0 disabled (stored; MOX-gating deferred to Phase 17); sendRXEnable at TCIServer.cs:2279 [v2.10.3.13] |
-| rx_enable_query_after_set | rx_enable:0,false;;rx_enable:0; | rx_enable:0,false; |  | TCIServer.cs:4413 [v2.10.3.13] | query returns rx0 stored enable state; uses ;; chain |
+| rx_enable_set_rx0_off | rx_enable:0,false; |  |  | TCIServer.cs:4595-4616 [v2.10.3.15] | set sends nothing and rx0 is always enabled (// rx0 is always enabled); only a real RX2 change sends rx_enable lines |
+| rx_enable_query_after_set | rx_enable:0,false;;rx_enable:0; | rx_enable:0,true; |  | TCIServer.cs:4617-4623 [v2.10.3.15] | query answers !MOX for rx0 whatever was set; uses ;; chain |
 | rx_ctun_ex_set_rx0 | rx_ctun_ex:0,true; |  | rx_ctun_ex:0,true; | TCIServer.cs:5118 [v2.10.3.13] | set CTUN on rx0; handleCTUN at TCIServer.cs:4696 [v2.10.3.13]; sendCTUN at TCIServer.cs:4690 [v2.10.3.13] |
 | tx_profile_ex_set | tx_profile_ex:Default; |  | tx_profile_ex:Default; | TCIServer.cs:5121 [v2.10.3.13] | set TX profile by name; handleTXProfile at TCIServer.cs:4732 [v2.10.3.13]; sendTXProfile at TCIServer.cs:4715 [v2.10.3.13] |
 | tx_profile_ex_query | tx_profile_ex; | tx_profile_ex:Default; |  | TCIServer.cs:5193 [v2.10.3.13] | 1-arg query in query switch returns active TX profile name; tmpArgs=string[0] path |

@@ -450,8 +450,10 @@ private slots:
     void stub_dsp_toggles_roundtrip() {
         RadioModel m;
         setupOneSlice(m);
-        // setRxEnable / setRxCtun are what is left on the per-slice stub
-        // backing storage (m_tciStubRx*).  Four shims have since moved off it
+        // setRxCtun is what is left on the per-slice stub backing storage
+        // (m_tciStubRx*).  setRxEnable was removed: rx_enable now answers
+        // from RX2 (receiver 1's slice) and MOX, as Thetis handleRXEnable
+        // does.  Four shims have since moved off it
         // to real model state: setRxAnf in Phase 3F Sub-Epic J Task 10, then
         // setRxApf and setRxBin in chip task_c1e6fbad, then setRxNf onto
         // NotchModel::globalEnabled in TNF section 6.4.  Their coverage is
@@ -462,13 +464,13 @@ private slots:
         // alone is exactly what never caught that the stubbed ones reached no
         // DSP, so assert the destination too, not just the echo.
         for (const QByteArray name :
-             {"setRxNf", "setRxEnable", "setRxCtun"})
+             {"setRxNf", "setRxCtun"})
         {
             QMetaObject::invokeMethod(&m, name.constData(),
                                       Q_ARG(int, 0), Q_ARG(bool, true));
         }
         const QByteArray getters[] = {
-            "rxNf", "rxEnable", "rxCtun"
+            "rxNf", "rxCtun"
         };
         for (const QByteArray& g : getters) {
             bool out = false;

@@ -504,11 +504,11 @@ private:
 
     // ── Phase 13: Bespoke _ex command handlers ───────────────────────────────
     // From Thetis TCIServer.cs:5010 [v2.10.3.13] — rx_enable case in set switch.
-    // handleRXEnable at TCIServer.cs:4413-4450 [v2.10.3.13]:
-    //   1-arg = query (rx → emit rx_enable:rx,bool;)
-    //   2-arg = set (rx, bool).
-    // rx==0 is always enabled in Thetis; rx==1 sets RX2Enabled.
-    // NereusSDR: MOX-gating of query result deferred to Phase 17; stored directly.
+    // handleRXEnable at TCIServer.cs:4595-4629 [v2.10.3.15]:
+    //   1-arg = query: rx 0 -> !MOX, rx 1 -> RX2Enabled && !MOX.
+    //   2-arg = set (rx, bool): rx==1 sets RX2Enabled; nothing is sent.
+    // NereusSDR: RX2 is receiver 1's slice, which TCI does not open or
+    // close, so a set changes nothing.
     // sendRXEnable at TCIServer.cs:2279-2283 [v2.10.3.13]: "rx_enable:rx,bool;"
     QString handleRxEnableCommand(const QStringList& args);
 

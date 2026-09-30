@@ -808,7 +808,6 @@ private slots:
         TciApp app(port);
         QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
         QTest::qWait(150);
-        QVERIFY(!station.rxEnable(1));
 
         app.frames.clear();
         app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:1,0,false;"));
@@ -818,12 +817,60 @@ private slots:
         QTest::qWait(150);
         QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,0,false;")));
         QVERIFY(!app.has(QStringLiteral("rx_channel_enable:1,1,true;")));
-        QVERIFY(!station.rxEnable(1));
+        QVERIFY(station.sliceById(1) != nullptr);
 
         // Slice 0 is writable: its set is echoed.
         app.socket.sendTextMessage(QStringLiteral("rx_channel_enable:0,1,true;"));
         QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_channel_enable:0,1,true;")), 3000);
         app.socket.close();
+    }
+
+    // rx_enable on the Core's server (Thetis handleRXEnable,
+    // TCIServer.cs:4595-4629 [v2.10.3.15]): receiver 1 answers true while
+    // slice 1 is there and false without it. A set sends nothing to any app
+    // and opens or closes no slice.
+    void stationRxEnableFollowsSlice1()
+    {
+        const quint16 port = freePort();
+        RadioModel station;
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 0);
+        QCOMPARE(station.addSlice(QStringLiteral("pan-0")), 1);
+        station.enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(station.setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        TciApp other(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(other.has(QStringLiteral("ready;")), 3000);
+        QTest::qWait(150);
+
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,true;")), 3000);
+
+        app.frames.clear();
+        other.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1,false;"));
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:0,false;"));
+        QTest::qWait(300);
+        const auto rxEnableLines = [](const TciApp& a) {
+            QStringList out;
+            for (const QString& f : a.frames) {
+                if (f.startsWith(QStringLiteral("rx_enable:"))) { out << f; }
+            }
+            return out;
+        };
+        QCOMPARE(rxEnableLines(app), QStringList{});
+        QCOMPARE(rxEnableLines(other), QStringList{});
+        QVERIFY(station.sliceById(1) != nullptr);
+
+        station.removeSlice(1);
+        QTRY_VERIFY_WITH_TIMEOUT(other.has(QStringLiteral("rx_enable:1,false;")), 3000);
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("rx_enable:1;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("rx_enable:1,false;")), 3000);
+        app.socket.close();
+        other.socket.close();
     }
 
     // Thetis re-sends the RX2 lines when RX2 is turned on or off
