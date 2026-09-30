@@ -119,6 +119,10 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 // Modification history (NereusSDR):
+//   2026-09-30 - Radio codec: lineInGainIndexForBoost and the line-in
+//                 index default follow Thetis SetMicGain's lineinboost
+//                 table. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-04-26 — tunePowerByBand[14] + per-MAC persistence (G.3, Phase 3M-1a)
 //                 ported by J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -1070,6 +1074,17 @@ public:
     //   udLineInBoost.Maximum decoded from decimal{12,0,0,0} = 12.0
     static constexpr double kLineInBoostMin = -34.5;
     static constexpr double kLineInBoostMax =  12.0;
+    // From Thetis setup.designer.cs:47007-47011 [v2.10.3.15]:
+    //   udLineInBoost.Increment = decimal{15,0,0,65536} = 1.5
+    static constexpr double kLineInBoostStep = 1.5;
+    // The last index of Thetis's lineinboost[32] table (MakeLineInList,
+    // console.cs:40900-40912 [v2.10.3.15]); the wire field is 5 bits.
+    static constexpr int kLineInGainIndexMax = 31;
+
+    /// The line-in gain index Thetis SetMicGain sends for a Line In Gain
+    /// value in dB: its position in the -34.5..+12 dB table in 1.5 dB steps
+    /// (0.0 dB is 23). A value between steps takes the nearest entry.
+    static int lineInGainIndexForBoost(double dB) noexcept;
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────────
     //
@@ -2765,7 +2780,10 @@ private:
 
     // ── line_in_gain + user_dig_out (Task 2.4) ───────────────────────────
     // Source: Thetis ChannelMaster/networkproto1.c:600-601 [v2.10.3.13].
-    int    m_lineInGain     = 0;      // bank 11 C2 low 5 bits, range [0, 31]
+    // bank 11 C2 low 5 bits, range [0, 31]. Follows m_lineInBoost; its
+    // default is the index Thetis SetMicGain sends for line_in_boost = 0.0
+    // (console.cs:13247, 40928-40932 [v2.10.3.15]): 0.0 is entry 23.
+    int    m_lineInGain     = 23;
     int    m_userDigOut     = 0;      // bank 11 C3 low 4 bits, range [0, 15]
 
     // ── Anti-VOX properties (3M-1b C.4) ──────────────────────────────────

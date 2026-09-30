@@ -4824,6 +4824,12 @@ target_compile_definitions(tst_p2_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_radio_model_mic_ptt_wire)
 target_compile_definitions(tst_radio_model_mic_ptt_wire PRIVATE NEREUS_BUILD_TESTS)
 
+# Radio codec lane (2026-09-30): mic boost, line in, tip/ring, bias and XLR
+# reach P1 bank 10/11 and P2 byte 50 on connect and on change; the line-in
+# dB value maps to Thetis's lineinboost index.
+nereus_add_test(tst_radio_model_mic_codec_wire)
+target_compile_definitions(tst_radio_model_mic_codec_wire PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b Task G.6: P1 mic_xlr storage-only ──────────────────────────
 # 8 tests verify that P1RadioConnection::setMicXlr() is STORAGE-ONLY.
 # Saturn G2 P2-only feature — P1 hardware has no XLR jack. No wire emission.

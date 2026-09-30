@@ -1045,7 +1045,11 @@ protected:
     // P1: emitted to case 10 (C0=0x12) C2 bit 0 (0x01).
     // P2: emitted to transmit_specific_buffer[50] bit 1 (0x02).
     // From Thetis networkproto1.c:581 [v2.10.3.13]; deskhpsdr new_protocol.c:1484-1486 [@120188f].
-    bool m_micBoost{false};
+    // Default on, as Thetis: From Thetis console.cs:13259 [v2.10.3.15] —
+    //   private bool mic_boost = true;
+    // (TransmitModel::m_micBoost carries the same default; RadioModel pushes
+    // the model value on connect, so this only covers the frames before it.)
+    bool m_micBoost{true};
 
     // Shared state for setLineIn (3M-1b G.2).
     // P1: emitted to case 10 (C0=0x12) C2 bit 1 (0x02).

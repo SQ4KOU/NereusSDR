@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
+//               in, XLR, tip/ring and bias to the connection on connect and
+//               on every change, as Thetis SetMicGain and the Setup handlers
+//               do. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: A remote RX DSP > Options apply waits while the radio is on
 //               the air, as the TX half does. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -18984,6 +18988,11 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // signal/slot bind here, and primes once below.
     connectMicPttDisabledSignal();
 
+    // Radio codec lane: mic boost, line in, XLR, tip/ring and bias reach
+    // the radio on connect and on every change (Thetis SetMicGain and the
+    // Setup mic panel handlers). See connectMicCodecSignals.
+    connectMicCodecSignals();
+
     // ── Task 2.5 of P1 full-parity epic: pureSig → setPuresignalRun ─────────
     // Wire the user PureSignal-enable toggle to the wire-bit setter added in
     // Task 2.3.  Direct signal→slot bind (bool→bool, no adapter needed).
@@ -19343,6 +19352,69 @@ void RadioModel::connectMicPttDisabledSignal()
     QMetaObject::invokeMethod(m_connection, [conn = m_connection,
                                              d = m_transmitModel.micPttDisabled()]() {
         conn->setMicPTTDisabled(d);
+    }, Qt::QueuedConnection);
+}
+
+// ---------------------------------------------------------------------------
+// connectMicCodecSignals — radio codec lane (2026-09-30).
+//
+// The radio's own microphone input settings reach the connection on connect
+// and on every change. Before this nothing called setMicBoost, setLineIn,
+// setMicXlr, setMicTipRing or setMicBias, so the radio kept the
+// connection's defaults whatever the operator chose. The line-in gain index
+// already travels with lineInGainChanged (Task 2.4 above); TransmitModel
+// derives it from lineInBoost.
+//
+// Source: Thetis console.cs:40920-40933 [v2.10.3.15] (SetMicGain):
+//   var v = mic_boost ? 1 : 0;
+//   NetworkIO.SetMicBoost(v);
+//   v = line_in ? 1 : 0;
+//   NetworkIO.SetLineIn(v);
+//   ... NetworkIO.SetLineBoost(lineboost);
+// called by the MicBoost, LineIn and LineInBoost setters
+// (console.cs:13235-13268 [v2.10.3.15]) and at power on
+// (console.cs:27461 [v2.10.3.15]). XLR: the MicXlr setter calls SetMicXlr
+// (console.cs:13271-13281, 40914-40918 [v2.10.3.15]). Tip/ring and bias:
+// the Setup mic panel handlers (setup.cs:16504-16518 [v2.10.3.15]):
+//   if (radOrionMicTip.Checked) NetworkIO.SetMicTipRing(0);
+//   else NetworkIO.SetMicTipRing(1);
+//   if (radOrionBiasOn.Checked) NetworkIO.SetMicBias(1);
+//   else NetworkIO.SetMicBias(0);
+// RadioConnection::setMicTipRing takes "tip is mic" and writes the inverted
+// wire bit itself, so the model value passes straight through.
+// ---------------------------------------------------------------------------
+void RadioModel::connectMicCodecSignals()
+{
+    if (!m_connection) {
+        return;
+    }
+    QObject::connect(&m_transmitModel, &TransmitModel::micBoostChanged,
+                     m_connection, &RadioConnection::setMicBoost,
+                     Qt::QueuedConnection);
+    QObject::connect(&m_transmitModel, &TransmitModel::lineInChanged,
+                     m_connection, &RadioConnection::setLineIn,
+                     Qt::QueuedConnection);
+    QObject::connect(&m_transmitModel, &TransmitModel::micXlrChanged,
+                     m_connection, &RadioConnection::setMicXlr,
+                     Qt::QueuedConnection);
+    QObject::connect(&m_transmitModel, &TransmitModel::micTipRingChanged,
+                     m_connection, &RadioConnection::setMicTipRing,
+                     Qt::QueuedConnection);
+    QObject::connect(&m_transmitModel, &TransmitModel::micBiasChanged,
+                     m_connection, &RadioConnection::setMicBias,
+                     Qt::QueuedConnection);
+    // Prime: the current model values, as Thetis SetMicGain at power on.
+    QMetaObject::invokeMethod(m_connection, [conn = m_connection,
+                                             boost = m_transmitModel.micBoost(),
+                                             lineIn = m_transmitModel.lineIn(),
+                                             xlr = m_transmitModel.micXlr(),
+                                             tipIsMic = m_transmitModel.micTipRing(),
+                                             bias = m_transmitModel.micBias()]() {
+        conn->setMicBoost(boost);
+        conn->setLineIn(lineIn);
+        conn->setMicXlr(xlr);
+        conn->setMicTipRing(tipIsMic);
+        conn->setMicBias(bias);
     }, Qt::QueuedConnection);
 }
 

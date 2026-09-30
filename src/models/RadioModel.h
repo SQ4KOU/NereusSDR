@@ -9,6 +9,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - Radio Status PTT source: a remote window reads a key from
 //                 a device that does not hold transmit as Remote, as the
 //                 Core's window does; both keep the key's source through a
@@ -4330,6 +4332,8 @@ public:
     // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
     // path without spinning up the full wireConnectionSignals pipeline.
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
+    // Radio codec lane: the mic codec wiring alone, for an injected connection.
+    void wireMicCodecForTest() { connectMicCodecSignals(); }
     // Task 13: wire the injected connection's user digital inputs to the
     // TX inhibit monitor, and undo it, without the full connect pipeline.
     void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
@@ -6163,6 +6167,10 @@ private:
     // in isolation by tst_radio_model_mic_ptt_wire without needing to spin
     // up the full DSP-thread pipeline that wireConnectionSignals starts.
     void connectMicPttDisabledSignal();
+    // Radio codec lane: TransmitModel's mic boost, line in, XLR, tip/ring
+    // and bias reach the connection on connect and on every change (Thetis
+    // SetMicGain and the Setup mic panel). Called from wireConnectionSignals.
+    void connectMicCodecSignals();
     // Task 13: the radio's user digital inputs reach TxInhibitMonitor
     // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
     // wireConnectionSignals.

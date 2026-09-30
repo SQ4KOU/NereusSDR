@@ -297,6 +297,10 @@
 //                 slider limit while powerSliderLimitEnabled is off
 //                 (PrettyTrackBar.ConstrainAValue [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec: lineInGain follows lineInBoost through
+//                 lineInGainIndexForBoost (Thetis SetMicGain /
+//                 MakeLineInList); its default is the index for 0.0 dB.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -667,6 +671,28 @@ void TransmitModel::setLineInBoost(double dB)
     m_lineInBoost = clamped;
     persistOne(QStringLiteral("Line_Input_Level"), QString::number(m_lineInBoost));  // L.2 auto-persist
     emit lineInBoostChanged(clamped);
+    // Thetis SetMicGain sends the line-in gain as the index of line_in_boost
+    // in its 1.5 dB table, so the wire index follows the dB value here.
+    // From Thetis console.cs:40928-40932 [v2.10.3.15]:
+    //   if (!lineinarrayfill) MakeLineInList();
+    //   var lineboost = Array.IndexOf(lineinboost, line_in_boost.ToString());
+    //   NetworkIO.SetLineBoost(lineboost);
+    setLineInGain(lineInGainIndexForBoost(m_lineInBoost));
+}
+
+int TransmitModel::lineInGainIndexForBoost(double dB) noexcept
+{
+    // From Thetis console.cs:40900-40912 [v2.10.3.15] (MakeLineInList):
+    //   for (double i = -34.5; i <= 12; i += 1.5) { lineinboost[k] = s; ++k; }
+    // Entry k is -34.5 + 1.5 * k, k = 0..31. Thetis's control steps 1.5 dB
+    // from -34.5 (setup.designer.cs udLineInBoost Increment 1.5, ReadOnly),
+    // so its IndexOf always finds the value. A value between steps (an
+    // older NereusSDR setting saved in whole dB) takes the nearest entry
+    // here rather than Thetis's -1, which no Thetis control can produce.
+    const double clamped = std::clamp(dB, kLineInBoostMin, kLineInBoostMax);
+    const int index = static_cast<int>(
+        std::lround((clamped - kLineInBoostMin) / kLineInBoostStep));
+    return std::clamp(index, 0, kLineInGainIndexMax);
 }
 
 void TransmitModel::setMicTipRing(bool tipIsMic)
@@ -2162,9 +2188,10 @@ void TransmitModel::loadFromSettings(const QString& mac)
     // Defaults from Thetis ChannelMaster/networkproto1.c:600-601 [v2.10.3.13]:
     //   line_in_gain default 0 (no line-in attenuation),
     //   user_dig_out default 0 (all 4 user digital pins low).
-    const int lineInGain = s.value(pfx + QLatin1String("LineInGain"),
-                                     QStringLiteral("0")).toInt();
-    setLineInGain(lineInGain);
+    // Radio codec lane (2026-09-30): the line-in gain index is derived
+    // from lineInBoost, as Thetis SetMicGain derives it (console.cs:40928-40932
+    // [v2.10.3.15]), so a stored LineInGain no longer overrides the dB value.
+    setLineInGain(lineInGainIndexForBoost(m_lineInBoost));
     const int userDigOut = s.value(pfx + QLatin1String("UserDigOut"),
                                      QStringLiteral("0")).toInt();
     setUserDigOut(userDigOut);

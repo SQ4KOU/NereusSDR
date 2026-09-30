@@ -87,6 +87,9 @@
 //                preamp bit (Thetis SetRX2Preamp, netInterface.c:758-767
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - Radio codec: byte 50 starts with mic boost on (0x22), as
+//                Thetis mic_boost = true (console.cs:13259 [v2.10.3.15]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -937,7 +940,7 @@ private:
     //   Bit 4: Mic Bias (0=disabled, 1=enabled)
     //   Bit 5: Balanced Input (0=disabled, 1=enabled, Saturn only)
     //
-    // Initial value 0x20: reflects one default-set bit:
+    // Initial value 0x22: reflects the default-set bits:
     //   bit 2 (0x04) CLEAR = PTT enabled at firmware (matches m_micPTTDisabled=false
     //     default in RadioConnection.h — direct polarity: false = 0 on wire).
     //     From Thetis console.cs:19757 [v2.10.3.13+501e3f51]:
@@ -953,8 +956,11 @@ private:
     // the box, which orphaned the mic-jack PTT line on every Protocol 2 OrionMKII
     // / Saturn family board because no model→connection wiring ever cleared it.
     // Default now matches Thetis mic_ptt_disabled=false out of the box.
+    // Bit 1 (0x02) SET = mic boost on, matching the m_micBoost=true default
+    //   in RadioConnection.h. From Thetis console.cs:13259 [v2.10.3.15] —
+    //   private bool mic_boost = true;
     struct MicState {
-        unsigned char micControl{0x20};  // PTT enabled (bit 2 clear) + XLR selected (bit 5)
+        unsigned char micControl{0x22};  // boost on (bit 1) + PTT enabled (bit 2 clear) + XLR selected (bit 5)
         int lineInGain{0};
     };
     MicState m_mic;
