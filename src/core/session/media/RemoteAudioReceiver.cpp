@@ -81,8 +81,122 @@ AudioHeader inspectAudioRtp(const QByteArray& packet, quint32 ssrc, RemoteAudioP
     return header;
 }
 }
+namespace {
+// One packet as submit() queued it for the worker.
+struct ReceivedAudioPacket { QByteArray bytes; quint32 timestamp; qint64 arrival; quint16 sequence; };
+}
+// The receive worker's state: what its loop carries from one wake to the
+// next, its setup and one wake of the loop (pass()). It is built, run and
+// destroyed by whichever thread runs the passes: the worker thread, or in
+// the test-only step mode the test's own. Nothing else touches it.
+struct RemoteAudioReceiver::WorkerState {
+    WorkerState(RemoteAudioReceiver* receiver, quint32 ssrc, quint32 firstTimestamp,
+                quint64 generation, RemoteAudioProfile profile, AudioFormat speakerFormat);
+    // The setup before the first wake. False: the worker ends (a fault was
+    // reported).
+    bool setup();
+    // One wake of the worker's loop. waitForWork: first wait up to 2 ms for
+    // work, as the worker thread does (the step mode does not wait). False:
+    // the worker ends (stopped, or a fault was reported).
+    bool pass(bool waitForWork);
+
+    // The speaker queue the worker keeps: two blocks, or the device's
+    // callback and one block when that is more.
+    int speakerTargetFrames(int callbackFrames) const
+    {
+        return std::max(2 * blockFrames, callbackFrames + blockFrames);
+    }
+    // One packet to PCM: the profile's decoder for a present packet, the
+    // Opus concealment or lossless silence for a missing one. Empty on
+    // a decode failure.
+    QVector<float> decodePacket(const QByteArray& packet);
+    void publishSpeakerQueue(const std::optional<IAudioBus::OutputPacing>& pacing);
+    RemoteAudioRateMatcherStats publishMatcherStats();
+    void notify(const QString& reason, Fault fault, bool fatal = false);
+    void trimStartBacklog(std::deque<ReceivedAudioPacket>& batch, bool backlog);
+    void noteReleased(quint32 timestamp, bool concealed, qint64 atNs);
+    void publishHold();
+
+    RemoteAudioReceiver* q;
+    Private* d;
+    const quint32 ssrc;
+    const quint32 firstTimestamp;
+    const quint64 generation;
+    const RemoteAudioProfile profile;
+    const AudioFormat speakerFormat;
+    // The run is created and destroyed on this worker, including every
+    // decoder-error return. Its WDSP handles never cross to the GUI.
+    std::unique_ptr<IRemotePcmWorkerStage::Run> stageRun;
+    const bool lossless;
+    const bool sinkMode;
+    const int packetFrames;
+    // R-R3-23: the speaker side runs at the device's rate. One worker
+    // block is 10 ms of it (480 frames at 48 kHz, 441 at 44.1 kHz, 960
+    // at 96 kHz), and every speaker-side size below is counted in such
+    // blocks, so the queue and reserve keep their times at any rate.
+    const int deviceRate;
+    const int deviceChannels;
+    const int blockFrames;
+    // A 48 kHz packet once the matcher has made it at the device's rate,
+    // rounded up.
+    const int packetDeviceFrames;
+    AudioJitterBuffer jitter;
+    quint64 publishedTrimmed = 0;
+    quint64 publishedSkipped = 0;
+    quint64 publishedRewound = 0;
+    // Only an Opus context needs the Opus decoder; a lossless packet is
+    // read directly, and a lost one is silence.
+    std::optional<OpusAudioDecoder> decoder;
+    const QVector<float> silence;
+    RemoteAudioRateMatcher matcher;
+    // Named apart from publishMatcherStats()'s local `stats` below.
+    RtpReceptionStats receptionStats;
+    qint64 startedAt = 0;
+    qint64 lastPacket = 0;
+    qint64 previousArrival = 0;
+    qint64 maxArrivalGap = 0;
+    qint64 previousWake = 0;
+    qint64 maxWakeGap = 0;
+    quint64 accepted = 0, late = 0, invalid = 0, duplicate = 0;
+    quint64 publishedUnderflows = 0, publishedOverflows = 0;
+    std::optional<IAudioBus::OutputPacing> initialPacing;
+    bool playing = false;
+    // Connect-time start: nothing has been released for playback yet.
+    // The receiver has no starting-fill constant of its own (the jitter
+    // hold, AudioJitterBuffer::kHoldNs, is the start buffer), so a backlog
+    // keeps only its newest packet. A burst within the arrival bound and
+    // the jitter window is kept whole, as before.
+    bool released = false;
+    bool admittedAny = false;
+    // R-R3-35: the end RTP time of the newest packet in the rate
+    // matcher, for the playout point, and the newest release not yet
+    // published. Both are published together once per wake, so the
+    // points lock is never taken per packet (250 a second lossless).
+    std::optional<quint32> pushedEnd;
+    std::optional<RemoteAudioReleasePoint> unpublishedRelease;
+    // Fixed delays a sample passes through after the matcher fill and
+    // the speaker queue say it is heard: the codec's own delay (Opus
+    // only) and the rate matcher's filter.
+    const int codecDelayFrames;
+    const int pipelineDelayFrames;
+    quint64 lastDeviceFrames = 0;
+    quint64 deviceConsumedBase = 0;
+    // R-R3-43, PCM sink: frames handed to the sink, and whether the
+    // stream has gone quiet (no admitted packet for 500 ms), so nothing
+    // more is released until a packet arrives and restarts it.
+    quint64 sinkFrames = 0;
+    bool sinkIdle = false;
+    quint64 telemetryDeviceFrames = 0;
+    qint64 lastDeviceProgress = 0;
+    // R-R3-21: when the speaker first took audio in this context. Until
+    // it has, a stream that is playing is waiting on a device that is
+    // still starting, not on the network, so the no-packet rule waits.
+    std::optional<qint64> speakerStartedAt;
+    // R-R3-21: the hold and the arrival bound it sets, as published.
+    qint64 publishedHoldNs = -1;
+};
 struct RemoteAudioReceiver::Private {
-    struct Packet { QByteArray bytes; quint32 timestamp; qint64 arrival; quint16 sequence; };
+    using Packet = ReceivedAudioPacket;
     AudioEngine* engine = nullptr; // owner stops/joins before engine destruction
     // R-R3-45: the output this receiver plays on.
     RemotePlaybackOutput output = RemotePlaybackOutput::Speakers;
@@ -95,6 +209,12 @@ struct RemoteAudioReceiver::Private {
     // start() clears it before each new worker.
     std::thread worker;
     std::atomic<bool> stopWorker{false};
+    // The worker's state, touched only by the thread that runs its passes
+    // (see WorkerState): the worker thread, or the owner in step mode.
+    std::optional<RemoteAudioReceiver::WorkerState> workerState;
+    // Test-only step mode (owner thread): no worker thread; the owner runs
+    // the passes through runWorkerPassForTest().
+    bool stepMode = false;
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<Packet> incoming;
@@ -353,6 +473,9 @@ void RemoteAudioReceiver::stop()
         d->wake.notify_one();
         d->worker.join();
     }
+    // Step mode: the state ends here, on the owner thread that ran it (the
+    // worker thread has already ended its own).
+    d->workerState.reset();
     // After the join, so a worker's last publication cannot outlive stop().
     d->hasDriftRatio.store(false);
     d->clearPoints();
@@ -438,6 +561,13 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->telemetrySequence.fetch_add(1);
     const quint64 generation = d->generation;
     d->stopWorker.store(false);
+    if (d->stepMode) {
+        // Test-only step mode: no worker thread. The setup runs here, and
+        // each runWorkerPassForTest() runs one pass, on the caller's thread.
+        d->workerState.emplace(this, ssrc, firstTimestamp, generation, profile, speakerFormat);
+        if (!d->workerState->setup()) { d->workerState.reset(); }
+        return true;
+    }
     d->worker = std::thread([this, ssrc, firstTimestamp, generation, profile,
                              speakerFormat] {
         // R-R3-21: this thread feeds the speaker's 20 ms queue, so it runs
@@ -449,645 +579,636 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         // once per process, not once per context.
         static std::atomic<bool> priorityLogged{false};
         elevateLatencyCriticalThreadPriority(!priorityLogged.exchange(true));
-        // The run is created and destroyed on this worker, including every
-        // decoder-error return. Its WDSP handles never cross to the GUI.
-        std::unique_ptr<IRemotePcmWorkerStage::Run> stageRun =
-            d->stage ? d->stage->createRun() : nullptr;
-        if (stageRun) { stageRun->reconcile(); }
-        const bool lossless = profile == RemoteAudioProfile::Lossless;
-        const bool sinkMode = bool(d->sink);
-        const int packetFrames = packetFramesFor(profile);
-        // R-R3-23: the speaker side runs at the device's rate. One worker
-        // block is 10 ms of it (480 frames at 48 kHz, 441 at 44.1 kHz, 960
-        // at 96 kHz), and every speaker-side size below is counted in such
-        // blocks, so the queue and reserve keep their times at any rate.
-        const int deviceRate = speakerFormat.sampleRate;
-        const int deviceChannels = speakerFormat.channels;
-        const int blockFrames = std::max(1, deviceRate / 100);
-        // A 48 kHz packet once the matcher has made it at the device's rate,
-        // rounded up.
-        const int packetDeviceFrames = int((qint64(packetFrames) * deviceRate
-                                            + PcmAudioCodecConfig::kSampleRate - 1)
-                                           / PcmAudioCodecConfig::kSampleRate);
-        // The speaker queue the worker keeps: two blocks, or the device's
-        // callback and one block when that is more.
-        const auto speakerTargetFrames = [blockFrames](int callbackFrames) {
-            return std::max(2 * blockFrames, callbackFrames + blockFrames);
-        };
-        AudioJitterBuffer jitter(packetFrames, packetDurationNsFor(profile));
-        jitter.reset(firstTimestamp);
-        // R-R3-21: the PCM sink is paced by the hold alone, so a late packet
-        // there only stays late: no rewind and no deeper hold, which would
-        // hand an app a silent pause and then a burst mid-transmission.
-        jitter.setAdaptive(!sinkMode);
-        quint64 publishedTrimmed = 0;
-        quint64 publishedSkipped = 0;
-        quint64 publishedRewound = 0;
-        // Only an Opus context needs the Opus decoder; a lossless packet is
-        // read directly, and a lost one is silence.
-        std::optional<OpusAudioDecoder> decoder;
-        if (!lossless) { decoder.emplace(); }
-        const QVector<float> silence(packetFrames * PcmAudioCodecConfig::kChannels, 0.0f);
-        // One packet to PCM: the profile's decoder for a present packet, the
-        // Opus concealment or lossless silence for a missing one. Empty on
-        // a decode failure.
-        const auto decodePacket = [&](const QByteArray& packet) -> QVector<float> {
-            if (lossless) {
-                if (packet.isEmpty()) { return silence; }
-                const PcmRtpDecodeResult audio = decodeL16Rtp(packet, ssrc);
-                return audio.status == OpusAudioCodecStatus::Accepted
-                    ? audio.pcmInterleaved : QVector<float>{};
-            }
-            const auto audio = packet.isEmpty() ? decoder->decodeMissing()
-                                                : decoder->decodeRtp(packet, ssrc);
-            return audio.status == OpusAudioCodecStatus::Accepted
-                    || audio.status == OpusAudioCodecStatus::Concealed
-                ? audio.pcmInterleaved : QVector<float>{};
-        };
-        RemoteAudioRateMatcher matcher;
-        // Named apart from publishMatcherStats()'s local `stats` below.
-        RtpReceptionStats receptionStats;
-        const qint64 startedAt = d->now();
-        qint64 lastPacket = startedAt;
-        qint64 previousArrival = 0;
-        qint64 maxArrivalGap = 0;
-        qint64 previousWake = startedAt;
-        qint64 maxWakeGap = 0;
-        quint64 accepted = 0, late = 0, invalid = 0, duplicate = 0;
-        quint64 publishedUnderflows = 0, publishedOverflows = 0;
-        const auto publishSpeakerQueue = [&](const std::optional<IAudioBus::OutputPacing>& pacing) {
-            d->speakerQueuedFrames.store(pacing ? pacing->queuedFrames : -1);
-        };
-        const auto publishMatcherStats = [&] {
-            const auto stats = matcher.stats();
-            const quint64 underflows = std::max(0, stats.underflows);
-            const quint64 overflows = std::max(0, stats.overflows);
-            d->underflows.store(stats.underflows);
-            d->overflows.store(stats.overflows);
-            if (underflows > publishedUnderflows) {
-                d->lifetimeUnderflows.fetch_add(underflows - publishedUnderflows);
-                publishedUnderflows = underflows;
-            }
-            if (overflows > publishedOverflows) {
-                d->lifetimeOverflows.fetch_add(overflows - publishedOverflows);
-                publishedOverflows = overflows;
-            }
-            return stats;
-        };
-        const auto notify = [&](const QString& reason, Fault fault, bool fatal = false) {
-            d->speakerQueuedFrames.store(-1);
-            d->reorderQueuedPackets.store(-1);
-            d->jitterHoldNs.store(-1);
-            d->running.store(false);
-            const auto stats = publishMatcherStats();
-            const auto pacing = d->engine ? d->engine->remotePlaybackPacing(d->output)
-                                          : std::optional<IAudioBus::OutputPacing>{};
-            const qint64 now = d->now();
-            // Bounded, restart-only diagnostics distinguish capture/network
-            // loss from a stalled consumer without logging media or secrets.
-            const QString detail = reason + QStringLiteral(
-                " [ageMs=%1 accepted=%2 decoded=%3 plc=%4 late=%5 invalid=%6 duplicate=%7"
-                " rejectedHeaders=%8 lastPacketMs=%9 maxArrivalGapMs=%10 maxWakeGapMs=%11"
-                " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16"
-                " startDiscarded=%17 holdMs=%18 interruptions=%19]")
-                .arg((now - startedAt) / 1'000'000).arg(accepted)
-                .arg(d->decoded.load()).arg(d->concealed.load()).arg(late).arg(invalid)
-                .arg(duplicate).arg(d->rejectedHeaders.load())
-                .arg((now - lastPacket) / 1'000'000).arg(maxArrivalGap / 1'000'000)
-                .arg(maxWakeGap / 1'000'000).arg(jitter.queuedPackets())
-                .arg(stats.currentRatio, 0, 'f', 7).arg(stats.ringFillFrames)
-                .arg(pacing ? pacing->callbackFrames : 0)
-                .arg(pacing ? pacing->queuedFrames : 0)
-                .arg(d->startDiscarded.load())
-                .arg(jitter.holdNs() / 1'000'000).arg(d->linkInterruptions.load());
-            QMetaObject::invokeMethod(this, [this, generation, detail, fault, fatal] {
-                if (d->generation != generation) { return; }
-                if (fatal) { emit errorOccurred(detail, fault); }
-                else { emit restartRequested(detail, fault); }
-            }, Qt::QueuedConnection);
-        };
-        // R-R3-43: a PCM sink has no speaker to pace it and no rate matcher.
-        const auto initialPacing = sinkMode ? std::optional<IAudioBus::OutputPacing>{}
-                                            : d->engine->remotePlaybackPacing(d->output);
-        if (sinkMode) {
-            if (decoder && !decoder->isReady()) {
-                notify(QStringLiteral("Could not initialize the remote audio decoder"),
-                       Fault::DecoderUnavailable, true);
-                return;
-            }
-        } else {
-            if (!initialPacing) {
-                notify(QStringLiteral("Speaker device timing is unavailable"),
-                       Fault::SpeakerTimingUnavailable, true);
-                return;
-            }
-            publishSpeakerQueue(initialPacing);
-            const int initialTarget = speakerTargetFrames(initialPacing->callbackFrames);
-            if (initialTarget + blockFrames > initialPacing->capacityFrames) {
-                notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
-                       Fault::SpeakerCallbackTooLarge, true);
-                return;
-            }
-            // WDSP starts half full. Preserve the default 90 ms reserve when a
-            // larger selected device quantum transfers extra frames into the
-            // speaker ring at startup. This is queue sizing, not a change to the
-            // resampler feedback or its continuous interpolation. R-R3-23:
-            // in device-rate blocks, so 18 blocks is the same 180 ms ring at
-            // any rate (8640 frames at 48 kHz).
-            const int deviceHighWater = ((initialTarget + blockFrames - 1) / blockFrames)
-                * blockFrames;
-            const int matchRingFrames = 18 * blockFrames
-                + 2 * std::max(0, deviceHighWater - 2 * blockFrames);
-            if ((decoder && !decoder->isReady())
-                || !matcher.configure(packetFrames, blockFrames, matchRingFrames, deviceRate)) {
-                notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"),
-                       Fault::DecoderUnavailable, true);
-                return;
+        // The worker's state lives, runs and ends on this thread.
+        d->workerState.emplace(this, ssrc, firstTimestamp, generation, profile, speakerFormat);
+        if (d->workerState->setup()) {
+            while (d->workerState->pass(true)) {
             }
         }
-        bool playing = false;
-        // Connect-time start: nothing has been released for playback yet.
-        // The receiver has no starting-fill constant of its own (the jitter
-        // hold, AudioJitterBuffer::kHoldNs, is the start buffer), so a backlog
-        // keeps only its newest packet. A burst within the arrival bound and
-        // the jitter window is kept whole, as before.
-        bool released = false;
-        bool admittedAny = false;
-        const auto trimStartBacklog = [&](std::deque<Private::Packet>& batch, bool backlog) {
-            // Packets behind the anchor or off the packet grid keep their
-            // normal Late/Invalid classification in insert().
-            const auto aheadOf = [&](const Private::Packet& packet) -> std::optional<qint32> {
-                const qint32 delta = std::bit_cast<qint32>(
-                    quint32(packet.timestamp - jitter.nextTimestamp()));
-                if (delta < 0 || delta % jitter.packetFrames() != 0) {
-                    return std::nullopt;
-                }
-                return delta / jitter.packetFrames();
-            };
-            std::optional<std::size_t> newest, oldest;
-            qint32 newestAhead = -1, oldestAhead = 0;
-            std::size_t playable = 0;
-            for (std::size_t i = 0; i < batch.size(); ++i) {
-                const auto ahead = aheadOf(batch[i]);
-                if (!ahead) { continue; }
-                ++playable;
-                if (*ahead > newestAhead) { newest = i; newestAhead = *ahead; }
-                if (!oldest || *ahead < oldestAhead) { oldest = i; oldestAhead = *ahead; }
-            }
-            if (!newest) { return; }
-            if (backlog || newestAhead >= jitter.maxPackets()) {
-                // Keep only the newest packet and restart the reorder window
-                // and its loss accounting from it: the dropped packets were
-                // never heard, so they are neither a gap nor a stream break.
-                // Packets already in the jitter queue were counted as
-                // admitted; they are discarded here instead, so move them to
-                // the start-discard count and "admitted" keeps only packets
-                // that can still play (fix wave M1).
-                const auto queued = quint64(jitter.queuedPackets());
-                accepted -= std::min(accepted, queued);
-                d->accepted.fetch_sub(std::min(d->accepted.load(), queued));
-                d->startDiscarded.fetch_add(queued + (playable - 1));
-                const quint32 anchor = batch[*newest].timestamp;
-                std::deque<Private::Packet> kept;
-                for (std::size_t i = 0; i < batch.size(); ++i) {
-                    if (i == *newest || !aheadOf(batch[i])) { kept.push_back(std::move(batch[i])); }
-                }
-                batch.swap(kept);
-                jitter.reset(anchor);
-                receptionStats.reset();
-            } else if (!admittedAny) {
-                jitter.reset(batch[*oldest].timestamp);
-            }
-        };
-        // R-R3-35: the end RTP time of the newest packet in the rate
-        // matcher, for the playout point, and the newest release not yet
-        // published. Both are published together once per wake, so the
-        // points lock is never taken per packet (250 a second lossless).
-        std::optional<quint32> pushedEnd;
-        std::optional<RemoteAudioReleasePoint> unpublishedRelease;
-        const auto noteReleased = [&](quint32 timestamp, bool concealed, qint64 atNs) {
-            pushedEnd = timestamp + quint32(packetFrames);
-            if (!concealed) {
-                unpublishedRelease = RemoteAudioReleasePoint{*pushedEnd, atNs};
-            }
-        };
-        // Fixed delays a sample passes through after the matcher fill and
-        // the speaker queue say it is heard: the codec's own delay (Opus
-        // only) and the rate matcher's filter.
-        const int codecDelayFrames = lossless ? 0 : opusCodecDelayFrames();
-        const int pipelineDelayFrames = RemoteAudioRateMatcher::filterDelayFrames(deviceRate)
-            + codecDelayFrames;
-        quint64 lastDeviceFrames = 0;
-        const quint64 deviceConsumedBase = initialPacing ? initialPacing->consumedFrames : 0;
-        // R-R3-43, PCM sink: frames handed to the sink, and whether the
-        // stream has gone quiet (no admitted packet for 500 ms), so nothing
-        // more is released until a packet arrives and restarts it.
-        quint64 sinkFrames = 0;
-        bool sinkIdle = false;
-        quint64 telemetryDeviceFrames = deviceConsumedBase;
-        qint64 lastDeviceProgress = lastPacket;
-        // R-R3-21: when the speaker first took audio in this context. Until
-        // it has, a stream that is playing is waiting on a device that is
-        // still starting, not on the network, so the no-packet rule waits.
-        std::optional<qint64> speakerStartedAt;
-        // R-R3-21: the hold and the arrival bound it sets, as published.
-        qint64 publishedHoldNs = -1;
-        const auto publishHold = [&] {
-            // Shedding happens as packets are released; published here,
-            // at most a wake later.
-            if (jitter.trimmedPackets() != publishedTrimmed) {
-                d->trimmed.fetch_add(jitter.trimmedPackets() - publishedTrimmed);
-                publishedTrimmed = jitter.trimmedPackets();
-            }
-            if (jitter.rewoundIntervals() != publishedRewound) {
-                d->rewound.fetch_add(jitter.rewoundIntervals() - publishedRewound);
-                publishedRewound = jitter.rewoundIntervals();
-            }
-            if (jitter.skippedIntervals() != publishedSkipped) {
-                d->skipped.fetch_add(jitter.skippedIntervals() - publishedSkipped);
-                publishedSkipped = jitter.skippedIntervals();
-            }
-            if (jitter.holdNs() == publishedHoldNs) { return; }
-            publishedHoldNs = jitter.holdNs();
-            d->jitterHoldNs.store(publishedHoldNs);
-            d->arrivalBoundPackets.store(jitter.maxPackets());
-        };
-        publishHold();
-        while (!d->stopWorker.load()) {
-            std::deque<Private::Packet> incoming;
-            bool overflow = false;
-            bool startBacklog = false;
-            {
-                std::unique_lock<std::mutex> lock(d->mutex);
-                if (!stageRun || !stageRun->hasRunnableWork()) {
-                    d->wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
-                        return d->stopWorker.load() || !d->incoming.empty() || d->overflow;
-                    });
-                }
-                incoming.swap(d->incoming);
-                overflow = d->overflow;
-                d->overflow = false;
-                startBacklog = d->startBacklog;
-                d->startBacklog = false;
-            }
-            if (d->stopWorker.load()) { break; }
-            publishHold();
-            const qint64 wakeAt = d->now();
-            maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);
-            d->maxWakeGapNs.store(maxWakeGap);
-            previousWake = wakeAt;
-            // R-R3-21: a network interruption this wake (an arrival burst,
-            // a stream gap, or packets that came after their intervals were
-            // concealed), counted once for the lossless link trial.
-            bool interrupted = false;
-            if (overflow) {
-                // R-R3-21: more packets arrived at once than the arrival
-                // bound holds, and the newest were dropped at the door
-                // (counted in submit()). The link is alive, so this is
-                // concealed loss, not a reason to ask the Core for a fresh
-                // context: the batch plays on and the jitter queue conceals
-                // what was dropped. Only a true outage (no packets at all)
-                // or a real fault restarts.
-                interrupted = true;
-            }
-            if (sinkIdle && !incoming.empty()) {
-                // R-R3-43: the quiet stream starts again on the earliest
-                // packet of this batch (serial order), as a fresh context
-                // would start on its first timestamp. The quiet time was
-                // heard as nothing, so it is neither a gap nor a restart.
-                quint32 anchor = incoming.front().timestamp;
-                for (const auto& packet : incoming) {
-                    if (std::bit_cast<qint32>(quint32(packet.timestamp - anchor)) < 0) {
-                        anchor = packet.timestamp;
-                    }
-                }
-                jitter.reset(anchor);
-                sinkIdle = false;
-            }
-            if (!released && !incoming.empty()) {
-                trimStartBacklog(incoming, startBacklog);
-            }
-            for (const auto& packet : incoming) {
-                if (previousArrival != 0) {
-                    maxArrivalGap = std::max(maxArrivalGap, packet.arrival - previousArrival);
-                }
-                previousArrival = packet.arrival;
-                auto admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
-                if (admitted == AudioJitterBuffer::Admission::OutsideWindow) {
-                    // R-R3-21: a stream gap re-anchors here: the head moves
-                    // forward just far enough for this packet to fit the
-                    // window, dropping only the oldest queued audio. The
-                    // Core is not asked for a fresh context; its stream is
-                    // alive.
-                    ++d->streamGapReanchors;
-                    interrupted = true;
-                    jitter.advanceToFit(packet.timestamp);
-                    admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
-                }
-                switch (admitted) {
-                case AudioJitterBuffer::Admission::Accepted:
-                    admittedAny = true;
-                    ++accepted;
-                    ++d->accepted;
-                    lastPacket = packet.arrival;
-                    d->lastAdmittedPacketNs.store(packet.arrival);
-                    d->hasLastAdmittedPacket.store(true);
-                    receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
-                    break;
-                case AudioJitterBuffer::Admission::Rewound:
-                    // R-R3-21: late, after its interval was concealed; the
-                    // queue rewound to play it, so it is admitted as well
-                    // as counted late.
-                    interrupted = true;
-                    admittedAny = true;
-                    ++accepted;
-                    ++d->accepted;
-                    ++late;
-                    ++d->late;
-                    lastPacket = packet.arrival;
-                    d->lastAdmittedPacketNs.store(packet.arrival);
-                    d->hasLastAdmittedPacket.store(true);
-                    receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
-                    break;
-                case AudioJitterBuffer::Admission::LateConcealed:
-                    // R-R3-21: its interval was concealed: the link stalled.
-                    interrupted = true;
-                    [[fallthrough]];
-                case AudioJitterBuffer::Admission::Late:
-                    ++late;
-                    ++d->late;
-                    // R-R3-21: a late packet proves the link is alive. Too
-                    // late to rewind for, it still deepened the hold (a
-                    // late copy of a packet that played changes nothing).
-                    lastPacket = packet.arrival;
-                    receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
-                    break;
-                case AudioJitterBuffer::Admission::Invalid:
-                    ++invalid;
-                    ++d->invalid;
-                    break;
-                case AudioJitterBuffer::Admission::Duplicate:
-                    ++duplicate;
-                    ++d->duplicate;
-                    break;
-                case AudioJitterBuffer::Admission::OutsideWindow: break;
-                }
-            }
-            publishHold();
-            if (interrupted) { ++d->linkInterruptions; }
-            d->expectedPackets.store(receptionStats.expectedPackets());
-            d->missingPackets.store(receptionStats.missingPackets());
-            if (const auto measuredJitterMs = receptionStats.jitterMs()) {
-                d->arrivalJitterMs.store(*measuredJitterMs);
-                d->hasArrivalJitterMs.store(true);
-            }
-            const qint64 now = d->now();
-            if (sinkMode) {
-                // R-R3-43: released by the jitter hold alone, so the Core's
-                // RTP clock paces the sink; at most the window per wake.
-                if (!sinkIdle && now - lastPacket > 500'000'000) {
-                    sinkIdle = true;
-                }
-                for (int i = 0; !sinkIdle && i < jitter.maxPackets(); ++i) {
-                    const auto frame = jitter.takeReady(now);
-                    if (!frame) { break; }
-                    const QVector<float> audio = decodePacket(frame->packet);
-                    if (audio.isEmpty()) {
-                        notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
-                        return;
-                    }
-                    const int frames = int(audio.size() / PcmAudioCodecConfig::kChannels);
-                    d->sink(audio.constData(), frames);
-                    if (stageRun) { stageRun->appendPcm(audio.constData(), frames); }
-                    if (frame->concealed()) { ++d->concealed; }
-                    else { ++d->decoded; }
-                    noteReleased(frame->timestamp, frame->concealed(), now);
-                    sinkFrames += quint64(frames);
-                    d->deviceConsumedFrames.store(sinkFrames);
-                    d->lastDeviceProgressNs.store(now);
-                    d->hasLastDeviceProgress.store(true);
-                    if (!released) {
-                        released = true;
-                        std::lock_guard<std::mutex> lock(d->mutex);
-                        d->startPhase = false;
-                    }
-                }
-                d->reorderQueuedPackets.store(jitter.queuedPackets());
-                if (unpublishedRelease) {
-                    std::lock_guard<std::mutex> lock(d->pointsMutex);
-                    d->release = *unpublishedRelease;
-                    unpublishedRelease.reset();
-                }
-                if (stageRun) {
-                    stageRun->reconcile();
-                    stageRun->serviceUntil(
-                        std::chrono::steady_clock::now() + std::chrono::microseconds(1800),
-                        32);
-                }
-                continue;
-            }
-            // A true outage: nothing, late packets included, for 500 ms.
-            // R-R3-21: once audio is playing the clock starts only when the
-            // speaker has taken its first frames, so a device that is slow
-            // to start cannot look like a dead link. Before anything plays
-            // it runs from the start, so a context that never receives a
-            // packet still asks for a fresh one.
-            if ((!playing || speakerStartedAt)
-                && now - std::max(lastPacket, speakerStartedAt.value_or(lastPacket))
-                    > 500'000'000) {
-                notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"),
-                       Fault::NoPackets);
-                return;
-            }
-            // R-R3-21: the rate matcher's fill above its working level
-            // (half its ring, where WDSP rmatch starts and steers) is delay
-            // too; shedding as the hold eases counts it.
-            {
-                const auto fill = matcher.stats();
-                jitter.setDownstreamExcessNs(
-                    qint64(fill.ringFillFrames - fill.ringCapacityFrames / 2) * 1'000'000'000
-                    / deviceRate);
-            }
-            // Every wake, even one whose release the full matcher holds
-            // back: that is when a backlog stands.
-            jitter.tick(now);
-            // R-R3-21: a shed Opus interval is decoded (a missing one
-            // concealed) and its audio thrown away, so the decoder's state
-            // (its prediction across frames) runs on as if nothing had been
-            // skipped. That keeps the decoder continuous; it does not smooth
-            // the splice itself. Lossless has no decoder state.
-            for (const QByteArray& shed : jitter.takeShedPackets()) {
-                if (!decoder) { continue; }
-                if (shed.isEmpty()) { decoder->decodeMissing(); }
-                else { decoder->decodeRtp(shed, ssrc); }
-            }
-            // At most the bounded jitter window per wake, never an
-            // unbounded catch-up burst.
-            for (int i = 0; i < jitter.maxPackets(); ++i) {
-                // A network burst stays in the bounded jitter queue until
-                // the device has drained room. Reserve two input packets, a
-                // conservative bound above WDSP's maximum resampled block;
-                // never let its drop-oldest overflow repair handle a burst.
-                const auto room = matcher.stats();
-                if (room.ringCapacityFrames - room.ringFillFrames < 2 * packetDeviceFrames) { break; }
-                const auto frame = jitter.takeReady(now);
-                if (!frame) { break; }
-                const QVector<float> audio = decodePacket(frame->packet);
-                if (audio.isEmpty() || !matcher.push(audio)) {
-                    notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
-                    return;
-                }
-                if (frame->concealed()) { ++d->concealed; }
-                else { ++d->decoded; }
-                noteReleased(frame->timestamp, frame->concealed(), now);
-                playing = true;
-                if (!released) {
-                    // Playback has begun; the normal overflow rule applies.
-                    released = true;
-                    std::lock_guard<std::mutex> lock(d->mutex);
-                    d->startPhase = false;
-                }
-            }
-            d->reorderQueuedPackets.store(jitter.queuedPackets());
-            if (!playing) {
-                publishSpeakerQueue(d->engine->remotePlaybackPacing(d->output));
-                continue;
-            }
-            auto pacing = d->engine->remotePlaybackPacing(d->output);
-            if (!pacing) {
-                notify(QStringLiteral("Speaker device timing became unavailable"),
-                       Fault::SpeakerTimingUnavailable, true);
-                return;
-            }
-            if (!speakerStartedAt && pacing->consumedFrames > deviceConsumedBase) {
-                speakerStartedAt = now;
-            }
-            if (pacing->consumedFrames != lastDeviceFrames) {
-                lastDeviceFrames = pacing->consumedFrames;
-                lastDeviceProgress = now;
-                if (pacing->consumedFrames != telemetryDeviceFrames) {
-                    telemetryDeviceFrames = pacing->consumedFrames;
-                    d->deviceConsumedFrames.store(telemetryDeviceFrames - deviceConsumedBase);
-                    d->lastDeviceProgressNs.store(now);
-                    d->hasLastDeviceProgress.store(true);
-                }
-            } else if (now - lastDeviceProgress > 500'000'000) {
-                notify(QStringLiteral("Speaker device stopped consuming audio"),
-                       Fault::SpeakerStalled, true);
-                return;
-            }
-            // Cover the selected callback quantum plus one worker block.
-            // Default 128-frame callbacks need 20-30 ms queued; a user-selected
-            // 2048-frame callback needs more so one callback cannot exhaust it.
-            const int targetFrames = speakerTargetFrames(pacing->callbackFrames);
-            if (targetFrames + blockFrames > pacing->capacityFrames) {
-                notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
-                       Fault::SpeakerCallbackTooLarge, true);
-                return;
-            }
-            // The timer only wakes us. Actual device queue consumption is the
-            // output clock; at most one bounded ring can be replenished here.
-            for (int i = 0; i < pacing->capacityFrames / blockFrames
-                 && pacing->queuedFrames < targetFrames; ++i) {
-                // A packet may already be admitted yet remain behind its
-                // per-arrival reorder hold while the independently clocked
-                // speaker consumes the final usable matcher block. There is
-                // no ordering benefit in retaining the exact expected packet
-                // at that point. One 40 ms Opus packet always covers an
-                // output block; 4 ms lossless packets may take several, each
-                // the exact expected packet, bounded by the jitter window.
-                // R-R3-21: with the expected packet not here but a later one
-                // queued (a hole), conceal it now. Waiting for its deadline
-                // (which a deepened hold pushes later) would underflow the
-                // rate matcher, and that costs a fresh context. An empty
-                // queue keeps its normal loss deadline.
-                for (int early = 0; early < jitter.maxPackets()
-                     && !matcher.canTakeWithoutUnderflow(); ++early) {
-                    const qint64 concealAt = d->now();
-                    auto next = jitter.takeExpectedPresentEarly(concealAt);
-                    if (!next) { next = jitter.concealExpectedNow(concealAt); }
-                    if (!next) { break; }
-                    const QVector<float> audio = decodePacket(next->packet);
-                    if (audio.isEmpty() || !matcher.push(audio)) {
-                        notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
-                        return;
-                    }
-                    if (next->concealed()) { ++d->concealed; }
-                    else { ++d->decoded; }
-                    noteReleased(next->timestamp, next->concealed(), concealAt);
-                }
-                QVector<float> pcm = matcher.take();
-                if (pcm.size() != 2 * blockFrames) { pcm.clear(); }
-                if (deviceChannels == 1 && !pcm.isEmpty()) {
-                    // R-R3-23: a mono speaker hears both channels, mixed
-                    // as (left + right) / 2 like the VAX microphone's mix.
-                    QVector<float> mono(blockFrames);
-                    for (int frame = 0; frame < blockFrames; ++frame) {
-                        mono[frame] = 0.5f * (pcm[2 * frame] + pcm[2 * frame + 1]);
-                    }
-                    pcm = std::move(mono);
-                }
-                if (pcm.isEmpty() || !d->engine->writeRemotePlayback(pcm, d->output)) {
-                    notify(QStringLiteral("Could not write remote audio to the speaker device"),
-                           Fault::SpeakerWriteFailed, true);
-                    return;
-                }
-                pacing = d->engine->remotePlaybackPacing(d->output);
-                if (!pacing) { break; }
-            }
-            const auto stats = publishMatcherStats();
-            // The ratio the fault text reports, published every playback
-            // iteration so a soak can record it without a fault (R-R3-07).
-            // Only once rmatch measures it: before its 3.0 s startup delay
-            // the ratio is the initial 1.0, which would read as a measured
-            // zero drift, so drift stays absent until then (review minor 3).
-            if (stats.controlActive) {
-                d->driftRatio.store(stats.currentRatio);
-                d->hasDriftRatio.store(true);
-            }
-            // The final pacing read in every playback iteration observes the
-            // queue after bounded replenishment. It remains worker-only and
-            // does not participate in device callback scheduling.
-            // R-R3-35: the clock is read on both sides of the queue read, so
-            // a worker preempted between them widens the accuracy instead of
-            // moving the figure.
-            const qint64 readStart = d->now();
-            const auto finalPacing = d->engine->remotePlaybackPacing(d->output);
-            const qint64 readEnd = d->now();
-            publishSpeakerQueue(finalPacing);
-            // R-R3-35: the newest matched sample is heard after the matcher
-            // fill and the speaker queue have played, then the device.
-            if ((finalPacing && pushedEnd) || unpublishedRelease) {
-                std::lock_guard<std::mutex> lock(d->pointsMutex);
-                if (finalPacing && pushedEnd) {
-                    RemoteAudioPlayoutPoint point;
-                    point.rtpTimestamp = *pushedEnd;
-                    point.measuredNs = readStart + (readEnd - readStart) / 2;
-                    point.matcherFillFrames = std::max(0, stats.ringFillFrames);
-                    point.speakerQueuedFrames = std::max(0, finalPacing->queuedFrames);
-                    point.deviceLatencyNs = finalPacing->deviceLatencyNs;
-                    point.deviceRateHz = deviceRate;
-                    point.pipelineDelayFrames = pipelineDelayFrames;
-                    point.callbackFrames = std::max(0, finalPacing->callbackFrames);
-                    point.readWindowNs = readEnd - readStart;
-                    // Follow-up item 5: while rmatch corrects, its ratio
-                    // is part of the delay (see matcherStretchNs).
-                    point.codecDelayFrames = codecDelayFrames;
-                    point.matcherRatio = stats.currentRatio;
-                    d->playout = point;
-                }
-                if (unpublishedRelease) { d->release = *unpublishedRelease; }
-            }
-            unpublishedRelease.reset();
-            if (stats.underflows || stats.overflows) {
-                notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
-                    .arg(stats.underflows).arg(stats.overflows), Fault::ClockBuffer);
-                return;
-            }
-        }
+        d->workerState.reset();
     });
     return true;
 }
+
+RemoteAudioReceiver::WorkerState::WorkerState(RemoteAudioReceiver* receiver, quint32 ssrcIn,
+                                              quint32 firstTimestampIn, quint64 generationIn,
+                                              RemoteAudioProfile profileIn,
+                                              AudioFormat speakerFormatIn)
+    : q(receiver), d(receiver->d.get()), ssrc(ssrcIn), firstTimestamp(firstTimestampIn),
+      generation(generationIn), profile(profileIn), speakerFormat(speakerFormatIn),
+      lossless(profile == RemoteAudioProfile::Lossless), sinkMode(bool(d->sink)),
+      packetFrames(packetFramesFor(profile)), deviceRate(speakerFormat.sampleRate),
+      deviceChannels(speakerFormat.channels), blockFrames(std::max(1, deviceRate / 100)),
+      packetDeviceFrames(int((qint64(packetFrames) * deviceRate
+                              + PcmAudioCodecConfig::kSampleRate - 1)
+                             / PcmAudioCodecConfig::kSampleRate)),
+      jitter(packetFrames, packetDurationNsFor(profile)),
+      silence(packetFrames * PcmAudioCodecConfig::kChannels, 0.0f),
+      codecDelayFrames(lossless ? 0 : opusCodecDelayFrames()),
+      pipelineDelayFrames(RemoteAudioRateMatcher::filterDelayFrames(deviceRate)
+                          + codecDelayFrames)
+{
+}
+
+QVector<float> RemoteAudioReceiver::WorkerState::decodePacket(const QByteArray& packet)
+{
+    if (lossless) {
+        if (packet.isEmpty()) { return silence; }
+        const PcmRtpDecodeResult audio = decodeL16Rtp(packet, ssrc);
+        return audio.status == OpusAudioCodecStatus::Accepted
+            ? audio.pcmInterleaved : QVector<float>{};
+    }
+    const auto audio = packet.isEmpty() ? decoder->decodeMissing()
+                                        : decoder->decodeRtp(packet, ssrc);
+    return audio.status == OpusAudioCodecStatus::Accepted
+            || audio.status == OpusAudioCodecStatus::Concealed
+        ? audio.pcmInterleaved : QVector<float>{};
+}
+
+void RemoteAudioReceiver::WorkerState::publishSpeakerQueue(
+    const std::optional<IAudioBus::OutputPacing>& pacing)
+{
+    d->speakerQueuedFrames.store(pacing ? pacing->queuedFrames : -1);
+}
+
+RemoteAudioRateMatcherStats RemoteAudioReceiver::WorkerState::publishMatcherStats()
+{
+    const auto stats = matcher.stats();
+    const quint64 underflows = std::max(0, stats.underflows);
+    const quint64 overflows = std::max(0, stats.overflows);
+    d->underflows.store(stats.underflows);
+    d->overflows.store(stats.overflows);
+    if (underflows > publishedUnderflows) {
+        d->lifetimeUnderflows.fetch_add(underflows - publishedUnderflows);
+        publishedUnderflows = underflows;
+    }
+    if (overflows > publishedOverflows) {
+        d->lifetimeOverflows.fetch_add(overflows - publishedOverflows);
+        publishedOverflows = overflows;
+    }
+    return stats;
+}
+
+void RemoteAudioReceiver::WorkerState::notify(const QString& reason, Fault fault, bool fatal)
+{
+    d->speakerQueuedFrames.store(-1);
+    d->reorderQueuedPackets.store(-1);
+    d->jitterHoldNs.store(-1);
+    d->running.store(false);
+    const auto stats = publishMatcherStats();
+    const auto pacing = d->engine ? d->engine->remotePlaybackPacing(d->output)
+                                  : std::optional<IAudioBus::OutputPacing>{};
+    const qint64 now = d->now();
+    // Bounded, restart-only diagnostics distinguish capture/network
+    // loss from a stalled consumer without logging media or secrets.
+    const QString detail = reason + QStringLiteral(
+        " [ageMs=%1 accepted=%2 decoded=%3 plc=%4 late=%5 invalid=%6 duplicate=%7"
+        " rejectedHeaders=%8 lastPacketMs=%9 maxArrivalGapMs=%10 maxWakeGapMs=%11"
+        " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16"
+        " startDiscarded=%17 holdMs=%18 interruptions=%19]")
+        .arg((now - startedAt) / 1'000'000).arg(accepted)
+        .arg(d->decoded.load()).arg(d->concealed.load()).arg(late).arg(invalid)
+        .arg(duplicate).arg(d->rejectedHeaders.load())
+        .arg((now - lastPacket) / 1'000'000).arg(maxArrivalGap / 1'000'000)
+        .arg(maxWakeGap / 1'000'000).arg(jitter.queuedPackets())
+        .arg(stats.currentRatio, 0, 'f', 7).arg(stats.ringFillFrames)
+        .arg(pacing ? pacing->callbackFrames : 0)
+        .arg(pacing ? pacing->queuedFrames : 0)
+        .arg(d->startDiscarded.load())
+        .arg(jitter.holdNs() / 1'000'000).arg(d->linkInterruptions.load());
+    QMetaObject::invokeMethod(q, [q = q, generation = generation, detail, fault, fatal] {
+        if (q->d->generation != generation) { return; }
+        if (fatal) { emit q->errorOccurred(detail, fault); }
+        else { emit q->restartRequested(detail, fault); }
+    }, Qt::QueuedConnection);
+}
+
+void RemoteAudioReceiver::WorkerState::trimStartBacklog(std::deque<ReceivedAudioPacket>& batch,
+                                                        bool backlog)
+{
+    // Packets behind the anchor or off the packet grid keep their
+    // normal Late/Invalid classification in insert().
+    const auto aheadOf = [&](const ReceivedAudioPacket& packet) -> std::optional<qint32> {
+        const qint32 delta = std::bit_cast<qint32>(
+            quint32(packet.timestamp - jitter.nextTimestamp()));
+        if (delta < 0 || delta % jitter.packetFrames() != 0) {
+            return std::nullopt;
+        }
+        return delta / jitter.packetFrames();
+    };
+    std::optional<std::size_t> newest, oldest;
+    qint32 newestAhead = -1, oldestAhead = 0;
+    std::size_t playable = 0;
+    for (std::size_t i = 0; i < batch.size(); ++i) {
+        const auto ahead = aheadOf(batch[i]);
+        if (!ahead) { continue; }
+        ++playable;
+        if (*ahead > newestAhead) { newest = i; newestAhead = *ahead; }
+        if (!oldest || *ahead < oldestAhead) { oldest = i; oldestAhead = *ahead; }
+    }
+    if (!newest) { return; }
+    if (backlog || newestAhead >= jitter.maxPackets()) {
+        // Keep only the newest packet and restart the reorder window
+        // and its loss accounting from it: the dropped packets were
+        // never heard, so they are neither a gap nor a stream break.
+        // Packets already in the jitter queue were counted as
+        // admitted; they are discarded here instead, so move them to
+        // the start-discard count and "admitted" keeps only packets
+        // that can still play (fix wave M1).
+        const auto queued = quint64(jitter.queuedPackets());
+        accepted -= std::min(accepted, queued);
+        d->accepted.fetch_sub(std::min(d->accepted.load(), queued));
+        d->startDiscarded.fetch_add(queued + (playable - 1));
+        const quint32 anchor = batch[*newest].timestamp;
+        std::deque<ReceivedAudioPacket> kept;
+        for (std::size_t i = 0; i < batch.size(); ++i) {
+            if (i == *newest || !aheadOf(batch[i])) { kept.push_back(std::move(batch[i])); }
+        }
+        batch.swap(kept);
+        jitter.reset(anchor);
+        receptionStats.reset();
+    } else if (!admittedAny) {
+        jitter.reset(batch[*oldest].timestamp);
+    }
+}
+
+void RemoteAudioReceiver::WorkerState::noteReleased(quint32 timestamp, bool concealed, qint64 atNs)
+{
+    pushedEnd = timestamp + quint32(packetFrames);
+    if (!concealed) {
+        unpublishedRelease = RemoteAudioReleasePoint{*pushedEnd, atNs};
+    }
+}
+
+void RemoteAudioReceiver::WorkerState::publishHold()
+{
+    // Shedding happens as packets are released; published here,
+    // at most a wake later.
+    if (jitter.trimmedPackets() != publishedTrimmed) {
+        d->trimmed.fetch_add(jitter.trimmedPackets() - publishedTrimmed);
+        publishedTrimmed = jitter.trimmedPackets();
+    }
+    if (jitter.rewoundIntervals() != publishedRewound) {
+        d->rewound.fetch_add(jitter.rewoundIntervals() - publishedRewound);
+        publishedRewound = jitter.rewoundIntervals();
+    }
+    if (jitter.skippedIntervals() != publishedSkipped) {
+        d->skipped.fetch_add(jitter.skippedIntervals() - publishedSkipped);
+        publishedSkipped = jitter.skippedIntervals();
+    }
+    if (jitter.holdNs() == publishedHoldNs) { return; }
+    publishedHoldNs = jitter.holdNs();
+    d->jitterHoldNs.store(publishedHoldNs);
+    d->arrivalBoundPackets.store(jitter.maxPackets());
+}
+
+bool RemoteAudioReceiver::WorkerState::setup()
+{
+    stageRun = d->stage ? d->stage->createRun() : nullptr;
+    if (stageRun) { stageRun->reconcile(); }
+    jitter.reset(firstTimestamp);
+    // R-R3-21: the PCM sink is paced by the hold alone, so a late packet
+    // there only stays late: no rewind and no deeper hold, which would
+    // hand an app a silent pause and then a burst mid-transmission.
+    jitter.setAdaptive(!sinkMode);
+    if (!lossless) { decoder.emplace(); }
+    startedAt = d->now();
+    lastPacket = startedAt;
+    previousWake = startedAt;
+    // R-R3-43: a PCM sink has no speaker to pace it and no rate matcher.
+    initialPacing = sinkMode ? std::optional<IAudioBus::OutputPacing>{}
+                                        : d->engine->remotePlaybackPacing(d->output);
+    if (sinkMode) {
+        if (decoder && !decoder->isReady()) {
+            notify(QStringLiteral("Could not initialize the remote audio decoder"),
+                   Fault::DecoderUnavailable, true);
+            return false;
+        }
+    } else {
+        if (!initialPacing) {
+            notify(QStringLiteral("Speaker device timing is unavailable"),
+                   Fault::SpeakerTimingUnavailable, true);
+            return false;
+        }
+        publishSpeakerQueue(initialPacing);
+        const int initialTarget = speakerTargetFrames(initialPacing->callbackFrames);
+        if (initialTarget + blockFrames > initialPacing->capacityFrames) {
+            notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
+                   Fault::SpeakerCallbackTooLarge, true);
+            return false;
+        }
+        // WDSP starts half full. Preserve the default 90 ms reserve when a
+        // larger selected device quantum transfers extra frames into the
+        // speaker ring at startup. This is queue sizing, not a change to the
+        // resampler feedback or its continuous interpolation. R-R3-23:
+        // in device-rate blocks, so 18 blocks is the same 180 ms ring at
+        // any rate (8640 frames at 48 kHz).
+        const int deviceHighWater = ((initialTarget + blockFrames - 1) / blockFrames)
+            * blockFrames;
+        const int matchRingFrames = 18 * blockFrames
+            + 2 * std::max(0, deviceHighWater - 2 * blockFrames);
+        if ((decoder && !decoder->isReady())
+            || !matcher.configure(packetFrames, blockFrames, matchRingFrames, deviceRate)) {
+            notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"),
+                   Fault::DecoderUnavailable, true);
+            return false;
+        }
+    }
+    deviceConsumedBase = initialPacing ? initialPacing->consumedFrames : 0;
+    telemetryDeviceFrames = deviceConsumedBase;
+    lastDeviceProgress = lastPacket;
+    publishHold();
+    return true;
+}
+
+bool RemoteAudioReceiver::WorkerState::pass(bool waitForWork)
+{
+    std::deque<ReceivedAudioPacket> incoming;
+    bool overflow = false;
+    bool startBacklog = false;
+    {
+        std::unique_lock<std::mutex> lock(d->mutex);
+        if (waitForWork && (!stageRun || !stageRun->hasRunnableWork())) {
+            d->wake.wait_for(lock, std::chrono::milliseconds(2), [this] {
+                return d->stopWorker.load() || !d->incoming.empty() || d->overflow;
+            });
+        }
+        incoming.swap(d->incoming);
+        overflow = d->overflow;
+        d->overflow = false;
+        startBacklog = d->startBacklog;
+        d->startBacklog = false;
+    }
+    if (d->stopWorker.load()) { return false; }
+    publishHold();
+    const qint64 wakeAt = d->now();
+    maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);
+    d->maxWakeGapNs.store(maxWakeGap);
+    previousWake = wakeAt;
+    // R-R3-21: a network interruption this wake (an arrival burst,
+    // a stream gap, or packets that came after their intervals were
+    // concealed), counted once for the lossless link trial.
+    bool interrupted = false;
+    if (overflow) {
+        // R-R3-21: more packets arrived at once than the arrival
+        // bound holds, and the newest were dropped at the door
+        // (counted in submit()). The link is alive, so this is
+        // concealed loss, not a reason to ask the Core for a fresh
+        // context: the batch plays on and the jitter queue conceals
+        // what was dropped. Only a true outage (no packets at all)
+        // or a real fault restarts.
+        interrupted = true;
+    }
+    if (sinkIdle && !incoming.empty()) {
+        // R-R3-43: the quiet stream starts again on the earliest
+        // packet of this batch (serial order), as a fresh context
+        // would start on its first timestamp. The quiet time was
+        // heard as nothing, so it is neither a gap nor a restart.
+        quint32 anchor = incoming.front().timestamp;
+        for (const auto& packet : incoming) {
+            if (std::bit_cast<qint32>(quint32(packet.timestamp - anchor)) < 0) {
+                anchor = packet.timestamp;
+            }
+        }
+        jitter.reset(anchor);
+        sinkIdle = false;
+    }
+    if (!released && !incoming.empty()) {
+        trimStartBacklog(incoming, startBacklog);
+    }
+    for (const auto& packet : incoming) {
+        if (previousArrival != 0) {
+            maxArrivalGap = std::max(maxArrivalGap, packet.arrival - previousArrival);
+        }
+        previousArrival = packet.arrival;
+        auto admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
+        if (admitted == AudioJitterBuffer::Admission::OutsideWindow) {
+            // R-R3-21: a stream gap re-anchors here: the head moves
+            // forward just far enough for this packet to fit the
+            // window, dropping only the oldest queued audio. The
+            // Core is not asked for a fresh context; its stream is
+            // alive.
+            ++d->streamGapReanchors;
+            interrupted = true;
+            jitter.advanceToFit(packet.timestamp);
+            admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
+        }
+        switch (admitted) {
+        case AudioJitterBuffer::Admission::Accepted:
+            admittedAny = true;
+            ++accepted;
+            ++d->accepted;
+            lastPacket = packet.arrival;
+            d->lastAdmittedPacketNs.store(packet.arrival);
+            d->hasLastAdmittedPacket.store(true);
+            receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
+            break;
+        case AudioJitterBuffer::Admission::Rewound:
+            // R-R3-21: late, after its interval was concealed; the
+            // queue rewound to play it, so it is admitted as well
+            // as counted late.
+            interrupted = true;
+            admittedAny = true;
+            ++accepted;
+            ++d->accepted;
+            ++late;
+            ++d->late;
+            lastPacket = packet.arrival;
+            d->lastAdmittedPacketNs.store(packet.arrival);
+            d->hasLastAdmittedPacket.store(true);
+            receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
+            break;
+        case AudioJitterBuffer::Admission::LateConcealed:
+            // R-R3-21: its interval was concealed: the link stalled.
+            interrupted = true;
+            [[fallthrough]];
+        case AudioJitterBuffer::Admission::Late:
+            ++late;
+            ++d->late;
+            // R-R3-21: a late packet proves the link is alive. Too
+            // late to rewind for, it still deepened the hold (a
+            // late copy of a packet that played changes nothing).
+            lastPacket = packet.arrival;
+            receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
+            break;
+        case AudioJitterBuffer::Admission::Invalid:
+            ++invalid;
+            ++d->invalid;
+            break;
+        case AudioJitterBuffer::Admission::Duplicate:
+            ++duplicate;
+            ++d->duplicate;
+            break;
+        case AudioJitterBuffer::Admission::OutsideWindow: break;
+        }
+    }
+    publishHold();
+    if (interrupted) { ++d->linkInterruptions; }
+    d->expectedPackets.store(receptionStats.expectedPackets());
+    d->missingPackets.store(receptionStats.missingPackets());
+    if (const auto measuredJitterMs = receptionStats.jitterMs()) {
+        d->arrivalJitterMs.store(*measuredJitterMs);
+        d->hasArrivalJitterMs.store(true);
+    }
+    const qint64 now = d->now();
+    if (sinkMode) {
+        // R-R3-43: released by the jitter hold alone, so the Core's
+        // RTP clock paces the sink; at most the window per wake.
+        if (!sinkIdle && now - lastPacket > 500'000'000) {
+            sinkIdle = true;
+        }
+        for (int i = 0; !sinkIdle && i < jitter.maxPackets(); ++i) {
+            const auto frame = jitter.takeReady(now);
+            if (!frame) { break; }
+            const QVector<float> audio = decodePacket(frame->packet);
+            if (audio.isEmpty()) {
+                notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
+                return false;
+            }
+            const int frames = int(audio.size() / PcmAudioCodecConfig::kChannels);
+            d->sink(audio.constData(), frames);
+            if (stageRun) { stageRun->appendPcm(audio.constData(), frames); }
+            if (frame->concealed()) { ++d->concealed; }
+            else { ++d->decoded; }
+            noteReleased(frame->timestamp, frame->concealed(), now);
+            sinkFrames += quint64(frames);
+            d->deviceConsumedFrames.store(sinkFrames);
+            d->lastDeviceProgressNs.store(now);
+            d->hasLastDeviceProgress.store(true);
+            if (!released) {
+                released = true;
+                std::lock_guard<std::mutex> lock(d->mutex);
+                d->startPhase = false;
+            }
+        }
+        d->reorderQueuedPackets.store(jitter.queuedPackets());
+        if (unpublishedRelease) {
+            std::lock_guard<std::mutex> lock(d->pointsMutex);
+            d->release = *unpublishedRelease;
+            unpublishedRelease.reset();
+        }
+        if (stageRun) {
+            stageRun->reconcile();
+            stageRun->serviceUntil(
+                std::chrono::steady_clock::now() + std::chrono::microseconds(1800),
+                32);
+        }
+        return true;
+    }
+    // A true outage: nothing, late packets included, for 500 ms.
+    // R-R3-21: once audio is playing the clock starts only when the
+    // speaker has taken its first frames, so a device that is slow
+    // to start cannot look like a dead link. Before anything plays
+    // it runs from the start, so a context that never receives a
+    // packet still asks for a fresh one.
+    if ((!playing || speakerStartedAt)
+        && now - std::max(lastPacket, speakerStartedAt.value_or(lastPacket))
+            > 500'000'000) {
+        notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"),
+               Fault::NoPackets);
+        return false;
+    }
+    // R-R3-21: the rate matcher's fill above its working level
+    // (half its ring, where WDSP rmatch starts and steers) is delay
+    // too; shedding as the hold eases counts it.
+    {
+        const auto fill = matcher.stats();
+        jitter.setDownstreamExcessNs(
+            qint64(fill.ringFillFrames - fill.ringCapacityFrames / 2) * 1'000'000'000
+            / deviceRate);
+    }
+    // Every wake, even one whose release the full matcher holds
+    // back: that is when a backlog stands.
+    jitter.tick(now);
+    // R-R3-21: a shed Opus interval is decoded (a missing one
+    // concealed) and its audio thrown away, so the decoder's state
+    // (its prediction across frames) runs on as if nothing had been
+    // skipped. That keeps the decoder continuous; it does not smooth
+    // the splice itself. Lossless has no decoder state.
+    for (const QByteArray& shed : jitter.takeShedPackets()) {
+        if (!decoder) { continue; }
+        if (shed.isEmpty()) { decoder->decodeMissing(); }
+        else { decoder->decodeRtp(shed, ssrc); }
+    }
+    // At most the bounded jitter window per wake, never an
+    // unbounded catch-up burst.
+    for (int i = 0; i < jitter.maxPackets(); ++i) {
+        // A network burst stays in the bounded jitter queue until
+        // the device has drained room. Reserve two input packets, a
+        // conservative bound above WDSP's maximum resampled block;
+        // never let its drop-oldest overflow repair handle a burst.
+        const auto room = matcher.stats();
+        if (room.ringCapacityFrames - room.ringFillFrames < 2 * packetDeviceFrames) { break; }
+        const auto frame = jitter.takeReady(now);
+        if (!frame) { break; }
+        const QVector<float> audio = decodePacket(frame->packet);
+        if (audio.isEmpty() || !matcher.push(audio)) {
+            notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
+            return false;
+        }
+        if (frame->concealed()) { ++d->concealed; }
+        else { ++d->decoded; }
+        noteReleased(frame->timestamp, frame->concealed(), now);
+        playing = true;
+        if (!released) {
+            // Playback has begun; the normal overflow rule applies.
+            released = true;
+            std::lock_guard<std::mutex> lock(d->mutex);
+            d->startPhase = false;
+        }
+    }
+    d->reorderQueuedPackets.store(jitter.queuedPackets());
+    if (!playing) {
+        publishSpeakerQueue(d->engine->remotePlaybackPacing(d->output));
+        return true;
+    }
+    auto pacing = d->engine->remotePlaybackPacing(d->output);
+    if (!pacing) {
+        notify(QStringLiteral("Speaker device timing became unavailable"),
+               Fault::SpeakerTimingUnavailable, true);
+        return false;
+    }
+    if (!speakerStartedAt && pacing->consumedFrames > deviceConsumedBase) {
+        speakerStartedAt = now;
+    }
+    if (pacing->consumedFrames != lastDeviceFrames) {
+        lastDeviceFrames = pacing->consumedFrames;
+        lastDeviceProgress = now;
+        if (pacing->consumedFrames != telemetryDeviceFrames) {
+            telemetryDeviceFrames = pacing->consumedFrames;
+            d->deviceConsumedFrames.store(telemetryDeviceFrames - deviceConsumedBase);
+            d->lastDeviceProgressNs.store(now);
+            d->hasLastDeviceProgress.store(true);
+        }
+    } else if (now - lastDeviceProgress > 500'000'000) {
+        notify(QStringLiteral("Speaker device stopped consuming audio"),
+               Fault::SpeakerStalled, true);
+        return false;
+    }
+    // Cover the selected callback quantum plus one worker block.
+    // Default 128-frame callbacks need 20-30 ms queued; a user-selected
+    // 2048-frame callback needs more so one callback cannot exhaust it.
+    const int targetFrames = speakerTargetFrames(pacing->callbackFrames);
+    if (targetFrames + blockFrames > pacing->capacityFrames) {
+        notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
+               Fault::SpeakerCallbackTooLarge, true);
+        return false;
+    }
+    // The timer only wakes us. Actual device queue consumption is the
+    // output clock; at most one bounded ring can be replenished here.
+    for (int i = 0; i < pacing->capacityFrames / blockFrames
+         && pacing->queuedFrames < targetFrames; ++i) {
+        // A packet may already be admitted yet remain behind its
+        // per-arrival reorder hold while the independently clocked
+        // speaker consumes the final usable matcher block. There is
+        // no ordering benefit in retaining the exact expected packet
+        // at that point. One 40 ms Opus packet always covers an
+        // output block; 4 ms lossless packets may take several, each
+        // the exact expected packet, bounded by the jitter window.
+        // R-R3-21: with the expected packet not here but a later one
+        // queued (a hole), conceal it now. Waiting for its deadline
+        // (which a deepened hold pushes later) would underflow the
+        // rate matcher, and that costs a fresh context. An empty
+        // queue keeps its normal loss deadline.
+        for (int early = 0; early < jitter.maxPackets()
+             && !matcher.canTakeWithoutUnderflow(); ++early) {
+            const qint64 concealAt = d->now();
+            auto next = jitter.takeExpectedPresentEarly(concealAt);
+            if (!next) { next = jitter.concealExpectedNow(concealAt); }
+            if (!next) { break; }
+            const QVector<float> audio = decodePacket(next->packet);
+            if (audio.isEmpty() || !matcher.push(audio)) {
+                notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
+                return false;
+            }
+            if (next->concealed()) { ++d->concealed; }
+            else { ++d->decoded; }
+            noteReleased(next->timestamp, next->concealed(), concealAt);
+        }
+        QVector<float> pcm = matcher.take();
+        if (pcm.size() != 2 * blockFrames) { pcm.clear(); }
+        if (deviceChannels == 1 && !pcm.isEmpty()) {
+            // R-R3-23: a mono speaker hears both channels, mixed
+            // as (left + right) / 2 like the VAX microphone's mix.
+            QVector<float> mono(blockFrames);
+            for (int frame = 0; frame < blockFrames; ++frame) {
+                mono[frame] = 0.5f * (pcm[2 * frame] + pcm[2 * frame + 1]);
+            }
+            pcm = std::move(mono);
+        }
+        if (pcm.isEmpty() || !d->engine->writeRemotePlayback(pcm, d->output)) {
+            notify(QStringLiteral("Could not write remote audio to the speaker device"),
+                   Fault::SpeakerWriteFailed, true);
+            return false;
+        }
+        pacing = d->engine->remotePlaybackPacing(d->output);
+        if (!pacing) { break; }
+    }
+    const auto stats = publishMatcherStats();
+    // The ratio the fault text reports, published every playback
+    // iteration so a soak can record it without a fault (R-R3-07).
+    // Only once rmatch measures it: before its 3.0 s startup delay
+    // the ratio is the initial 1.0, which would read as a measured
+    // zero drift, so drift stays absent until then (review minor 3).
+    if (stats.controlActive) {
+        d->driftRatio.store(stats.currentRatio);
+        d->hasDriftRatio.store(true);
+    }
+    // The final pacing read in every playback iteration observes the
+    // queue after bounded replenishment. It remains worker-only and
+    // does not participate in device callback scheduling.
+    // R-R3-35: the clock is read on both sides of the queue read, so
+    // a worker preempted between them widens the accuracy instead of
+    // moving the figure.
+    const qint64 readStart = d->now();
+    const auto finalPacing = d->engine->remotePlaybackPacing(d->output);
+    const qint64 readEnd = d->now();
+    publishSpeakerQueue(finalPacing);
+    // R-R3-35: the newest matched sample is heard after the matcher
+    // fill and the speaker queue have played, then the device.
+    if ((finalPacing && pushedEnd) || unpublishedRelease) {
+        std::lock_guard<std::mutex> lock(d->pointsMutex);
+        if (finalPacing && pushedEnd) {
+            RemoteAudioPlayoutPoint point;
+            point.rtpTimestamp = *pushedEnd;
+            point.measuredNs = readStart + (readEnd - readStart) / 2;
+            point.matcherFillFrames = std::max(0, stats.ringFillFrames);
+            point.speakerQueuedFrames = std::max(0, finalPacing->queuedFrames);
+            point.deviceLatencyNs = finalPacing->deviceLatencyNs;
+            point.deviceRateHz = deviceRate;
+            point.pipelineDelayFrames = pipelineDelayFrames;
+            point.callbackFrames = std::max(0, finalPacing->callbackFrames);
+            point.readWindowNs = readEnd - readStart;
+            // Follow-up item 5: while rmatch corrects, its ratio
+            // is part of the delay (see matcherStretchNs).
+            point.codecDelayFrames = codecDelayFrames;
+            point.matcherRatio = stats.currentRatio;
+            d->playout = point;
+        }
+        if (unpublishedRelease) { d->release = *unpublishedRelease; }
+    }
+    unpublishedRelease.reset();
+    if (stats.underflows || stats.overflows) {
+        notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
+            .arg(stats.underflows).arg(stats.overflows), Fault::ClockBuffer);
+        return false;
+    }
+    return true;
+}
+
+
+#ifdef NEREUS_BUILD_TESTS
+void RemoteAudioReceiver::setStepModeForTest(bool on) { d->stepMode = on; }
+bool RemoteAudioReceiver::runWorkerPassForTest()
+{
+    if (!d->workerState) { return false; }
+    if (!d->workerState->pass(false)) {
+        d->workerState.reset();
+        return false;
+    }
+    return true;
+}
+#endif
 
 void RemoteAudioReceiver::submit(const QByteArray& packet)
 {
