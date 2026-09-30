@@ -58,6 +58,10 @@
 //                                    slice check forwards changeRefusal;
 //                                    levelCalHostSlice is the desktop's own.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX rulings: a listener's refused
+//                                    receive-level write forwards
+//                                    listenerChangeReason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 4b (R-IOS-01,
@@ -844,6 +848,10 @@ const QList<ReasonSource>& reasonSources()
           // ruling 4.3).
           QStringLiteral("changeRefusal(requester, sliceId)"),
           QStringLiteral("ownedElsewhereReason(sliceId)"),
+          // TX rulings: a listener's receive-level write (ATT, preamp,
+          // auto-att) on the slice it hears; listenerChangeReason's words,
+          // scanned here.
+          QStringLiteral("listenerChangeReason(shown)"),
           // Fix wave I3: a slice's settings key; ownedElsewhereReason's
           // words, scanned here.
           QStringLiteral("sliceSettingsRefusal(transport, key)"),
