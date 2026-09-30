@@ -59,6 +59,10 @@
 //                and the HPSDR MOX path turns RX1's step attenuator off and
 //                holds RX2's mode (console.cs:29598-29608, 29688-29692).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: RX2's own attenuator is held to the
+//                second ADC's 0-31 dB field (kRx2StepAttMaxDb,
+//                rx2MaxAttenuation), so no RX2 value wraps on the wire.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1398,7 +1402,7 @@ void StepAttenuatorController::runRx2AutoAtt(bool overloaded)
             return;
         }
         const int shift = m_adcState[static_cast<size_t>(m_rx2Adc)].level;
-        const int newAtt = std::min(m_rx2AttDb + shift, m_maxAttDb);
+        const int newAtt = std::min(m_rx2AttDb + shift, rx2MaxAttenuation());
         if (newAtt != m_rx2AttDb) {
             Rx2AttReading har;
             har.stepAttenuator = m_rx2AttDb;
@@ -1729,8 +1733,10 @@ void StepAttenuatorController::applyAttToHardware(int dB)
 //
 // Above 31 dB on an Alex board Thetis also switches the Alex attenuator and
 // sends RX1's value + 2 (console.cs 11044-11056); sendRx1Attenuation does
-// that on a known board (Level Cal). RX2's value goes as it is: Thetis's RX2
-// setter has no Alex attenuator of its own.
+// that on a known board (Level Cal). RX2's setter has no Alex attenuator of
+// its own, so RX2's own value is held to the second ADC's 0-31 dB field
+// (rx2MaxAttenuation, kRx2StepAttMaxDb; Deliberate divergence (operator
+// decision 2026-09-30)) rather than sent + 2 for the gateware to wrap.
 
 bool StepAttenuatorController::adcUsesRx1Attenuator(int adc) const noexcept
 {
@@ -1961,7 +1967,9 @@ int StepAttenuatorController::wireAttDbForAdc(int adc) const noexcept
     if (!m_rx2StepAttEnabled && rx2PreampDrivesAdc()) {
         return rx2PreampDriveFor(m_rx2PreampMode).attDb;
     }
-    return m_rx2AttDb;
+    // Level Cal 2 review: RX2's own value never leaves the 5-bit field
+    // (kRx2StepAttMaxDb), so the wire cannot wrap it.
+    return std::clamp(m_rx2AttDb, m_minAttDb, rx2MaxAttenuation());
 }
 
 void StepAttenuatorController::applyPreampDrive()
@@ -2039,8 +2047,10 @@ void StepAttenuatorController::sendRx2Attenuation()
 
 void StepAttenuatorController::setRx2Attenuation(int dB)
 {
-    // The same range as RX1's (the radio's own step attenuator).
-    dB = std::clamp(dB, m_minAttDb, m_maxAttDb);
+    // RX1's range while linked (setAttenuation takes it); RX2's own up to
+    // the second ADC's field (rx2MaxAttenuation, kRx2StepAttMaxDb).
+    const int asked = dB;
+    dB = std::clamp(dB, m_minAttDb, m_adcAttLinked ? m_maxAttDb : rx2MaxAttenuation());
     // Linked (diversity): one value for both, set through RX1's, which
     // copies it here (setAttenuation), as Thetis's RX2 setter sets RX1's.
     // From Thetis console.cs:11246-11251 [v2.10.3.15] (RX2AttenuatorData):
@@ -2055,6 +2065,11 @@ void StepAttenuatorController::setRx2Attenuation(int dB)
         return;
     }
     if (m_rx2AttDb == dB) {
+        // A value above the range left it where it was: say so, so a
+        // control showing the asked value returns to the kept one.
+        if (asked != dB) {
+            emit rx2AttenuationChanged(m_rx2AttDb);
+        }
         return;
     }
     m_rx2AttDb = dB;
@@ -2108,7 +2123,8 @@ void StepAttenuatorController::setRx2Band(Band band)
     m_rx2Band = band;
     const auto it = m_rx2BandAttDb.find(static_cast<int>(band));
     if (it != m_rx2BandAttDb.end()) {
-        const int restoredDb = std::clamp(it->second, m_minAttDb, m_maxAttDb);
+        const int restoredDb = std::clamp(it->second, m_minAttDb,
+                                          m_adcAttLinked ? m_maxAttDb : rx2MaxAttenuation());
         if (restoredDb != m_rx2AttDb) {
             m_rx2AttDb = restoredDb;
             emit rx2AttenuationChanged(m_rx2AttDb);
@@ -2158,6 +2174,13 @@ void StepAttenuatorController::setAdcRouting(int rx1Adc, int rx2Adc, Band rx2Ban
     // Diversity links the two ADCs: both take RX1's value from here on.
     if (linking && m_rx2AttDb != m_attDb) {
         m_rx2AttDb = m_attDb;
+        emit rx2AttenuationChanged(m_rx2AttDb);
+    }
+    // Level Cal 2 review: unlinked, RX2's own value is held to its field
+    // (a linked value above 31 was RX1's, with the Alex attenuator in).
+    if (!m_adcAttLinked && m_rx2AttDb > rx2MaxAttenuation()) {
+        m_rx2AttDb = rx2MaxAttenuation();
+        m_rx2BandAttDb[static_cast<int>(m_rx2Band)] = m_rx2AttDb;
         emit rx2AttenuationChanged(m_rx2AttDb);
     }
 
@@ -2551,7 +2574,7 @@ void StepAttenuatorController::loadSettings(const QString& mac)
         rx2It != m_rx2BandAttDb.end()) {
         m_rx2AttDb = rx2It->second;
     }
-    m_rx2AttDb = std::clamp(m_rx2AttDb, m_minAttDb, m_maxAttDb);
+    m_rx2AttDb = std::clamp(m_rx2AttDb, m_minAttDb, rx2MaxAttenuation());
     if (m_adcAttLinked) {
         m_rx2AttDb = m_attDb;
     }

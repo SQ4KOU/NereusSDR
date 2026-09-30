@@ -38,6 +38,9 @@
 //                 never hidden and follows RadioModel::isRxOnly.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: rx2StepAttMaxDb, the top of the RX2
+//                 box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -202,6 +205,8 @@ private:
     // R-R3-46 / R-R3-11: the RX2 row (the other ADC's own attenuator):
     // value, and enabled or disabled with its reason.
     void refreshRx2StepAtt();
+    // Level Cal 2 review: the top of the RX2 box (31 dB, RX1's while linked).
+    int rx2StepAttMaxDb() const;
     void applyRadioHardwareAvailability();
 
     // Task 16: Receive Only follows the model; a radio with no transmitter

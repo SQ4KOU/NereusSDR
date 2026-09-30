@@ -45,6 +45,14 @@
 //   2026-09-30: take-over re-review (N-1): nor on a phone's slice the
 //               flag stayed on after the phone let go. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings: a slice-sharing keyer's key moves the flag
+//               from another device's slice once admitted, and in the
+//               unkey tail is told the radio is on the air (item 4); a
+//               closed card's Take it back is forgotten; the desktop's
+//               footswitch and mic PTT key its active slice (ruling 8.11
+//               on a hosting desktop), and with no desktop key where the
+//               flag is. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -141,6 +149,31 @@ qint64 choiceFor(const QJsonObject& ask, int stream)
         }
     }
     return -1;
+}
+
+// A phone that chose its own slice for transmit and let go of it: the flag
+// stays on the phone's slice with nobody holding transmit (ruling 8.10).
+// `p` is the phone's slice.
+void phoneLeavesTheFlag(Core& core, const Device& phone, LoopbackTransport* appP, int* p)
+{
+    *p = -1;
+    SliceOwnership* ownership = core.model->sliceOwnership();
+    if (ownership->ownedBy(phone.key.fingerprint()).isEmpty()) {
+        core.invoke(appP, "addSlice", {utf8("initialPanId", QString())});
+    }
+    const QList<int> own = ownership->ownedBy(phone.key.fingerprint());
+    QVERIFY(!own.isEmpty());
+    *p = own.first();
+    SliceModel* slice = core.model->sliceById(*p);
+    slice->setDspMode(DSPMode::USB);
+    slice->setFrequency(14210000.0);
+    core.invoke(appP, "tx.take");
+    QTRY_VERIFY_WITH_TIMEOUT(core.server->transmitHolder()->isHeldBy(phone.key.fingerprint()),
+                             5000);
+    core.invoke(appP, "tx.setTxSlice", {int64("sliceId", *p)});
+    QTRY_COMPARE_WITH_TIMEOUT(core.model->txSliceArbiter()->txBoundSliceId(), *p, 5000);
+    core.server->releaseTransmitFor(phone.key.fingerprint(), QStringLiteral("The test let go."));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.server->transmitHolder()->holder().has_value(), 5000);
 }
 
 } // namespace
@@ -794,6 +827,373 @@ private slots:
                  QString::fromLatin1(TxRefusals::kNoTransmitSlice));
         QVERIFY(!core.server->transmitHolder()->isHeldBy(station));
         QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+    }
+
+    // TX rulings (item 4, test a; take-over re-review N-1 and N-2): a
+    // keyer that shares slices, with a slice of its own, finds the flag on
+    // another device's slice it never had (not a lost one). Its key is
+    // admitted, the flag moves to its own slice, and it keys there.
+    void aSharingKeyersKeyMovesTheFlagToItsOwnSliceOnceAdmitted()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        int p = -1;
+        phoneLeavesTheFlag(core, phone, appP, &p);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        QVERIFY(p >= 0);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBackTx);
+        QVERIFY(admitted(appB));
+        if (ownership->ownedBy(b.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appB, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int own = ownership->ownedBy(b.key.fingerprint()).first();
+        QVERIFY(own != p);
+        core.model->sliceById(own)->setDspMode(DSPMode::USB);
+        core.model->sliceById(own)->setFrequency(14220000.0);
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        mox->setMox(true, keyerFor(b));
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), own);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QCOMPARE(ownership->mark(p).owner, phone.key.fingerprint());
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // TX rulings (item 4): a key in the TX-to-RX tail. The desktop's
+    // footswitch keyed on the phone's slice, its active one (ruling 8.11 on
+    // a hosting desktop), and was let go. The desktop's MOX a moment later,
+    // before the radio is back in receive, cannot move the flag to the
+    // desktop's own slice, so it is refused in words that say the radio is
+    // on the air, not "There is no slice to transmit on"; nothing moves or
+    // keys. Back in receive the same key moves the flag and keys.
+    void aKeyInTheUnkeyTailIsToldTheRadioIsOnTheAir()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownedBy(core, station), QList<int>{0});
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        int p = -1;
+        phoneLeavesTheFlag(core, phone, appP, &p);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        QVERIFY(p >= 0);
+        host.listen(p);
+        QTRY_COMPARE(finished.count(), 1);
+        host.select(p);
+        QTRY_COMPARE(finished.count(), 2);
+        QCOMPARE(ownership->activeRxFor(station), p);
+
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(!mox->isMox());
+        QVERIFY(mox->state() != MoxState::Rx);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(station));
+
+        QSignalSpy moxChanges(mox, &MoxController::moxChanged);
+        mox->setMox(true);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(moxChanges.count(), 0);
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kHolderOnAir));
+        QCOMPARE(mox->lastRefusal().text, TxRefusals::radioOnAir().text);
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        mox->setMox(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // TX rulings (item 4, test b; take-over re-review N-3): closing a
+    // hosting card forgets its Take it back, so a later answer to it is
+    // never read as that card's.
+    void closingAHostingCardForgetsItsTakeBack()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        startHosting(core);
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+        QSignalSpy answered(&host, &HostingSliceActions::takeBackAnswered);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        QVERIFY(accepted(core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))))));
+        QTRY_COMPARE(notices.count(), 1);
+        const qint64 id = notices.first().at(0).value<SessionMessage>().prompt.id;
+
+        host.forgetNotice(id);
+        host.takeBack(id);
+        QTRY_COMPARE(finished.count(), 1);
+        QTest::qWait(20);
+        QCOMPARE(answered.count(), 0);
+    }
+
+    // TX rulings (JJ, 2026-09-30, ruling 8.11 on a hosting desktop): the
+    // desktop lost its only slice, where the flag stayed, and listens to the
+    // phone's slice as its active slice. Its MOX keeps the take-over rule
+    // and is refused; its footswitch or mic PTT moves the flag to its active
+    // slice, the phone's, and keys there.
+    void theDesktopsFootswitchKeysItsActiveSliceWhereverItIs()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownedBy(core, station), QList<int>{0});
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        if (ownership->ownedBy(phone.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appP, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int p = ownership->ownedBy(phone.key.fingerprint()).first();
+        core.model->sliceById(p)->setDspMode(DSPMode::USB);
+        core.model->sliceById(p)->setFrequency(14210000.0);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        QVERIFY(accepted(core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))))));
+        QTRY_COMPARE(notices.count(), 1);
+        QVERIFY(ownedBy(core, station).isEmpty());
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+
+        host.listen(p);
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        host.select(p);
+        QTRY_COMPARE(finished.count(), 2);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        QCOMPARE(ownership->activeRxFor(station), p);
+        QCOMPARE(ownership->mark(p).owner, phone.key.fingerprint());
+
+        // The desktop's MOX (a Device-source key) keeps the refusal.
+        mox->setMox(true);
+        QTest::qWait(20);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+
+        // The footswitch moves the flag to the desktop's active slice.
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(mox->currentKeyer().source, PttMode::Mic);
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(station));
+        QCOMPARE(ownership->mark(p).owner, phone.key.fingerprint());
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+    }
+
+    // TX rulings review: the radio's own PTT on a hosting desktop is
+    // refused rather than keyed elsewhere. With no active slice it has no
+    // slice to transmit on; while the flag is frozen (or the radio still
+    // coming back to receive) the radio is on the air.
+    void theDesktopsFootswitchIsRefusedWhenItCannotMoveTheFlag()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        if (ownership->ownedBy(phone.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appP, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int p = ownership->ownedBy(phone.key.fingerprint()).first();
+        core.model->sliceById(p)->setDspMode(DSPMode::USB);
+        core.model->sliceById(p)->setFrequency(14210000.0);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        QVERIFY(accepted(core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))))));
+        QTRY_COMPARE(notices.count(), 1);
+        QVERIFY(ownedBy(core, station).isEmpty());
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+
+        // The desktop leaves slice A: it has no slice at all.
+        host.stopListening(0);
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        QCOMPARE(ownership->activeRxFor(station), -1);
+        mox->onMicPttFromRadio(true);
+        QTest::qWait(20);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->onMicPttFromRadio(false);
+
+        // It listens to the phone's slice and selects it; the flag frozen.
+        host.listen(p);
+        QTRY_COMPARE(finished.count(), 2);
+        QVERIFY2(finished.last().at(2).toBool(), qPrintable(finished.last().at(3).toString()));
+        host.select(p);
+        QTRY_COMPARE(finished.count(), 3);
+        QCOMPARE(ownership->activeRxFor(station), p);
+        bool frozen = true;
+        arbiter->setFrozen([&frozen] { return frozen; });
+        mox->onMicPttFromRadio(true);
+        QTest::qWait(20);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kHolderOnAir));
+        QCOMPARE(mox->lastRefusal().text, TxRefusals::radioOnAir().text);
+        QCOMPARE(arbiter->txBoundSliceId(), 0);
+        mox->onMicPttFromRadio(false);
+
+        // Thawed, the same footswitch moves the flag and keys.
+        frozen = false;
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Ruling 8.11 on a hosting desktop (JJ, 2026-09-30): the flag on one of
+    // the desktop's own slices that is not its active one (split transmit)
+    // is its chosen transmit slice. The footswitch keys that slice and the
+    // flag stays.
+    void theDesktopsFootswitchKeysItsOwnSplitTransmitSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy finished(&host, &HostingSliceActions::finished);
+        host.addOnPan(QStringLiteral("pan-0"));
+        QTRY_COMPARE(finished.count(), 1);
+        QVERIFY2(finished.first().at(2).toBool(), qPrintable(finished.first().at(3).toString()));
+        QCOMPARE(ownedBy(core, station).size(), 2);
+        const int first = ownedBy(core, station).first();
+        const int second = ownedBy(core, station).last();
+        core.model->sliceById(second)->setDspMode(DSPMode::USB);
+        core.model->sliceById(second)->setFrequency(14210000.0);
+        host.select(first);
+        QTRY_COMPARE(finished.count(), 2);
+        QCOMPARE(ownership->activeRxFor(station), first);
+        QVERIFY(arbiter->requestHandoff(second, station));
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+        QCOMPARE(ownership->activeRxFor(station), first);
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(arbiter->txBoundSliceId(), second);
+    }
+
+    // Ruling 8.11 on a Core with no desktop is as it was: the radio's own
+    // PTT transmits where the flag is, a phone's slice included.
+    void withNoDesktopTheFootswitchKeysWhereTheFlagIs()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        int p = -1;
+        phoneLeavesTheFlag(core, phone, appP, &p);
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        QVERIFY(p >= 0);
+
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 
     void withNobodyAtTheDesktopTheCoresSliceStaysItsOwn()

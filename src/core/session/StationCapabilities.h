@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Level Cal 2: rx2AttenuatorVersion, after the direct media
+//               ladder and before coreBuildInfo. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: mediaDirectVersion and
 //               mediaStunUrls, before coreBuildInfo. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -561,6 +564,11 @@ struct StationCapabilities {
     /// `stuns:` URLs only, as a JSON array (utf8). A device uses them for
     /// its media connections and never stores them.
     QStringList mediaStunUrls;
+    /// Level Cal 2: 1 means the catalogue's board carries rx2Attenuator,
+    /// rx2PreampItems and rx2AttenuatorReason (RX2's own input control).
+    /// Sent after the direct media ladder and before coreBuildInfo, only
+    /// to a peer whose hello declared `rx2Attenuator` 1; 0 otherwise.
+    int rx2AttenuatorVersion = 0;
     /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
     static constexpr int kMaxMediaStunUrls = 8;
     static constexpr int kMaxMediaStunUrlBytes = 512;

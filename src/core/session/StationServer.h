@@ -513,6 +513,10 @@
 //               (N-1): keyerSharesSlices(), nor on another device's
 //               slice. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (8.11 on a hosting desktop):
+//               radioPttKeyRefusal(), the radio's own PTT keys the
+//               desktop's active slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -2357,8 +2361,20 @@ private:
     /// slice it may transmit on. With one, nothing is refused and
     /// `moveTo` names it; the gate moves the flag there once askKey admits
     /// the key (N-2). A slice nobody owns is left as it was. The radio's
-    /// own PTT is not asked (ruling 8.11).
+    /// own PTT is asked radioPttKeyRefusal instead (ruling 8.11).
     TxRefusal othersSliceKeyRefusal(const QByteArray& device, int* moveTo);
+    /// TX rulings (ruling 8.11 for a hosting desktop): the refusal for a
+    /// key from the radio's own PTT (RadioPtt) on a Core with a hosting
+    /// desktop, while the flag is on another device's slice. Nothing is
+    /// refused, and the flag stays, when it is on one of the desktop's own
+    /// slices (a non-active one included: split transmit, JJ 2026-09-30,
+    /// keys that chosen slice), on one nobody controls, or on the desktop's
+    /// active slice, and on a Core with no desktop. Otherwise `moveTo` names the desktop's active slice
+    /// (its receive focus, wherever it is) and the gate moves the flag
+    /// there once askKey admits the key; noTransmitSlice when the desktop
+    /// has no slice, radioOnAir while the radio is not back in receive or
+    /// the flag is frozen.
+    TxRefusal radioPttKeyRefusal(int* moveTo);
     /// Take-over re-review (N-1): the hosting desktop once it takes its
     /// notices, or a device that declared sliceAccess.
     bool keyerSharesSlices(const QByteArray& device) const;

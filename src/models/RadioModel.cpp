@@ -810,6 +810,18 @@
 //                attenuator's ceiling on connect is the Core's
 //                (BoardCapsTable::stepAttMaxDb).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: a remote window's Level Cal Start names its
+//                own active slice, as the phone does, not the Core's (-1).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: levelCalHostSlice, the slice the
+//                hosting desktop's Start names, or the ownership words when
+//                it may change none. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 re-review: a slice held for an absent device
+//                is not the desktop's own. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-30 - TX rulings (item 1): moxPressAsksOn and tunePressAsksOn.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -16378,6 +16390,53 @@ bool RadioModel::rx2PreampModeAvailable() const
     return m_station != nullptr && m_station->rx2PreampModeAvailable();
 }
 
+int RadioModel::levelCalHostSlice(QString* refusal) const
+{
+    if (refusal != nullptr) {
+        refusal->clear();
+    }
+    if (m_role == Role::Remote || m_sliceOwnership == nullptr || m_activeSlice == nullptr) {
+        return -1;
+    }
+    const SliceOwnership& owners = *m_sliceOwnership;
+    const QByteArray& station = SliceOwnership::stationDevice();
+    const int active = m_activeSlice->sliceIndex();
+    // The station changes a slice it controls as its own (not one it runs
+    // held for an absent device, MainWindow::stationControlsSlice), or one
+    // with no controller and no listeners (SliceAccessPolicy), as
+    // StationServer::changeRefusal holds a device to.
+    const auto ownNotHeld = [&owners, &station](int sliceId) {
+        return SliceAccessPolicy::mayChange(owners, station, sliceId)
+            && !owners.mark(sliceId).isHeld();
+    };
+    if (ownNotHeld(active) || SliceAccessPolicy::stationMayChangeUnclaimed(owners, active)) {
+        return -1;
+    }
+    // The desktop's own active slice; activeFor matches the owner alone, so
+    // a held slice (owner the station) is passed over for one of its own.
+    const int chosen = owners.activeFor(station);
+    if (chosen >= 0 && ownNotHeld(chosen)) {
+        return chosen;
+    }
+    for (int sliceId : owners.ownedBy(station)) {
+        if (ownNotHeld(sliceId)) {
+            return sliceId;
+        }
+    }
+    if (refusal != nullptr) {
+        // The words StationServer gives a device for a slice it may not
+        // change (ownedElsewhereReason, listenerChangeReason), without the
+        // device's name, which the desktop's model does not hold.
+        if (owners.mark(active).subject().isEmpty()) {
+            *refusal = QStringLiteral("Nobody controls slice %1. Take control to change it.")
+                           .arg(QChar(QLatin1Char('A').unicode() + active));
+        } else {
+            *refusal = QStringLiteral("That slice belongs to another device. It can be changed only there.");
+        }
+    }
+    return -1;
+}
+
 QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId)
 {
     if (m_role != Role::Remote) {
@@ -16389,8 +16448,16 @@ QString RadioModel::requestStartLevelCalibration(float levelDbm, double frequenc
     if (!m_station->levelCalibrationRunAvailable()) {
         return IStationLink::levelCalibrationRunUnavailableReason();
     }
+    // Level Cal 2 (remote parity): -1 at the Core is the station's active
+    // slice, which may be another device's, and the Core refuses a slice
+    // this window may not change. A window's "active slice" is its own, so
+    // it names that one, as the phone does.
+    int target = sliceId;
+    if (target < 0 && m_activeSlice != nullptr) {
+        target = m_activeSlice->sliceIndex();
+    }
     const IStationLink::CommandOutcome outcome =
-        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, sliceId);
+        m_station->requestStartLevelCalibration(levelDbm, frequencyHz, target);
     if (!outcome.sent) {
         return outcome.reason;
     }
@@ -25578,6 +25645,44 @@ void RadioModel::setTwoTone(bool on)
     if (m_twoToneController) {
         m_twoToneController->setActive(on);
     }
+}
+
+bool RadioModel::moxPressAsksOn(bool toggledOn) const
+{
+    // TX rulings (JJ, 2026-09-30, item 1): a remote window's MOX lights from
+    // the Core's `transmitting`, which reaches it after the Core's own
+    // state, so for a moment after a quick key and release it can still
+    // show the key let go. A press then is a new key, never a second
+    // release. A press while this window's own key is down (or waiting for
+    // its answer) still unkeys.
+    if (!remoteTransmitRouted()) {
+        return toggledOn;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    if (remote->screenKeyDown()) {
+        return false;
+    }
+    if (remote->screenReleasePending()) {
+        return true;
+    }
+    return toggledOn;
+}
+
+bool RadioModel::tunePressAsksOn(bool toggledOn) const
+{
+    // TX rulings (item 1): TUNE, as MOX above, against this window's own
+    // TUNE (tuneAsked).
+    if (!remoteTransmitRouted()) {
+        return toggledOn;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    if (remote->tuneAsked()) {
+        return false;
+    }
+    if (remote->tuneReleasePending()) {
+        return true;
+    }
+    return toggledOn;
 }
 
 void RadioModel::setMoxFromButton(bool on)

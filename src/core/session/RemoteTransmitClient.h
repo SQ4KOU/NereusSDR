@@ -61,6 +61,16 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
 //               setTunerTune. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: TX rulings (item 1): screenReleasePending and
+//               tuneReleasePending, the operator's MOX or TUNE let go while
+//               the Core's confirmation is on its way, so the next press
+//               keys. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
+//   2026-09-30: TX rulings review (I-1): the release memory is bounded,
+//               forgotten on a failed release, and ignored while anything
+//               else of this window keeps the radio on the air. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -113,6 +123,12 @@ public:
     using KeepaliveSender = std::function<bool(quint64 sequence, quint32 epoch)>;
     /// How often a keepalive goes (RemoteTxWatchdog::kKeepaliveIntervalMs).
     static constexpr int kKeepaliveIntervalMs = 100;
+    /// TX rulings (item 1): once the Core accepted a release and this
+    /// window does not read it transmitting, how long a late `transmitting`
+    /// from the key let go may still arrive: a few of the Core's delta
+    /// flushes (StationServer::kDefaultDeltaFlushMs, 50 ms), after which
+    /// the memory of the release is forgotten.
+    static constexpr int kReleaseConfirmGraceMs = 250;
     /// The session's tx.keepalive (sent once, never three times).
     void setSessionKeepalive(KeepaliveSender sender) { m_sessionKeepalive = std::move(sender); }
     /// The media connection's "tx" data channel; tried first while no
@@ -187,6 +203,19 @@ public:
     /// This window asked for TUNE on and has not asked it off since (nor
     /// been refused): its off must go even before the Core's TUNE shows.
     bool tuneAsked() const { return m_tuneAsked; }
+    /// TX rulings (item 1): the operator let go of MOX (or TUNE) and the
+    /// Core has not said it stopped: its `transmitting` may still read
+    /// true, from this key, for a moment. The next press is a new key.
+    /// It ends when the Core reads not transmitting (its `transmitting`
+    /// going false, a key refused, a stop while not transmitting), when
+    /// the release is refused or cannot be sent, or kReleaseConfirmGraceMs
+    /// after the release or its acceptance, whatever the Core reads.
+    /// Review I-1: never while a release failed (the sticky failure), and
+    /// never while anything else of this window may keep the radio on the
+    /// air (VOX armed, two-tone, a program key, TUNE for MOX, MOX for
+    /// TUNE): then a press is the plain toggle, which unkeys.
+    bool screenReleasePending() const;
+    bool tuneReleasePending() const;
 
 signals:
     /// The Core refused the operator's press (or a release), in its words.
@@ -232,6 +261,12 @@ private:
     bool m_releaseFailureNotified{false};
     quint64 m_sessionGeneration{0};
     bool m_tuneAsked{false};
+    // TX rulings (item 1, review I-1).
+    void forgetReleases();
+    bool othersKeepTransmitting(bool forTune) const;
+    // TX rulings (item 1).
+    bool m_screenReleasePending{false};
+    bool m_tuneReleasePending{false};
     // Task 37.
     bool m_twoToneAsked{false};
     bool m_voxArmed{false};
@@ -239,6 +274,8 @@ private:
     KeepaliveSender m_channelKeepalive;
     KeepaliveSender m_auxiliaryKeepalive;
     QTimer m_keepaliveTimer;
+    // TX rulings (item 1).
+    QTimer m_releaseGraceTimer;
     quint64 m_keepaliveSequence{0};
     quint64 m_channelKeepalives{0};
     quint64 m_sessionKeepalives{0};

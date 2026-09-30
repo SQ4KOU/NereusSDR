@@ -1,4 +1,5 @@
 // no-port-check: NereusSDR-original. Desktop host presentation over a borrowed local model.
+#include "gui/HostingSliceActions.h"
 #include "gui/MainWindow.h"
 
 #include "core/TxSliceArbiter.h"
@@ -645,6 +646,61 @@ private slots:
         QVERIFY2(released.accepted, qPrintable(released.reason));
         cards().first()->takeBackButton()->click();
         QTRY_COMPARE(cards().size(), 0);
+        controller.stop();
+    }
+
+    // TX rulings review (N-3 through the card): closing a controlTaken
+    // card with its close button forgets its Take it back record.
+    void closingTheHostCardForgetsItsTakeBack()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        const int aId = model->addSlice(QStringLiteral("pan-0"));
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        StationServer* server = controller.server();
+        QVERIFY(server);
+        QObject phoneSession;
+        const DeviceSessionRegistry::Entry phone =
+            admitPhone(*server, phoneSession, QByteArrayLiteral("phone-device-id-for-card-close-1"));
+        QVERIFY(!phone.deviceId.isEmpty());
+        SliceOwnership* ownership = model->sliceOwnership();
+
+        const auto cards = [&window]() {
+            QList<NoticeCard*> found;
+            for (NoticeCard* card : window.findChildren<NoticeCard*>()) {
+                if (card->isVisibleTo(&window) && card->takeBackButton() != nullptr) {
+                    found.append(card);
+                }
+            }
+            return found;
+        };
+        HostingSliceActions* actions = window.hostingSliceActionsForTest();
+        QVERIFY(actions);
+        qint64 noticeId = 0;
+        connect(actions, &HostingSliceActions::notice, &window,
+                [&noticeId](const SessionMessage& notice) { noticeId = notice.prompt.id; });
+        SliceAccessController* access = server->sliceAccessController();
+        const SliceOwnership::SliceRef ref{aId, ownership->incarnation(aId)};
+        QVERIFY(access->listen(phone.deviceId, ref).accepted);
+        QVERIFY(access->takeControl(phone.deviceId, ref, ownership->controlRevision(aId)).accepted);
+        QTRY_COMPARE(cards().size(), 1);
+        QVERIFY(noticeId != 0);
+        QVERIFY(actions->hasTakeBackForTest(noticeId));
+
+        NoticeCard* card = cards().first();
+        QVERIFY(card->closeButton());
+        card->closeButton()->click();
+        QTRY_COMPARE(cards().size(), 0);
+        QVERIFY(!actions->hasTakeBackForTest(noticeId));
         controller.stop();
     }
 

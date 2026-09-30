@@ -26,16 +26,25 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: TX rulings review (I-1): the memory of a release never
+//               turns a press into a key while VOX, two-tone or TUNE keeps
+//               the radio on the air, is forgotten when the release is
+//               refused or cannot be sent, and lasts only the grace (an
+//               unanswered release included), and a program key after a
+//               release makes the press an unkey. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QSignalSpy>
 
 #include "core/session/RemoteTransmitClient.h"
 #include "core/safety/RemoteTxWatchdog.h"
 
+#include <algorithm>
 #include <optional>
 
 using namespace NereusSDR;
@@ -1201,6 +1210,170 @@ private slots:
         QCOMPARE(client.channelKeepalivesSent(), channelBefore + 1);
         client.setScreenKey(false);
         QCOMPARE(core.argument(core.sent.size() - 1, "epoch").toLongLong(), qlonglong(8));
+    }
+    // TX rulings review (I-1a): after MOX is let go, this window's VOX,
+    // two-tone or TUNE may keep the Core transmitting. The release memory
+    // then does not count, and the lit button's press is the unkey.
+    void somethingElseOnTheAirMakesThePressAnUnkey()
+    {
+        for (int what = 0; what < 3; ++what) {
+            Recorder core;
+            RemoteTransmitClient client(core.sender());
+            client.setAvailable(true);
+            client.setScreenKey(true);
+            answerCopies(client, core.sent.at(0), true, {}, epochValue(5));
+            client.setCoreTransmitting(true);
+            switch (what) {
+            case 0: client.setVoxArmed(true); break;
+            case 1: client.setTwoTone(true); break;
+            default: client.setTune(true); break;
+            }
+            client.setScreenKey(false);
+            QVERIFY2(!client.screenReleasePending(), qPrintable(QString::number(what)));
+            // The press: the button's off, while the Core still transmits.
+            const int keys = std::count_if(core.sent.cbegin(), core.sent.cend(),
+                [](const Sent& c) { return c.verb == "tx.key"; });
+            const int unkeys = std::count_if(core.sent.cbegin(), core.sent.cend(),
+                [](const Sent& c) { return c.verb == "tx.unkey"; });
+            client.setScreenKey(false);
+            QCOMPARE(std::count_if(core.sent.cbegin(), core.sent.cend(),
+                [](const Sent& c) { return c.verb == "tx.key"; }), keys);
+            QCOMPARE(std::count_if(core.sent.cbegin(), core.sent.cend(),
+                [](const Sent& c) { return c.verb == "tx.unkey"; }), unkeys + 1);
+            QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+            QCOMPARE(core.argument(core.sent.size() - 1, "epoch").toLongLong(),
+                     qlonglong(RemoteTransmitClient::kReleaseAnyEpoch));
+        }
+
+        // TUNE let go while this window's MOX is still down: not a TUNE
+        // press to turn it back on.
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setTune(true);
+        client.setScreenKey(true);
+        client.setTune(false);
+        QVERIFY(!client.tuneReleasePending());
+    }
+
+    // TX rulings review (I-1b): a release the Core refuses, or one that
+    // cannot be sent, stopped nothing. The memory is forgotten, so the
+    // next press is the unkey again, and it goes.
+    void aFailedReleaseLetsThePressRetryTheUnkey()
+    {
+        {
+            Recorder core;
+            RemoteTransmitClient client(core.sender());
+            client.setAvailable(true);
+            client.setScreenKey(true);
+            answerCopies(client, core.sent.at(0), true, {}, epochValue(9));
+            client.setCoreTransmitting(true);
+            client.setScreenKey(false);
+            QVERIFY(client.screenReleasePending());
+            answerCopies(client, core.sent.last(), false, QStringLiteral("refused"), {});
+            QVERIFY(!client.screenReleasePending());
+            const int sent = core.sent.size();
+            client.setScreenKey(false);
+            QCOMPARE(core.sent.size(), sent + 1);
+            QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+        }
+        {
+            Recorder core;
+            RemoteTransmitClient client(core.sender());
+            client.setAvailable(true);
+            client.setScreenKey(true);
+            answerCopies(client, core.sent.at(0), true, {}, epochValue(9));
+            client.setCoreTransmitting(true);
+            core.linked = false;
+            client.setScreenKey(false);
+            QVERIFY(!client.screenReleasePending());
+            core.linked = true;
+            const int sent = core.sent.size();
+            client.setScreenKey(false);
+            QCOMPARE(core.sent.size(), sent + 1);
+            QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+        }
+        {
+            // TUNE off refused: its memory goes too.
+            Recorder core;
+            RemoteTransmitClient client(core.sender());
+            client.setAvailable(true);
+            client.setTune(true);
+            client.setTune(false);
+            QVERIFY(client.tuneReleasePending());
+            answerCopies(client, core.sent.last(), false, QStringLiteral("refused"), {});
+            QVERIFY(!client.tuneReleasePending());
+        }
+    }
+
+    // TX rulings review (I-1): the memory lasts the grace from the release
+    // and its acceptance, whatever the Core still reads after it.
+    void theReleaseMemoryEndsAfterTheGraceEvenWhileTheCoreTransmits()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.at(0), true, {}, epochValue(4));
+        client.setCoreTransmitting(true);
+        client.setScreenKey(false);
+        answerCopies(client, core.sent.last(), true, {}, {});
+        client.setCoreTransmitting(true);   // a late `true`
+        QVERIFY(client.screenReleasePending());
+        QTRY_VERIFY_WITH_TIMEOUT(!client.screenReleasePending(),
+                                 RemoteTransmitClient::kReleaseConfirmGraceMs * 4);
+        const int sent = core.sent.size();
+        client.setScreenKey(false);   // the lit button's press unkeys
+        QCOMPARE(core.sent.size(), sent + 1);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+    }
+    // TX rulings re-review: a release sent and never answered is
+    // forgotten at the grace too; the lit button's press then unkeys.
+    void anUnansweredReleaseIsForgottenAfterTheGrace()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.at(0), true, {}, epochValue(6));
+        client.setCoreTransmitting(true);
+        client.setScreenKey(false);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+        QVERIFY(client.screenReleasePending());
+        QElapsedTimer waited;
+        waited.start();
+        QTRY_VERIFY_WITH_TIMEOUT(!client.screenReleasePending(),
+                                 RemoteTransmitClient::kReleaseConfirmGraceMs * 4);
+        QVERIFY(waited.elapsed() >= RemoteTransmitClient::kReleaseConfirmGraceMs - 10);
+        const int sent = core.sent.size();
+        client.setScreenKey(false);
+        QCOMPARE(core.sent.size(), sent + 1);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+    }
+
+    // TX rulings re-review: a program that keys through this window after
+    // MOX was let go keeps the radio on the air; the press unkeys it.
+    void aProgramKeyAfterAReleaseMakesThePressAnUnkey()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.at(0), true, {}, epochValue(3));
+        client.setCoreTransmitting(true);
+        client.setScreenKey(false);
+        QVERIFY(client.screenReleasePending());
+        client.keyForProgram([](const RemoteTransmitClient::Answer&) {});
+        answerCopies(client, core.sent.last(), true, {}, epochValue(4));
+        QVERIFY(!client.screenReleasePending());
+        const int keys = std::count_if(core.sent.cbegin(), core.sent.cend(),
+            [](const Sent& c) { return c.verb == "tx.key"; });
+        client.setScreenKey(false);   // the press
+        QCOMPARE(std::count_if(core.sent.cbegin(), core.sent.cend(),
+            [](const Sent& c) { return c.verb == "tx.key"; }), keys);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.unkey"));
+        QCOMPARE(core.argument(core.sent.size() - 1, "epoch").toLongLong(), 4LL);
+        QVERIFY(!client.holdsTransmit());
     }
 };
 

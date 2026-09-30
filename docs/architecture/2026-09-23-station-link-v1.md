@@ -924,6 +924,13 @@ media connection"); a peer that does not sees exactly the wire it was built
 for, with neither, and its `replace` keeps its three fields. The station
 does not declare it; the desktop's remote window does.
 
+**`rx2Attenuator` 1** (Level Cal 2): the client reads RX2's own input
+control from the catalogue's `board` (`rx2Attenuator`, `rx2PreampItems`,
+`rx2AttenuatorReason`). A peer that declares it is sent
+`rx2AttenuatorVersion` (section 6.3); a peer that does not sees exactly the
+capabilities it was built for. Neither the station nor the desktop's remote
+window declares it; the phone does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1104,6 +1111,7 @@ change shows as surface drift and as a change to this table.
 | `paTransmitBandVersion` | 1 |
 | `sliceAccessVersion` | 2 |
 | `mediaDirectVersion` | 1 |
+| `rx2AttenuatorVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2116,6 +2124,14 @@ operation with `mediaDirectVersion` 1: a direct-only connection that
 gathers STUN and host candidates and neither the media tunnel nor the
 relay. A peer that did not declare the feature is sent neither entry.
 
+**RX2's input control.** A client that declared `rx2Attenuator` 1 is sent
+`rx2AttenuatorVersion`, an `i64`, 1, after the direct media ladder (or after
+the last entry before it when that is absent) and before `coreBuildInfo`.
+At 1 the catalogue's `board` carries `rx2Attenuator`, `rx2PreampItems` and
+`rx2AttenuatorReason` (section "Catalogue"). A peer that did not declare
+the feature is sent no entry; the catalogue keys are sent to every peer,
+and an app that does not know them ignores them.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2339,7 +2355,8 @@ older window sees only the values it was built for.
 | 99 | `sliceAccessVersion` | `i64` |
 | 100 | `mediaDirectVersion` | `i64` |
 | 101 | `mediaStunUrls` | `utf8` |
-| 102 | `coreBuildInfo` | `utf8` |
+| 102 | `rx2AttenuatorVersion` | `i64` |
+| 103 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -4884,6 +4901,9 @@ app detects each by its presence, as it does `board`'s `transmit`,
 | `transmit` | `{power, tunePowerForTxBand, tunePower, micGainDb}`: the transmit controls' ranges on this radio (below) |
 | `rx1Preamp` | Whether it has the RX applet's RX1 preamp toggle (the dual-ADC boards; `rx1Preamp` true is refused elsewhere) |
 | `relays` | `{rxOutOnTx, ext1OutOnTx, ext2OutOnTx, rxOutOverride}`: the antenna relays it has (below) |
+| `rx2Attenuator` | `{min, max, step}` in dB for RX2's own input attenuator, 0 to 31 in 1 dB steps on the radios with a second ADC (ANAN-100D, 200D, OrionMKII, 7000D, 8000D, Anvelina Pro3, G2, G2 1K), or `null`. An app draws a slider and writes `stepAtt`'s `rx2AttenuationDb` with `rx2StepAttEnabled` true (`adcAttenuatorVersion` 1) |
+| `rx2PreampItems` | `[{id, label}]`: RX2's preamp choices where RX2's input has two states instead (the HPSDR's second Mercury: `0dB`, `-20dB`), `id` the `stepAtt` object's `rx2PreampMode`; empty elsewhere |
+| `rx2AttenuatorReason` | Why RX2 has no input control of its own, in operator words, when `rx2Attenuator` is `null` and `rx2PreampItems` is empty (RX2 shares RX1's input, or the radio's second input is not known); `null` otherwise |
 
 `board.transmit`: each key is `{min, max, step}` in the property's own
 units, as the desktop's control ranges it (the TX applet's RF Power and Tune
@@ -7653,11 +7673,11 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone. Wait a moment and try again. (a remote key whose line sent nothing within 1 s, or did not fill within 250 ms of its first packet, section 18.6) | |
 | `changingHands` | Transmit is changing hands. Try again in a moment. | |
 | `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
-| `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
+| `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit; the same sentence for a key whose transmit binding would land on another device's slice, from a device with a slice of its own to move the flag to, while the radio is not back in receive or the flag is frozen, and for the hosting desktop's own PTT in that case) | `takeTransmit` |
 | `notHolder` | Take transmit on this device first. | `takeTransmit` |
 | `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
 | `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
-| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice; and a device's key, the hosting desktop's included, whose transmit binding would land on another device's slice (for a device on sliceAccess or the hosting desktop; for any other device, only the slice it lost when another device took control of it) while the device has no slice of its own it may transmit on; with one, its unkeyed flag moves there and the key goes ahead) | |
+| `noTransmitSlice` | There is no slice to transmit on. Add a slice first. (every key while the Core has no slice; and a device's key, the hosting desktop's included, whose transmit binding would land on another device's slice (for a device on sliceAccess or the hosting desktop; for any other device, only the slice it lost when another device took control of it) while the device has no slice of its own it may transmit on; with one, its unkeyed flag moves there and the key goes ahead; and the radio's own PTT on a hosting desktop, with the flag on another device's slice, while the desktop has no slice) | |
 | `chooseTransmitSlice` | You took this slice from another device. Choose it for transmit first with its TX button. (a key whose transmit binding would land on a slice this device took from another device and has not chosen with `tx.setTxSlice`, or the hosting desktop's TX button, while it has no other slice it may transmit on) | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two

@@ -14,10 +14,16 @@
 // buttons, in the same places, and emits the same bandSelected arguments
 // now that its table lives in models/BandGrid.h. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-30 (TX rulings, item 3): the ATT flyout is held with the reason
+// on a pan whose slice this window only listens to, and writes nothing.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <QCheckBox>
+#include <QSpinBox>
 #include <QComboBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -26,6 +32,7 @@
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/StepAttenuatorFacade.h"
 #include "gui/SpectrumOverlayPanel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -410,6 +417,45 @@ private slots:
             QCOMPARE(selected.last().at(1).toDouble(), expected[i].freqHz);
             QCOMPARE(selected.last().at(2).toString(), QString::fromLatin1(expected[i].mode));
         }
+    }
+    // TX rulings (item 3, JJ): a listened pan's ATT flyout is held with
+    // the reason naming the controller, and writes nothing.
+    void attFlyoutHeldOnAListenedSlice() {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setBoardForTest(HPSDRHW::Hermes);
+        remote.addSlice();
+        StepAttenuatorFacade* att = remote.stepAttFacade();
+        att->setWindowAvailability(true, QString());
+        att->applyRemoteProperty("enabled", true);
+
+        PanelHarness h;
+        h.panel->setRadioModel(&remote);
+        auto* chk = h.host.findChild<QCheckBox*>(QStringLiteral("attEnableCheck"));
+        auto* spin = h.host.findChild<QSpinBox*>(QStringLiteral("attSpin"));
+        auto* reason = h.host.findChild<QLabel*>(QStringLiteral("attReason"));
+        QVERIFY(chk && spin && reason);
+        QVERIFY(chk->isEnabled());
+        QVERIFY(spin->isEnabled());
+
+        const int dB = att->attenuationDb();
+        const QString held = QStringLiteral("Shack iPad controls this slice");
+        h.panel->setAttHeldReason(held);
+        QVERIFY(!chk->isEnabled());
+        QVERIFY(!spin->isEnabled());
+        QCOMPARE(chk->toolTip(), held);
+        QCOMPARE(spin->toolTip(), held);
+        QCOMPARE(reason->text(), held);
+        QVERIFY(!reason->isHidden());
+        chk->setChecked(false);
+        spin->setValue(dB == 20 ? 21 : 20);
+        QVERIFY(att->enabled());
+        QCOMPARE(att->attenuationDb(), dB);
+
+        h.panel->setAttHeldReason(QString());
+        QVERIFY(chk->isEnabled());
+        QVERIFY(spin->isEnabled());
+        QVERIFY(chk->toolTip() != held);
+        QVERIFY(reason->isHidden());
     }
 };
 

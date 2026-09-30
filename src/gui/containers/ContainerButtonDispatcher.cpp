@@ -62,6 +62,10 @@
 //                                    the RX applet's reason, in remote and
 //                                    hosting windows. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  TX rulings (item 1): a remote
+//                                    window's MOX and TUNE press toggles
+//                                    against its own key. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -403,7 +407,8 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
             && m_hooks.requestDesktopTune) {
             m_hooks.requestDesktopTune(turnOn);
         } else {
-            m_model->setTune(turnOn);
+            // TX rulings (item 1): against a remote window's own TUNE.
+            m_model->setTune(m_model->tunePressAsksOn(turnOn));
         }
         break;
     case Id::Mox:
@@ -413,7 +418,8 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
             && m_hooks.requestDesktopMox) {
             m_hooks.requestDesktopMox(turnOn);
         } else {
-            m_model->setMoxFromButton(turnOn);
+            // TX rulings (item 1): against a remote window's own key.
+            m_model->setMoxFromButton(m_model->moxPressAsksOn(turnOn));
         }
         break;
     case Id::TwoTon:

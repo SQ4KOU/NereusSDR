@@ -74,6 +74,14 @@
 //   2026-09-30: load finding: the different-band case waits for the
 //               window's MOX to show the release before pressing again.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX rulings (item 1): a press after a release is a key,
+//               even while the Core's confirmation is on its way, for MOX
+//               and TUNE; a normal toggle still works and nothing keys
+//               without a press. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-30: TX rulings review (I-1): with this window's VOX armed the
+//               lit MOX's press after a release unkeys. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -709,8 +717,9 @@ private slots:
         // The window's MOX follows the Core's `transmitting`, which reaches
         // it on the Core's delta flush, after the Core's own state. A late
         // `true` from this key can light it after the checks above; the
-        // Core's `false` follows. Until then a press is a release of the key
-        // it shows, not a new key.
+        // Core's `false` follows. A press then is a new key (TX rulings,
+        // item 1; pressAfterAReleaseKeysWhileTheCoreStillShowsTheKey); this
+        // case waits for the release so its key is the refused one.
         QTRY_VERIFY(!window.mox->isChecked());
         QVERIFY(arbiter->requestHandoff(h.sliceB, device));
         QCOMPARE(arbiter->txBoundSliceId(), h.sliceB);
@@ -735,6 +744,194 @@ private slots:
         QVERIFY(!coreMox->isMox());
         QVERIFY(!h.station.isTune());
         QTRY_VERIFY(!window.tune->isChecked());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX rulings (JJ, 2026-09-30, item 1): a quick key and release, then a
+    // press while the window still shows the Core transmitting for the key
+    // it let go (the Core's `false` not yet here). The press is a new key,
+    // as the desktop's button toggles against its own intent, and the window
+    // ends keyed.
+    void pressAfterAReleaseKeysWhileTheCoreStillShowsTheKey()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        MoxController* coreMox = h.station.moxController();
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+        const QByteArray device = h.windowKey->fingerprint();
+
+        window.mox->click();
+        QTRY_VERIFY(coreMox->isMox());
+        QTRY_VERIFY(h.remote.isTransmitting());
+        QVERIFY(window.mox->isChecked());
+        const quint32 first = h.station.keyedBy().epoch;
+        QTRY_COMPARE(tx->screenEpoch(), first);
+
+        // Released; the Core's confirmation is on its way.
+        window.mox->click();
+        QVERIFY(!tx->screenKeyDown());
+        QVERIFY(tx->screenReleasePending());
+        QVERIFY(h.remote.isTransmitting());
+        // The Core's late `true` lights the button as TxApplet's
+        // syncFromCore does from the window's `transmitting`.
+        {
+            QSignalBlocker blocker(window.mox);
+            window.mox->setChecked(h.remote.isTransmitting());
+        }
+        QVERIFY(window.mox->isChecked());
+        const int keysBefore = commandsOf(h.stationLink, QStringLiteral("tx.key")).size();
+
+        // The press is a key, not a second release.
+        window.mox->click();
+        QVERIFY(tx->screenKeyDown());
+        QVERIFY(!tx->screenReleasePending());
+        QTRY_COMPARE(commandsOf(h.stationLink, QStringLiteral("tx.key")).size(),
+                     keysBefore + RemoteTransmitClient::kCopies);
+        QTRY_VERIFY(coreMox->isMox() && h.station.keyedBy().epoch > first);
+        QCOMPARE(h.station.keyedBy().deviceId, device);
+        QTest::qWait(200);
+        QVERIFY(coreMox->isMox());
+        QVERIFY(tx->screenKeyDown());
+        QTRY_VERIFY(window.mox->isChecked());
+
+        // A press while truly keyed still unkeys.
+        window.mox->click();
+        QTRY_VERIFY(!coreMox->isMox());
+        QTRY_VERIFY(!h.remote.isTransmitting());
+        QTRY_VERIFY(!window.mox->isChecked());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX rulings (item 1): the normal toggle is unchanged, and a release
+    // waiting for the Core's confirmation keys nothing without a press.
+    void aNormalToggleWorksAndNothingKeysWithoutAPress()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        MoxController* coreMox = h.station.moxController();
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+
+        for (int round = 0; round < 2; ++round) {
+            window.mox->click();
+            QTRY_VERIFY(coreMox->isMox());
+            QTRY_VERIFY(h.remote.isTransmitting());
+            QVERIFY(window.mox->isChecked());
+            window.mox->click();
+            QVERIFY(tx->screenReleasePending());
+            QTRY_VERIFY(!coreMox->isMox());
+            QTRY_VERIFY(!h.remote.isTransmitting());
+            QTRY_VERIFY(!tx->screenReleasePending());
+            QVERIFY(!window.mox->isChecked());
+        }
+        const int keys = commandsOf(h.stationLink, QStringLiteral("tx.key")).size();
+        QCOMPARE(keys, 2 * RemoteTransmitClient::kCopies);
+        QTest::qWait(200);
+        QVERIFY(!coreMox->isMox());
+        QVERIFY(!tx->screenKeyDown());
+        QCOMPARE(commandsOf(h.stationLink, QStringLiteral("tx.key")).size(), keys);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX rulings (item 1): TUNE shares the rule. A press after TUNE was let
+    // go, while the window still shows the Core's TUNE on, turns it on.
+    void tunePressAfterAReleaseTunesWhileTheCoreStillShowsIt()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+
+        window.tune->click();
+        QTRY_VERIFY(h.station.isTune());
+        QTRY_VERIFY(h.remote.transmitModel().isTune());
+        QTRY_VERIFY(window.tune->isChecked());
+
+        window.tune->click();
+        QVERIFY(!tx->tuneAsked());
+        QVERIFY(tx->tuneReleasePending());
+        QVERIFY(h.remote.transmitModel().isTune());
+        {
+            QSignalBlocker blocker(window.tune);
+            window.tune->setChecked(h.remote.transmitModel().isTune());
+        }
+
+        // On, off, and this press's on: three commands, each sent as copies.
+        window.tune->click();
+        QVERIFY(tx->tuneAsked());
+        QVERIFY(window.tune->isChecked());
+        QTRY_COMPARE(commandsOf(h.stationLink, QStringLiteral("tx.tune")).size(),
+                     3 * RemoteTransmitClient::kCopies);
+        QVERIFY(argument(commandsOf(h.stationLink, QStringLiteral("tx.tune")).last(),
+                         QStringLiteral("on")).toBool());
+        QTest::qWait(200);
+        QVERIFY(h.station.isTune());
+
+        window.tune->click();
+        QTRY_VERIFY(!h.station.isTune());
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX rulings review (I-1a): the window's VOX may keep the Core
+    // transmitting after MOX is let go. The lit button's press then stops
+    // the radio (the MOX off's "unkey whatever keys"), never a new key.
+    void withVoxArmedAPressAfterAReleaseUnkeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        MoxController* coreMox = h.station.moxController();
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+
+        window.mox->click();
+        QTRY_VERIFY(coreMox->isMox());
+        QTRY_VERIFY(h.remote.isTransmitting());
+        // As StationClient reports the Core's VOX armed by this window.
+        tx->setVoxArmed(true);
+        window.mox->click();
+        QVERIFY(!tx->screenKeyDown());
+        QVERIFY(!tx->screenReleasePending());
+        QVERIFY(h.remote.isTransmitting());
+        {
+            QSignalBlocker blocker(window.mox);
+            window.mox->setChecked(true);
+        }
+        QVERIFY(!h.remote.moxPressAsksOn(false));
+
+        // The press: the release's unkey and this one go (the link sends
+        // each as copies, after this returns); the only key is the first.
+        window.mox->click();
+        QVERIFY(!tx->screenKeyDown());
+        QVERIFY(!window.mox->isChecked());
+        QTRY_COMPARE(commandsOf(h.stationLink, QStringLiteral("tx.unkey")).size(),
+                     2 * RemoteTransmitClient::kCopies);
+        QTest::qWait(200);
+        QCOMPARE(commandsOf(h.stationLink, QStringLiteral("tx.key")).size(),
+                 RemoteTransmitClient::kCopies);
+        QVERIFY(!coreMox->isMox());
+        tx->setVoxArmed(false);
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

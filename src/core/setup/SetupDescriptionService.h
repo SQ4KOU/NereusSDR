@@ -52,6 +52,8 @@ public:
     static bool validateHardwareV16Control(const QJsonObject& control);
     /// Version 18: HL2 Options' clock rows, exactly as published.
     static bool validateHardwareV18Control(const QJsonObject& control);
+    /// Version 23: Calibration's Rx1 6m LNA row, exactly as published.
+    static bool validateHardwareV23Control(const QJsonObject& control);
     /// Version 19: DSP > CFC's band editor (`dsp.cfc.bands`), exactly as
     /// published: transmit's cfcProfile, applied with cfc.setProfile.
     static bool validateDspV19Control(const QJsonObject& control);

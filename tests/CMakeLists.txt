@@ -7965,6 +7965,9 @@ nereus_add_test(tst_station_handover EXTRA_LABELS session)
 nereus_add_test(tst_station_handover_roundtrip EXTRA_LABELS session)
 nereus_add_test(tst_desktop_station_controller)
 nereus_add_test(tst_desktop_station_window)
+# TX rulings review: MainWindow::hostingSliceActionsForTest and
+# HostingSliceActions::hasTakeBackForTest.
+target_compile_definitions(tst_desktop_station_window PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_receive_layout_store)
 nereus_add_test(tst_receive_layout_hydration)
 nereus_add_test(tst_receive_layout_runtime)

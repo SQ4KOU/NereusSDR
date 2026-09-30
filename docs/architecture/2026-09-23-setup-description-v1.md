@@ -1,4 +1,4 @@
-# Setup description versions 1–21
+# Setup description versions 1–23
 
 The Core sends the desktop's built Setup pages as JSON strings on the read-only
 `setup` mirror object (`SetupDescription`). It has one string property per
@@ -165,10 +165,11 @@ command or result binding. The actual peer must separately declare
 nothing. A V3 peer still receives the older controls with their existing
 semantics. The Core filters every control above the peer's negotiated
 description version, drops empty sections and pages, and caps an unknown
-future declaration at version 22. PA has a version-20 ceiling (version 14
-for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-18 ceiling (version 17
+future declaration at version 23. PA has a version-20 ceiling (version 14
+for V14–V19, version 13 for V13, version 5 for V5–V12) and Hardware a version-23 ceiling
+(version 18 for V18–V22, version 17
 for V17, version 16 for V16, version 13
-for V13–V15, version 6 for V6–V12; see Versions 16, 17 and 18); Display a version-12 ceiling, and
+for V13–V15, version 6 for V6–V12; see Versions 16, 17, 18 and 23); Display a version-12 ceiling, and
 Appearance a version-12 ceiling with its prior version-4 projection for
 V4–V6 and version-7 projection for V7–V11. DSP is version 22 to a V22 or
 later peer (see Version 22), version 19 to a V19 to V21 peer (see Version 19)
@@ -1112,6 +1113,23 @@ air with the same reason, at every version. A V21 or older peer receives DSP
 at its earlier version without the `availability` objects. The desktop Setup
 greys the four RX rows and the three TX Buffer Size rows on the air with the
 same reason.
+
+Version 23 adds one row to Hardware Config > Calibration, in a new first
+section titled `Level Cal`: `hardware.calibration.rx1_6mLna`, the desktop
+Calibration tab's "Rx1 6m LNA:" box. It is closed as the version 13 rows are:
+`kind:"decimal"`, `binding:{"radioSetting":"cal/rx1_6mLna"}`, `applies:"live"`,
+gate `radioHardwareVersion` 1, `requiresDescriptionVersion:23`, `min` 0, `max`
+25, `step` 1, `decimals` 1, `unit` `dB`, `default` 13, and an empty tooltip,
+as the desktop box has none (Thetis ud6mLNAGainOffset,
+setup.designer.cs:12089-12116 [v2.10.3.15]). The row is on every board, as
+the tab is. A write goes through the per-radio settings path the desktop
+uses: the Core refuses a value outside 0 to 25 dB with "Choose a 6 m LNA
+offset from 0 to 25 dB." and hands back its own, takes it from a
+receive-only Core's peers (it is a receive calibration), and applies it to
+its receive calibration through the "cal" reload, once the radio is back on
+receive if it is on the air. A V18 to V22 peer receives Hardware at version
+18 without the row or its section. This version adds no mirror field,
+ordinal or verb; the Core caps a declaration at 23.
 
 V4 adds `default` metadata to these exact Display and Appearance controls.
 Display toggles use JSON booleans; its numeric controls use JSON numbers,
