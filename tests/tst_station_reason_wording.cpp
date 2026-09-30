@@ -1383,7 +1383,10 @@ const QList<ReasonSource>& reasonSources()
           // raw PA keys.
           QStringLiteral("paOnAirLockedReason"), QStringLiteral("paHolderOnlyReason"),
           QStringLiteral("paOnAirEditRefusal"), QStringLiteral("paValueRangeRefusal"),
-          QStringLiteral("paRowRangeRefusal"), QStringLiteral("paSettingOnAirRefusal")},
+          QStringLiteral("paRowRangeRefusal"), QStringLiteral("paSettingOnAirRefusal"),
+          // Setup description version 22: the RX buffer sizes' on-air
+          // lock (paOnAirLockedReason's words).
+          QStringLiteral("dspBufferOnAirLockedReason")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
