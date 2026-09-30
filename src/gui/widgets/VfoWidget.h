@@ -52,6 +52,10 @@
 //                 AI-assisted via Anthropic Claude Code.
 //   2026-09-30 : core-slice take-over: SliceAccess::takeHeldReason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : TX badge take (JJ's ruling): TxBadgeOffer and
+//                 txTakeRequested, a TX badge click that starts the take of
+//                 transmit or of the slice. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -596,6 +600,21 @@ public:
     };
     void setSliceAccess(const SliceAccess& access);
     const SliceAccess& sliceAccess() const { return m_sliceAccess; }
+
+    // TX badge take (JJ, 2026-09-30): what a click on the TX badge does
+    // when it cannot make this slice the TX slice at once (another device
+    // holds transmit, or this flag only listens). Offered: the badge is
+    // enabled, says what a click will do, and a click emits
+    // txTakeRequested. Not offered: the badge is held as before, with
+    // heldReason when it is set (the slice is on the air) or today's reason.
+    struct TxBadgeOffer {
+        bool offered{false};
+        QString toolTip;
+        QString heldReason;
+        bool operator==(const TxBadgeOffer&) const = default;
+    };
+    void setTxBadgeOffer(const TxBadgeOffer& offer);
+    const TxBadgeOffer& txBadgeOffer() const { return m_txBadgeOffer; }
     bool isListening() const
     {
         return m_sliceAccess.state == SliceAccess::State::Listening;
@@ -733,6 +752,10 @@ signals:
     // RadioModel::txSliceArbiter()->requestHandoff(sliceIndex), which drops
     // MOX (RF-safe) before flipping the TX-bound slice.
     void txHandoffRequested(int sliceIndex);
+    // TX badge take (JJ, 2026-09-30): the badge was clicked while it offers
+    // a take (TxBadgeOffer). MainWindow takes the slice, then transmit, as
+    // needed, and makes the slice the TX slice. Nothing keys.
+    void txTakeRequested(int sliceIndex);
 
     // Phase 3F Sub-Epic E Task 4: right-click context menu intent signals.
     // MainWindow listens and routes to SliceModel / FilterPolicyDialog /
@@ -865,6 +888,10 @@ private:
     QLabel*      m_filterWidthLbl{nullptr};
     QPushButton* m_txBadge{nullptr};
     bool m_inUseByRadio{false};
+    // TX badge take: the TX mark setTxSlice last showed, and the offer.
+    bool m_txMarked{false};
+    TxBadgeOffer m_txBadgeOffer;
+    bool txBadgeTakeOffered() const;
     QLabel*      m_splitBadge{nullptr};
     QLabel*      m_sliceBadge{nullptr};
     QStringList  m_antennaList{QStringLiteral("ANT1"), QStringLiteral("ANT2"), QStringLiteral("ANT3")};

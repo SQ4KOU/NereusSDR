@@ -525,6 +525,10 @@
 //   2026-09-30: JJ's wider ruling: staysListeningAfterTake(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: TX badge take fix round 1: setTokenSessionsMayTransmitForTest(),
+//               so a window test reaches a real take of transmit. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -973,6 +977,10 @@ public:
     /// change the Core's radio, so a window test can reach the Core's
     /// answers (fix wave, I5).
     void setTokenSessionsMayChangeRadioForTest(bool may) { m_tokenSessionsMayChangeRadioForTest = may; }
+    /// The same bench window cannot pair, so the transmit gate refuses it
+    /// as not paired. This counts such a session as paired for that gate,
+    /// so a window test can take transmit. Set before the window connects.
+    void setTokenSessionsMayTransmitForTest(bool may) { m_tokenSessionsMayTransmitForTest = may; }
     /// Deterministic export expiry; caller drives cleanup after advancing time.
     void setSettingsExportClockForTest(std::function<qint64()> clock)
     { m_settingsExportNowForTest = std::move(clock); }
@@ -2832,6 +2840,7 @@ private:
     int m_sessionsMoved = 0;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
     bool m_tokenSessionsMayChangeRadioForTest = false;
+    bool m_tokenSessionsMayTransmitForTest = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_sustainableSliceLimit = 0;
 };

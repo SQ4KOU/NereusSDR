@@ -18,7 +18,8 @@ class StationServer;
 class DesktopStationController final : public QObject {
     Q_OBJECT
 public:
-    enum class Key { Mox, Tune };
+    // TX badge take (JJ, 2026-09-30): Take takes transmit and keys nothing.
+    enum class Key { Mox, Tune, Take };
     enum class RequestState { Refused, NoChange, Pending, Ask };
 
     struct TakeQuestion {
@@ -33,6 +34,9 @@ public:
         RequestState state{RequestState::Refused};
         std::optional<TakeQuestion> question;
         QString reason;
+        /// TX badge take: the take this result belongs to (0: none).
+        /// takeFinished names it when the take ends later.
+        quint64 takeId{0};
     };
 
     // The model, settings and chosen profile are caller-owned. Construction
@@ -50,11 +54,23 @@ public:
 
 signals:
     void hostingStateChanged(bool enabled);
+    /// TX badge take: a take requestTakeTransmit started and that did not
+    /// end within its call ended now. `held` is whether the station device
+    /// holds transmit through it; false when the Core did not assign it
+    /// (a stop not confirmed), and when another request, a stop or the end
+    /// of hosting replaced it.
+    void takeFinished(quint64 takeId, bool held);
 
 public:
     RequestResult requestMox(bool on);
     RequestResult requestTune(bool on);
+    /// TX badge take: the station device takes transmit through tx.take's
+    /// rules (asked first while another device holds it) and keys nothing.
+    /// NoChange when it already holds transmit.
+    RequestResult requestTakeTransmit();
     RequestResult confirmTake(const TakeQuestion& shown);
+    /// TX badge take: the take still waiting for its end (0: none).
+    quint64 takeInFlight() const { return m_takeInFlight; }
 
 #ifdef NEREUS_BUILD_TESTS
     // Forward the existing Host construction seam for in-process lifecycle tests.
@@ -71,6 +87,10 @@ private:
     RequestResult ask(Key key);
     void keyNow(Key key);
     bool stationHoldsTransmit() const;
+    // TX badge take: ends the take in flight as not held (takeFinished).
+    void supersedeTake();
+    // TX badge take: what a take's call returns, and whether it ended there.
+    RequestResult settleTake(quint64 takeId, RequestResult result);
 
     QPointer<RadioModel> m_model;
     StationHostOptions m_options;
@@ -79,6 +99,8 @@ private:
     std::optional<TakeQuestion> m_question;
     quint64 m_intentGeneration{0};
     quint64 m_nextQuestionId{0};
+    quint64 m_takeInFlight{0};
+    quint64 m_nextTakeId{0};
     bool m_moxRequested{false};
     bool m_tuneRequested{false};
     bool m_stopDuringStart{false};

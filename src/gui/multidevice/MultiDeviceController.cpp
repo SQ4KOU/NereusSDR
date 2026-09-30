@@ -28,6 +28,9 @@
 //               hosting desktop (or the Core itself) for a slice the station
 //               device holds, from the access entry. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX badge take fix round 1: lastTakeCommandId(), the
+//               tx.take the window's own take question sent. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
@@ -156,8 +159,9 @@ void MultiDeviceController::askTakeTransmit()
     connect(dialog, &QDialog::accepted, this, [this, self, shownEpoch, shownKeyed]() {
         if (m_dialog != self) { return; }
         m_dialog.clear();
+        m_lastTakeCommandId = 0;
         if (m_client) {
-            m_client->requestTakeTransmit(true, shownEpoch, shownKeyed);
+            m_lastTakeCommandId = m_client->requestTakeTransmit(true, shownEpoch, shownKeyed);
         }
     });
     connect(dialog, &QDialog::rejected, this, [this, self]() {

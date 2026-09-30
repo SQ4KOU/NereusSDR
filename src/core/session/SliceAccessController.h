@@ -87,6 +87,9 @@
 //               Claude Code.
 //   2026-09-30: JJ's wider ruling: Hooks::staysListening. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX badge take: takeWhileTransmittingWords, so a flag shows
+//               the on-air refusal in the Core's own words. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/SliceOwnership.h"
@@ -179,6 +182,9 @@ public:
 
     /// The letter of `sliceId`, as the words name it.
     static QString letterOf(int sliceId);
+    /// Why takeControl refuses while `sliceId` transmits, in its words (a
+    /// window's TX badge holds with them while the slice is on the air).
+    static QString takeWhileTransmittingWords(int sliceId);
 
 signals:
     /// `byDevice` took control of the slice from `fromDevice`, which is

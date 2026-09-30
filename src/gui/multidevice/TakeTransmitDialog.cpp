@@ -10,6 +10,8 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: TX badge take: shortNameOf. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/TakeTransmitDialog.h"
@@ -39,6 +41,11 @@ QString nameOf(const TakeTransmitDialog::Holder& h)
 }
 
 } // namespace
+
+QString TakeTransmitDialog::shortNameOf(const Holder& holder)
+{
+    return shortOf(holder);
+}
 
 TakeTransmitDialog::Holder TakeTransmitDialog::fromTransmitState(const TransmitState& tx)
 {

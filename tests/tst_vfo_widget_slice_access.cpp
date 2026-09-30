@@ -17,6 +17,11 @@
 // Core-slice take-over (2026-09-30, J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code): Take control stays, disabled with the Core's
 // words, when the Core refuses the take of its own slice.
+//
+// TX badge take (2026-09-30, J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code): a TX badge that offers a take is enabled, says what a
+// click will do, and a click asks for the take (txTakeRequested), never
+// the move; the radio's own transmission and a held reason still hold it.
 // =================================================================
 #include <QtTest/QtTest>
 #include <QAction>
@@ -413,6 +418,111 @@ private slots:
         QCOMPARE(slice.afGain(), 70);
         QCOMPARE(mine.count(), 0);
         QCOMPARE(flag.afNameForTest(), QStringLiteral("AF"));
+    }
+
+    // Case 2: this window's slice while another device holds transmit.
+    void tx_badge_offering_a_take_is_enabled_and_asks_for_the_take()
+    {
+        VfoWidget flag;
+        flag.setSliceIndex(1);
+        flag.setSliceAccess(controlled());
+        const QString notHolder = QStringLiteral("Another device holds transmit.");
+        flag.setTransmitPermitted(false, notHolder);
+        auto* badge = flag.findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badge);
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), notHolder);
+
+        VfoWidget::TxBadgeOffer offer;
+        offer.offered = true;
+        offer.toolTip = QStringLiteral("Take transmit from iPhone and make this the TX slice");
+        flag.setTxBadgeOffer(offer);
+        QVERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(), offer.toolTip);
+        QCOMPARE(badge->accessibleDescription(), offer.toolTip);
+
+        QSignalSpy take(&flag, &VfoWidget::txTakeRequested);
+        QSignalSpy move(&flag, &VfoWidget::txHandoffRequested);
+        badge->click();
+        QCOMPARE(take.count(), 1);
+        QCOMPARE(take.first().at(0).toInt(), 1);
+        QCOMPARE(move.count(), 0);
+        // The TX mark follows the Core, not the click.
+        QVERIFY(!badge->isChecked());
+
+        // The radio's own transmission on this frequency: held, its words.
+        flag.setInUseByRadio(true);
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), VfoWidget::inUseByRadioText());
+        badge->click();
+        QCOMPARE(take.count(), 1);
+        flag.setInUseByRadio(false);
+        QVERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(), offer.toolTip);
+
+        // Transmit is here again: the offer is moot, the badge moves
+        // transmit as before and says what it always said.
+        flag.setTransmitPermitted(true, QString());
+        QVERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(), QStringLiteral("Indicates this slice is the TX slice"));
+        flag.simulateTxBadgeClick();
+        QCOMPARE(move.count(), 1);
+        QCOMPARE(take.count(), 1);
+
+        // The offer withdrawn: held with today's reason.
+        flag.setTransmitPermitted(false, notHolder);
+        flag.setTxBadgeOffer({});
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), notHolder);
+    }
+
+    // Case 3: a listened slice. The offer replaces the hold; a slice
+    // request waiting, or the slice on the air, holds it with those words.
+    void tx_badge_on_a_listened_flag_offers_the_slice_take()
+    {
+        VfoWidget flag;
+        flag.setSliceIndex(2);
+        flag.setSliceAccess(listened());
+        auto* badge = flag.findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QVERIFY(badge);
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), QStringLiteral("Shack iPad controls this slice"));
+
+        VfoWidget::TxBadgeOffer offer;
+        offer.offered = true;
+        offer.toolTip = QStringLiteral("Take control of this slice and make it the TX slice");
+        flag.setTxBadgeOffer(offer);
+        QVERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(), offer.toolTip);
+        QSignalSpy take(&flag, &VfoWidget::txTakeRequested);
+        flag.simulateTxBadgeClick();
+        QCOMPARE(take.count(), 1);
+        QCOMPARE(take.first().at(0).toInt(), 2);
+
+        // A slice request waiting: held with what it waits for.
+        flag.setSliceAccessPending(QStringLiteral("Asking the Core…"));
+        QVERIFY(!badge->isEnabled());
+        QCOMPARE(badge->toolTip(), QStringLiteral("Asking the Core…"));
+        flag.simulateTxBadgeClick();
+        QCOMPARE(take.count(), 1);
+        flag.setSliceAccessPending(QString());
+        QVERIFY(badge->isEnabled());
+
+        // On the air: held with the Core's on-air words, the red mark kept.
+        VfoWidget::TxBadgeOffer onAir;
+        onAir.heldReason = QStringLiteral("Slice C is transmitting. Take control once it stops.");
+        flag.setTxBadgeOffer(onAir);
+        flag.setTxSlice(true);
+        QVERIFY(!badge->isEnabled());
+        QVERIFY(badge->isChecked());
+        QCOMPARE(badge->toolTip(), onAir.heldReason);
+
+        // Control came here: the badge is this window's own again.
+        flag.setTxSlice(false);
+        flag.setTxBadgeOffer({});
+        flag.setSliceAccess(controlled());
+        QVERIFY(badge->isEnabled());
+        QCOMPARE(badge->toolTip(), QStringLiteral("Indicates this slice is the TX slice"));
     }
 };
 

@@ -35,6 +35,9 @@
 //   2026-09-30: JJ's wider ruling: a former controller that cannot stay
 //               listening leaves the slice it lost. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX badge take: takeWhileTransmittingWords gives a window
+//               the on-air refusal's words. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessController.h"
@@ -135,6 +138,11 @@ SliceAccessController::SliceAccessController(RadioModel* radio, Hooks hooks, QOb
 QString SliceAccessController::letterOf(int sliceId)
 {
     return QString(QChar(QLatin1Char('A').unicode() + sliceId));
+}
+
+QString SliceAccessController::takeWhileTransmittingWords(int sliceId)
+{
+    return takeWhileTransmittingReason(letterOf(sliceId));
 }
 
 SliceOwnership* SliceAccessController::ownership() const
