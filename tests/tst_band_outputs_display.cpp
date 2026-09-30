@@ -24,14 +24,24 @@
 //
 // The scenario is the HL2 bench's cross-band split: the N2ADR board, slice A
 // on 20 m, slice B on 40 m holding the transmitter. On the wire:
-// - unkeyed, two filter ranges open: 0x00 (the N2ADR receive bypass);
+// - unkeyed: 0x48, the receive pins of the higher slice (A, 20 m). In Auto
+//   the HL2's receive pins follow the highest-frequency slice on the input
+//   rather than bypassing the board (JJ's ruling of 2026-09-30);
 // - keyed on B: 0x04 (the 60/40 m transmit low-pass).
-// A byte computed from pan 1 (20 m) would be 20 m's pins in both states.
+// A byte computed from pan 1 (20 m) would be 20 m's transmit pins keyed.
 //
 // Remote-window parity Task 14 (R-R3-46): HL2 Options' output strip is not
 // one of these displays any more. It shows the I/O board's output register
 // read back, as mi0bot's ucOutPinsLedStripHF does (tst_hl2_options_tab,
 // tst_remote_hl2_io).
+// =================================================================
+//
+// Modification history (NereusSDR):
+//   2026-09-30 - Unkeyed, the cross-band split now expects the 20 m receive
+//                pins instead of the N2ADR receive bypass (0x00): in Auto the
+//                HL2 pins follow the highest-frequency slice (JJ's ruling).
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -65,7 +75,9 @@ namespace {
 constexpr double k20mHz = 14200000.0;
 constexpr double k40mHz =  7100000.0;
 constexpr quint8 kN2adrTx40m = 0x04;   // N2adrPreset.cpp: 40 m transmit, pin 3
-constexpr quint8 kReceiveBypass = 0x00;
+// N2adrPreset.cpp: 20 m receive, pin 4 plus pin 7. Unkeyed, the split's
+// wire byte: the pins of the higher slice.
+constexpr quint8 kN2adrRx20m = 0x48;
 
 class ConnectedP1 final : public P1RadioConnection {
 public:
@@ -181,17 +193,17 @@ private slots:
         OcOutputsHfTab ocTab(&core.model, &core.oc);
         Hl2IoBoardTab ioTab(&core.model);
 
-        // What a byte computed from pan 1 would show: 20 m's pins.
-        QVERIFY(core.oc.maskFor(Band::Band20m, /*tx=*/false) != kReceiveBypass);
+        // What a byte computed from pan 1 would show keyed: 20 m's pins.
+        QCOMPARE(core.oc.maskFor(Band::Band20m, /*tx=*/false), kN2adrRx20m);
         QVERIFY(core.oc.maskFor(Band::Band20m, /*tx=*/true)  != kN2adrTx40m);
 
-        // Unkeyed: the N2ADR receive bypass.
-        QCOMPARE(core.send(), kReceiveBypass);
+        // Unkeyed: the receive pins of the higher slice, A on 20 m.
+        QCOMPARE(core.send(), kN2adrRx20m);
         QVERIFY(core.model.bandOutputsKnown());
-        QCOMPARE(core.model.bandOutputsByte(), int(kReceiveBypass));
+        QCOMPARE(core.model.bandOutputsByte(), int(kN2adrRx20m));
         QCOMPARE(core.model.bandOutputsKeyed(), false);
-        QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrRx20m);
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
 
         // Keyed on B: B's 40 m transmit pin.
@@ -209,9 +221,9 @@ private slots:
 
         // Unkeyed again.
         core.conn.setMox(false);
-        QCOMPARE(core.send(), kReceiveBypass);
-        QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(core.send(), kN2adrRx20m);
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrRx20m);
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
     }
 
     // ── Protocol 1's automatic reconnect, on the same connection ─────────
@@ -227,9 +239,9 @@ private slots:
         core.model.setConnectionStateForTest(ConnectionState::Connected);
         Hl2IoBoardTab ioTab(&core.model);
 
-        QCOMPARE(core.send(), kReceiveBypass);
+        QCOMPARE(core.send(), kN2adrRx20m);
         QVERIFY(core.model.bandOutputsKnown());
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
 
         // The watchdog declares the link lost; the model forgets the byte.
         for (ConnectionState s : {ConnectionState::LinkLost, ConnectionState::Connecting}) {
@@ -242,11 +254,11 @@ private slots:
         // The retry succeeds on the same object and composes the same byte.
         core.conn.setStateForTest(ConnectionState::Connected);
         core.model.setConnectionStateForTest(ConnectionState::Connected);
-        QCOMPARE(core.send(), kReceiveBypass);
+        QCOMPARE(core.send(), kN2adrRx20m);
         QVERIFY(core.model.bandOutputsKnown());
-        QCOMPARE(core.model.bandOutputsByte(), int(kReceiveBypass));
+        QCOMPARE(core.model.bandOutputsByte(), int(kN2adrRx20m));
         QCOMPARE(core.model.bandOutputsKeyed(), false);
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
     }
 
@@ -319,12 +331,12 @@ private slots:
         server.acceptTransport(stationEnd);
         QTRY_COMPARE(completed.count(), 1);
 
-        // Unkeyed: the Core's receive bypass.
+        // Unkeyed: the Core's receive pins, A's 20 m.
         QTRY_VERIFY(remote.bandOutputsKnown());
-        QCOMPARE(remote.bandOutputsByte(), int(kReceiveBypass));
+        QCOMPARE(remote.bandOutputsByte(), int(kN2adrRx20m));
         QCOMPARE(remote.bandOutputsKeyed(), false);
-        QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
-        QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrRx20m);
+        QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrRx20m));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
 
         // Keyed on B at the Core: the window shows B's 40 m transmit pin.
@@ -342,8 +354,8 @@ private slots:
         core.conn.setMox(false);
         core.send();
         QTRY_COMPARE(remote.bandOutputsKeyed(), false);
-        QCOMPARE(remote.bandOutputsByte(), int(kReceiveBypass));
-        QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
+        QCOMPARE(remote.bandOutputsByte(), int(kN2adrRx20m));
+        QCOMPARE(ocTab.currentOcByteForTest(), kN2adrRx20m);
 
         // The window cannot write them.
         QVERIFY(!core.model.applyStationBandOutputsValue("bandOutputsByte", 0x7F));

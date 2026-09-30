@@ -40,6 +40,13 @@
 //   2026-09-30: Shared-input filters: the HL2 reason names the slice
 //               with the highest frequency, whose band's pins are sent.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: HL2 in Auto: differing N2ADR masks no longer bypass the
+//               board; the pins follow the highest slice, with the
+//               broadcast-band high-pass (bit 6) off when a counted slice's
+//               pins lack it, and the low-pass reason says which slice
+//               needs it off (JJ's ruling). The low-pass choice is made once
+//               and read by both. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: Radio codec: connectMicCodecSignals pushes mic boost, line
 //               in, XLR, tip/ring and bias to the connection on connect and
 //               on every change, as Thetis SetMicGain and the Setup handlers
@@ -22129,6 +22136,76 @@ void RadioModel::republishAlexAdcSlices()
         }
     }
 
+    // ── Shared-input filters: the receiver the low-pass follows ──────────
+    //
+    // Chosen once here, by SharedInputLowPass::highest (the call the
+    // connections make) over the same candidates they hold: one per
+    // hardware receiver slot counted on ADC0 (countedSlotsAdc0 above), in
+    // slot order, each with its DDC centre (the stream centre the allocator
+    // commands) and the VFO of the slice the connection knows the slot by
+    // (receiverVfoHzBySlot, which republishReceiverVfoFrequencies sends).
+    // The HL2 Auto decision below and the low-pass reason further down both
+    // read this one choice, so the band-pass state, the reason and the wire
+    // agree.
+    const bool hl2 = m_hardwareProfile.model == HPSDRModel::HERMESLITE;
+    const SharedInputLowPass::Rule lowPassRule = hl2
+        ? SharedInputLowPass::Rule::HighestCentrePins
+        : SharedInputLowPass::Rule::HighestCentre;
+    QList<SharedInputLowPass::Candidate> lowPassCandidates;
+    QList<QList<const SliceModel*>> lowPassSlicesOf;
+    if (m_receiverManager != nullptr) {
+        const QVector<quint64> vfoBySlot = receiverVfoHzBySlot();
+        std::map<int, QList<const SliceModel*>> slicesOnSlot;  // slot order
+        std::map<int, quint64> centreOnSlot;
+        for (const SliceModel* s : std::as_const(countedSlices[0])) {
+            const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
+            if (!cfg.active || cfg.hardwareRx < 0 || cfg.hardwareRx >= 32) { continue; }
+            slicesOnSlot[cfg.hardwareRx].append(s);
+            const double centre = m_streamAllocator.streamCentreHz(s->streamIndex());
+            centreOnSlot[cfg.hardwareRx] = (std::isfinite(centre) && centre > 0.0)
+                ? static_cast<quint64>(std::llround(centre)) : 0;
+        }
+        for (const auto& [slot, list] : slicesOnSlot) {
+            const quint64 vfo = (slot < vfoBySlot.size()) ? vfoBySlot.at(slot) : 0;
+            lowPassCandidates.append({slot, centreOnSlot[slot], vfo});
+            lowPassSlicesOf.append(list);
+        }
+    }
+    const int lowPassBest = SharedInputLowPass::highest(lowPassRule, lowPassCandidates);
+
+    // ── HL2 in Auto: mi0bot's way, the pins of the highest slice ─────────
+    //
+    // JJ's ruling of 2026-09-30: on the HL2, unkeyed, counted slices whose
+    // N2ADR pin masks differ no longer switch the board off (ocByte 0x00,
+    // the Auto multi-band bypass). The pins follow the counted slice with
+    // the highest frequency, as P1RadioConnection::ocBandFrequencyHz sends
+    // them, the way mi0bot's HERMESLITE receive arm does for two receivers
+    // (mi0bot-Thetis HPSDR/Penny.cs:183-189 [@c26a8a4], quoted at
+    // ocBandFrequencyHz; mi0bot never commands 0x00), ordered by frequency,
+    // not by mi0bot's band enum (SharedInputLowPass.h).
+    // The chain is handed to AlexController as the one band those pins
+    // serve, so in Auto it reports Filtered: a band difference never shows
+    // WIDE on the HL2, which shows only when 0x00 is actually sent.
+    //
+    // The N2ADR broadcast-band high-pass (bit 6) is cleared when a counted
+    // slice's own receive pins lack it, a slice on 160 m in the N2ADR preset
+    // (SharedInputLowPass::hl2ReceivePins, JJ's ruling of 2026-09-30, citing
+    // N2ADR's page for the board); the low-pass reason below says which
+    // slice needs it off. The maintainer note on 0x00 itself (2026-08-01,
+    // "disable/bypass the N2ADR board") stands at the OC byte build in
+    // P1RadioConnection, for ForceBypass and WidebandLocked only.
+    //
+    // ForceBypass and WidebandLocked still bypass (AlexController), keyed
+    // behavior is the connection's TX pins as before, and the Alex boards
+    // are unchanged.
+    if (ocFilterPath && hl2 && !diversityPair && counts[0] > 1 && lowPassBest >= 0) {
+        const double pinsHz = static_cast<double>(SharedInputLowPass::ruleHz(
+            lowPassRule, lowPassCandidates.at(lowPassBest)));
+        bands[0].fill(Band::Count);
+        bands[0][0] = bandFromFrequency(pinsHz);
+        counts[0] = 1;
+    }
+
     // Plan Task 14 re-review N4 (Phase 3F design section 16.4.1: WIDE is
     // the bypass on the wire). The Alex tab's HPF Bypass (master) and
     // Disable 6m LNA on RX put 0x20 in Alex0 on an Alex board, in place of
@@ -22256,36 +22333,35 @@ void RadioModel::republishAlexAdcSlices()
     // low-pass, every slice below that one hears through a filter set for a
     // higher band, and the operator is told which slice holds it there.
     //
-    // The receiver the low-pass follows is chosen by
-    // SharedInputLowPass::highest, the same call the connections make, over
-    // the same candidates they hold: one per hardware receiver slot counted
-    // on ADC0 (countedSlotsAdc0 above), in slot order, each with its DDC
-    // centre (the stream centre the allocator commands) and the VFO of the
-    // slice the connection knows the slot by (receiverVfoHzBySlot, which
-    // republishReceiverVfoFrequencies sends). Receivers are ordered by the
-    // DDC centre, the frequency Thetis sets the Alex low-pass from, on every
-    // board; the chosen one sets the Alex row for its centre, or on the HL2
-    // the N2ADR pins for its VFO's band (SharedInputLowPass.h; the HL2
-    // ordering by frequency, not mi0bot's band enum, is the maintainer's
-    // ruling of 2026-09-30). So under CTUN, where VFO and centre order can
-    // differ, the reason names the slice the filter actually follows.
+    // The receiver the low-pass follows is the one chosen above
+    // (lowPassBest). Receivers are ordered by the DDC centre, the frequency
+    // Thetis sets the Alex low-pass from, on every board; the chosen one
+    // sets the Alex row for its centre, or on the HL2 the N2ADR pins for its
+    // VFO's band (SharedInputLowPass.h; the HL2 ordering by frequency, not
+    // mi0bot's band enum, is the maintainer's ruling of 2026-09-30). So
+    // under CTUN, where VFO and centre order can differ, the reason names
+    // the slice the filter actually follows.
     //
     // The identity compared is the low-pass each receiver would get alone,
     // at that same frequency: the Alex-1 row selection
     // (codec::alex::selectAlexLpf over the tab's rows, as the connection
     // selects it), and on the HL2 the N2ADR board's receive pins for the
-    // band (OcMatrix, as buildCodecContext sends them), falling back to the
-    // row selection where no pins are set. With 6m/ByPass on RX on, the
+    // band (OcMatrix, as buildCodecContext sends them) without bit 6, which
+    // is the N2ADR board's broadcast-band high-pass rather than a low-pass
+    // (SharedInputLowPass::hl2ReceivePins), falling back to the row
+    // selection where no pins are set. On the HL2 the reason also says when
+    // that high-pass is off and which slice needs it off, from the same
+    // hl2ReceivePins call the connection sends the pins from. With 6m/ByPass on RX on, the
     // receive low-pass is the 6 m filter for every slice
     // (codec::alex::setAlexLpf) and nothing is held.
     //
     // On the HL2 the reason describes only what is on the wire. When chain
-    // 0's band-pass is bypassed (hpfBitsAdc0 == 0x20, the Auto multi-band
-    // bypass), P1RadioConnection sends the N2ADR board's receive pins as
-    // 0x00 (the hasIoBoardHl2 block in the OC byte build), so no low-pass
-    // is set for any slice and nothing is held.
+    // 0's band-pass is bypassed (hpfBitsAdc0 == 0x20: ForceBypass or
+    // WidebandLocked),
+    // P1RadioConnection sends the N2ADR board's receive pins as 0x00 (the
+    // hasIoBoardHl2 block in the OC byte build), so no low-pass is set for
+    // any slice and nothing is held.
     {
-        const bool hl2 = m_hardwareProfile.model == HPSDRModel::HERMESLITE;
         const bool lowPassPresent = boardCapabilities().hasAlexFilters || hl2;
         constexpr int kAlexBypassSentinel = 0x20;  // AlexRxBpf.hpfBitsAdc0 bypass encoding
         const bool hl2PinsCleared = hl2 && bpf.hpfBitsAdc0 == kAlexBypassSentinel;
@@ -22294,36 +22370,20 @@ void RadioModel::republishAlexAdcSlices()
         const QList<SliceModel*>& onInput = countedSlices[0];
         if (lowPassPresent && !hl2PinsCleared && !m_alexLpfBypassSwitch
             && onInput.size() >= 2 && m_receiverManager != nullptr) {
-            const SharedInputLowPass::Rule rule = hl2
-                ? SharedInputLowPass::Rule::HighestCentrePins
-                : SharedInputLowPass::Rule::HighestCentre;
-            const QVector<quint64> vfoBySlot = receiverVfoHzBySlot();
-            std::map<int, QList<const SliceModel*>> slicesOnSlot;  // slot order
-            std::map<int, quint64> centreOnSlot;
-            for (const SliceModel* s : onInput) {
-                const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
-                if (!cfg.active || cfg.hardwareRx < 0 || cfg.hardwareRx >= 32) { continue; }
-                slicesOnSlot[cfg.hardwareRx].append(s);
-                const double centre = m_streamAllocator.streamCentreHz(s->streamIndex());
-                centreOnSlot[cfg.hardwareRx] = (std::isfinite(centre) && centre > 0.0)
-                    ? static_cast<quint64>(std::llround(centre)) : 0;
-            }
-            QList<SharedInputLowPass::Candidate> candidates;
-            QList<QList<const SliceModel*>> slicesOf;
-            for (const auto& [slot, list] : slicesOnSlot) {
-                const quint64 vfo = (slot < vfoBySlot.size()) ? vfoBySlot.at(slot) : 0;
-                candidates.append({slot, centreOnSlot[slot], vfo});
-                slicesOf.append(list);
-            }
+            const SharedInputLowPass::Rule rule = lowPassRule;
+            const QList<SharedInputLowPass::Candidate>& candidates = lowPassCandidates;
+            const QList<QList<const SliceModel*>>& slicesOf = lowPassSlicesOf;
             const auto lowPassFor = [this, hl2, rule](const SharedInputLowPass::Candidate& c) {
                 const double hz = static_cast<double>(SharedInputLowPass::ruleHz(rule, c));
                 if (hl2) {
-                    const quint8 pins = m_ocMatrix.maskFor(bandFromFrequency(hz), /*tx=*/false);
+                    const quint8 pins = quint8(
+                        m_ocMatrix.maskFor(bandFromFrequency(hz), /*tx=*/false)
+                        & ~SharedInputLowPass::kN2adrBroadcastHighPassBit);
                     if (pins != 0) { return 0x100 | int(pins); }
                 }
                 return int(codec::alex::selectAlexLpf(hz / 1.0e6, m_alexLpfEdges));
             };
-            const int best = SharedInputLowPass::highest(rule, candidates);
+            const int best = lowPassBest;
             if (best >= 0) {
                 const int topLowPass = lowPassFor(candidates.at(best));
                 QList<const SliceModel*> held;
@@ -22334,13 +22394,30 @@ void RadioModel::republishAlexAdcSlices()
                 }
                 // The slice the slot is known by: the lowest slice index,
                 // as receiverVfoHzBySlot picks the slot's VFO.
-                const SliceModel* top = nullptr;
-                for (const SliceModel* s : slicesOf.at(best)) {
-                    if (top == nullptr || s->sliceIndex() < top->sliceIndex()) { top = s; }
+                const auto knownBy = [&slicesOf](int i) {
+                    const SliceModel* first = nullptr;
+                    for (const SliceModel* s : slicesOf.at(i)) {
+                        if (first == nullptr || s->sliceIndex() < first->sliceIndex()) {
+                            first = s;
+                        }
+                    }
+                    return first;
+                };
+                const SliceModel* top = knownBy(best);
+                QList<const SliceModel*> highPassOff;
+                if (hl2) {
+                    const SharedInputLowPass::Hl2ReceivePins rx =
+                        SharedInputLowPass::hl2ReceivePins(m_ocMatrix, candidates);
+                    for (int i : rx.highPassOff) {
+                        if (const SliceModel* s = knownBy(i)) { highPassOff.append(s); }
+                    }
                 }
                 if (!held.isEmpty() && top != nullptr) {
                     forcing = top->sliceIndex();
-                    lowPassReason = lowPassHoldReason(top, held);
+                }
+                if ((!held.isEmpty() && top != nullptr) || !highPassOff.isEmpty()) {
+                    lowPassReason = lowPassHoldReason(
+                        held.isEmpty() ? nullptr : top, held, highPassOff);
                 }
             }
         }
@@ -22943,28 +23020,49 @@ QString RadioModel::bypassReasonForAdc(
 // that would have had a lower one alone. NereusSDR-original: Thetis sets the
 // same filter (console.cs:15487-15498 [v2.10.3.15]) and says nothing.
 //
+// On the HL2, `highPassOff` are the counted slices whose own receive pins
+// lack the N2ADR broadcast-band high-pass, which is off for the input
+// because of them (SharedInputLowPass::hl2ReceivePins, JJ's ruling of
+// 2026-09-30). `top` is null when no slice is held and only the high-pass
+// is reported.
+//
 // Plain words, read by an operator: the slice letters and bands, and what
 // it costs the lower slices.
 // ---------------------------------------------------------------------------
 QString RadioModel::lowPassHoldReason(const SliceModel* top,
-                                      const QList<const SliceModel*>& held) const
+                                      const QList<const SliceModel*>& held,
+                                      const QList<const SliceModel*>& highPassOff) const
 {
     const auto named = [](const SliceModel* s) {
         return QStringLiteral("%1 on %2").arg(s->sliceLetter(),
                                               bandLabel(bandFromFrequency(s->frequency())));
     };
-    QStringList lower;
-    for (const SliceModel* s : held) { lower << named(s); }
-    const QString lead = tr("The receive low-pass filter is set for slice %1, the highest "
-                            "band on this receiver input.").arg(named(top));
-    if (lower.size() == 1) {
-        return lead + QLatin1Char(' ')
-            + tr("Slice %1 shares the input, so it has less protection from strong "
-                 "signals on higher bands.").arg(lower.first());
+    QStringList parts;
+    if (top != nullptr && !held.isEmpty()) {
+        QStringList lower;
+        for (const SliceModel* s : held) { lower << named(s); }
+        parts << tr("The receive low-pass filter is set for slice %1, the highest "
+                    "band on this receiver input.").arg(named(top));
+        if (lower.size() == 1) {
+            parts << tr("Slice %1 shares the input, so it has less protection from strong "
+                        "signals on higher bands.").arg(lower.first());
+        } else {
+            parts << tr("Slices %1 share the input, so they have less protection from "
+                        "strong signals on higher bands.").arg(joinRangeNames(lower));
+        }
     }
-    return lead + QLatin1Char(' ')
-        + tr("Slices %1 share the input, so they have less protection from strong "
-             "signals on higher bands.").arg(joinRangeNames(lower));
+    if (!highPassOff.isEmpty()) {
+        QStringList off;
+        for (const SliceModel* s : highPassOff) { off << named(s); }
+        if (off.size() == 1) {
+            parts << tr("The broadcast-band high-pass filter is off because slice %1 "
+                        "needs it off.").arg(off.first());
+        } else {
+            parts << tr("The broadcast-band high-pass filter is off because slices %1 "
+                        "need it off.").arg(joinRangeNames(off));
+        }
+    }
+    return parts.join(QLatin1Char(' '));
 }
 
 // The same station-owned tick runs in the desktop local mode and daemon.

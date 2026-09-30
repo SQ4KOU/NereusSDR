@@ -230,6 +230,9 @@
 //                                    lowPassHoldReason and the
 //                                    rxFilter0LowPassReason getter.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  lowPassHoldReason's broadcast-band
+//                                    high-pass sentences (JJ's ruling).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -772,11 +775,14 @@ const QList<ReasonSource>& reasonSources()
     static const QList<ReasonSource> sources{
         // Shared-input filters, ruling (d): rxFilter0LowPassReason. The
         // slices are named by letter and band ("B on 20m"), one or several
-        // joined by joinRangeNames.
+        // joined by joinRangeNames. On the HL2 it also names the slices the
+        // N2ADR broadcast-band high-pass is off for (JJ's ruling of
+        // 2026-09-30).
         {"src/models/RadioModel.cpp", {QStringLiteral("lowPassHoldReason")},
-         {QStringLiteral("%1 on %2")}, 3,
+         {QStringLiteral("%1 on %2")}, 5,
          {QStringLiteral("named(top)"), QStringLiteral("lower.first()"),
-          QStringLiteral("joinRangeNames(lower)")}},
+          QStringLiteral("joinRangeNames(lower)"), QStringLiteral("off.first()"),
+          QStringLiteral("joinRangeNames(off)")}},
         // session.end, auth.result, property.result, settings.reject and
         // the refusals of a verb an older app sends.
         {"src/core/session/StationServer.cpp", {},

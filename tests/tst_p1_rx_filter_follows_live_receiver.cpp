@@ -39,6 +39,13 @@
 // Both of the last two select LOW-pass filters, so the harmful direction is
 // A on a low band and B on a high one: B then listens through A's low-pass.
 // =================================================================
+//
+// Modification history (NereusSDR):
+//   2026-09-30 - HL2 with B on 20 m and C on 80 m expects B's receive pins, not
+//                the N2ADR bypass (0x00): JJ's ruling on HL2 Auto.
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
+// =================================================================
 
 #include <QtTest/QtTest>
 
@@ -236,11 +243,11 @@ private slots:
         const int c = s.add(k80mHz);
         QCOMPARE(s.slotOf(c), 0);
         QCOMPARE(s.conn.rx1SlotForTest(), 0);
-        // On the HL2 two slices on two filter ranges bypass the N2ADR board
-        // (0x00, the multi-band decision buildCodecContext applies), so the
-        // byte is that decision rather than a band there.
+        // On the HL2 in Auto the receive pins follow the highest-frequency
+        // slice on the input (JJ's ruling of 2026-09-30), so B's 20 m stays
+        // on the wire; elsewhere the OC byte follows the RX1 stand-in, C.
         const quint8 bothLive = (hw == HPSDRHW::HermesLite)
-            ? quint8(0x00)
+            ? s.oc.maskFor(Band::Band20m, /*tx=*/false)
             : s.oc.maskFor(Band::Band80m, /*tx=*/false);
         QCOMPARE(ocByte(s.conn), bothLive);
 

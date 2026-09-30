@@ -137,6 +137,11 @@
 //                highest frequency, not mi0bot's band enum order
 //                (maintainer ruling). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - HL2 unkeyed pins through SharedInputLowPass::hl2ReceivePins:
+//                the N2ADR high-pass (bit 6) cleared when a counted slice's
+//                pins lack it; only ForceBypass and WidebandLocked send 0x00
+//                (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -3894,11 +3899,23 @@ CodecContext P1RadioConnection::buildCodecContext() const
     //
     // Keyed it is the TRANSMITTING slice's band (plan Task 14). See
     // ocBandFrequencyHz for the Penny.cs rule. Unkeyed on the HL2 it is the
-    // highest band among the slices counted on the input (shared-input
-    // filters, ruling (c), mi0bot's receive arm), also in ocBandFrequencyHz.
+    // band of the highest-frequency slice counted on the input (shared-input
+    // filters, ruling (c), mi0bot's receive arm), also in ocBandFrequencyHz,
+    // with the N2ADR broadcast-band high-pass (bit 6) cleared when a counted
+    // slice's own receive pins lack it (JJ's ruling of 2026-09-30,
+    // SharedInputLowPass::hl2ReceivePins, the one RadioModel names in the
+    // low-pass reason).
     if (m_ocMatrix) {
         const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
+        if (!m_mox && m_hardwareProfile.model == HPSDRModel::HERMESLITE
+            && m_countedSlotsAdc0 != 0) {
+            const SharedInputLowPass::Hl2ReceivePins rx =
+                SharedInputLowPass::hl2ReceivePins(*m_ocMatrix, countedCandidates());
+            if (rx.best >= 0) {
+                ctx.ocByte = rx.pins;
+            }
+        }
     } else {
         ctx.ocByte = m_ocOutput;
     }
@@ -3928,6 +3945,12 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // 0x00 = "disable/bypass the N2ADR board": maintainer-supplied
     // hardware knowledge (J.J. Boyd / KG4VCF, 2026-08-01), not documented
     // in any upstream source -- mi0bot never commands 0x00.
+    //
+    // Which decisions reach here (JJ's ruling of 2026-09-30): ForceBypass
+    // and WidebandLocked only. In Auto a difference between the counted
+    // slices' pins never sends 0x00: RadioModel::republishAlexAdcSlices
+    // hands the chain over filtered, and the pins above follow the highest
+    // slice, mi0bot's way, with bit 6 cleared where a slice needs it off.
     static constexpr int kAlexBypassSentinel = 0x20;  // AlexRxBpf.hpfBitsAdc0 bypass encoding
     if (!m_mox && m_caps && m_caps->hasIoBoardHl2
         && m_alexRxHpfOverride == kAlexBypassSentinel) {

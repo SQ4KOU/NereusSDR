@@ -3863,9 +3863,16 @@ Notes on the keys:
   slice is counted, when every counted slice uses the same low-pass, when
   the radio has no receive low-pass, when 6m/ByPass on receive is on, or
   on the Hermes Lite 2 when the band-pass is bypassed (the N2ADR pins are
-  then all off, so no low-pass is set).
+  then all off, so no low-pass is set: Force bypass or wideband). In Auto
+  on the Hermes Lite 2, slices whose pins differ get the pins of the
+  highest slice, and the reason names it. When the N2ADR board's
+  broadcast-band high-pass (pin 7) is off because a counted slice's own
+  pins lack it (a slice on 160 m in the N2ADR preset), the reason adds a
+  sentence naming that slice, and that sentence can be the whole reason
+  when no slice is held.
   `rxFilter0LowPassSlice` (int, outbound only, read-only) is the id of the
-  slice the low-pass is set for, -1 when the reason is empty. Both are
+  slice the low-pass is set for, -1 when the reason is empty or names only
+  the high-pass. Both are
   sent only to a peer that declared `rxFilterLowPass` 1 (section 6.2). A
   window shows the reason beside the WIDE reason (`rxFilter0Reason`) and
   never writes either; a raw write is refused. A window of a Core that

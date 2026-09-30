@@ -59,6 +59,10 @@
 //   2026-09-30 - HL2 pins ordered by frequency, not mi0bot's band enum
 //                (maintainer ruling on review I-2). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - hl2ReceivePins: the HL2's unkeyed receive pins, with the
+//                N2ADR broadcast-band high-pass (bit 6) cleared when a
+//                counted slice's own pins lack it (JJ's ruling). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -129,6 +133,62 @@ inline int highest(Rule rule, const QList<Candidate>& candidates) noexcept
         }
     }
     return best;
+}
+
+// ── The HL2's receive pins on a shared input ─────────────────────────────
+//
+// JJ's ruling of 2026-09-30, for the HL2 unkeyed (in Auto and wherever the
+// board is not bypassed): the pins are the receive mask of the counted
+// receiver with the highest frequency (highest() above), with bit 6 cleared
+// unless every counted receiver's own receive mask has bit 6. A difference
+// between the masks never sends 0x00; only ForceBypass and WidebandLocked
+// do (the hasIoBoardHl2 block in P1RadioConnection's OC byte build).
+//
+// From N2ADR's page for the board (https://james.ahlstrom.name/hl2filter/):
+// bits 0-5 select the low-pass filters (160, 80, 60/40, 30/20, 17/15,
+// 12/10 m); bit 6 (pin 7) is a 3 MHz receive high-pass that rejects AM
+// broadcast and should be used on every band except 160 m; with several
+// receivers the receive filter for the highest band is used. The page does
+// not say what all bits zero does.
+//
+// So a slice on 160 m (the N2ADR preset gives 160 m no bit 6), on GEN, or
+// on any band the operator set without pin 7, turns the high-pass off for
+// the whole input rather than having it cut that slice's signal. The rule
+// reads the operator's own pin table; no band is named here.
+//
+// mi0bot's HERMESLITE receive arm (Penny.cs:183-189 [@c26a8a4]) takes the
+// higher band's receive mask whole, with no bit-6 handling.
+inline constexpr quint8 kN2adrBroadcastHighPassBit = 0x40;  // bit 6, pin 7
+
+struct Hl2ReceivePins {
+    int         best {-1};     // index of the receiver the pins follow, -1 if none tuned
+    quint8      pins {0};      // the byte to send, valid when best >= 0
+    QList<int>  highPassOff;   // indices of the receivers that turned bit 6 off
+};
+
+inline Hl2ReceivePins hl2ReceivePins(const OcMatrix& oc,
+                                     const QList<Candidate>& candidates)
+{
+    Hl2ReceivePins result;
+    result.best = highest(Rule::HighestCentrePins, candidates);
+    if (result.best < 0) { return result; }
+    const auto maskOf = [&oc](const Candidate& c) {
+        return oc.maskFor(bandFromFrequency(static_cast<double>(
+                              ruleHz(Rule::HighestCentrePins, c))), /*tx=*/false);
+    };
+    result.pins = maskOf(candidates.at(result.best));
+    if ((result.pins & kN2adrBroadcastHighPassBit) == 0) { return result; }
+    for (int i = 0; i < candidates.size(); ++i) {
+        const Candidate& c = candidates.at(i);
+        if (orderHz(Rule::HighestCentrePins, c) == 0) { continue; }
+        if ((maskOf(c) & kN2adrBroadcastHighPassBit) == 0) {
+            result.highPassOff.append(i);
+        }
+    }
+    if (!result.highPassOff.isEmpty()) {
+        result.pins = quint8(result.pins & ~kN2adrBroadcastHighPassBit);
+    }
+    return result;
 }
 
 } // namespace NereusSDR::SharedInputLowPass

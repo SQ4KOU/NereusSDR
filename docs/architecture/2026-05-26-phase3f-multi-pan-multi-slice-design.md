@@ -318,6 +318,26 @@ Decision tree (computed by `AlexController::recomputeBpf(int adc)`):
    - 1 unique band among slices: `Filtered` to that band, reason "<band>".
    - 2+ unique bands: `Bypass`, reason "BYPASS (multi-band: <bands>)".
 
+**Hermes Lite 2 in Auto (JJ's ruling of 2026-09-30).** The HL2's receive filter is the N2ADR
+board: bits 0-5 of the OC pins select its low-pass filters (160, 80, 60/40, 30/20, 17/15,
+12/10 m), and bit 6 (pin 7) switches in a 3 MHz receive high-pass that rejects AM broadcast,
+meant for every band except 160 m (N2ADR's page for the board,
+https://james.ahlstrom.name/hl2filter/). When the counted slices on its input need different pin
+masks, Auto no longer bypasses (which sent the pins as `0x00`, the board off). Unkeyed, the pins
+are the receive mask of the counted slice with the highest frequency, mi0bot's way (mi0bot-Thetis
+`Penny.cs:183-189 [@c26a8a4]`, ordered by frequency rather than mi0bot's band enum), with bit 6
+cleared unless every counted slice's own receive mask has it
+(`SharedInputLowPass::hl2ReceivePins`, one helper read by the connection and by the low-pass
+reason). A slice on 160 m in the N2ADR preset, on GEN, or on any band the operator set without
+pin 7 turns the high-pass off for the input; no band is named in the rule. mi0bot takes the higher
+band's mask whole, with no bit-6 handling. `RadioModel::republishAlexAdcSlices` hands
+AlexController the one band the pins follow, so the chain reports `Filtered`, and WIDE never
+shows for a band difference. The slices below the highest are held behind its filter; the
+low-pass reason names the slice the pins follow and, when bit 6 is cleared, adds a line naming
+the slice that needs the high-pass off. ForceBypass and WidebandLocked still send `0x00` (the
+2026-08-01 maintainer note); keyed, the transmitting band's TX pins go out as before; the Alex
+boards are unchanged.
+
 Recompute triggers (16-row event matrix in §10).
 
 #### Producer and consumer (added 2026-06-01)

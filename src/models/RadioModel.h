@@ -16,6 +16,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-30 - Shared-input filters, follow-up: receiverVfoHzBySlot.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - lowPassHoldReason names the slices the HL2's N2ADR
+//                 broadcast-band high-pass is off for (JJ's ruling).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -1857,9 +1860,12 @@ public:
 
     /// Shared-input filters, ruling (d): the sentence saying which slice
     /// sets the receive low-pass on the input (`top`) and which counted
-    /// slices it holds to it (`held`). AlexAdcState::lowPassReason.
+    /// slices it holds to it (`held`). AlexAdcState::lowPassReason. On the
+    /// HL2, `highPassOff` names the slices the N2ADR broadcast-band
+    /// high-pass is off for; `top` may then be null when none is held.
     QString lowPassHoldReason(const SliceModel* top,
-                              const QList<const SliceModel*>& held) const;
+                              const QList<const SliceModel*>& held,
+                              const QList<const SliceModel*>& highPassOff = {}) const;
 
     // Band-plan overlay manager — loaded once on construction from bundled
     // Qt resource JSON files. Active plan persists in AppSettings under

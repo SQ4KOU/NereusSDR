@@ -20,6 +20,9 @@
 //                and the N2ADR pins on the wire, since the HL2's Auto
 //                bypass now clears the reason. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - The HL2 hold is set up in Auto again (JJ's ruling: two
+//                masks keep the pins of the highest slice). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -41,12 +44,11 @@ namespace {
 // own republish holds the low-pass for the 20 m slice. Returns that slice.
 int holdOnTwoBands(RadioModel& model)
 {
-    // On the HL2: different receive pins for 80 m and 20 m, and the
-    // band-pass forced so the pins stay on the wire (in Auto the two bands
-    // bypass the band-pass, the pins go to 0x00, and nothing is held).
+    // On the HL2: different receive pins for 80 m and 20 m. In Auto the
+    // pins follow the 20 m slice (JJ's ruling of 2026-09-30) and the 80 m
+    // slice is held.
     model.ocMatrixMutable().setPin(Band::Band80m, 2, /*tx=*/false, true);
     model.ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/false, true);
-    model.alexControllerMutable().setBpfMode(0, AlexController::BpfMode::ForceBand);
     model.configureStreamPool(2, 5, 192000);
     for (int i = 0; i < 2; ++i) {
         model.receiverManager()->createReceiver();
@@ -193,7 +195,6 @@ private slots:
         Core core(/*upgradedWithToken=*/true);
         core.model->setBoardForTest(HPSDRHW::Hermes);
         const int second = holdOnTwoBands(*core.model);
-        core.model->alexControllerMutable().setBpfMode(0, AlexController::BpfMode::Auto);
         QVERIFY(second > 0);
         const QString held = core.model->rxFilter0LowPassReason();
         QVERIFY(!held.isEmpty());
