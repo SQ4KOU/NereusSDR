@@ -13,9 +13,14 @@
 //   2026-09-30: take-over parity: a Take it back the Core cannot run here
 //               is shown off, with the reason as its tooltip. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave: a disabled button draws in the style
+//               guide's disabled colours. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/NoticeCard.h"
+
+#include "gui/StyleConstants.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -46,7 +51,11 @@ NoticeCard::NoticeCard(const RemotePrompt& notice, QWidget* parent,
         " border-radius: 6px; }"
         "QLabel { color: #d8e4f0; background: transparent; }"
         "QPushButton { background: #1e3048; color: #d8e4f0; border: 1px solid #5078a0;"
-        " border-radius: 3px; padding: 2px 10px; }"));
+        " border-radius: 3px; padding: 2px 10px; }"
+        // Take-over fix wave: a Take it back that is off reads as off, in
+        // the style guide's disabled colours; its reason is its tooltip.
+        "QPushButton:disabled { background: %1; color: %2; border-color: %3; }")
+                      .arg(Style::kDisabledBg, Style::kDisabledText, Style::kDisabledBorder));
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(10, 6, 6, 6);
     m_text = new QLabel(text(notice), this);

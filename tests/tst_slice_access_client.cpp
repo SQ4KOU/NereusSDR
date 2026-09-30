@@ -32,11 +32,16 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  Take-over parity: controlTaken is a
 //               card with Take it back, and an older Core's is shown off
 //               with the reason. AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Take-over fix wave (M-2, M-3): the
+//               card stays when Take it back may be tried again and goes
+//               when it worked or never can; an ended take-back's card.
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include <QApplication>
+#include <QDateTime>
 #include <QDialog>
 #include <QLabel>
 #include <QPushButton>
@@ -59,6 +64,9 @@ const QHash<QByteArray, int> kShares{{"deviceAuth", 1}, {"sessionHolder", 1}, {"
 // controlTaken).
 const QHash<QByteArray, int> kSharesBack{
     {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}};
+// Take-over fix wave (M-3): the same, with remote transmit.
+const QHash<QByteArray, int> kSharesBackTx{
+    {"deviceAuth", 1}, {"sessionHolder", 1}, {"sliceAccess", 2}, {"remoteTx", 1}};
 
 // The window: this computer's own key, a remote model and its client.
 struct Window {
@@ -592,21 +600,152 @@ private slots:
         QVERIFY(slice->isReadOnlyListener());
         QCOMPARE(slice->readOnlyListenerReason(), controlledBy(letter, QStringLiteral("iPad")));
 
-        // One tap sends notice.takeBack; control comes back here.
+        // One tap sends notice.takeBack; control comes back here, and the
+        // card goes (take-over fix wave, M-3).
         card->takeBackButton()->click();
         QTRY_COMPARE(core.model->sliceOwnership()->mark(own).owner, w.key->fingerprint());
         QVERIFY(w.sentVerbs(QStringLiteral("notice.takeBack")).size() == 1);
+        QTRY_COMPARE(controller.noticeCards().size(), 0);
         QTRY_VERIFY(w.access().controlledHere(own));
         QTRY_VERIFY(!slice->isReadOnlyListener());
         QCOMPARE(refusals.count(), 0);
         QVERIFY(core.model->sliceOwnership()->listenersOf(own).contains(b.key.fingerprint()));
     }
 
-    // A window on a Core that cannot give control back from a notice (here:
-    // the window declares sliceAccess 1, so the Core sends it version 1 and
+    // Take-over fix wave (M-3): Take it back refused while the slice
+    // transmits may be tried again, so the card stays; once it stops, the
+    // same tap works and the card goes. A refusal that ends the take-back
+    // (control moved on) takes the card away.
+    void aTakeItBackRefusedWhileTheSliceTransmitsKeepsTheCard()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        MultiDeviceController controller(&w.client, &w.host);
+        controller.setNoticeHost(&w.host);
+        QSignalSpy refusals(&controller, &MultiDeviceController::refusal);
+        const int own = core.model->sliceOwnership()->ownedBy(w.key->fingerprint()).first();
+        QTRY_VERIFY(w.access().controlledHere(own));
+        core.model->sliceById(own)->setDspMode(DSPMode::USB);
+        core.model->sliceById(own)->setFrequency(14200000.0);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBackTx);
+        QVERIFY(admitted(appB));
+        QTRY_VERIFY(holds(appB, QStringLiteral("access:%1").arg(own)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(appB, own))));
+        QTRY_COMPARE(controller.noticeCards().size(), 1);
+        NoticeCard* card = controller.noticeCards().first();
+
+        // B chooses the slice for transmit and keys on it.
+        MoxController* mox = core.model->moxController();
+        QVERIFY(accepted(core.invoke(appB, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(b.key.fingerprint()));
+        QVERIFY(accepted(core.invoke(appB, "tx.setTxSlice", {int64("sliceId", own)})));
+        mox->setMox(true, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + own));
+        const QString transmitting =
+            QStringLiteral("Slice %1 is transmitting. Take control once it stops.").arg(letter);
+        card->takeBackButton()->click();
+        QTRY_COMPARE(refusals.count(), 1);
+        QCOMPARE(refusals.first().at(0).toString(), transmitting);
+        QCOMPARE(controller.noticeCards().size(), 1);
+        QCOMPARE(controller.noticeCards().first(), card);
+        QVERIFY(card->takeBackButton()->isEnabled());
+        QCOMPARE(core.model->sliceOwnership()->mark(own).owner, b.key.fingerprint());
+
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        card->takeBackButton()->click();
+        QTRY_COMPARE(core.model->sliceOwnership()->mark(own).owner, w.key->fingerprint());
+        QTRY_COMPARE(controller.noticeCards().size(), 0);
+        QCOMPARE(refusals.count(), 1);
+    }
+
+    void aTakeItBackRefusedAfterControlMovedOnTakesTheCardAway()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        MultiDeviceController controller(&w.client, &w.host);
+        controller.setNoticeHost(&w.host);
+        QSignalSpy refusals(&controller, &MultiDeviceController::refusal);
+        const int own = core.model->sliceOwnership()->ownedBy(w.key->fingerprint()).first();
+        QTRY_VERIFY(w.access().controlledHere(own));
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        Device c(QStringLiteral("Mac"), QStringLiteral("computer"), QStringLiteral("Mac"));
+        core.pair(b);
+        core.pair(c);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        LoopbackTransport* appC = core.signIn(c, kSharesBack);
+        QVERIFY(admitted(appB) && admitted(appC));
+        QTRY_VERIFY(holds(appB, QStringLiteral("access:%1").arg(own)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(appB, own))));
+        QTRY_COMPARE(controller.noticeCards().size(), 1);
+        NoticeCard* card = controller.noticeCards().first();
+        // C takes it from B before the window taps.
+        QTRY_VERIFY(holds(appC, QStringLiteral("access:%1").arg(own)));
+        QTRY_COMPARE(accessOf(appC, own, "controllerDeviceId").toString(), b.id());
+        QVERIFY(accepted(core.invoke(appC, "slice.takeControl", revisionArgs(appC, own))));
+        QTRY_COMPARE(w.access().entry(own)->controllerDeviceId, c.id());
+
+        card->takeBackButton()->click();
+        const QString letter = QString(QChar(QLatin1Char('A').unicode() + own));
+        QTRY_COMPARE(refusals.count(), 1);
+        QCOMPARE(refusals.first().at(0).toString(),
+                 QStringLiteral("Someone else changed who controls slice %1. Look again and "
+                                "try once more.")
+                     .arg(letter));
+        QTRY_COMPARE(controller.noticeCards().size(), 0);
+        QCOMPARE(core.model->sliceOwnership()->mark(own).owner, c.key.fingerprint());
+    }
+
+    // The enabled card's other off state: a Core at 2 that sends takeBack
+    // false (the take-back ended while this window was away) shows Take it
+    // back off with "That can no longer be taken back.", in the style
+    // guide's disabled look.
+    void aTakeBackThatEndedIsShownOffWithTheReason()
+    {
+        RemotePrompt notice;
+        notice.prompt.id = 7;
+        notice.prompt.kind = QStringLiteral("controlTaken");
+        notice.prompt.takeBack = false;
+        notice.reason = QStringLiteral("iPad took control of slice A. You are still listening.");
+        notice.receivedAt = QDateTime::currentDateTime();
+        const QString ended = MultiDeviceController::controlTakeBackOff(notice, true);
+        QCOMPARE(ended, QStringLiteral("That can no longer be taken back."));
+        QVERIFY(OperatorWording::isPlain(ended));
+        QCOMPARE(MultiDeviceController::controlTakeBackOff(notice, false),
+                 StationClient::controlTakeBackUnavailableReason());
+        notice.prompt.takeBack = true;
+        QVERIFY(MultiDeviceController::controlTakeBackOff(notice, true).isEmpty());
+        notice.prompt.takeBack = false;
+
+        QWidget host;
+        NoticeCard card(notice, &host, ended);
+        QVERIFY(card.takeBackButton() != nullptr);
+        QVERIFY(!card.takeBackButton()->isEnabled());
+        QCOMPARE(card.takeBackButton()->toolTip(), ended);
+        QVERIFY(card.styleSheet().contains(QStringLiteral("QPushButton:disabled")));
+        QSignalSpy asked(&card, &NoticeCard::takeBackRequested);
+        card.takeBackButton()->click();
+        QCOMPARE(asked.count(), 0);
+    }
+
+    // A window whose link is at sliceAccessVersion 1, as an older Core's is
+    // (here the window declares sliceAccess 1, so the Core sends it 1 and
     // offers no Take it back): the card shows Take it back off, with the
     // reason, never hidden.
-    void onAnOlderCoreTakeItBackIsShownOffWithTheReason()
+    void onALinkAtSliceAccess1TakeItBackIsShownOffWithTheReason()
     {
         Core core;
         core.model->configureStreamPool(3, 5, 192000);

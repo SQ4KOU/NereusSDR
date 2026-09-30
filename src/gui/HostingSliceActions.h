@@ -32,11 +32,16 @@
 //   2026-09-30: take-over parity: controlTaken is a notice with Take it
 //               back, as in a remote window. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-3): takeBackAnswered() says whether
+//               a controlTaken card goes (control came back, or never can
+//               now) or stays (may be tried again). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -95,10 +100,17 @@ signals:
     void notice(const NereusSDR::SessionMessage& notice);
     /// Every request's final answer.
     void finished(const QByteArray& verb, int sliceId, bool accepted, const QString& reason);
+    /// Take-over fix wave (M-3): Take it back on controlTaken notice
+    /// `noticeId` was answered. `ended`: control came back, or never can
+    /// now, and the card goes; false: refused and may be tried again (the
+    /// slice transmits), and the card stays.
+    void takeBackAnswered(qint64 noticeId, bool ended);
 
 private:
-    void run(const QByteArray& verb, int sliceId, const QList<MirrorUpdate>& arguments);
-    void onAnswer(const QByteArray& verb, int sliceId, const SessionMessage& result);
+    void run(const QByteArray& verb, int sliceId, const QList<MirrorUpdate>& arguments,
+             qint64 noticeId = -1);
+    void onAnswer(const QByteArray& verb, int sliceId, const SessionMessage& result,
+                  qint64 noticeId);
     QList<MirrorUpdate> sliceArguments(int sliceId, bool withRevision) const;
 
     QPointer<StationServer> m_server;
@@ -107,6 +119,9 @@ private:
     int m_invokeDepth = 0;
     /// Requests answered "Waiting for you to confirm." and not yet finally.
     QSet<quint32> m_waiting;
+    /// Take-over fix wave (M-3): the controlTaken notices offering Take it
+    /// back, by id, as notice() sent them.
+    QHash<qint64, SessionPrompt> m_takeBackNotices;
 };
 
 } // namespace NereusSDR

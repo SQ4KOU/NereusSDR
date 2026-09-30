@@ -461,6 +461,10 @@
 //   2026-09-30 - Take-over parity: the hosting desktop's controlTaken
 //               card has Take it back, as a remote window's does. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Take-over fix wave (M-3): the hosting desktop's
+//               controlTaken card stays when Take it back may be tried
+//               again. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2901,6 +2905,20 @@ void MainWindow::wireHostingSlices()
     });
     connect(actions, &HostingSliceActions::question, this, &MainWindow::showHostingQuestion);
     connect(actions, &HostingSliceActions::notice, this, &MainWindow::showHostingNotice);
+    // Take-over fix wave (M-3): a controlTaken card goes when control came
+    // back or never can now; it stays when Take it back may be tried again.
+    connect(actions, &HostingSliceActions::takeBackAnswered, this, [this](qint64 id, bool ended) {
+        if (!ended) { return; }
+        m_hostingNoticeCards.removeIf([id](const QPointer<NoticeCard>& card) {
+            if (card && card->noticeId() == id) {
+                card->hide();
+                card->deleteLater();
+                return true;
+            }
+            return false;
+        });
+        layoutHostingNoticeCards();
+    });
     connect(actions, &HostingSliceActions::finished, this,
             [this](const QByteArray& verb, int sliceId, bool accepted, const QString& reason) {
         const QPointer<MainWindow> self(this);
@@ -3027,10 +3045,15 @@ void MainWindow::showHostingNotice(const SessionMessage& notice)
     // controlTaken; a card that does not offer it shows it off with why.
     auto* card = new NoticeCard(prompt, host, MultiDeviceController::controlTakeBackOff(prompt, true));
     const QPointer<NoticeCard> guard(card);
-    connect(card, &NoticeCard::takeBackRequested, this, [this, guard](qint64 id) {
-        m_hostingNoticeCards.removeAll(guard);
-        if (guard) { guard->hide(); guard->deleteLater(); }
-        layoutHostingNoticeCards();
+    // Take-over fix wave (M-3): a controlTaken card waits for the answer
+    // (takeBackAnswered); any other goes at the tap.
+    const bool waitsForAnswer = prompt.prompt.kind == QStringLiteral("controlTaken");
+    connect(card, &NoticeCard::takeBackRequested, this, [this, guard, waitsForAnswer](qint64 id) {
+        if (!waitsForAnswer) {
+            m_hostingNoticeCards.removeAll(guard);
+            if (guard) { guard->hide(); guard->deleteLater(); }
+            layoutHostingNoticeCards();
+        }
         if (HostingSliceActions* actions = hostingSlices()) { actions->takeBack(id); }
     });
     connect(card, &NoticeCard::dismissed, this, [this, guard](qint64) {

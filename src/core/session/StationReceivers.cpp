@@ -85,10 +85,15 @@
 //               (takeBackControl), offered to a peer at sliceAccessVersion
 //               2 (sendNotice). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: take-over fix wave (M-1): a peer below sliceAccess 2 is
+//               sent controlTaken without the slice entry's incarnation and
+//               controlRevision. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -1507,9 +1512,21 @@ void StationServer::sendNotice(SessionTransport* transport, const ConfirmStep::N
     prompt.secondsAgo = std::max<qint64>(0, (m_deviceSessions->now() - notice.happenedAtMs) / 1000);
     // Take-over parity: Take it back on controlTaken is offered only to a
     // peer at sliceAccessVersion 2; any other is told as before.
-    if (prompt.kind == QLatin1String("controlTaken") && prompt.takeBack
-        && !peerTakesControlBack(transport)) {
+    // Take-over fix wave (M-1): as before exactly, so the slice entry's
+    // incarnation and controlRevision, which only Take it back reads, go
+    // too.
+    if (prompt.kind == QLatin1String("controlTaken") && !peerTakesControlBack(transport)) {
         prompt.takeBack = false;
+        if (prompt.slices.has_value()) {
+            QJsonArray entries;
+            for (const QJsonValue& value : *prompt.slices) {
+                QJsonObject entry = value.toObject();
+                entry.remove(QStringLiteral("incarnation"));
+                entry.remove(QStringLiteral("controlRevision"));
+                entries.append(entry);
+            }
+            prompt.slices = entries;
+        }
     }
     send(transport, SessionMessages::notice(prompt, notice.reason));
 }
