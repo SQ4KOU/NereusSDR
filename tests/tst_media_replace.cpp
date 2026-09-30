@@ -31,6 +31,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: load finding: a session move folded into a refused
+//               fallback's wait is made only once the window has heard the
+//               Core on the air, and the waits for the refusal use the
+//               window's own replace deadline. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: media back on the direct pair ends a refused fallback
 //               waiting to be retried (a folded move is still followed, as
 //               a normal replace). J.J. Boyd (KG4VCF), AI-assisted via
@@ -107,6 +112,12 @@ constexpr char kFirst[] = "11111111-2222-4333-8444-555555555555";
 constexpr char kSecond[] = "66666666-7777-4888-9999-aaaaaaaaaaaa";
 constexpr char kThird[] = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
 constexpr int kDspFrames = 64;
+// The window's own bound for the Core's answer to a replace: startReplacement
+// arms replaceDeadline with the description deadline plus the ICE connect
+// deadline (src/gui/RemoteMediaController.cpp startReplacement), after which
+// it gives the replace up.
+constexpr int kReplaceAnswerMs =
+    RemoteMediaController::kMediaDescriptionDeadlineMs + IceConfiguration::kConnectDeadlineMs;
 
 class FakeTransport final : public IMediaTransport {
 public:
@@ -1133,8 +1144,8 @@ private slots:
         QVERIFY(keyed);
         QObject::disconnect(keyOnReplace);
         // Refused while transmitting: the move waits, and the Core started
-        // no connection for it.
-        QTRY_VERIFY(g.gui->replacePending());
+        // no connection for it (within the window's replace deadline).
+        QTRY_VERIFY_WITH_TIMEOUT(g.gui->replacePending(), kReplaceAnswerMs);
         QCOMPARE(g.core.transports.size(), 1);
         mox->setMox(false);
         QTRY_VERIFY(!onAir());
@@ -1200,7 +1211,16 @@ private slots:
         QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
         QVERIFY(keyed);
         QObject::disconnect(keyOnReplace);
-        QTRY_VERIFY(g.gui->replacePending());
+        // The Core refuses the replace the moment it leaves receive, but
+        // the window hears the Core on the air only on the Core's next delta
+        // flush (StationServer::kDefaultDeltaFlushMs, a rate limit with no
+        // delivery bound of its own). Until then the window takes the Core
+        // for idle and would start the move at once; so the move is made
+        // once the window has heard it, and the refusal is waited for again
+        // (a retry in between is refused the same way). Both come over the
+        // same link, within the window's bound for a replace answer.
+        QTRY_VERIFY_WITH_TIMEOUT(g.core.remote.isTransmitting(), kReplaceAnswerMs);
+        QTRY_VERIFY_WITH_TIMEOUT(g.gui->replacePending(), kReplaceAnswerMs);
         QCOMPARE(g.core.transports.size(), 1);
         // The session moves while the refused fallback waits.
         emit g.core.client.pathChanged();
@@ -1273,7 +1293,11 @@ private slots:
         QVERIFY(g.guiTransports.at(1)->startOptions.ice->onlySourceCandidates());
         QVERIFY(keyed);
         QObject::disconnect(keyOnReplace);
-        QTRY_VERIFY(g.gui->replacePending());
+        // As in aSessionMoveKeepsAWaitingFallbackOnTheTunnelAlone: the move
+        // is made once the window has heard the Core on the air, and the
+        // refusal is waited for within the window's replace deadline.
+        QTRY_VERIFY_WITH_TIMEOUT(g.core.remote.isTransmitting(), kReplaceAnswerMs);
+        QTRY_VERIFY_WITH_TIMEOUT(g.gui->replacePending(), kReplaceAnswerMs);
         QCOMPARE(g.core.transports.size(), 1);
         if (moved) {
             emit g.core.client.pathChanged();
