@@ -142,7 +142,8 @@ struct PlacementPlan {
 /// than own one, on the least busy signal processing core: first the core
 /// with the fewest decoders (they spread before any core takes a second),
 /// then the fewest roles of any kind (transmit roles included), then a
-/// core without the DSP thread, then the earlier core in signalPool
+/// core without a transmit role, then a core without the DSP thread, then
+/// the earlier core in signalPool
 /// (fastest first). Decoders are placed in the order given, so a later one
 /// never moves an earlier one. Judged from the plan only: nothing moves on
 /// live load.

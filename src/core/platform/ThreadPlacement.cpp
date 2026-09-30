@@ -463,10 +463,13 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     //  2. busy: every role the plan gives the core. Transmit roles count in
     //     full: they are in the plan only while transmitting, and then they
     //     are working (G-06 keeps their cores for them);
-    //  3. the DSP thread's core last among equals: it runs fexchange2 for
-    //     every slice, so it is the one core whose single thread is not
-    //     like the others. It stays a candidate;
-    //  4. signalPool order (fastest first).
+    //  3. a core carrying a transmit role last among equals, so that while
+    //     keyed a receive decoder leaves the transmit cores to the transmit
+    //     path (G-06) whenever an equal core without one exists;
+    //  4. the DSP thread's core next to last: it runs fexchange2 for every
+    //     slice, so it is the one receive-time core whose single thread is
+    //     not like the others. It stays a candidate;
+    //  5. signalPool order (fastest first).
     // In the order given (the registry's: the order the decoders started),
     // so a decoder added later never moves one already placed.
     QList<int> rade;
@@ -479,11 +482,16 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
         QMap<int, int> busy;
         QMap<int, int> decoders;
         std::set<int> dspCores;
+        std::set<int> transmitCores;
         for (const RoleAssignment& a : std::as_const(order)) {
             if (a.cpu < 0) {
                 continue;
             }
             ++busy[a.cpu];
+            if (a.role == ThreadRole::TxWorker || a.role == ThreadRole::TxWorkerThread
+                || a.role == ThreadRole::TxIqSender) {
+                transmitCores.insert(a.cpu);
+            }
             if (a.role == ThreadRole::DspThread) {
                 dspCores.insert(a.cpu);
             }
@@ -497,7 +505,7 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
                 }
                 const auto key = [&](int c) {
                     return std::make_tuple(decoders.value(c), busy.value(c),
-                                           dspCores.count(c));
+                                           transmitCores.count(c), dspCores.count(c));
                 };
                 // Strictly less: an equal core keeps the earlier one.
                 if (key(cpu) < key(best)) {

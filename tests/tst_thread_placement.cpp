@@ -1119,14 +1119,17 @@ private slots:
 
         // Both pans in RADE (pan 0's decoder is gated, not stopped, so it
         // is still placed). The first takes 4. For the second, 5, 6 and 7
-        // have no decoder and one role each; the DSP core goes last among
-        // equals, so the key gives 6, a transmit core, over 5. This pins
-        // what the key does; the report asks for a ruling on it.
+        // have no decoder and one role each; the transmit cores go last,
+        // then the DSP core, so it takes 5 and 6 and 7 stay with the
+        // transmit path.
         keyed.radeDecoders = {0, 1};
         const PlacementPlan two = planThreadPlacement(rk, keyed);
         QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 0), 4);
-        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 1), 6);
+        QCOMPARE(two.cpuFor(ThreadRole::RadeDecoder, 1), 5);
+        QVERIFY(!transmitCores.contains(two.cpuFor(ThreadRole::RadeDecoder, 0)));
+        QVERIFY(!transmitCores.contains(two.cpuFor(ThreadRole::RadeDecoder, 1)));
         QCOMPARE(two.cpuFor(ThreadRole::TxWorker), 6);
+        QCOMPARE(two.cpuFor(ThreadRole::TxWorkerThread), 7);
     }
 
     void moreRadeDecodersThanFastCores()
