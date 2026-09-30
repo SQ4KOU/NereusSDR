@@ -14,6 +14,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-29: A remote RX DSP > Options apply waits while the radio is on
+//               the air, as the TX half does. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: The Core's TCI server settings (JJ's ruling of 2026-09-28,
 //               stationTciSettingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -26835,7 +26838,13 @@ void RadioModel::flushRemoteDspOptionsApply()
             }
         }
     }
-    if (m_pendingDspOptionsGroups.isEmpty()) {
+    // Setup description version 22: the RX half waits the same way. An RX
+    // buffer size accepted just before the radio keyed would otherwise
+    // reach SetDSPBuffsize's flush on the air, which the on-air lock
+    // refuses to a new write. The whole RX apply waits (it applies a
+    // group's buffer, filter size and filter type together), and
+    // releaseHeldOnAirWork applies it once the radio is back on receive.
+    if (m_pendingDspOptionsGroups.isEmpty() || stationOnAirRefusal(nullptr)) {
         return;
     }
     const QSet<QString> groups = m_pendingDspOptionsGroups;
@@ -27363,7 +27372,7 @@ codec::alex::AlexLpfEdges RadioModel::savedAlexLpfEdges(const QString& mac)
 }
 
 // Group B fix wave (group A's follow-ups): work a window's change left
-// waiting while the radio was on the air (a DSP > Options TX change, a PA
+// waiting while the radio was on the air (a DSP > Options TX or RX change, a PA
 // profile or calibration reload) applies once the on-air rule clears,
 // whichever way it clears: MOX back to receive, TUNE's completion or the
 // two-tone test's end.
@@ -27372,7 +27381,7 @@ void RadioModel::releaseHeldOnAirWork()
     if (stationOnAirRefusal(nullptr)) {
         return;
     }
-    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+    if (!m_pendingDspOptionsTxGroups.isEmpty() || !m_pendingDspOptionsGroups.isEmpty()) {
         flushRemoteDspOptionsApply();
     }
     if (!m_pendingHardwareReloads.isEmpty()
