@@ -40,6 +40,10 @@
 //               source alone (IceConfiguration::onlySourceCandidates)
 //               takes no signalled candidate and sends none of its own.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: ICE check log review fix: a local candidate is logged
+//               where it is sent, or as not sent on the tunnel alone, and
+//               the tunnel-only refusal of a remote candidate is logged.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -716,10 +720,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                            "oversized local candidate rejected");
                 return;
             }
-            if (IceDiagnostics::enabled()) {
-                IceDiagnostics::logPath("media", QStringLiteral("local candidate %1")
-                                                     .arg(QString::fromStdString(value)));
-            }
+            // Logged where it is sent, or not (drainCallbacks).
             queueEvent(weak, CallbackEvent::Kind::Candidate, value, mid);
         });
         d->peer->onGatheringStateChange([weak](rtc::PeerConnection::GatheringState state) {
@@ -1250,6 +1251,7 @@ bool LibDataChannelMediaTransport::admitCandidate(const QString& candidate,
         rtc::Candidate parsed(candidateBytes.toStdString(), midBytes.toStdString());
         if (d->ice && d->ice->onlySourceCandidates() && !fromOwnedSource) {
             // The fallback onto the tunnel: only the tunnel's own candidate.
+            logMediaRemoteCandidate(candidate, fromOwnedSource, false);
             return false;
         }
         if (d->ice) {
@@ -1598,7 +1600,16 @@ void LibDataChannelMediaTransport::drainCallbacks()
             if (d->ice && d->ice->onlySourceCandidates()) {
                 // The fallback onto the tunnel: this computer's addresses
                 // stay with it, so the far end has no direct pair to try.
+                if (IceDiagnostics::enabled()) {
+                    IceDiagnostics::logPath(
+                        "media", QStringLiteral("local candidate (not sent, tunnel only) %1")
+                                     .arg(QString::fromStdString(event.first)));
+                }
                 break;
+            }
+            if (IceDiagnostics::enabled()) {
+                IceDiagnostics::logPath("media", QStringLiteral("local candidate %1")
+                                                     .arg(QString::fromStdString(event.first)));
             }
             emit localCandidate(QString::fromStdString(event.first),
                                 QString::fromStdString(event.second));

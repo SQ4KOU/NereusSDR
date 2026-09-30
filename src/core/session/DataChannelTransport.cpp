@@ -27,13 +27,13 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: separate bounded transmit-watch DTLS channel; AI-assisted
 //               implementation via OpenAI Codex for J.J. Boyd (KG4VCF).
+//   2026-09-28: setWatchRelayClockForTest, the clock a watch relay grant's
+//               expiry is read against. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: the opt-in ICE check log (IceDiagnostics, NEREUS_ICE_DIAG):
 //               this peer's candidates, the ones it admits, its states and
 //               its selected pair, redacted. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
-//   2026-09-28: setWatchRelayClockForTest, the clock a watch relay grant's
-//               expiry is read against. J.J. Boyd (KG4VCF), AI-assisted via
-//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
