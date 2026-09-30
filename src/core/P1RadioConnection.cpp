@@ -12,6 +12,7 @@
 //   Project Files/Source/ChannelMaster/bandwidth_monitor.h, original licence from Thetis source is included below
 //   Project Files/Source/Console/HPSDR/IoBoardHl2.cs (mi0bot/OpenHPSDR-Thetis fork), original licence from upstream included below
 //   Project Files/Source/Console/setup.cs, original licence from Thetis source is included below
+//   Project Files/Source/Console/HPSDR/Penny.cs (mi0bot/OpenHPSDR-Thetis fork), original licence from upstream included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -117,6 +118,33 @@
 //                [v2.10.3.15]); on the HL2 only when Swap audio channels is
 //                on, as mi0bot (networkproto1.c:1231-1239 [@c26a8a4]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (c)): the receive low-pass
+//                follows the highest slice the model counted on the input
+//                (Thetis UpdateAlexTXFilter, console.cs:15487-15498
+//                [v2.10.3.15]), and on the HL2 the OC receive band follows
+//                the highest band among them (mi0bot Penny.cs UpdateExtCtrl,
+//                183-189 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: both choices go through
+//                SharedInputLowPass::highest over countedCandidates (the
+//                DDC centre for the Alex low-pass, the VFO's band for the
+//                HL2 pins), the call RadioModel's reason makes. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Review fix: ocBandFrequencyHz notes the out-of-range RX1
+//                band divergence from mi0bot. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - HL2 receive pins follow the counted slice with the
+//                highest frequency, not mi0bot's band enum order
+//                (maintainer ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30 - HL2 unkeyed pins through SharedInputLowPass::hl2ReceivePins:
+//                the N2ADR high-pass (bit 6) cleared when a counted slice's
+//                pins lack it; only ForceBypass and WidebandLocked send 0x00
+//                (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-30 - Review fix: ocBandFrequencyHz reports the receiver
+//                hl2ReceivePins takes the pins from. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -405,6 +433,27 @@ mw0lge@grange-lane.co.uk
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
+
+// --- From Penny.cs (mi0bot/OpenHPSDR-Thetis fork) ---
+
+/*
+*
+* Copyright (C) 2008 Bill Tracey, KD5TFD, bill@ewjt.com 
+* Copyright (C) 2010-2020  Doug Wigley
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation; either version 2 of the License, or
+* (at your option) any later version.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+*/
 
 #include "P1RadioConnection.h"
 #include "CalibrationController.h"
@@ -1184,6 +1233,42 @@ void P1RadioConnection::applyReceiveAlexLpf(quint64 rx1Hz, quint64 fallbackHz)
         return;  // no receiver tuned yet: nothing to select from
     }
     const BoardCapabilities* const fcaps = filterCaps();
+
+    // Shared-input filters, ruling (c) 2026-09-30: the low-pass follows the
+    // highest receiver among the slices the model counted on the input
+    // (AlexRxBpf::countedSlotsAdc0), the same set the band-pass was chosen
+    // over. Protocol 1 has one filter chain, so that is every counted slice.
+    // Thetis's "higher of the two", generalised to every slice that shares
+    // the input:
+    //   From Thetis console.cs:15491-15495 UpdateAlexTXFilter [v2.10.3.15]
+    //     if (!_rx2_preamp_present && chkRX2.Checked)
+    //     {
+    //         if (rx1_dds_freq_mhz > rx2_dds_freq_mhz) setAlexLPF(rx1_dds_freq_mhz, false);
+    //         else setAlexLPF(rx2_dds_freq_mhz, false);
+    //     }
+    // With nothing counted the rule below stands, as the band-pass falls
+    // back to its frequency-derived bits.
+    //
+    // The frequency compared is each receiver's DDC centre, Thetis's DDS
+    // frequency (SharedInputLowPass::Rule::HighestCentre), and the choice
+    // is the one RadioModel names in the low-pass reason.
+    {
+        const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
+        const int best = SharedInputLowPass::highest(
+            SharedInputLowPass::Rule::HighestCentre, candidates);
+        const quint64 highestHz = (best >= 0) ? candidates.at(best).centreHz : 0;
+        if (highestHz != 0) {
+            const quint8 oldRxLpf = m_alexLpfBitsRx;
+            applyAlexLpf(double(highestHz) / 1e6, /*freqIsTx=*/false);
+            if (m_alexLpfBitsRx != oldRxLpf) {
+                qCDebug(lcConnection) << "P1::applyReceiveAlexLpf counted"
+                                      << "rxLpf=" << Qt::hex << m_alexLpfBitsRx << Qt::dec
+                                      << "rx=" << highestHz << "Hz";
+            }
+            return;
+        }
+    }
+
     {
         // m_rxFreqHz[m_rx1Slot] / [1] are Thetis's rx1_dds_freq_mhz /
         // rx2_dds_freq_mhz; m_rx1Slot is 0 whenever slot 0 is live (Phase 3F
@@ -2350,6 +2435,16 @@ void P1RadioConnection::setAntennaRouting(AntennaRouting r)
 void P1RadioConnection::setAlexRxBpf(AlexRxBpf b)
 {
     m_alexRxHpfOverride = b.hpfBitsAdc0;
+    // Shared-input filters, ruling (c): the receive low-pass (and on the
+    // HL2 the N2ADR board's receive band, ocBandFrequencyHz) follows the
+    // same counted slices. Unkeyed only, as every receive-derived low-pass
+    // write (console.cs:15487-15498 [v2.10.3.15], `if (!_mox)`).
+    if (m_countedSlotsAdc0 != b.countedSlotsAdc0) {
+        m_countedSlotsAdc0 = b.countedSlotsAdc0;
+        if (!m_mox) {
+            applyReceiveAlexLpf(m_rxFreqHz[m_rx1Slot], m_rxFreqHz[m_rx1Slot]);
+        }
+    }
     // Same as setAntennaRouting: the next EP2 frame picks this up through
     // buildCodecContext() → P1Codec::bank10.
 }
@@ -2431,8 +2526,7 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 //         else
 //         {
 //             if (Console.getConsole().RX2Enabled && (idxb > idx))     // MI0BOT: Select the filter for the high band
-// (that receive arm is not taken here: see the HL2 two-range note in
-// buildCodecContext). VFOBTX is chkVFOBTX:
+// VFOBTX is chkVFOBTX:
 //   From Thetis console.cs:39833-39834 [v2.10.3.15]
 //     Audio.VFOBTX = chkVFOBTX.Checked;
 //     Penny.getPenny().VFOBTX = chkVFOBTX.Checked; // MW0LGE_21j
@@ -2460,13 +2554,79 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 //         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
 // and under CTUN the centre can sit in another band than the VFO. A slot
 // whose VFO has not been told keeps its centre.
+//
+// Shared-input filters, ruling (c) 2026-09-30: on the HL2, unkeyed, the
+// receive arm of mi0bot's rule is taken. The N2ADR board's low-pass is
+// chosen by these pins, and one receive filter serves every receiver, so
+// it is set for the HIGH band:
+//   From mi0bot-Thetis HPSDR/Penny.cs:183-189 [@c26a8a4]
+//         else
+//         {
+//             if (Console.getConsole().RX2Enabled && (idxb > idx))     // MI0BOT: Select the filter for the high band
+//                 bits = RXABitMasks[idxb];
+//             else
+//                 bits = RXABitMasks[idx];
+//         }
+// mi0bot has two receivers. Here the candidates are the slices the model
+// counted on the input (AlexRxBpf::countedSlotsAdc0), the same set the
+// band-pass was chosen over, and the pins are those of the band of the one
+// with the highest frequency, read as for the Alex low-pass (the DDC
+// centre, SharedInputLowPass::Rule::HighestCentrePins, the one RadioModel
+// names in the low-pass reason). The N2ADR bank is low-pass filters, so the
+// filter for the highest counted receiver passes every lower one. On a
+// frequency tie the earlier slot keeps it, RX1 first, as `idxb > idx` keeps
+// RX1. With nothing counted RX1 decides alone, as before.
+// Divergence (maintainer ruling, 2026-09-30): NereusSDR orders by
+// frequency; mi0bot compares band enum values (Penny.cs:158-159 and
+// 183-189 [@c26a8a4], over enums.cs:280-322), which rank WWV and the SWL
+// bands above 10 m.
+// Divergence: when RX1's band is out of range (GEN and the like, idx < 0),
+// mi0bot sends bits = 0 (Penny.cs:162-165 [@c26a8a4]), but here an
+// out-of-range band ranks below every band in range (extCtrlBandIndex -1),
+// so the other counted slice's band is taken.
 // ---------------------------------------------------------------------------
 quint64 P1RadioConnection::ocBandFrequencyHz() const
 {
     if (m_mox && m_txFreqHz != 0) {
         return m_txFreqHz;
     }
-    return (m_rxVfoHz[m_rx1Slot] != 0) ? m_rxVfoHz[m_rx1Slot] : m_rxFreqHz[m_rx1Slot];
+    const auto slotHz = [this](int slot) {
+        return (m_rxVfoHz[slot] != 0) ? m_rxVfoHz[slot] : m_rxFreqHz[slot];
+    };
+    if (!m_mox && m_hardwareProfile.model == HPSDRModel::HERMESLITE
+        && m_countedSlotsAdc0 != 0) {
+        const QList<SharedInputLowPass::Candidate> candidates = countedCandidates();
+        // The receiver hl2ReceivePins takes the pins from, so the band
+        // reported with the byte is the one sent.
+        const int best = m_ocMatrix
+            ? SharedInputLowPass::hl2PinsReceiver(*m_ocMatrix, candidates)
+            : SharedInputLowPass::highest(SharedInputLowPass::Rule::HighestCentrePins,
+                                          candidates);
+        if (best >= 0) {
+            return SharedInputLowPass::ruleHz(SharedInputLowPass::Rule::HighestCentrePins,
+                                              candidates.at(best));
+        }
+    }
+    return slotHz(m_rx1Slot);
+}
+
+// ---------------------------------------------------------------------------
+// countedCandidates: the receivers counted on the input
+// (AlexRxBpf::countedSlotsAdc0, live ones when the live set is known), in
+// slot order, each with its DDC centre and its slice's VFO, for
+// SharedInputLowPass. Shared-input filters, ruling (c) 2026-09-30.
+// ---------------------------------------------------------------------------
+QList<SharedInputLowPass::Candidate> P1RadioConnection::countedCandidates() const
+{
+    const quint32 counted = (m_liveSlotMask != 0)
+        ? (m_countedSlotsAdc0 & m_liveSlotMask) : m_countedSlotsAdc0;
+    QList<SharedInputLowPass::Candidate> candidates;
+    for (int slot = 0; slot < 7; ++slot) {
+        if ((counted & (1u << slot)) != 0) {
+            candidates.append({slot, m_rxFreqHz[slot], m_rxVfoHz[slot]});
+        }
+    }
+    return candidates;
 }
 
 // ---------------------------------------------------------------------------
@@ -3745,10 +3905,24 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // A's band.
     //
     // Keyed it is the TRANSMITTING slice's band (plan Task 14). See
-    // ocBandFrequencyHz for the Penny.cs rule.
+    // ocBandFrequencyHz for the Penny.cs rule. Unkeyed on the HL2 it is the
+    // band of the highest-frequency slice counted on the input (shared-input
+    // filters, ruling (c), mi0bot's receive arm), also in ocBandFrequencyHz,
+    // with the N2ADR broadcast-band high-pass (bit 6) cleared when a counted
+    // slice's own receive pins lack it (JJ's ruling of 2026-09-30,
+    // SharedInputLowPass::hl2ReceivePins, the one RadioModel names in the
+    // low-pass reason).
     if (m_ocMatrix) {
         const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
+        if (!m_mox && m_hardwareProfile.model == HPSDRModel::HERMESLITE
+            && m_countedSlotsAdc0 != 0) {
+            const SharedInputLowPass::Hl2ReceivePins rx =
+                SharedInputLowPass::hl2ReceivePins(*m_ocMatrix, countedCandidates());
+            if (rx.best >= 0) {
+                ctx.ocByte = rx.pins;
+            }
+        }
     } else {
         ctx.ocByte = m_ocOutput;
     }
@@ -3778,6 +3952,12 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // 0x00 = "disable/bypass the N2ADR board": maintainer-supplied
     // hardware knowledge (J.J. Boyd / KG4VCF, 2026-08-01), not documented
     // in any upstream source -- mi0bot never commands 0x00.
+    //
+    // Which decisions reach here (JJ's ruling of 2026-09-30): ForceBypass
+    // and WidebandLocked only. In Auto a difference between the counted
+    // slices' pins never sends 0x00: RadioModel::republishAlexAdcSlices
+    // hands the chain over filtered, and the pins above follow the highest
+    // slice, mi0bot's way, with bit 6 cleared where a slice needs it off.
     static constexpr int kAlexBypassSentinel = 0x20;  // AlexRxBpf.hpfBitsAdc0 bypass encoding
     if (!m_mox && m_caps && m_caps->hasIoBoardHl2
         && m_alexRxHpfOverride == kAlexBypassSentinel) {

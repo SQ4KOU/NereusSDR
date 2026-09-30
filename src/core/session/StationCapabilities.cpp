@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Shared-input filters (ruling (d)): rxFilterLowPassVersion,
+//               after radioMicVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Radio codec lane: radioMicVersion, after
 //               rx2AttenuatorVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -513,6 +516,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
     if (radioMicVersion > 0) {
         updates.append(intEntry("radioMicVersion", radioMicVersion));
     }
+    // Shared-input filters, ruling (d): radio's low-pass reason fields,
+    // after radioMicVersion and before coreBuildInfo (which stays last),
+    // only for a peer that declared rxFilterLowPass.
+    if (rxFilterLowPassVersion > 0) {
+        updates.append(intEntry("rxFilterLowPassVersion", rxFilterLowPassVersion));
+    }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
@@ -534,6 +543,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     int mediaStunEntries = 0;
     int rx2AttenuatorEntries = 0;
     int radioMicEntries = 0;
+    int rxFilterLowPassEntries = 0;
     for (const MirrorUpdate& u : updates) {
         if (u.name == "mediaDirectVersion") {
             // The direct media ladder: one entry, an Int64 of 1 or more.
@@ -541,6 +551,16 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong version = u.value.toLongLong();
                 caps.mediaDirectVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "rxFilterLowPassVersion") {
+            // Shared-input filters, ruling (d): one entry, an Int64 of 1 or
+            // more.
+            if (++rxFilterLowPassEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.rxFilterLowPassVersion = version > 0 && version <= 65535
                     ? static_cast<int>(version) : 0;
             }
         } else if (u.name == "radioMicVersion") {

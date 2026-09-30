@@ -19,6 +19,12 @@
 //              setAlexBpfMode request); an older Core keeps a plain reason
 //              and nothing is sent. J.J. Boyd (KG4VCF), AI-assisted via
 //              Anthropic Claude Code.
+//   2026-09-30 Shared-input filters (ruling (d)): the state shows the
+//              receive low-pass reason when a slice holds it. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 The shared-input reason is labeled "Shared input", since on
+//              the HL2 it can be only the high-pass sentence. J.J. Boyd
+//              (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // no-port-check: NereusSDR-original
@@ -87,7 +93,15 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     auto* stateLbl = new QLabel(
         stationState && !stationStateAvailable
             ? tr("Core filter state is not available.")
-            : QStringLiteral("Effective: %1\nReason: %2").arg(effectiveText, state.reasonText),
+            : QStringLiteral("Effective: %1\nReason: %2").arg(effectiveText, state.reasonText)
+                  // Shared-input filters, ruling (d): the receive low-pass on
+                  // this input when a slice holds it, and on the HL2 the
+                  // broadcast-band high-pass when a slice needs it off. The
+                  // reason can be that high-pass sentence alone, so the label
+                  // names the input rather than the low-pass.
+                  + (state.lowPassReason.isEmpty()
+                         ? QString()
+                         : QStringLiteral("\nShared input: %1").arg(state.lowPassReason)),
         stateGroup);
     stateLbl->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 11px;"));
     stateLbl->setWordWrap(true);

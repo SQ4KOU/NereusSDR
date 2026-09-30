@@ -16,6 +16,12 @@
 //                                    declares paTransmitBand, so
 //                                    paTransmitBandVersion and radio's
 //                                    paTransmitBand are captured.
+//   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters (ruling (d)): the
+//                                    capture declares rxFilterLowPass, so
+//                                    rxFilterLowPassVersion and radio's
+//                                    rxFilter0LowPassReason and
+//                                    rxFilter0LowPassSlice are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Radio codec lane: the capture
 //                                    declares radioMic, so radioMicVersion
 //                                    is captured. AI-assisted via Anthropic
@@ -683,7 +689,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   {"rx2Attenuator", 1},
                                   // Radio codec lane: radioMicVersion,
                                   // the catalogue's radio mic keys.
-                                  {"radioMic", 1}})));
+                                  {"radioMic", 1},
+                                  // Shared-input filters, ruling (d):
+                                  // rxFilterLowPassVersion and radio's
+                                  // rxFilter0LowPass fields.
+                                  {"rxFilterLowPass", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -761,6 +771,9 @@ QJsonArray captureCapabilities()
     caps.rx2AttenuatorVersion = 1;
     // Radio codec lane: sent to a peer that declared radioMic.
     caps.radioMicVersion = 1;
+    // Shared-input filters, ruling (d): sent to a peer that declared
+    // rxFilterLowPass.
+    caps.rxFilterLowPassVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

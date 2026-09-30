@@ -30,8 +30,17 @@
 // 20 m went out through the 30/20 m low-pass. And every band came from the
 // DDC centre rather than the VFO, which differ under CTUN.
 // =================================================================
+//
+// Modification history (NereusSDR):
+//   2026-09-30 - HL2 unkeyed expects the higher slice's receive pins, not the
+//                N2ADR bypass (0x00): JJ's ruling on HL2 Auto.
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
+// =================================================================
 
 #include <QtTest/QtTest>
+
+#include <algorithm>
 
 #include "core/AppSettings.h"
 #include "core/OcMatrix.h"
@@ -149,11 +158,12 @@ private slots:
         const int b = s.add(bHz);
         s.model.setActiveSlice(a);
 
-        // Unkeyed first, to pin what the fix must leave alone. On the HL2 two
-        // filter ranges open bypass the N2ADR board (the operator's hardware
-        // ruling); elsewhere the receive mask of A, the RX1 stand-in.
+        // Unkeyed first, to pin what the fix must leave alone. On the HL2 in
+        // Auto the receive pins follow the highest-frequency slice (JJ's
+        // ruling of 2026-09-30); elsewhere the receive mask of A, the RX1
+        // stand-in.
         const quint8 unkeyed = (hw == HPSDRHW::HermesLite)
-            ? quint8(0x00)
+            ? s.oc.maskFor(bandFromFrequency(std::max(aHz, bHz)), /*tx=*/false)
             : s.oc.maskFor(bandFromFrequency(aHz), /*tx=*/false);
         QCOMPARE(ocByte(s.conn), unkeyed);
 

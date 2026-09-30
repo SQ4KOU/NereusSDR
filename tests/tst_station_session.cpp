@@ -1418,12 +1418,14 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
     // declares (radeStatus: its VFO flag's RADE row; txInhibitReason: why
     // the Core's transmit is held; alexLpf: the Alex-1 tab's low-pass
     // lamps; paTransmitBand: the PA row the Core holds on the air;
-    // levelCalibration: Setup's calibration run) arrive.
+    // levelCalibration: Setup's calibration run; rxFilterLowPass: why the
+    // receive low-pass is set for another slice) arrive.
     const QSet<QByteArray> declaredGatedFeatures{QByteArrayLiteral("radeStatus"),
                                                  QByteArrayLiteral("txInhibitReason"),
                                                  QByteArrayLiteral("alexLpf"),
                                                  QByteArrayLiteral("paTransmitBand"),
-                                                 QByteArrayLiteral("levelCalibration")};
+                                                 QByteArrayLiteral("levelCalibration"),
+                                                 QByteArrayLiteral("rxFilterLowPass")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {

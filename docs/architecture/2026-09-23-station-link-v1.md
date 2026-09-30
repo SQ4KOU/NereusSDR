@@ -940,6 +940,14 @@ it is sent `radioMicVersion` (section 6.3); a peer that does not sees
 exactly the capabilities it was built for. Neither the station nor the
 desktop's remote window declares it; the phone does.
 
+**`rxFilterLowPass` 1** (shared-input filters, ruling (d)): the client
+shows why the receive low-pass on a shared input is set for another slice.
+A peer that declares it is sent `rxFilterLowPassVersion` (section 6.3) and
+the `radio` object's `rxFilter0LowPassReason` and `rxFilter0LowPassSlice`
+(section 7); a peer that does not sees exactly the wire it was built for,
+with neither property. The station does not declare it; the desktop's
+remote window does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1122,6 +1130,7 @@ change shows as surface drift and as a change to this table.
 | `mediaDirectVersion` | 1 |
 | `rx2AttenuatorVersion` | 1 |
 | `radioMicVersion` | 1 |
+| `rxFilterLowPassVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2158,6 +2167,13 @@ the catalogue's `board` carries `radioMic` and `radioMicNote` (section
 catalogue keys are sent to every peer, and an app that does not know them
 ignores them.
 
+**The receive low-pass on a shared input.** A client that declared
+`rxFilterLowPass` 1 is sent `rxFilterLowPassVersion`, an `i64`, 1, after
+`radioMicVersion` (or after the last entry before it when that is absent)
+and before `coreBuildInfo`. At 1 the `radio` object carries
+`rxFilter0LowPassReason` and `rxFilter0LowPassSlice` (section 7). A peer
+that did not declare the feature is sent no entry and neither property.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2383,7 +2399,8 @@ older window sees only the values it was built for.
 | 101 | `mediaStunUrls` | `utf8` |
 | 102 | `rx2AttenuatorVersion` | `i64` |
 | 103 | `radioMicVersion` | `i64` |
-| 104 | `coreBuildInfo` | `utf8` |
+| 104 | `rxFilterLowPassVersion` | `i64` |
+| 105 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2605,7 +2622,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (35 properties)
+**RadioModel** (37 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2644,6 +2661,8 @@ An enum property lists the values its domain allows.
 | 32 | `levelCalPercent` | `i64` | outbound |  |
 | 33 | `levelCalMessage` | `utf8` | outbound |  |
 | 34 | `levelCalSucceeded` | `bool` | outbound |  |
+| 35 | `rxFilter0LowPassReason` | `utf8` | outbound |  |
+| 36 | `rxFilter0LowPassSlice` | `i64` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -3837,6 +3856,40 @@ Notes on the keys:
   connected). It is sent only to a peer that declared `alexLpf` 1
   (section 6.2). A window lights the lamp of the row it names and never
   writes it; a raw write is refused.
+- **The receive low-pass held for another slice (`radio`).** When two or
+  more slices are counted on the first receiver input (a slice on another
+  device that is away is not counted), the Core sets the receive low-pass
+  for the slice with the highest receiver centre frequency (on the Hermes
+  Lite 2, the N2ADR pins of that slice's band; a slice outside the bands
+  the pins cover counts only when no other does), as Thetis does for RX1
+  and RX2 together. `rxFilter0LowPassReason` (utf8, outbound only,
+  read-only) says so in operator words, naming that slice and the slices
+  that share the input with less protection, for example "The receive
+  low-pass filter is set for slice B on 20m, the highest band on this
+  receiver input. Slice A on 80m shares the input, so it has less
+  protection from strong signals on higher bands." It is empty when one
+  slice is counted, when every counted slice uses the same low-pass, when
+  the radio has no receive low-pass, when 6m/ByPass on receive is on, or
+  on the Hermes Lite 2 when the band-pass is bypassed (the N2ADR pins are
+  then all off, so no low-pass is set: Force bypass or wideband), or on
+  the Hermes Lite 2 when the pins sent are all off because the band of
+  the slice they follow has none set (the chain is then reported bypassed
+  and `rxFilter0Reason` names that slice). In Auto
+  on the Hermes Lite 2, slices whose pins differ get the pins of the
+  highest slice, and the reason names it. When the N2ADR board's
+  broadcast-band high-pass (pin 7) is off because a counted slice's own
+  pins lack it (a slice on 160 m in the N2ADR preset), the reason adds a
+  sentence naming that slice, and that sentence can be the whole reason
+  when no slice is held.
+  `rxFilter0LowPassSlice` (int, outbound only, read-only) is the id of the
+  slice the low-pass is set for, -1 when the reason is empty or names only
+  the high-pass. Both are
+  sent only to a peer that declared `rxFilterLowPass` 1 (section 6.2). A
+  window shows the reason beside the WIDE reason (`rxFilter0Reason`) and
+  never writes either; a raw write is refused. A window of a Core that
+  never sends them shows the WIDE reason alone. They are optional: a
+  chain's filter state is shown once its mode, effective state, band and
+  reason have arrived, with or without them.
 
 #### The TX EQ curve (`txEqCurve`)
 
@@ -7608,7 +7661,8 @@ how a fixture is written to what the code does.
   sends as a property value that an app shows as it arrives is held to the
   same rule: the `connectionError` of the `tuner`, `amplifier` and `rfkit`
   objects, a slice's `nnrStatus` and `nnrLastError`, the radio's
-  `rxFilter0Reason`, `rxFilter1Reason`, `settingsSaveError`,
+  `rxFilter0Reason`, `rxFilter1Reason`, `rxFilter0LowPassReason`,
+  `settingsSaveError`,
   `receiveLayoutRestoreMessage` and `fourO3AListenerError`, the
   `stationTci` object's `error`, the `txState` object's `stopText`
   (section 18.8), the `amplifier` object's

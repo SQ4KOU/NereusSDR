@@ -229,6 +229,16 @@
 //                                    orionMicPanelUnavailableReason placed
 //                                    beside lpfBypassUnavailableReason.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters: RadioModel's
+//                                    lowPassHoldReason and the
+//                                    rxFilter0LowPassReason getter.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  lowPassHoldReason's broadcast-band
+//                                    high-pass sentences (JJ's ruling).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  AlexController's NoFilterPins reason
+//                                    names the slice (JJ's ruling).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -769,6 +779,16 @@ struct ReasonSource {
 const QList<ReasonSource>& reasonSources()
 {
     static const QList<ReasonSource> sources{
+        // Shared-input filters, ruling (d): rxFilter0LowPassReason. The
+        // slices are named by letter and band ("B on 20m"), one or several
+        // joined by joinRangeNames. On the HL2 it also names the slices the
+        // N2ADR broadcast-band high-pass is off for (JJ's ruling of
+        // 2026-09-30).
+        {"src/models/RadioModel.cpp", {QStringLiteral("lowPassHoldReason")},
+         {QStringLiteral("%1 on %2")}, 5,
+         {QStringLiteral("named(top)"), QStringLiteral("lower.first()"),
+          QStringLiteral("joinRangeNames(lower)"), QStringLiteral("off.first()"),
+          QStringLiteral("joinRangeNames(off)")}},
         // session.end, auth.result, property.result, settings.reject and
         // the refusals of a verb an older app sends.
         {"src/core/session/StationServer.cpp", {},
@@ -1805,6 +1825,10 @@ const QList<AppSideReason>& appSideReasons()
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",
          "the filter badge's status label (AlexController), not a refusal"},
+        // Shared-input filters, ruling (d): why the receive low-pass is set
+        // for another slice (lowPassHoldReason, scanned below).
+        {"src/models/RadioModel.h", "rxFilter0LowPassReason",
+         "the CH label's tooltip and the WIDE reason's second sentence, not a refusal"},
     };
     return sites;
 }
@@ -1833,10 +1857,13 @@ const QList<ReasonSource>& propertyTextSources()
         // publish's error: Rf2ksConnection's connectionFailed reason, scanned
         // above.
         {"src/core/StationRfKitController.cpp", {}, {}, 1, {}, {QStringLiteral("reason")}},
-        // Band names ("20m"), one or several joined with " + ".
+        // Band names ("20m"), one or several joined with " + ". On the HL2
+        // the slice the filter board is off for, by letter and band ("slice
+        // B on WWV"), which RadioModel::republishAlexAdcSlices passes in.
         {"src/core/accessories/AlexController.cpp", {QStringLiteral("recomputeBpf")}, {}, 3,
          {QStringLiteral("bandLabel(s.currentBpfBand)"),
-          QStringLiteral("bandList.join(QStringLiteral(\" + \"))")},
+          QStringLiteral("bandList.join(QStringLiteral(\" + \"))"),
+          QStringLiteral("m_switchBypassDetail[adc]")},
          // One band's name alone: the reason when one band is filtered.
          {QStringLiteral("bandLabel(s.currentBpfBand)")}},
         {"src/core/dsp/NnrSettings.h", {QStringLiteral("nnrLimitExplanation")}, {}, 4},

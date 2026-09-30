@@ -9,6 +9,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters (ruling (d)): the
+//                                    hello declares rxFilterLowPass 1, so
+//                                    the CH label, WIDE badge and Filter
+//                                    Policy dialog show the Core's receive
+//                                    low-pass reason. AI-assisted via
+//                                    Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampModeAvailable,
 //                                    RX2's own preamp mode on the Core
 //                                    (radioHardwareVersion 12). AI-assisted
@@ -815,6 +821,11 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // The Alex-1 Filters tab's lamps show the low-pass the Core's radio is
     // using (radio's alexLpfBits, radioHardwareVersion 10).
     m_declaredFeatures.insert(QByteArrayLiteral("alexLpf"), 1);
+    // Shared-input filters, ruling (d): the CH label, WIDE badge and Filter
+    // Policy dialog say which slice holds the Core's receive low-pass
+    // (radio's rxFilter0LowPassReason and rxFilter0LowPassSlice;
+    // rxFilterLowPassVersion 1).
+    m_declaredFeatures.insert(QByteArrayLiteral("rxFilterLowPass"), 1);
     // PA on-air gate re-review, Important C: the PA pages open and lock
     // the row the Core holds on the air (paTransmitBandVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("paTransmitBand"), 1);

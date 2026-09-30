@@ -318,6 +318,33 @@ Decision tree (computed by `AlexController::recomputeBpf(int adc)`):
    - 1 unique band among slices: `Filtered` to that band, reason "<band>".
    - 2+ unique bands: `Bypass`, reason "BYPASS (multi-band: <bands>)".
 
+**Hermes Lite 2 in Auto (JJ's ruling of 2026-09-30).** The HL2's receive filter is the N2ADR
+board: bits 0-5 of the OC pins select its low-pass filters (160, 80, 60/40, 30/20, 17/15,
+12/10 m), and bit 6 (pin 7) switches in a 3 MHz receive high-pass that rejects AM broadcast,
+meant for every band except 160 m (N2ADR's page for the board,
+https://james.ahlstrom.name/hl2filter/). When the counted slices on its input need different pin
+masks, Auto no longer bypasses (which sent the pins as `0x00`, the board off). Unkeyed, the pins
+are the receive mask of the counted slice with the highest frequency, mi0bot's way (mi0bot-Thetis
+`Penny.cs:183-189 [@c26a8a4]`, ordered by frequency rather than mi0bot's band enum), with bit 6
+cleared unless every counted slice's own receive mask has it
+(`SharedInputLowPass::hl2ReceivePins`, one helper read by the connection and by the low-pass
+reason). A slice on 160 m in the N2ADR preset, on GEN, or on any band the operator set without
+pin 7 turns the high-pass off for the input; no band is named in the rule. mi0bot takes the higher
+band's mask whole, with no bit-6 handling. `RadioModel::republishAlexAdcSlices` hands
+AlexController the one band the pins follow, so the chain reports `Filtered`, and WIDE never
+shows for a band difference. WIDE shows when `0x00` is actually sent: ForceBypass,
+WidebandLocked, or pins that come to `0x00` because the band of the slice they follow has no pins
+set (WWV under the N2ADR preset, or a band the operator left empty) on a board with receive pins
+configured. Then the chain reports bypassed (`SwitchBypass::NoFilterPins`, from the same
+`hl2ReceivePins` result the connection sends), the WIDE reason names that slice ("Slice B on WWV
+has no filter pins set, so the filter board is off."), and there is no low-pass sentence
+(`lowPassSlice` -1). With no receive pins set on any band nothing is reported off, as before. The slices below the highest are held behind its filter; the
+low-pass reason names the slice the pins follow and, when bit 6 is cleared, adds a line naming
+the slice that needs the high-pass off (the top slice itself when its own mask lacks bit 6 and
+another's has it). 6m/ByPass on RX is an Alex switch; it changes neither the HL2's pins nor its
+reason. ForceBypass and WidebandLocked still force `0x00` (the 2026-08-01 maintainer note); keyed, the transmitting band's TX pins go out as before; the Alex
+boards are unchanged.
+
 Recompute triggers (16-row event matrix in §10).
 
 #### Producer and consumer (added 2026-06-01)
@@ -1524,12 +1551,25 @@ OpenHPSDR radio, it is scoped **per band**, and it is shared by both chains:
 a chain cannot serve a *different* antenna from the other chain. Rule 3 is restated in §16.2.3
 step 0.
 
-On the 7000D / 8000D / G2 / G2-1K / Anvelina Pro 3 the single selected antenna necessarily reaches
-both filter banks: there is no RX 2 jack (the RX-only inputs are BYPS / EXT1 / XVTR), no second
-selector, yet ADC1 has a complete BPF2 bank with its own step attenuator and its own 6 m LNA
-offset, and diversity works. **This is strong convergent inference, not a cited hardware fact.**
-No schematic or upstream comment states the split in words. It is therefore a bench row
-(§16.7 Q9), and the router's ADC-distribution step is gated on it.
+**Corrected 2026-09-30 (§16.7 Q9, answered by JJ on the G2).** An earlier version of this
+paragraph inferred that on the 7000D / 8000D / G2 / G2-1K / Anvelina Pro 3 the single selected
+antenna necessarily reaches both filter banks. That is wrong for the G2. On the G2, ADC1 is fed
+from the RX2 jack and is not on the antenna switch; ANT1, for both TX and RX, feeds ADC0 only. The one antenna selector above still holds (it is one selector, and it selects
+for ADC0); what it selects does not reach ADC1. This matches the codec's own comment,
+"on an ANAN-G2 the block diagram shows ADC1 fed from the RX2 ant jack while the Ant/TR switch
+feeds ADC0 only" (`P2CodecOrionMkII.cpp:1246-1249`), and the G2 bench results
+(`2026-05-26-phase3f-verification/g2-results.md` row 15: ADC1 needs a real feed on the RX2 jack
+to hear anything). The 7000D / 8000D / G2-1K / Anvelina Pro 3 were not benched; treat them as
+the G2 until a bench row says otherwise.
+
+Consequence for the router: distributing a slice on another band to ADC1 (the multi-slice
+filter options' option (a)) only helps when something is plugged into the RX2 jack. On a
+single-antenna station ADC1 hears nothing, so it would turn a bypassed chain into a silent
+slice. It is not the fix for two slices on two bands sharing ADC0. The fix is option (c): both
+Alex filters on ADC0 follow the slices counted on that input (the band-pass bypasses across
+their ranges, and the receive low-pass is set for the highest one, as Thetis does for RX1 and
+RX2), and the operator is told which slice the low-pass is set for. Option (a) stays a later,
+opt-in step for stations with a second antenna on the RX2 jack.
 
 On ANAN-100D / 200D the opposite holds: ADC1 is drawn hardwired to connector C2, labelled "RX 2"
 (`Path_Illustrator.cs:4380, 5009-5014, 5695 [v2.10.3.15]`), and deskhpsdr's own preset text says
@@ -2293,6 +2333,14 @@ depend on this answer.
 G2-1K / Anvelina Pro 3. Test: tune two slices to the same band on ANT1, force them onto different
 chains, confirm both hear signal. If this fails, Q2 must be answered "opt-in" and the ANAN-G2
 column of §16.6 loses its "no WIDE" outcomes.
+
+**Q9 closed 2026-09-30 (JJ, on the G2): no.** On the G2 the RX2 input (ADC1) is not on the
+antenna switch; ANT1, for both TX and RX, feeds ADC0 only, and ADC1 hears only what is plugged
+into the RX2 jack. §16.1.6 is corrected. So Q2 cannot be answered "auto": a second chain helps
+only a station with an antenna on the RX2 jack (how to offer it is still Q2's to decide), and
+the ANAN-G2 column of §16.6 loses its "no WIDE" outcomes for a
+single-antenna station. Moving a slice to ADC1 (option (a)) is not the fix for a shared input;
+option (c), both filters following the counted slices with the low-pass reason shown, is.
 
 **Q10. Thetis's ORIONMKII inconsistency.** Upstream writes Alex2 HPF bits for a board whose Alex2
 settings the operator can never see (`console.cs:15435` in the driver list,

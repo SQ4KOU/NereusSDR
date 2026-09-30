@@ -102,6 +102,9 @@
 //                the DSP worker once per stream, and frameReceived is posted
 //                once per drain, not once per packet. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (c)): m_countedSlotsAdc0,
+//                the DDCs the receive low-pass follows. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1136,6 +1139,11 @@ private:
     int     m_rx1Slot{-1};
     int     m_lastRetunedDdc{0};
     int     rx1Ddc() const { return m_rx1Slot >= 0 ? m_rx1Slot : m_lastRetunedDdc; }
+
+    // The DDCs of the slices counted on ADC0's input (AlexRxBpf::
+    // countedSlotsAdc0); the receive low-pass follows the highest. 0 = none
+    // counted, and the RX1 stand-in rule applies.
+    quint32 m_countedSlotsAdc0{0};
 
     // Recompute m_alex.hpfBits and m_alex.lpfBitsRx from the RX1 stand-in
     // (and, for the low-pass, the receiver beside it).

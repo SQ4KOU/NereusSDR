@@ -74,6 +74,12 @@
 //                [v2.10.3.15]); on the HL2 only when Swap audio channels is
 //                on, as mi0bot (networkproto1.c:1231-1239 [@c26a8a4]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters (ruling (c)): m_countedSlotsAdc0,
+//                the slots the receive low-pass and the HL2 OC receive band
+//                follow. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: countedCandidates.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -105,6 +111,7 @@
 #include "RadioConnection.h"
 #include "BoardCapabilities.h"
 #include "HpsdrModel.h"
+#include "SharedInputLowPass.h"
 #include "codec/IP1Codec.h"
 #include "codec/CodecContext.h"
 
@@ -848,6 +855,13 @@ private:
     quint32 m_liveSlotMask{0};
     int     m_rx1Slot{0};
 
+    // The frame slots of the slices counted on the input (AlexRxBpf::
+    // countedSlotsAdc0). The receive low-pass follows the highest, and on
+    // the HL2 the OC receive band follows the highest band among them
+    // (mi0bot Penny.cs UpdateExtCtrl). 0 = none counted, and the RX1
+    // stand-in rule applies.
+    quint32 m_countedSlotsAdc0{0};
+
     // Recompute the receive-side Alex selections (m_alexHpfBits and
     // m_alexLpfBitsRx) from the RX1 stand-in. `changedSlot` is the frame slot
     // whose frequency just moved, or -1 when the stand-in itself moved.
@@ -866,6 +880,10 @@ private:
     // The frequency whose band selects the OC outputs: the transmitting
     // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
     quint64 ocBandFrequencyHz() const;
+
+    // The receivers counted on the input, in slot order, with their DDC
+    // centres and slice VFOs (shared-input filters, ruling (c)).
+    QList<SharedInputLowPass::Candidate> countedCandidates() const;
 
     // HL2 mic decimation state.  At sample rates above 48 kHz the radio
     // embeds one mic sample per I/Q sample group in EP6 frames (so mic

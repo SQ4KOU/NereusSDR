@@ -12,6 +12,9 @@
 //                 Claude Code.
 //   2026-09-29 - radio's alexLpfBits is declared after logCategoryList.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - rxFilter0LowPassReason and rxFilter0LowPassSlice are
+//                 declared last. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -64,14 +67,17 @@ private slots:
         // Appended after every earlier property, so each keeps its wire
         // ordinal; it keeps its own (27) as later properties (txInhibitReason,
         // alexLpfBits, paTransmitBand, then the four Level Cal run
-        // properties) append after it.
+        // properties, then the shared-input low-pass reason and slice)
+        // append after it.
         QCOMPARE(index - meta.propertyOffset(), 27);
         QCOMPARE(meta.indexOfProperty("txInhibitReason"), index + 1);
         QCOMPARE(meta.indexOfProperty("alexLpfBits"), index + 2);
         QCOMPARE(meta.indexOfProperty("paTransmitBand"), index + 3);
         QCOMPARE(meta.indexOfProperty("levelCalRunning"), index + 4);
         QCOMPARE(meta.indexOfProperty("levelCalSucceeded"), index + 7);
-        QCOMPARE(index, meta.propertyCount() - 8);
+        QCOMPARE(meta.indexOfProperty("rxFilter0LowPassReason"), index + 8);
+        QCOMPARE(meta.indexOfProperty("rxFilter0LowPassSlice"), index + 9);
+        QCOMPARE(index, meta.propertyCount() - 10);
         RadioModel model;
         QCOMPARE(model.logCategoryList(), LogManager::instance().categoryListJson());
     }

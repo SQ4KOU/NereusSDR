@@ -9,6 +9,19 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Shared-input filters (rulings (c) and (d)):
+//                 rxFilter0LowPassReason and rxFilter0LowPassSlice, declared
+//                 last; lowPassHoldReason; the counted slices and 6m/ByPass
+//                 on RX as last applied. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-30 - Shared-input filters, follow-up: receiverVfoHzBySlot.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - lowPassHoldReason names the slices the HL2's N2ADR
+//                 broadcast-band high-pass is off for (JJ's ruling).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - m_hl2NoPinsSliceId: the slice the HL2 filter board is off
+//                 for (JJ's ruling). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-30 - Radio codec: connectMicCodecSignals and its test seam;
 //                 the radio speaker output tap. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -854,6 +867,13 @@ class RadioModel : public QObject {
     Q_PROPERTY(int levelCalPercent READ levelCalPercent NOTIFY levelCalStateChanged)
     Q_PROPERTY(QString levelCalMessage READ levelCalMessage NOTIFY levelCalStateChanged)
     Q_PROPERTY(bool levelCalSucceeded READ levelCalSucceeded NOTIFY levelCalStateChanged)
+    // Shared-input filters, ruling (d) 2026-09-30: why the receive low-pass
+    // on chain 0's input is held for one slice, and that slice's id (-1 when
+    // none is). Peer-only, to a peer that declared rxFilterLowPass 1
+    // (rxFilterLowPassVersion 1). Declared last so every earlier property
+    // keeps its wire ordinal.
+    Q_PROPERTY(QString rxFilter0LowPassReason READ rxFilter0LowPassReason NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter0LowPassSlice READ rxFilter0LowPassSlice NOTIFY filterStateChanged)
 
 
 public:
@@ -1695,6 +1715,10 @@ public:
     int rxFilter1Effective() const { return static_cast<int>(filterChainState(1).effective); }
     int rxFilter1Band() const { return static_cast<int>(filterChainState(1).currentBpfBand); }
     QString rxFilter1Reason() const { return filterChainState(1).reasonText; }
+    // Shared-input filters, ruling (d): the low-pass reason and the slice
+    // that forces it, chain 0 (the receive low-pass is on ADC0's input).
+    QString rxFilter0LowPassReason() const { return filterChainState(0).lowPassReason; }
+    int rxFilter0LowPassSlice() const { return filterChainState(0).lowPassSlice; }
 
     // ── Plan Task 14 fix wave (R-R3-49): the band outputs on the wire ──────
     //
@@ -1843,6 +1867,15 @@ public:
     /// Policy dialog can show the same wording the badge tooltip carries.
     QString bypassReasonForAdc(int adc,
                                const AlexController::AlexAdcState& st) const;
+
+    /// Shared-input filters, ruling (d): the sentence saying which slice
+    /// sets the receive low-pass on the input (`top`) and which counted
+    /// slices it holds to it (`held`). AlexAdcState::lowPassReason. On the
+    /// HL2, `highPassOff` names the slices the N2ADR broadcast-band
+    /// high-pass is off for; `top` may then be null when none is held.
+    QString lowPassHoldReason(const SliceModel* top,
+                              const QList<const SliceModel*>& held,
+                              const QList<const SliceModel*>& highPassOff = {}) const;
 
     // Band-plan overlay manager — loaded once on construction from bundled
     // Qt resource JSON files. Active plan persists in AppSettings under
@@ -6588,6 +6621,7 @@ public:
     /// slice letter speaks for it, as VFO A does in Thetis. Runs on the same
     /// triggers as republishAlexAdcSlices.
     void republishReceiverVfoFrequencies();
+    QVector<quint64> receiverVfoHzBySlot() const;
 
     /// Phase 3F Sub-Epic I closeout, defect H1: put the DSP side of the pool
     /// back in step with the allocator after anything moves a stream's rate
@@ -7379,6 +7413,18 @@ private:
     // high-pass from them, as the connection does.
     codec::alex::AlexHpfEdges m_alexHpfEdges{codec::alex::AlexHpfEdges::thetisDefaults()};
     codec::alex::AlexLpfEdges m_alexLpfEdges{codec::alex::AlexLpfEdges::thetisDefaults()};
+    // Shared-input filters, ruling (d): 6m/ByPass on RX as last applied
+    // (applyAlexHpfSwitchSettings). On, the receive low-pass is the 6 m
+    // filter for every slice and no slice holds it.
+    bool m_alexLpfBypassSwitch{false};
+    // Shared-input filters, ruling (c): the slice ids republishAlexAdcSlices
+    // counted on each chain (away and unbound slices left out), for
+    // bypassReasonForAdc's range names.
+    std::array<QList<int>, 2> m_alexCountedSliceIds{};
+    // JJ's ruling of 2026-09-30: on the HL2, the slice whose band has no
+    // N2ADR pins set when the pins sent come to 0x00 (hl2ReceivePins
+    // boardOff), for bypassReasonForAdc. -1 otherwise.
+    int m_hl2NoPinsSliceId{-1};
     // alexLpfBits(): -1 until the connection (or the Core) reports one.
     int m_alexLpfBits{-1};
     // Level Cal: the Core's run (local role), created on first use.
