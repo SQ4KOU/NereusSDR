@@ -450,7 +450,7 @@ private slots:
     void withEveryPathOpenTheDirectPathWins()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -481,7 +481,7 @@ private slots:
     void withOnlyTheServiceTheServiceWinsThenMovesToTheAddress()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         const quint16 port = closedPort();
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -527,7 +527,7 @@ private slots:
     void anUpgradeWaitsWhileKeyedOrVoxArmed()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         const quint16 port = closedPort();
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
@@ -594,7 +594,7 @@ private slots:
     void theRankIsTheSettledPairsAtSnapshotComplete()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -640,7 +640,7 @@ private slots:
     void aTicketRefusedForNowKeepsTheLookStep()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -705,7 +705,7 @@ private slots:
     {
         LocalService service(/*stun=*/true, /*relay=*/false);
         service.setRelayGrants(true);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
@@ -736,7 +736,7 @@ private slots:
     {
         QFETCH(bool, recorded);
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
         core.server->setRelayAllowed(false);
@@ -788,7 +788,7 @@ private slots:
         QFETCH(bool, tooOld);
         QVERIFY(OperatorWording::isPlain(words));
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
         rendezvous.setAnswersIntroductionsForTest(false);
@@ -814,7 +814,7 @@ private slots:
     {
         Core core;
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Window window(core);
         window.route(service, RendezvousWire::rendezvousId(
                                   core.server->stationIdentity().publicKeySpki()),
@@ -834,7 +834,7 @@ private slots:
     void aStaleNegativeRouteIsRecheckedWhenTheRaceStarts()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
         core.server->setRelayAllowed(false);

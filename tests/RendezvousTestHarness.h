@@ -17,11 +17,16 @@
 //   2026-09-27: moved out of tst_rendezvous_client for Task 29 by J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-29: LocalService waits for the service's own "listening on"
+//               line, fails at once if it exits, and says why with its
+//               output (startFailure). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
 #include <QHostAddress>
@@ -111,6 +116,16 @@ inline quint16 freeTcpPort()
 
 class LocalService {
 public:
+    /// How long a live service may take to be listening. A test executable
+    /// gets ctest's default TIMEOUT of 120 s (tests/CMakeLists.txt,
+    /// nereus_add_test); half of it leaves the other half for the test
+    /// body, so a service that is merely slow to start is reported here,
+    /// with its output, before ctest kills the executable with none. A
+    /// service that fails exits and is reported at once, and a ready one
+    /// returns as soon as it says so, so the bound costs nothing when all
+    /// is well.
+    static constexpr int kServiceReadyBoundMs = 60000;
+
     /// `stun`: the service's hello names the fake's STUN server. `relay`:
     /// the service mints relay credentials for the fake's TURN server.
     explicit LocalService(bool stun = true, bool relay = true) : m_stun(stun), m_relay(relay) {}
@@ -131,7 +146,9 @@ public:
 
     bool start()
     {
+        m_startFailure.clear();
         if ((m_stun || m_relay) && !startTurn()) {
+            m_startFailure = QStringLiteral("the fake TURN server did not start");
             return false;
         }
         m_port = freeTcpPort();
@@ -154,6 +171,7 @@ public:
         }
         QFile config(m_dir.filePath(QStringLiteral("rendezvous.conf")));
         if (!config.open(QIODevice::WriteOnly)) {
+            m_startFailure = QStringLiteral("could not write %1").arg(config.fileName());
             return false;
         }
         const QString stun = m_stun ? QStringLiteral("stun:127.0.0.1:%1").arg(m_turnPort)
@@ -177,32 +195,75 @@ public:
     }
 
     // Starts the service again on the same port, as after a restart.
+    //
+    // Ready means the service's own "listening on" line (nereus_rendezvous
+    // __main__.run logs it once every listening socket is serving), read
+    // from its standard error. A process that exits first fails at once,
+    // with its output. The bound only governs a service still starting;
+    // see kServiceReadyBoundMs.
     bool launch()
     {
+        m_startFailure.clear();
+        const qsizetype logFrom = m_log.size();
         m_process = std::make_unique<QProcess>();
         QProcessEnvironment env = pythonEnvironment();
         env.insert(QStringLiteral("PYTHONPATH"),
                    QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/server"));
+        env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
         m_process->setProcessEnvironment(env);
         m_process->setWorkingDirectory(m_dir.path());
+        QElapsedTimer elapsed;
+        elapsed.start();
+        const QDeadlineTimer deadline(kServiceReadyBoundMs);
         m_process->start(QStringLiteral("python3"),
                          {QStringLiteral("-m"), QStringLiteral("nereus_rendezvous"),
                           QStringLiteral("--config"),
                           m_dir.filePath(QStringLiteral("rendezvous.conf"))});
-        if (!m_process->waitForStarted(10000)) {
+        if (!m_process->waitForStarted(static_cast<int>(deadline.remainingTime()))) {
+            m_startFailure = QStringLiteral("python3 did not start: %1")
+                                 .arg(m_process->errorString());
             return false;
         }
-        QDeadlineTimer deadline(15000);
-        while (!deadline.hasExpired()) {
-            QTcpSocket probe;
-            probe.connectToHost(QHostAddress::LocalHost, m_port);
-            if (probe.waitForConnected(200)) {
+        while (true) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_stdout += QString::fromUtf8(m_process->readAllStandardOutput());
+            if (m_log.indexOf(QLatin1String("listening on "), logFrom) >= 0) {
+                m_readyMs = elapsed.elapsed();
                 return true;
             }
-            QTest::qWait(50);
+            if (m_process->state() == QProcess::NotRunning) {
+                m_startFailure = QStringLiteral("the service exited (code %1) before it was "
+                                                "listening, after %2 ms")
+                                     .arg(m_process->exitCode())
+                                     .arg(elapsed.elapsed());
+                return false;
+            }
+            if (deadline.hasExpired()) {
+                m_startFailure = QStringLiteral("the service was not listening after %1 ms")
+                                     .arg(elapsed.elapsed());
+                return false;
+            }
+            m_process->waitForReadyRead(
+                static_cast<int>(qMin<qint64>(100, deadline.remainingTime())));
         }
-        return false;
     }
+
+    /// Why start() or launch() returned false, with everything the service
+    /// wrote, for QVERIFY2.
+    QString startFailure()
+    {
+        if (m_process) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_stdout += QString::fromUtf8(m_process->readAllStandardOutput());
+        }
+        return QStringLiteral("%1\n--- service stderr ---\n%2\n--- service stdout ---\n%3")
+            .arg(m_startFailure.isEmpty() ? QStringLiteral("(no failure recorded)")
+                                          : m_startFailure,
+                 m_log, m_stdout);
+    }
+
+    /// How long the last launch took to be ready.
+    qint64 readyMs() const { return m_readyMs; }
 
     void stop()
     {
@@ -291,6 +352,9 @@ private:
     std::unique_ptr<QProcess> m_process;
     std::unique_ptr<QProcess> m_turn;
     QString m_log;
+    QString m_stdout;
+    QString m_startFailure;
+    qint64 m_readyMs = -1;
     QString m_turnLog;
 };
 

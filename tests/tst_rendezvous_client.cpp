@@ -2127,7 +2127,7 @@ private slots:
     {
         // STUN only: the service has no relay, so the connection is direct.
         LocalService service(/*stun=*/true, /*relay=*/false);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2169,7 +2169,7 @@ private slots:
     void aDirectPathIsPreferredOverTheRelay()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2198,7 +2198,7 @@ private slots:
     {
         LocalService service;
         service.setRelayFull(true);
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2235,7 +2235,7 @@ private slots:
     void withOnlyRelayCandidatesTheRelayCarriesTheConnection()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2268,7 +2268,7 @@ private slots:
     void relayDeniedAsksForNoCredentials()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2294,7 +2294,7 @@ private slots:
     void unpairedAndRevokedDevicesGetNoAnswerAndAreCounted()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto stranger = makeKey();
         auto revoked = makeKey();
@@ -2335,7 +2335,7 @@ private slots:
     {
         QVERIFY(SpakeExchange::isAvailable());
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         RecordingRelay relay(service.url());
         Core core;
         QVERIFY(core.server->pairingWindow()->isOpen());
@@ -2439,7 +2439,7 @@ private slots:
     {
         QVERIFY(SpakeExchange::isAvailable());
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
         rendezvous.setAnswersIntroductionsForTest(false);
@@ -2508,7 +2508,7 @@ private slots:
     void aSessionOutlivesTheService()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2538,7 +2538,7 @@ private slots:
         QVERIFY(pair.answerer()->isReady());
 
         // The Core registers again once the service is back.
-        QVERIFY(service.launch());
+        QVERIFY2(service.launch(), qPrintable(service.startFailure()));
         QTRY_VERIFY_WITH_TIMEOUT(registered.size() >= 2, 20000);
         QVERIFY(pair.offerer()->isReady());
     }
@@ -2550,7 +2550,7 @@ private slots:
                   "loopback one reaches no server).");
         }
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
@@ -2913,7 +2913,7 @@ private slots:
     void aSessionRunsThroughTheServiceAndGivesTheRelayBack()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -3017,7 +3017,7 @@ private slots:
     void aRelayDeniedCoresMediaSettingsAreSettled()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         Core core;
         QTemporaryDir keyDir;
         auto key = std::make_shared<const ClientDeviceIdentity>(
@@ -3052,7 +3052,7 @@ private slots:
     void aSessionOutlivesTheCoresRegisteringAgain()
     {
         LocalService service;
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         LossyLink link(service.port());
         Core core;
         QTemporaryDir keyDir;
@@ -3410,8 +3410,8 @@ private slots:
     {
         LocalService first(/*stun=*/false, /*relay=*/false);
         LocalService second(/*stun=*/false, /*relay=*/false);
-        QVERIFY(first.start());
-        QVERIFY(second.start());
+        QVERIFY2(first.start(), qPrintable(first.startFailure()));
+        QVERIFY2(second.start(), qPrintable(second.startFailure()));
         Core core;
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));

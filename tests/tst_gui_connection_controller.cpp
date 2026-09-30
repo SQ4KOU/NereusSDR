@@ -513,7 +513,7 @@ void TestGuiConnectionController::codeOnlyDialogPairsThroughMailboxAndOpensRemot
 {
     using namespace NereusSDR::Test::Rendezvous;
     LocalService service;
-    QVERIFY(service.start());
+    QVERIFY2(service.start(), qPrintable(service.startFailure()));
     Core core;
     StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
     QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);

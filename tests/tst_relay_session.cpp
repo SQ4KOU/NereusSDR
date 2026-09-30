@@ -182,7 +182,7 @@ private slots:
         LocalService service(/*stun=*/false, /*relay=*/false);
         service.setRelayGrants(true);
         RelayLeg::setRelayUrlForTest(QUrl(relay.url()));
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         CoreThroughService station;
         QVERIFY(station.start(service));
         IceConfiguration::setOnlyLoopbackShimCandidatesForTest(true);
@@ -285,7 +285,7 @@ private slots:
         LocalService service(/*stun=*/false, /*relay=*/false);
         service.setRelayGrants(true);
         RelayLeg::setRelayUrlForTest(QUrl(relay.url()));
-        QVERIFY(service.start());
+        QVERIFY2(service.start(), qPrintable(service.startFailure()));
         CoreThroughService station;
         QVERIFY(station.start(service));
 
