@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original Setup description transport.
 // 2026-09-29: setOnAirState, one revision per on-air edge. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-30: Hardware version 23, Calibration's Rx1 6m LNA row. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/setup/SetupDescriptionService.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/MirrorSchema.h"
@@ -189,6 +191,20 @@ constexpr char kHardwareV18Controls[] =
     R"json({"id":"hardware.hl2Io.cl2Enable","label":"Enable CL2","tooltip":"Enable frequency output on CL2","kind":"toggle","binding":{"radioSetting":"hl2/cl2Enable"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"default":false},)json"
     R"json({"id":"hardware.hl2Io.cl2Freq","label":"CL2 frequency","tooltip":"Output frequency on CL2 output","kind":"decimal","binding":{"radioSetting":"hl2/cl2FreqMHz"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"min":1,"max":200,"step":0.1,"decimals":3,"unit":"MHz","enabledWhen":{"radioSetting":"hl2/cl2Enable","oneOf":[true]},"default":116},)json"
     R"json({"id":"hardware.hl2Io.ext10MHz","label":"External 10 MHz reference","tooltip":"Enable external 10 MHz input on CL1","kind":"toggle","binding":{"radioSetting":"hl2/ext10MHz"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":18,"default":false})json"
+    R"json(])json";
+
+// Hardware version 23: Calibration's Level Cal "Rx1 6m LNA" row, the
+// desktop Calibration tab's spin box (CalibrationTab m_rx1LnaSpin), bound to
+// the same per-radio key the Core already takes and applies to its receive
+// calibration ("cal" reload, RadioModel::refreshRxMeterOffset). Range, step,
+// places and default are the tab's:
+// From Thetis setup.designer.cs:12089-12116 [v2.10.3.15] ud6mLNAGainOffset:
+// 0..25 dB, step 1, one decimal, 13 dB.
+// The Core refuses a value outside 0..25 (calibrationKeyValueRefusal).
+// Closed as the version 13 rows are.
+constexpr char kHardwareV23Controls[] =
+    R"json([)json"
+    R"json({"id":"hardware.calibration.rx1_6mLna","label":"Rx1 6m LNA:","tooltip":"","kind":"decimal","binding":{"radioSetting":"cal/rx1_6mLna"},"applies":"live","gate":{"capability":"radioHardwareVersion","min":1},"requiresDescriptionVersion":23,"min":0,"max":25,"step":1,"decimals":1,"unit":"dB","default":13})json"
     R"json(])json";
 
 // Transmit version 13 (R-R3-49): Power's PA Control group, "Disable HF PA",
@@ -433,6 +449,12 @@ const QHash<QString, QJsonObject>& hardwareV16Controls()
 const QHash<QString, QJsonObject>& hardwareV18Controls()
 {
     static const QHash<QString, QJsonObject> table = controlsById(kHardwareV18Controls);
+    return table;
+}
+
+const QHash<QString, QJsonObject>& hardwareV23Controls()
+{
+    static const QHash<QString, QJsonObject> table = controlsById(kHardwareV23Controls);
     return table;
 }
 
@@ -705,8 +727,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
               && root.value(QStringLiteral("version")) == QJsonValue(19))
          && !(id == QLatin1String("transmit")
               && root.value(QStringLiteral("version")) == QJsonValue(13))
+         // Version 23: Calibration's Rx1 6m LNA row.
          && !(id == QLatin1String("hardware")
-              && root.value(QStringLiteral("version")) == QJsonValue(18))
+              && root.value(QStringLiteral("version")) == QJsonValue(23))
          // Version 21: CAT & Network's TCI Forget row greys out with Duplicate.
          && !(id == QLatin1String("catNetwork")
               && root.value(QStringLiteral("version")) == QJsonValue(21))
@@ -839,7 +862,9 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                                          || control.value(QStringLiteral("requiresDescriptionVersion"))
                                              == QJsonValue(17)
                                          || control.value(QStringLiteral("requiresDescriptionVersion"))
-                                             == QJsonValue(18))))))
+                                             == QJsonValue(18)
+                                         || control.value(QStringLiteral("requiresDescriptionVersion"))
+                                             == QJsonValue(23))))))
                     || (control.value(QStringLiteral("kind")) == QJsonValue(QStringLiteral("table"))
                         && !((id == QLatin1String("dsp")
                               && SetupDescription::validateTnfTable(control))
@@ -881,7 +906,8 @@ QString loadCategory(const QString& id, const BoardCapabilities& caps, HPSDRMode
                         && !SetupDescription::validateAntennaRowsTable(control)
                         && !SetupDescription::validateHardwareV13Control(control)
                         && !SetupDescription::validateHardwareV16Control(control)
-                        && !SetupDescription::validateHardwareV18Control(control))
+                        && !SetupDescription::validateHardwareV18Control(control)
+                        && !SetupDescription::validateHardwareV23Control(control))
                     || (id == QLatin1String("pa")
                         && !SetupDescription::validatePaReadoutBinding(control)
                         && !SetupDescription::validatePaDriveReadoutBinding(control)
@@ -2242,6 +2268,13 @@ bool SetupDescription::validateHardwareV18Control(const QJsonObject& control)
     return row != hardwareV18Controls().constEnd() && control == *row;
 }
 
+bool SetupDescription::validateHardwareV23Control(const QJsonObject& control)
+{
+    const auto row = hardwareV23Controls().constFind(
+        control.value(QStringLiteral("id")).toString());
+    return row != hardwareV23Controls().constEnd() && control == *row;
+}
+
 bool SetupDescription::validateTransmitSettingBinding(const QJsonObject& control)
 {
     const QJsonObject binding = control.value(QStringLiteral("binding")).toObject();
@@ -2977,8 +3010,9 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         : SetupDescriptionV15::isCategory(categoryId)
             && version >= SetupDescriptionV15::kVersion ? SetupDescriptionV15::kVersion
         // Hardware changed at 16 (HL2 Options), 17 (the Alex-1 low-pass
-        // rows) and 18 (HL2 Options' clock rows).
-        : categoryId == QLatin1String("hardware") ? 18
+        // rows), 18 (HL2 Options' clock rows) and 23 (Calibration's Rx1 6m
+        // LNA row): 18 to 22 see 18.
+        : categoryId == QLatin1String("hardware") ? (version >= 23 ? 23 : 18)
         : categoryId == QLatin1String("transmit") ? 13
         // PA changed at 20 (PA Gain's on-the-air lock per row): 14 to 19
         // see 14.
@@ -2993,7 +3027,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
                             ? 7
                         : categoryId == QLatin1String("display") && version < 8
                             ? qMin(version, 4)
-                        // Hardware changed at 6, 13, 16, 17 and 18, PA at 5 and 13.
+                        // Hardware changed at 6, 13, 16, 17, 18 and 23, PA at 5 and 13.
                         : categoryId == QLatin1String("hardware") && version < 13
                             ? qMin(version, 6)
                         : categoryId == QLatin1String("hardware") && version < 16
@@ -3018,7 +3052,7 @@ QString SetupDescription::fitCategoryForVersion(const QString& description, int 
         }
         category.insert(QStringLiteral("pages"), fittedPages);
     }
-    // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17 and 18;
+    // PA changed at 5, 13, 14 and 20; hardware at 6, 13, 16, 17, 18 and 23;
     // transmit at 13; DSP, Transmit, Audio, Diagnostics and CAT & Network at
     // 15; DSP at 19; CAT & Network at 21.
     if (version >= 2 && version < SetupDescriptionV15::kVersion

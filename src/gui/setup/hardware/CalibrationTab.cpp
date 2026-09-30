@@ -66,6 +66,15 @@
 //                 complete, and is disabled with its reason where the
 //                 Core cannot run it. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Rx1 6m LNA carries its Setup description id (version 23).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2: at the hosting desktop, Start names the
+//                 desktop's own active slice when another device owns the
+//                 station's. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-30 - Level Cal 2 review: with no slice the desktop may
+//                 change, Start is disabled with the ownership words.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -175,6 +184,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/CalibrationController.h"
 #include "core/RadioDiscovery.h"
+#include "core/SliceOwnership.h"
 #include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 
@@ -303,6 +313,8 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
     // step 1, one decimal, 13 dB.
     m_rx1LnaSpin = makeSpinBox(0.0, 25.0, 13.0, 1.0, 1, levelCalGroup);
     m_rx1LnaSpin->setObjectName(QStringLiteral("rx1SixMeterLnaSpin"));
+    // Setup description version 23 describes this box to remote windows.
+    m_rx1LnaSpin->setProperty("nereusSetupId", "hardware.calibration.rx1_6mLna");
     m_rx1LnaSpin->setSuffix(tr(" dB"));
     levelCalForm->addRow(tr("Rx1 6m LNA:"), m_rx1LnaSpin);
 
@@ -533,6 +545,18 @@ CalibrationTab::CalibrationTab(RadioModel* model, QWidget* parent)
                 this, &CalibrationTab::refreshLevelCalControls);
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &CalibrationTab::refreshLevelCalControls);
+        // Level Cal 2: whose the station's active slice is decides whether
+        // the hosting desktop's Start can run.
+        connect(m_model, &RadioModel::activeSliceChanged,
+                this, [this](int) { refreshLevelCalControls(); });
+        if (SliceOwnership* owners = m_model->sliceOwnership()) {
+            connect(owners, &SliceOwnership::markChanged, this,
+                    [this](int, const QByteArray&, const QByteArray&) { refreshLevelCalControls(); });
+            connect(owners, &SliceOwnership::activeChanged,
+                    this, &CalibrationTab::refreshLevelCalControls);
+            connect(owners, &SliceOwnership::listenersChanged,
+                    this, [this](int) { refreshLevelCalControls(); });
+        }
         // The Core refused a start this window sent.
         connect(m_model, &RadioModel::levelCalibrationRefused, this, [this](const QString& reason) {
             m_levelCalStartedHere = false;
@@ -818,12 +842,18 @@ void CalibrationTab::refreshLevelCalControls()
 
     // From Thetis setup.cs:6525-6526 and 6557-6558 [v2.10.3.15]: Start and
     // Reset are off while the run goes and back on when it ends.
-    m_levelCalStartBtn->setEnabled(runAvailable && !running);
+    // Level Cal 2: at the hosting desktop, a station active slice the
+    // desktop may not change, with no slice of its own, disables Start
+    // with the ownership words (RadioModel::levelCalHostSlice).
+    QString hostRefusal;
+    m_model->levelCalHostSlice(&hostRefusal);
+    m_levelCalStartBtn->setEnabled(runAvailable && !running && hostRefusal.isEmpty());
     m_levelCalStartBtn->setToolTip(
-        !runAvailable ? IStationLink::levelCalibrationRunUnavailableReason()
-        : running     ? runningReason
-                      : tr("Measure a signal of the level and frequency above and "
-                           "set the receive level calibration from it."));
+        !runAvailable           ? IStationLink::levelCalibrationRunUnavailableReason()
+        : running               ? runningReason
+        : !hostRefusal.isEmpty() ? hostRefusal
+                                : tr("Measure a signal of the level and frequency above and "
+                                     "set the receive level calibration from it."));
     m_levelCalResetBtn->setEnabled(resetAvailable && !running);
     m_levelCalResetBtn->setToolTip(
         !resetAvailable ? IStationLink::levelCalibrationResetUnavailableReason()
@@ -861,9 +891,22 @@ void CalibrationTab::startLevelCalibration()
         return; //MW0LGE_[2.9.0.6] double check we want to do this, prevents accidental click from changing config
     }
     // Thetis calibrates RX1 on VFO A; here the active slice (-1).
+    // Level Cal 2: a remote window names its own active slice
+    // (RadioModel::requestStartLevelCalibration). At the hosting desktop -1
+    // is the station's active slice while the station may change it; else
+    // the desktop's own active slice; with neither Start is disabled with
+    // the reason (refreshLevelCalControls), and refused here the same way.
+    QString hostRefusal;
+    const int sliceId = m_model->levelCalHostSlice(&hostRefusal);
+    if (!hostRefusal.isEmpty()) {
+        if (m_levelCalTell) {
+            m_levelCalTell(tr("Level Calibration"), hostRefusal, true);
+        }
+        return;
+    }
     m_levelCalStartedHere = true;
     const QString reason = m_model->requestStartLevelCalibration(
-        static_cast<float>(m_levelCalLevelSpin->value()), m_levelCalFreqSpin->value(), -1);
+        static_cast<float>(m_levelCalLevelSpin->value()), m_levelCalFreqSpin->value(), sliceId);
     if (!reason.isEmpty()) {
         m_levelCalStartedHere = false;
         if (m_levelCalTell) {

@@ -3875,6 +3875,13 @@ public:
     // otherwise the reason it was not. A refusal the Core sends later
     // arrives as levelCalibrationRefused.
     QString requestStartLevelCalibration(float levelDbm, double frequencyHz, int sliceId);
+    // Level Cal 2: the slice the hosting desktop's Start names. -1 (the
+    // station's active slice) when the station may change that one (its
+    // own, or one nobody controls or listens to); else the desktop's own
+    // active slice; else -1 with *refusal set to the ownership words, and
+    // the desktop's Start is disabled with them. -1 and no refusal in a
+    // remote window, which names its own slice (requestStartLevelCalibration).
+    int levelCalHostSlice(QString* refusal = nullptr) const;
     QString requestCancelLevelCalibration();
     bool levelCalRunning() const;
     int levelCalPercent() const;

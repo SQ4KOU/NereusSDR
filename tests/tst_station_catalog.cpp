@@ -49,6 +49,9 @@
 //               board.relays among the keys the G2 and HL2 differ in
 //               (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: board.rx2Attenuator and rx2AttenuatorReason among the keys
+//               the G2 and HL2 differ in (Level Cal 2). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -841,7 +844,8 @@ private slots:
                                 QStringLiteral("rxOnlyInputs"), QStringLiteral("txAntennas"),
                                 QStringLiteral("sampleRates"), QStringLiteral("paRatingW"),
                                 QStringLiteral("micJack"), QStringLiteral("transmit"),
-                                QStringLiteral("relays")}));
+                                QStringLiteral("relays"), QStringLiteral("rx2Attenuator"),
+                                QStringLiteral("rx2AttenuatorReason")}));
         // Neither has the RX1 preamp (tst_catalogue_ranges holds the
         // transmit ranges and the relays against the widgets).
         QCOMPARE(g2.value(QStringLiteral("board")).toObject().value(QStringLiteral("rx1Preamp")),

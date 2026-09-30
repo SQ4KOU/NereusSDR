@@ -65,6 +65,9 @@
 //                 40883-40889 [v2.10.3.15]), local and remote; a remote
 //                 window of an older Core shows it disabled with the reason.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Level Cal 2 review: a slice on the other ADC's S-ATT box
+//                 stops at 31 dB (rx2MaxAttenuation). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -471,6 +474,10 @@ void RxApplet::showStepAttValueForSlice()
     // attenuator (Thetis RX2's), every other slice slice A's.
     const int sliceId = m_slice ? m_slice->sliceIndex() : 0;
     int dB = 0;
+    // Level Cal 2 review: a slice on the other ADC stops at RX2's own top,
+    // the second ADC's 0-31 dB field (StepAttenuatorController::
+    // rx2MaxAttenuation); every other slice at RX1's.
+    int maxDb = m_stepAttSpin->maximum();
     if (m_model->ownsLocalDsp()) {
         const StepAttenuatorController* c = m_model->stepAttController();
         if (!c) {
@@ -479,14 +486,21 @@ void RxApplet::showStepAttValueForSlice()
         const bool rx2 = sliceId >= 0 && sliceId < 32
             && (c->rx2SliceMask() & (1u << sliceId)) != 0;
         dB = rx2 ? c->rx2AttenuatorDb() : c->attenuatorDb();
+        maxDb = rx2 ? c->rx2MaxAttenuation() : c->maxAttenuation();
     } else {
         const StepAttenuatorFacade* stepAtt = m_model->stepAttFacade();
         if (!stepAtt) {
             return;
         }
         dB = stepAtt->attenuationDbForSlice(sliceId);
+        if (stepAtt->windowAvailable()) {
+            maxDb = stepAtt->sliceUsesRx2(sliceId)
+                ? std::min(stepAtt->maxDb(), StepAttenuatorController::kRx2StepAttMaxDb)
+                : stepAtt->maxDb();
+        }
     }
     QSignalBlocker blk(m_stepAttSpin);
+    m_stepAttSpin->setMaximum(maxDb);
     m_stepAttSpin->setValue(dB);
 }
 

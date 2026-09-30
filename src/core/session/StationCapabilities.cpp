@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: Level Cal 2: rx2AttenuatorVersion, after the direct media
+//               ladder and before coreBuildInfo. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: mediaDirectVersion and
 //               mediaStunUrls, before coreBuildInfo. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -494,6 +497,13 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             "mediaStunUrls",
             QString::fromUtf8(QJsonDocument(urls).toJson(QJsonDocument::Compact))));
     }
+    // Level Cal 2: RX2's input control in the catalogue, after the direct
+    // media ladder and before coreBuildInfo (which stays last), only for a
+    // peer that declared rx2Attenuator; an older peer's descriptor is
+    // unchanged.
+    if (rx2AttenuatorVersion > 0) {
+        updates.append(intEntry("rx2AttenuatorVersion", rx2AttenuatorVersion));
+    }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
@@ -513,6 +523,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     std::optional<CoreBuildInfo> buildInfo;
     int mediaDirectEntries = 0;
     int mediaStunEntries = 0;
+    int rx2AttenuatorEntries = 0;
     for (const MirrorUpdate& u : updates) {
         if (u.name == "mediaDirectVersion") {
             // The direct media ladder: one entry, an Int64 of 1 or more.
@@ -520,6 +531,15 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong version = u.value.toLongLong();
                 caps.mediaDirectVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "rx2AttenuatorVersion") {
+            // Level Cal 2: one entry, an Int64 of 1 or more.
+            if (++rx2AttenuatorEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.rx2AttenuatorVersion = version > 0 && version <= 65535
                     ? static_cast<int>(version) : 0;
             }
         } else if (u.name == "mediaStunUrls") {

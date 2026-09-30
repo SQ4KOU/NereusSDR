@@ -29,6 +29,10 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  Level Cal: rx2PreampMode, RX2's own
 //                                    preamp mode. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Level Cal 2 review: rx2AttenuationDb
+//                                    stops at RX2's own top (0-31 dB)
+//                                    unless linked. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -469,11 +473,18 @@ void StepAttenuatorFacade::setRx2AttenuationDb(int dB)
     }
     if (StepAttenuatorController* c = m_controller.data()) {
         const int lo = c->minAttenuation();
-        const int hi = c->maxAttenuation();
+        // Level Cal 2 review: RX2's own value stops at the second ADC's
+        // field (StepAttenuatorController::rx2MaxAttenuation); linked, it
+        // is RX1's and takes RX1's range.
+        const bool linked = c->adcAttenuatorsLinked();
+        const int hi = linked ? c->maxAttenuation() : c->rx2MaxAttenuation();
         const int kept = std::clamp(dB, lo, hi);
         if (kept != dB) {
             settle("rx2AttenuationDb",
-                   QStringLiteral("This radio's attenuator goes from %1 to %2 dB.").arg(lo).arg(hi));
+                   linked ? QStringLiteral("This radio's attenuator goes from %1 to %2 dB.")
+                                .arg(lo).arg(hi)
+                          : QStringLiteral("RX2's attenuator goes from %1 to %2 dB.")
+                                .arg(lo).arg(hi));
         }
         c->setRx2Attenuation(kept);
         refresh();
