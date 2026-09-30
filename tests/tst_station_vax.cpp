@@ -196,6 +196,9 @@ struct Device {
         if (!arrived) {
             found.reason = QStringLiteral("no property.result arrived");
         }
+        // QVERIFY's check without its bare return (this returns a value);
+        // the timeout also stays in found.reason for the caller.
+        QTest::qVerify(arrived, "arrived", "", __FILE__, __LINE__);
         return found;
     }
     SessionMessage invoke(const QByteArray& verb, const QList<MirrorUpdate>& arguments)
@@ -216,6 +219,8 @@ struct Device {
         if (!arrived) {
             found.reason = QStringLiteral("no command.result arrived");
         }
+        // As write() does.
+        QTest::qVerify(arrived, "arrived", "", __FILE__, __LINE__);
         return found;
     }
     // Every vaxLevels record this device received, oldest first.

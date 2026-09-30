@@ -1003,6 +1003,11 @@ private:
     // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
     // meters from the Core's `txState`.
     void wireRemoteTransmitMeters();
+    // iPhone app plan Task 25 (R-IOS-18): the VAX applet's "Station
+    // computer" section from the Core's `vax` object, shown while the Core
+    // sends it, with its meters subscribed only while the applet shows it.
+    void wireRemoteStationVax();
+    void refreshRemoteStationVax();
     // iPhone app plan Task 78 (R-IOS-02, R-IOS-30): the remote window's
     // screens for several devices on one Core (MultiDeviceController), the
     // bottom banner's holder, the TX pill and applet button that take

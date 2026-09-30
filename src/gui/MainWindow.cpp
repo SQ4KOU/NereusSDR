@@ -471,6 +471,12 @@
 //   2026-09-30 - TX rulings (item 3): refreshOverlayAttAccess, each pan's
 //               ATT flyout held on a slice this window only listens to.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): a remote window's VAX
+//                applet gains the "Station computer" section, the Core
+//                computer's VAX through the Core's `vax` object, its TX row
+//                on the transmit permission and its meters subscribed only
+//                while the applet shows it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2476,6 +2482,26 @@ void MainWindow::connectToStation()
     if (m_remoteConnection) { m_remoteConnection->connectToStation(); }
 }
 
+void MainWindow::wireRemoteStationVax()
+{
+    if (m_stationClient == nullptr) {
+        return;
+    }
+    connect(m_stationClient, &StationClient::stationVaxAvailabilityChanged, this,
+            &MainWindow::refreshRemoteStationVax);
+    refreshRemoteStationVax();
+}
+
+void MainWindow::refreshRemoteStationVax()
+{
+    if (m_vaxApplet == nullptr || m_stationClient == nullptr) {
+        return;
+    }
+    m_vaxApplet->setStationVax(m_stationClient->stationVax(),
+                               m_stationClient->stationVaxHeld());
+    m_stationClient->setStationVaxLevelsWanted(m_vaxApplet->stationLevelsWanted());
+}
+
 void MainWindow::wireRemoteTransmitMeters()
 {
     // iPhone app plan Task 39 (D14, R-IOS-13): the remote window shows the
@@ -3436,6 +3462,8 @@ void MainWindow::ensureRemoteSession()
         }
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();
+        // iPhone app plan Task 25: the Core computer's VAX channels.
+        wireRemoteStationVax();
         // iPhone app plan Task 78: several devices on one Core.
         wireRemoteDevices();
         m_remoteConnection = new RemoteConnectionController(
@@ -9103,6 +9131,14 @@ void MainWindow::populateDefaultMeter()
     m_vaxApplet = new VaxApplet(m_radioModel,
                                 m_radioModel->audioEngine(), nullptr);
     panel->addApplet(m_vaxApplet);
+    // iPhone app plan Task 25: in a remote window, the Core computer's VAX
+    // below this computer's own; its meters only while the applet shows.
+    connect(m_vaxApplet, &VaxApplet::stationLevelsWantedChanged, this, [this](bool wanted) {
+        if (m_stationClient != nullptr) {
+            m_stationClient->setStationVaxLevelsWanted(wanted);
+        }
+    });
+    refreshRemoteStationVax();
 
     // Phase 3M-4 Task 13 — PureSignalApplet quick-access surface.
     //
@@ -14647,6 +14683,9 @@ void MainWindow::applyRemoteRoleGating()
     // R-R3-44: the VAX applet's TX row (VAX as the microphone).
     if (m_vaxApplet) {
         m_vaxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        // iPhone app plan Task 25: the Core computer's TX row, which the
+        // Core takes only from a device that may transmit.
+        m_vaxApplet->setStationTransmitPermitted(transmitPermitted, transmitReason);
     }
     // R-R3-49 (parity Task 1): the RX applet's TX passband Shift-click.
     // Its XIT row is a slice setting and takes no gate (parity Task 11).

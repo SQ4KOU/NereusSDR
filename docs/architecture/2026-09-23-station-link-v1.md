@@ -786,9 +786,11 @@ Core, and its transmit meters read `txState`.
 **`vax` 1** (iPhone app plan Task 25, R-IOS-18): the client shows the VAX
 channels of the computer the Core runs on (its VAX tool). A peer that
 declares it at minor 11 is sent `vaxVersion` (section 6.3) and, when that is
-1, the `vax` object (section 7.1). The station does not declare it, and the
-desktop's remote window does not: its VAX applet runs that computer's own
-VAX channels (R-R3-44).
+1, the `vax` object (section 7.1). The station does not declare it. The
+desktop's remote window declares it: its VAX applet runs that computer's
+own VAX channels (R-R3-44) and, below them, shows the Core computer's in a
+"Station computer" section from this object, subscribing to `vaxLevels`
+only while the applet is shown.
 
 **`txEqCurve` 1** (R-IOS-13, R-R3-49): the client reads the TX EQ
 parametric curve in the form section 7.1 documents ("The TX EQ curve"). A
