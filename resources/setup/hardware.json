@@ -2974,7 +2974,7 @@
             {
               "id": "hardware.hl2Io.swapAudioChannels",
               "label": "Swap audio channels",
-              "tooltip": "",
+              "tooltip": "Swap the audio channels sent to the HL2",
               "kind": "toggle",
               "binding": {
                 "radioSetting": "hl2/swapAudioChannels"
@@ -2989,11 +2989,7 @@
                 "min": 8
               },
               "requiresDescriptionVersion": 16,
-              "default": false,
-              "availability": {
-                "enabled": false,
-                "reason": "NereusSDR does not send the radio audio of its own, so there is nothing to swap."
-              }
+              "default": false
             }
           ]
         }

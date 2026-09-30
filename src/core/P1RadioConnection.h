@@ -243,6 +243,14 @@ public:
     // documented offsets, so cadence still flows.  RadioModel forces the
     // PC mic override on HL2 via setMicSourceLocked(true) so the mic16
     // zeros never reach fexchange0.
+    // [Radio codec lane, 2026-09-30] Correction to the note above: a stock
+    // HL2 has no mic codec and sends zero mic bytes, but an HL2 built with
+    // the AK4951 audio add-on board (gateware variants hl2b5up_ak4951v3/v4)
+    // does fill the zone; mi0bot has no HL2 mic lock. The gateware's
+    // discovery reply carries no AK4951 field (Hermes-Lite2
+    // usopenhpsdr1.v:254-314 @7472bd1), so NereusSDR cannot tell the two
+    // apart. The PC mic lock (BoardCapabilities hasMicJack=false for HL2)
+    // still stands; lifting it is the pending HL2 Radio Mic item.
     void setTxMicSource(TxMicSource* src);
 
 public slots:
@@ -1327,6 +1335,7 @@ public:
         return n;
     }
     int hl2Cl2FreqKHzForTest() const { return m_hl2Cl2FreqKHz; }
+    bool hl2SwapAudioChannelsForTest() const { return m_hl2SwapAudioChannels; }
     // What an ep6 frame does for the clock lists (hl2ClockConfirmSent),
     // and what a lost link does (the watchdog's LinkLost branch).
     void hl2ClockEp6ForTest() { hl2ClockConfirmSent(); }

@@ -864,6 +864,13 @@ signals:
     /// (typically 48 kHz on HPSDR family).
     ///
     /// Plan: 3M-1b F.4. Pre-code review §6.4.
+    ///
+    /// Radio codec lane (2026-09-30): no connection emits this signal (only
+    /// test doubles do), so RadioMicSource and CompositeTxMicRouter's radio
+    /// branch receive nothing in a running app. The radio mic reaches the
+    /// TX channel another way: P1/P2 decode the mic bytes into
+    /// TxMicSource::inbound() (setTxMicSource), which also paces the TX
+    /// pump. The branch is left in place, unused, rather than removed.
     void micFrameDecoded(const float* samples, int frames);
 
     // --- Meters ---

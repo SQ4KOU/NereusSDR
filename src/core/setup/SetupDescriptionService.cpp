@@ -160,8 +160,13 @@ constexpr char kHardwareV13Controls[] =
 // keys (Hl2OptionsModel, hardware/<mac>/hl2/...). Ranges and defaults are
 // Hl2OptionsModel's (mi0bot setup.designer.cs). The Core sends the radio TX
 // latency, PTT hang, reset on disconnect, power supply sync and Band Volts;
-// the other four are stored only, so they carry availability disabled with
-// the desktop's own reason. Closed as the version 13 rows are.
+// the three clock rows are stored only here, so they carry availability
+// disabled with the desktop's own reason (version 18 opens them). Swap audio
+// channels is open at every version from 16: the radio codec lane
+// (2026-09-30) sends the HL2 its receive audio and honors the option, and
+// the row's shape did not change, so no peer needs a new version to use it.
+// Tooltip from mi0bot setup.designer.cs:11119 [@c26a8a4]. Closed as the
+// version 13 rows are.
 constexpr char kHardwareV16Controls[] =
     R"json([)json"
     R"json({"id":"hardware.hl2Io.txLatency","label":"TX buffer latency:","tooltip":"","kind":"integer","binding":{"radioSetting":"hl2/txLatencyMs"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8,"transmit":true},"requiresDescriptionVersion":16,"min":0,"max":70,"step":1,"unit":"ms","default":20},)json"
@@ -172,7 +177,7 @@ constexpr char kHardwareV16Controls[] =
     R"json({"id":"hardware.hl2Io.disconnectReset","label":"Reset on Ethernet disconnect","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/disconnectReset"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
     R"json({"id":"hardware.hl2Io.psSync","label":"Disable power supply sync","tooltip":"Stops the radio synchronizing its power supply clock.","kind":"toggle","binding":{"radioSetting":"hl2/psSync"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
     R"json({"id":"hardware.hl2Io.bandVolts","label":"Band Volts (PWM out 0\u20133.3 V)","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/bandVolts"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false},)json"
-    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false,"availability":{"enabled":false,"reason":"NereusSDR does not send the radio audio of its own, so there is nothing to swap."}})json"
+    R"json({"id":"hardware.hl2Io.swapAudioChannels","label":"Swap audio channels","tooltip":"Swap the audio channels sent to the HL2","kind":"toggle","binding":{"radioSetting":"hl2/swapAudioChannels"},"valueEncoding":{"true":"True","false":"False"},"applies":"live","gate":{"capability":"transmitSettingsVersion","min":8},"requiresDescriptionVersion":16,"default":false})json"
     R"json(])json";
 
 // Hardware version 18: HL2 Options' Enable CL2, CL2 frequency and External

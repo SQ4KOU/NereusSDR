@@ -79,8 +79,9 @@ private slots:
             if (received >= 16) {
                 const QJsonObject swap = rows.last().toObject();
                 QCOMPARE(swap.value("id"), QJsonValue("hardware.hl2Io.swapAudioChannels"));
-                QCOMPARE(swap.value("availability").toObject().value("enabled"),
-                         QJsonValue(false));
+                // Open at every version from 16: the Core sends the HL2
+                // its receive audio (radio codec lane).
+                QVERIFY(!swap.contains("availability"));
                 // The clock rows are open from version 18; a version 16 or
                 // 17 phone keeps them closed.
                 const QJsonObject cl2 = rows.at(2).toObject();

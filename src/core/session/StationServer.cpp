@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Radio codec lane: radioHardwareVersion 13, the receive
+//               audio to the Core's radio and HL2 Swap audio channels from
+//               a window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-29: One setup description revision per on-air edge (PA and the
 //               DSP RX buffer lock together). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
@@ -12214,7 +12218,16 @@ int StationServer::radioHardwareVersion() const
     // slice, whose progress reaches a peer that declared levelCalibration.
     // The number was extended, not raised: no Core shipped 12 without
     // these verbs.
-    return m_radioModel->ioBoardFacade()->isBound() ? 12 : 2;
+    //
+    // 13 (radio codec lane): the Core sends its radio the receive audio
+    // (P1's L/R bytes, P2's port 1028 packets), and HL2 Options' Swap audio
+    // channels (hardware/<mac>/hl2/swapAudioChannels) reaches it through
+    // the "hl2" reload (RadioModel::applyHl2Options ->
+    // P1RadioConnection::setHl2SwapAudioChannels), on and off the air, as
+    // mi0bot's chkSwapAudioChannels_CheckedChanged has no MOX check
+    // (setup.cs:38065 [@c26a8a4]). A Core below 13 stores it without
+    // effect, so a window keeps the box closed.
+    return m_radioModel->ioBoardFacade()->isBound() ? 13 : 2;
 }
 
 QString StationServer::radioAntennaRowRefusal(SessionTransport* transport,

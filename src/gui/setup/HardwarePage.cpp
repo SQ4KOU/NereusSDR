@@ -45,6 +45,9 @@
 //   2026-09-29 - HL2 Options' Enable CL2, CL2 frequency and External 10 MHz
 //                follow radioHardwareVersion 11 in a remote window.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - HL2 Options' Swap audio channels follows
+//                radioHardwareVersion 13 in a remote window. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -453,6 +456,12 @@ void HardwarePage::applyTransmitHardwareGates()
         m_hl2OptionsTab->setClockControlAvailable(
             !m_remote || (link != nullptr && link->radioHardwareAvailable(11)),
             IStationLink::hl2ClockUnavailableReason());
+        // radioHardwareVersion 13: HL2 Options' Swap audio channels, which
+        // the Core applies to the receive audio it sends its radio. No
+        // on-air rule: mi0bot's handler has no MOX check.
+        m_hl2OptionsTab->setSwapAudioAvailable(
+            !m_remote || (link != nullptr && link->radioHardwareAvailable(13)),
+            IStationLink::hl2SwapAudioUnavailableReason());
     }
 }
 

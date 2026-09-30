@@ -1690,9 +1690,9 @@ private slots:
         const QHash<QString, QString> reasons{
             {"hardware.hl2Io.cl2Enable", clock},
             {"hardware.hl2Io.cl2Freq", clock},
-            {"hardware.hl2Io.ext10MHz", clock},
-            {"hardware.hl2Io.swapAudioChannels", QStringLiteral(
-                "NereusSDR does not send the radio audio of its own, so there is nothing to swap.")}};
+            {"hardware.hl2Io.ext10MHz", clock}};
+        // Swap audio channels is open from version 16 (the radio codec
+        // lane): the Core sends the HL2 its receive audio.
         for (const QJsonValue& raw : rows) {
             const QJsonObject row = raw.toObject();
             const QString id = row.value("id").toString();

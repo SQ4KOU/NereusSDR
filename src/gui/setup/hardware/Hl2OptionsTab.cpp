@@ -64,6 +64,11 @@
 //                 the frequency box follows Enable CL2, and a remote window
 //                 needs a Core that sends them (setClockControlAvailable).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec lane: Swap audio channels reaches the radio
+//                 (P1RadioConnection::setHl2SwapAudioChannels), so it is
+//                 enabled with mi0bot's tooltip; a remote window needs a
+//                 Core at radioHardwareVersion 13 (setSwapAudioAvailable).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -359,15 +364,15 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
 
     // From mi0bot setup.designer.cs:11343 chkSwapAudioChannels
     // mi0bot swaps the left and right audio it sends the radio over P1
-    // (networkproto1.c:1231-1239 [@c26a8a4]). NereusSDR sends the radio no
-    // audio of its own over P1 (the audio bytes of each TX frame are zero),
-    // so the option is stored and shown disabled with the reason.
+    // (networkproto1.c:1231-1239 [@c26a8a4]). NereusSDR now sends the
+    // receive audio in each TX frame's L/R bytes, and RadioModel's
+    // applyHl2Options hands this option to P1RadioConnection, so it is live.
+    // Tooltip from mi0bot setup.designer.cs:11119 [@c26a8a4], with its
+    // "ot" typo read as "to".
     m_chkSwapAudio = new QCheckBox(tr("Swap audio channels"), parent);
     m_chkSwapAudio->setObjectName(QStringLiteral("hl2SwapAudioChannels"));
     m_chkSwapAudio->setProperty("nereusSetupId", "hardware.hl2Io.swapAudioChannels");
-    m_chkSwapAudio->setEnabled(false);
-    m_chkSwapAudio->setToolTip(
-        tr("NereusSDR does not send the radio audio of its own, so there is nothing to swap."));
+    m_chkSwapAudio->setToolTip(tr("Swap the audio channels sent to the HL2"));
     grid->addWidget(m_chkSwapAudio, row, 0, 1, 2);
     ++row;
 
@@ -651,6 +656,17 @@ void Hl2OptionsTab::setClockControlAvailable(bool available, const QString& reas
     m_clockAvailable = available;
     m_clockUnavailableReason = available ? QString() : reason;
     applyClockGates();
+}
+
+void Hl2OptionsTab::setSwapAudioAvailable(bool available, const QString& reason)
+{
+    m_swapAudioAvailable = available;
+    m_swapAudioUnavailableReason = available ? QString() : reason;
+    // No on-air rule: mi0bot's chkSwapAudioChannels_CheckedChanged sets
+    // NetworkIO.SwapAudioChannels with no MOX check (setup.cs:38065
+    // [@c26a8a4]).
+    HardwareTransmitGate::apply(m_chkSwapAudio, m_swapAudioAvailable,
+                                m_swapAudioUnavailableReason);
 }
 
 void Hl2OptionsTab::applyClockGates()
