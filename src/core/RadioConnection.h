@@ -730,10 +730,18 @@ public:
         if (stereo == nullptr || frames <= 0) {
             return;
         }
-        int largest = m_radioAudioLargestBlock.load(std::memory_order_relaxed);
-        if (frames > largest) {
-            m_radioAudioLargestBlock.store(frames, std::memory_order_relaxed);
+        // The largest block is held over two windows of about a second of
+        // pushed audio, so one oversized block raises the cushion for a
+        // second or two, not for the rest of the connection.
+        m_radioAudioWindowMax = std::max(m_radioAudioWindowMax, frames);
+        m_radioAudioWindowFrames += frames;
+        const int largest = std::max(m_radioAudioPrevWindowMax, m_radioAudioWindowMax);
+        if (m_radioAudioWindowFrames >= kRadioAudioLargestWindowFrames) {
+            m_radioAudioPrevWindowMax = m_radioAudioWindowMax;
+            m_radioAudioWindowMax = 0;
+            m_radioAudioWindowFrames = 0;
         }
+        m_radioAudioLargestBlock.store(largest, std::memory_order_relaxed);
         const qint64 bytes = qint64(frames) * kRadioAudioFrameBytes;
         if (m_radioAudioRing.tryPushCopy(reinterpret_cast<const uint8_t*>(stereo), bytes)
             != bytes) {
@@ -744,6 +752,41 @@ public:
     quint64 radioAudioDroppedFrames() const noexcept
     {
         return m_radioAudioDroppedFrames.load(std::memory_order_relaxed);
+    }
+    /// The radio output's counters, for the diagnostics log. Any thread.
+    struct RadioAudioStats {
+        bool valid{false};             // the connection sends radio audio
+        quint64 droppedFrames{0};      // refused by the full ring
+        quint64 underruns{0};          // the ring ran dry and primed again
+        quint64 trimmedFrames{0};      // cut back to the cushion (drift)
+        int cushionFrames{0};          // the cushion now
+        bool hasPackets{false};        // P2: the port 1028 stream's counters
+        quint64 packetsSent{0};
+        quint64 sendErrors{0};
+    };
+    virtual RadioAudioStats radioAudioStats() const
+    {
+        RadioAudioStats st;
+        st.valid = carriesRadioAudio();
+        st.droppedFrames = radioAudioDroppedFrames();
+        st.underruns = m_radioAudioUnderruns.load(std::memory_order_relaxed);
+        st.trimmedFrames = m_radioAudioTrimmedFrames.load(std::memory_order_relaxed);
+        st.cushionFrames = radioAudioCushionFrames();
+        return st;
+    }
+    /// One log fragment ("radioOut dropped=... underruns=..."). Log only.
+    static QString radioAudioStatsText(const RadioAudioStats& st)
+    {
+        if (!st.valid) {
+            return QStringLiteral("radioOut=none");
+        }
+        QString text = QStringLiteral("radioOut dropped=%1 underruns=%2 trimmed=%3 cushion=%4")
+                           .arg(st.droppedFrames).arg(st.underruns)
+                           .arg(st.trimmedFrames).arg(st.cushionFrames);
+        if (st.hasPackets) {
+            text += QStringLiteral(" sent=%1 sendErrors=%2").arg(st.packetsSent).arg(st.sendErrors);
+        }
+        return text;
     }
 
 public slots:
@@ -971,8 +1014,14 @@ private:
     static constexpr size_t kRadioAudioRingBytes = 131072;
     static constexpr int kRadioAudioRingFrames = int(kRadioAudioRingBytes) / kRadioAudioFrameBytes;
     static constexpr int kRadioAudioMarginFrames = 960;  // 20 ms at 48 kHz
+    static constexpr int kRadioAudioLargestWindowFrames = 48000;  // 1 s at 48 kHz
     AudioRingSpsc<kRadioAudioRingBytes> m_radioAudioRing;
     std::atomic<int> m_radioAudioLargestBlock{0};
+    // pushRadioAudio's (the producer's) own: the largest block in this
+    // window and the one before, and the frames pushed in this window.
+    int m_radioAudioWindowMax{0};
+    int m_radioAudioPrevWindowMax{0};
+    int m_radioAudioWindowFrames{0};
     std::atomic<quint64> m_radioAudioDroppedFrames{0};
     std::atomic<quint64> m_radioAudioUnderruns{0};
     std::atomic<quint64> m_radioAudioTrimmedFrames{0};

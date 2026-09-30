@@ -287,6 +287,40 @@ private slots:
         QCOMPARE(t2.userDigOut(), 11);
     }
 
+    // Radio codec review (2026-09-30): lineInBoost is held on Thetis's
+    // 1.5 dB udLineInBoost grid (setup.designer.cs:47006-47034
+    // [v2.10.3.15]), at the entry the radio is sent, so the value shown and
+    // the wire index agree for an off-grid write.
+    void lineInBoost_offGridWrite_snapsToTheSentEntry() {
+        TransmitModel t;
+        QSignalSpy spy(&t, &TransmitModel::lineInBoostChanged);
+        t.setLineInBoost(5.0);  // between 4.5 (index 26) and 6.0 (index 27)
+        QCOMPARE(t.lineInBoost(), 4.5);
+        QCOMPARE(t.lineInGain(), 26);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.takeFirst().at(0).toDouble(), 4.5);
+        t.setLineInBoost(5.5);  // nearer 6.0
+        QCOMPARE(t.lineInBoost(), 6.0);
+        QCOMPARE(t.lineInGain(), 27);
+        t.setLineInBoost(-10.0);  // a pre-24 whole-dB step: -10.5, index 16
+        QCOMPARE(t.lineInBoost(), -10.5);
+        QCOMPARE(t.lineInGain(), 16);
+        spy.clear();
+        t.setLineInBoost(-10.4);  // the same entry: no change, no signal
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void lineInBoost_storedWholeDbValue_loadsOnTheGrid() {
+        // A value saved in whole dB before the 1.5 dB steps.
+        AppSettings::instance().setValue(
+            QStringLiteral("hardware/%1/tx/Line_Input_Level").arg(kMacA),
+            QStringLiteral("5"));
+        TransmitModel t;
+        t.loadFromSettings(kMacA);
+        QCOMPARE(t.lineInBoost(), 4.5);
+        QCOMPARE(t.lineInGain(), 26);
+    }
+
     void roundTrip_lineInGain_persistToSettings_bulk() {
         // Bulk-write path (persistToSettings(mac)) preserves the same value.
         TransmitModel t;

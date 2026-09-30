@@ -93,6 +93,10 @@
 //   2026-09-30 - Radio codec: the receive audio stream to port 1028
 //                (serviceRadioAudioSend). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - Radio codec review: radioAudioStats adds the stream's
+//                packet and send-error counters; rx_out_seq_no starts at 0
+//                once per connection, not at each sender start. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -377,6 +381,15 @@ public slots:
 public:
     // R-IOS-13, R-R3-42: the send path's counters since the last key.
     TxSendStats txSendStats() const override;
+    // Radio codec: the ring's counters plus the port 1028 stream's.
+    RadioAudioStats radioAudioStats() const override
+    {
+        RadioAudioStats st = RadioConnection::radioAudioStats();
+        st.hasPackets = true;
+        st.packetsSent = m_radioAudioPacketsSent.load(std::memory_order_relaxed);
+        st.sendErrors = m_radioAudioSendErrors.load(std::memory_order_relaxed);
+        return st;
+    }
     double txIqQueuedMs() const override;
     // G-05: the unkey's wait for the send ring (RadioConnection).
     bool txIqRingDrained() const override;
@@ -880,7 +893,10 @@ private:
     // One pass of the send thread at nowNs: sends every audio packet due.
     // Returns the packets sent. Send thread (or the caller's, in tests).
     int serviceRadioAudioSend(qint64 nowNs, TxIqFrameSink sink, void* ctx);
-    quint32 m_rxOutSeqNo{0};                  // prn->rx[0].rx_out_seq_no; send thread
+    // prn->rx[0].rx_out_seq_no; send thread. 0 from construction only, as
+    // Thetis zeroes it once in create_rnet (netInterface.c:1492
+    // [v2.10.3.15]), not at each start.
+    quint32 m_rxOutSeqNo{0};
     double m_radioAudioLead{0.0};             // radio's buffer, estimated; send thread
     qint64 m_radioAudioLastNs{-1};            // send thread
     std::atomic<bool> m_radioAudioSwap{false};  // prn->lr_audio_swap, set at sender start

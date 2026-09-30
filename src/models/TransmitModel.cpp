@@ -301,6 +301,9 @@
 //                 lineInGainIndexForBoost (Thetis SetMicGain /
 //                 MakeLineInList); its default is the index for 0.0 dB.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Radio codec review: setLineInBoost holds the value on
+//                 the 1.5 dB grid, the entry the radio is sent. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -664,13 +667,20 @@ void TransmitModel::setLineInBoost(double dB)
 {
     // Clamp to Thetis range per setup.designer.cs:46898-46907 [v2.10.3.13]:
     //   udLineInBoost.Minimum = -34.5, udLineInBoost.Maximum = 12.0
+    // Radio codec lane (2026-09-30): the value is then held on the 1.5 dB
+    // grid of Thetis's udLineInBoost (setup.designer.cs:47006-47034
+    // [v2.10.3.15], Increment 1.5 from -34.5, ReadOnly), taking the entry
+    // lineInGainIndexForBoost sends, so an older whole-dB setting or a
+    // pre-24 peer's write shows the value the radio gets (5.0 -> 4.5).
     const double clamped = std::clamp(dB, kLineInBoostMin, kLineInBoostMax);
-    if (clamped == m_lineInBoost) { return; }  // idempotent guard
+    const double onGrid = kLineInBoostMin
+        + kLineInBoostStep * static_cast<double>(lineInGainIndexForBoost(clamped));
+    if (onGrid == m_lineInBoost) { return; }  // idempotent guard
     // Porting from Thetis console.cs:13225-13234 [v2.10.3.13]:
     //   line_in_boost = value; ptbMic_Scroll(); SetMicGain();
-    m_lineInBoost = clamped;
+    m_lineInBoost = onGrid;
     persistOne(QStringLiteral("Line_Input_Level"), QString::number(m_lineInBoost));  // L.2 auto-persist
-    emit lineInBoostChanged(clamped);
+    emit lineInBoostChanged(onGrid);
     // Thetis SetMicGain sends the line-in gain as the index of line_in_boost
     // in its 1.5 dB table, so the wire index follows the dB value here.
     // From Thetis console.cs:40928-40932 [v2.10.3.15]:

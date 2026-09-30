@@ -2501,12 +2501,13 @@ void P2RadioConnection::startTxIqSender()
     // Radio codec (2026-09-30): the receive audio to the radio's speaker
     // out goes to base + 4 (1028). From Thetis network.c:1373 [v2.10.3.15]:
     //   sendPacket(listenSock, framebuf, buflen + 4, prn->base_outbound_port + 4);// 1028);
-    // Its sequence number starts at 0 (netInterface.c:1492 [v2.10.3.15]:
-    // prn->rx[i].rx_out_seq_no = 0;), and the L/R swap is the model's
-    // (LRAudioSwap, netInterface.c:1409-1413 [v2.10.3.15]).
+    // Its sequence number starts at 0 once (netInterface.c:1492
+    // [v2.10.3.15]: prn->rx[i].rx_out_seq_no = 0;, in create_rnet, which
+    // cmaster.cs:547 calls once), so a restart of the stream carries on
+    // from the last number (m_rxOutSeqNo's initialiser). The L/R swap is
+    // the model's (LRAudioSwap, netInterface.c:1409-1413 [v2.10.3.15]).
     m_radioAudioDestPort = static_cast<quint16>(m_baseOutboundPort + 4);
     m_radioAudioSwap.store(m_hardwareProfile.lrAudioSwap, std::memory_order_relaxed);
-    m_rxOutSeqNo = 0;
     m_radioAudioLead = 0.0;
     m_radioAudioLastNs = -1;
     m_txIqSenderRun.store(true, std::memory_order_release);

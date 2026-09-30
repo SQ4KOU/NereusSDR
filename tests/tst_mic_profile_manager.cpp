@@ -491,7 +491,7 @@ private slots:
         tx.setMicBoost(false);
         tx.setMicXlr(false);
         tx.setLineIn(true);
-        tx.setLineInBoost(6.5);
+        tx.setLineInBoost(7.5);  // on the 1.5 dB grid (radio codec review)
         tx.setMicTipRing(false);
         tx.setMicBias(true);
         tx.setMicPttDisabled(true);
@@ -528,7 +528,7 @@ private slots:
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Line_Input_On")).toString(),
                  QStringLiteral("True"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Line_Input_Level")).toString(),
-                 QStringLiteral("6.5"));
+                 QStringLiteral("7.5"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Mic_TipRing")).toString(),
                  QStringLiteral("False"));
         QCOMPARE(s.value(profileKey(kMacA, "MyProfile", "Mic_Bias")).toString(),

@@ -918,13 +918,16 @@ transmit hardware settings. In the desktop's order:
 - `hardware.hl2Io.bandVolts`, Band Volts (PWM out 0–3.3 V), toggle.
 - `hardware.hl2Io.swapAudioChannels`, Swap audio channels, toggle.
 
-Toggles use `valueEncoding` True/False and default off. Four rows the Core
-stores but does not send to the radio carry `availability {enabled:false,
-reason}`, and the desktop tab, a remote window and the phone show them
-disabled with that reason: Enable CL2, CL2 frequency and External 10 MHz
-reference ("NereusSDR does not change the radio's clock settings.") and
-Swap audio channels ("NereusSDR does not send the radio audio of its own,
-so there is nothing to swap."). A board without the HL2 I/O board has no
+Toggles use `valueEncoding` True/False and default off. Three rows the
+Core stores but does not send to the radio carry `availability
+{enabled:false, reason}`, and the desktop tab, a remote window and the phone
+show them disabled with that reason: Enable CL2, CL2 frequency and External
+10 MHz reference ("NereusSDR does not change the radio's clock settings.").
+Swap audio channels was a fourth such row until the Core sent its radio the
+receive audio (the radio codec lane, radioHardwareVersion 13). It is now
+open at every version from 16, with the tooltip "Swap the audio channels
+sent to the HL2", and its shape is unchanged. A remote window enables it
+against a Core at radioHardwareVersion 13 or later. A board without the HL2 I/O board has no
 `hardware.hl2Io` page, so none of these rows. V13–V15 peers receive Hardware
 at version 13 without the section. No new wire field, verb or capability
 value is defined.

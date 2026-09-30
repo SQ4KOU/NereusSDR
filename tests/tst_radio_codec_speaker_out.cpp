@@ -19,11 +19,22 @@
 //   Engine: the radio output tap takes the station's program at the master
 //       volume, silence while muted (cmaster.cs:954-957 [v2.10.3.15]).
 //
-// Nothing here keys a radio: no socket is opened and MOX is never set.
+// Nothing here keys a radio: MOX is never set. One case runs the P2 send
+// thread against a loopback socket with the transmit ring empty.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec: created. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec review: the cushion's
+//                                    decay, trim and re-prime, the
+//                                    diagnostics counters, and the P2
+//                                    sequence number across a restart.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QScopeGuard>
+#include <QUdpSocket>
 
 #include "core/AudioEngine.h"
 #include "core/P1RadioConnection.h"
@@ -212,6 +223,119 @@ private slots:
         QCOMPARE(conn.serviceRadioAudioSendForTest(1'000'000'000LL, &capture), 15);
         QCOMPARE(conn.serviceRadioAudioSendForTest(1'000'000'000LL, &capture), 0);
         QCOMPARE(conn.serviceRadioAudioSendForTest(1'004'000'000LL, &capture), 3);
+    }
+
+    // ── The ring: cushion, trim, re-prime, counters ─────────────────────
+
+    // One oversized block raises the cushion for about two seconds of
+    // pushed audio, then it falls back to the blocks now arriving.
+    void ring_cushionDecaysAfterAnOversizedBlock()
+    {
+        P2RadioConnection conn;
+        const std::vector<float> big = stereo(4096, kLeft, kRight);
+        const std::vector<float> small = stereo(256, kLeft, kRight);
+        conn.pushRadioAudio(small.data(), 256);
+        QCOMPARE(conn.radioAudioStats().cushionFrames, 256 + 960);
+        conn.pushRadioAudio(big.data(), 4096);
+        QCOMPARE(conn.radioAudioStats().cushionFrames, 4096 + 960);
+        // Still held one window on (48000 frames pushed, ~1 s).
+        for (int i = 0; i < 48000 / 256; ++i) {
+            conn.pushRadioAudio(small.data(), 256);
+        }
+        QCOMPARE(conn.radioAudioStats().cushionFrames, 4096 + 960);
+        // Gone after the second window.
+        for (int i = 0; i < 48000 / 256 + 1; ++i) {
+            conn.pushRadioAudio(small.data(), 256);
+        }
+        QCOMPARE(conn.radioAudioStats().cushionFrames, 256 + 960);
+        // The full ring refused the rest, and said so.
+        QVERIFY(conn.radioAudioStats().droppedFrames > 0);
+    }
+
+    // A ring deeper than the cushion plus a block and 20 ms is cut back to
+    // the cushion; once it runs dry it waits for the cushion again.
+    void ring_trimsDriftAndPrimesAgainAfterRunningDry()
+    {
+        P2RadioConnection conn;
+        const std::vector<float> block = stereo(1024, kLeft, kRight);
+        for (int i = 0; i < 5; ++i) {
+            conn.pushRadioAudio(block.data(), 1024);  // 5120 > 1984 + 1024 + 960
+        }
+        P2RadioConnection::TxIqCapture capture;
+        qint64 now = 1'000'000'000LL;
+        QCOMPARE(conn.serviceRadioAudioSendForTest(now, &capture), 15);
+        RadioConnection::RadioAudioStats st = conn.radioAudioStats();
+        QCOMPARE(st.trimmedFrames, quint64(5120 - 1984));
+        QCOMPARE(st.underruns, quint64(0));
+        QCOMPARE(st.packetsSent, quint64(15));
+        // 1984 - 960 = 1024 left: 16 more packets as the radio drains.
+        int sent = 0;
+        for (int pass = 0; pass < 4; ++pass) {
+            now += 1'000'000'000LL;
+            sent += conn.serviceRadioAudioSendForTest(now, &capture);
+        }
+        QCOMPARE(sent, 16);
+        st = conn.radioAudioStats();
+        QCOMPARE(st.underruns, quint64(1));
+        QCOMPARE(st.packetsSent, quint64(31));
+        QCOMPARE(st.sendErrors, quint64(0));
+        // Primes again: one block (under the 1984 cushion) waits...
+        conn.pushRadioAudio(block.data(), 1024);
+        now += 1'000'000'000LL;
+        QCOMPARE(conn.serviceRadioAudioSendForTest(now, &capture), 0);
+        // ...and a second one starts the stream.
+        conn.pushRadioAudio(block.data(), 1024);
+        now += 1'000'000'000LL;
+        QCOMPARE(conn.serviceRadioAudioSendForTest(now, &capture), 15);
+        QCOMPARE(conn.radioAudioStats().underruns, quint64(1));
+    }
+
+    void ring_sendErrorsCountedAndStatsText()
+    {
+        P2RadioConnection conn;
+        fill(conn, kLeft, kRight);
+        P2RadioConnection::TxIqCapture capture;
+        capture.refuse = 2;
+        QCOMPARE(conn.serviceRadioAudioSendForTest(1'000'000'000LL, &capture), 13);
+        const RadioConnection::RadioAudioStats st = conn.radioAudioStats();
+        QVERIFY(st.valid);
+        QCOMPARE(st.sendErrors, quint64(2));
+        QCOMPARE(RadioConnection::radioAudioStatsText(st),
+                 QStringLiteral("radioOut dropped=0 underruns=0 trimmed=0 cushion=1984"
+                                " sent=13 sendErrors=2"));
+        // P1 has no packet counters of its own.
+        P1RadioConnection p1;
+        const RadioConnection::RadioAudioStats p1st = p1.radioAudioStats();
+        QVERIFY(p1st.valid);
+        QVERIFY(!p1st.hasPackets);
+        QCOMPARE(RadioConnection::radioAudioStatsText(p1st),
+                 QStringLiteral("radioOut dropped=0 underruns=0 trimmed=0 cushion=960"));
+        QCOMPARE(RadioConnection::radioAudioStatsText({}), QStringLiteral("radioOut=none"));
+    }
+
+    // Thetis zeroes rx_out_seq_no once, in create_rnet (netInterface.c:1492
+    // [v2.10.3.15]); a restart of the send thread carries on counting.
+    void p2_seqNo_notResetBySenderRestart()
+    {
+        QUdpSocket radio;
+        QVERIFY(radio.bind(QHostAddress::LocalHost, 0));
+        const quint16 port = radio.localPort();
+        QVERIFY(port > 5);
+        P2RadioConnection conn;
+        conn.setPortBasesForTest(static_cast<quint16>(port - 5), 20000);
+        conn.init();
+        fill(conn, kLeft, kRight);
+        P2RadioConnection::TxIqCapture capture;
+        QCOMPARE(conn.serviceRadioAudioSendForTest(1'000'000'000LL, &capture), 15);
+        conn.startTxIqSenderForTest(QHostAddress::LocalHost);
+        conn.stopTxIqSenderForTest();
+        fill(conn, kLeft, kRight);
+        capture.frames.clear();
+        QVERIFY(conn.serviceRadioAudioSendForTest(3'000'000'000LL, &capture) > 0);
+        const QByteArray& p = capture.frames.first();
+        const quint32 seq = (quint32(quint8(p[0])) << 24) | (quint32(quint8(p[1])) << 16)
+            | (quint32(quint8(p[2])) << 8) | quint32(quint8(p[3]));
+        QVERIFY2(seq >= 15, qPrintable(QString::number(seq)));
     }
 
     // ── Engine and model ─────────────────────────────────────────────────

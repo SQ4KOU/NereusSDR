@@ -334,7 +334,7 @@ private slots:
         QCOMPARE(model.transmitModel().lineInBoost(), -10.5);
     }
 
-    // ── 12. Hermes: setLineInBoost(5.0) → slider at 5 (Model→UI) ─────────────
+    // ── 12. Hermes: setLineInBoost(4.5) → slider at 9 (Model→UI) ─────────────
 
     void hermes_lineInBoost_modelToUi()
     {

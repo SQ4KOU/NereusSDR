@@ -222,6 +222,10 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 17: the kind
 //                                    word sliceHolderWords inserts.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Radio codec: RadioModel's
+//                                    orionMicPanelUnavailableReason placed
+//                                    beside lpfBypassUnavailableReason.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1788,6 +1792,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/models/RadioModel.cpp", "lpfBypassUnavailableReason",
          "the reason shown on the disabled 6m/ByPass box, not a Core refusal"},
+        // Setup description 24 (radio codec): why the Radio Mic (Orion-MkII)
+        // rows are disabled on the Red Pitaya, shown on the disabled group.
+        {"src/models/RadioModel.cpp", "orionMicPanelUnavailableReason",
+         "the reason shown on the disabled Orion mic group, not a Core refusal"},
         {"src/models/RadioModel.cpp", "stationSupportUnavailableReason",
          "a remote window's own reason its Core-side support controls are disabled"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
