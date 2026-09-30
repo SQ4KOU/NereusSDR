@@ -17,6 +17,12 @@
 //               itself", as the Core's refusal does, not "the Core's own
 //               window". J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-30: desktop listening lane: a slice the station device holds
+//               names the desktop that hosts the Core (its connectedDevices
+//               entry with hostsCore), and "the Core itself" only on a Core
+//               no desktop hosts; a slice the Core keeps for an away
+//               device names that device. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SliceChooser.h"
@@ -215,8 +221,15 @@ VfoWidget::SliceAccess SliceChooser::flagAccessFor(const Row& row)
     access.state = VfoWidget::SliceAccess::State::Listening;
     switch (row.controller) {
     case Controller::CoreDesktop:
-        access.line = tr("Listening · controlled by the Core itself");
-        access.heldReason = tr("The Core itself controls this slice");
+        // The desktop that hosts the Core by its own name; "the Core
+        // itself" only on a Core no desktop hosts.
+        if (!row.controllerName.isEmpty()) {
+            access.line = tr("Listening · controlled by %1").arg(row.controllerName);
+            access.heldReason = tr("%1 controls this slice").arg(row.controllerName);
+        } else {
+            access.line = tr("Listening · controlled by the Core itself");
+            access.heldReason = tr("The Core itself controls this slice");
+        }
         // Core-slice take-over: Take control off with the Core's words.
         access.takeHeldReason = row.takeRefusal;
         break;
@@ -279,7 +292,9 @@ QString SliceChooser::ownerWords(const Row& row) const
 {
     switch (row.controller) {
     case Controller::ThisWindow:  return tr("This window controls");
-    case Controller::CoreDesktop: return tr("The Core itself controls");
+    case Controller::CoreDesktop:
+        return row.controllerName.isEmpty() ? tr("The Core itself controls")
+                                            : tr("%1 controls").arg(row.controllerName);
     case Controller::OtherDevice: return tr("%1 controls").arg(row.controllerName);
     case Controller::Nobody:      break;
     }
@@ -319,8 +334,9 @@ QString SliceChooser::descriptionFor(const Row& row) const
                                  : tr("You can listen in. %1").arg(row.takeRefusal);
     }
     const QString who = row.controller == Controller::OtherDevice ? row.controllerName
-        : row.controller == Controller::CoreDesktop ? tr("The Core itself")
-                                                    : QString();
+        : row.controller == Controller::CoreDesktop
+        ? (row.controllerName.isEmpty() ? tr("The Core itself") : row.controllerName)
+        : QString();
     if (row.controllerAway && !who.isEmpty()) {
         return tr("%1 is away. You can listen or take control now. It loses this slice after "
                   "three minutes away.").arg(who);
@@ -492,9 +508,13 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
     QList<Row> rows;
     const QString self = access ? access->selfDeviceId() : devices.selfDeviceId();
     const auto nameOf = [&devices](const QString& wireId) {
-        const auto device = devices.connectedDevice(wireId);
+        const auto device = devices.sliceHolderDevice(wireId);
         return device ? device->name : QString();
     };
+    // The station device, as a slice's holder: the desktop that hosts the
+    // Core, by its connectedDevices entry with hostsCore (never by id). Empty
+    // on a Core no desktop hosts, which the rows call the Core itself.
+    const QString hostName = nameOf(kStationWireId);
     const auto awayOf = [&devices](const QString& wireId) {
         const auto device = devices.connectedDevice(wireId);
         return device && device->state == QLatin1String("away");
@@ -512,7 +532,17 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
             : controller == self               ? Controller::ThisWindow
             : controller == kStationWireId     ? Controller::CoreDesktop
                                                : Controller::OtherDevice;
-        if (row.controller == Controller::OtherDevice) {
+        // A slice the Core keeps for an away device: its marker names that
+        // device, and the row names it too, never the Core.
+        const bool keptForAway = !markerOwner.isEmpty() && markerOwner != kStationWireId;
+        if (row.controller == Controller::CoreDesktop && keptForAway) {
+            row.controller = Controller::OtherDevice;
+            row.controllerName = nameOf(markerOwner);
+            row.controllerAway = true;
+        } else if (row.controller == Controller::CoreDesktop) {
+            row.controllerName = hostName;
+            row.controllerAway = false;
+        } else if (row.controller == Controller::OtherDevice) {
             row.controllerName = nameOf(controller);
             row.controllerAway = awayOf(controller)
                 || (row.controllerAway && controller == markerOwner);
@@ -526,8 +556,7 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
         // refuses the take, and Take control says so. A slice the Core
         // keeps for an away device (its marker names that device) may be
         // taken at any version.
-        const bool keptForAway = !markerOwner.isEmpty() && markerOwner != kStationWireId;
-        row.takeRefusal = row.controller == Controller::CoreDesktop && !keptForAway
+        row.takeRefusal = row.controller == Controller::CoreDesktop
                 && !access->coreSliceTakeable()
             ? StationClient::coreSliceTakeUnavailableReason(row.letter())
             : QString();
@@ -561,12 +590,18 @@ QList<SliceChooser::Row> SliceChooser::rowsForRemoteWindow(const RadioModel& mod
         row.frequencyHz = marker.frequencyHz;
         row.mode = modeWords(marker.dspMode);
         row.filter = filterWords(marker.filterLowHz, marker.filterHighHz);
-        row.controller = marker.ownerDeviceId.isEmpty() ? Controller::Nobody
-            : marker.ownerDeviceId == kStationWireId    ? Controller::CoreDesktop
-                                                        : Controller::OtherDevice;
-        row.controllerName = marker.ownerName;
-        row.controllerAway = marker.ownerAway;
-        row.listenerCount = marker.ownerDeviceId.isEmpty() ? 0 : 1;
+        // A marker with no ownerDeviceId is read as nobody's: the Core
+        // sends ownerKind "station" both for a slice the station device
+        // holds and for a slice nobody holds, so the marker alone cannot
+        // tell them apart. The access entry decides (fill): a controller
+        // of "station" is the Core's desktop.
+        row.controller = marker.ownerDeviceId.isEmpty()      ? Controller::Nobody
+            : marker.ownerDeviceId == kStationWireId         ? Controller::CoreDesktop
+                                                             : Controller::OtherDevice;
+        row.controllerName =
+            row.controller == Controller::CoreDesktop ? hostName : marker.ownerName;
+        row.controllerAway = row.controller == Controller::OtherDevice && marker.ownerAway;
+        row.listenerCount = row.controller == Controller::Nobody ? 0 : 1;
         fill(row, marker.ownerDeviceId);
         if (row.controller == Controller::OtherDevice && row.controllerName.isEmpty()) {
             row.controllerName = marker.ownerName;

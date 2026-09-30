@@ -8,6 +8,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 J.J. Boyd / KG4VCF : desktop listening fix 3: the edge
+//                 arrow is drawn by drawOffScreenArrow, for the pan's VFO
+//                 and, one row each, for a slice shown here only as its
+//                 flag (setEdgeMarkedSlice). AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-30 J.J. Boyd / KG4VCF : desktop listening lane review: a
+//                 marker's click says who controls the slice and offers
+//                 Take control, in the listener words; nobody's slice says
+//                 so. AI-assisted via Anthropic Claude Code.
 //   2026-09-30 J.J. Boyd / KG4VCF : Level Cal fix wave: while the level
 //                 calibration holds the grid's noise floor follow off, the
 //                 saved value stays the user's (setGridFollowSaveHold).
@@ -7089,11 +7098,18 @@ QString SpectrumWidget::foreignMarkerLabel(const ForeignSliceMarker& marker)
 
 QString SpectrumWidget::foreignMarkerExplanation(const ForeignSliceMarker& marker)
 {
+    // Any slice can be taken except while it transmits, so the words are
+    // the listener's (SliceAccessMirror::listenerReason, as the Core words
+    // its refusal): who controls it, and Take control.
+    if (marker.unowned) {
+        return QStringLiteral("Nobody controls slice %1. Take control to change it.")
+            .arg(marker.letter);
+    }
     const QString name = marker.ownerName.isEmpty()
         ? (marker.ownerShortName.isEmpty() ? QStringLiteral("another device")
                                            : marker.ownerShortName)
         : marker.ownerName;
-    return QStringLiteral("Slice %1 belongs to %2. Only %2 can tune it or close it.")
+    return QStringLiteral("Slice %1 is controlled by %2. Take control to change it.")
         .arg(marker.letter, name);
 }
 
@@ -7283,36 +7299,71 @@ void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
                                              const QRect& wfRect)
 {
     Q_UNUSED(wfRect);
-    if (m_vfoOffScreen == VfoOffScreen::None
-        || !m_ownSliceMarkerPresentationAllowed) {
+    if (!m_ownSliceMarkerPresentationAllowed) {
         return;
     }
 
-    // Arrow and label colors — match slice accent color
-    static constexpr int kArrowW = 14;
-    static constexpr int kArrowH = 20;
-    int arrowSliceId = m_frontSliceIndex;
-    if (!m_vfoWidgets.isEmpty()) {
-        // The pan-level VFO can still name a selected foreign slice. Never
-        // borrow another own flag's color for that foreign frequency.
-        const VfoWidget* front = m_vfoWidgets.value(arrowSliceId, nullptr);
-        if (!front || !front->stationPresentationAllowed()
-            || !qFuzzyCompare(front->frequency(), m_vfoHz)) {
-            arrowSliceId = -1;
-            for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-                if (it.value() && it.value()->stationPresentationAllowed()
-                    && qFuzzyCompare(it.value()->frequency(), m_vfoHz)) {
-                    arrowSliceId = it.key();
-                    break;
+    int leftRows = 0;
+    int rightRows = 0;
+    if (m_vfoOffScreen != VfoOffScreen::None) {
+        // Arrow and label colors — match slice accent color
+        int arrowSliceId = m_frontSliceIndex;
+        bool drawPanArrow = true;
+        if (!m_vfoWidgets.isEmpty()) {
+            // The pan-level VFO can still name a selected foreign slice. Never
+            // borrow another own flag's color for that foreign frequency.
+            const VfoWidget* front = m_vfoWidgets.value(arrowSliceId, nullptr);
+            if (!front || !front->stationPresentationAllowed()
+                || !qFuzzyCompare(front->frequency(), m_vfoHz)) {
+                arrowSliceId = -1;
+                for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
+                    if (it.value() && it.value()->stationPresentationAllowed()
+                        && !m_edgeMarkedSlices.contains(it.key())
+                        && qFuzzyCompare(it.value()->frequency(), m_vfoHz)) {
+                        arrowSliceId = it.key();
+                        break;
+                    }
                 }
             }
+            if (arrowSliceId < 0) { drawPanArrow = false; }
         }
-        if (arrowSliceId < 0) { return; }
+        if (drawPanArrow) {
+            const bool left = (m_vfoOffScreen == VfoOffScreen::Left);
+            drawOffScreenArrow(p, specRect, left, VfoWidget::sliceColor(arrowSliceId),
+                               m_vfoHz, 0);
+            (left ? leftRows : rightRows) = 1;
+        }
     }
-    const QColor arrowColor = VfoWidget::sliceColor(arrowSliceId);
+
+    // A slice this pan shows only as its flag (a listened slice a layout
+    // change placed here) never moves the pan's VFO, so off the span it gets
+    // its own marker, the same arrow in its own colour, one row per slice
+    // below the pan's own.
+    const double leftEdge = m_centerHz - m_bandwidthHz / 2.0;
+    const double rightEdge = m_centerHz + m_bandwidthHz / 2.0;
+    for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
+        if (!m_edgeMarkedSlices.contains(it.key()) || !it.value()
+            || !it.value()->stationPresentationAllowed()) {
+            continue;
+        }
+        const double hz = it.value()->frequency();
+        if (hz >= leftEdge && hz <= rightEdge) { continue; }
+        const bool left = hz < leftEdge;
+        int& row = left ? leftRows : rightRows;
+        drawOffScreenArrow(p, specRect, left, VfoWidget::sliceColor(it.key()), hz, row);
+        ++row;
+    }
+}
+
+void SpectrumWidget::drawOffScreenArrow(QPainter& p, const QRect& specRect, bool left,
+                                        const QColor& arrowColor, double hz, int row)
+{
+    static constexpr int kArrowW = 14;
+    static constexpr int kArrowH = 20;
+    static constexpr int kRowGap = 6;
 
     // Format frequency text
-    double mhz = m_vfoHz / 1.0e6;
+    double mhz = hz / 1.0e6;
     QString label = QString::number(mhz, 'f', 4);
 
     QFont font = p.font();
@@ -7321,9 +7372,10 @@ void SpectrumWidget::drawOffScreenIndicator(QPainter& p, const QRect& specRect,
     p.setFont(font);
     QFontMetrics fm(font);
 
-    int arrowY = specRect.top() + specRect.height() / 2 - kArrowH / 2;
+    int arrowY = specRect.top() + specRect.height() / 2 - kArrowH / 2
+        + row * (kArrowH + kRowGap);
 
-    if (m_vfoOffScreen == VfoOffScreen::Left) {
+    if (left) {
         // Left arrow at left edge
         int x = specRect.left() + 4;
         QPolygon arrow;
@@ -12303,6 +12355,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceIndex)
 
 void SpectrumWidget::removeVfoWidget(int sliceIndex)
 {
+    m_edgeMarkedSlices.remove(sliceIndex);
     if (auto* w = m_vfoWidgets.take(sliceIndex)) {
         // The flag's close / lock / record / play buttons are parented to THIS
         // widget, not to the flag, so deleting the flag alone orphans them and
@@ -12319,6 +12372,29 @@ void SpectrumWidget::removeVfoWidget(int sliceIndex)
 VfoWidget* SpectrumWidget::vfoWidget(int sliceIndex) const
 {
     return m_vfoWidgets.value(sliceIndex, nullptr);
+}
+
+void SpectrumWidget::setEdgeMarkedSlice(int sliceIndex, bool edgeMarked)
+{
+    const bool changed = edgeMarked ? !m_edgeMarkedSlices.contains(sliceIndex)
+                                    : m_edgeMarkedSlices.contains(sliceIndex);
+    if (!changed) { return; }
+    if (edgeMarked) {
+        m_edgeMarkedSlices.insert(sliceIndex);
+    } else {
+        m_edgeMarkedSlices.remove(sliceIndex);
+    }
+    refreshSliceFlags();
+}
+
+void SpectrumWidget::refreshSliceFlags()
+{
+    updateVfoPositions();
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#else
+    update();
+#endif
 }
 
 // See the header for the bench defect this closes (Sub-Epic J,

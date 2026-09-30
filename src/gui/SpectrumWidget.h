@@ -11,6 +11,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 : setEdgeMarkedSlice, refreshSliceFlags and
+//                 drawOffScreenArrow: a listened slice a layout change
+//                 placed here draws its own edge marker, never through the
+//                 pan's VFO (desktop listening fix 3). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : ForeignSliceMarker::unowned; a marker's click words say
+//                 who controls the slice and offer Take control (desktop
+//                 listening lane review). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-30 : setGridFollowSaveHold, the saved grid noise floor follow
 //                 held at the user's value while the level calibration
 //                 holds the follow off. J.J. Boyd (KG4VCF), AI-assisted via
@@ -216,6 +225,7 @@ mw0lge@grange-lane.co.uk
 #include <functional>
 #include <QPoint>
 #include <QMap>
+#include <QSet>
 #include <QHash>
 #include <QStaticText>
 #include <QTimer>
@@ -1445,6 +1455,14 @@ public:
     void removeVfoWidget(int sliceIndex);
     VfoWidget* vfoWidget(int sliceIndex) const;
     void updateVfoPositions();
+    /// A slice this pan shows only as its flag and, off the span, as its own
+    /// edge marker, never through the pan's VFO: a listened slice a layout
+    /// change placed on this pan. Cleared when its flag is removed.
+    void setEdgeMarkedSlice(int sliceIndex, bool edgeMarked);
+    bool isEdgeMarkedSlice(int sliceIndex) const { return m_edgeMarkedSlices.contains(sliceIndex); }
+    /// Re-place the flags and repaint the edge markers, for a slice whose
+    /// tune must not go through the pan's VFO.
+    void refreshSliceFlags();
 
     /// Pin sliceIndex's flag to the front of this pan's stacking order.
     ///
@@ -1502,6 +1520,9 @@ public:
         QString ownerName;
         bool    tx{false};
         bool    away{false};
+        /// Nobody controls the slice (the Core's access entry names no
+        /// controller, or the Core sends no access data for it).
+        bool    unowned{false};
     };
     void setForeignSliceMarkers(const QVector<ForeignSliceMarker>& markers);
     const QVector<ForeignSliceMarker>& foreignSliceMarkers() const { return m_foreignMarkers; }
@@ -2943,6 +2964,9 @@ private:
 
     // ---- VFO flag widgets ----
     QMap<int, VfoWidget*> m_vfoWidgets;
+    // Slices shown here only as their flag and their own edge marker
+    // (setEdgeMarkedSlice).
+    QSet<int> m_edgeMarkedSlices;
 
     // Which slice's flag stays on top -- see setFrontSliceIndex(). -1 = no
     // pin; updateVfoPositions() falls back to its own ascending-index order.
@@ -2962,6 +2986,9 @@ private:
     enum class VfoOffScreen { None, Left, Right };
     VfoOffScreen m_vfoOffScreen{VfoOffScreen::None};
     void drawOffScreenIndicator(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    // One edge arrow and its frequency label; row 0 is the pan's own VFO.
+    void drawOffScreenArrow(QPainter& p, const QRect& specRect, bool left,
+                            const QColor& arrowColor, double hz, int row);
 
     // ---- Mouse tracking overlay (QRhiWidget macOS workaround) ----
     QWidget* m_mouseOverlay{nullptr};

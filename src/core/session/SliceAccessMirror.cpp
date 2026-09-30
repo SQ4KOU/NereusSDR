@@ -17,6 +17,9 @@
 //   2026-09-30: core-slice take-over: setCoreSliceTakeable(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: listenerReason names the hosting desktop for the station
+//               device by its hostsCore entry. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceAccessMirror.h"
@@ -196,10 +199,11 @@ QString SliceAccessMirror::listenerReason(int sliceId) const
     // (StationServer::sliceHolderWords): the device's name (the hosting
     // desktop's too), the plain word for its kind when it has no name,
     // "another device" when neither is known, and the Core only for the
-    // station device on a Core no desktop hosts.
+    // station device on a Core no desktop hosts. The station device is the
+    // hosting desktop's entry (hostsCore), never matched by id.
     std::optional<RemoteConnectedDevice> device;
     if (m_devices) {
-        device = m_devices->connectedDevice(controller);
+        device = m_devices->sliceHolderDevice(controller);
     }
     QString owner;
     if (device && !device->name.isEmpty()) {

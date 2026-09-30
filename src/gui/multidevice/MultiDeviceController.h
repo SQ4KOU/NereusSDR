@@ -49,6 +49,10 @@
 //   2026-09-30: take-over parity: controlTaken is a card with Take it
 //               back, shown off with a reason on an older Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane review: foreignMarkers() reads the
+//               access entries, naming the hosting desktop for a slice the
+//               station device holds. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "gui/SpectrumWidget.h"
@@ -67,6 +71,7 @@ namespace NereusSDR {
 
 class NoticeCard;
 class RemoteDevicesState;
+class SliceAccessMirror;
 struct RemotePrompt;
 struct SessionPrompt;
 class StationClient;
@@ -91,9 +96,14 @@ public:
     /// elsewhere or this window cannot take it.
     void askTakeTransmit();
 
-    /// Other devices' slices, as a panadapter draws them.
+    /// Other devices' slices, as a panadapter draws them. A marker names
+    /// no device for a slice the station device holds and for one nobody
+    /// holds; `access` (null when the Core sends none) decides. A
+    /// controller of "station" names the desktop that hosts the Core (its
+    /// connectedDevices entry with hostsCore), or the Core itself on a Core
+    /// no desktop hosts; otherwise nobody controls it.
     static QVector<SpectrumWidget::ForeignSliceMarker> foreignMarkers(
-        const RemoteDevicesState& devices);
+        const RemoteDevicesState& devices, const SliceAccessMirror* access = nullptr);
 
     /// The dialog for a confirm.request question: TakeTransmitDialog,
     /// TakeReceiverDialog (takeReceiver, takeSlice) or ConfirmChangeDialog.

@@ -20,10 +20,16 @@
 //   2026-09-30: take-over review: the Core's own slice reads "the Core
 //               itself". J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane: the hosting desktop by its own
+//               name, a headless Core as the Core itself, the station
+//               marker, and a slice kept for an away device. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
+#include <QDialog>
 #include <QDir>
 #include <QImage>
 #include <QLabel>
@@ -34,7 +40,9 @@
 #include "core/session/RemoteDevicesState.h"
 #include "core/session/SliceAccessMirror.h"
 #include "gui/SliceChooser.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
+#include "gui/multidevice/MultiDeviceController.h"
 #include "gui/widgets/RxDashboard.h"
 #include "gui/widgets/VfoWidget.h"
 
@@ -474,6 +482,334 @@ private slots:
         take->click();
         QCOMPARE(taken.count(), 1);
         render(chooser, QStringLiteral("Choose a slice"), QStringLiteral("core-slice-offered"));
+    }
+
+    // Desktop listening lane (JJ, 2026-09-30): a slice the station device
+    // holds names the desktop that hosts the Core, by its connectedDevices
+    // entry with hostsCore. Its wire id is base64url("station"), so it is
+    // never matched by the id "station".
+    void aHostedCoreNamesTheHostingDesktop()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("connectedDevices",
+                            {text("listJson",
+                                  QStringLiteral(
+                                      "[{\"deviceId\":\"c3RhdGlvbg\",\"name\":\"Shack desktop\","
+                                      "\"shortName\":\"Shack\",\"kind\":\"station\","
+                                      "\"hostsCore\":true,\"state\":\"listening\"},"
+                                      "{\"deviceId\":\"me\",\"name\":\"Jo's iPad\","
+                                      "\"kind\":\"tablet\",\"state\":\"listening\"}]")),
+                             count("deviceLimit", 4)});
+        QVERIFY(!devices.connectedDevice(QStringLiteral("station")));
+        QCOMPARE(devices.sliceHolderDevice(QStringLiteral("station"))->name,
+                 QStringLiteral("Shack desktop"));
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        access.setCoreSliceTakeable(true);
+        access.applyObject("access:0", {count("incarnation", 3),
+                                        text("controllerDeviceId", "station"),
+                                        count("controlRevision", 1),
+                                        text("listenerDeviceIds", "[\"station\",\"me\"]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+
+        const QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        const Row& r = rows.first();
+        QCOMPARE(r.controller, Controller::CoreDesktop);
+        QCOMPARE(r.controllerName, QStringLiteral("Shack desktop"));
+        QVERIFY(!r.controllerAway);
+        QVERIFY(r.listeningHere);
+
+        // The row, its description and the flag name the desktop.
+        SliceChooser chooser;
+        chooser.setInventory(rows);
+        chooser.selectSlice(0);
+        QStringList labels;
+        for (QLabel* l : chooser.findChildren<QLabel*>()) {
+            labels.append(l->text());
+        }
+        const QString all = labels.join(QLatin1Char('\n'));
+        QVERIFY2(all.contains(QStringLiteral("Shack desktop controls")), qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("Shack desktop controls tuning.")), qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("Core itself")), qPrintable(all));
+        QVERIFY(action(chooser, QStringLiteral("Stop listening")));
+        const VfoWidget::SliceAccess flagAccess = SliceChooser::flagAccessFor(r);
+        QCOMPARE(flagAccess.line, QStringLiteral("Listening \u00b7 controlled by Shack desktop"));
+        QCOMPARE(flagAccess.heldReason, QStringLiteral("Shack desktop controls this slice"));
+        // The refusal a listened slice's held change shows, as the Core
+        // words it (StationServer::sliceHolderWords).
+        QCOMPARE(access.listenerReason(0),
+                 QStringLiteral("Slice A is controlled by Shack desktop. Take control to change "
+                                "it."));
+        render(chooser, QStringLiteral("Listening"), QStringLiteral("hosted-core-named"));
+    }
+
+    // A Core no desktop hosts: the station device is the Core itself.
+    void aHeadlessCoreIsTheCoreItself()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("connectedDevices",
+                            {text("listJson",
+                                  QStringLiteral(
+                                      "[{\"deviceId\":\"me\",\"name\":\"Jo's iPad\","
+                                      "\"kind\":\"tablet\",\"state\":\"listening\"}]")),
+                             count("deviceLimit", 4)});
+        QVERIFY(!devices.sliceHolderDevice(QStringLiteral("station")));
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        access.setCoreSliceTakeable(true);
+        access.applyObject("access:0", {count("incarnation", 3),
+                                        text("controllerDeviceId", "station"),
+                                        count("controlRevision", 1),
+                                        text("listenerDeviceIds", "[\"station\",\"me\"]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+
+        const QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        const Row& r = rows.first();
+        QCOMPARE(r.controller, Controller::CoreDesktop);
+        QVERIFY(r.controllerName.isEmpty());
+        SliceChooser chooser;
+        chooser.setInventory(rows);
+        chooser.selectSlice(0);
+        QStringList labels;
+        for (QLabel* l : chooser.findChildren<QLabel*>()) {
+            labels.append(l->text());
+        }
+        const QString all = labels.join(QLatin1Char('\n'));
+        QVERIFY2(all.contains(QStringLiteral("The Core itself controls")), qPrintable(all));
+        QVERIFY2(all.contains(QStringLiteral("The Core itself controls tuning.")),
+                 qPrintable(all));
+        const VfoWidget::SliceAccess flagAccess = SliceChooser::flagAccessFor(r);
+        QCOMPARE(flagAccess.line, QStringLiteral("Listening \u00b7 controlled by the Core itself"));
+        QCOMPARE(flagAccess.heldReason, QStringLiteral("The Core itself controls this slice"));
+        QCOMPARE(access.listenerReason(0),
+                 QStringLiteral("Slice A is controlled by the Core. Take control to change it."));
+    }
+
+    // Job B review N-1 (JJ, 2026-09-30): the station marker names no
+    // device (ownerDeviceId empty, ownerKind "station"), and the Core sends
+    // the same for a slice nobody holds, so the marker alone cannot tell
+    // them apart. The access entry decides: a controller of "station" is
+    // the Core's desktop, named for the desktop that hosts the Core.
+    void theStationMarkerIsTheCoresDesktop()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("connectedDevices",
+                            {text("listJson",
+                                  QStringLiteral(
+                                      "[{\"deviceId\":\"c3RhdGlvbg\",\"name\":\"Shack desktop\","
+                                      "\"kind\":\"station\",\"hostsCore\":true,"
+                                      "\"state\":\"listening\"}]")),
+                             count("deviceLimit", 4)});
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        access.setCoreSliceTakeable(true);
+        access.applyObject("access:0", {count("incarnation", 3),
+                                        text("controllerDeviceId", "station"),
+                                        count("controlRevision", 1),
+                                        text("listenerDeviceIds", "[\"station\"]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+        const QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(rows.first().controller, Controller::CoreDesktop);
+        QCOMPARE(rows.first().controllerName, QStringLiteral("Shack desktop"));
+        QCOMPARE(rows.first().listenerCount, 1);
+    }
+
+    // Job B review N-1: the same marker for a slice nobody holds reads
+    // "Available to control", whether the access entry names no controller
+    // or there is no access data at all.
+    void anUnownedMarkerIsAvailableToControl()
+    {
+        const auto ownerLine = [](const QList<Row>& rows) {
+            SliceChooser chooser;
+            chooser.setInventory(rows);
+            QStringList labels;
+            for (QLabel* l : chooser.findChildren<QLabel*>()) {
+                labels.append(l->text());
+            }
+            return labels.join(QLatin1Char('\n'));
+        };
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("connectedDevices",
+                            {text("listJson",
+                                  QStringLiteral(
+                                      "[{\"deviceId\":\"c3RhdGlvbg\",\"name\":\"Shack desktop\","
+                                      "\"kind\":\"station\",\"hostsCore\":true,"
+                                      "\"state\":\"listening\"}]")),
+                             count("deviceLimit", 4)});
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+
+        // An access entry whose controller is empty.
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        access.setCoreSliceTakeable(true);
+        access.applyObject("access:0", {count("incarnation", 3),
+                                        text("controllerDeviceId", ""),
+                                        count("controlRevision", 2),
+                                        text("listenerDeviceIds", "[]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+        QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(rows.first().controller, Controller::Nobody);
+        QVERIFY(rows.first().controllerName.isEmpty());
+        QCOMPARE(rows.first().listenerCount, 0);
+        QString all = ownerLine(rows);
+        QVERIFY2(all.contains(QStringLiteral("Available to control")), qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("Shack desktop")), qPrintable(all));
+
+        // No access data at all.
+        rows = SliceChooser::rowsForRemoteWindow(model, nullptr, devices);
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(rows.first().controller, Controller::Nobody);
+        QCOMPARE(rows.first().listenerCount, 0);
+        all = ownerLine(rows);
+        QVERIFY2(all.contains(QStringLiteral("Available to control")), qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("Shack desktop")), qPrintable(all));
+    }
+
+    // Job B review N-2 (JJ, 2026-09-30): a remote window's spectrum marker
+    // for a slice the station device holds names the hosting desktop, as
+    // the chooser does; a headless Core's reads the Core itself; nobody's
+    // says nobody controls it. The click words offer Take control.
+    void aStationMarkerOnTheSpectrumNamesTheHostingDesktop()
+    {
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        const auto hosted = [&devices](bool hosting) {
+            devices.applyObject(
+                "connectedDevices",
+                {text("listJson",
+                      hosting ? QStringLiteral(
+                                    "[{\"deviceId\":\"c3RhdGlvbg\",\"name\":\"Shack desktop\","
+                                    "\"shortName\":\"Shack\",\"kind\":\"station\","
+                                    "\"hostsCore\":true,\"state\":\"listening\"}]")
+                              : QStringLiteral("[]")),
+                 count("deviceLimit", 4)});
+        };
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", ""),
+                                         text("ownerKind", "station"),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(7177000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        const auto controlledBy = [&access](const QString& controller) {
+            access.applyObject("access:0", {count("incarnation", 3),
+                                            text("controllerDeviceId", controller),
+                                            count("controlRevision", 1),
+                                            text("listenerDeviceIds", "[]"),
+                                            text("activeRxDeviceIds", "[]"),
+                                            flag("onAir", false)});
+        };
+
+        // Hosted: the desktop's own name and short name.
+        hosted(true);
+        controlledBy(QStringLiteral("station"));
+        QVector<SpectrumWidget::ForeignSliceMarker> markers =
+            MultiDeviceController::foreignMarkers(devices, &access);
+        QCOMPARE(markers.size(), 1);
+        QCOMPARE(markers.first().ownerName, QStringLiteral("Shack desktop"));
+        QCOMPARE(markers.first().ownerShortName, QStringLiteral("Shack"));
+        QVERIFY(!markers.first().unowned);
+        QCOMPARE(SpectrumWidget::foreignMarkerLabel(markers.first()), QStringLiteral("A Shack"));
+        QCOMPARE(SpectrumWidget::foreignMarkerExplanation(markers.first()),
+                 QStringLiteral("Slice A is controlled by Shack desktop. Take control to change "
+                                "it."));
+
+        // Headless: the Core itself.
+        hosted(false);
+        markers = MultiDeviceController::foreignMarkers(devices, &access);
+        QCOMPARE(markers.first().ownerName, QStringLiteral("the Core itself"));
+        QCOMPARE(SpectrumWidget::foreignMarkerExplanation(markers.first()),
+                 QStringLiteral("Slice A is controlled by the Core itself. Take control to "
+                                "change it."));
+
+        // Nobody's, by the access entry and with no access data at all.
+        hosted(true);
+        controlledBy(QString());
+        markers = MultiDeviceController::foreignMarkers(devices, &access);
+        QVERIFY(markers.first().unowned);
+        QVERIFY(markers.first().ownerName.isEmpty());
+        QCOMPARE(SpectrumWidget::foreignMarkerLabel(markers.first()), QStringLiteral("A"));
+        QCOMPARE(SpectrumWidget::foreignMarkerExplanation(markers.first()),
+                 QStringLiteral("Nobody controls slice A. Take control to change it."));
+        markers = MultiDeviceController::foreignMarkers(devices, nullptr);
+        QVERIFY(markers.first().unowned);
+        QVERIFY(markers.first().ownerName.isEmpty());
+        const QString words = SpectrumWidget::foreignMarkerExplanation(markers.first());
+        QVERIFY2(OperatorWording::isPlain(words), qPrintable(words));
+    }
+
+    // A slice the Core keeps for an away device: the row names that
+    // device, never "the Core itself is away".
+    void aSliceKeptForAnAwayDeviceNamesThatDevice()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        RemoteDevicesState devices;
+        devices.setSelfDeviceId(QStringLiteral("me"));
+        devices.applyObject("marker:0", {count("sliceId", 0), text("ownerDeviceId", "jo"),
+                                         text("ownerName", "Jo's iPhone"),
+                                         text("ownerKind", "phone"), flag("ownerAway", true),
+                                         MirrorUpdate{0, "frequency", MirrorWireKind::Float64,
+                                                      QVariant(14074000.0)},
+                                         count("dspMode", 1)});
+        SliceAccessMirror access(nullptr, &devices);
+        access.setSelfDeviceId(QStringLiteral("me"));
+        // The Core holds it for Jo's iPhone: the station device controls it.
+        access.applyObject("access:0", {count("incarnation", 5),
+                                        text("controllerDeviceId", "station"),
+                                        count("controlRevision", 3),
+                                        text("listenerDeviceIds", "[\"station\"]"),
+                                        text("activeRxDeviceIds", "[]"), flag("onAir", false)});
+        const QList<Row> rows = SliceChooser::rowsForRemoteWindow(model, &access, devices);
+        QCOMPARE(rows.size(), 1);
+        const Row& r = rows.first();
+        QCOMPARE(r.controller, Controller::OtherDevice);
+        QCOMPARE(r.controllerName, QStringLiteral("Jo's iPhone"));
+        QVERIFY(r.controllerAway);
+        QVERIFY(r.takeRefusal.isEmpty());
+        SliceChooser chooser;
+        chooser.setInventory(rows);
+        chooser.selectSlice(0);
+        QStringList labels;
+        for (QLabel* l : chooser.findChildren<QLabel*>()) {
+            labels.append(l->text());
+        }
+        const QString all = labels.join(QLatin1Char('\n'));
+        QVERIFY2(all.contains(QStringLiteral("Jo's iPhone is away. You can listen or take control "
+                                             "now.")),
+                 qPrintable(all));
+        QVERIFY2(!all.contains(QStringLiteral("Core itself")), qPrintable(all));
+        render(chooser, QStringLiteral("Choose a slice"), QStringLiteral("kept-for-away"));
     }
 
     // The hosting desktop: the Core's slices, two same-named devices told

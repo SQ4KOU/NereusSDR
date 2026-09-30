@@ -471,6 +471,30 @@
 //   2026-09-30 - TX rulings (item 3): refreshOverlayAttAccess, each pan's
 //               ATT flyout held on a slice this window only listens to.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Desktop listening: a layout change that retires the pan
+//               of a slice this window listens to places it on a pan that
+//               remains and keeps listening; stopListeningOffWindow and its
+//               toast are gone. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-30 - Desktop listening review: a remote window's marker for a
+//               slice the station device holds names the hosting desktop
+//               (foreignMarkers reads the access entries), refreshed when
+//               access or the connected devices change. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Desktop listening placement: a listened slice placed on
+//               a remaining pan no longer takes that pan's view. It is
+//               placed before the controlled slices rehome, and
+//               rebuildFftRouting does not push its stream window onto a
+//               pan that already shows something. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Desktop listening fix 3: a listened slice a layout change
+//               places on a remaining pan is a marker only there
+//               (m_markerOnlyPlacement): its stream is not subscribed to
+//               that pan, and its hooks draw its flag and its own edge
+//               marker, never the pan's VFO, view or DDC centre. On a pan
+//               not its own, a slice's demodulator shift comes from its own
+//               stream's centre. A reveal is unchanged. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-28 - iPhone app plan Task 25 (R-IOS-18): a remote window's VAX
 //                applet gains the "Station computer" section, the Core
 //                computer's VAX through the Core's `vax` object, its TX row
@@ -1894,6 +1918,7 @@ void MainWindow::revealSliceInWindow(int sliceId)
                     chosen->setPanKey(id);
                 } else {
                     m_listenPlacement.insert(sliceId, id);
+                    m_markerOnlyPlacement.remove(sliceId);
                     m_panStack->moveSliceToPan(sliceId, id);
                     rehostSliceView(chosen);
                     rebuildFftRouting();
@@ -1912,6 +1937,7 @@ void MainWindow::revealSliceInWindow(int sliceId)
         // The slice's pan key belongs to its controller; this window only
         // places it.
         m_listenPlacement.insert(sliceId, target);
+        m_markerOnlyPlacement.remove(sliceId);
         m_panStack->moveSliceToPan(sliceId, target);
         rehostSliceView(slice);
         rebuildFftRouting();
@@ -1930,18 +1956,26 @@ void MainWindow::reconcileListenPlacements()
         const QString pan = m_listenPlacement.value(id);
         if (!slice) {
             m_listenPlacement.remove(id);
+            m_markerOnlyPlacement.remove(id);
             changed = true;
             continue;
         }
         if (windowControlsSlice(id)) {
             // Now this window's to control: the placement becomes its pan.
             m_listenPlacement.remove(id);
+            // A slice this window controls is no longer only a marker there.
+            if (m_markerOnlyPlacement.remove(id) && m_panStack) {
+                if (SpectrumWidget* shown = m_panStack->spectrum(pan)) {
+                    shown->setEdgeMarkedSlice(id, false);
+                }
+            }
             changed = true;
             if (m_panStack && m_panStack->panadapter(pan)) { slice->setPanKey(pan); }
             continue;
         }
         if (!windowListensTo(id)) {
             m_listenPlacement.remove(id);
+            m_markerOnlyPlacement.remove(id);
             changed = true;
             if (m_panStack && slice->panKey() != pan) {
                 if (PanadapterApplet* applet = m_panStack->panadapter(pan)) {
@@ -1954,25 +1988,20 @@ void MainWindow::reconcileListenPlacements()
     m_reconcilingPlacements = false;
 }
 
-void MainWindow::stopListeningOffWindow(int sliceId)
+bool MainWindow::markerOnlyPlacement(int sliceId) const
 {
-    if (!m_radioModel) { return; }
-    m_listenPlacement.remove(sliceId);
-    if (desktopHosting()) {
-        if (HostingSliceActions* actions = hostingSlices()) {
-            actions->stopListening(sliceId);
-        } else if (SliceOwnership* ownership = m_radioModel->sliceOwnership()) {
-            ownership->leave(SliceOwnership::stationDevice(), sliceId);
-        }
-    } else if (StationClient* client = sliceAccessClient()) {
-        const std::optional<SliceAccessMirror::Entry> entry =
-            client->sliceAccess() ? client->sliceAccess()->entry(sliceId) : std::nullopt;
-        client->requestStopListening(sliceId, entry ? entry->incarnation : 0);
-    }
-    const QString letter = QString(QChar(QLatin1Char('A').unicode() + std::max(0, sliceId)));
-    showToast(tr("Stopped listening to Slice %1: it is no longer shown in this window.")
-                  .arg(letter),
-              ToastSeverity::Info, 5000);
+    return m_markerOnlyPlacement.contains(sliceId)
+        && !m_listenPlacement.value(sliceId).isEmpty();
+}
+
+bool MainWindow::hostIsNotSlicesOwnPan(const SliceModel* slice) const
+{
+    if (!slice || !m_panStack) { return false; }
+    const int id = slice->sliceIndex();
+    if (windowControlsSlice(id) || !windowListensTo(id)) { return false; }
+    if (m_panStack->panadapter(m_listenPlacement.value(id))) { return true; }
+    // Its own pan is gone: spectrumForSlice falls back to the active pan.
+    return !slice->panKey().isEmpty() && !m_panStack->panadapter(slice->panKey());
 }
 
 StationServer* MainWindow::sliceAccessServer() const
@@ -2708,7 +2737,10 @@ void MainWindow::refreshForeignMarkers()
             markers.append(marker);
         }
     } else if (m_stationClient) {
-        markers = MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices());
+        // A marker for a slice the station device holds names no device;
+        // its access entry says so, and the hosting desktop is named.
+        markers = MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices(),
+                                                        m_stationClient->sliceAccess());
     }
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
         if (applet && applet->spectrumWidget()) {
@@ -3452,13 +3484,19 @@ void MainWindow::ensureRemoteSession()
                 refreshSliceChooser();
                 refreshContainerControls();
                 reconcileListenPlacements();
+                // A marker's owner words come from the access entry.
+                refreshForeignMarkers();
             });
         }
         if (RemoteDevicesState* devices = m_stationClient->remoteDevices()) {
             connect(devices, &RemoteDevicesState::markersChanged, this,
                     [this]() { refreshSliceChooser(); });
             connect(devices, &RemoteDevicesState::connectedDevicesChanged, this,
-                    [this]() { refreshSliceChooser(); });
+                    [this]() {
+                refreshSliceChooser();
+                // The hosting desktop's name, on a station-held marker.
+                refreshForeignMarkers();
+            });
         }
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();
@@ -4231,7 +4269,13 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // pan's marker at its 0 Hz default -- the flag was positioned off the left
     // edge and the pan showed the "<| 0.0000" off-screen-VFO chevron instead.
     // Bench-caught 2026-07-26: looked exactly like the flag was never created.
-    sw->setVfoFrequency(slice->frequency());
+    if (markerOnlyPlacement(sliceIndex)) {
+        // A listened slice a layout change placed here: its flag and its own
+        // edge marker, never this pan's VFO.
+        sw->setEdgeMarkedSlice(sliceIndex, true);
+    } else {
+        sw->setVfoFrequency(slice->frequency());
+    }
     newFlag->setMode(slice->dspMode());
 
     // AUTO AGC-T on this flag. The toggle and its visual feedback were wired
@@ -4426,6 +4470,20 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         // to another pan and the flag follows it there.
         SpectrumWidget* host = spectrumForSlice(slice);
         if (!host) { return; }
+        if (markerOnlyPlacement(slice->sliceIndex())) {
+            // A listened slice a layout change placed here moves only its
+            // own flag and edge marker: never this pan's VFO, view or DDC
+            // centre, and never its own demodulator shift, which
+            // bindSliceToStream set from its own stream.
+            host->setEdgeMarkedSlice(slice->sliceIndex(), true);
+            host->refreshSliceFlags();
+            return;
+        }
+        // On a pan that is not the slice's own, the demodulator shift comes
+        // from the slice's own stream, never from this pan's view: that pan
+        // shows another stream, and its geometry would put the slice off
+        // frequency for the device that controls it.
+        const bool foreignHost = hostIsNotSlicesOwnPan(slice);
 
         // Band jump: the slice moved outside what this pan is showing, so the
         // pan has to follow it. Restored after the flag-path unification
@@ -4461,7 +4519,8 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // src/gui/ no longer reaches into WdspEngine for a channel.
             // The model and WDSP together (R-R3-49): the pan now sits on
             // the slice, so its offset is zero in both halves.
-            m_radioModel->applySliceStreamCentre(slice, hz);
+            m_radioModel->applySliceStreamCentre(
+                slice, foreignHost ? m_radioModel->streamCentreHz(slice->streamIndex()) : hz);
             if (wasCtun && m_radioModel->receiverManager()) {
                 m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
             }
@@ -4470,7 +4529,8 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // CTUN, still on-screen: the DDC stays put and WDSP shifts.
             // Written to the model and WDSP together (R-R3-49), so the
             // slice's shiftOffsetHz names the centre the demodulator uses.
-            m_radioModel->applySliceStreamCentre(slice, center);
+            m_radioModel->applySliceStreamCentre(
+                slice, foreignHost ? m_radioModel->streamCentreHz(slice->streamIndex()) : center);
         }
         host->setVfoFrequency(hz);
     };
@@ -4486,6 +4546,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // Resolved through spectrumForSlice per call, so the passband lands on the
     // pan hosting this slice rather than on whichever pan is active.
     hostHooks.modeChanged = [this, slice](DSPMode mode) {
+        // The pan's passband and TX mode belong to the pan's VFO, which a
+        // slice placed there only as a marker never takes.
+        if (markerOnlyPlacement(slice->sliceIndex())) { return; }
         if (SpectrumWidget* host = spectrumForSlice(slice)) {
             // TX filter overlay maps audio Hz to the right sideband from this.
             host->setTxMode(mode);
@@ -4495,6 +4558,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         }
     };
     hostHooks.filterChanged = [this, slice](int low, int high) {
+        if (markerOnlyPlacement(slice->sliceIndex())) { return; }
         if (SpectrumWidget* host = spectrumForSlice(slice)) {
             host->setFilterOffset(low, high);
         }
@@ -6056,6 +6120,11 @@ void MainWindow::rebuildFftRouting()
         if (!slice) { continue; }
         const int stream = slice->streamIndex();
         if (stream < 0) { continue; }          // unbound slice feeds nothing
+        // A listened slice a layout change placed is a marker only on that
+        // pan: its stream is not subscribed there, so its frames never draw
+        // there and its DDC moves never re-centre that pan. The pan keeps
+        // the stream and the centre of the slices that own its view.
+        if (markerOnlyPlacement(slice->sliceIndex())) { continue; }
 
         // Resolving the pan is not just slice->panKey(). Slice A never has
         // one: RadioModel::addSlice stamps panKey only when it is given one
@@ -15417,6 +15486,23 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_radioModel) { return; }
 
     if (shared) {
+        // Listening ends only when the operator ends it (Stop listening,
+        // Release or a close). A listened slice whose pan the layout
+        // retired moves onto a pan that remains, the way a controlled slice
+        // is rehomed, and keeps listening. Only this window's placement
+        // changes; the slice's pan for its controller stays put. Placed
+        // before the controlled slices rehome, so the FFT routing pass
+        // their pan change triggers already finds it on its placed pan and
+        // leaves that pan's view where the operator had it.
+        const QString survivor = ids.value(0);
+        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
+            scope.listenedOn.insert(off, survivor);
+            m_listenPlacement.insert(off, survivor);
+            // Only its flag and its own edge marker on that pan: never its
+            // stream, its view or its VFO (JJ's ruling, 2026-09-30).
+            m_markerOnlyPlacement.insert(off);
+            m_panStack->moveSliceToPan(off, survivor);
+        }
         // Controlled slices rehome as before; nothing else moves, and no
         // stream or DDC is touched.
         const int rehomed = m_radioModel->rehomeSlicesToPans(ids, &scope);
@@ -15430,13 +15516,24 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             const QString placed = m_listenPlacement.value(slice->sliceIndex());
             if (!placed.isEmpty() && !ids.contains(placed)) {
                 m_listenPlacement.remove(slice->sliceIndex());
+                m_markerOnlyPlacement.remove(slice->sliceIndex());
             }
             rehostSliceView(slice);
         }
-        // A device hears only the slices it can see.
-        for (int off : m_radioModel->listenedOffPans(ids, scope)) {
-            scope.listenedOn.remove(off);
-            stopListeningOffWindow(off);
+        // A slice placed only as a marker is never the pan's active slice
+        // ahead of a slice this window controls there (PanadapterApplet::
+        // addSlice makes the first slice added active on an empty pan).
+        if (PanadapterApplet* kept = m_panStack->panadapter(survivor)) {
+            if (markerOnlyPlacement(kept->activeSliceIndex())) {
+                QList<int> hosted = kept->associatedSlices().values();
+                std::sort(hosted.begin(), hosted.end());
+                for (int id : std::as_const(hosted)) {
+                    if (windowControlsSlice(id) && !markerOnlyPlacement(id)) {
+                        kept->setActiveSliceIndex(id);
+                        break;
+                    }
+                }
+            }
         }
         m_radioModel->spreadSlicesOntoEmptyPans(ids, &scope);
         // populatePanSlices' rule, counting only what this window shows.

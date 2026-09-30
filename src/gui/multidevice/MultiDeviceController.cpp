@@ -24,11 +24,16 @@
 //   2026-09-30: take-over parity: controlTaken is a card with Take it
 //               back (controlTakeBackOff shows it off on an older Core).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane review: foreignMarkers() names the
+//               hosting desktop (or the Core itself) for a slice the station
+//               device holds, from the access entry. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/multidevice/MultiDeviceController.h"
 
 #include "core/session/RemoteDevicesState.h"
+#include "core/session/SliceAccessMirror.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
 #include "gui/multidevice/ConfirmChangeDialog.h"
@@ -395,8 +400,9 @@ void MultiDeviceController::onCommandFinished(const QByteArray& verb, quint32 co
 }
 
 QVector<SpectrumWidget::ForeignSliceMarker> MultiDeviceController::foreignMarkers(
-    const RemoteDevicesState& devices)
+    const RemoteDevicesState& devices, const SliceAccessMirror* access)
 {
+    const QString station = QStringLiteral("station");
     QVector<SpectrumWidget::ForeignSliceMarker> out;
     for (const RemoteSliceMarker& m : devices.markers()) {
         SpectrumWidget::ForeignSliceMarker f;
@@ -413,6 +419,24 @@ QVector<SpectrumWidget::ForeignSliceMarker> MultiDeviceController::foreignMarker
         f.ownerName = m.ownerName;
         f.tx = m.txSlice;
         f.away = m.ownerAway;
+        if (m.ownerDeviceId.isEmpty()) {
+            // The Core sends the same marker for a slice the station device
+            // holds and for one nobody holds; the access entry decides.
+            const std::optional<SliceAccessMirror::Entry> entry =
+                access ? access->entry(m.sliceId) : std::nullopt;
+            if (entry && entry->controllerDeviceId == station) {
+                if (const auto host = devices.sliceHolderDevice(station)) {
+                    f.ownerName = host->name;
+                    f.ownerShortName = host->shortName;
+                } else {
+                    // A Core no desktop hosts, in the chooser's words.
+                    f.ownerName = QStringLiteral("the Core itself");
+                    f.ownerShortName = QStringLiteral("Core");
+                }
+            } else {
+                f.unowned = true;
+            }
+        }
         out.append(f);
     }
     return out;

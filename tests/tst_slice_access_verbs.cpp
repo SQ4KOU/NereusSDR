@@ -45,6 +45,10 @@
 //   2026-09-30: core-slice take-over: a peer that declared sliceAccess 3
 //               reads 3. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: desktop listening lane: Take it back of a slice taken
+//               again or released since the notice answers "That can no
+//               longer be taken back." J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-30: JJ's wider ruling: control passes from a session that
 //               cannot stay listening (it loses the slice; an older
 //               window left with none ends). J.J. Boyd (KG4VCF), with
@@ -731,6 +735,12 @@ private slots:
         QCOMPARE(ownership->mark(0).owner, a.key.fingerprint());
     }
 
+    // Desktop listening lane (JJ, 2026-09-30): the slice was taken again
+    // since the notice, so the take-back record is void and the first tap
+    // says so. It used to answer with the stale-revision words, which the
+    // Core keeps for a real race: see
+    // ofTwoTakesWithTheSameRevisionExactlyOneIsApplied, and the race check
+    // at the end of this test.
     void aTakeItBackAfterControlMovedOnIsRefused()
     {
         Core core;
@@ -758,11 +768,64 @@ private slots:
 
         const QJsonObject late = core.invoke(appA, "notice.takeBack", {int64("id", id)});
         QVERIFY(!accepted(late));
-        QCOMPARE(reasonOf(late), QStringLiteral("Someone else changed who controls slice A. "
-                                                "Look again and try once more."));
+        QCOMPARE(reasonOf(late), QStringLiteral("That can no longer be taken back."));
         QVERIFY(OperatorWording::isPlain(reasonOf(late)));
         QCOMPARE(core.model->sliceOwnership()->mark(0).owner, c.key.fingerprint());
         // It never can be now, so the record is gone.
+        const QJsonObject again = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QCOMPARE(reasonOf(again), QStringLiteral("That can no longer be taken back."));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, c.key.fingerprint());
+        // A real race keeps the stale-revision words: B's take at the
+        // revision it saw before C took the slice.
+        const QJsonObject raced =
+            core.invoke(appB, "slice.takeControl",
+                        {int64("sliceId", 0),
+                         int64("incarnation",
+                               static_cast<qint64>(core.model->sliceOwnership()->incarnation(0))),
+                         int64("controlRevision",
+                               static_cast<qint64>(
+                                   core.model->sliceOwnership()->controlRevision(0) - 1))});
+        QVERIFY(!accepted(raced));
+        QCOMPARE(reasonOf(raced), QStringLiteral("Someone else changed who controls slice A. "
+                                                 "Look again and try once more."));
+    }
+
+    // Desktop listening lane (JJ, 2026-09-30): the device that took the
+    // slice released it before A tapped Take it back. The first tap
+    // answers that it can no longer be taken back, not the stale-revision
+    // words, and nothing changes.
+    void aTakeItBackAfterTheTakerReleasedIsRefusedPlainly()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kSharesBack);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const SliceOwnership* ownership = core.model->sliceOwnership();
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        QVERIFY(accepted(core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)))));
+        QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
+        QTRY_VERIFY(!firstOfType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const qint64 id =
+            firstOfType(appA->received(), QStringLiteral("notice")).value(QStringLiteral("id"))
+                .toInteger();
+        // B releases; A still listens, so the slice stays with nobody in
+        // control.
+        QTRY_COMPARE(accessOf(appB, 0, "controllerDeviceId").toString(), b.id());
+        const QJsonObject released =
+            core.invoke(appB, "slice.release", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(released), qPrintable(reasonOf(released)));
+        QVERIFY(ownership->mark(0).owner.isEmpty());
+        const quint64 revision = ownership->controlRevision(0);
+
+        const QJsonObject first = core.invoke(appA, "notice.takeBack", {int64("id", id)});
+        QVERIFY(!accepted(first));
+        QCOMPARE(reasonOf(first), QStringLiteral("That can no longer be taken back."));
+        QVERIFY(ownership->mark(0).owner.isEmpty());
+        QCOMPARE(ownership->controlRevision(0), revision);
         const QJsonObject again = core.invoke(appA, "notice.takeBack", {int64("id", id)});
         QCOMPARE(reasonOf(again), QStringLiteral("That can no longer be taken back."));
     }
