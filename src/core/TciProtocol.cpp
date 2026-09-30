@@ -627,6 +627,16 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // chkRX2.Checked + the rx2_enabled member).  NereusSDR's equivalent is
     // receiver 1 having a slice (rx2EnabledNow).
     const bool bRX2Enabled = rx2EnabledNow();
+    // Receiver 1 has no slice on the desktop host. Thetis still sends its
+    // receiver-1 lines with RX2 off (TCIServer.cs:2486-2651 [v2.10.3.15];
+    // only lock(1) is skipped, at 2596-2599) from RX2's own dormant state,
+    // or from RX1's VFO B for vfo:1,*. NereusSDR has no such state for a
+    // receiver with no slice, and receiverSlice() would read receiver 0's
+    // slice in its place, so those lines are not sent. The receiver-1
+    // lines whose value does not come from receiver 1's slice are still
+    // sent: rx_enable, rx_nf_enable (global), calibration_ex, split_enable,
+    // tx_enable, rx_channel_enable, trx, tune and iq_stop.
+    const bool rx1Vacant = m_receiverSliceMap && m_receiverSliceMap(1) < 0;
 
     // Helper: read a qint64 RadioModel accessor via QMetaObject::invokeMethod.
     // Mirrors the query-path pattern at handleVfoCommand below (line ~1140).
@@ -788,6 +798,15 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
                                   Qt::DirectConnection,
                                   Q_RETURN_ARG(bool, v),
                                   Q_ARG(int, receiverSlice(rx)));
+        return v;
+    };
+    // For shims that take the TCI receiver index rather than a slice id.
+    const auto readBoolForReceiver = [this](const char* method, int rx) -> bool {
+        bool v = false;
+        QMetaObject::invokeMethod(m_radio, method,
+                                  Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, v),
+                                  Q_ARG(int, rx));
         return v;
     };
     const auto readQStringPerRx = [this](const char* method, int rx) -> QString {
@@ -1082,20 +1101,24 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
         // reads CentreFrequency / CentreRX2Frequency (TCIServer.cs:2402-2410
         // [v2.10.3.15]); the if sign divergence is at ifOffsetHz.
         lines << buildDdsLineForRx(0);
-        lines << buildDdsLineForRx(1);
+        if (!rx1Vacant) { lines << buildDdsLineForRx(1); }
         lines << buildIfLineForRx(0, 0);
         lines << buildIfLineForRx(0, 1);
         // NereusSDR divergence (design doc §7 row 1): Thetis TCIServer.cs:2374-2375
         // [v2.10.3.13] calls sendIF(1,1) TWICE (copy-paste bug). We emit the intended
         // (1,0)+(1,1) cross-product instead, matching the sendVFO enumeration below.
-        lines << buildIfLineForRx(1, 0);
-        lines << buildIfLineForRx(1, 1);
+        if (!rx1Vacant) {
+            lines << buildIfLineForRx(1, 0);
+            lines << buildIfLineForRx(1, 1);
+        }
         lines << buildVfoLine(0, 0, rx1FreqHz);
         // With RX2 on, sendVFO(0, 1) reads VFOBFreq, which is RX2's
         // (TCIServer.cs:2113-2114, console.cs:32951-32954 [v2.10.3.15]).
         lines << buildVfoLine(0, 1, bRX2Enabled ? rx2FreqHz : rx1FreqHz);
-        lines << buildVfoLine(1, 0, rx2VfoaHz);
-        lines << buildVfoLine(1, 1, rx2FreqHz);
+        if (!rx1Vacant) {
+            lines << buildVfoLine(1, 0, rx2VfoaHz);
+            lines << buildVfoLine(1, 1, rx2FreqHz);
+        }
 
         //bespoke
         lines << buildTxFrequencyLine(txFreqHz);
@@ -1104,9 +1127,9 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
 
     // From Thetis TCIServer.cs:2385-2389 [v2.10.3.13]
     lines << buildModulationLine(0, modeUpper[0]);
-    lines << buildModulationLine(1, modeUpper[1]);
+    if (!rx1Vacant) { lines << buildModulationLine(1, modeUpper[1]); }
     lines << buildRxFilterBandLine(0, filterLow[0], filterHigh[0]);
-    lines << buildRxFilterBandLine(1, filterLow[1], filterHigh[1]);
+    if (!rx1Vacant) { lines << buildRxFilterBandLine(1, filterLow[1], filterHigh[1]); }
 
     // From Thetis TCIServer.cs:2391-2392 [v2.10.3.13]
     lines << buildRxEnableLine(0, !mox);
@@ -1114,34 +1137,40 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
 
     // From Thetis TCIServer.cs:2394-2403 [v2.10.3.13]
     lines << buildRxNrEnableLine(0, rx1nr > 0);
-    lines << buildRxNrEnableLine(1, rx2nr > 0);
+    if (!rx1Vacant) { lines << buildRxNrEnableLine(1, rx2nr > 0); }
     lines << buildRxNrEnableExLine(0, rx1nr > 0, rx1nr);
-    lines << buildRxNrEnableExLine(1, rx2nr > 0, rx2nr);
+    if (!rx1Vacant) { lines << buildRxNrEnableExLine(1, rx2nr > 0, rx2nr); }
     lines << buildRxNbEnableLine(0, readBoolPerRx("rxNb", 0));
-    lines << buildRxNbEnableLine(1, readBoolPerRx("rxNb", 1));
+    if (!rx1Vacant) { lines << buildRxNbEnableLine(1, readBoolPerRx("rxNb", 1)); }
     lines << buildRxBinEnableLine(0, readBoolPerRx("rxBin", 0));
-    lines << buildRxBinEnableLine(1, readBoolPerRx("rxBin", 1));
+    if (!rx1Vacant) { lines << buildRxBinEnableLine(1, readBoolPerRx("rxBin", 1)); }
 
     // From Thetis TCIServer.cs:2405-2413 [v2.10.3.13]
     // Upstream tags preserved: //MW0LGE (from cited TCIServer.cs:2412) [v2.10.3.15]
     lines << buildRxAnfEnableLine(0, readBoolPerRx("rxAnf", 0));
-    lines << buildRxAnfEnableLine(1, readBoolPerRx("rxAnf", 1));
+    if (!rx1Vacant) { lines << buildRxAnfEnableLine(1, readBoolPerRx("rxAnf", 1)); }
     // Gate on !IsSetupFormNull; Phase 4 Task 4.2 always emits (no Setup form yet).
     lines << buildRxApfEnableLine(0, readBoolPerRx("rxApf", 0));
-    lines << buildRxApfEnableLine(1, readBoolPerRx("rxApf", 1));
-    lines << buildRxNfEnableLine(0, readBoolPerRx("rxNf", 0));
-    lines << buildRxNfEnableLine(1, readBoolPerRx("rxNf", 1));
+    if (!rx1Vacant) { lines << buildRxApfEnableLine(1, readBoolPerRx("rxApf", 1)); }
+    // RadioModel::rxNf takes the receiver index (the flag is global:
+    // GetMNF, console.cs:52317-52330 [v2.10.3.15]), not a slice id.
+    lines << buildRxNfEnableLine(0, readBoolForReceiver("rxNf", 0));
+    lines << buildRxNfEnableLine(1, readBoolForReceiver("rxNf", 1));
 
     // From Thetis TCIServer.cs:2415-2430 [v2.10.3.13]
     // Upstream tags preserved: //MW0LGE (from cited TCIServer.cs:2412) [v2.10.3.15]
     lines << buildRxVolumeLine(0, 0, rx1vol);
     lines << buildRxVolumeLine(0, 1, rx1Subvol);
-    lines << buildRxVolumeLine(1, 0, rx2vol);
-    lines << buildRxVolumeLine(1, 1, rx2vol);
+    if (!rx1Vacant) {
+        lines << buildRxVolumeLine(1, 0, rx2vol);
+        lines << buildRxVolumeLine(1, 1, rx2vol);
+    }
     lines << buildRxBalanceLine(0, 0, bal[0][0]);
     lines << buildRxBalanceLine(0, 1, bal[0][1]);
-    lines << buildRxBalanceLine(1, 0, bal[1][0]);
-    lines << buildRxBalanceLine(1, 1, bal[1][1]);
+    if (!rx1Vacant) {
+        lines << buildRxBalanceLine(1, 0, bal[1][0]);
+        lines << buildRxBalanceLine(1, 1, bal[1][1]);
+    }
 
     // From Thetis TCIServer.cs:2427-2433 [v2.10.3.13].
     // Normalise enum-style names to TCI wire tokens via tciAgcModeForWire
@@ -1151,16 +1180,18 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // pass real clients see frames like "agc_mode:0,MED;" instead of
     // "agc_mode:0,normal;".
     lines << buildAgcModeLine(0, tciAgcModeForWire(agcMode[0]));
-    lines << buildAgcModeLine(1, tciAgcModeForWire(agcMode[1]));
+    if (!rx1Vacant) { lines << buildAgcModeLine(1, tciAgcModeForWire(agcMode[1])); }
     lines << buildAgcGainLine(0, agcGain[0]);
-    lines << buildAgcGainLine(1, agcGain[1]);
+    if (!rx1Vacant) { lines << buildAgcGainLine(1, agcGain[1]); }
     lines << buildRxCtunExLine(0, ctun[0]);
-    lines << buildRxCtunExLine(1, ctun[1]);
+    if (!rx1Vacant) { lines << buildRxCtunExLine(1, ctun[1]); }
 
     // From Thetis TCIServer.cs:2435-2439 [v2.10.3.13]
     lines << buildTxProfilesExLine(txProfiles);
     lines << buildTxProfileExLine(txProfile);
     lines << buildCalibrationExLine(0, calMeter[0], calDisplay[0], calXvtr[0], cal6m[0], calTxDisp[0]);
+    // RadioModel's calibration shims do not read a slice, so receiver 1's
+    // line never carries receiver 0's values.
     lines << buildCalibrationExLine(1, calMeter[1], calDisplay[1], calXvtr[1], cal6m[1], calTxDisp[1]);
 
     //lock
@@ -1168,14 +1199,16 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     //rit/xit
 
     // From Thetis TCIServer.cs:2445-2452 [v2.10.3.13]
+    // RITOn / XITOn / RITValue / XITValue are global in Thetis; the desktop
+    // host keeps them per slice, so a receiver with no slice has none.
     lines << buildRitEnableLine(0, ritOnFor(0));
-    lines << buildRitEnableLine(1, ritOnFor(1));
+    if (!rx1Vacant) { lines << buildRitEnableLine(1, ritOnFor(1)); }
     lines << buildXitEnableLine(0, xitOnFor(0));
-    lines << buildXitEnableLine(1, xitOnFor(1));
+    if (!rx1Vacant) { lines << buildXitEnableLine(1, xitOnFor(1)); }
     lines << buildRitOffsetLine(0, ritValFor(0));
-    lines << buildRitOffsetLine(1, ritValFor(1));
+    if (!rx1Vacant) { lines << buildRitOffsetLine(1, ritValFor(1)); }
     lines << buildXitOffsetLine(0, xitValFor(0));
-    lines << buildXitOffsetLine(1, xitValFor(1));
+    if (!rx1Vacant) { lines << buildXitOffsetLine(1, xitValFor(1)); }
 
     // From Thetis TCIServer.cs:2453-2458 [v2.10.3.13]
     lines << buildLockLine(0, vfoALock);
@@ -1186,9 +1219,9 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
 
     // From Thetis TCIServer.cs:2459-2464 [v2.10.3.13]
     lines << buildSqlEnableLine(0, sqlEn[0]);
-    lines << buildSqlEnableLine(1, sqlEn[1]);
+    if (!rx1Vacant) { lines << buildSqlEnableLine(1, sqlEn[1]); }
     lines << buildSqlLevelLine(0, sqlLevel[0]);
-    lines << buildSqlLevelLine(1, sqlLevel[1]);
+    if (!rx1Vacant) { lines << buildSqlLevelLine(1, sqlLevel[1]); }
     lines << buildDiglOffsetLine(diglOffset);
     lines << buildDiguOffsetLine(diguOffset);
 
@@ -1231,7 +1264,7 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // From Thetis TCIServer.cs:2499-2505 [v2.10.3.13]
     lines << buildMuteLine(globalMute);
     lines << buildRxMuteLine(0, rx0Mute);
-    lines << buildRxMuteLine(1, rx1Mute);
+    if (!rx1Vacant) { lines << buildRxMuteLine(1, rx1Mute); }
     lines << buildVolumeLine(volumeDb);
     lines << buildMonEnableLine(monEnable);
     lines << buildMonVolumeLine(monVolDb);
@@ -2758,8 +2791,10 @@ QString TciProtocol::handleRxNfEnableCommand(const QStringList& args)
 
     if (args.size() == 1) {
         bool en = false;
+        // RadioModel::rxNf takes the receiver index, not a slice id: the
+        // flag is global (GetMNF, console.cs:52317-52330 [v2.10.3.15]).
         QMetaObject::invokeMethod(m_radio, "rxNf", Qt::DirectConnection,
-                                  Q_RETURN_ARG(bool, en), Q_ARG(int, receiverSlice(rx)));
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
         return QStringLiteral("rx_nf_enable:%1,%2;")
             .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
     }
@@ -2767,7 +2802,7 @@ QString TciProtocol::handleRxNfEnableCommand(const QStringList& args)
     if (args.size() >= 2) {
         const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
         QMetaObject::invokeMethod(m_radio, "setRxNf", Qt::DirectConnection,
-                                  Q_ARG(int, receiverSlice(rx)), Q_ARG(bool, en));
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
         // No notification queued here.  From Thetis TCIServer.cs:3394-3398
         // [v2.10.3.15] the set branch sends nothing at all; the wire frames
         // come from TNFChangedHandlers -> OnTnfChanged (TCIServer.cs:6771,
