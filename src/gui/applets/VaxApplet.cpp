@@ -35,6 +35,12 @@
 //                 are wanted only while it is shown and the applet visible.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-30 - The section is titled "Core computer", and where it does
+//                 not apply (a local window, or a Core that shares no VAX
+//                 channels) it stays in place disabled, with a plain reason
+//                 on each of its controls, instead of hidden. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "VaxApplet.h"
@@ -131,6 +137,34 @@ VaxApplet::VaxApplet(RadioModel* model, AudioEngine* audio, QWidget* parent)
         setTransmitPermitted(false, QString());
     }
 }
+
+namespace {
+
+// The tooltip a widget had before a reason replaced it, kept on the widget.
+constexpr auto kSavedStationTooltip = "VaxSavedStationTooltip";
+
+// While the Core computer section cannot be used, each of its controls
+// shows the reason in place of its own tooltip; the tooltip comes back
+// when the section can be used again (the TX row's pattern below).
+void showStationReason(QWidget* w, bool available, const QString& reason)
+{
+    if (w == nullptr) {
+        return;
+    }
+    if (!available) {
+        if (!w->property(kSavedStationTooltip).isValid()) {
+            w->setProperty(kSavedStationTooltip, w->toolTip());
+        }
+        w->setToolTip(reason);
+        return;
+    }
+    if (w->property(kSavedStationTooltip).isValid()) {
+        w->setToolTip(w->property(kSavedStationTooltip).toString());
+        w->setProperty(kSavedStationTooltip, QVariant());
+    }
+}
+
+} // namespace
 
 void VaxApplet::setTransmitPermitted(bool permitted, const QString& reason)
 {
@@ -368,11 +402,13 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
     line->setStyleSheet(QStringLiteral("QFrame { color: #203040; }"));
     box->addWidget(line);
 
-    auto* title = new QLabel(QStringLiteral("Station computer"), m_stationSection);
-    title->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: bold; }")
-                             .arg(Style::kTextPrimary));
-    title->setToolTip(QStringLiteral("The VAX channels on the computer the Core runs on"));
-    box->addWidget(title);
+    m_stationTitle = new QLabel(QStringLiteral("Core computer"), m_stationSection);
+    m_stationTitle->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-size: 11px; font-weight: bold; }"
+                       "QLabel:disabled { color: %2; }")
+            .arg(Style::kTextPrimary, Style::kDisabledText));
+    m_stationTitle->setToolTip(QStringLiteral("The VAX channels on the computer the Core runs on"));
+    box->addWidget(m_stationTitle);
 
     for (int i = 0; i < kChannels; ++i) {
         const int channel = i + 1;
@@ -446,8 +482,33 @@ void VaxApplet::buildStationSection(QWidget* body, QVBoxLayout* vbox)
     box->addLayout(row);
 
     vbox->addWidget(m_stationSection);
-    m_stationSection->setVisible(false);
+    // Disabled with its reason, never hidden, until a Core sends its VAX.
+    applyStationAvailability();
     setStationTransmitPermitted(false, QString());
+}
+
+QString VaxApplet::stationUnavailableReason() const
+{
+    if (m_model == nullptr || m_model->ownsLocalDsp()) {
+        return QStringLiteral("This computer runs the Core, so its VAX channels are the rows above.");
+    }
+    return QStringLiteral("The Core computer is not sharing its VAX channels.");
+}
+
+void VaxApplet::applyStationAvailability()
+{
+    if (!m_stationSection) {
+        return;
+    }
+    const QString reason = m_stationShown ? QString() : stationUnavailableReason();
+    m_stationSection->setEnabled(m_stationShown);
+    showStationReason(m_stationSection, m_stationShown, reason);
+    showStationReason(m_stationTitle, m_stationShown, reason);
+    for (int i = 0; i < kChannels; ++i) {
+        showStationReason(m_stationRxMeter[i], m_stationShown, reason);
+        showStationReason(m_stationMuteBtn[i], m_stationShown, reason);
+    }
+    updateStationTxRow();
 }
 
 void VaxApplet::setStationVax(StationVax* vax, bool shown)
@@ -466,9 +527,7 @@ void VaxApplet::setStationVax(StationVax* vax, bool shown)
         }
     }
     m_stationShown = shown && vax != nullptr;
-    if (m_stationSection) {
-        m_stationSection->setVisible(m_stationShown);
-    }
+    applyStationAvailability();
     refreshStationValues();
     refreshStationLevels();
     updateStationLevelsWanted();
@@ -476,17 +535,31 @@ void VaxApplet::setStationVax(StationVax* vax, bool shown)
 
 void VaxApplet::setStationTransmitPermitted(bool permitted, const QString& reason)
 {
+    m_stationTxPermitted = permitted;
+    m_stationTxReason = reason;
+    updateStationTxRow();
+}
+
+void VaxApplet::updateStationTxRow()
+{
     if (!m_stationTxMeter) {
         return;
     }
-    m_stationTxMeter->setEnabled(permitted);
+    // The section's own reason comes first: while the section cannot be
+    // used, the transmit permission is not what stops the row.
+    m_stationTxMeter->setEnabled(m_stationTxPermitted);
+    if (!m_stationShown) {
+        m_stationTxMeter->setToolTip(stationUnavailableReason());
+        return;
+    }
     m_stationTxMeter->setToolTip(
-        permitted ? QStringLiteral("Level of VAX used as the microphone on the computer the "
-                                   "Core runs on")
-                  : (reason.isEmpty()
-                         ? tr("Transmit controls are unavailable until the Core confirms "
-                              "transmit permission.")
-                         : reason));
+        m_stationTxPermitted
+            ? QStringLiteral("Level of VAX used as the microphone on the computer the "
+                             "Core runs on")
+            : (m_stationTxReason.isEmpty()
+                   ? tr("Transmit controls are unavailable until the Core confirms "
+                        "transmit permission.")
+                   : m_stationTxReason));
 }
 
 void VaxApplet::refreshStationValues()

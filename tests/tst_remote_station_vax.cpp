@@ -145,17 +145,23 @@ private slots:
         QFile::remove(path + QStringLiteral(".bak"));
     }
 
-    // A local window's applet has no "Station computer" section: its own
-    // rows are the station computer's.
-    void aLocalWindowShowsNoStationSection()
+    // A local window's own rows are the Core computer's, so its "Core
+    // computer" section cannot be used: it stays in place, disabled, and
+    // each of its controls says why in plain words (disabled, never hidden).
+    void aLocalWindowShowsTheSectionDisabled()
     {
         RadioModel local;
         AudioEngine audio;
         VaxApplet applet(&local, &audio);
         applet.show();
-        QVERIFY(applet.stationSectionForTest() != nullptr);
-        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QWidget* const section = applet.stationSectionForTest();
+        QVERIFY(section != nullptr);
+        QVERIFY(section->isVisibleTo(&applet));
+        QVERIFY(!section->isEnabled());
         QVERIFY(!applet.stationLevelsWanted());
+        verifyDisabledWithReason(applet, QStringLiteral(
+            "This computer runs the Core, so its VAX channels are the rows above."));
+        QVERIFY(!QTest::currentTestFailed());
     }
 
     // The window declares vax, holds the Core's object and shows the
@@ -174,6 +180,13 @@ private slots:
         VaxApplet applet(&s.window, &ownAudio);
         wire(applet, *s.client);
         QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(applet.stationSectionForTest()->isEnabled());
+        // Built disabled with the reason, the controls get their own
+        // tooltips back once the Core sends its VAX.
+        QCOMPARE(applet.stationMuteButtonForTest(3)->toolTip(),
+                 QStringLiteral("Mute VAX channel 3 on the computer the Core runs on"));
+        QVERIFY(applet.stationRxMeterForTest(1)->toolTip().isEmpty());
+        QVERIFY(applet.stationSectionForTest()->toolTip().isEmpty());
         StationVax* copy = s.client->stationVax();
         QTRY_COMPARE(copy->rxGain(2), 0.4);
         QTRY_COMPARE(applet.stationRxMeterForTest(2)->gain(), 0.4f);
@@ -288,8 +301,9 @@ private slots:
         QTRY_VERIFY(!s.server->vaxLevelsPollingForTest());
     }
 
-    // A Core that publishes no VAX devices (nereusd): no section.
-    void aHeadlessCoreShowsNoSection()
+    // A Core that publishes no VAX devices (nereusd): the section stays in
+    // place, disabled, with the plain reason on each control.
+    void aHeadlessCoreShowsTheSectionDisabled()
     {
         Session s(m_securityDir.path(), this);
         s.coreAudio()->setVaxOutputsAllowed(false);
@@ -300,8 +314,12 @@ private slots:
         VaxApplet applet(&s.window, &ownAudio);
         wire(applet, *s.client);
         applet.show();
-        QVERIFY(!applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(applet.stationSectionForTest()->isVisibleTo(&applet));
+        QVERIFY(!applet.stationSectionForTest()->isEnabled());
         QVERIFY(!applet.stationLevelsWanted());
+        verifyDisabledWithReason(
+            applet, QStringLiteral("The Core computer is not sharing its VAX channels."));
+        QVERIFY(!QTest::currentTestFailed());
     }
 
     // A level slider that cannot act looks disabled: the style guide's
@@ -341,7 +359,7 @@ private slots:
         slider.setEnabled(true);
         QCOMPARE(pixel(0.75), QStringLiteral("#0a0a18"));
 
-        // The applet: this computer's TX row and the Station computer's.
+        // The applet: this computer's TX row and the Core computer's.
         Session s(m_securityDir.path(), this);
         QVERIFY(s.connect());
         QTRY_VERIFY(s.client->stationVaxHeld());
@@ -390,6 +408,34 @@ private slots:
     }
 
 private:
+    // The section cannot be used: titled "Core computer", and it and every
+    // control in it (title, RX rows, mutes, TX row) show `reason`, which
+    // is plain and does not call the Core a station.
+    static void verifyDisabledWithReason(const VaxApplet& applet, const QString& reason)
+    {
+        QWidget* const section = applet.stationSectionForTest();
+        QVERIFY(!section->isEnabled());
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QVERIFY2(OperatorWording::coreCalledStationIn(reason).isEmpty(), qPrintable(reason));
+        QCOMPARE(section->toolTip(), reason);
+        bool titled = false;
+        for (QLabel* label : section->findChildren<QLabel*>()) {
+            if (label->text() == QStringLiteral("Core computer")) {
+                titled = true;
+                QCOMPARE(label->toolTip(), reason);
+            }
+        }
+        QVERIFY(titled);
+        for (int channel = 1; channel <= 4; ++channel) {
+            QCOMPARE(applet.stationRxMeterForTest(channel)->toolTip(), reason);
+            QCOMPARE(applet.stationMuteButtonForTest(channel)->toolTip(), reason);
+            QVERIFY(!applet.stationRxMeterForTest(channel)->isEnabled());
+            QVERIFY(!applet.stationMuteButtonForTest(channel)->isEnabled());
+        }
+        QCOMPARE(applet.stationTxMeterForTest()->toolTip(), reason);
+        QVERIFY(!applet.stationTxMeterForTest()->isEnabled());
+    }
+
     QTemporaryDir m_securityDir;
 };
 
