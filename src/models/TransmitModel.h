@@ -119,6 +119,10 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 // Modification history (NereusSDR):
+//   2026-09-30 - CFC echo: updatePairedCfc / updatePairedCfcArray return
+//                 false for a value the paired curve already holds, so the
+//                 setter's own mirror path decides. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Radio codec: lineInGainIndexForBoost and the line-in
 //                 index default follow Thetis SetMicGain's lineinboost
 //                 table. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -2609,7 +2613,9 @@ signals:
 private:
     enum class CfcField { Frequency, Compression, PostEqBandGain, Precomp, PostEqGlobal };
     // Returns true when a valid paired curve owns CFC, including when the
-    // requested legacy edit is invalid and must leave it unchanged.
+    // requested legacy edit is invalid and must leave it unchanged. False
+    // when there is no paired curve, or when the curve already holds the
+    // value (rounded): the setter's own mirror path then decides.
     bool updatePairedCfc(CfcField field, int index, double value);
     bool updatePairedCfcArray(CfcField field, const std::array<int, 10>& values);
     bool m_mox{false};
