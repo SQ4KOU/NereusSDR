@@ -9199,6 +9199,27 @@ nereus_add_test(tst_dss_floor_and_span)
 # Source: AetherSDR src/gui/DssRenderer.cpp:753-903 [@1872028c].
 nereus_add_test(tst_dss_cpu_surface)
 
+# ── GPU spectrum frames do not grow the heap ─────────────────────────────
+# A 3D pan wrote the 2D trace's line and fill vertices into dynamic buffers
+# every GPU frame without ever binding them, and a 2D pan with pan fill off
+# did the same to the fill buffer. Qt's Metal backend holds each partial
+# dynamic-buffer write until the buffer is bound, so the unbound buffers
+# kept every frame's copy: 23 GB in 2.5 hours on the desktop window. Drives
+# a real QRhi for a few hundred frames and bounds the heap growth, so it
+# needs a native window (the offscreen platform gives the widget no GPU
+# backend); the `gpu` label marks it for a CI job with a GPU. Skips where no
+# QRhi comes up. NereusSDR-original.
+if(NEREUS_GPU_SPECTRUM)
+    nereus_add_test(tst_spectrum_gpu_buffer_growth NATIVE_WINDOW EXTRA_LABELS gpu)
+endif()
+
+# The same rule without a GPU, on every platform CI runs: every combination
+# of planSpectrumTraceFrame()'s inputs binds each trace buffer it writes and
+# draws no fill or peak left from another trace, and MeterWidget's geometry
+# buffer is written only when it is bound. renderGpuFrame() takes both its
+# uploads and its draws from these helpers. NereusSDR-original.
+nereus_add_test(tst_gpu_buffer_write_bind_plan)
+
 # ── 3D stacked-trace spectrum plan, Task 11: 3D dBm scale ────────────────
 # Pins drawDbmScale3D(): floor-anchored (dssFloorDbm() + rounded 3D Span),
 # not Ref-anchored like the 2D scale, so its rendered output must move when

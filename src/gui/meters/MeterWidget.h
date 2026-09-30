@@ -17,6 +17,9 @@
 //                 drawn dimmed and the reason is their tooltip (a meter a
 //                 remote window cannot show yet is disabled, never hidden).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - drawsGeometryLayer(): the geometry buffer is written only
+//                 in a frame that binds it (GUI memory leak follow-up).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -130,6 +133,17 @@ public:
     // (UnbuiltFeatures). Such an item loads and is saved with its
     // container, but is not drawn, takes no clicks and is not offered.
     static bool itemFeatureBuilt(const MeterItem* item);
+
+    // Whether a GPU frame writes and binds the geometry vertex buffer: only
+    // with a geometry pipeline to draw it and vertices to draw. The write
+    // and the draw both take it, because Qt's Metal backend keeps a partial
+    // dynamic-buffer write pending until the buffer is bound, so a buffer
+    // written every frame and never bound (the pipeline failed to build,
+    // for example a missing shader) keeps every frame's copy.
+    static bool drawsGeometryLayer(bool hasPipeline, int vertCount)
+    {
+        return hasPipeline && vertCount > 0;
+    }
 
     QString serializeItems() const;
     bool deserializeItems(const QString& data);
