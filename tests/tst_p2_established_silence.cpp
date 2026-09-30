@@ -40,16 +40,48 @@ void configureConnection(P2RadioConnection& connection,
     connection.init();
 }
 
+// Connects and returns once the connection reports Connected. Event
+// driven: the first DDC goes out on the first event-loop pass that sees
+// the client, and the wait ends on the state change itself, so none of the
+// connect watchdog's kConnectTimeoutMs is spent in qWaitFor's sleeps (the
+// cause of a failure under load). 3 s bounds a connect that never comes.
 bool establish(P2RadioConnection& connection, P2FakeRadio& fake)
 {
-    connection.connectToRadio(fake.radioInfo());
-    if (!waitUntil([&fake]() { return fake.hasClient(); })) {
-        return false;
-    }
-    fake.sendDdc(2);
-    return waitUntil([&connection]() {
-        return connection.state() == ConnectionState::Connected;
+    QEventLoop loop;
+    bool connected = false;
+    const QMetaObject::Connection onState = QObject::connect(
+        &connection, &RadioConnection::connectionStateChanged, &loop,
+        [&loop, &connected](ConnectionState state) {
+            if (state == ConnectionState::Connected) {
+                connected = true;
+                loop.quit();
+            }
+        });
+    const QMetaObject::Connection onFailed = QObject::connect(
+        &connection, &RadioConnection::connectFailed, &loop, &QEventLoop::quit);
+    bool sent = false;
+    QTimer firstDdc;
+    firstDdc.setInterval(0);
+    QObject::connect(&firstDdc, &QTimer::timeout, &loop, [&fake, &sent, &firstDdc]() {
+        if (!sent && fake.hasClient()) {
+            sent = true;
+            firstDdc.stop();
+            fake.sendDdc(2);
+        }
     });
+    QTimer limit;
+    limit.setSingleShot(true);
+    QObject::connect(&limit, &QTimer::timeout, &loop, &QEventLoop::quit);
+
+    connection.connectToRadio(fake.radioInfo());
+    if (connection.state() != ConnectionState::Connected) {
+        firstDdc.start();
+        limit.start(3000);
+        loop.exec();
+    }
+    QObject::disconnect(onState);
+    QObject::disconnect(onFailed);
+    return connected || connection.state() == ConnectionState::Connected;
 }
 
 } // namespace

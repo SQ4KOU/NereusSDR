@@ -2,45 +2,71 @@
 // tests/tst_rade_rx_multislice_routing.cpp  (NereusSDR)
 // =================================================================
 //
-// R-R3-31: NereusSDR-native regression for selecting one RADE RX owner in a
-// two-slice worker. There is no upstream multi-slice orchestration equivalent
-// to port (no port check applies).
+// R-R3-31, then RADE threads: NereusSDR-native regression for RADE receive
+// on several slices at once. There is no upstream multi-slice orchestration
+// equivalent to port (no port check applies).
+//
+// Fixtures: the real WDSP receive channels (synchronous test init), the real
+// RADE codec with its built-in weights (the "dummy" model sentinel,
+// rade_api_nopy.c), and a synthetic 64-frame I/Q block. No radio, nothing
+// keys a transmitter: MOX edges are the model's signal only.
 //
 // Modification history (NereusSDR):
 //   2026-09-21 -- Added by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via OpenAI Codex.
+//   2026-09-30 -- RADE threads: every RADE slice decodes at once, each on
+//                 its own decoder thread; a stalled decoder plays silence
+//                 and never holds the mixer; a removed slice takes its
+//                 decoder with it. The single-owner checks this file held
+//                 are retired with the single owner. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 -- A RADE slice restored from its saved band (a device's
+//                 slice made again, a band button) decodes; a slice
+//                 restored in another mode has no decoder. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-30 -- RADE threads review: decoded speech (not only silence
+//                 slots) reaches the mixer; txEncode never waits for a
+//                 decode on the TX slice's channel; a TX worker made again
+//                 after a reconnect reaches the slice the transmitter moves
+//                 to. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
+#include <QElapsedTimer>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTest>
+#include <QThread>
 
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
+#include "core/RadeRxWorker.h"
+#include "core/ReceiveLayoutStore.h"
 #include "core/RxChannel.h"
+#include "core/TxSliceArbiter.h"
+#include "core/TxWorkerThread.h"
 #include "core/WdspEngine.h"
 #include "fakes/FakeAudioBus.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/RxDspWorker.h"
 #include "models/SliceModel.h"
-#include "core/TxSliceArbiter.h"
 
+#include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 using namespace NereusSDR;
 
 namespace {
 
-class TestRadeChannel final : public RadeChannel {
-public:
-    using RadeChannel::RadeChannel;
-
-    void emitLateSpeechForTest(const QByteArray& pcm)
-    {
-        emit rxSpeechReady(pcm);
-    }
-};
+constexpr int kFrames = 64;
 
 struct DspWorkerDetach {
     RadioModel* radio{nullptr};
@@ -83,286 +109,670 @@ QVector<float> makeIqBlock(int frames)
     return iq;
 }
 
+// A decoder stall a test holds and lets go of.
+struct Gate {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool open{false};
+    std::atomic<int> entered{0};
+
+    void hold()
+    {
+        entered.fetch_add(1);
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [this] { return open; });
+    }
+    void release()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            open = true;
+        }
+        cv.notify_all();
+    }
+};
+
+// Two receivers A (stream 0, VAX 1) and B (stream 1, VAX 2) on a real WDSP
+// engine and a worker driven on this thread.
+struct TwoSliceRig {
+    RadioModel radio;
+    int a{-1};
+    int b{-1};
+    int c{-1};
+    SliceModel* sliceA{nullptr};
+    SliceModel* sliceB{nullptr};
+    SliceModel* sliceC{nullptr};  // setUp(3) only
+    WdspEngine* wdsp{nullptr};
+    FakeAudioBus* speakers{nullptr};
+    FakeAudioBus* vaxA{nullptr};
+    FakeAudioBus* vaxB{nullptr};
+    RxDspWorker worker;
+    std::unique_ptr<DspWorkerDetach> detach;
+    QVector<float> iq{makeIqBlock(kFrames)};
+
+    // `slices` 3 adds a third receiver C (stream 2, no VAX).
+    bool setUp(int slices = 2)
+    {
+        radio.configureStreamPool(/*userDdcCount=*/slices, /*maxSlices=*/slices,
+                                  /*defaultRateHz=*/48000);
+        a = radio.addSlice();
+        b = radio.addSlice();
+        sliceA = radio.sliceById(a);
+        sliceB = radio.sliceById(b);
+        if (!sliceA || !sliceB) {
+            return false;
+        }
+        if (slices == 3) {
+            c = radio.addSlice();
+            sliceC = radio.sliceById(c);
+            if (!sliceC) {
+                return false;
+            }
+        }
+        sliceA->setVaxChannel(1);
+        sliceB->setVaxChannel(2);
+        AudioEngine* const audio = radio.audioEngine();
+        wdsp = radio.wdspEngine();
+        wdsp->setSynchronousInitForTest(true);
+        if (!wdsp->initialize(QStandardPaths::writableLocation(
+                QStandardPaths::AppConfigLocation))) {
+            return false;
+        }
+        BusView spk = makeOpenBus(QStringLiteral("speakers"));
+        BusView va = makeOpenBus(QStringLiteral("vax-a"));
+        BusView vb = makeOpenBus(QStringLiteral("vax-b"));
+        if (!spk.view || !va.view || !vb.view) {
+            return false;
+        }
+        speakers = spk.view;
+        vaxA = va.view;
+        vaxB = vb.view;
+        audio->setSpeakersBusForTest(std::move(spk.owned));
+        audio->setVaxBusForTest(1, std::move(va.owned));
+        audio->setVaxBusForTest(2, std::move(vb.owned));
+        RxChannel* const rxA = wdsp->createRxChannel(a, kFrames, 4096, 48000, 48000, 48000);
+        RxChannel* const rxB = wdsp->createRxChannel(b, kFrames, 4096, 48000, 48000, 48000);
+        if (!rxA || !rxB) {
+            return false;
+        }
+        rxA->setActive(true);
+        rxB->setActive(true);
+        worker.setEngines(wdsp, audio);
+        worker.setBufferSizes(kFrames, kFrames);
+        worker.setStreamSlices(0, QVector<int>{a});
+        worker.setStreamSlices(1, QVector<int>{b});
+        if (sliceC) {
+            RxChannel* const rxC =
+                wdsp->createRxChannel(c, kFrames, 4096, 48000, 48000, 48000);
+            if (!rxC) {
+                return false;
+            }
+            rxC->setActive(true);
+            worker.setStreamSlices(2, QVector<int>{c});
+        }
+        radio.attachDspWorkerForTest(&worker);
+        detach = std::make_unique<DspWorkerDetach>();
+        detach->radio = &radio;
+        return true;
+    }
+
+    // The app's path into RADE: the slice's own mode change creates, wires
+    // and starts its channel through the engine.
+    RadeChannel* toRade(SliceModel* slice)
+    {
+        slice->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();  // the route reaches the worker
+        return wdsp->radeChannel(slice->sliceIndex());
+    }
+
+    // Runs blocks through both streams until `channel` has decoded, and
+    // says on which thread it did. False (with the counts in `evidence`)
+    // when it never ran the codec or ran it on the main thread.
+    bool decodesOnItsOwnThread(RadeChannel* channel, QString* evidence)
+    {
+        std::atomic<Qt::HANDLE> decodedOn{nullptr};
+        const QMetaObject::Connection probe = QObject::connect(
+            channel, &RadeChannel::rxSpeechReady, channel,
+            [&decodedOn](const QByteArray&) {
+                decodedOn.store(QThread::currentThreadId());
+            }, Qt::DirectConnection);
+        const int callsBefore = channel->radeRxCallCountForTest();
+        constexpr int kBlocks = 512;  // past the resamplers and one rade_rx
+        bool idle = true;
+        for (int i = 0; i < kBlocks && idle; ++i) {
+            worker.processIqBatch(0, iq);
+            worker.processIqBatch(1, iq);
+            idle = channel->waitRxIdleForTest(5000);
+        }
+        QObject::disconnect(probe);
+        const Qt::HANDLE on = decodedOn.load();
+        *evidence = QStringLiteral("idle=%1 radeRx=%2 decodedOnDecoderThread=%3 onMain=%4")
+            .arg(idle)
+            .arg(channel->radeRxCallCountForTest() - callsBefore)
+            .arg(on != nullptr && on == channel->rxThreadIdForTest())
+            .arg(on == QThread::currentThreadId());
+        return idle && channel->radeRxCallCountForTest() > callsBefore
+            && on != nullptr && on != QThread::currentThreadId()
+            && on == channel->rxThreadIdForTest();
+    }
+};
+
 }  // namespace
 
 class TestRadeRxMultisliceRouting : public QObject {
     Q_OBJECT
 
 private slots:
-    void selectingRadeOnBLeavesAOrdinaryAndRoutesOnlyBToRade()
+    // The late bound is one rade_rx input (rade_nin_max, 1120 samples at
+    // 8 kHz = 140 ms) in the mixer's own blocks.
+    void lateBoundIsOneRadeFrameOfBlocks()
     {
-        RadioModel radio;
-        radio.configureStreamPool(/*userDdcCount=*/2, /*maxSlices=*/2,
-                                  /*defaultRateHz=*/48000);
-        const int sliceAId = radio.addSlice();
-        const int sliceBId = radio.addSlice();
-        QCOMPARE(sliceAId, 0);
-        QCOMPARE(sliceBId, 1);
+        QCOMPARE(kRadeNinMax8k, 1120);
+        QCOMPARE(radeLateBoundBlocks(64), 105);
+        QCOMPARE(radeLateBoundBlocks(1024), 7);
+    }
 
-        SliceModel* const sliceA = radio.sliceById(sliceAId);
-        SliceModel* const sliceB = radio.sliceById(sliceBId);
-        QVERIFY(sliceA);
-        QVERIFY(sliceB);
-        sliceA->setVaxChannel(1);
-        sliceB->setVaxChannel(2);
+    // The due record plays; one older than its slot, or from a replaced
+    // route, is dropped rather than played late; a later one waits.
+    void bridgePlaysDueBlockAndDropsLateOnes()
+    {
+        RadeRxBridge bridge;
+        const quint32 stale = bridge.nextEpoch();
+        const quint32 epoch = bridge.nextEpoch();
+        const float speech[8] = {1, 1, 2, 2, 3, 3, 4, 4};
+        std::vector<float> out;
 
-        AudioEngine* const audio = radio.audioEngine();
-        WdspEngine* const wdsp = radio.wdspEngine();
-        QVERIFY(audio);
-        QVERIFY(wdsp);
+        QVERIFY(bridge.pushOutput({stale, 1, 4}, speech, 4));
+        QVERIFY(bridge.pushOutput({epoch, 0, 4}, speech, 4));
+        QVERIFY(bridge.pushOutput({epoch, 1, 4}, speech, 4));
+        QVERIFY(bridge.pushOutput({epoch, 5, 4}, speech, 4));
 
-        // Use the repository's real, synchronous WDSP test initialization
-        // seam. It skips only the minutes-long wisdom worker; channel open,
-        // RxChannel::processIq and every assertion below remain production
-        // code (same pattern as tst_connectable_radio_model).
-        wdsp->setSynchronousInitForTest(true);
-        QVERIFY(wdsp->initialize(
-            QStandardPaths::writableLocation(
-                QStandardPaths::AppConfigLocation)));
-        QVERIFY(wdsp->isInitialized());
+        QCOMPARE(bridge.takeDue(epoch, 1, out), 4);
+        QCOMPARE(bridge.lateDrops(), quint64(2));  // other epoch, and seq 0
+        QCOMPARE(out.size(), size_t(8));
+        QCOMPARE(out[6], 4.0f);
 
-        BusView speakers = makeOpenBus(QStringLiteral("speakers"));
-        BusView vaxA = makeOpenBus(QStringLiteral("vax-a"));
-        BusView vaxB = makeOpenBus(QStringLiteral("vax-b"));
-        QVERIFY(speakers.view);
-        QVERIFY(vaxA.view);
-        QVERIFY(vaxB.view);
-        FakeAudioBus* const speakersView = speakers.view;
-        FakeAudioBus* const vaxAView = vaxA.view;
-        FakeAudioBus* const vaxBView = vaxB.view;
-        audio->setSpeakersBusForTest(std::move(speakers.owned));
-        audio->setVaxBusForTest(1, std::move(vaxA.owned));
-        audio->setVaxBusForTest(2, std::move(vaxB.owned));
+        QCOMPARE(bridge.takeDue(epoch, 3, out), 0);  // seq 5 is early: kept
+        QCOMPARE(bridge.lateDrops(), quint64(2));
+        QCOMPARE(bridge.takeDue(epoch, 5, out), 4);
+        QCOMPARE(bridge.takeDue(epoch, 6, out), 0);  // nothing: silence
+    }
 
-        constexpr int kFrames = 64;
-        RxChannel* const rxA = wdsp->createRxChannel(
-            sliceAId, kFrames, 4096, 48000, 48000, 48000);
-        RxChannel* const rxB = wdsp->createRxChannel(
-            sliceBId, kFrames, 4096, 48000, 48000, 48000);
-        QVERIFY(rxA);
-        QVERIFY(rxB);
-        rxA->setActive(true);
-        rxB->setActive(true);
+    // Ruling 1: both RADE slices decode at once, each on its own thread,
+    // which is not the main thread, and both reach the speakers.
+    void twoRadeSlicesDecodeAtOnceOnTheirOwnThreads()
+    {
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        RadeChannel* const radeA = rig.toRade(rig.sliceA);
+        RadeChannel* const radeB = rig.toRade(rig.sliceB);
+        QVERIFY(radeA && radeB && radeA != radeB);
+        QVERIFY(radeA->isActive() && radeB->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 2);
+        const std::shared_ptr<RadeRxBridge> bridgeA = radeA->rxBridge();
+        const std::shared_ptr<RadeRxBridge> bridgeB = radeB->rxBridge();
+        QVERIFY(bridgeA && bridgeB);
 
-        RxDspWorker worker;
-        worker.setEngines(wdsp, audio);
-        worker.setBufferSizes(kFrames, kFrames);
-        worker.setStreamSlices(0, QVector<int>{sliceAId});
-        worker.setStreamSlices(1, QVector<int>{sliceBId});
-        RxDspWorker replacement;
-        radio.attachDspWorkerForTest(&worker);
-        DspWorkerDetach detach{&radio};
+        // Which thread runs processIq's body, seen from inside it.
+        std::atomic<Qt::HANDLE> decodedOnA{nullptr};
+        std::atomic<Qt::HANDLE> decodedOnB{nullptr};
+        connect(radeA, &RadeChannel::rxSpeechReady, radeA,
+                [&decodedOnA](const QByteArray&) {
+                    decodedOnA.store(QThread::currentThreadId());
+                }, Qt::DirectConnection);
+        connect(radeB, &RadeChannel::rxSpeechReady, radeB,
+                [&decodedOnB](const QByteArray&) {
+                    decodedOnB.store(QThread::currentThreadId());
+                }, Qt::DirectConnection);
+        QSignalSpy speechA(radeA, &RadeChannel::rxSpeechReady);
+        QSignalSpy speechB(radeB, &RadeChannel::rxSpeechReady);
 
-        const QVector<float> iq = makeIqBlock(kFrames);
-
-        // Establish the real precondition from the incident: both ordinary
-        // slices have produced and are members of MasterMixer's no-timeout
-        // readiness barrier before B changes to RADE.
-        worker.processIqBatch(0, iq);
-        worker.processIqBatch(1, iq);
-        QVERIFY(vaxAView->pushCount() > 0);
-        QVERIFY(vaxBView->pushCount() > 0);
-        QVERIFY(speakersView->pushCount() > 0);
-
-        const int aOrdinaryBefore = vaxAView->pushCount();
-        const int bOrdinaryBefore = vaxBView->pushCount();
-        const int masterBefore = speakersView->pushCount();
-
-        auto radeB = std::make_unique<TestRadeChannel>();
-        QSignalSpy radeFeed(&worker, &RxDspWorker::radeIqReady);
-        QVERIFY(radeFeed.isValid());
-        radio.wireRadeChannel(sliceBId, radeB.get(), sliceB);
-        QCoreApplication::processEvents(); // apply worker binding
-
-        // Software-only authoritative MOX edge: AudioEngine restores its
-        // captured TX slice on unkey, then RadioModel must immediately keep
-        // a warming, unadmitted RADE owner withdrawn. A remains the sole
-        // mixer member and advances without waiting for B.
-        QVERIFY(radio.txSliceArbiter()->requestHandoff(sliceBId));
-        QVERIFY(QMetaObject::invokeMethod(
-            radio.moxController(), "moxStateChanged", Qt::DirectConnection,
-            Q_ARG(bool, true)));
-        QVERIFY(QMetaObject::invokeMethod(
-            radio.moxController(), "moxStateChanged", Qt::DirectConnection,
-            Q_ARG(bool, false)));
-        const int masterBeforeUnkeyA = speakersView->pushCount();
-        const int bBeforeUnkeyA = vaxBView->pushCount();
-        worker.processIqBatch(0, iq);
-        QVERIFY(speakersView->pushCount() > masterBeforeUnkeyA);
-        QCOMPARE(vaxBView->pushCount(), bBeforeUnkeyA);
-
-        // Feed enough real WDSP blocks to clear the 48 -> 24 kHz RADE
-        // resampler warm-up. Keep the streams separate so the signal counts
-        // prove which physical slice was selected rather than merely that a
-        // RADE block appeared eventually.
-        for (int i = 0; i < 96; ++i) {
-            worker.processIqBatch(0, iq);
+        const int vaxABefore = rig.vaxA->pushCount();
+        const int vaxBBefore = rig.vaxB->pushCount();
+        const int masterBefore = rig.speakers->pushCount();
+        // Past the resamplers, one rade_rx, and well past the late bound
+        // (105 blocks), so decoded blocks come back into their slots.
+        constexpr int kBlocks = 512;
+        QVERIFY(kBlocks > 2 * radeLateBoundBlocks(kFrames));
+        for (int i = 0; i < kBlocks; ++i) {
+            rig.worker.processIqBatch(0, rig.iq);
+            rig.worker.processIqBatch(1, rig.iq);
+            QVERIFY(radeA->waitRxIdleForTest(5000));
+            QVERIFY(radeB->waitRxIdleForTest(5000));
         }
-        QCoreApplication::processEvents();
-        const int radeAfterA = radeFeed.count();
-        for (int i = 0; i < 96; ++i) {
-            worker.processIqBatch(1, iq);
-            QCoreApplication::processEvents();
-        }
-        QCoreApplication::processEvents();
-        const int radeAfterB = radeFeed.count();
-
-        const bool aStillOrdinary =
-            vaxAView->pushCount() > aOrdinaryBefore;
-        const bool bWithheldFromOrdinary =
-            vaxBView->pushCount() == bOrdinaryBefore;
-        const bool aNeverFedRade = (radeAfterA == 0);
-        const bool bFedRade = (radeAfterB > radeAfterA);
-        const bool masterContinued =
-            speakersView->pushCount() > masterBefore;
 
         const QString evidence = QStringLiteral(
-            "Aordinary=%1 Bordinary=%2 radeAfterA=%3 radeAfterB=%4 "
-            "masterBefore=%5 masterAfter=%6")
-            .arg(vaxAView->pushCount() - aOrdinaryBefore)
-            .arg(vaxBView->pushCount() - bOrdinaryBefore)
-            .arg(radeAfterA)
-            .arg(radeAfterB)
-            .arg(masterBefore)
-            .arg(speakersView->pushCount());
-        QVERIFY2(aStillOrdinary && bWithheldFromOrdinary
-                     && aNeverFedRade && bFedRade && masterContinued,
+            "speechA=%1 speechB=%2 radeRxA=%3 radeRxB=%4 vaxA=%5 vaxB=%6 master=%7 "
+            "playedA=%8 playedB=%9")
+            .arg(speechA.count()).arg(speechB.count())
+            .arg(radeA->radeRxCallCountForTest()).arg(radeB->radeRxCallCountForTest())
+            .arg(rig.vaxA->pushCount() - vaxABefore)
+            .arg(rig.vaxB->pushCount() - vaxBBefore)
+            .arg(rig.speakers->pushCount() - masterBefore)
+            .arg(bridgeA->playedSlots())
+            .arg(bridgeB->playedSlots());
+        // What each decoder returned came back to the mixer in its own slot,
+        // not only silence slots.
+        QVERIFY2(bridgeA->playedSlots() > 0 && bridgeB->playedSlots() > 0,
+                 qPrintable(evidence));
+        // Both got input and ran the codec, both produced output.
+        QVERIFY2(radeA->radeRxCallCountForTest() > 0
+                     && radeB->radeRxCallCountForTest() > 0, qPrintable(evidence));
+        QVERIFY2(speechA.count() > 0 && speechB.count() > 0, qPrintable(evidence));
+        QVERIFY2(rig.vaxA->pushCount() > vaxABefore
+                     && rig.vaxB->pushCount() > vaxBBefore
+                     && rig.speakers->pushCount() > masterBefore,
                  qPrintable(evidence));
 
-        // Now activate the real codec. Unsynchronised input must produce
-        // source-authoritative quiet padding at input cadence; RadioModel
-        // re-admits B only when that current block exists, and A+B then keep
-        // advancing the no-timeout MasterMixer together.
-        QSignalSpy speech(radeB.get(), &RadeChannel::rxSpeechReady);
-        QVERIFY(speech.isValid());
-        QVERIFY(radeB->start(QStringLiteral("dummy")));
-        const int masterBeforePadding = speakersView->pushCount();
-        const int bBeforePadding = vaxBView->pushCount();
-        for (int i = 0; i < 96; ++i) {
-            worker.processIqBatch(0, iq);
-            worker.processIqBatch(1, iq);
-            QCoreApplication::processEvents();
-        }
-        QVERIFY(!radeB->isSynced());
-        QVERIFY(speech.count() > 0);
-        QVERIFY(vaxBView->pushCount() > bBeforePadding);
-        QVERIFY(speakersView->pushCount() > masterBeforePadding);
+        // Each decoded on its own thread, named for its slice.
+        const Qt::HANDLE mainThread = QThread::currentThreadId();
+        QVERIFY(decodedOnA.load() != nullptr && decodedOnB.load() != nullptr);
+        QVERIFY(decodedOnA.load() != mainThread);
+        QVERIFY(decodedOnB.load() != mainThread);
+        QVERIFY(decodedOnA.load() != decodedOnB.load());
+        QCOMPARE(decodedOnA.load(), radeA->rxThreadIdForTest());
+        QCOMPARE(decodedOnB.load(), radeB->rxThreadIdForTest());
+        QCOMPARE(radeA->rxThreadNameForTest(), QStringLiteral("RadeRx%1").arg(rig.a));
+        QCOMPARE(radeB->rxThreadNameForTest(), QStringLiteral("RadeRx%1").arg(rig.b));
+        // The tick log counts per channel.
+        QCOMPARE(radeA->rxTickCountForTest(), speechA.count());
+        QCOMPARE(radeB->rxTickCountForTest(), speechB.count());
+    }
 
-        // Same RadeChannel, new DSP worker: leave one old-worker IQ event
-        // queued at RadioModel, replace the worker, then drain the event.
-        // The old generation must not run the codec or re-admit B. This is
-        // the production boundary that also rejects an old decode submitted
-        // before a reconnect from completing into the replacement epoch.
-        const int speechBeforeReplacement = speech.count();
-        const int oldFeedBefore = radeFeed.count();
-        for (int i = 0; i < 8 && radeFeed.count() == oldFeedBefore; ++i) {
-            worker.processIqBatch(1, iq);
-        }
-        QVERIFY(radeFeed.count() > oldFeedBefore);
+    // Ruling 2: a decoder that never returns costs its own slice silence,
+    // never the other slices' time, and its late speech is dropped.
+    void aStalledDecoderNeverHoldsTheOtherSlices()
+    {
+        // The gate outlives the rig (whose teardown joins the decoder), and
+        // is opened on every exit path so a failed check cannot hang it.
+        Gate gate;
+        TwoSliceRig rig;
+        struct OpenOnExit {
+            Gate& gate;
+            ~OpenOnExit() { gate.release(); }
+        } openOnExit{gate};
+        QVERIFY(rig.setUp());
+        RadeChannel* const radeB = rig.toRade(rig.sliceB);
+        QVERIFY(radeB && radeB->isActive());
+        std::shared_ptr<RadeRxBridge> bridge = radeB->rxBridge();
+        QVERIFY(bridge);
 
-        replacement.setEngines(wdsp, audio);
-        replacement.setBufferSizes(kFrames, kFrames);
-        replacement.setStreamSlices(0, QVector<int>{sliceAId});
-        replacement.setStreamSlices(1, QVector<int>{sliceBId});
-        radio.attachDspWorkerForTest(&replacement);
-        QCoreApplication::processEvents();
-        QCOMPARE(speech.count(), speechBeforeReplacement);
-
-        // Model an asynchronous completion from work submitted in the old
-        // worker epoch. It has the same live channel and slice identities,
-        // so only the codec-input generation guard can reject it.
-        const int bBeforeLateSpeech = vaxBView->pushCount();
-        const QByteArray staleSpeech(1024 * 2 * sizeof(float), '\0');
+        // Both slices in the mixer first.
         for (int i = 0; i < 8; ++i) {
-            radeB->emitLateSpeechForTest(staleSpeech);
+            rig.worker.processIqBatch(0, rig.iq);
+            rig.worker.processIqBatch(1, rig.iq);
         }
-        QCoreApplication::processEvents();
-        QCoreApplication::processEvents();
-        QCOMPARE(vaxBView->pushCount(), bBeforeLateSpeech);
+        QVERIFY(radeB->waitRxIdleForTest(5000));
 
-        const int speechBeforeReplacementOutput = speech.count();
-        const int bBeforeReplacementOutput = vaxBView->pushCount();
-        const int masterBeforeReplacementOutput = speakersView->pushCount();
-        // attachRadeRxWorker intentionally resets both the replacement's
-        // 48->24 input resampler and RadioModel's 24->48 speech resamplers.
-        // The focused tst_audio_engine_rade run established that 96 blocks
-        // (~3,040 returned 24-kHz frames) can remain inside r8brain's fresh
-        // high-attenuation filter, while the bounded 256-block window clears
-        // it. Keep all three acceptance conditions and stop as soon as the
-        // replacement has proved codec, VAX and shared-master delivery.
-        constexpr int kReplacementWarmupBlocks = 256;
-        int replacementBlocks = 0;
-        for (; replacementBlocks < kReplacementWarmupBlocks
-               && !(speech.count() > speechBeforeReplacementOutput
-                    && vaxBView->pushCount() > bBeforeReplacementOutput
-                    && speakersView->pushCount()
-                           > masterBeforeReplacementOutput);
-             ++replacementBlocks) {
-            replacement.processIqBatch(0, iq);
-            replacement.processIqBatch(1, iq);
-            QCoreApplication::processEvents();
+        radeB->setRxStallHookForTest([&gate] { gate.hold(); });
+        // Hold the decoder first: feed until it is inside the hook (the
+        // decoder thread may start late on a loaded machine), then count.
+        for (int i = 0; i < 512 && gate.entered.load() == 0; ++i) {
+            rig.worker.processIqBatch(0, rig.iq);
+            rig.worker.processIqBatch(1, rig.iq);
+            QTest::qWait(1);
         }
-        const QString replacementEvidence = QStringLiteral(
-            "blocks=%1 speechDelta=%2 vaxBDelta=%3 masterDelta=%4")
-            .arg(replacementBlocks)
-            .arg(speech.count() - speechBeforeReplacementOutput)
-            .arg(vaxBView->pushCount() - bBeforeReplacementOutput)
-            .arg(speakersView->pushCount() - masterBeforeReplacementOutput);
-        QVERIFY2(speech.count() > speechBeforeReplacementOutput
-                     && vaxBView->pushCount() > bBeforeReplacementOutput
-                     && speakersView->pushCount()
-                            > masterBeforeReplacementOutput,
-                 qPrintable(replacementEvidence));
-
-        // Replace the target on the same slice. Destroying the old QObject
-        // afterward must not clear the replacement's owner serial.
-        auto newer = std::make_unique<RadeChannel>();
-        QVERIFY(newer->start(QStringLiteral("dummy")));
-        QSignalSpy newerSpeech(newer.get(), &RadeChannel::rxSpeechReady);
-        QVERIFY(newerSpeech.isValid());
-        radio.wireRadeChannel(sliceBId, newer.get(), sliceB);
-        QCoreApplication::processEvents();
-        radeB.reset();
-        QCoreApplication::processEvents();
-        for (int i = 0; i < 96; ++i) {
-            replacement.processIqBatch(1, iq);
-            QCoreApplication::processEvents();
+        QTRY_VERIFY_WITH_TIMEOUT(gate.entered.load() == 1, 5000);
+        const int masterBefore = rig.speakers->pushCount();
+        const int vaxABefore = rig.vaxA->pushCount();
+        const int vaxBBefore = rig.vaxB->pushCount();
+        const quint64 silentBefore = bridge->silentSlots();
+        const int lateBound = radeLateBoundBlocks(kFrames);
+        const int blocks = 2 * lateBound;
+        for (int i = 0; i < blocks; ++i) {
+            rig.worker.processIqBatch(0, rig.iq);
+            rig.worker.processIqBatch(1, rig.iq);
         }
-        QVERIFY(newerSpeech.count() > 0);
+        const int masterDelta = rig.speakers->pushCount() - masterBefore;
+        const int vaxADelta = rig.vaxA->pushCount() - vaxABefore;
+        const int vaxBDelta = rig.vaxB->pushCount() - vaxBBefore;
+        const quint64 silentDelta = bridge->silentSlots() - silentBefore;
+        const QString evidence = QStringLiteral(
+            "blocks=%1 entered=%2 master=%3 vaxA=%4 vaxB=%5 silentSlots=%6 inputDrops=%7")
+            .arg(blocks).arg(gate.entered.load()).arg(masterDelta)
+            .arg(vaxADelta).arg(vaxBDelta).arg(silentDelta).arg(bridge->inputDrops());
 
-        // Destroying the current target crosses the worker clear boundary
-        // before restoring ordinary B membership. A reused/stale RADE block
-        // therefore cannot enroll B; its next real WDSP block does.
-        newer.reset();
-        QCoreApplication::processEvents();
-        QCoreApplication::processEvents();
-        const int bBeforeClear = vaxBView->pushCount();
-        replacement.processIqBatch(1, iq);
-        QVERIFY(vaxBView->pushCount() > bBeforeClear);
+        // The decoder is held for the whole run...
+        QVERIFY2(gate.entered.load() == 1, qPrintable(evidence));
+        // ...and the mix and both slices kept the worker's pace: one mixed
+        // block per block fed, B contributing silence.
+        QVERIFY2(masterDelta == blocks && vaxADelta == blocks && vaxBDelta == blocks,
+                 qPrintable(evidence));
+        // Every slot after the late bound found nothing due.
+        QVERIFY2(silentDelta >= quint64(blocks - lateBound), qPrintable(evidence));
 
-        // A removed slice can release its numeric ID before deleteLater runs.
-        // A late event from that slice's still-live channel must not target
-        // the new QObject that receives the same ID.
-        auto staleTarget = std::make_unique<TestRadeChannel>();
-        QVERIFY(staleTarget->start(QStringLiteral("dummy")));
-        radio.wireRadeChannel(sliceBId, staleTarget.get(), sliceB);
+        // Let go: what it decodes now is past its slot and dropped.
+        const quint64 lateBefore = bridge->lateDrops();
+        gate.release();
+        QVERIFY(radeB->waitRxIdleForTest(5000));
+        rig.worker.processIqBatch(0, rig.iq);
+        rig.worker.processIqBatch(1, rig.iq);
+        QVERIFY2(bridge->lateDrops() > lateBefore,
+                 qPrintable(QStringLiteral("lateDrops=%1").arg(bridge->lateDrops())));
+        radeB->setRxStallHookForTest({});
+    }
+
+    // A closed slice takes its decoder; the id's next slice gets a fresh one.
+    void removingARadeSliceDestroysItsDecoder()
+    {
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        QVERIFY(rig.toRade(rig.sliceB));
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+
+        rig.radio.removeSlice(rig.b);
         QCoreApplication::processEvents();
-        radio.removeSlice(sliceBId);
-        QCoreApplication::processEvents();
-        const int reusedId = radio.addSlice();
-        QCOMPARE(reusedId, sliceBId);
-        SliceModel* const replacementSlice = radio.sliceById(reusedId);
-        QVERIFY(replacementSlice);
-        QVERIFY(replacementSlice != sliceB);
-        replacementSlice->setVaxChannel(2);
-        const int bBeforeReusedEvent = vaxBView->pushCount();
-        const QByteArray reusedStaleSpeech(1024 * 2 * sizeof(float), '\0');
-        for (int i = 0; i < 8; ++i) {
-            staleTarget->emitLateSpeechForTest(reusedStaleSpeech);
+        QVERIFY(rig.wdsp->radeChannel(rig.b) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+
+        const int reused = rig.radio.addSlice();
+        QCOMPARE(reused, rig.b);
+        SliceModel* const fresh = rig.radio.sliceById(reused);
+        QVERIFY(fresh && fresh != rig.sliceB);
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        RadeChannel* const again = rig.toRade(fresh);
+        QVERIFY(again && again->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+    }
+
+    // RADE TX stays on one channel: the TX slice's. The other RADE slice
+    // hears the microphone blocks but encodes nothing, and only the keyed
+    // slice's decoder stops.
+    void onlyTheTxSliceChannelEncodes()
+    {
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        RadeChannel* const radeA = rig.toRade(rig.sliceA);
+        RadeChannel* const radeB = rig.toRade(rig.sliceB);
+        QVERIFY(radeA && radeB);
+
+        QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.b));
+        QVERIFY(!radeA->txSelected());
+        QVERIFY(radeB->txSelected());
+        QVERIFY(!radeA->rxGated() && !radeB->rxGated());
+
+        // Model signal only; no radio is attached.
+        QVERIFY(QMetaObject::invokeMethod(
+            rig.radio.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true)));
+        QVERIFY(radeB->rxGated());
+        QVERIFY(!radeA->rxGated());
+        QVERIFY(QMetaObject::invokeMethod(
+            rig.radio.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, false)));
+        QVERIFY(!radeB->rxGated());
+
+        // An unselected channel takes the block and encodes nothing.
+        QByteArray speech16k(16000 * int(sizeof(int16_t)), '\0');
+        radeA->txEncode(speech16k);
+        QCOMPARE(radeA->radeTxCallCountForTest(), 0);
+        radeB->txEncode(speech16k);
+        QVERIFY(radeB->radeTxCallCountForTest() > 0);
+
+        QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.a));
+        QVERIFY(radeA->txSelected());
+        QVERIFY(!radeB->txSelected());
+    }
+
+    // Review Critical: the TX slice's own decoder holds the codec for a
+    // whole decode. Unkeyed, with that slice also decoding, a microphone
+    // block that reaches txEncode then must not wait for the decode: it is
+    // held and encoded with the next call once the codec is free.
+    void txEncodeNeverWaitsForADecode()
+    {
+        Gate gate;
+        TwoSliceRig rig;
+        struct OpenOnExit {
+            Gate& gate;
+            ~OpenOnExit() { gate.release(); }
+        } openOnExit{gate};
+        QVERIFY(rig.setUp());
+        RadeChannel* const radeB = rig.toRade(rig.sliceB);
+        QVERIFY(radeB && radeB->isActive());
+        QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.b));
+        QVERIFY(radeB->txSelected());
+        QVERIFY(!rig.radio.mox());
+        QVERIFY(!radeB->rxGated());
+
+        // Hold the decoder inside a decode, the codec taken. Blocks reach
+        // the decoder once the DSP worker's 48 -> 24 kHz resampler has
+        // filled, so feed until it is in (bounded).
+        radeB->setRxDecodeLockedHookForTest([&gate] { gate.hold(); });
+        for (int i = 0; i < 512 && gate.entered.load() == 0; ++i) {
+            rig.worker.processIqBatch(1, rig.iq);
+            QTest::qWait(1);
         }
+        QTRY_VERIFY_WITH_TIMEOUT(gate.entered.load() == 1, 5000);
+
+        // A watchdog frees the decoder after 5 s, so a txEncode that waited
+        // would return only then; one that never waits returns long before.
+        std::atomic<bool> watchdogFired{false};
+        std::atomic<bool> done{false};
+        std::thread watchdog([&] {
+            for (int i = 0; i < 500 && !done.load(); ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!done.load()) {
+                watchdogFired.store(true);
+                gate.release();
+            }
+        });
+        struct JoinOnExit {
+            std::thread& thread;
+            std::atomic<bool>& done;
+            ~JoinOnExit()
+            {
+                done.store(true);
+                if (thread.joinable()) {
+                    thread.join();
+                }
+            }
+        } joinOnExit{watchdog, done};
+
+        constexpr int kCalls = 10;
+        constexpr int kSamples = 1600;  // 100 ms at 16 kHz each, 1 s in all
+        const QByteArray block(kSamples * int(sizeof(int16_t)), '\0');
+        qint64 slowestMs = 0;
+        for (int i = 0; i < kCalls; ++i) {
+            QElapsedTimer timer;
+            timer.start();
+            radeB->txEncode(block);
+            slowestMs = std::max(slowestMs, timer.elapsed());
+        }
+        done.store(true);
+        const QString evidence = QStringLiteral(
+            "watchdog=%1 slowestMs=%2 busy=%3 held=%4 radeTx=%5 heldDrops=%6")
+            .arg(watchdogFired.load()).arg(slowestMs)
+            .arg(radeB->txCodecBusyCountForTest()).arg(radeB->txHeldBytesForTest())
+            .arg(radeB->radeTxCallCountForTest()).arg(radeB->txHeldDrops());
+        // No call waited for the decode, which was still running.
+        QVERIFY2(!watchdogFired.load(), qPrintable(evidence));
+        QVERIFY2(gate.entered.load() == 1, qPrintable(evidence));
+        QVERIFY2(slowestMs < 5000, qPrintable(evidence));
+        QVERIFY2(radeB->txCodecBusyCountForTest() == kCalls, qPrintable(evidence));
+        QVERIFY2(radeB->txHeldBytesForTest() == kCalls * block.size(), qPrintable(evidence));
+        QVERIFY2(radeB->radeTxCallCountForTest() == 0, qPrintable(evidence));
+        QVERIFY2(radeB->txHeldDrops() == 0, qPrintable(evidence));
+
+        // Once the decode ends, the next block encodes, held blocks first.
+        radeB->setRxDecodeLockedHookForTest({});
+        gate.release();
+        QVERIFY(radeB->waitRxIdleForTest(5000));
+        radeB->txEncode(block);
+        QCOMPARE(radeB->txHeldBytesForTest(), 0);
+        QVERIFY2(radeB->radeTxCallCountForTest() > 0,
+                 qPrintable(QStringLiteral("radeTx=%1").arg(radeB->radeTxCallCountForTest())));
+    }
+
+    // Review Important 1: after a reconnect the TX worker is a new one, and
+    // only the channels re-wired at that point know it. Moving the
+    // transmitter to another RADE slice connects that slice's channel to
+    // the current worker, so its microphone blocks reach txEncode. Nothing
+    // is keyed: the worker's signal is emitted by the test.
+    void aNewTxWorkerReachesTheSliceTheTransmitterMovesTo()
+    {
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp(3));
+        RadeChannel* const radeA = rig.toRade(rig.sliceA);
+        RadeChannel* const radeB = rig.toRade(rig.sliceB);
+        RadeChannel* const radeC = rig.toRade(rig.sliceC);
+        QVERIFY(radeA && radeB && radeC);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 3);
+
+        // The first connection's worker, with A transmitting.
+        rig.radio.installTxWorkerForTest(std::make_unique<TxWorkerThread>());
+        QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.a));
+        // A reconnect: that worker goes and a new one takes its place.
+        auto fresh = std::make_unique<TxWorkerThread>();
+        TxWorkerThread* const worker = fresh.get();
+        rig.radio.installTxWorkerForTest(std::move(fresh));
+
+        // The transmitter moves to C, a third RADE slice.
+        QVERIFY(rig.radio.txSliceArbiter()->requestHandoff(rig.c));
+        QVERIFY(radeC->txSelected());
+        QVERIFY(!radeA->txSelected() && !radeB->txSelected());
+        QCOMPARE(worker->radeChannelForTest(), radeC);
+
+        QByteArray speech16k(16000 * int(sizeof(int16_t)), '\0');
+        emit worker->radeMicBlockReady(speech16k);
         QCoreApplication::processEvents();
+        QVERIFY2(radeC->radeTxCallCountForTest() > 0,
+                 qPrintable(QStringLiteral("radeTxC=%1").arg(radeC->radeTxCallCountForTest())));
+        QCOMPARE(radeA->radeTxCallCountForTest(), 0);
+        QCOMPARE(radeB->radeTxCallCountForTest(), 0);
+    }
+
+    // JJ's bench, 2026-09-30: a device's RADE slice closed after the grace
+    // (saved, then removed) and made again on reconnect read RADE but
+    // played its sideband audio. restoreFromSettings set the mode without
+    // the RADE start, and the setDspMode after it saw no change. It now
+    // decodes again, on its own decoder thread.
+    void aRestoredRadeSliceDecodesAgain()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceB->setFrequency(14200000.0);
+        QVERIFY(rig.toRade(rig.sliceB));
+
+        // What the grace end does (StationServer releaseDeviceClaims):
+        // save the slice, then close it.
+        const Band band = bandFromFrequency(rig.sliceB->frequency());
+        rig.sliceB->saveToSettings(band);
+        ReceiveSliceState saved;
+        saved.id = rig.b;
+        saved.panKey = rig.sliceB->panKey();
+        saved.frequencyHz = rig.sliceB->frequency();
+        saved.dspMode = rig.sliceB->dspMode();
+        rig.radio.removeSlice(rig.b);
         QCoreApplication::processEvents();
-        QCOMPARE(vaxBView->pushCount(), bBeforeReusedEvent);
+        QVERIFY(rig.wdsp->radeChannel(rig.b) == nullptr);
+
+        // Readmission (StationServer placeSlicesForAdmission).
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        QString reason;
+        const int restored = rig.radio.restoreSliceFor(QByteArrayLiteral("phone"), rig.b,
+                                                       saved, &reason);
+        QVERIFY2(restored == rig.b, qPrintable(reason));
+        QCoreApplication::processEvents();  // the route reaches the worker
+        SliceModel* const slice = rig.radio.sliceById(restored);
+        QVERIFY(slice);
+        QCOMPARE(slice->dspMode(), DSPMode::RADE_U);
+
+        RadeChannel* const channel = rig.wdsp->radeChannel(restored);
+        QVERIFY(channel);
+        QVERIFY(channel->isActive());
+        QVERIFY(channel->sidebandUpper());
+        QVERIFY(channel->rxWorkerRunning());
+        QCOMPARE(channel->rxThreadNameForTest(), QStringLiteral("RadeRx%1").arg(restored));
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+    }
+
+    // The band buttons restore a band's saved mode the same way. A RADE
+    // slice keeps decoding across them, a band saved in RADE starts its
+    // decoder, and a band saved in another mode stops it.
+    void bandButtonsKeepARadeSliceDecoding()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceA->setFrequency(14200000.0);
+        QVERIFY(rig.toRade(rig.sliceA));  // 20 m in RADE-U
+
+        // 40 m, first visit: its seed mode, not RADE. No decoder.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band40m);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.sliceA->dspMode() != DSPMode::RADE_U
+                && rig.sliceA->dspMode() != DSPMode::RADE_L);
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        rig.sliceA->setDspMode(DSPMode::RADE_L);  // 40 m in RADE-L
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a));
+
+        // Back to 20 m, saved in RADE-U: the decoder follows the band.
+        QTest::failOnWarning(QRegularExpression(QStringLiteral("already exists")));
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band20m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), DSPMode::RADE_U);
+        RadeChannel* channel = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(channel && channel->isActive() && channel->sidebandUpper());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+
+        // And to 40 m, saved in RADE-L: still decoding.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band40m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), DSPMode::RADE_L);
+        channel = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(channel && channel->isActive() && !channel->sidebandUpper());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QVERIFY2(rig.decodesOnItsOwnThread(channel, &evidence), qPrintable(evidence));
+
+        // 80 m, first visit, is saved in its seed mode; coming back to it
+        // from a RADE band restores that mode and stops the decoder.
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band80m);
+        QCoreApplication::processEvents();
+        const DSPMode seed80 = rig.sliceA->dspMode();
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band20m);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a));
+        rig.radio.onBandButtonClicked(rig.sliceA, Band::Band80m);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->dspMode(), seed80);
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+    }
+
+    // A slice restored in another mode makes no decoder.
+    void aSliceRestoredInAnotherModeHasNoDecoder()
+    {
+        AppSettings::instance().clear();
+        TwoSliceRig rig;
+        QVERIFY(rig.setUp());
+        rig.sliceB->setFrequency(7150000.0);
+        rig.sliceB->setDspMode(DSPMode::LSB);
+        rig.sliceB->saveToSettings(bandFromFrequency(rig.sliceB->frequency()));
+        ReceiveSliceState saved;
+        saved.id = rig.b;
+        saved.panKey = rig.sliceB->panKey();
+        saved.frequencyHz = rig.sliceB->frequency();
+        saved.dspMode = DSPMode::LSB;
+        rig.radio.removeSlice(rig.b);
+        QCoreApplication::processEvents();
+
+        QString reason;
+        const int restored = rig.radio.restoreSliceFor(QByteArrayLiteral("phone"), rig.b,
+                                                       saved, &reason);
+        QVERIFY2(restored == rig.b, qPrintable(reason));
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.radio.sliceById(restored)->dspMode(), DSPMode::LSB);
+        QVERIFY(rig.wdsp->radeChannel(restored) == nullptr);
+        QCOMPARE(rig.worker.radeRxRouteCount(), 0);
     }
 };
 

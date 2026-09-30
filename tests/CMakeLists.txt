@@ -9312,6 +9312,11 @@ nereus_add_test(tst_display_settings_model)
 nereus_add_test(tst_radio_link_stats fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_radio_link_stats PRIVATE NEREUS_BUILD_TESTS)
 
+# RADE threads lane (2026-09-30): one Protocol 2 socket drain's I/Q reaches
+# the DSP worker as one post per stream, with the same samples in order.
+nereus_add_test(tst_p2_iq_drain_batching fakes/P2FakeRadio.cpp)
+target_compile_definitions(tst_p2_iq_drain_batching PRIVATE NEREUS_BUILD_TESTS)
+
 # R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity Task 6): Setup > PA,
 # Radio Status's PA card and the HW meters in a remote window; the PA keys
 # taken by the Core off the air and applied at once; the Core's TX inhibit

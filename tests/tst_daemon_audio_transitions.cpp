@@ -371,8 +371,9 @@ private slots:
         QVERIFY2(rade != nullptr, "test setup: RADE mode created no decoder");
         QSignalSpy speech(rade, &RadeChannel::rxSpeechReady);
         QVERIFY2(h.pumpPackets(kPacketsPerPhase), "no audio in RADE");
-        // The slice leaves the mix on RADE entry and rejoins only with
-        // decoded speech, so these packets carry the RADE path's audio.
+        // RADE threads: the slice stays in the mix on the DSP thread's
+        // cadence, playing its decoder's speech (silence while it warms),
+        // so these packets carry the RADE path's audio.
         QVERIFY(speech.count() > 0);
         verifyContract(h, "in RADE");
         if (QTest::currentTestFailed()) { return; }

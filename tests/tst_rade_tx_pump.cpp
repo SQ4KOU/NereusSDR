@@ -32,6 +32,10 @@
 //                 selected-PC/unavailable-capture regression proving the
 //                 RADE encoder never receives radio-mic fallback. AI tooling:
 //                 OpenAI Codex.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE threads review: the RADE branch
+//                 hands the microphone to the encoder only while keyed
+//                 (setRadeMicKeyed, set and cleared at RadioModel's MOX
+//                 edges). AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -39,10 +43,13 @@
 #include <QSignalSpy>
 
 #include <atomic>
+#include <cmath>
+#include <memory>
 #include <cstring>
 #include <vector>
 
 #include "core/AudioEngine.h"
+#include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadioConnection.h"
 #include "core/TxChannel.h"
@@ -183,6 +190,7 @@ private slots:
         RadeChannel rade;
         w.setRadeChannel(&rade);
         w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        w.setRadeMicKeyed(true);
 
         QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
 
@@ -346,6 +354,7 @@ private slots:
         w.setAudioEngine(&engine);
         w.setMicSource(&src);
         w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        w.setRadeMicKeyed(true);
 
         QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
 
@@ -374,6 +383,73 @@ private slots:
                 QCOMPARE(samples[i], static_cast<int16_t>(0));
             }
         }
+
+        src.stop();
+    }
+
+    // RADE threads review: the path stays Rade between overs and the pump
+    // runs unkeyed; no microphone block goes to the encoder (a queued call
+    // on the main thread) until the MOX edge keys it, and none after the
+    // release. The edges come from RadioModel's moxStateChanged hook.
+    void radeMicBlocksGoOutOnlyWhileKeyed()
+    {
+        AudioEngine engine;
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+        TxMicSource src;
+        src.start();
+
+        RadioModel model;
+        auto owned = std::make_unique<TxWorkerThread>();
+        TxWorkerThread* const w = owned.get();
+        w->setTxChannel(&ch);
+        w->setAudioEngine(&engine);
+        w->setMicSource(&src);
+        model.installTxWorkerForTest(std::move(owned));
+        w->setCurrentTxPath(TxWorkerThread::TxPath::Rade);  // latched by an earlier over
+        QVERIFY(!w->radeMicKeyed());
+
+        QSignalSpy micSpy(w, &TxWorkerThread::radeMicBlockReady);
+        std::vector<float> mic(kBlockFrames);
+        int blk = 0;
+        const auto pump = [&](int blocks) {
+            for (int n = 0; n < blocks; ++n, ++blk) {
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    const float t = static_cast<float>(blk * kBlockFrames + i) / 48000.0f;
+                    mic[static_cast<size_t>(i)] =
+                        0.5f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+                }
+                src.inbound(mic.data(), kBlockFrames);
+                w->tickForTest();
+            }
+        };
+
+        // Unkeyed: 500 blocks, past the resampler's warm-up, send nothing.
+        pump(500);
+        QCOMPARE(micSpy.count(), 0);
+
+        // The MOX-on edge (the model's signal only; nothing is keyed).
+        QVERIFY(QMetaObject::invokeMethod(
+            model.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, true)));
+        QVERIFY(w->radeMicKeyed());
+        // This model has no RADE slice, so the edge latched the WDSP path;
+        // a RADE TX slice would have latched Rade.
+        w->setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+        pump(50);
+        QVERIFY2(micSpy.count() > 0,
+                 qPrintable(QStringLiteral("keyed emits=%1").arg(micSpy.count())));
+
+        // The release edge: nothing more.
+        QVERIFY(QMetaObject::invokeMethod(
+            model.moxController(), "moxStateChanged", Qt::DirectConnection,
+            Q_ARG(bool, false)));
+        QVERIFY(!w->radeMicKeyed());
+        const int keyedCount = static_cast<int>(micSpy.count());
+        pump(50);
+        QCOMPARE(static_cast<int>(micSpy.count()), keyedCount);
 
         src.stop();
     }

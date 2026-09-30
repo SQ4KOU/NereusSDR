@@ -9,6 +9,9 @@
 //   2026-09-29: created for NereusSDR by J.J. Boyd (KG4VCF), slice control
 //               and shared listening plan Task 7, with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: RADE threads: the zero-slice RADE check wires a real
+//               channel and sees its route and decoder go. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // The model side of a Core with no slice: the claims rule's close of an
@@ -27,6 +30,8 @@
 #include "core/AudioEngine.h"
 #include "core/DdcAssignment.h"
 #include "core/P2RadioConnection.h"
+#include "core/RadeChannel.h"
+#include "core/WdspEngine.h"
 #include "core/ReceiveLayoutStore.h"
 #include "core/ReceiverManager.h"
 #include "core/SliceOwnership.h"
@@ -209,19 +214,20 @@ private slots:
         QVERIFY(!core.model.m_externalDiversityRouteActive);
     }
 
-    // The RADE receive target goes with the slice.
+    // The RADE receive target goes with the slice. RADE threads: the
+    // slice's route and its decoder both go.
     void theRadeTargetIsClearedAtZero()
     {
         ZeroCore core;
         const int a = core.model.addSlice();
         SliceModel* slice = core.model.sliceById(a);
-        core.model.m_radeRxTarget.slice = slice;
-        core.model.m_radeRxTarget.sliceId = a;
-        core.model.m_radeRxTarget.ownerSerial = 7;
+        RadeChannel* const channel = core.model.wdspEngine()->createRadeChannel(a);
+        QVERIFY(channel);
+        core.model.wireRadeChannel(a, channel, slice);
+        QVERIFY(core.model.m_radeRxRoutes.contains(a));
         QVERIFY(core.model.closeUnclaimedSlice(a));
-        QVERIFY(core.model.m_radeRxTarget.slice.isNull());
-        QCOMPARE(core.model.m_radeRxTarget.sliceId, -1);
-        QCOMPARE(core.model.m_radeRxTarget.ownerSerial, quint64(0));
+        QVERIFY(!core.model.m_radeRxRoutes.contains(a));
+        QVERIFY(core.model.wdspEngine()->radeChannel(a) == nullptr);
     }
 
     // Ruling Q10: a Core with no slice saves no layout, so a restart starts

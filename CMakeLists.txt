@@ -995,6 +995,7 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp
+    src/core/RadeRxWorker.cpp
     src/core/RadeText.cpp
     # RADE end-of-over callsigns: FreeDV's callsign format (freedv-backend
     # rade_text + LDPC(112,56) port).

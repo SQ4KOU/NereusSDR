@@ -97,6 +97,11 @@
 //                packet and send-error counters; rx_out_seq_no starts at 0
 //                once per connection, not at each sender start. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - onReadyRead brackets each socket drain with iqBatchStarted /
+//                iqBatchFinished so ReceiverManager posts the drain's I/Q to
+//                the DSP worker once per stream, and frameReceived is posted
+//                once per drain, not once per packet. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -1161,6 +1166,10 @@ private:
     // --- I/Q buffers and packet counters ---
     std::array<QVector<float>, kMaxDdc> m_iqBuffers;
     int m_totalIqPackets{0};
+    // Connection thread only: inside onReadyRead's drain, processIqPacket
+    // marks frameReceived pending and the drain emits it once at its end.
+    bool m_inIqDrain{false};
+    bool m_frameReceivedPending{false};
 
 #ifdef NEREUS_BUILD_TESTS
 public:

@@ -7,6 +7,9 @@
 // Modification history (NereusSDR):
 // 2026-09-27: Use the approved shared decimation bounds.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
+// 2026-09-30: Frames can carry their bins in dBm, converted on the engine
+// thread, so DaemonAgcSource does no per-bin log10 on the main thread.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
 
 #include "core/ControlRanges.h"
 #include "core/session/media/DaemonSpectrumSource.h"
@@ -23,6 +26,15 @@
 #include <utility>
 
 namespace NereusSDR {
+
+namespace {
+
+// Moved unchanged from DaemonAgcSource.cpp, which had them for the same
+// conversion (FFTEngine::fftReady's floor).
+constexpr float kFftPowerFloor = 1.0e-20f;
+constexpr float kFftDbmFloor = -200.0f;
+
+} // namespace
 
 struct DaemonSpectrumSource::FrameState {
     mutable QMutex mutex;
@@ -534,6 +546,9 @@ bool DaemonSpectrumSource::publishFrameForTest(const MediaSourceKey& key,
         state->latest.binsLinear = QVector<float>(state->config.fft.fftSize, binLinear);
         state->latest.windowEnb = 1.0;
         state->latest.dbmOffset = 0.0;
+        state->latest.binsDbm.clear();
+        state->latest.binsDbmValid = computesBinsDbm()
+            && binsLinearToDbm(state->latest.binsLinear, 0.0, state->latest.binsDbm);
         state->hasLatest = true;
         state->notificationQueued = true;
         ++state->publishedFrames;
@@ -565,6 +580,9 @@ bool DaemonSpectrumSource::publishFrameForTest(const MediaSourceKey& key,
         state->latest.binsLinear = binsLinear;
         state->latest.windowEnb = 1.0;
         state->latest.dbmOffset = 0.0;
+        state->latest.binsDbm.clear();
+        state->latest.binsDbmValid = computesBinsDbm()
+            && binsLinearToDbm(binsLinear, 0.0, state->latest.binsDbm);
         state->hasLatest = true;
         state->notificationQueued = true;
         ++state->publishedFrames;
@@ -577,6 +595,12 @@ void DaemonSpectrumSource::publishFrame(
     const MediaSourceKey& key, const QSharedPointer<FrameState>& state,
     const QVector<float>& binsLinear, double windowEnb, double dbmOffset)
 {
+    // On the engine thread, outside the frame lock.
+    QVector<float> binsDbm;
+    bool binsDbmValid = false;
+    if (computesBinsDbm()) {
+        binsDbmValid = binsLinearToDbm(binsLinear, dbmOffset, binsDbm);
+    }
     bool queueNotification = false;
     {
         QMutexLocker lock(&state->mutex);
@@ -591,6 +615,8 @@ void DaemonSpectrumSource::publishFrame(
         state->latest.binsLinear = binsLinear;
         state->latest.windowEnb = windowEnb;
         state->latest.dbmOffset = dbmOffset;
+        state->latest.binsDbm = std::move(binsDbm);
+        state->latest.binsDbmValid = binsDbmValid;
         state->hasLatest = true;
         ++state->publishedFrames;
         if (!state->notificationQueued) {
@@ -609,6 +635,41 @@ void DaemonSpectrumSource::publishFrame(
             }
         }, Qt::QueuedConnection);
     }
+}
+
+void DaemonSpectrumSource::setComputesBinsDbm(bool computes)
+{
+    m_computesBinsDbm.store(computes, std::memory_order_release);
+}
+
+bool DaemonSpectrumSource::computesBinsDbm() const
+{
+    return m_computesBinsDbm.load(std::memory_order_acquire);
+}
+
+bool DaemonSpectrumSource::binsLinearToDbm(const QVector<float>& binsLinear,
+                                           double dbmOffset, QVector<float>& out)
+{
+    // Moved unchanged from DaemonAgcSource::onFrameAvailable: this is
+    // exactly FFTEngine::fftReady's conversion (FFTEngine.cpp).
+    out.clear();
+    out.reserve(binsLinear.size());
+    for (const float power : binsLinear) {
+        if (!std::isfinite(power)) {
+            out.clear();
+            return false;
+        }
+        const float dbm = power < kFftPowerFloor
+            ? kFftDbmFloor
+            : static_cast<float>(10.0 * std::log10(static_cast<double>(power))
+                                 + dbmOffset);
+        if (!std::isfinite(dbm)) {
+            out.clear();
+            return false;
+        }
+        out.append(dbm);
+    }
+    return true;
 }
 
 } // namespace NereusSDR

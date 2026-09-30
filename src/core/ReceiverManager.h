@@ -21,6 +21,14 @@
 //                 for the external-diversity input bound, R-R3-40) by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code. NereusSDR-original.
+//   2026-09-30 - beginIqBatch / endIqBatch: the queued stamped batches of
+//                 one socket drain go to the DSP worker as one post per
+//                 stream, not one per packet, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original.
+//   2026-09-30 - reset() drops a held batch and ends batching. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -79,6 +87,7 @@
 #include <QMap>
 #include <QMutex>
 
+#include <atomic>
 #include <chrono>
 
 #include "codec/CodecContext.h"   // PsDdcConfig + Q_DECLARE_METATYPE
@@ -187,6 +196,24 @@ public:
     // Called when I/Q data arrives for a hardware DDC.
     // Routes to the correct logical receiver.
     void feedIqData(int hwReceiverIndex, const QVector<float>& samples);
+
+    // One socket drain's worth of I/Q, bracketed by the connection thread
+    // (RadioConnection::iqBatchStarted / iqBatchFinished, DirectConnection).
+    // Between the two, feedIqData still emits iqDataForReceiver and
+    // iqDataForChannel for every packet, but holds the queued stamped
+    // batches (iqDataForReceiverStamped, hardwareIqDataStamped) and joins
+    // each stream's packets, in order, into one batch, emitted at
+    // endIqBatch: one post per stream per drain instead of one per packet.
+    // The samples and their order per stream are unchanged. A stream's
+    // held batch is emitted early once it reaches kIqBatchMaxSamples. Only
+    // the thread that began the batch is held; any other thread's
+    // feedIqData emits at once, as before.
+    void beginIqBatch();
+    void endIqBatch();
+    // Bounds one held batch: about eight 238-sample Protocol 2 packets.
+    // Far below RxDspWorker's kMaxSaneSamplesPerBatch and its diversity
+    // leg backlog, so no joined batch is refused or trimmed there.
+    static constexpr int kIqBatchMaxSamples = 2048;
 
     // -------------------------------------------------------------------
     // Phase 3M-4 Task 6: PureSignal DDC orchestration
@@ -369,6 +396,19 @@ private:
     // destroyReceiver -> rebuildHardwareMapping do not deadlock.  Mutable
     // so the reader can take it.
     mutable QRecursiveMutex m_routingMutex;
+
+    // beginIqBatch / endIqBatch state. The mutex is taken on the connection
+    // thread, and by reset() on the owner's thread (never an audio
+    // callback), and never while emitting.
+    struct HeldIqBatch {
+        bool hardware{false};  // hardwareIqDataStamped, else iqDataForReceiverStamped
+        int index{-1};
+        QVector<float> samples;
+    };
+    void flushHeldIq(QVector<HeldIqBatch>& batches);
+    QMutex m_iqBatchMutex;
+    std::atomic<Qt::HANDLE> m_iqBatchThread{nullptr};
+    QVector<HeldIqBatch> m_heldIq;
 
     // Diagnostic: one-shot logging of first successful and first dropped feedIqData
     bool m_firstForwardLogged{false};

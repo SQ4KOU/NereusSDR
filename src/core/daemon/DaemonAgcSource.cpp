@@ -5,6 +5,11 @@
 // station I/Q source into existing FFT/noise-floor components; it introduces
 // no noise-floor or AGC algorithm.
 // =================================================================
+// Modification history (NereusSDR):
+// 2026-09-30: The per-bin dBm conversion moved to DaemonSpectrumSource's
+// engine threads; the values are unchanged.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via Anthropic Claude Code.
+// =================================================================
 
 #include "core/daemon/DaemonAgcSource.h"
 
@@ -22,7 +27,6 @@
 namespace NereusSDR {
 namespace {
 
-constexpr float kFftPowerFloor = 1.0e-20f;
 constexpr float kFftDbmFloor = -200.0f;
 constexpr float kTrackerFrameIntervalMs = 33.0f;
 
@@ -56,6 +60,8 @@ DaemonAgcSource::DaemonAgcSource(RadioModel* radioModel, QObject* parent)
     , m_radioModel(radioModel)
     , m_source(std::make_unique<DaemonSpectrumSource>(this))
 {
+    // The per-bin dBm conversion runs on the source's engine threads.
+    m_source->setComputesBinsDbm(true);
     if (!m_radioModel) {
         return;
     }
@@ -148,21 +154,12 @@ void DaemonAgcSource::onFrameAvailable(MediaSourceKey key)
     // DaemonSpectrumSource carries the raw |X[k]|^2 side channel plus the
     // matching window coherent-gain offset, so no display reducer, station
     // meter offset, percentile estimator, or client calibration participates.
-    QVector<float> binsDbm;
-    binsDbm.reserve(frame->binsLinear.size());
-    for (const float power : frame->binsLinear) {
-        if (!std::isfinite(power)) {
-            return;
-        }
-        const float dbm = power < kFftPowerFloor
-            ? kFftDbmFloor
-            : static_cast<float>(10.0 * std::log10(static_cast<double>(power))
-                                 + frame->dbmOffset);
-        if (!std::isfinite(dbm)) {
-            return;
-        }
-        binsDbm.append(dbm);
+    // The source converts it on its engine thread
+    // (DaemonSpectrumSource::binsLinearToDbm), so no per-bin log10 runs here.
+    if (!frame->binsDbmValid || frame->binsDbm.size() != frame->binsLinear.size()) {
+        return;
     }
+    const QVector<float>& binsDbm = frame->binsDbm;
 
     StreamState& state = *it->second;
     state.tracker->feed(binsDbm, kTrackerFrameIntervalMs);

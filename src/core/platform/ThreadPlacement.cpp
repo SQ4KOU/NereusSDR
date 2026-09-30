@@ -23,6 +23,10 @@
 //   2026-09-27: the transmit I/Q sender role (R-IOS-13, R-R3-42). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: RADE decoder role, placed on the least busy fast core by
+//               the plan (JJ's ruling of 2026-09-30), each choice logged.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -39,6 +43,7 @@
 #include <algorithm>
 #include <functional>
 #include <set>
+#include <tuple>
 #include <utility>
 
 #ifdef Q_OS_LINUX
@@ -126,6 +131,13 @@ QString priorityOnlyLine(const QString& reason, bool raisePriority)
 bool isChannelRole(ThreadRole role)
 {
     return role == ThreadRole::RxWorker || role == ThreadRole::TxWorker;
+}
+
+// Roles with one thread per channel in a plan. One transmit channel: the
+// transmit worker is not told apart by channel.
+bool assignedPerChannel(ThreadRole role)
+{
+    return role == ThreadRole::RxWorker || role == ThreadRole::RadeDecoder;
 }
 
 } // namespace
@@ -270,8 +282,9 @@ CpuTopology readCpuTopology(const QString& cpuRoot, const QList<int>& allowed)
 int PlacementPlan::cpuFor(ThreadRole role, int channel) const
 {
     for (const RoleAssignment& a : assignments) {
-        // One transmit channel: only receive workers are told apart by channel.
-        if (a.role == role && (role != ThreadRole::RxWorker || a.channel == channel)) {
+        // One transmit channel: only receive workers and RADE decoders are
+        // told apart by channel.
+        if (a.role == role && (!assignedPerChannel(role) || a.channel == channel)) {
             return a.cpu;
         }
     }
@@ -287,6 +300,7 @@ QList<int> PlacementPlan::signalCores() const
         }
     }
     std::sort(cores.begin(), cores.end());
+    cores.erase(std::unique(cores.begin(), cores.end()), cores.end());
     return cores;
 }
 
@@ -438,6 +452,69 @@ PlacementPlan planThreadPlacement(const CpuTopology& topology,
     for (RoleAssignment& a : order) {
         if (next < plan.signalPool.size()) {
             a.cpu = plan.signalPool.at(next++);
+        }
+    }
+
+    // RADE decoders (JJ's ruling of 2026-09-30: the least busy fast core),
+    // after every other role, each sharing a signal processing core, judged
+    // from the plan. The key, smallest first:
+    //  1. decoders already on the core, so decoders spread across cores
+    //     before any core takes a second;
+    //  2. busy: every role the plan gives the core. Transmit roles count in
+    //     full: they are in the plan only while transmitting, and then they
+    //     are working (G-06 keeps their cores for them);
+    //  3. a core carrying a transmit role last among equals, so that while
+    //     keyed a receive decoder leaves the transmit cores to the transmit
+    //     path (G-06) whenever an equal core without one exists;
+    //  4. the DSP thread's core next to last: it runs fexchange2 for every
+    //     slice, so it is the one receive-time core whose single thread is
+    //     not like the others. It stays a candidate;
+    //  5. signalPool order (fastest first).
+    // In the order given (the registry's: the order the decoders started),
+    // so a decoder added later never moves one already placed.
+    QList<int> rade;
+    for (int channel : demand.radeDecoders) {
+        if (!rade.contains(channel)) {
+            rade.append(channel);
+        }
+    }
+    if (!rade.isEmpty()) {
+        QMap<int, int> busy;
+        QMap<int, int> decoders;
+        std::set<int> dspCores;
+        std::set<int> transmitCores;
+        for (const RoleAssignment& a : std::as_const(order)) {
+            if (a.cpu < 0) {
+                continue;
+            }
+            ++busy[a.cpu];
+            if (a.role == ThreadRole::TxWorker || a.role == ThreadRole::TxWorkerThread
+                || a.role == ThreadRole::TxIqSender) {
+                transmitCores.insert(a.cpu);
+            }
+            if (a.role == ThreadRole::DspThread) {
+                dspCores.insert(a.cpu);
+            }
+        }
+        for (int channel : std::as_const(rade)) {
+            int best = -1;
+            for (int cpu : std::as_const(plan.signalPool)) {
+                if (best < 0) {
+                    best = cpu;
+                    continue;
+                }
+                const auto key = [&](int c) {
+                    return std::make_tuple(decoders.value(c), busy.value(c),
+                                           transmitCores.count(c), dspCores.count(c));
+                };
+                // Strictly less: an equal core keeps the earlier one.
+                if (key(cpu) < key(best)) {
+                    best = cpu;
+                }
+            }
+            order.append({ThreadRole::RadeDecoder, channel, best});
+            ++busy[best];
+            ++decoders[best];
         }
     }
     plan.assignments = order;
@@ -702,6 +779,9 @@ PlacementDemand ThreadPlacement::demandLocked() const
             || (t.role == ThreadRole::TxWorkerThread && demand.txWorker);
         demand.txIqSender = demand.txIqSender
             || (t.role == ThreadRole::TxIqSender && demand.txWorker);
+        if (t.role == ThreadRole::RadeDecoder) {
+            demand.radeDecoders.append(t.channel);
+        }
     }
     return demand;
 }
@@ -714,6 +794,7 @@ bool ThreadPlacement::roleActiveLocked(ThreadRole role, int channel) const
     case ThreadRole::TxWorker:
         return m_activeTx.value(channel, false);
     case ThreadRole::DspThread:
+    case ThreadRole::RadeDecoder:
         return true;
     case ThreadRole::TxWorkerThread:
     case ThreadRole::TxIqSender:
@@ -735,6 +816,20 @@ void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& pl
         const QList<int> cpus = cpu >= 0 ? QList<int>{cpu} : m_startupPlan.housekeeping;
         if (cpus != thread.appliedCpus && setAffinityLocked(thread.threadId, cpus)) {
             thread.appliedCpus = cpus;
+            // Each RADE decoder's core is logged when it is chosen (a
+            // decoder added or removed, a transmit edge), never per block.
+            if (thread.role == ThreadRole::RadeDecoder) {
+                qCInfo(lcApp).noquote()
+                    << (cpu >= 0
+                            ? QStringLiteral("Thread placement: the RADE decoder for"
+                                             " channel %1 runs on core %2.")
+                                  .arg(thread.channel).arg(cpu)
+                            : QStringLiteral("Thread placement: the RADE decoder for"
+                                             " channel %1 runs on cores %2 with"
+                                             " everything else.")
+                                  .arg(thread.channel)
+                                  .arg(formatCpuList(cpus)));
+            }
         }
         // A role left without a core of its own (none free, or the move
         // was refused) shares the housekeeping cores; raised there, it
@@ -768,13 +863,15 @@ void ThreadPlacement::registerCurrentThread(ThreadRole role, int channel)
     }
     QMutexLocker lock(&m_mutex);
     const qint64 threadId = m_api->currentThreadId();
-    const int ownChannel = isChannelRole(role) ? channel : -1;
+    const bool perChannel = isChannelRole(role) || role == ThreadRole::RadeDecoder;
+    const int ownChannel = perChannel ? channel : -1;
     // A channel has one worker: WDSP's own rebuilds (a rate or size change)
-    // replace it with a new thread, so the old entry goes too.
+    // replace it with a new thread, so the old entry goes too. A RADE
+    // channel likewise has one decoder thread.
     m_threads.erase(std::remove_if(m_threads.begin(), m_threads.end(),
                                    [&](const Registered& t) {
                                        return t.threadId == threadId
-                                           || (isChannelRole(role) && t.role == role
+                                           || (perChannel && t.role == role
                                                && t.channel == ownChannel);
                                    }),
                     m_threads.end());
@@ -896,10 +993,10 @@ PlacementPlan ThreadPlacement::appliedPlan() const
         }
         const bool applied = std::any_of(
             m_threads.cbegin(), m_threads.cend(), [&assignment](const Registered& thread) {
-                // As in cpuFor(): only receive workers are told apart by
-                // channel.
+                // As in cpuFor(): only receive workers and RADE decoders
+                // are told apart by channel.
                 return thread.role == assignment.role
-                    && (assignment.role != ThreadRole::RxWorker
+                    && (!assignedPerChannel(assignment.role)
                         || thread.channel == assignment.channel)
                     && thread.appliedCpus == QList<int>{assignment.cpu};
             });

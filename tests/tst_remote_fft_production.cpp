@@ -13,6 +13,7 @@
 #include "core/spectrum/FftEnginePool.h"
 #undef private
 #include "core/FFTEngine.h"
+#include "core/NoiseFloorTracker.h"
 #include "models/RadioModel.h"
 
 #include <QElapsedTimer>
@@ -21,7 +22,9 @@
 #include <QThread>
 
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <random>
 #include <memory>
 #include <numbers>
 
@@ -54,6 +57,41 @@ QVector<float> syntheticIq(int complexSamples, double cyclesPerSample)
         iq.append(static_cast<float>(std::sin(phase)));
     }
     return iq;
+}
+
+
+// The conversion exactly as DaemonAgcSource::onFrameAvailable ran it on the
+// main thread before it moved to the engine threads (2026-09-30), kept here
+// as the reference the moved code must match bit for bit.
+bool mainThreadAgcDbm(const QVector<float>& binsLinear, double dbmOffset,
+                      QVector<float>& binsDbm)
+{
+    constexpr float kFftPowerFloor = 1.0e-20f;
+    constexpr float kFftDbmFloor = -200.0f;
+    binsDbm.clear();
+    binsDbm.reserve(binsLinear.size());
+    for (const float power : binsLinear) {
+        if (!std::isfinite(power)) {
+            return false;
+        }
+        const float dbm = power < kFftPowerFloor
+            ? kFftDbmFloor
+            : static_cast<float>(10.0 * std::log10(static_cast<double>(power))
+                                 + dbmOffset);
+        if (!std::isfinite(dbm)) {
+            return false;
+        }
+        binsDbm.append(dbm);
+    }
+    return true;
+}
+
+bool bitIdentical(const QVector<float>& a, const QVector<float>& b)
+{
+    return a.size() == b.size()
+        && (a.isEmpty()
+            || std::memcmp(a.constData(), b.constData(),
+                           size_t(a.size()) * sizeof(float)) == 0);
 }
 
 // QObject::receivers() is protected; a member pointer named through a
@@ -446,6 +484,110 @@ private slots:
         QVERIFY2(postGap->binsLinear.at(oldPeak)
                      < postGap->binsLinear.at(newPeak) * 0.01f,
                  "post-gap FFT retained the dropped packet's preceding tone");
+    }
+
+    // The per-bin dBm conversion DaemonAgcSource ran on the main thread now
+    // runs in DaemonSpectrumSource; every value, and every rejection, must
+    // be the same bits.
+    void binsDbmMatchesTheMainThreadConversionBitForBit()
+    {
+        QVector<float> edges{0.0f,
+                             std::numeric_limits<float>::denorm_min(),
+                             1.0e-21f,
+                             std::nextafter(1.0e-20f, 0.0f),
+                             1.0e-20f,
+                             std::nextafter(1.0e-20f, 1.0f),
+                             1.0e-12f,
+                             0.5f,
+                             1.0f,
+                             3.0f,
+                             1.0e10f,
+                             std::numeric_limits<float>::max(),
+                             -1.0f};
+        std::mt19937 rng(20260930u);
+        std::uniform_real_distribution<float> exponent(-24.0f, 12.0f);
+        QVector<float> random;
+        for (int i = 0; i < 4096; ++i) {
+            random.append(std::pow(10.0f, exponent(rng)));
+        }
+        const double offsets[] = {0.0, -3.0103, 47.95, -174.2, 1.0e300};
+        for (const QVector<float>* bins : {&edges, &random}) {
+            for (const double offset : offsets) {
+                QVector<float> expected;
+                QVector<float> actual;
+                const bool expectedOk = mainThreadAgcDbm(*bins, offset, expected);
+                const bool actualOk =
+                    DaemonSpectrumSource::binsLinearToDbm(*bins, offset, actual);
+                QCOMPARE(actualOk, expectedOk);
+                if (expectedOk) {
+                    QVERIFY(bitIdentical(actual, expected));
+                } else {
+                    QVERIFY(actual.isEmpty());
+                }
+            }
+        }
+        // A non-finite power rejects the frame, as before.
+        for (const float bad : {std::numeric_limits<float>::quiet_NaN(),
+                                std::numeric_limits<float>::infinity()}) {
+            QVector<float> bins = random;
+            bins[17] = bad;
+            QVector<float> out;
+            QVERIFY(!DaemonSpectrumSource::binsLinearToDbm(bins, 0.0, out));
+            QVERIFY(out.isEmpty());
+        }
+    }
+
+    // Frames from the engine thread: the source that computes dBm carries
+    // the same bits the main thread would have made, its linear bins equal
+    // those of a source that does not, and a noise-floor tracker fed from
+    // either path reads the same value.
+    void engineThreadDbmLeavesSpectrumAndAgcValuesUnchanged()
+    {
+        DaemonSpectrumSource plain;
+        DaemonSpectrumSource agc;
+        agc.setComputesBinsDbm(true);
+        QVERIFY(!plain.computesBinsDbm());
+        const MediaSourceKey key{0, FftTier::Wide};
+        QVERIFY(plain.activate(key, sourceConfig(1024, 7100000.0, 48000.0)));
+        QVERIFY(agc.activate(key, sourceConfig(1024, 7100000.0, 48000.0)));
+        QTRY_VERIFY(plain.isActive(key));
+        QTRY_VERIFY(agc.isActive(key));
+
+        NoiseFloorTracker reference;
+        NoiseFloorTracker moved;
+        for (int round = 0; round < 3; ++round) {
+            QSignalSpy plainFrames(&plain, &DaemonSpectrumSource::frameAvailable);
+            QSignalSpy agcFrames(&agc, &DaemonSpectrumSource::frameAvailable);
+            const QVector<float> iq = syntheticIq(1026, 0.125 / (round + 1));
+            plain.submitIq(0, iq);
+            agc.submitIq(0, iq);
+            QTRY_VERIFY(plainFrames.count() >= 1);
+            QTRY_VERIFY(agcFrames.count() >= 1);
+            const auto plainFrame = plain.takeLatest(key);
+            const auto agcFrame = agc.takeLatest(key);
+            QVERIFY(plainFrame.has_value());
+            QVERIFY(agcFrame.has_value());
+
+            // Spectrum: the linear bins and offset are untouched.
+            QVERIFY(bitIdentical(agcFrame->binsLinear, plainFrame->binsLinear));
+            QCOMPARE(agcFrame->dbmOffset, plainFrame->dbmOffset);
+            QVERIFY(plainFrame->binsDbm.isEmpty());
+            QVERIFY(!plainFrame->binsDbmValid);
+
+            // AGC: the engine thread's dBm is the main thread's, bit for bit.
+            QVector<float> expected;
+            QVERIFY(mainThreadAgcDbm(agcFrame->binsLinear, agcFrame->dbmOffset,
+                                     expected));
+            QVERIFY(agcFrame->binsDbmValid);
+            QVERIFY(bitIdentical(agcFrame->binsDbm, expected));
+
+            reference.feed(expected, 33.0f);
+            moved.feed(agcFrame->binsDbm, 33.0f);
+            const float referenceFloor = reference.noiseFloor();
+            const float movedFloor = moved.noiseFloor();
+            QVERIFY(std::memcmp(&referenceFloor, &movedFloor, sizeof(float)) == 0);
+            QCOMPARE(moved.isGood(), reference.isGood());
+        }
     }
 };
 

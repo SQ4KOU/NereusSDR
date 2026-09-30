@@ -826,6 +826,19 @@
 //                via Anthropic Claude Code.
 //   2026-09-30 - TX rulings (item 1): moxPressAsksOn and tunePressAsksOn.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - RADE threads: every RADE slice decodes at once, each on its
+//                own decoder thread fed by the DSP thread (m_radeRxRoutes
+//                replaces the single RADE target and its main-thread
+//                decode and resample). Only the TX slice's channel encodes
+//                (refreshRadeTxSelection). Removing a slice destroys its
+//                RadeChannel. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-30 - RADE threads review: the TX worker hands the microphone to
+//                RADE only while keyed (setRadeMicKeyed at the MOX edges),
+//                and refreshRadeTxSelection connects the selected channel
+//                to the current TX worker, so a worker made again after a
+//                reconnect reaches a slice the transmitter moves to. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2207,6 +2220,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // with the transmitter unkeyed.
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
             this, [this](int, int newId) {
+        // RADE threads: only the new TX slice's RADE channel encodes.
+        refreshRadeTxSelection(mox());
         rebindAccessorySlice();
         rebindIoBoardSlice();
         // R-R3-49 (parity Task 2): the transmit band's tune power.
@@ -3980,14 +3995,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
         if (m_audioEngine) {
             connect(m_moxController, &MoxController::moxStateChanged,
                     m_audioEngine, &AudioEngine::setMoxState);
-            // AudioEngine restores its captured TX slice on the falling
-            // edge. A selected RADE owner that has not produced a current
-            // block must remain outside MasterMixer's no-timeout barrier;
-            // onRadeSpeechReady is the sole admission edge for that target.
-            // This connection is deliberately installed after AudioEngine's
-            // so it can preserve that stronger readiness condition.
+            // RADE threads (2026-09-30): a RADE slice is fed on the DSP
+            // worker's own cadence (silence while its decoder is late), so
+            // it needs no admission edge of its own and AudioEngine's MOX
+            // withdraw and restore cover it like any slice. The edge only
+            // gates the transmitting slice's decoder.
             connect(m_moxController, &MoxController::moxStateChanged,
-                    this, &RadioModel::onRadeMoxStateChanged);
+                    this, [this](bool active) { refreshRadeTxSelection(active); });
         }
     }
 
@@ -7794,6 +7808,10 @@ void RadioModel::wireTxWorkerRade(TxWorkerThread* worker)
     }
     connect(m_moxController, &MoxController::moxStateChanged,
             worker, [this, worker](bool active) {
+                // RADE threads (2026-09-30): the microphone reaches the RADE
+                // encoder only while keyed; the path itself stays latched
+                // for the end-of-over checks.
+                worker->setRadeMicKeyed(active);
                 if (!active) {
                     return;   // released; pump will idle anyway
                 }
@@ -14400,12 +14418,21 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist, bool mayCloseLast)
         m_settingsSaveScheduled = true;
         flushPendingSettingsSave();
     }
-    if (m_radeRxTarget.slice == victim) {
-        // Retire the exact QObject identity while it is still present in the
-        // slice list. The worker acknowledgment arrives after its old route
-        // is gone; by then sliceById/streamIndex prevent a reused numeric ID
-        // from being re-admitted on the victim's behalf.
-        clearRadeRxTarget(m_radeRxTarget.ownerSerial);
+    {
+        // RADE threads (2026-09-30): a closed slice takes its RADE decoder
+        // with it. The route goes first, while the slice is still in the
+        // list; then the channel, whose decoder thread is joined before its
+        // codec closes (WdspEngine::destroyRadeChannel). Before this the
+        // channel outlived its slice, and a new slice reusing the id got
+        // the "already exists" warning and the old decoder.
+        const int victimId = victim->sliceIndex();
+        const auto route = m_radeRxRoutes.constFind(victimId);
+        if (route != m_radeRxRoutes.cend() && route->slice == victim) {
+            retireRadeRxRoute(victimId, route->serial);
+        }
+        if (m_wdspEngine && m_wdspEngine->radeChannel(victimId) != nullptr) {
+            m_wdspEngine->destroyRadeChannel(victimId);
+        }
     }
     // Slice control plan Task 7: the last slice has no other slice to hand
     // transmit to; the binding is released once it has left the list.
@@ -14624,14 +14651,6 @@ void RadioModel::requestTxBoundReRoute(const QString& proposedAntenna,
 // the wiring captures the slice ID at wire time so the receiving slot
 // knows which slice to apply the update to.
 
-void RadioModel::resetRadeRxSpeechState()
-{
-    m_radeRxSpeechL.reset();
-    m_radeRxSpeechR.reset();
-    m_radeRxLScratch.clear();
-    m_radeRxRScratch.clear();
-}
-
 bool RadioModel::canAdmitRadeSlice(int sliceId,
                                   const SliceModel* slice) const
 {
@@ -14648,69 +14667,111 @@ bool RadioModel::canAdmitRadeSlice(int sliceId,
     return true;
 }
 
-void RadioModel::queueRadeRxBinding(int sliceId, quint64 generation)
+// RADE threads (2026-09-30), NereusSDR-original. Hands one slice's route to
+// the DSP worker, on the worker's thread: the channel's rings, or none.
+void RadioModel::queueRadeRxRoute(int sliceId, RadeChannel* channel)
 {
     RxDspWorker* const worker = m_dspWorker;
     if (worker == nullptr) {
         return;
     }
+    std::shared_ptr<RadeRxBridge> bridge =
+        channel != nullptr ? channel->rxBridge() : nullptr;
     QMetaObject::invokeMethod(
-        worker, "setRadeRxBinding", Qt::QueuedConnection,
-        Q_ARG(int, sliceId), Q_ARG(quint64, generation));
+        worker,
+        [worker, sliceId, bridge]() { worker->setRadeRxRoute(sliceId, bridge); },
+        Qt::QueuedConnection);
 }
 
 void RadioModel::attachRadeRxWorker(RxDspWorker* worker)
 {
-    if (m_dspWorker == worker && m_radeIqConnection
-        && m_radeBindingAppliedConnection) {
-        return;
+    RxDspWorker* const old = m_dspWorker;
+    if (old != nullptr && old != worker) {
+        // The old worker stops feeding every decoder. Queued, because the
+        // routes are its thread's; a worker destroyed first takes them
+        // with it.
+        QMetaObject::invokeMethod(
+            old, [old]() { old->clearRadeRxRoutes(); }, Qt::QueuedConnection);
     }
-    QObject::disconnect(m_radeIqConnection);
-    QObject::disconnect(m_radeBindingAppliedConnection);
-    m_radeIqConnection = {};
-    m_radeBindingAppliedConnection = {};
     m_dspWorker = worker;
     if (worker == nullptr) {
-        // No old worker callback may be admitted after this edge.
-        if (++m_nextRadeRxWorkerGeneration == 0) {
-            ++m_nextRadeRxWorkerGeneration;
-        }
-        m_radeRxTarget.workerGeneration = m_nextRadeRxWorkerGeneration;
         return;
     }
+    // Replay every route onto the new worker. Each install takes a new
+    // epoch on the channel's rings, so nothing queued for the old worker
+    // plays through the new one.
+    for (auto it = m_radeRxRoutes.cbegin(); it != m_radeRxRoutes.cend(); ++it) {
+        if (it->channel && it->slice) {
+            queueRadeRxRoute(it.key(), it->channel);
+        }
+    }
+}
 
-    m_radeIqConnection = connect(
-        worker, &RxDspWorker::radeIqReady, this,
-        [this, worker](const QByteArray& iq, quint64 generation) {
-            onRadeIqReady(worker, iq, generation);
-        }, Qt::QueuedConnection);
-    m_radeBindingAppliedConnection = connect(
-        worker, &RxDspWorker::radeRxBindingApplied, this,
-        [this, worker](quint64 generation) {
-            onRadeRxBindingApplied(worker, generation);
-        }, Qt::QueuedConnection);
+quint64 RadioModel::installRadeRxRoute(int sliceId, RadeChannel* channel,
+                                       SliceModel* slice)
+{
+    if (++m_nextRadeRxRouteSerial == 0) {
+        ++m_nextRadeRxRouteSerial;
+    }
+    m_radeRxRoutes.insert(sliceId,
+                          RadeRxRoute{m_nextRadeRxRouteSerial, channel, slice});
+    channel->setChannelId(sliceId);
+    channel->startRxWorker();
+    channel->setRxGated(mox() && slice->isTxSlice());
+    queueRadeRxRoute(sliceId, channel);
+    if (m_receiveLayoutManaged) {
+        m_restoredRadeReceiveOwner = sliceId;
+        scheduleSettingsSave(slice);
+    }
+    refreshRadeTxSelection(mox());
+    return m_nextRadeRxRouteSerial;
+}
 
-    if (++m_nextRadeRxWorkerGeneration == 0) {
-        ++m_nextRadeRxWorkerGeneration;
+void RadioModel::retireRadeRxRoute(int sliceId, quint64 serial)
+{
+    auto it = m_radeRxRoutes.find(sliceId);
+    if (serial == 0 || it == m_radeRxRoutes.end() || it->serial != serial) {
+        return;
     }
-    m_radeRxTarget.workerGeneration = m_nextRadeRxWorkerGeneration;
-    const QList<PendingRadeRestore> pendingRestores =
-        m_pendingRadeRestores.values();
-    m_pendingRadeRestores.clear();
-    for (const PendingRadeRestore& pending : pendingRestores) {
-        m_pendingRadeRestores.insert(m_radeRxTarget.workerGeneration,
-                                     pending);
+    m_radeRxRoutes.erase(it);
+    queueRadeRxRoute(sliceId, nullptr);
+    if (m_receiveLayoutManaged && m_restoredRadeReceiveOwner == sliceId) {
+        // The saved layout names one RADE receiver, the one chosen last. It
+        // goes with that receiver's decoder, as before; another slice still
+        // decoding does not inherit it (the save asks the operator instead).
+        m_restoredRadeReceiveOwner.reset();
+        scheduleSettingsSave();
     }
-    resetRadeRxSpeechState();
-    if (m_radeRxTarget.channel && m_radeRxTarget.slice
-        && m_audioEngine
-        && canAdmitRadeSlice(m_radeRxTarget.sliceId,
-                             m_radeRxTarget.slice)) {
-        m_audioEngine->setSliceStreaming(m_radeRxTarget.sliceId, false);
-        m_radeRxTarget.admitted = false;
+    refreshRadeTxSelection(mox());
+}
+
+void RadioModel::refreshRadeTxSelection(bool keyed)
+{
+    SliceModel* const bound = txBoundSlice();
+    RadeChannel* txChannel = nullptr;
+    for (auto it = m_radeRxRoutes.cbegin(); it != m_radeRxRoutes.cend(); ++it) {
+        RadeChannel* const channel = it->channel;
+        if (channel == nullptr) {
+            continue;
+        }
+        const bool selected = bound != nullptr && it->slice == bound;
+        channel->setTxSelected(selected);
+        // The transmitting slice hears its own modem; it does not decode it.
+        channel->setRxGated(selected && keyed);
+        if (selected) {
+            txChannel = channel;
+        }
     }
-    queueRadeRxBinding(m_radeRxTarget.channel ? m_radeRxTarget.sliceId : -1,
-                       m_radeRxTarget.workerGeneration);
+    if (m_txWorker) {
+        m_txWorker->setRadeChannel(txChannel);
+        // A TX worker made again after a reconnect or a recovery has none of
+        // the channels' old connections; the selected one hears it here.
+        if (txChannel != nullptr) {
+            connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
+                    txChannel, &RadeChannel::txEncode,
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
+        }
+    }
 }
 
 #ifdef NEREUS_BUILD_TESTS
@@ -14879,184 +14940,6 @@ void RadioModel::wireRxChannelLaneSignals(int channelId)
     });
 }
 
-quint64 RadioModel::publishRadeRxTarget(int sliceId, RadeChannel* channel,
-                                        SliceModel* slice)
-{
-    if (m_radeRxTarget.channel == channel
-        && m_radeRxTarget.slice == slice
-        && m_radeRxTarget.sliceId == sliceId) {
-        return m_radeRxTarget.ownerSerial;
-    }
-
-    const PendingRadeRestore prior{m_radeRxTarget.sliceId,
-                                   m_radeRxTarget.slice};
-    if (++m_nextRadeRxOwnerSerial == 0) {
-        ++m_nextRadeRxOwnerSerial;
-    }
-    if (++m_nextRadeRxWorkerGeneration == 0) {
-        ++m_nextRadeRxWorkerGeneration;
-    }
-    if (prior.slice) {
-        m_pendingRadeRestores.insert(m_nextRadeRxWorkerGeneration, prior);
-    }
-
-    m_radeRxTarget = RadeRxTarget{sliceId, m_nextRadeRxOwnerSerial,
-                                  m_nextRadeRxWorkerGeneration,
-                                  channel, slice, false};
-    if (m_receiveLayoutManaged) {
-        m_restoredRadeReceiveOwner = sliceId;
-        scheduleSettingsSave(slice);
-    }
-    resetRadeRxSpeechState();
-    if (m_audioEngine && canAdmitRadeSlice(sliceId, slice)) {
-        // Do not enroll a RADE owner until a current padded/decoded block is
-        // ready. That keeps a failed/warming codec out of MasterMixer's
-        // no-timeout barrier.
-        m_audioEngine->setSliceStreaming(sliceId, false);
-    }
-    queueRadeRxBinding(sliceId, m_radeRxTarget.workerGeneration);
-    return m_radeRxTarget.ownerSerial;
-}
-
-void RadioModel::clearRadeRxTarget(quint64 ownerSerial)
-{
-    if (ownerSerial == 0 || ownerSerial != m_radeRxTarget.ownerSerial) {
-        return;
-    }
-    if (++m_nextRadeRxWorkerGeneration == 0) {
-        ++m_nextRadeRxWorkerGeneration;
-    }
-    const quint64 generation = m_nextRadeRxWorkerGeneration;
-    if (m_radeRxTarget.slice) {
-        m_pendingRadeRestores.insert(
-            generation, PendingRadeRestore{m_radeRxTarget.sliceId,
-                                            m_radeRxTarget.slice});
-    }
-    m_radeRxTarget = RadeRxTarget{-1, 0, generation, nullptr, nullptr, false};
-    if (m_receiveLayoutManaged) {
-        m_restoredRadeReceiveOwner.reset();
-        scheduleSettingsSave();
-    }
-    resetRadeRxSpeechState();
-    queueRadeRxBinding(-1, generation);
-}
-
-void RadioModel::onRadeRxBindingApplied(RxDspWorker* worker,
-                                        quint64 generation)
-{
-    if (worker != m_dspWorker) {
-        return;
-    }
-    const QList<PendingRadeRestore> priors =
-        m_pendingRadeRestores.values(generation);
-    if (priors.isEmpty()) {
-        return;
-    }
-    m_pendingRadeRestores.remove(generation);
-    for (const PendingRadeRestore& prior : priors) {
-        if (m_audioEngine && canAdmitRadeSlice(prior.sliceId, prior.slice)
-            && !(m_radeRxTarget.slice == prior.slice
-                 && m_radeRxTarget.sliceId == prior.sliceId)) {
-            m_audioEngine->setSliceStreaming(prior.sliceId, true);
-        }
-    }
-}
-
-void RadioModel::onRadeIqReady(RxDspWorker* worker, const QByteArray& iq,
-                               quint64 generation)
-{
-    if (worker != m_dspWorker || generation == 0
-        || generation != m_radeRxTarget.workerGeneration
-        || !m_radeRxTarget.channel || !m_radeRxTarget.slice
-        || !canAdmitRadeSlice(m_radeRxTarget.sliceId,
-                              m_radeRxTarget.slice)) {
-        return;
-    }
-    m_radeRxCodecGenerationInCall = generation;
-    m_radeRxTarget.channel->processIq(iq);
-    m_radeRxCodecGenerationInCall = 0;
-}
-
-void RadioModel::onRadeSpeechReady(RadeChannel* channel, SliceModel* slice,
-                                   int sliceId, const QByteArray& pcm)
-{
-    if (channel == nullptr || slice == nullptr || m_dspWorker == nullptr
-        || m_radeRxCodecGenerationInCall == 0
-        || m_radeRxCodecGenerationInCall
-               != m_radeRxTarget.workerGeneration
-        || m_radeRxTarget.channel != channel
-        || m_radeRxTarget.slice != slice
-        || m_radeRxTarget.sliceId != sliceId
-        || !canAdmitRadeSlice(sliceId, slice)) {
-        return;
-    }
-    constexpr int kBytesPerStereoFrame = 2 * static_cast<int>(sizeof(float));
-    if (pcm.isEmpty() || (pcm.size() % kBytesPerStereoFrame) != 0) {
-        return;
-    }
-    const int frames24k = pcm.size() / kBytesPerStereoFrame;
-    const float* const stereo24k =
-        reinterpret_cast<const float*>(pcm.constData());
-    if (!m_radeRxSpeechL || !m_radeRxSpeechR) {
-        m_radeRxSpeechL =
-            std::make_unique<Resampler>(24000.0, 48000.0, 4096);
-        m_radeRxSpeechR =
-            std::make_unique<Resampler>(24000.0, 48000.0, 4096);
-    }
-    m_radeRxLScratch.resize(static_cast<size_t>(frames24k));
-    m_radeRxRScratch.resize(static_cast<size_t>(frames24k));
-    for (int i = 0; i < frames24k; ++i) {
-        m_radeRxLScratch[static_cast<size_t>(i)] = stereo24k[2 * i];
-        m_radeRxRScratch[static_cast<size_t>(i)] = stereo24k[2 * i + 1];
-    }
-    const QByteArray upL =
-        m_radeRxSpeechL->process(m_radeRxLScratch.data(), frames24k);
-    const QByteArray upR =
-        m_radeRxSpeechR->process(m_radeRxRScratch.data(), frames24k);
-    const int frames48k = std::min(upL.size(), upR.size())
-        / static_cast<int>(sizeof(float));
-    if (frames48k <= 0) {
-        return;
-    }
-
-    // Resampler work can emit diagnostics; re-check the exact identities
-    // before admitting or queueing the resulting block.
-    if (m_dspWorker == nullptr || m_radeRxTarget.channel != channel
-        || m_radeRxTarget.slice != slice
-        || m_radeRxTarget.sliceId != sliceId
-        || !canAdmitRadeSlice(sliceId, slice)) {
-        return;
-    }
-    QByteArray pcm48k(frames48k * kBytesPerStereoFrame, Qt::Uninitialized);
-    float* const interleaved = reinterpret_cast<float*>(pcm48k.data());
-    const float* const left = reinterpret_cast<const float*>(upL.constData());
-    const float* const right = reinterpret_cast<const float*>(upR.constData());
-    for (int i = 0; i < frames48k; ++i) {
-        interleaved[2 * i] = left[i];
-        interleaved[2 * i + 1] = right[i];
-    }
-
-    const quint64 generation = m_radeRxTarget.workerGeneration;
-    if (!m_radeRxTarget.admitted) {
-        m_audioEngine->setSliceStreaming(sliceId, true);
-        m_radeRxTarget.admitted = true;
-    }
-    QMetaObject::invokeMethod(
-        m_dspWorker, "routeRadeSpeech", Qt::QueuedConnection,
-        Q_ARG(int, sliceId), Q_ARG(quint64, generation),
-        Q_ARG(QByteArray, pcm48k));
-}
-
-void RadioModel::onRadeMoxStateChanged(bool active)
-{
-    if (active || m_audioEngine == nullptr || m_radeRxTarget.admitted
-        || !m_radeRxTarget.channel || !m_radeRxTarget.slice
-        || txBoundSlice() != m_radeRxTarget.slice) {
-        return;
-    }
-    m_audioEngine->setSliceStreaming(m_radeRxTarget.sliceId, false);
-}
-
 void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                                  SliceModel* slice)
 {
@@ -15066,33 +14949,67 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
         return;
     }
 
+    // RADE threads (2026-09-30): wiring is idempotent per channel. A second
+    // call for the channel already routed for this slice (radio recovery,
+    // the WDSP-init and restored-owner paths) re-attaches the TX worker and
+    // the route, never the model connections a second time.
+    const auto existing = m_radeRxRoutes.constFind(sliceId);
+    if (existing != m_radeRxRoutes.cend() && existing->channel == channel
+        && existing->slice == slice) {
+        channel->setChannelId(sliceId);
+        channel->startRxWorker();
+        queueRadeRxRoute(sliceId, channel);
+        if (m_txWorker) {
+            connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
+                    channel, &RadeChannel::txEncode,
+                    Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
+        }
+        refreshRadeTxSelection(mox());
+        return;
+    }
+
     // Adapt the channel's per-channel signals to the per-slice-ID
     // RadioModel slots. Captured-sliceId lambdas attach the slice
     // identity at wire time. The slot bodies look the slice up via
     // sliceById(sliceId) so a stale capture (slice removed between
     // emit and dispatch) lands as a safe no-op.
+    //
+    // RADE threads: the receive-side signals now leave the channel's
+    // decoder thread, so they arrive queued. `alive` drops any that arrive
+    // after the channel is gone, so a late lock cannot follow the unlock
+    // its destruction records.
+    const QPointer<RadeChannel> alive(channel);
     connect(channel, &RadeChannel::snrChanged, this,
-            [this, sliceId](float snr) {
-                onRadeSnrChanged(sliceId, snr);
+            [this, sliceId, alive](float snr) {
+                if (alive) {
+                    onRadeSnrChanged(sliceId, snr);
+                }
             });
     connect(channel, &RadeChannel::syncChanged, this,
-            [this, sliceId](bool synced) {
-                onRadeSyncChanged(sliceId, synced);
+            [this, sliceId, alive](bool synced) {
+                if (alive) {
+                    onRadeSyncChanged(sliceId, synced);
+                }
             });
     connect(channel, &RadeChannel::rxTextDecoded, this,
-            [this, sliceId](const QString& callsign, const QString& grid) {
-                onRadeTextDecoded(sliceId, callsign, grid);
+            [this, sliceId, alive](const QString& callsign, const QString& grid) {
+                if (alive) {
+                    onRadeTextDecoded(sliceId, callsign, grid);
+                }
             });
     // Phase 3R L2: freq-offset re-emit for the RadeApplet readout. The
-    // codec sends the offset on every processIq tick while locked, right
-    // after the SNR, whether or not it changed (RadeChannel::processIq);
+    // codec sends the offset right after the SNR while locked, whenever
+    // either changes and every 100 blocks otherwise (RadeChannel::
+    // decodeRxBlock, RADE threads review);
     // the flag re-appends it to each fresh SNR text. It is re-emitted
     // here without de-dup; the slice's setRadeFreqOffsetHz keeps the
     // mirrored value change-only. The captured sliceId routes the
     // per-channel emission into the multi-slice signal surface.
     connect(channel, &RadeChannel::freqOffsetChanged, this,
-            [this, sliceId](float hz) {
-                emit radeFreqOffsetChanged(sliceId, hz);
+            [this, sliceId, alive](float hz) {
+                if (alive) {
+                    emit radeFreqOffsetChanged(sliceId, hz);
+                }
             });
 
     // RADE status for a remote VFO flag (radeStatusVersion 1): the slice
@@ -15102,27 +15019,24 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     // replacement channel starts unsynced and reports its own first lock.
     // The slice is the context, so a removed slice drops the connections.
     connect(channel, &RadeChannel::syncChanged, slice,
-            &SliceModel::setRadeSynced);
+            [slice, alive](bool synced) {
+                if (alive) {
+                    slice->setRadeSynced(synced);
+                }
+            });
     connect(channel, &RadeChannel::freqOffsetChanged, slice,
-            [slice](float hz) {
-                slice->setRadeFreqOffsetHz(static_cast<double>(hz));
+            [slice, alive](float hz) {
+                if (alive) {
+                    slice->setRadeFreqOffsetHz(static_cast<double>(hz));
+                }
             });
     connect(channel, &QObject::destroyed, slice,
             [slice]() { slice->setRadeSynced(false); });
 
-    // Return decoded RADE speech through RxDspWorker so AudioEngine has one
-    // serialized producer for ordinary and RADE RX blocks. The QPointers and
-    // current-target checks in onRadeSpeechReady reject queued emissions from
-    // removed slices and replaced channels.
-    const QPointer<RadeChannel> safeChannel(channel);
-    const QPointer<SliceModel> safeSlice(slice);
-    connect(channel, &RadeChannel::rxSpeechReady, this,
-            [this, safeChannel, safeSlice, sliceId](const QByteArray& pcm) {
-                if (!safeChannel || !safeSlice) {
-                    return;
-                }
-                onRadeSpeechReady(safeChannel, safeSlice, sliceId, pcm);
-            });
+    // RADE threads (2026-09-30): decoded speech no longer comes back here.
+    // The DSP worker feeds the channel's decoder thread and plays its speech
+    // on its own thread (RxDspWorker::processRadeRxBlock), so AudioEngine
+    // still has one serialized producer for ordinary and RADE RX blocks.
 
     // ── Phase 3R K-bench (source-first reframe): TX modem audio ────────
     //
@@ -15250,27 +15164,31 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     // tears down the connection); the worker's m_radeChannel pointer
     // is separately cleared via a channel->destroyed lambda below so
     // a stale pointer can't leak into a subsequent TxPath::Rade tick.
+    //
+    // RADE threads (2026-09-30): every RADE channel hears the microphone
+    // blocks, but only the TX slice's encodes them (RadeChannel::
+    // setTxSelected, set by refreshRadeTxSelection), and that one channel is
+    // the worker's m_radeChannel.
     if (m_txWorker) {
-        m_txWorker->setRadeChannel(channel);
         connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
                 channel, &RadeChannel::txEncode,
-                Qt::QueuedConnection);
+                Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
     }
 
-    // Publish the exact owner before accepting any codec callback. The worker
-    // carries only the stable slice ID plus a unique generation; QObject
-    // lifetime remains on this main-thread side.
-    const quint64 ownerSerial = publishRadeRxTarget(sliceId, channel, slice);
+    // Route the slice before any codec callback: the decoder thread starts
+    // and the DSP worker begins feeding it. Any number of slices may be
+    // routed at once.
+    const quint64 routeSerial = installRadeRxRoute(sliceId, channel, slice);
     // A closed decoder is no longer locked. Record the drop so the flag and
     // the FreeDV reporter hear it, and so the next decoder's first lock on
     // this slice (RadeChannel starts with m_synced false) is not dropped as
     // a repeat by the de-dup in onRadeSyncChanged.
     connect(channel, &QObject::destroyed, this,
-            [this, ownerSerial, sliceId]() {
-                if (m_txWorker) {
-                    m_txWorker->setRadeChannel(nullptr);
-                }
-                clearRadeRxTarget(ownerSerial);
+            [this, routeSerial, sliceId]() {
+                // Retires this channel's route only; a replacement wired
+                // since has its own serial. The TX worker's channel is
+                // re-picked from the routes left.
+                retireRadeRxRoute(sliceId, routeSerial);
                 onRadeSyncChanged(sliceId, false);
             });
 }
@@ -18238,12 +18156,10 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                             qCInfo(lcDsp)
                                 << "RADE: retroactive TxWorker wire-up"
                                    "for slice" << sliceId;
-                            m_txWorker->setRadeChannel(radeCh);
-                            connect(m_txWorker.get(),
-                                    &TxWorkerThread::radeMicBlockReady,
-                                    radeCh, &RadeChannel::txEncode,
-                                    Qt::QueuedConnection);
-                            publishRadeRxTarget(sliceId, radeCh, txRadeSlice);
+                            // RADE threads: wireRadeChannel is idempotent
+                            // for a channel already wired, and re-attaches
+                            // the TxWorker and the receive route.
+                            wireRadeChannel(sliceId, radeCh, txRadeSlice);
                         }
                     }
                 }
@@ -18776,6 +18692,14 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             this, [this](int ddcIndex, const QVector<float>& samples) {
         m_receiverManager->feedIqData(ddcIndex, samples);
     }, Qt::DirectConnection);
+    // One socket drain's I/Q goes to the DSP worker as one post per stream
+    // (ReceiverManager::beginIqBatch). Both run on the connection thread.
+    connect(m_connection, &RadioConnection::iqBatchStarted,
+            m_receiverManager, &ReceiverManager::beginIqBatch,
+            Qt::DirectConnection);
+    connect(m_connection, &RadioConnection::iqBatchFinished,
+            m_receiverManager, &ReceiverManager::endIqBatch,
+            Qt::DirectConnection);
 
     // Phase 3M-4 bench-fix 2026-05-23 (J.J. Boyd KG4VCF): source-first
     // PS pairing.  RadioConnection emits psPairedIqDataReceived once per
@@ -22921,13 +22845,8 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
         channel->setSideband(slice->dspMode() == DSPMode::RADE_U);
         // Decoder ownership survives radio recovery; the TxWorker does not.
         // Existing channel-to-model callbacks stay installed exactly once.
-        if (m_txWorker) {
-            m_txWorker->setRadeChannel(channel);
-            connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
-                    channel, &RadeChannel::txEncode,
-                    Qt::ConnectionType(Qt::QueuedConnection | Qt::UniqueConnection));
-        }
-        publishRadeRxTarget(id, channel, slice);
+        // RADE threads: wireRadeChannel is idempotent for a wired channel.
+        wireRadeChannel(id, channel, slice);
     }
     if (!channel) {
         *error = tr("RADE audio from receiver %1 stays off because its RADE decoder could "

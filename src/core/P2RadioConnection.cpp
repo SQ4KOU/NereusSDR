@@ -118,6 +118,11 @@
 //                WriteUDPFrame case 0, network.c:1276-1294, 1363-1373
 //                [v2.10.3.15]), from the transmit I/Q send thread.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - onReadyRead brackets each socket drain with iqBatchStarted /
+//                iqBatchFinished so ReceiverManager posts the drain's I/Q to
+//                the DSP worker once per stream, and frameReceived is posted
+//                once per drain, not once per packet. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -333,6 +338,7 @@ warren@wpratt.com
 #include <sys/socket.h>
 #endif
 
+#include <QScopeGuard>
 #include <QNetworkDatagram>
 #include <QThread>
 #include <QVariant>
@@ -3184,6 +3190,28 @@ void P2RadioConnection::setTxStepAttenuation(int dB)
 
 void P2RadioConnection::onReadyRead()
 {
+    // One drain is one batch: ReceiverManager holds the stamped I/Q it
+    // queues to the DSP worker until iqBatchFinished, and frameReceived is
+    // emitted once at the end, so the drain costs one post per stream and
+    // one to the main thread rather than one of each per packet. Samples
+    // and their order per stream are unchanged.
+    const bool outerDrain = !m_inIqDrain;
+    if (outerDrain) {
+        m_inIqDrain = true;
+        m_frameReceivedPending = false;
+        emit iqBatchStarted();
+    }
+    const auto finishDrain = qScopeGuard([this, outerDrain] {
+        if (!outerDrain) {
+            return;
+        }
+        m_inIqDrain = false;
+        emit iqBatchFinished();
+        if (m_frameReceivedPending) {
+            m_frameReceivedPending = false;
+            emit frameReceived();
+        }
+    });
     while (m_socket && m_socket->hasPendingDatagrams()) {
         QNetworkDatagram datagram = m_socket->receiveDatagram();
         QByteArray data = datagram.data();
@@ -4443,7 +4471,12 @@ void P2RadioConnection::processIqPacket(const QByteArray& data, int ddcIndex)
 
     // Per-frame activity signal for TitleBar LED (throttled to 10 Hz by
     // the receiver). Design §4.1.
-    emit frameReceived();
+    // Inside a socket drain it is emitted once, at the drain's end.
+    if (m_inIqDrain) {
+        m_frameReceivedPending = true;
+    } else {
+        emit frameReceived();
+    }
 
     // ── Phase 3M-4 Task 17 — multi-stream sync de-interleaver ─────────────
     //

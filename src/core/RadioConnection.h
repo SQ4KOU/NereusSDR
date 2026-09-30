@@ -856,6 +856,15 @@ signals:
     // samples: interleaved float I/Q pairs, normalized to [-1.0, 1.0].
     void iqDataReceived(int hwReceiverIndex, const QVector<float>& samples);
 
+    // Bracket one socket drain on the connection thread (Protocol 2's
+    // onReadyRead). Every iqDataReceived between them belongs to that
+    // drain. RadioModel connects them DirectConnection to ReceiverManager's
+    // beginIqBatch / endIqBatch, which posts the drain's I/Q to the DSP
+    // worker once per stream. A connection that never emits them keeps one
+    // post per packet.
+    void iqBatchStarted();
+    void iqBatchFinished();
+
     // Phase 3M-4 bench-fix 2026-05-23 (J.J. Boyd KG4VCF): per-packet paired
     // PureSignal I/Q streams.
     //

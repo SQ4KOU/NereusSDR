@@ -107,6 +107,9 @@
 //                 thread, and its setters post their WDSP calls to the lane
 //                 instead of waiting for the next mic block. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 : RADE threads by J.J. Boyd (KG4VCF): the RADE branch emits
+//                 radeMicBlockReady only while keyed (setRadeMicKeyed).
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -861,7 +864,18 @@ void TxWorkerThread::dispatchOneBlock()
                     << "(16k samples=" << out16k << ")";
                 ++s_radeMicFirstEmitLogged;
             }
-            emit radeMicBlockReady(payload);
+            // RADE threads (2026-09-30): only while keyed. The path stays
+            // Rade between overs, and each block posted here runs txEncode
+            // on the main thread. FreeDV likewise runs its transmit
+            // pipeline only while transmitting (half duplex):
+            // From freedv-gui src/pipeline/TxRxThread.cpp:754-755 [@a4ae053] (condition shortened)
+            //   bool tmpHalfDuplex = g_half_duplex.load(std::memory_order_acquire);
+            //   if (((g_nSoundCards == 2) && ((tmpHalfDuplex && g_tx.load(std::memory_order_acquire)) || !tmpHalfDuplex || ...
+            // The end-of-over tail needs no microphone: its frame and
+            // silence are queued whole at the release (queueEndOfOver).
+            if (m_radeMicKeyed.load(std::memory_order_acquire)) {
+                emit radeMicBlockReady(payload);
+            }
         }
         // r8brain warm-up tick (out16k == 0) just skips the RADE encode;
         // the WDSP TXA chain still runs below with whatever RADE audio
@@ -1223,6 +1237,12 @@ void TxWorkerThread::setAntiVoxDetectorTau(double seconds)
 void TxWorkerThread::setCurrentTxPath(TxPath path)
 {
     m_currentTxPath.store(path, std::memory_order_release);
+}
+
+// RADE threads (2026-09-30), NereusSDR-original: see the header.
+void TxWorkerThread::setRadeMicKeyed(bool keyed)
+{
+    m_radeMicKeyed.store(keyed, std::memory_order_release);
 }
 
 #ifdef NEREUS_BUILD_TESTS

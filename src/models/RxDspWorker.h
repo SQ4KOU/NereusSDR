@@ -21,6 +21,15 @@
 //                 NereusSDR-original; no Thetis counterpart. Later the same
 //                 day: the external-diversity legs are stamped and bounded
 //                 too (processStampedExternalDiversityIqBatch).
+//   2026-09-30 - RADE threads: every RADE slice has its own route
+//                 (setRadeRxRoute) to its channel's decoder thread through
+//                 lock-free rings; the DSP thread feeds each block and plays
+//                 each slice's decoded block exactly radeLateBoundBlocks()
+//                 later, or silence when it is not back, so a late decoder
+//                 never holds the mixer. Replaces the single RADE binding and
+//                 its main-thread hop (radeIqReady, routeRadeSpeech).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -78,6 +87,7 @@
 #include <atomic>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include <QObject>
 #include <QVector>
@@ -87,6 +97,7 @@ namespace NereusSDR {
 class WdspEngine;
 class AudioEngine;
 class Resampler;
+class RadeRxBridge;
 struct AudioPriorityToken;   // src/core/audio/RealtimeAudioPriority.h
 
 // RxDspWorker runs the per-receiver I/Q → WDSP → audio processing step
@@ -330,17 +341,19 @@ public slots:
     /// chunk size no channel is configured for.
     void clearStreamInputChunks();
 
-    // Select the single slice whose decoded WDSP audio feeds RADE. This
-    // slot runs on the DSP thread. A unique generation belongs to one
-    // RadioModel target/worker epoch; queued IQ and speech carrying an old
-    // generation are rejected after a mode swap, slice removal or worker
-    // replacement. sliceId < 0 disables the route.
-    void setRadeRxBinding(int sliceId, quint64 generation);
+public:
+    // RADE threads (2026-09-30). Route one slice's decoded WDSP audio to its
+    // RADE decoder thread, or (bridge null) back to the speakers. DSP thread
+    // only: RadioModel queues it there. Any number of slices may be routed
+    // at once. Each install starts a new epoch on the bridge, so a record
+    // left from an earlier route never fills one of this route's slots.
+    void setRadeRxRoute(int sliceId, std::shared_ptr<RadeRxBridge> bridge);
+    // DSP thread: drop every RADE route (the worker is being detached).
+    void clearRadeRxRoutes();
+    // Any thread: how many slices are routed to RADE.
+    int radeRxRouteCount() const { return m_radeRxRouteCount.load(std::memory_order_acquire); }
 
-    // Return one decoded 48 kHz stereo speech block to AudioEngine on the
-    // same DSP thread that publishes every ordinary RX block. The binding
-    // check prevents late channel events from entering a replacement slice.
-    void routeRadeSpeech(int sliceId, quint64 generation, QByteArray pcm48k);
+public slots:
 
     // 2026-05-25 KG4VCF bench fix: real-time scheduling priority for
     // audio DSP work.  Connected by RadioModel to m_dspThread's
@@ -409,19 +422,6 @@ signals:
     //  the chain, and still sets DEXP's block geometry. The retired feed's
     //  cadence argument is preserved at the bottom of the drain loop in
     //  RxDspWorker.cpp.)
-
-    // Phase 3R K-bench: per-batch RADE feed. Emitted from the DSP
-    // thread with a 24 kHz interleaved-float32 I/Q buffer (real=audio,
-    // imag=0) that mirrors the freedv-gui / AetherSDR RADE input
-    // shape. RadioModel validates generation and QObject identities before
-    // forwarding it to the current RadeChannel.
-    void radeIqReady(QByteArray iq, quint64 generation);
-
-    // Acknowledges that the DSP thread has crossed a binding boundary. The
-    // main thread may restore the prior slice to MasterMixer only after this
-    // edge; restoring earlier lets a late block from the old binding enroll a
-    // removed or reused slice ID.
-    void radeRxBindingApplied(quint64 generation);
 
 private:
     WdspEngine*      m_wdspEngine{nullptr};
@@ -605,25 +605,42 @@ private:
     int m_lastEmittedInSize{-1};
     int m_lastEmittedOutSize{-1};
 
-    // Phase 3R K-bench: RADE RX path. Both fields are worker-thread-owned.
-    // When generation is non-zero, processIqBatch routes only the selected
-    // slice through the decimator and suppresses only that slice's ordinary
-    // audio. All other slices continue through AudioEngine.
+    // Phase 3R K-bench: RADE RX path, worker-thread-owned. A routed slice
+    // goes through the decimator to its decoder, and only that slice's
+    // ordinary audio is replaced. All other slices continue through
+    // AudioEngine.
     //
-    // The decimators run at the configured radio rate (m_sampleRate,
-    // typically 48 / 96 / 192 kHz) and produce 24 kHz I/Q matching
-    // RadeChannel's processIq expectation. Built lazily on first use
-    // and rebuilt if m_sampleRate changes. Two parallel resamplers
-    // (one per leg) so the I and Q channels stay aligned.
-    int                         m_radeRxSliceId{-1};
-    quint64                     m_radeRxGeneration{0};
-    std::unique_ptr<Resampler>  m_radeRxDownsamplerI;
-    std::unique_ptr<Resampler>  m_radeRxDownsamplerQ;
-    double                      m_radeRxDownsamplerSrcRate{0.0};
-    // Scratch for the float-mono I/Q presented to RadeChannel::processIq
-    // as interleaved stereo float32 at 24 kHz (matching RadeChannel's
-    // input convention from RadeChannel::processIq).
-    QByteArray                  m_radeRxIqScratch;
+    // RADE threads (2026-09-30): one route per RADE slice, each with its
+    // own resamplers so no slice's filter state reaches another's.
+    struct RadeRxRoute {
+        std::shared_ptr<RadeRxBridge> bridge;
+        quint32 epoch{0};
+        quint32 seq{0};  // this route's block counter
+        int fedBlocks{0};  // blocks fed so far, up to the late bound
+        // 48 -> 24 kHz for the codec's input (was m_radeRxDownsamplerI), and
+        // 24 -> 48 kHz for its speech, per leg (was RadioModel's
+        // m_radeRxSpeechL / R).
+        std::unique_ptr<Resampler> down;
+        std::unique_ptr<Resampler> upL;
+        std::unique_ptr<Resampler> upR;
+        // 48 kHz stereo speech waiting to play; each block takes exactly
+        // outSize frames from it, zero-padded when short.
+        std::vector<float> play;
+    };
+    // Routes one block of a RADE slice and delivers that slice's audio for
+    // the block. Returns false when the slice has no route.
+    bool processRadeRxBlock(int sliceIdx, const float* audio48k, int outSize);
+
+    std::unordered_map<int, RadeRxRoute> m_radeRxRoutes;
+    std::atomic<int>            m_radeRxRouteCount{0};
+    // Scratch for the (audio, 0) pairs presented to the codec as
+    // interleaved stereo float32 at 24 kHz (RadeChannel::processIq's input
+    // convention), and for the speech coming back.
+    std::vector<float>          m_radeRxIqScratch;
+    std::vector<float>          m_radeRxDueScratch;
+    std::vector<float>          m_radeRxLegL;
+    std::vector<float>          m_radeRxLegR;
+    std::vector<float>          m_radeRxOutScratch;
 };
 
 } // namespace NereusSDR

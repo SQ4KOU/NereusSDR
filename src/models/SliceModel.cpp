@@ -8,6 +8,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - setDspMode's RADE decoder start and stop moved, unchanged,
+//                 into applyRadeModeChange, which restoreFromSettings now
+//                 runs too: a restored or band-changed RADE slice played its
+//                 sideband audio with no decoder. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-29 - radeSynced and radeFreqOffsetHz, the RADE decoder's sync
 //                 and frequency offset; sync clears on leaving a RADE
 //                 sideband. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -196,6 +201,7 @@
 #include "models/RadioModel.h"
 
 #include <QFile>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 
@@ -337,13 +343,8 @@ void SliceModel::applyFrequency(double freq)
 // Demodulation mode
 // ---------------------------------------------------------------------------
 
-void SliceModel::setDspMode(DSPMode mode)
+void SliceModel::applyRadeModeChange(DSPMode oldMode, DSPMode newMode)
 {
-    if (holdsListenerWrite(dspMode(), mode)) { return; }
-    const bool modeChanged = (m_dspMode != mode);
-    const DSPMode oldMode = m_dspMode;
-    m_dspMode = mode;
-
     // ── Phase 3R J3 + K-bench: RADE channel-additive lifecycle ────────────
     //
     // RADE_U / RADE_L are NereusSDR-native DSPModes (J1).  Original J3
@@ -376,106 +377,120 @@ void SliceModel::setDspMode(DSPMode mode)
     // a direct pointer on SliceModel; this keeps the construction graph
     // unchanged (slices are parented to RadioModel; see RadioModel.cpp:
     // 1374 [Phase 3R J3] new SliceModel(this)).
-    if (modeChanged) {
-        const auto isRade = [](DSPMode m) {
-            return m == DSPMode::RADE_U || m == DSPMode::RADE_L;
-        };
+    const auto isRade = [](DSPMode m) {
+        return m == DSPMode::RADE_U || m == DSPMode::RADE_L;
+    };
 
-        // 2026-05-12 bench: clear last RADE-decoded speaker callsign
-        // when leaving the *current* RADE sideband.  Two cases now
-        // covered (refined from 2026-05-11 design which kept the
-        // callsign sticky on U <-> L swap):
-        //   1. RADE -> non-RADE: leaving RADE entirely.
-        //   2. RADE_U <-> RADE_L: still in RADE, but the channel is
-        //      destroyed and recreated below so the decoder state is
-        //      no longer associated with the old caller's transmission.
-        // Trigger: oldMode was a RADE sideband AND mode actually changed
-        // (we're already inside the modeChanged guard).
-        if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
-            m_lastRadeRxCallsign.clear();
-            emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
-        }
-        // The same two cases end the old decoder (it is destroyed below),
-        // and the VFO flag drops its sync dot (VfoWidget::setRadeActive):
-        // the next decoder reports its own sync.
-        if (isRade(oldMode)) {
-            setRadeSynced(false);
-        }
+    // 2026-05-12 bench: clear last RADE-decoded speaker callsign
+    // when leaving the *current* RADE sideband.  Two cases now
+    // covered (refined from 2026-05-11 design which kept the
+    // callsign sticky on U <-> L swap):
+    //   1. RADE -> non-RADE: leaving RADE entirely.
+    //   2. RADE_U <-> RADE_L: still in RADE, but the channel is
+    //      destroyed and recreated below so the decoder state is
+    //      no longer associated with the old caller's transmission.
+    // Trigger: oldMode was a RADE sideband AND mode actually changed
+    // (we're already inside the modeChanged guard).
+    if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
+        m_lastRadeRxCallsign.clear();
+        emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+    }
+    // The same two cases end the old decoder (it is destroyed below),
+    // and the VFO flag drops its sync dot (VfoWidget::setRadeActive):
+    // the next decoder reports its own sync.
+    if (isRade(oldMode)) {
+        setRadeSynced(false);
+    }
 
-        // 2026-05-12 bench: stop the idle-clear timer when leaving
-        // RADE.  The clear above already happened; letting the timer
-        // fire would just re-emit lastRadeRxCallsignChanged("") and
-        // snrDbChanged(NaN) needlessly.  Also stop on RADE_U <-> RADE_L
-        // swaps for the same reason.
-        if (isRade(oldMode) && m_radeIdleClearTimer) {
-            m_radeIdleClearTimer->stop();
-        }
+    // 2026-05-12 bench: stop the idle-clear timer when leaving
+    // RADE.  The clear above already happened; letting the timer
+    // fire would just re-emit lastRadeRxCallsignChanged("") and
+    // snrDbChanged(NaN) needlessly.  Also stop on RADE_U <-> RADE_L
+    // swaps for the same reason.
+    if (isRade(oldMode) && m_radeIdleClearTimer) {
+        m_radeIdleClearTimer->stop();
+    }
 
-        auto* radio = qobject_cast<RadioModel*>(parent());
-        // Remote-daemon R2 Task 5: the only model-to-engine reach-through
-        // in src/models outside RadioModel itself. Gate BEFORE any
-        // channel creation, not merely before the resulting emit --
-        // WdspEngine::createRadeChannel carries no isInitialized guard,
-        // so a mirrored RADE mode delta on a Role::Remote model (whose
-        // WdspEngine is constructed but never initialize()'d) would
-        // otherwise construct and start() a live RadeChannel -- a real
-        // vocoder -- on a machine with no DSP role at all. See design
-        // addendum docs/architecture/2026-08-03-remote-daemon-r2-r3-
-        // design-addendum.md section 4.1.
-        if (radio != nullptr && radio->role() != RadioModel::Role::Remote) {
-            WdspEngine* engine = radio->wdspEngine();
-            if (engine != nullptr) {
-                const int channelId = m_sliceIndex;
-                const bool oldIsRade = isRade(oldMode);
-                const bool newIsRade = isRade(mode);
+    auto* radio = qobject_cast<RadioModel*>(parent());
+    // Remote-daemon R2 Task 5: the only model-to-engine reach-through
+    // in src/models outside RadioModel itself. Gate BEFORE any
+    // channel creation, not merely before the resulting emit --
+    // WdspEngine::createRadeChannel carries no isInitialized guard,
+    // so a mirrored RADE mode delta on a Role::Remote model (whose
+    // WdspEngine is constructed but never initialize()'d) would
+    // otherwise construct and start() a live RadeChannel -- a real
+    // vocoder -- on a machine with no DSP role at all. See design
+    // addendum docs/architecture/2026-08-03-remote-daemon-r2-r3-
+    // design-addendum.md section 4.1.
+    if (radio != nullptr && radio->role() != RadioModel::Role::Remote) {
+        WdspEngine* engine = radio->wdspEngine();
+        // restoreReceiveState's offline seam starts its RADE decoder at
+        // admission instead (m_radeStartDeferredToAdmission).
+        if (engine != nullptr && !m_radeStartDeferredToAdmission) {
+            const int channelId = m_sliceIndex;
+            const bool oldIsRade = isRade(oldMode);
+            const bool newIsRade = isRade(newMode);
 
-                auto wireAndStartRade = [&](RadeChannel* radeCh,
-                                            const char* context) {
-                    if (radeCh == nullptr) return;
-                    radeCh->setSideband(mode == DSPMode::RADE_U);
-                    radio->wireRadeChannel(channelId, radeCh, this);
-                    const QString modelPath = radeModelPath();
-                    if (!radeCh->start(modelPath)) {
-                        qCWarning(lcDsp)
-                            << "SliceModel" << m_sliceIndex
-                            << context
-                            << ": RadeChannel.start() failed for"
-                            << modelPath
-                            << "- channel-swap proceeds but RADE will"
-                               " not decode";
-                    }
-                };
-
-                if (oldIsRade && !newIsRade) {
-                    // RADE -> any WDSP mode: tear down the RadeChannel
-                    // only.  K-bench: WDSP RxChannel was running the
-                    // whole time as the demod front-end; leave it
-                    // alone.  WDSP-facing mode will retune from
-                    // USB/LSB (the wdspModeFor mapping) to the new
-                    // mode via the dspModeChanged -> rxCh->setMode
-                    // path in RadioModel.cpp:5202-5206.
-                    engine->destroyRadeChannel(channelId);
-                } else if (!oldIsRade && newIsRade) {
-                    // Any WDSP mode -> RADE: create RadeChannel
-                    // alongside the still-running RxChannel.  Wire
-                    // its signals into RadioModel's per-slice slot
-                    // graph and start it with the configured model
-                    // path.  WDSP-facing mode will map to USB/LSB
-                    // via the dspModeChanged path.
-                    wireAndStartRade(engine->createRadeChannel(channelId),
-                                     "setDspMode(RADE)");
-                } else if (oldIsRade && newIsRade) {
-                    // RADE_U <-> RADE_L: destroy + recreate the
-                    // RadeChannel so the sideband flag is set fresh
-                    // on a clean instance.  RxChannel is untouched;
-                    // the dspModeChanged path retunes it USB <-> LSB
-                    // through wdspModeFor.
-                    engine->destroyRadeChannel(channelId);
-                    wireAndStartRade(engine->createRadeChannel(channelId),
-                                     "setDspMode(RADE U<->L)");
+            auto wireAndStartRade = [&](RadeChannel* radeCh,
+                                        const char* context) {
+                if (radeCh == nullptr) return;
+                radeCh->setSideband(newMode == DSPMode::RADE_U);
+                radio->wireRadeChannel(channelId, radeCh, this);
+                const QString modelPath = radeModelPath();
+                if (!radeCh->start(modelPath)) {
+                    qCWarning(lcDsp)
+                        << "SliceModel" << m_sliceIndex
+                        << context
+                        << ": RadeChannel.start() failed for"
+                        << modelPath
+                        << "- channel-swap proceeds but RADE will"
+                           " not decode";
                 }
+            };
+
+            if (oldIsRade && !newIsRade) {
+                // RADE -> any WDSP mode: tear down the RadeChannel
+                // only.  K-bench: WDSP RxChannel was running the
+                // whole time as the demod front-end; leave it
+                // alone.  WDSP-facing mode will retune from
+                // USB/LSB (the wdspModeFor mapping) to the new
+                // mode via the dspModeChanged -> rxCh->setMode
+                // path in RadioModel.cpp:5202-5206.
+                engine->destroyRadeChannel(channelId);
+            } else if (!oldIsRade && newIsRade) {
+                // Any WDSP mode -> RADE: create RadeChannel
+                // alongside the still-running RxChannel.  Wire
+                // its signals into RadioModel's per-slice slot
+                // graph and start it with the configured model
+                // path.  WDSP-facing mode will map to USB/LSB
+                // via the dspModeChanged path.
+                wireAndStartRade(engine->createRadeChannel(channelId),
+                                 "setDspMode(RADE)");
+            } else if (oldIsRade && newIsRade) {
+                // RADE_U <-> RADE_L: destroy + recreate the
+                // RadeChannel so the sideband flag is set fresh
+                // on a clean instance.  RxChannel is untouched;
+                // the dspModeChanged path retunes it USB <-> LSB
+                // through wdspModeFor.
+                engine->destroyRadeChannel(channelId);
+                wireAndStartRade(engine->createRadeChannel(channelId),
+                                 "setDspMode(RADE U<->L)");
             }
         }
+    }
+}
+
+void SliceModel::setDspMode(DSPMode mode)
+{
+    if (holdsListenerWrite(dspMode(), mode)) { return; }
+    const bool modeChanged = (m_dspMode != mode);
+    const DSPMode oldMode = m_dspMode;
+    m_dspMode = mode;
+
+    if (modeChanged) {
+        // RADE threads (2026-09-30): the RADE start and stop below lives in
+        // applyRadeModeChange, which restoreFromSettings runs too.
+        applyRadeModeChange(oldMode, mode);
     }
 
     // Phase 3J-1 closeout Item 4 (2026-05-12): per-(band, mode) LastFilter.
@@ -2621,7 +2636,12 @@ bool SliceModel::restoreReceiveState(double frequencyHz, DSPMode mode)
     // before DSP admission.  It also restores per-MAC NNR through its stable
     // slice identity.  The offline gate above is required because an NNR
     // applier may otherwise reach a live RxChannel.
-    restoreFromSettings(manifestBand);
+    {
+        // No radio and no DSP yet: the restored layout starts its RADE
+        // decoder at admission (RadioModel::activateRestoredRadeReceiveOwner).
+        const QScopedValueRollback<bool> deferRade(m_radeStartDeferredToAdmission, true);
+        restoreFromSettings(manifestBand);
+    }
 
     // The layout manifest is authoritative for tuning.  Do not call the
     // setters: a saved Locked flag must not veto the seed, and setDspMode()
@@ -2862,7 +2882,14 @@ void SliceModel::restoreFromSettings(Band band)
         // Directly assign mode without calling setDspMode() (which also
         // resets the filter). Emit the signal manually to keep observers in sync.
         if (m_dspMode != mode) {
+            const DSPMode oldMode = m_dspMode;
             m_dspMode = mode;
+            // RADE threads (2026-09-30): the same RADE decoder start and
+            // stop as setDspMode. A band saved in RADE, or a device's slice
+            // made again from its saved band, otherwise read RADE and played
+            // the sideband's audio with no decoder (and a band saved in SSB
+            // kept a RADE slice's decoder).
+            applyRadeModeChange(oldMode, mode);
             emit dspModeChanged(mode);
         }
     }
