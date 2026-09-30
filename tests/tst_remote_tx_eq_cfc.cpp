@@ -356,6 +356,7 @@ private slots:
     void eqRoundTripsToTheCoresTxChannel();
     void parametricCurveReachesTheCoresTxChannel();
     void cfcPhaseRotatorAndCessbRoundTrip();
+    void lateResultKeepsTheNewerCfcCurve();
     void levelerAndAlcRoundTrip();
     void eachGroupIsRefusedOnTheAir();
     void remoteEqDialogShowsAndChangesTheCoresValues();
@@ -661,6 +662,38 @@ void TstRemoteTxEqCfc::cfcPhaseRotatorAndCessbRoundTrip()
 
     coreTx.setCfcCompression(3, 16);
     QTRY_COMPARE(windowTx.cfcCompression(3), 16);
+}
+
+// The cfcPhaseRotatorAndCessbRoundTrip failure under load, made
+// deterministic: the Core's answer to an earlier write (the pre-comp)
+// arrives after the window has saved a CFC curve and before the window
+// sends it. The answer names the value the window already holds, so it
+// is no change; it must not re-encode the pending curve, or the window
+// sends the Core a curve nobody saved.
+void TstRemoteTxEqCfc::lateResultKeepsTheNewerCfcCurve()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    TransmitModel& windowTx = s.window.transmitModel();
+
+    // The Core's answers wait, as on a slow link.
+    s.coreEnd->setHoldsOutgoing(true);
+    windowTx.setCfcPrecompDb(6);
+    QTRY_COMPARE(coreTx.cfcPrecompDb(), 6);
+
+    // pairedCfcBlob's pre-comp is 6: the curve leaves it where it was.
+    const QString cfcCurve = pairedCfcBlob(10);
+    windowTx.setCfcParaEqData(cfcCurve);
+    QCOMPARE(windowTx.cfcPrecompDb(), 6);
+
+    // The pre-comp answer lands before the window's next send.
+    s.coreEnd->setHoldsOutgoing(false);
+    QCoreApplication::sendPostedEvents();
+    QCOMPARE(windowTx.cfcParaEqData(), cfcCurve);
+
+    QTRY_COMPARE(coreTx.cfcParaEqData(), cfcCurve);
+    QCOMPARE(windowTx.cfcParaEqData(), cfcCurve);
 }
 
 // B5.9: Setup > DSP > AGC/ALC's TX Leveler and TX ALC.

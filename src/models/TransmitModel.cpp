@@ -304,6 +304,10 @@
 //   2026-09-30 - Radio codec review: setLineInBoost holds the value on
 //                 the 1.5 dB grid, the entry the radio is sent. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - CFC echo: a paired-curve ten-band or scalar write the
+//                 curve already holds keeps the curve unchanged, so a late
+//                 Core answer cannot overwrite a newer unsent curve.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TransmitModel.h"
@@ -324,6 +328,7 @@
 #include <array>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 #include <cmath>
@@ -3779,6 +3784,21 @@ bool TransmitModel::updatePairedCfcArray(CfcField field, const std::array<int, 1
     CfcProfile::Profile p;
     if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
     if (p.f.size() != 10) { return true; }
+    // The curve already holds these values (as its ten-band mirrors read
+    // them): no change, so the saved curve is kept as it is. Re-encoding
+    // it would change a curve nobody edited, and a late answer from the
+    // Core that repeats a value would then overwrite a newer curve still
+    // waiting to be sent (the cfcPhaseRotatorAndCessbRoundTrip load
+    // failure).
+    bool unchanged = true;
+    for (int i = 0; i < 10 && unchanged; ++i) {
+        const auto k = static_cast<std::size_t>(i);
+        const double held = field == CfcField::Frequency ? p.f[k]
+            : field == CfcField::Compression             ? p.g[k]
+                                                          : p.e[k];
+        unchanged = std::lround(held) == values[k];
+    }
+    if (unchanged) { return true; }
     for (int i = 0; i < 10; ++i) {
         const double value = values[static_cast<std::size_t>(i)];
         if (field == CfcField::Frequency) {
@@ -3803,6 +3823,18 @@ bool TransmitModel::updatePairedCfc(CfcField field, int index, double value)
 {
     CfcProfile::Profile p;
     if (!CfcProfile::decode(m_cfcParaEqData, p)) { return false; }
+    // As updatePairedCfcArray: a value the curve already holds (as its
+    // integer mirror reads it) is no change, and the curve is kept.
+    const auto held = [&p, field, index]() -> std::optional<double> {
+        if (field == CfcField::Precomp) { return p.precompDb; }
+        if (field == CfcField::PostEqGlobal) { return p.postEqGainDb; }
+        if (p.f.size() != 10 || index < 0 || index >= 10) { return std::nullopt; }
+        const auto k = static_cast<std::size_t>(index);
+        if (field == CfcField::Frequency) { return p.f[k]; }
+        if (field == CfcField::Compression) { return p.g[k]; }
+        return p.e[k];
+    }();
+    if (held && std::lround(*held) == std::lround(value)) { return true; }
     if (field == CfcField::Precomp) { p.precompDb = value; }
     else if (field == CfcField::PostEqGlobal) { p.postEqGainDb = value; }
     else {
