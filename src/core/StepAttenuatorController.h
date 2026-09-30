@@ -339,7 +339,8 @@ public:
     // linked). Its own value is clamped to rx2MaxAttenuation().
     int rx2AttenuatorDb() const noexcept { return m_rx2AttDb; }
     void setRx2Attenuation(int dB);
-    // RX2's own step attenuator is the second ADC's 5-bit field, 0-31 dB:
+    // Deliberate divergence (operator decision 2026-09-30): RX2's own step
+    // attenuator is the second ADC's 5-bit field, 0-31 dB:
     // TAPR-OpenHPSDR-Firmware @e7c6584 Angelia.v:2319 (C1[4:0] input
     // attenuator 2), Orion.v:2295 ("0-31 dB") and :2419. Thetis lets RX2
     // reach 61 on an Alex board (console.cs:11176-11189 [v2.10.3.15],

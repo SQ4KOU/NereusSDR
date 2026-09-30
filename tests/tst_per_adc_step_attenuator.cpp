@@ -29,6 +29,9 @@
 //   2026-09-30: Level Cal 2 review: RX2 above its 0-31 dB field never
 //               wraps on either protocol. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: Level Cal 2 re-review: a stored RX2 value above 31 loads
+//               and restores as 31. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -988,6 +991,47 @@ private slots:
         QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
         QCOMPARE(rx2Wire(), 31 | enable);
         ctrl.setRadioConnection(nullptr);
+    }
+
+    // Level Cal 2 re-review: a stored RX2 value above 31 (saved before RX2
+    // was held to its field, on an Alex board's 61 dB range) comes back as
+    // 31, both when the settings load and when a band restores it, and the
+    // radio is sent 31.
+    void rx2StoredAboveItsFieldLoadsAndRestoresAs31()
+    {
+        const QString mac = QStringLiteral("02:00:00:00:ad:35");
+        startFromNothing(mac);
+        AppSettings& s = AppSettings::instance();
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx2Value"), 45);
+        s.setHardwareValue(mac, QStringLiteral("options/stepAtt/rx2Band/")
+                                    + bandKeyName(Band::Band40m), 50);
+        s.save();
+
+        StepAttenuatorController ctrl;
+        ctrl.setBoardIdentity(HPSDRHW::Angelia, HPSDRModel::ANAN100D, true);
+        ctrl.setTickTimerEnabled(false);
+        ctrl.setMinAttenuation(0);
+        ctrl.setMaxAttenuation(61);
+        RecordingConnection radio;
+        ctrl.setAdcRouting(0, 1, Band::Band20m, false, 1u << 1);
+        ctrl.setRadioConnection(&radio);
+        ctrl.loadSettings(mac);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        ctrl.setRx2StepAttEnabled(true);
+
+        ctrl.setRx2Attenuation(10);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 10);
+        radio.sends.clear();
+        ctrl.setBandRestoreToRadio(true);
+        ctrl.setAdcRouting(0, 1, Band::Band40m, false, 1u << 1);
+        QCOMPARE(ctrl.rx2AttenuatorDb(), 31);
+        QVERIFY2(radio.sends.contains(QPair<int, int>(1, 31)),
+                 qPrintable(QStringLiteral("%1 sends").arg(radio.sends.size())));
+        for (const auto& send : radio.sends) {
+            QVERIFY(send.second <= 31 || send.first != 1);
+        }
+        ctrl.setRadioConnection(nullptr);
+        startFromNothing(mac);
     }
 
     // Level Cal 2 review: a write of RX2's value above 31 through stepAtt

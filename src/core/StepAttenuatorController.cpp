@@ -1733,8 +1733,10 @@ void StepAttenuatorController::applyAttToHardware(int dB)
 //
 // Above 31 dB on an Alex board Thetis also switches the Alex attenuator and
 // sends RX1's value + 2 (console.cs 11044-11056); sendRx1Attenuation does
-// that on a known board (Level Cal). RX2's value goes as it is: Thetis's RX2
-// setter has no Alex attenuator of its own.
+// that on a known board (Level Cal). RX2's setter has no Alex attenuator of
+// its own, so RX2's own value is held to the second ADC's 0-31 dB field
+// (rx2MaxAttenuation, kRx2StepAttMaxDb; Deliberate divergence (operator
+// decision 2026-09-30)) rather than sent + 2 for the gateware to wrap.
 
 bool StepAttenuatorController::adcUsesRx1Attenuator(int adc) const noexcept
 {
