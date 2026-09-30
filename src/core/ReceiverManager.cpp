@@ -24,6 +24,9 @@
 //                 stream, not one per packet, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
 //                 NereusSDR-original.
+//   2026-09-30 - reset() drops a held batch and ends batching. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -167,6 +170,16 @@ void ReceiverManager::reset()
     m_rx2Enabled = false;
     m_rxAdcCtrl1 = 0;
     m_rxAdcCtrl2 = 0;
+
+    // RADE threads review: a batch the connection held when it went away
+    // belongs to receivers that are gone; drop it, and end the batch, so
+    // nothing held is posted after the reset and no thread stays batching.
+    // Lock order as in feedIqData: the routing lock, then the batch lock.
+    {
+        QMutexLocker batchLock(&m_iqBatchMutex);
+        m_iqBatchThread.store(nullptr, std::memory_order_release);
+        m_heldIq.clear();
+    }
 
     for (int idx : indices) {
         emit receiverDestroyed(idx);

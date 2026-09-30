@@ -176,6 +176,48 @@ private slots:
         receivers.feedIqData(3, packet(238, 0.9f));
         QCOMPARE(stamped.count(), 1);
     }
+
+    // A reset (a disconnect) in the middle of a drain drops the held
+    // samples of the receivers it removes and ends the batch: nothing held
+    // is posted afterwards, and the next feed on the same thread is per
+    // packet again.
+    void resetDropsTheHeldBatchAndEndsBatching()
+    {
+        ReceiverManager receivers;
+        const int rx = receivers.createReceiver();
+        receivers.setDdcMapping(rx, 3);
+        receivers.activateReceiver(rx);
+        QSignalSpy stamped(&receivers, &ReceiverManager::iqDataForReceiverStamped);
+        QSignalSpy hardware(&receivers, &ReceiverManager::hardwareIqDataStamped);
+
+        receivers.beginIqBatch();
+        receivers.feedIqData(3, packet(238, 0.3f));
+        receivers.feedIqData(3, packet(238, 0.4f));
+        QCOMPARE(stamped.count(), 0);
+        QCOMPARE(hardware.count(), 0);
+
+        receivers.reset();
+        receivers.endIqBatch();  // the drain's own end, after the reset
+        QCOMPARE(stamped.count(), 0);
+        QCOMPARE(hardware.count(), 0);
+
+        // Batching ended with the reset: a new receiver's packet on this
+        // thread goes out at once, with none of the dropped samples.
+        const int again = receivers.createReceiver();
+        receivers.setDdcMapping(again, 3);
+        receivers.activateReceiver(again);
+        receivers.beginIqBatch();
+        receivers.reset();
+        const int third = receivers.createReceiver();
+        receivers.setDdcMapping(third, 3);
+        receivers.activateReceiver(third);
+        const QVector<float> fresh = packet(238, 0.5f);
+        receivers.feedIqData(3, fresh);
+        QCOMPARE(stamped.count(), 1);
+        QCOMPARE(hardware.count(), 1);
+        QVERIFY(bitIdentical(stamped.at(0).at(1).value<QVector<float>>(), fresh));
+        QVERIFY(bitIdentical(hardware.at(0).at(1).value<QVector<float>>(), fresh));
+    }
 };
 
 QTEST_MAIN(TstP2IqDrainBatching)

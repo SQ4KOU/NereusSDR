@@ -26,6 +26,9 @@
 //                 stream, not one per packet, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
 //                 NereusSDR-original.
+//   2026-09-30 - reset() drops a held batch and ends batching. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -395,7 +398,8 @@ private:
     mutable QRecursiveMutex m_routingMutex;
 
     // beginIqBatch / endIqBatch state. The mutex is taken on the connection
-    // thread only (never an audio callback) and never while emitting.
+    // thread, and by reset() on the owner's thread (never an audio
+    // callback), and never while emitting.
     struct HeldIqBatch {
         bool hardware{false};  // hardwareIqDataStamped, else iqDataForReceiverStamped
         int index{-1};
