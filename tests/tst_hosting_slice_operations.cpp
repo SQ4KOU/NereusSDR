@@ -42,6 +42,9 @@
 //               refused while transmitting keeps the card (M-3). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: take-over re-review (N-1): nor on a phone's slice the
+//               flag stayed on after the phone let go. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -682,6 +685,68 @@ private slots:
         QCOMPARE(answered.last().at(0).toLongLong(), id);
         QCOMPARE(answered.last().at(1).toBool(), true);
         QCOMPARE(ownership->mark(0).owner, station);
+    }
+
+    // TX safety (take-over re-review, N-1): the flag was never on the
+    // desktop's slice. A phone chose its own slice P and let go of transmit,
+    // so the flag stays on P (ruling 8.10). The iPad takes the desktop's
+    // only slice. The desktop's MOX must not key the phone's slice.
+    void theDesktopsKeyNeverLandsOnAnotherDevicesSlice()
+    {
+        Core core;
+        core.model->configureStreamPool(3, 5, 192000);
+        allowTransmit(core);
+        startHosting(core);
+        const QByteArray station = SliceOwnership::stationDevice();
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownedBy(core, station), QList<int>{0});
+        HostingSliceActions host(core.server.get(), core.model.get());
+        QSignalSpy notices(&host, &HostingSliceActions::notice);
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+
+        Device phone(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(phone);
+        LoopbackTransport* appP = core.signIn(phone, kSharesTx);
+        QVERIFY(admitted(appP));
+        if (ownership->ownedBy(phone.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appP, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int p = ownership->ownedBy(phone.key.fingerprint()).first();
+        QVERIFY(p != 0);
+        QVERIFY(accepted(core.invoke(appP, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(phone.key.fingerprint()));
+        QVERIFY(accepted(core.invoke(appP, "tx.setTxSlice", {int64("sliceId", p)})));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), p);
+        core.server->releaseTransmitFor(phone.key.fingerprint(), QStringLiteral("The test let go."));
+        QTRY_VERIFY(!core.server->transmitHolder()->holder().has_value());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kSharesBack);
+        QVERIFY(admitted(appB));
+        QVERIFY(accepted(core.invoke(appB, "slice.listen", refOf(core, 0))));
+        const QJsonObject taken = core.invoke(
+            appB, "slice.takeControl",
+            refOf(core, 0)
+                << int64("controlRevision", static_cast<qint64>(ownership->controlRevision(0))));
+        QVERIFY2(accepted(taken), qPrintable(reasonOf(taken)));
+        QTRY_COMPARE(notices.count(), 1);
+        QVERIFY(ownedBy(core, station).isEmpty());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        QSignalSpy moxChanges(mox, &MoxController::moxChanged);
+        mox->setMox(true);
+        QTest::qWait(50);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(moxChanges.count(), 0);
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QVERIFY(!core.server->transmitHolder()->isHeldBy(station));
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+        QCOMPARE(ownership->mark(p).owner, phone.key.fingerprint());
     }
 
     // TX safety (take-over review, I-2): the desktop's only slice is its

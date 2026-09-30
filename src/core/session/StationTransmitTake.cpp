@@ -53,9 +53,11 @@
 //               takenSliceKeyRefusal. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
 //   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal, a key
-//               never lands on the slice a device lost. J.J. Boyd
-//               (KG4VCF), with AI-assisted implementation via Anthropic
-//               Claude Code.
+//               never lands on the slice a device lost. Re-review (N-1,
+//               N-2): nor, for a keyer that shares slices
+//               (keyerSharesSlices), on any other device's slice; the flag
+//               moves only once the key is admitted. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -636,8 +638,24 @@ TxRefusal StationServer::takenSliceKeyRefusal(const QByteArray& device)
     return {};
 }
 
-TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device)
+bool StationServer::keyerSharesSlices(const QByteArray& device) const
 {
+    // Take-over re-review (N-1): the keyers that share slices, the
+    // hosting desktop once it takes its notices (Task 10) and a device
+    // that declared sliceAccess. A legacy window and a headless station
+    // keep today's keying.
+    if (device == SliceOwnership::stationDevice()) {
+        return liveTransportFor(device) != nullptr;
+    }
+    SessionTransport* transport = liveTransportFor(device);
+    return transport != nullptr && peerHasSliceAccess(transport);
+}
+
+TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device, int* moveTo)
+{
+    if (moveTo != nullptr) {
+        *moveTo = -1;
+    }
     if (device.isEmpty() || m_radioModel.isNull() || m_radioModel->txSliceArbiter() == nullptr
         || !m_transmitHolder) {
         return {};
@@ -664,23 +682,34 @@ TxRefusal StationServer::othersSliceKeyRefusal(const QByteArray& device)
     if (landing < 0 || m_radioModel->sliceById(landing) == nullptr) {
         return {};
     }
-    // Ruling Q8: control of a slice grants no transmit, and the flag left
-    // on the slice control passed from is not this device's to key. Only
-    // that slice: a key landing on any other slice keeps today's rules.
-    // A slice nobody owns, or one it controls again, keeps today's keying.
-    auto lost = m_lostTxSlice.find(device);
-    if (lost == m_lostTxSlice.end() || !lost->contains(landing)) {
-        return {};
-    }
+    // Ruling Q8: control of a slice grants no transmit. A slice nobody
+    // owns, or one it controls, keeps today's keying.
     const QByteArray subject = ownership->mark(landing).subject();
+    auto lost = m_lostTxSlice.find(device);
+    const bool lostHere = lost != m_lostTxSlice.end() && lost->contains(landing);
     if (subject.isEmpty() || subject == device) {
-        lost->remove(landing);
+        if (lostHere) {
+            lost->remove(landing);
+        }
         return {};
     }
+    // Another device's slice. Take-over re-review (N-1): a keyer that
+    // shares slices never keys there. Take-over fix wave (I-2): nor does
+    // any keyer on the slice it lost, the flag's slice when control passed
+    // from it (a keyer outside that scope, such as a legacy window).
+    if (!keyerSharesSlices(device) && !lostHere) {
+        return {};
+    }
+    // With a slice of its own it may transmit on, the unkeyed flag moves
+    // there once the key is admitted (N-2); the caller moves it. A move
+    // that could not happen now (keyed, or the flag frozen) is refused.
     MoxController* mox = m_radioModel->moxController();
-    if (mox == nullptr || !mox->isMox()) {
+    if ((mox == nullptr || !mox->isMox()) && !arbiter->isFrozen()) {
         for (int id : ownership->ownedBy(device)) {
-            if (mayTransmit(id) && arbiter->requestHandoff(id, device)) {
+            if (mayTransmit(id)) {
+                if (moveTo != nullptr) {
+                    *moveTo = id;
+                }
                 return {};
             }
         }

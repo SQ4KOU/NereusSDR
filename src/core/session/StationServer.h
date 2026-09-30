@@ -509,9 +509,10 @@
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
 //   2026-09-30: take-over fix wave (I-2): othersSliceKeyRefusal(), a
-//               key never lands on the slice a device lost. J.J.
-//               Boyd (KG4VCF), with AI-assisted implementation via
-//               Anthropic Claude Code.
+//               key never lands on the slice a device lost; re-review
+//               (N-1): keyerSharesSlices(), nor on another device's
+//               slice. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -2349,15 +2350,18 @@ private:
     /// slice it may transmit on; empty otherwise. A holder bound on such a
     /// slice with another of its own is moved there first (unkeyed only).
     TxRefusal takenSliceKeyRefusal(const QByteArray& device);
-    /// Take-over fix wave (I-2, ruling Q8): the refusal for a key from
-    /// `device` that would land on the slice it lost, the one the flag was
-    /// on when control passed from it (m_lostTxSlice; a slice taken from it
-    /// while it did not hold transmit, the hosting desktop's included)
-    /// while another device controls it: noTransmitSlice when it
-    /// has no slice it may transmit on; with one, the unkeyed flag moves
-    /// there first and nothing is refused. A slice nobody owns is left as
-    /// it was. The radio's own PTT is not asked (ruling 8.11).
-    TxRefusal othersSliceKeyRefusal(const QByteArray& device);
+    /// Take-over fix wave (I-2, ruling Q8) and re-review (N-1): the
+    /// refusal for a key from `device` that would land on another device's
+    /// slice, when `device` shares slices (keyerSharesSlices) or the slice
+    /// is the one it lost (m_lostTxSlice): noTransmitSlice when it has no
+    /// slice it may transmit on. With one, nothing is refused and
+    /// `moveTo` names it; the gate moves the flag there once askKey admits
+    /// the key (N-2). A slice nobody owns is left as it was. The radio's
+    /// own PTT is not asked (ruling 8.11).
+    TxRefusal othersSliceKeyRefusal(const QByteArray& device, int* moveTo);
+    /// Take-over re-review (N-1): the hosting desktop once it takes its
+    /// notices, or a device that declared sliceAccess.
+    bool keyerSharesSlices(const QByteArray& device) const;
     /// Ruling 8.12: the holder's last slice closed: transmit is released.
     void onSliceClosedForHolder(int sliceId);
     /// Each device's chosen transmit slice (ruling 8.10), by device.

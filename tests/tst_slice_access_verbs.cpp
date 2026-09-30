@@ -33,7 +33,8 @@
 //               older peer offered none. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-30: take-over fix wave: a key never lands on the slice a
-//               device lost (I-2); an older peer's controlTaken entry
+//               device lost (I-2), nor another device's slice for a keyer
+//               that shares slices (N-1); an older peer's controlTaken entry
 //               (M-1); exact refusal words and a take-back of a slice made
 //               again (M-2). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
@@ -956,6 +957,62 @@ private slots:
         QCOMPARE(ownership->mark(0).owner, b.key.fingerprint());
     }
 
+    // TX safety (take-over re-review, N-1): the remote variant. A device
+    // with no slice of its own keys while the flag sits on another device's
+    // slice (remembered there under 8.10 after that device let go). Its
+    // key never lands there.
+    void aKeyWithNoSliceOfItsOwnNeverLandsOnAnotherDevicesSlice()
+    {
+        Core core;
+        allowTransmit(core);
+        core.model->configureStreamPool(5, 5, 192000);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("iPhone"), QStringLiteral("phone"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        LoopbackTransport* appA = core.signIn(a, kSharesTx);
+        QVERIFY(admitted(appA));
+        SliceOwnership* ownership = core.model->sliceOwnership();
+        QCOMPARE(ownership->ownedBy(a.key.fingerprint()), QList<int>{0});
+        LoopbackTransport* appC = core.signIn(c, kSharesTx);
+        QVERIFY(admitted(appC));
+        if (ownership->ownedBy(c.key.fingerprint()).isEmpty()) {
+            QVERIFY(accepted(core.invoke(appC, "addSlice", {utf8("initialPanId", QString())})));
+        }
+        const int p = ownership->ownedBy(c.key.fingerprint()).first();
+        QVERIFY(p != 0);
+        MoxController* mox = core.model->moxController();
+        TxSliceArbiter* arbiter = core.model->txSliceArbiter();
+        QVERIFY(accepted(core.invoke(appC, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(c.key.fingerprint()));
+        QVERIFY(accepted(core.invoke(appC, "tx.setTxSlice", {int64("sliceId", p)})));
+        QTRY_COMPARE(arbiter->txBoundSliceId(), p);
+        core.server->releaseTransmitFor(c.key.fingerprint(), QStringLiteral("The test let go."));
+        QTRY_VERIFY(!core.server->transmitHolder()->holder().has_value());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        LoopbackTransport* appB = core.signIn(b, kSharesTx);
+        QVERIFY(admitted(appB));
+        QTRY_VERIFY(holds(appB, accessKey(0)));
+        const QJsonObject r = core.invoke(appB, "slice.takeControl", revisionArgs(seenBy(appB, 0)));
+        QVERIFY2(accepted(r), qPrintable(reasonOf(r)));
+        QVERIFY(ownership->ownedBy(a.key.fingerprint()).isEmpty());
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+
+        QSignalSpy moxChanges(mox, &MoxController::moxChanged);
+        mox->setMox(true, keyerFor(a));
+        QTest::qWait(50);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QCOMPARE(moxChanges.count(), 0);
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QVERIFY(!core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QCOMPARE(arbiter->txBoundSliceId(), p);
+    }
+
     // The same device with a second slice of its own keys there instead.
     void aKeyAfterLosingTheTransmitSliceGoesToTheDevicesOtherSlice()
     {
@@ -1409,10 +1466,14 @@ private slots:
         TxSliceArbiter* arbiter = core.model->txSliceArbiter();
         QCOMPARE(arbiter->txBoundSliceId(), 0);
         MoxController* mox = core.model->moxController();
+        // Take-over re-review (N-1): C shares slices, so its key on A's
+        // slice is refused; it holds transmit unkeyed (tx.take) instead.
         mox->setMox(true, keyerFor(c));
-        mox->setMox(false, keyerFor(c));
-        QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QVERIFY(core.server->transmitHolder()->isHeldBy(c.key.fingerprint()));
+        QVERIFY(!mox->isMox());
+        QCOMPARE(QString::fromLatin1(mox->lastRefusal().code),
+                 QString::fromLatin1(TxRefusals::kNoTransmitSlice));
+        QVERIFY(accepted(core.invoke(appC, "tx.take")));
+        QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(c.key.fingerprint()));
         QCOMPARE(arbiter->txBoundSliceId(), 0);
 
         QTRY_VERIFY(holds(appB, accessKey(0)));
