@@ -263,6 +263,10 @@
 //               coreInterfaces are known stationSetup keys. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: The data-channel mode's connect hook reports a channel for
+//               another client that did not open, with its stage. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1274,7 +1278,11 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
         return true;
     });
     LinkFixtures::setConnectClient([&join](LoopbackTransport* joined, StationServer&) {
-        join(joined);
+        QString diagnostic;
+        if (join(joined, &diagnostic)) {
+            return QString();
+        }
+        return QStringLiteral("the data channel for that client %1").arg(diagnostic);
     });
     const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
     LinkFixtures::setSettleCheck({});

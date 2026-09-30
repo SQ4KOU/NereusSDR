@@ -65,6 +65,9 @@
 //               setSettleCheck() and setConnectClient(). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: setConnectClient()'s hook returns why a connection did
+//               not open. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -202,9 +205,12 @@ public:
     static void setSettleCheck(std::function<bool()> settled);
     /// Also for the data-channel mode: how a client the player adds
     /// (stationSetup.otherClients' {"connect"} step) is joined to the
-    /// station. Unset: a LoopbackTransport pair, as always.
+    /// station. Unset: a LoopbackTransport pair, as always. Returns empty
+    /// when the client's connection opened, otherwise why it did not; the
+    /// step reports that at once instead of waiting for the station.
     static void setConnectClient(
-        std::function<void(LoopbackTransport* client, NereusSDR::StationServer& server)> connect);
+        std::function<QString(LoopbackTransport* client, NereusSDR::StationServer& server)>
+            connect);
 
     static QString runSession(const QJsonObject& fixture, NereusSDR::StationServer& server,
                               LoopbackTransport& transport);
