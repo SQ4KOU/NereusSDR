@@ -463,33 +463,25 @@ if(TARGET wdsp_static)
     # loop; the live rate change returns at once and finishes once; the
     # MeterPoller reads the lane's cache. REALTIME: it holds the event
     # loop's 10 ms timer to a wall-clock bound while the lane waits.
+    # Its OpenChannel plans through the shared FFTW wisdom cache with its
+    # 0.1 s plan limit (nereus_test_fftw_wisdom above), so the default 120 s
+    # holds (fix wave INFRA-I3: the 900 s override is gone).
     nereus_add_test(tst_dsp_control_receive EXTRA_LABELS core REALTIME)
-    # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
-    # 100 s under a loaded build), so the default 120 s is too close.
-    if(TEST tst_dsp_control_receive)
-        set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
-    endif()
     # R-R3-39 (Task 32): transmit DSP off the event loop. A real TX channel
     # on the transmit lane keeps the rf_delay keying order; twenty MOX, TUNE
     # and two-tone cycles with the PureSignal poll make no WDSP call on the
     # event loop while both lanes' channels run 200 ms blocks; setters queued
     # before a rebuild never run; the unkey drain is measured. REALTIME: it
-    # holds the event loop's 10 ms timer to a wall-clock bound. Its first
-    # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    # holds the event loop's 10 ms timer to a wall-clock bound. It plans
+    # through the shared wisdom cache, so the default 120 s holds.
     nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
-    if(TEST tst_dsp_control_transmit)
-        set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
-    endif()
     # Task 33 (R-IOS-03): stopping transmission at once. With both lanes
     # held for 200 ms, stopTransmitNow returns within 2 ms with the RF gate
     # shut and MOX off at the connection before either lane is free, and no
     # TX block follows it; the normal unkey drains before the hardware flip
-    # (Thetis's order). REALTIME: wall-clock bounds on real channels; the
-    # first OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    # (Thetis's order). REALTIME: wall-clock bounds on real channels; it
+    # plans through the shared wisdom cache, so the default 120 s holds.
     nereus_add_test(tst_stop_transmit_now EXTRA_LABELS core REALTIME)
-    if(TEST tst_stop_transmit_now)
-        set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
-    endif()
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -530,14 +522,12 @@ if(TARGET wdsp_static)
     # SetAnalyzer with Blackman-Harris 4T, are at least 90 dB down 66 Hz from
     # the peak and beyond; every DSP block reaches the siphon once, in order.
     # Reads the analyzer's input ring (analyzer.h), hence the WDSP headers.
-    # REALTIME: real WDSP threads, and the first SetAnalyzer plans a
-    # 32768-point FFTW_PATIENT transform with no wisdom.
+    # REALTIME: real WDSP threads. The first SetAnalyzer's 32768-point
+    # FFTW_PATIENT plan goes through the shared wisdom cache and its 0.1 s
+    # plan limit, so the default 120 s holds.
     nereus_add_test(tst_tx_analyzer_skirt EXTRA_LABELS core REALTIME)
     target_include_directories(tst_tx_analyzer_skirt PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_tx_analyzer_skirt PRIVATE WDSP_STATIC_BUILD)
-    if(TEST tst_tx_analyzer_skirt)
-        set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
-    endif()
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
@@ -8681,16 +8671,15 @@ if(TEST tst_link_conformance_session)
     # in-process one does.
     # Load findings 3: the two transports are now two entries of the same
     # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
-    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel,
-    # each within the same 300 s (at load 198 to 281 both together took
-    # 397 s; the limit is not raised).
-    set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel.
+    # Each takes about 28 s at load 10 to 14 (2026-09-30), so both keep the
+    # default 120 s (fix wave INFRA-I3: the 300 s overrides are gone).
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_MODE=loopback")
     add_test(NAME tst_link_conformance_session_datachannel COMMAND tst_link_conformance_session)
     set_tests_properties(tst_link_conformance_session_datachannel PROPERTIES
         LABELS "${_lcs_labels}"
-        TIMEOUT 300)
+        TIMEOUT 120)
     if(_lcs_env_mod)
         set_property(TEST tst_link_conformance_session_datachannel
             PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
@@ -8860,12 +8849,9 @@ nereus_add_test(tst_remote_iq_codec)
 # 200 ppm fast and slow for 10 simulated minutes, the key's wait and
 # starvation. Injected clocks throughout.
 nereus_add_test(tst_remote_mic_receiver)
-# Two 10-minute runs of simulated time through WDSP rmatch take tens of
-# seconds of processor time; the default 120 s would trip on a loaded
-# machine, as it would for any heavy computation.
-if(TEST tst_remote_mic_receiver)
-    set_tests_properties(tst_remote_mic_receiver PROPERTIES TIMEOUT 600)
-endif()
+# Two 10-minute runs of simulated time through WDSP rmatch: 13 s of its
+# 17 s alone, 31 s at load 10 to 14 (2026-09-30), so the default 120 s holds
+# (fix wave INFRA-I3: the 600 s override is gone).
 
 # iPhone app plan Task 36 (R-IOS-13): the remote microphone ring at the
 # transmitter: the pump's branch in the normal and RADE paths, the Core's
@@ -8931,15 +8917,10 @@ nereus_add_test(tst_daemon_audio_transitions
     fakes/LoopbackTransport.cpp
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
-# Each of its four slots connects a fresh radio with real WDSP. The first
-# connect carries the process's FFTW planning at first channel use (see
-# tst_connectable_radio_model), about 30 s; later ones reuse those plans.
-# Measured 2026-09-23: about 42 s alone at load 4.6. The default 120 s is
-# under three times that, too close for a loaded -jN run; TIMEOUT 300 is
-# about seven times the measurement.
-if(TEST tst_daemon_audio_transitions)
-    set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
-endif()
+# Each of its four slots connects a fresh radio with real WDSP. Its FFTW
+# planning goes through the shared wisdom cache with the 0.1 s plan limit
+# (it names ConnectableRadioModel), so the 30 s cold plan that once needed
+# a 300 s override is gone and the default 120 s holds (fix wave INFRA-I3).
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
@@ -9484,9 +9465,8 @@ nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_path_racer PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
-if(TEST tst_path_racer)
-    set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
-endif()
+# 22 s at load 10 to 14 (2026-09-30), on the Python NEREUS_TEST_PYTHON
+# names; the default 120 s holds (INFRA-I3: the 400 s override is gone).
 # iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08; the rendezvous
 # document, section 12.8): the Core's relay-leg runner over the relay
 # fixtures in rendezvous/conformance/v1/relay/, and the leg's own rules.
@@ -9501,9 +9481,8 @@ nereus_add_test(tst_relay_session fakes/LoopbackTransport.cpp EXTRA_LABELS sessi
 target_compile_definitions(tst_relay_session PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
-if(TEST tst_relay_session)
-    set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
-endif()
+# 5 s at load 10 to 14 (2026-09-30); the default 120 s holds (INFRA-I3:
+# the 400 s override is gone).
 # Media inside a direct WebSocket session (the media tunnel): real Core,
 # real window, real DTLS/SRTP over an in-process link. Plays real-time
 # audio, so REALTIME.
