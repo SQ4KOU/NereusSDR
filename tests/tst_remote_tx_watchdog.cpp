@@ -37,6 +37,10 @@
 //               link's key past one turn, and a check only a few ms late
 //               is judged at once. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-01: TX watch follow-up: the dead link stops in time whether
+//               the check or the other device's drain runs first in each
+//               turn. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -47,6 +51,7 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -61,6 +66,10 @@ const QByteArray kTablet = QByteArrayLiteral("tablet-2");
 struct Rig {
     qint64 nowMs = 0;
     std::optional<qint64> timerDue;
+    // TX watch follow-up: how many times the timer was started, so a test
+    // can tell a check restarted during a turn of the event loop (which
+    // runs in a later turn) from one left due (which runs in this one).
+    int starts = 0;
     struct Stop {
         QByteArray device;
         QString message;
@@ -73,7 +82,10 @@ struct Rig {
     {
         RemoteTxWatchdog::Hooks hooks;
         hooks.clock = [this] { return nowMs; };
-        hooks.startTimer = [this](int ms) { timerDue = nowMs + ms; };
+        hooks.startTimer = [this](int ms) {
+            timerDue = nowMs + ms;
+            ++starts;
+        };
         hooks.stopTimer = [this] { timerDue.reset(); };
         hooks.stop = [this](const QByteArray& device, const QString& message) {
             stops.push_back({device, message, nowMs});
@@ -367,7 +379,13 @@ void TestRemoteTxWatchdog::aStallWithKeepalivesArrivingKeepsTheKey()
         QCOMPARE(rig.timerDue, std::optional<qint64>(kStallEndMs));
     }
     drain();
-    // Heard at 1400: the next check is due at 1801.
+    // TX watch follow-up: the check already due is left to run (at 1401
+    // when the drain went first, at the stall's end after the late turn)
+    // and judges by the keepalives heard; heard at 1400, the next check is
+    // due at 1801.
+    QCOMPARE(rig.timerDue, std::optional<qint64>(checkFirst ? kStallEndMs : 1401));
+    rig.advanceTo(kStallEndMs);
+    QVERIFY(rig.stops.empty());
     QCOMPARE(rig.timerDue, std::optional<qint64>(1801));
     for (qint64 t = 1500; t <= 3000; t += 100) {
         rig.advanceTo(t);
@@ -424,15 +442,25 @@ void TestRemoteTxWatchdog::aSilentLinkStillStopsInTime()
 // the waiting keepalives their one turn, and the phone stops by the stall's
 // end plus one turn, not never. With 10 ms turns every later check fires
 // more than kLateCheckSlackMs late too.
+// TX watch follow-up: each turn runs the timers due at its start, the
+// check and the tablet's drain, in either order: the check first, or the
+// drain first (where a check restarted by the drain's keepalive would run
+// only in a later turn). A check already due is left due, so it runs in
+// the turn either way, and the phone stops by the stall's end plus two
+// turns whatever order the event loop picks.
 void TestRemoteTxWatchdog::anotherDevicesKeepalivesCannotHoldADeadLinksKey_data()
 {
+    QTest::addColumn<bool>("checkFirst");
     QTest::addColumn<qint64>("turnMs");
-    QTest::newRow("2 ms turns") << qint64(2);
-    QTest::newRow("10 ms turns") << qint64(10);
+    QTest::newRow("check first, 2 ms turns") << true << qint64(2);
+    QTest::newRow("check first, 10 ms turns") << true << qint64(10);
+    QTest::newRow("drain first, 2 ms turns") << false << qint64(2);
+    QTest::newRow("drain first, 10 ms turns") << false << qint64(10);
 }
 
 void TestRemoteTxWatchdog::anotherDevicesKeepalivesCannotHoldADeadLinksKey()
 {
+    QFETCH(bool, checkFirst);
     QFETCH(qint64, turnMs);
     Rig rig;
     rig.watchdog.setKeyed(kPhone, true, 3);
@@ -444,29 +472,54 @@ void TestRemoteTxWatchdog::anotherDevicesKeepalivesCannotHoldADeadLinksKey()
 
     // The stall: 100 to 700. The check due at 501 fires at its end.
     constexpr qint64 kStallEndMs = 700;
-    rig.nowMs = kStallEndMs;
-    rig.timerDue.reset();
-    rig.watchdog.onTimer();
-    QVERIFY(rig.stops.empty());
     quint64 tabletSequence = 1;
-    // The tablet's keepalives received during the stall, heard at receipt.
-    for (qint64 received = 200; received <= 600; received += 100) {
-        QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5, RemoteTxWatchdog::Path::TxChannel,
-                                       kStallEndMs - received));
-    }
-    for (int turn = 0; turn < 1000 && rig.stops.empty(); ++turn) {
-        rig.nowMs += turnMs;
-        if (rig.timerDue && *rig.timerDue <= rig.nowMs) {
+    // One turn of the event loop: the check, if due when the turn starts,
+    // and the tablet's drain, in the row's order.
+    const auto turnOfTheLoop = [&rig, checkFirst](const std::function<void()>& drain) {
+        const bool checkDue = rig.timerDue && *rig.timerDue <= rig.nowMs;
+        const int startsBefore = rig.starts;
+        const auto check = [&rig] {
             rig.timerDue.reset();
             rig.watchdog.onTimer();
+        };
+        if (checkFirst) {
+            if (checkDue) {
+                check();
+            }
+            drain();
+        } else {
+            drain();
+            // Restarted (or stopped) during the turn: not in this one.
+            if (checkDue && rig.starts == startsBefore && rig.timerDue) {
+                check();
+            }
         }
+    };
+    rig.nowMs = kStallEndMs;
+    // The tablet's keepalives received during the stall, heard at receipt.
+    turnOfTheLoop([&rig, &tabletSequence] {
+        for (qint64 received = 200; received <= 600; received += 100) {
+            QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5,
+                                           RemoteTxWatchdog::Path::TxChannel,
+                                           kStallEndMs - received));
+        }
+    });
+    QVERIFY(rig.stops.empty());
+    for (int turn = 0; turn < 1000 && rig.stops.empty(); ++turn) {
+        rig.nowMs += turnMs;
         // The tablet's keepalive comes in on every turn.
-        QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5, RemoteTxWatchdog::Path::TxChannel));
+        turnOfTheLoop([&rig, &tabletSequence] {
+            QVERIFY(rig.watchdog.keepalive(kTablet, ++tabletSequence, 5,
+                                           RemoteTxWatchdog::Path::TxChannel));
+        });
     }
     QCOMPARE(rig.stops.size(), size_t(1));
     QCOMPARE(rig.stops.front().device, kPhone);
-    QVERIFY2(rig.stops.front().atMs <= kStallEndMs + turnMs,
-             qPrintable(QStringLiteral("stopped at %1").arg(rig.stops.front().atMs)));
+    const qint64 boundMs = kStallEndMs + (checkFirst ? 1 : 2) * turnMs;
+    QVERIFY2(rig.stops.front().atMs <= boundMs,
+             qPrintable(QStringLiteral("stopped at %1, bound %2")
+                            .arg(rig.stops.front().atMs)
+                            .arg(boundMs)));
     QVERIFY(!rig.watchdog.isWatching(kPhone));
     QVERIFY(rig.watchdog.isWatching(kTablet));
 }
