@@ -89,7 +89,9 @@
 //                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I1: the badge's take
 //                                    question closes with the link and
-//                                    when its take is abandoned.
+//                                    when its take is abandoned. GUI-I5:
+//                                    a container's MON and PS-A follow
+//                                    the transmit holder.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -171,6 +173,7 @@
 #include "fakes/RemoteWindowHarness.h"
 #include "core/SliceOwnership.h"
 #include "core/session/DeviceSessionRegistry.h"
+#include "gui/applets/TxApplet.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/MeterWidget.h"
@@ -2177,6 +2180,64 @@ private slots:
         QTRY_VERIFY(!ask || !ask->isVisible());
         QVERIFY(controller->openDialog() == nullptr);
         QVERIFY(holder->isHeldBy(phone));
+        QVERIFY(!h.station().mox());
+    }
+
+    // Fix wave GUI-I5: a container's MON and PS-A follow the transmit holder
+    // as the TX applet's do: while the phone holds transmit, MON is shown
+    // disabled with the Core's holder reason, and PS-A says the same
+    // reason as the TX applet's PS-A. Nothing keys.
+    void remoteContainerMonAndPsaFollowTheTransmitHolder()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        auto* manager = h.window()->findChild<ContainerManager*>();
+        QVERIFY(manager);
+        ContainerWidget* container = manager->createContainer(1, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+        using Id = OtherButtonItem::ButtonId;
+        QTRY_VERIFY(buttons->isButtonAvailable(Id::Mon));
+
+        TransmitHolder::Holder phoneHolder;
+        phoneHolder.deviceId = phone;
+        phoneHolder.name = QStringLiteral("Living room iPhone");
+        phoneHolder.shortName = QStringLiteral("iPhone");
+        phoneHolder.kind = QStringLiteral("phone");
+        h.server().transmitHolder()->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        const QString holderReason = client->otherHolderReason();
+        QVERIFY(!holderReason.isEmpty());
+        QTRY_VERIFY(!buttons->isButtonAvailable(Id::Mon));
+        QCOMPARE(buttons->buttonUnavailableReason(buttons->indexOf(Id::Mon)), holderReason);
+        QVERIFY(!buttons->isButtonAvailable(Id::PsA));
+        auto* applet = h.window()->findChild<TxApplet*>();
+        QVERIFY(applet);
+        QPushButton* psa = nullptr;
+        for (QPushButton* b : applet->findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("PS-A")) { psa = b; }
+        }
+        QVERIFY(psa);
+        QVERIFY(!psa->isEnabled());
+        QCOMPARE(buttons->buttonUnavailableReason(buttons->indexOf(Id::PsA)), psa->toolTip());
         QVERIFY(!h.station().mox());
     }
 

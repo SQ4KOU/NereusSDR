@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave GUI-I5: the container's MON
+//                and PS-A hooks carry the transmit holder's reason, as the
+//                TX applet's do. GUI-I1: abandonTxBadgeTake rejects the
+//                badge's open take question. AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Station VOX: a hosting window's VOX
 //                (the TX applet's button, Setup's Enable VOX) is disabled,
 //                naming the holder, while another device holds transmit.
@@ -7093,11 +7098,33 @@ void MainWindow::buildUI()
         hooks.requestDesktopTune = [this](bool on) { requestDesktopTransmit(true, on); };
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
         // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
-        hooks.transmitSettingsPermitted = [this] { return transmitSettingsPermitted(2); };
-        hooks.transmitSettingsReason = [this] { return transmitSettingsReason(2); };
         // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
-        hooks.pureSignalArmingPermitted = [this] { return pureSignalArmingPermitted(); };
-        hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
+        // Fix wave GUI-I5: with the holder rule applyRemoteRoleGating gives
+        // the TX applet's MON and PS-A (iPhone app plan Task 77, rulings
+        // 7.7 and 8.4): while another device holds transmit they are shown
+        // disabled with the Core's holder reason; a reason already shown
+        // (the setting not taken, the radio on the air) stays.
+        const auto otherHolder = [this] {
+            return m_stationClient && m_stationClient->knowsTransmitHolder()
+                ? m_stationClient->otherHolderReason()
+                : QString();
+        };
+        hooks.transmitSettingsPermitted = [this, otherHolder] {
+            return otherHolder().isEmpty() && transmitSettingsPermitted(2);
+        };
+        hooks.transmitSettingsReason = [this, otherHolder] {
+            const QString holder = otherHolder();
+            return holder.isEmpty() || !transmitSettingsPermitted(2) ? transmitSettingsReason(2)
+                                                                     : holder;
+        };
+        hooks.pureSignalArmingPermitted = [this, otherHolder] {
+            return otherHolder().isEmpty() && pureSignalArmingPermitted();
+        };
+        hooks.pureSignalArmingReason = [this, otherHolder] {
+            const QString holder = otherHolder();
+            return holder.isEmpty() || !pureSignalArmingPermitted() ? pureSignalArmingReason()
+                                                                    : holder;
+        };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core.");
         // Desktop remote transmit: the Core's own reason when it gave one.
