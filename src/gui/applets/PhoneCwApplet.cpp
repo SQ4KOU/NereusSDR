@@ -1138,7 +1138,9 @@ void PhoneCwApplet::wireControls()
         m_dexpBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_dexpBtn, &QPushButton::customContextMenuRequested, this,
                 [this](const QPoint&) {
-            if (!m_transmitPermitted) { return; }
+            // GUI-M3 (fix wave): opening the page is navigation; the
+            // DEXP/VOX page gates its own controls, so the right-click
+            // works whether or not this window may transmit.
             emit openSetupRequested(QStringLiteral("Transmit"),
                                     QStringLiteral("DEXP/VOX"));
         });
