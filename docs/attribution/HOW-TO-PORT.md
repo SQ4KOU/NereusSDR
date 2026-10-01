@@ -1,5 +1,7 @@
 # How to Port a File from Thetis / mi0bot-Thetis / any GPL Upstream
 
+This guide covers code NereusSDR ports: code translated from an upstream file, or constants, tables or algorithms taken from one. Upstreams include Thetis, mi0bot-Thetis, piHPSDR, deskHPSDR, AetherSDR, freedv-gui and WDSP. Designs that only study an upstream need no header, but cite the facts they rely on.
+
 When you (or an AI agent) port code from a GPL-licensed upstream into
 NereusSDR, the file's license header is handled this way:
 
@@ -231,6 +233,8 @@ committed corpus.
 │   └── protocol2.cs  Protocol 2 specific handling
 └── wdsp/             WDSP C source: channel.c, RXA.c, TXA.c, ...
 ```
+
+piHPSDR: `../pihpsdr/`. deskHPSDR: `../deskhpsdr/`. TAPR firmware: `../TAPR-OpenHPSDR-Firmware/`.
 
 freedv-gui: `../freedv-gui/src/reporting/` (FreeDVReporter, pskreporter),
 `src/pipeline/` (RADE RX/TX steps, rade_text, EQ, AGC). Full tree in
