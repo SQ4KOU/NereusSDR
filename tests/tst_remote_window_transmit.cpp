@@ -1611,6 +1611,45 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // Fix round 1 (minor 2): the slider does not depend on the Core's
+    // answer arriving before its next value. A value that arrives while the
+    // change is on its way (the Core's own later change, or its clamp) shows
+    // once the change is answered. Nothing keys.
+    void tunePowerSliderShowsTheCoresValueWhenItsChangeIsAnswered()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        window.applet.setTransmitSettingsPermitted(true, {});
+        window.applet.setTransmitChainSettingsPermitted(true, {});
+        QSlider* tune = nullptr;
+        for (QSlider* slider : window.applet.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("Tune power")) { tune = slider; }
+        }
+        QVERIFY(tune && tune->isEnabled());
+        TransmitModel& core = h.station.transmitModel();
+        TransmitModel& mirror = h.remote.transmitModel();
+        QVERIFY(core.setTunePowerForTxBand(20));
+        QTRY_COMPARE(tune->value(), 20);
+
+        // The window's change is on its way, and the Core's value (45)
+        // arrives before its answer.
+        mirror.setTunePowerForTxBandWriteInFlight(true);
+        QVERIFY(core.setTunePowerForTxBand(45));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 45);
+        QCOMPARE(tune->value(), 20);
+        // The answer: the slider shows the Core's value.
+        mirror.setTunePowerForTxBandWriteInFlight(false);
+        QCOMPARE(tune->value(), 45);
+        QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // Fix wave I4: the window says who holds transmit on the Core, from
     // txState's holder: this window, the radio, another device, away, and
     // changing hands.

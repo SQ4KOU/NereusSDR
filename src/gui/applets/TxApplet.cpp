@@ -198,6 +198,10 @@
 //                lock follows connectionStateChanged too, so a remote
 //                window whose Core has no radio locks MOX, TUN and 2TONE.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 2): the remote
+//                Tune Power slider shows the Core's value when its change
+//                is answered, whatever arrived first. AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
 //                hosting window's 2-TONE asks to take transmit, as MOX and
 //                TUNE do (setDesktopTwoToneHandler). AI-assisted via
@@ -1295,6 +1299,19 @@ void TxApplet::wireControls()
     connect(m_tunePwrSlider, &QSlider::sliderReleased, this, [this]() {
         if (m_updatingFromModel || !remoteTunePower()) { return; }
         requestRemoteTunePower(m_tunePwrSlider->value());
+    });
+
+    // Fix round 1 (minor 2): the change answered, the slider shows the
+    // Core's value, whichever arrived first, its answer or its next value
+    // (or a value it clamped). Not while the operator holds the slider.
+    connect(&tx, &TransmitModel::tunePowerForTxBandWriteInFlightChanged,
+            this, [this, &tx](bool inFlight) {
+        if (inFlight || !remoteTunePower() || m_tunePwrSlider->isSliderDown()) { return; }
+        QSignalBlocker b(m_tunePwrSlider);
+        m_updatingFromModel = true;
+        m_tunePwrSlider->setValue(tx.tunePowerForTxBand());
+        updatePowerSliderLabels();
+        m_updatingFromModel = false;
     });
 
     // R-R3-49 (parity Task 2): in a remote window the slider shows the
