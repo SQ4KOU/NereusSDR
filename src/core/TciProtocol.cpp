@@ -2484,10 +2484,31 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
             (void)mox;
             return buildTrxLine(rx, false);
         }
-        // Phase 8: store via setMox. In Phase 17 this becomes TCIPTT + VFOATX/VFOBTX logic.
-        QMetaObject::invokeMethod(m_radio, "setMox",
-                                  Qt::DirectConnection,
-                                  Q_ARG(bool, mox));
+        // Fix wave RD-I2: only receiver 0, or receiver 1 while RX2 is on,
+        // writes TCIPTT; any other index keys and releases nothing.
+        // From Thetis TCIServer.cs:3666-3681 [v2.10.3.15] (handleTrxMessage):
+        //   if (rx == 0)
+        //   {
+        //       if (consoleThreadSafe.RX2Enabled && consoleThreadSafe.VFOBTX)
+        //           consoleThreadSafe.VFOATX = true;
+        //       if (consoleThreadSafe.MOX != bMox)
+        //           consoleThreadSafe.TCIPTT = bMox;
+        //   }
+        //   else if (rx == 1 && consoleThreadSafe.RX2Enabled)
+        //   {
+        //       if (!consoleThreadSafe.VFOBTX)
+        //           consoleThreadSafe.VFOBTX = true;
+        //       if (consoleThreadSafe.MOX != bMox)
+        //           consoleThreadSafe.TCIPTT = bMox;
+        //   }
+        // The VFOATX/VFOBTX choice is still not ported (see the header).
+        const bool keysReceiver = rx == 0 || (rx == 1 && rx2EnabledNow());
+        if (keysReceiver) {
+            // Phase 8: store via setMox. In Phase 17 this becomes TCIPTT + VFOATX/VFOBTX logic.
+            QMetaObject::invokeMethod(m_radio, "setMox",
+                                      Qt::DirectConnection,
+                                      Q_ARG(bool, mox));
+        }
 
         // Receiver and transmit gaps plan, Task 7 fix wave (R-R3-49): no
         // broadcast here. The 2026-05-10 bench fix broadcast the requested

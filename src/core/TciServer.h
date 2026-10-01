@@ -803,6 +803,16 @@ private:
     // both run on the Qt event loop that owns TciServer).  No additional locking.
     QPointer<QWebSocket> m_txAudioActiveClient;
 
+    // Fix wave RD-C1 (JJ ruling 1): the app whose trx raised the TCI PTT
+    // level (MoxController::isTciPttHeld) on a server that keys locally.
+    // Cleared when the level drops. Its disconnect, or this server
+    // stopping, releases that key before its TX audio lock.
+    QPointer<QWebSocket> m_tciPttClient;
+    // Releases the TCI key of `client` (any keying app when null) through
+    // MoxController::onTciPtt(false). False when a callback destroyed this
+    // server meanwhile.
+    bool releaseAppTciKey(QWebSocket* client);
+
     // ── Phase 19: sensor broadcast timers ────────────────────────────────────
     //
     // From Thetis TCIServer.cs:2554-2581 [v2.10.3.13] — setRxSensorsEnabled /
