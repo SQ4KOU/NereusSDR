@@ -64,6 +64,9 @@
 //               microphone line's figures once, with the underruns of
 //               the over. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: TX stall lane: the line names the device in hex. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -1296,7 +1299,8 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
     QTRY_VERIFY(!mox->isMox());
     QTRY_COMPARE(g_unkeyLines.size(), 1);
     const QString first = g_unkeyLines.at(0);
-    QVERIFY2(first.contains(QString::fromLatin1(station.deviceId())), qPrintable(first));
+    // The device's id in hex, as the watchdog's line names it.
+    QVERIFY2(first.contains(QString::fromLatin1(station.deviceId().toHex())), qPrintable(first));
     // The over's underruns, taken before the feed left use and reset them.
     QVERIFY2(first.contains(QStringLiteral("underruns %1,").arg(underruns)), qPrintable(first));
     QVERIFY2(first.contains(QStringLiteral("transmit I/Q")), qPrintable(first));

@@ -4,6 +4,10 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX stall lane: the unkey line names the device by its id in
+//               hex, as the transmit watchdog's line does, not its raw
+//               bytes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-30: TX stall lane: the unkey line follows MoxController (its
 //               moxChanging and moxStateChanged), so it prints on every
 //               unkey; TransmitModel::moxChanged only saw the
@@ -2444,7 +2448,7 @@ void DaemonMediaController::logUnkeyStats()
         send = conn->txSendStats();
     }
     qCInfo(lcDaemonMedia).noquote()
-        << unkeyStatsLine(snapshot.deviceId, snapshot.rx,
+        << unkeyStatsLine(snapshot.deviceId.toHex(), snapshot.rx,
                           snapshot.haveFeed ? &snapshot.feed : nullptr, send);
 }
 
