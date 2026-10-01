@@ -2942,6 +2942,13 @@ target_compile_definitions(tst_tx_mic_latency PRIVATE NEREUS_BUILD_TESTS)
 # WDSP channels: the Setup > DSP filter type reaches TXASetMP / RXASetMP as
 # Thetis sends it (Low Latency is minimum phase).
 nereus_add_test(tst_tx_latency_dsp)
+# Leveler lane (2026-10-01): remote microphone audio (the phone's Opus, a
+# desktop remote window's Opus or L16, the local microphone) through the real
+# WDSP TX channel with the Leveler and PROC, offline; the measurement matrix
+# prints with NEREUS_LEVELER_MATRIX=1.
+nereus_add_test(tst_tx_leveler_remote_mic)
+target_compile_definitions(tst_tx_leveler_remote_mic PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # R-IOS-13 (2026-09-27): every key path (MOX, TUNE, a remote key, VOX,
 # two-tone) applies the TX-bound slice's DSP > Options before the TX
 # channel's first block, on a real WDSP TX channel.

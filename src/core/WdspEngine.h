@@ -53,6 +53,9 @@
 //   2026-09-27 : R-IOS-13 by J.J. Boyd (KG4VCF): test-only friendship for
 //                 the transmit path's DSP latency and key-path tests. AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-10-01 : Leveler lane by J.J. Boyd (KG4VCF): test-only friendship
+//                 for the remote microphone leveler measurement. AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -196,6 +199,8 @@ class TstConfirmStep;
 class TestTxAnalyzerSkirt;
 // R-IOS-13: the transmit path's DSP latency test.
 class TestTxLatencyDsp;
+// Leveler lane: the remote microphone leveler measurement on real channels.
+class TestTxLevelerRemoteMic;
 class TestTxKeyDspOptions;
 class TstRemoteTxDisplay;
 #endif
@@ -1087,6 +1092,8 @@ private:
     // R-IOS-13: the filter type and DEXP timing test on real channels.
     friend class ::TestTxLatencyDsp;
     friend class ::TestTxKeyDspOptions;
+    // Leveler lane: the remote microphone leveler measurement.
+    friend class ::TestTxLevelerRemoteMic;
 #endif
 };
 
