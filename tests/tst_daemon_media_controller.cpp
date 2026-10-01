@@ -1971,8 +1971,13 @@ void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers()
     QTest::qWait(200);
     QVERIFY(sent.load() > 20);
     // A new connection's line (not yet up) has heard nothing of the old:
-    // nothing accepted, nothing rejected, nothing decoded.
-    if (const RemoteMicReceiver* receiver = harness.controller.micReceiver()) {
+    // nothing accepted, nothing rejected, nothing decoded. The session's
+    // end leaves no line; a new connection's start has one.
+    const RemoteMicReceiver* receiver = harness.controller.micReceiver();
+    if (!sessionEnds) {
+        QVERIFY2(receiver != nullptr, "the new connection opened no microphone line");
+    }
+    if (receiver != nullptr) {
         const RemoteMicReceiver::Stats stats = receiver->stats();
         QCOMPARE(stats.accepted, quint64(0));
         QCOMPARE(stats.rejectedPackets, quint64(0));

@@ -142,8 +142,16 @@ public:
         std::function<qint64()> clock;
         /// (Re)starts the one single-shot check timer to fire onTimer()
         /// after `ms`; a later call replaces an earlier one.
+        ///
+        /// TX watch follow-up: the timer is the watchdog's alone. Nothing
+        /// else starts or stops it, and every start ends in exactly one
+        /// onTimer() unless stopTimer or a later start replaces it. The
+        /// watchdog relies on this: a check it recorded as due is still
+        /// pending in the timer, so reschedule() leaves it to run rather
+        /// than restarting it. A timer stopped or restarted behind the
+        /// watchdog's back would leave that check never run.
         std::function<void(int ms)> startTimer;
-        /// Stops the check timer.
+        /// Stops the check timer (the watchdog's alone, as above).
         std::function<void()> stopTimer;
         /// Stops transmitting for `deviceId` with `message` (StopAllTx, and
         /// the VOX that device armed turned off).
