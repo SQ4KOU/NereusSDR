@@ -150,6 +150,11 @@
 //                until released (m_linkLossLatched), as the priming frames of
 //                Thetis networkproto1.c:106-138 [v2.10.3.15] never carry MOX.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety fix round 1: the latch is set only when the
+//                link was lost keyed and is lifted when the reconnect
+//                reaches Connected unkeyed, so a loss while unkeyed never
+//                refuses the next key. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2327,12 +2332,13 @@ void P1RadioConnection::setMox(bool enabled)
     // Source: deskhpsdr/src/old_protocol.c:3595-3599 [@120188f]
     m_forceBank0Next = true;
 
-    // TX safety (whole-branch review 2026-09-30): after a link loss a key is
-    // refused until it has been released. A key still queued from before the
-    // loss, or one made during the outage, must not ride the reconnect onto
-    // the air; the release that precedes a fresh key lifts the latch.
-    // Follows P2RadioConnection::setMox, which refuses a key through its
-    // link-loss latch the same way.
+    // TX safety (whole-branch review 2026-09-30, fix round 1): after a link
+    // lost while keyed, a key is refused until the reconnect is back unkeyed
+    // or the key has been released. A key still queued from before the loss,
+    // or one made during the outage, must not ride the reconnect onto the
+    // air. Follows P2RadioConnection::setMox, which refuses a key through
+    // its link-loss latch the same way (there only a new connectToRadio
+    // lifts it, as P2 does not reconnect by itself).
     if (enabled && m_linkLossLatched) {
         if (!m_linkLossRefusalLogged) {
             m_linkLossRefusalLogged = true;
@@ -4225,6 +4231,14 @@ void P1RadioConnection::onReadyRead()
                 // drain loop don't re-enter this branch.  Issue #258.
                 cs = ConnectionState::Connected;
                 if (wasReconnecting) {
+                    // TX safety fix round 1: the link is back unkeyed, so a
+                    // latch from a loss while keyed has done its work (the
+                    // reconnect's frames went out unkeyed) and the next key
+                    // goes through. A key still set here keeps the latch.
+                    if (!m_mox) {
+                        m_linkLossLatched = false;
+                        m_linkLossRefusalLogged = false;
+                    }
                     if (!m_reconnectedLogged) {
                         qCDebug(lcConnection) << "P1: Reconnected, ep6 stream restored";
                         m_reconnectedLogged = true;
@@ -4362,7 +4376,8 @@ void P1RadioConnection::onWatchdogTick()
         }
         m_reconnectedLogged = false;
         // TX safety: the lost link drops out of transmit here, before any
-        // observer of LinkLost runs, and a key is refused until released.
+        // observer of LinkLost runs, and a link lost keyed refuses a key
+        // until it is back.
         // Thetis drops its keyed state on the same event: the read loop's
         // timeout reports loss of sync to the console,
         //   From Thetis ChannelMaster/networkproto1.c:292-297 [v2.10.3.15]
@@ -4373,12 +4388,21 @@ void P1RadioConnection::onWatchdogTick()
         //     {
         //         HaveSync = 0; //send console LOS
         // and the console then powers the radio off, which unchecks MOX
-        // (console.cs:21336-21340 and 27488-27492 [v2.10.3.15], cited where
+        // (console.cs:21336-21340 and 27488-27493 [v2.10.3.15], cited where
         // RadioModel unkeys on LinkLost). P2's established-silence stop
-        // drops MOX, PureSignal and the relay the same way.
+        // (P2RadioConnection::stopForEstablishedSilence) also clears MOX,
+        // PureSignal and the relay, but it then sends one unkeyed stop and
+        // stays down until a new connectToRadio; it does not reconnect by
+        // itself, and it latches on every loss. Here the latch is set only
+        // when the link was lost keyed (fix round 1): a link lost unkeyed
+        // has nothing to refuse, and RadioModel's key block covers the
+        // outage (MoxController::setRadioLinkDown).
+        const bool keyedAtLoss = m_mox;
         dropTransmitForNewLink();
-        m_linkLossLatched = true;
-        m_linkLossRefusalLogged = false;
+        if (keyedAtLoss) {
+            m_linkLossLatched = true;
+            m_linkLossRefusalLogged = false;
+        }
         // Phase 3Q-1: ConnectionState::Error removed from the 5-value enum.
         // Watchdog timeout (was Connected, frames stopped) → LinkLost.
         setState(ConnectionState::LinkLost);
@@ -4462,11 +4486,11 @@ void P1RadioConnection::onReconnectTimeout()
     qCDebug(lcConnection) << "P1: Reconnect attempt" << m_reconnectAttempts
                           << "of" << kMaxReconnectAttempts;
 
-    // TX safety: the attempt goes out unkeyed. A key made during the outage
-    // (only possible once a release lifted the latch) is dropped here and
-    // latched again, so it needs a fresh release and key once the link is
-    // back. Without this a link lost while keyed came back with C0 MOX = 1
-    // on the priming burst and on every frame after it.
+    // TX safety: the attempt goes out unkeyed. A key that reached the
+    // connection during the outage is dropped here and latched again, so it
+    // does not resume when the link is back. Without this a link lost while
+    // keyed came back with C0 MOX = 1 on the priming burst and on every
+    // frame after it.
     const bool keyedDuringOutage = m_mox;
     dropTransmitForNewLink();
     if (keyedDuringOutage) {

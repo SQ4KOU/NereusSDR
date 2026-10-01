@@ -22,6 +22,7 @@
 #include <QtTest/QtTest>
 #include <QElapsedTimer>
 
+#include <functional>
 #include <memory>
 
 #include "core/P1RadioConnection.h"
@@ -125,9 +126,41 @@ QByteArray firstBank(const QList<QByteArray>& log, quint8 address)
     return {};
 }
 
-// Keys the link, drops it, and brings it back. On return the fake's log
-// holds only what was sent from the loss onward.
-void keyThenDropAndReconnect(P1FakeRadio& fake, P1RadioConnection& conn)
+// Drops the link and brings it back. `onLinkLost` runs on the LinkLost
+// transition, after the fake has been told to answer again and before the
+// reconnect's first attempt. On return the fake's log holds only what was
+// sent from the reconnect's metis-stop onward.
+void dropAndReconnect(P1FakeRadio& fake, P1RadioConnection& conn,
+                      std::function<void()> onLinkLost = {})
+{
+    // The radio comes back the moment the loss is declared (see
+    // tst_reconnect_on_silence for why this rides the transition). The
+    // fake clears its log at the reconnect's metis-stop, so frames sent
+    // before the loss and still in flight are not read as the reconnect's.
+    bool sawLinkLost = false;
+    const QMetaObject::Connection watch = QObject::connect(
+        &conn, &P1RadioConnection::connectionStateChanged, &conn,
+        [&fake, &sawLinkLost, &onLinkLost](ConnectionState s) {
+            if (s == ConnectionState::LinkLost && !sawLinkLost) {
+                sawLinkLost = true;
+                fake.resume();
+                if (onLinkLost) {
+                    onLinkLost();
+                }
+            }
+        });
+    fake.goSilent();
+    QTRY_VERIFY_WITH_TIMEOUT(sawLinkLost, 3000);
+    QObject::disconnect(watch);
+    QTRY_VERIFY_WITH_TIMEOUT(conn.state() == ConnectionState::Connected, 3000);
+    QVERIFY(fake.metisStopCount() >= 1);
+    // Past the priming bursts and well into the round robin.
+    QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 40, 3000);
+}
+
+// Keys the link, drops it, and brings it back (dropAndReconnect).
+void keyThenDropAndReconnect(P1FakeRadio& fake, P1RadioConnection& conn,
+                             std::function<void()> onLinkLost = {})
 {
     QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
 
@@ -140,24 +173,7 @@ void keyThenDropAndReconnect(P1FakeRadio& fake, P1RadioConnection& conn)
     // unkeyed reconnect from a key that never went out.
     QTRY_VERIFY_WITH_TIMEOUT(anyKeyed(fake.ep2CcReceived()), 3000);
 
-    // The radio comes back the moment the loss is declared (see
-    // tst_reconnect_on_silence for why this rides the transition). The
-    // fake clears its log at the reconnect's metis-stop, so frames sent
-    // before the loss and still in flight are not read as the reconnect's.
-    bool sawLinkLost = false;
-    QObject::connect(&conn, &P1RadioConnection::connectionStateChanged, &conn,
-                     [&fake, &sawLinkLost](ConnectionState s) {
-                         if (s == ConnectionState::LinkLost && !sawLinkLost) {
-                             sawLinkLost = true;
-                             fake.resume();
-                         }
-                     });
-    fake.goSilent();
-    QTRY_VERIFY_WITH_TIMEOUT(sawLinkLost, 3000);
-    QTRY_VERIFY_WITH_TIMEOUT(conn.state() == ConnectionState::Connected, 3000);
-    QVERIFY(fake.metisStopCount() >= 1);
-    // Past the priming bursts and well into the round robin.
-    QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 40, 3000);
+    dropAndReconnect(fake, conn, std::move(onLinkLost));
 }
 
 } // namespace
@@ -215,7 +231,13 @@ private slots:
         fake.stop();
     }
 
-    void keyAfterLossRefusedUntilReleased()
+    // Fix round 1 (replaces keyAfterLossRefusedUntilReleased, which keyed
+    // after Connected with no release, a state the model never sends: its
+    // stopAllTx on LinkLost releases, and its key block refuses every key
+    // until the link is back). A key that reaches the connection during
+    // the outage of a link lost keyed is refused; it does not resume when
+    // the link is back, and the next key after the reconnect goes out.
+    void keyDuringOutageDoesNotResume()
     {
         P1FakeRadio fake;
         fake.start();
@@ -223,20 +245,55 @@ private slots:
         QVERIFY2(connPtr != nullptr, "link never reached Connected");
         P1RadioConnection& conn = *connPtr;
 
-        keyThenDropAndReconnect(fake, conn);
+        bool latchedAtLoss = false;
+        bool refusedInOutage = false;
+        keyThenDropAndReconnect(fake, conn, [&conn, &latchedAtLoss, &refusedInOutage]() {
+            latchedAtLoss = conn.linkLossLatchedForTest();
+            conn.setMox(true);
+            refusedInOutage = !conn.moxForTest();
+        });
         if (QTest::currentTestFailed()) {
             return;
         }
+        QVERIFY(latchedAtLoss);
+        QVERIFY(refusedInOutage);
 
-        // A key arriving after the loss, with no release since: refused.
-        fake.clearEp2CcLog();
-        conn.setMox(true);
+        // Back unkeyed: no keyed frame, and the latch has done its work.
+        QCOMPARE(firstKeyed(fake.ep2CcReceived()), -1);
         QVERIFY(!conn.moxForTest());
-        QTRY_VERIFY_WITH_TIMEOUT(fake.ep2CcReceived().size() >= 20, 3000);
-        QVERIFY(!anyKeyed(fake.ep2CcReceived()));
+        QVERIFY(!conn.linkLossLatchedForTest());
 
-        // The operator releases and keys again: that key goes out.
+        // The operator's next key goes out.
+        conn.setMox(true);
+        QVERIFY(conn.moxForTest());
+        QTRY_VERIFY_WITH_TIMEOUT(anyKeyed(fake.ep2CcReceived()), 3000);
+
         conn.setMox(false);
+        conn.disconnect();
+        fake.stop();
+    }
+
+    // Fix round 1, I1: a link lost while unkeyed latches nothing, so the
+    // first key after the reconnect reaches the radio (C0 MOX = 1 on ep2).
+    void unkeyedLossThenReconnectKeys()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        std::unique_ptr<P1RadioConnection> connPtr = bringLinkUp(fake, HPSDRHW::Hermes);
+        QVERIFY2(connPtr != nullptr, "link never reached Connected");
+        P1RadioConnection& conn = *connPtr;
+        QTRY_VERIFY_WITH_TIMEOUT(fake.isRunning(), 3000);
+
+        bool latchedAtLoss = true;
+        dropAndReconnect(fake, conn, [&conn, &latchedAtLoss]() {
+            latchedAtLoss = conn.linkLossLatchedForTest();
+        });
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+        QVERIFY(!latchedAtLoss);
+        QCOMPARE(firstKeyed(fake.ep2CcReceived()), -1);
+
         conn.setMox(true);
         QVERIFY(conn.moxForTest());
         QTRY_VERIFY_WITH_TIMEOUT(anyKeyed(fake.ep2CcReceived()), 3000);

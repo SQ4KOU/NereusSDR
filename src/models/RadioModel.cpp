@@ -904,6 +904,12 @@
 //                27488-27492 [v2.10.3.15]); a P1 link back from its own
 //                reconnect gets the PureSignal enable again. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety fix round 1: every key is refused and MOX,
+//                TUN and 2TONE are locked while the link to the radio is
+//                lost and until it is back (MoxController::setRadioLinkDown,
+//                console.cs:27488-27493 [v2.10.3.15]); every link back
+//                (P1 and P2) gets the effective PureSignal enable again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -24590,6 +24596,23 @@ void RadioModel::setConnectionState(ConnectionState s)
 
 void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
+    // TX safety fix round 1 (2026-09-30): the lost link's key block. It is
+    // set on LinkLost, held through the Connecting and Probing of a
+    // reconnect, and lifted when the link is back (Connected) or closed
+    // (Disconnected). It is set before connectionStateChanged goes out so
+    // the windows lock MOX, TUN and 2TONE on that signal; the keying gate
+    // itself follows below, after LinkLost's stopAllTx. See
+    // MoxController::setRadioLinkDown for the Thetis lines.
+    const bool wasRadioLinkDown = m_radioLinkDown;
+    if (m_role != Role::Remote) {
+        if (state == ConnectionState::LinkLost) {
+            m_radioLinkDown = true;
+        } else if (state == ConnectionState::Connected
+                   || state == ConnectionState::Disconnected) {
+            m_radioLinkDown = false;
+        }
+    }
+
     // Phase 3Q-1: route through setConnectionState() so m_connectionState
     // stays in sync and the signal carries the new state value.
     setConnectionState(state);
@@ -24620,14 +24643,22 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         if (m_twoToneController) {
             m_twoToneController->setPowerOn(true);
         }
-        // TX safety (whole-branch review 2026-09-30): P1 starts every link
-        // with the PureSignal run flag off (dropTransmitForNewLink), the
-        // priming frames clean as Thetis's ForceCandCFrames are, and its own
-        // reconnect never passes through connectToRadio's pre-start push.
-        // The operator's PureSignal enable goes back once data flows.
-        if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
-            QMetaObject::invokeMethod(p1, [p1, ps = m_transmitModel.pureSigEnabled()]() {
-                p1->setPuresignalRun(ps);
+        // TX safety (whole-branch review 2026-09-30, fix round 1): every
+        // link starts with the PureSignal run flag off. P1 clears it for
+        // each new link and each reconnect (dropTransmitForNewLink), so the
+        // priming frames are clean as Thetis's ForceCandCFrames are, and its
+        // own reconnect never passes through connectToRadio's pre-start
+        // push. P2's connectToRadio clears it too, after the pre-start push
+        // queued ahead of it. The effective enable goes back once data
+        // flows, on both protocols: PureSignal's own (psEnabledChanged, the
+        // running PS-A or Single Cal) or the transmit model's toggle, the
+        // two sources that set it (the connects in the WDSP-init path and
+        // below connectToRadio).
+        if (m_connection != nullptr) {
+            const bool ps = (m_pureSignal && m_pureSignal->isPsEnabled())
+                            || m_transmitModel.pureSigEnabled();
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, ps]() {
+                conn->setPuresignalRun(ps);
             });
         }
         // Phase 3I Task 17 — record the most recently used radio so
@@ -24747,8 +24778,10 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // transmission, so the model, the MOX button and the windows read
         // unkeyed and nothing is left keyed for a reconnect to resume. The
         // P1 connection's own reconnect starts unkeyed and refuses a key
-        // until it is released (P1RadioConnection::dropTransmitForNewLink);
-        // this is the model's half. Thetis does the same on loss of sync,
+        // that reached it during the outage (P1RadioConnection::
+        // dropTransmitForNewLink); this is the model's half, and the key
+        // block below (m_radioLinkDown) refuses every new key until the
+        // link is back. Thetis does the same on loss of sync,
         // which powers the radio off:
         //   From Thetis console.cs:21339-21340 [v2.10.3.15]
         //     // set ui to power off if lost connection to radio
@@ -24777,6 +24810,12 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
             m_twoToneController->setPowerOn(false);
         }
         break;
+    }
+
+    // TX safety fix round 1: the keying gate follows the lost link's block.
+    if (m_radioLinkDown != wasRadioLinkDown) {
+        applyTxKeyBlock();
+        emit radioLinkDownChanged(m_radioLinkDown);
     }
 }
 
@@ -27060,7 +27099,11 @@ void RadioModel::applyTxKeyBlock()
     // chkMOX.Checked = false). TUN and two-tone go off below as for the
     // other two.
     m_moxController->setRxOnly(m_rxOnlyEffective, rxOnlyReason());
-    if (!inhibited && !m_paTripped && !m_rxOnlyEffective) {
+    // TX safety (2026-09-30): the lost radio link, the fourth (see
+    // MoxController::setRadioLinkDown; chkTUN and chk2TONE go off with
+    // chkMOX, console.cs:27488-27493 [v2.10.3.15]).
+    m_moxController->setRadioLinkDown(m_radioLinkDown);
+    if (!inhibited && !m_paTripped && !m_rxOnlyEffective && !m_radioLinkDown) {
         return;
     }
     if (m_isTuning && !m_pendingTuneOff) {
@@ -27201,11 +27244,31 @@ QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
 
 bool RadioModel::transmitButtonsLocked() const
 {
+    return m_radioLinkDown || m_rxOnlyEffective || isTxInhibited();
+}
+
+QString RadioModel::radioLinkDownReason()
+{
+    return TxRefusals::radioLinkDown().text;
+}
+
+bool RadioModel::transmitLockCoversVox() const
+{
+    // From Thetis console.cs:27488-27493 [v2.10.3.15]: loss of sync's
+    // power-off disables chkMOX, chkTUN and chk2TONE, not chkVOX. It
+    // follows the CW form stop (console.cs:27486, not part of this lock):
+    //   m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
     return m_rxOnlyEffective || isTxInhibited();
 }
 
 bool RadioModel::transmitLockCoversMox() const
 {
+    // TX safety (2026-09-30): a lost link disables MOX in every mode.
+    //   From Thetis console.cs:27489 [v2.10.3.15]
+    //     chkMOX.Enabled = false;
+    if (m_radioLinkDown) {
+        return true;
+    }
     if (m_rxOnlyEffective) {
         return receiveOnlyDisablesMoxButton();
     }
@@ -27224,6 +27287,11 @@ bool RadioModel::transmitLockCoversMox() const
 
 QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) const
 {
+    // TX safety (2026-09-30): the lost link stands alone. Nothing else
+    // matters until it is back.
+    if (m_radioLinkDown) {
+        return radioLinkDownReason();
+    }
     if (m_rxOnlyEffective) {
         return rxOnlyReasonAlongside(otherReason);
     }

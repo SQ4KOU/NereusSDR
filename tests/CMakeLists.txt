@@ -1074,6 +1074,15 @@ target_compile_definitions(tst_reconnect_on_silence PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_reconnect_unkeyed fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_p1_reconnect_unkeyed PRIVATE NEREUS_BUILD_TESTS)
 
+# TX safety fix round 1 (I2): with PS-A running, the PureSignal run flag is
+# back after a link blip, P1 (its own reconnect, on the ep2 wire) and P2
+# (the rebuilt link). Fake radios only; nothing keys.
+nereus_add_test(tst_ps_run_after_link_blip
+    fakes/P1FakeRadio.cpp
+    fakes/P2FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+target_compile_definitions(tst_ps_run_after_link_blip PRIVATE NEREUS_BUILD_TESTS)
+
 # Saved-radio persistence round-trip (Phase 3I Task 15)
 nereus_add_test(tst_connection_panel_saved_radios)
 

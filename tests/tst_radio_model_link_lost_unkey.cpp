@@ -12,6 +12,13 @@
 //   2. TUNE keyed: the same.
 //   3. Nothing keyed: LinkLost emits no stop.
 //   4. The link back (Connected) does not key anything.
+//   5. Fix round 1 (I1): while the link is lost, and through the reconnect
+//      that follows, every key is refused with "The link to the radio is
+//      down." (code interlock), MOX, TUN and 2TONE are locked with that
+//      reason (VOX is not), and the model never shows TX; when the link is
+//      back the lock lifts and a key reaches the connection.
+//   6. Fix round 1 (I2): the link back pushes the PureSignal enable to the
+//      connection again, whatever the protocol.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
@@ -20,6 +27,7 @@
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/RadioConnection.h"
+#include "core/safety/TxRefusal.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
@@ -70,7 +78,10 @@ public:
     void setMicBias(bool) override {}
     void setLineInGain(int) override {}
     void setUserDigOut(quint8) override {}
-    void setPuresignalRun(bool) override {}
+    void setPuresignalRun(bool on) override
+    {
+        log.append(on ? QStringLiteral("PS on") : QStringLiteral("PS off"));
+    }
     void setMicPTTDisabled(bool) override {}
     void setMicXlr(bool) override {}
     void setStateForTest(ConnectionState s) { setState(s); }
@@ -192,6 +203,97 @@ private slots:
         pump();
         QCOMPARE(stopped.count(), 0);
         QVERIFY(!rig.conn.log.contains(QStringLiteral("MOX on")));
+    }
+
+    void outageRefusesEveryKeyWithItsReason()
+    {
+        Rig rig;
+        MoxController* mox = rig.model.moxController();
+        const QString reason = QStringLiteral("The link to the radio is down.");
+        QSignalSpy downChanged(&rig.model, &RadioModel::radioLinkDownChanged);
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        QSignalSpy moxState(mox, &MoxController::moxStateChanged);
+        rig.conn.log.clear();
+
+        rig.conn.setStateForTest(ConnectionState::LinkLost);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        pump();
+        QVERIFY(rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+        QCOMPARE(downChanged.at(0).at(0).toBool(), true);
+
+        // The windows' lock: MOX, TUN and 2TONE with the reason, not VOX.
+        QVERIFY(rig.model.transmitButtonsLocked());
+        QVERIFY(rig.model.transmitLockCoversMox());
+        QVERIFY(!rig.model.transmitLockCoversVox());
+        QCOMPARE(rig.model.transmitLockReasonAlongside(QString()), reason);
+        // The refusal remote windows and the phone are sent.
+        QCOMPARE(mox->transmitBlockReason(), reason);
+        QCOMPARE(mox->transmitBlockRefusal().code, QByteArray(TxRefusals::kInterlock));
+        QCOMPARE(mox->transmitBlockRefusal().text, reason);
+
+        mox->setMox(true);
+        pump();
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), reason);
+        QCOMPARE(refused.count(), 1);
+        QVERIFY(!rig.model.mox());
+
+        rig.model.setTune(true);
+        pump();
+        QVERIFY(!rig.model.isTune());
+        QVERIFY(!rig.model.mox());
+
+        // The reconnect under way (Connecting) still refuses.
+        rig.conn.setStateForTest(ConnectionState::Connecting);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::Connecting);
+        pump();
+        QVERIFY(rig.model.isRadioLinkDown());
+        mox->setMox(true);
+        pump();
+        QVERIFY(!rig.model.mox());
+
+        for (const QList<QVariant>& args : moxState) {
+            QVERIFY2(!args.at(0).toBool(), "the model showed TX during the outage");
+        }
+        QVERIFY2(!rig.conn.log.contains(QStringLiteral("MOX on")),
+                 "a key reached the connection during the outage");
+
+        // The link is back: the lock lifts and the next key goes out.
+        rig.conn.setStateForTest(ConnectionState::Connected);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::Connected);
+        pump();
+        QVERIFY(!rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 2);
+        QCOMPARE(downChanged.at(1).at(0).toBool(), false);
+        QVERIFY(!rig.model.transmitButtonsLocked());
+        QVERIFY(mox->transmitBlockReason().isEmpty());
+
+        mox->setMox(true);
+        pump();
+        QTRY_VERIFY_WITH_TIMEOUT(rig.model.mox(), 5000);
+        QVERIFY(rig.conn.log.contains(QStringLiteral("MOX on")));
+        mox->setMox(false);
+        QTRY_VERIFY_WITH_TIMEOUT(rig.allOff(), 5000);
+    }
+
+    void linkBackPutsPureSignalEnableBack()
+    {
+        Rig rig;
+        rig.model.transmitModel().setPureSigEnabled(true);
+        pump();
+        rig.conn.setStateForTest(ConnectionState::LinkLost);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        pump();
+        rig.conn.log.clear();
+
+        rig.conn.setStateForTest(ConnectionState::Connected);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::Connected);
+        pump();
+        QVERIFY2(rig.conn.log.contains(QStringLiteral("PS on")),
+                 qPrintable(rig.conn.log.join(QStringLiteral(", "))));
+        QVERIFY(!rig.conn.log.contains(QStringLiteral("PS off")));
     }
 };
 

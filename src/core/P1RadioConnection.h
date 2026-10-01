@@ -85,6 +85,9 @@
 //                until released (m_linkLossLatched), as the priming frames of
 //                Thetis networkproto1.c:106-138 [v2.10.3.15] never carry MOX.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety fix round 1: the latch only for a link lost
+//                keyed, lifted when the reconnect is back unkeyed.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -919,13 +922,14 @@ private:
     // not once per sample, so the ordering cost is irrelevant next to the
     // surrounding ring arithmetic.
     std::atomic<bool> m_mox{false};
-    // Link-loss latch (TX safety, whole-branch review 2026-09-30). Set when
-    // the watchdog declares the link lost, and again at a reconnect attempt
-    // that found a key made during the outage. While set, setMox(true) is
-    // refused; setMox(false), the operator's release, clears it, and so
-    // does connectToRadio. Follows P2RadioConnection::m_linkLossLatched,
-    // which refuses a key through a lost link the same way; Thetis itself
-    // never reconnects a lost P1 link (see dropTransmitForNewLink).
+    // Link-loss latch (TX safety, whole-branch review 2026-09-30, fix
+    // round 1). Set when the watchdog declares a link lost while keyed, and
+    // at a reconnect attempt that found a key made during the outage. While
+    // set, setMox(true) is refused; the reconnect reaching Connected
+    // unkeyed clears it, as do setMox(false) and connectToRadio. Follows
+    // P2RadioConnection::m_linkLossLatched, which refuses a key through a
+    // lost link the same way; Thetis itself never reconnects a lost P1
+    // link (see dropTransmitForNewLink).
     // Connection thread only.
     bool    m_linkLossLatched{false};
     bool    m_linkLossRefusalLogged{false};
