@@ -61,7 +61,7 @@ private slots:
     void structureHasThreeSectionsInOrderWithDividers();
 
     void modelChange_reflectsOnControl_waterfall();
-    void modelChange_outOfRangeColorScheme_clampsDisplayWithoutCorruptingModel();
+    void modelChange_reflectsEveryValidColorScheme();
     void modelChange_reflectsOnControl_spectrum();
     void modelChange_reflectsOnControl_threeDView();
 
@@ -187,7 +187,7 @@ void TestDisplayApplet::modelChange_reflectsOnControl_waterfall()
 
     {
         QSignalSpy spy(settings, &DisplaySettingsModel::wfColorSchemeChanged);
-        settings->setWfColorScheme(2);  // "Spectran" -- within the combo's 4 items
+        settings->setWfColorScheme(2);  // "Spectran"
         QCOMPARE(applet.colorSchemeComboForTest()->currentIndex(), 2);
         QCOMPARE(spy.count(), 1);
     }
@@ -205,27 +205,31 @@ void TestDisplayApplet::modelChange_reflectsOnControl_waterfall()
     }
 }
 
-// wfColorScheme's model range is 0..7 (WfColorScheme::Count == 8), but the
-// combo -- copied verbatim from the popup, which only ever offered four
-// items -- can only DISPLAY 0..3 (SpectrumOverlayMenu::setValues() clamps
-// the same way). Without QSignalBlocker on the reflect, that clamped
-// DISPLAY value would bounce back out through the combo's
-// currentIndexChanged and corrupt the model down to 3. This is the one
-// field in the fifteen where the blocker is load-bearing rather than
-// belt-and-suspenders over the model's own equality guard (every other
-// field's reflect sets the control to the SAME value the model just
-// stored, so an unblocked round trip is a same-value no-op there).
-void TestDisplayApplet::modelChange_outOfRangeColorScheme_clampsDisplayWithoutCorruptingModel()
+// The primary Display applet must reflect every scheme accepted by Setup
+// and the model without writing a different selection back to the model.
+void TestDisplayApplet::modelChange_reflectsEveryValidColorScheme()
 {
     RadioModel m;
     SpectrumWidget w;
     m.setSpectrumWidget(&w);
     DisplayApplet applet(&m);
     DisplaySettingsModel* settings = w.displaySettings();
-
-    settings->setWfColorScheme(6);  // LinRad -- outside the combo's 4 items
-    QCOMPARE(applet.colorSchemeComboForTest()->currentIndex(), 3);
-    QCOMPARE(settings->wfColorScheme(), 6);
+    const QStringList labels{
+        QStringLiteral("Default"), QStringLiteral("Enhanced"),
+        QStringLiteral("Spectran"), QStringLiteral("Black & White"),
+        QStringLiteral("LinLog"), QStringLiteral("LinRad"),
+        QStringLiteral("Custom"), QStringLiteral("Clarity Blue")};
+    for (int scheme = 0; scheme < labels.size(); ++scheme) {
+        settings->setWfColorScheme(scheme);
+        QCOMPARE(applet.colorSchemeComboForTest()->currentText(), labels[scheme]);
+        QCOMPARE(settings->wfColorScheme(), scheme);
+        applet.colorSchemeComboForTest()->setCurrentIndex((scheme + 1) % labels.size());
+        QCOMPARE(settings->wfColorScheme(), (scheme + 1) % labels.size());
+    }
+    // Initial binding must also reflect the previously selected scheme.
+    settings->setWfColorScheme(7);
+    DisplayApplet rebound(&m);
+    QCOMPARE(rebound.colorSchemeComboForTest()->currentText(), QStringLiteral("Clarity Blue"));
 }
 
 void TestDisplayApplet::modelChange_reflectsOnControl_spectrum()

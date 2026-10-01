@@ -19,6 +19,8 @@
 //                 via Anthropic Claude Code.
 //                 Row ring store ported from AetherSDR
 //                 `src/gui/DssRenderer.cpp`.
+//   2026-10-01 - Fixed CPU viewport mapping during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #include "gui/DssRenderer.h"
@@ -325,8 +327,14 @@ const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
                                  float floorDbm, float rangeDb, float zCurve,
                                  const PaletteFn& palette,
                                  quint64 paletteToken,
-                                 const QColor& bgFill, const DssShape& shape)
+                                 const QColor& bgFill, const DssShape& shape,
+                                 double targetCenterMhz, double targetBandwidthMhz)
 {
+    if (!std::isfinite(targetCenterMhz) || !std::isfinite(targetBandwidthMhz)
+        || targetCenterMhz <= 0.0 || targetBandwidthMhz <= 0.0) {
+        targetCenterMhz = m_rowCenterMhz[m_head];
+        targetBandwidthMhz = m_rowBandwidthMhz[m_head];
+    }
     const bool changed = m_dirty
         || px != m_cacheSize
         || scaleStripPx != m_cacheScaleStrip
@@ -334,6 +342,8 @@ const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
         || rangeDb != m_cacheRange
         || zCurve != m_cacheZCurve
         || paletteToken != m_cachePaletteToken
+        || targetCenterMhz != m_cacheCenterMhz
+        || targetBandwidthMhz != m_cacheBandwidthMhz
         // -KG4VCF [v0.5.3] Not present upstream: its shape is a compile-time
         // constant, so it cannot change and needs no cache-key entry. Ours
         // moves with the runtime 3D Angle control -- without this, the
@@ -345,7 +355,7 @@ const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
 
     if (changed) {
         rebuild(px, scaleStripPx, floorDbm, rangeDb, zCurve, palette, bgFill,
-               shape);
+               shape, targetCenterMhz, targetBandwidthMhz);
         ++m_generation;
         m_cacheSize         = px;
         m_cacheScaleStrip   = scaleStripPx;
@@ -354,6 +364,8 @@ const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
         m_cacheZCurve       = zCurve;
         m_cachePaletteToken = paletteToken;
         m_cacheShape        = shape;
+        m_cacheCenterMhz    = targetCenterMhz;
+        m_cacheBandwidthMhz = targetBandwidthMhz;
         m_dirty             = false;
     }
     return m_cache;
@@ -362,7 +374,8 @@ const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
 // From AetherSDR src/gui/DssRenderer.cpp:781-888 [@1872028c].
 void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
                           float rangeDb, float zCurve, const PaletteFn& palette,
-                          const QColor& bgFill, const DssShape& shape)
+                          const QColor& bgFill, const DssShape& shape,
+                          double targetCenterMhz, double targetBandwidthMhz)
 {
     const int W = px.width();
     const int Htot = px.height();
@@ -416,13 +429,49 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
         const double dim          = kMinDim + (1.0 - kMinDim) * (1.0 - depthFrac);
 
         const int ring = ringAtAge(age);
-        const auto& row = m_rows[ring];
-        const auto& coverage = m_rowCoverage[ring];
+        // NereusSDR CPU mapping follows the frequency-frame arbitration in
+        // AetherSDR resources/shaders/dss_mesh.vert:133-175 [@1872028c].
+        // Unlike upstream's destructive reprojectFrequencyFrame(), sample
+        // the retained capture at paint time so repeated zooms lose no bins.
+        std::array<float, kDssCols> row;
+        for (int c = 0; c < kDssCols; ++c) {
+            const double u = double(c) / (kDssCols - 1);
+            const auto sample = [&](const auto& values, const auto& coverage,
+                                    double centerMhz, double bandwidthMhz,
+                                    float& value) {
+                double sourceU = u;
+                if (centerMhz > 0.0 && bandwidthMhz > 0.0
+                    && targetCenterMhz > 0.0 && targetBandwidthMhz > 0.0) {
+                    sourceU = 0.5 + (targetCenterMhz - centerMhz) / bandwidthMhz
+                        + (u - 0.5) * targetBandwidthMhz / bandwidthMhz;
+                }
+                if (!std::isfinite(sourceU) || sourceU < 0.0 || sourceU > 1.0) {
+                    return false;
+                }
+                const double position = sourceU * (kDssCols - 1);
+                const int lo = static_cast<int>(position);
+                const int hi = std::min(lo + 1, kDssCols - 1);
+                const float mix = static_cast<float>(position - lo);
+                const float covered = coverage[lo] * (1.0f - mix) + coverage[hi] * mix;
+                if (covered <= 0.5f) {
+                    return false;
+                }
+                value = values[lo] * (1.0f - mix) + values[hi] * mix;
+                return true;
+            };
+            row[c] = floorDbm;
+            if (!sample(m_rows[ring], m_rowCoverage[ring],
+                        m_rowCenterMhz[ring], m_rowBandwidthMhz[ring], row[c])
+                && m_rowWideBandwidthMhz[ring] > 0.0) {
+                sample(m_rowWide[ring], m_rowWideCoverage[ring],
+                       m_rowWideCenterMhz[ring], m_rowWideBandwidthMhz[ring], row[c]);
+            }
+        }
         // Pass 1: geometry — noise-floor-anchored ridge heights, with the same
         // pow(s, zCurve) floor-lift the GPU shader applies.
         for (int c = 0; c < kDssCols; ++c) {
             const double x = inset + (kDssCols > 1 ? double(c) / (kDssCols - 1) : 0.0) * rowW;
-            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            const float dbm = row[c];
             double strength = std::clamp(
                 (dbm - floorDbm) / rangeDb, 0.0f, 1.0f);
             strength = std::pow(strength, zc);
@@ -435,7 +484,7 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
             const int cr = std::min(kDssCols - 1, c + 1);
             const double slope = (pts[cl].y() - pts[cr].y()) / slopeScale; // +: rises to right
             const double shade = std::clamp(1.0 + kSlopeGain * slope, kShadeLo, kShadeHi);
-            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            const float dbm = row[c];
             QColor base = QColor(palette(dbm));
             base = lerpColor(base, bgFill, depthFrac * kDssHaze);
             cols[c] = scaled(base, dim * shade);
@@ -459,7 +508,7 @@ void DssRenderer::rebuild(const QSize& px, int scaleStripPx, float floorDbm,
         p.setRenderHint(QPainter::Antialiasing, true);
         ridgePen.setWidthF(age == 0 ? 1.6 : 1.0);
         for (int c = 0; c < kDssCols - 1; ++c) {
-            const float dbm = coverage[c] != 0 ? row[c] : floorDbm;
+            const float dbm = row[c];
             QColor rc = QColor(palette(dbm)).lighter(165);
             rc = lerpColor(rc, bgFill, depthFrac * kDssHaze);
             ridgePen.setColor(scaled(rc, dim));

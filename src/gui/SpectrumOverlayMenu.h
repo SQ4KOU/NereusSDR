@@ -21,6 +21,12 @@
 //                 via Anthropic Claude Code.
 //                 Overlay-menu pattern from AetherSDR
 //                 `src/gui/SpectrumOverlayMenu.{h,cpp}`.
+//   2026-08-08 - Adapted the 3D VIEW declarations from AetherSDR
+//                 src/gui/SpectrumOverlayMenu.h:380-387 [@1872028c]
+//                 for NereusSDR by J.J. Boyd (KG4VCF), with AI assistance
+//                 via Anthropic Claude Code.
+//   2026-10-01 - Completed 3D port history during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #include <QWidget>

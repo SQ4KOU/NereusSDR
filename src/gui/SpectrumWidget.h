@@ -100,6 +100,28 @@
 //                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
+// =================================================================
+// Source attribution for 3D stacked-trace spectrum (AetherSDR, GPLv3):
+//   Project lead: Jeremy (KK7GWY) / AetherSDR contributors
+//   https://github.com/ten9876/AetherSDR
+//   Upstream files at 1872028c: src/gui/SpectrumWidget.h and
+//   src/gui/DssRenderer.h. AetherSDR has no per-file license header;
+//   its project LICENSE is GPLv3.
+//
+// Modification history (3D stacked-trace port, NereusSDR):
+//   2026-10-02 - Integrated the display bindings and speed fold with
+//                landed remote capture, RX/TX and marker paths for
+//                NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                conflict resolution via OpenAI Codex.
+//   2026-08-08 - Adapted the AetherSDR 3D controls and renderer state
+//                for NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                transformation via Anthropic Claude Code. The 3D Speed
+//                row divider and peak-hold fold are NereusSDR additions.
+//   2026-10-01 - Corrected frame-fold and skipped-paint GPU upload state
+//                for NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via OpenAI Codex.
+// =================================================================
+
 /*  enums.cs
 
 This file is part of a program that implements a Software-Defined Radio.
@@ -285,6 +307,8 @@ using SpectrumBaseClass = QRhiWidget;
 using SpectrumBaseClass = QWidget;
 #endif
 
+class TestDssRowTee;
+
 namespace NereusSDR {
 
 class BandPlanManager;
@@ -373,6 +397,7 @@ QRgb interpolateWfGradient(float t, const WfGradientStop* stops, int count);
 // From gpu-waterfall.md lines 274-289
 class SpectrumWidget : public SpectrumBaseClass, public NereusSDR::ISpectrumSink {
     Q_OBJECT
+    friend class ::TestDssRowTee;
 
     // Phase 3Q-8: animated dim factor for the disconnect overlay.
     // 1.0 = no dim (connected), 0.4 = 60% dim (disconnected, after 800 ms fade).
@@ -2928,7 +2953,16 @@ private:
     // baseline sits, in dB. Persisted per band (design doc section 6.3).
     int  m_dssFloorDepth{6};
     int  m_dssGain{70};        // colour gamma 0-100
-    int  m_dssRowSpan{100};    // wedge close-in 0-100
+    // [original inline comment from AetherSDR src/gui/SpectrumWidget.h:1485-1492 @1872028c]
+    // 3DSS wedge close-in 0-100 (see setDssRowSpan). Defaults to 100 -- fully
+    // ON -- by deliberate product decision, not by omission: three reviewers
+    // read 0 as the safer default since it is the reference rendering. The
+    // control is buried in the Display overlay's 3D VIEW section, so shipping
+    // it off would mean most operators never discover the feature exists.
+    // Anyone who wants the classic trapezoid has a labelled slider; anyone who
+    // does not know to look gets the intended view. Do not flip this to 0
+    // without also solving the discoverability side.
+    int  m_dssRowSpan{100};
     //-KG4VCF [v0.5.3] NereusSDR-original: upstream renders at one fixed
     // viewing angle. 50 reproduces its geometry exactly.
     int  m_dssAngle{50};
@@ -2941,7 +2975,15 @@ private:
     QVector<float> m_dssFoldRow;
     QVector<float> m_dssFoldFullBins;
     int  m_dssFoldCount{0};
+    double m_dssFoldCenterHz{0.0};
+    double m_dssFoldBandwidthHz{0.0};
+    double m_dssFoldDdcCenterHz{0.0};
+    double m_dssFoldSampleRateHz{0.0};
     bool m_threeDSliceDepth{false};
+    // [original inline comment from AetherSDR src/gui/SpectrumWidget.h:1474-1476 @1872028c]
+    // GUI-thread only: pushRow() (updateSpectrum / updateKiwiSdrWaterfallRow) and
+    // the renderGpuFrame/paint reads all run on the GUI thread, so m_dss needs no
+    // lock. Do NOT call pushRow() from a worker/audio thread without adding one.
     DssRenderer m_dss;
     int  m_dssRowsPushed{0};
     bool m_txActiveForTest{false};
@@ -3694,6 +3736,7 @@ private:
     // ---- 3DSS mesh GPU resources ----
     bool initDssMeshPipeline();
     void rebuildDssMeshIfNeeded(QRhiResourceUpdateBatch* batch);
+    QVector<int> dssHeightRowsToUpload() const;
     void uploadDssHeightRows(QRhiResourceUpdateBatch* batch);
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch);
     void writeDssMeshUbo(QRhiResourceUpdateBatch* batch,

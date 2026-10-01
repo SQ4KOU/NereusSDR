@@ -127,6 +127,29 @@
 //                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
+// =================================================================
+// Source attribution for 3D stacked-trace spectrum (AetherSDR, GPLv3):
+//   Project lead: Jeremy (KK7GWY) / AetherSDR contributors
+//   https://github.com/ten9876/AetherSDR
+//   Upstream files at 1872028c: src/gui/SpectrumWidget.cpp,
+//   src/gui/DssRenderer.cpp, resources/shaders/dss_mesh.vert, and
+//   resources/shaders/dss_mesh.frag. AetherSDR has no per-file license
+//   header; its project LICENSE is GPLv3.
+//
+// Modification history (3D stacked-trace port, NereusSDR):
+//   2026-10-02 - Integrated the display bindings and speed fold with
+//                landed remote capture, RX/TX and marker paths for
+//                NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                conflict resolution via OpenAI Codex.
+//   2026-08-08 - Adapted the AetherSDR 3D renderer and GPU upload path
+//                for NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                transformation via Anthropic Claude Code. The 3D Speed
+//                row divider and peak-hold fold are NereusSDR additions.
+//   2026-10-01 - Corrected frame-fold and skipped-paint GPU uploads for
+//                NereusSDR by J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via OpenAI Codex.
+// =================================================================
+
 //=================================================================
 // display.cs
 //=================================================================
@@ -7127,18 +7150,25 @@ QVector<SpectrumWidget::DssShadowBand> SpectrumWidget::buildDssShadowBands() con
 // this reason (it would shrink such a burst by a factor of N and could
 // vanish from the 3D surface while still visible in the waterfall).
 //
-// A size change on either the exact row or the full-bins snapshot (DDC
-// bandwidth/zoom change mid-fold) discards whatever was accumulated and
-// starts a fresh fold at count 1, rather than mixing rows of two
-// different widths together.
+// A size or frequency-frame change on either channel discards whatever was
+// accumulated and starts a fresh fold at count 1, rather than combining
+// bin indices that now represent different frequencies.
 void SpectrumWidget::accumulateDssRow(const QVector<float>& wfPixelsDbm)
 {
     if (m_dssFoldCount == 0
         || wfPixelsDbm.size() != m_dssFoldRow.size()
-        || m_lastFullBinsDbm.size() != m_dssFoldFullBins.size()) {
+        || m_lastFullBinsDbm.size() != m_dssFoldFullBins.size()
+        || m_centerHz != m_dssFoldCenterHz
+        || m_bandwidthHz != m_dssFoldBandwidthHz
+        || m_ddcCenterHz != m_dssFoldDdcCenterHz
+        || m_sampleRateHz != m_dssFoldSampleRateHz) {
         m_dssFoldRow = wfPixelsDbm;
         m_dssFoldFullBins = m_lastFullBinsDbm;
         m_dssFoldCount = 1;
+        m_dssFoldCenterHz = m_centerHz;
+        m_dssFoldBandwidthHz = m_bandwidthHz;
+        m_dssFoldDdcCenterHz = m_ddcCenterHz;
+        m_dssFoldSampleRateHz = m_sampleRateHz;
     } else {
         const int n = m_dssFoldRow.size();
         for (int i = 0; i < n; ++i) {
@@ -7371,7 +7401,8 @@ const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
     // UBO's bgFill field (writeDssMeshUbo()), for the same reason.
     return m_dss.image(px, scaleStripPx, floorDbm, rangeDb, 0.6f,
                        palette, dssPaletteToken(), QColor(0x0a, 0x0a, 0x14),
-                       dssShape());
+                       dssShape(), m_centerHz / 1.0e6,
+                       m_bandwidthHz / 1.0e6);
 }
 
 // ---- VFO marker + filter passband overlay ----
@@ -11522,10 +11553,29 @@ void SpectrumWidget::rebuildDssMeshIfNeeded(QRhiResourceUpdateBatch* batch)
 // more than one push (mode just entered 3D, or several rows arrived between
 // paints) -- in which case the whole texture is re-uploaded to avoid
 // re-deriving which rows are stale from the generation delta alone.
+QVector<int> SpectrumWidget::dssHeightRowsToUpload() const
+{
+    if (m_dss.rowCount() == 0
+        || m_dss.rowGeneration() == m_dssUploadedRowGeneration) {
+        return {};
+    }
+    if (m_dssLastUploadedHead < 0 || m_dss.rowCount() < kDssRows
+        || m_dss.rowGeneration() - m_dssUploadedRowGeneration != 1) {
+        QVector<int> rows;
+        rows.reserve(m_dss.rows());
+        for (int ring = 0; ring < m_dss.rows(); ++ring) {
+            rows.append(ring);
+        }
+        return rows;
+    }
+    return {m_dss.headRing()};
+}
+
 void SpectrumWidget::uploadDssHeightRows(QRhiResourceUpdateBatch* batch)
 {
     if (!m_dssMeshReady || !batch || m_dss.rowCount() == 0) { return; }
-    if (m_dss.rowGeneration() == m_dssUploadedRowGeneration) { return; }
+    const QVector<int> rowsToUpload = dssHeightRowsToUpload();
+    if (rowsToUpload.isEmpty()) { return; }
 
     const int cols = m_dss.cols();
     const auto packRow = [&](int ring, QVector<qfloat16>& out) {
@@ -11544,25 +11594,12 @@ void SpectrumWidget::uploadDssHeightRows(QRhiResourceUpdateBatch* batch)
 
     QVector<qfloat16> packed;
     const int head = m_dss.headRing();
-    const bool fullUpload =
-        m_dssLastUploadedHead < 0
-        || m_dss.rowCount() < kDssRows;
-    if (fullUpload) {
-        for (int ring = 0; ring < m_dss.rows(); ++ring) {
-            packRow(ring, packed);
-            QRhiTextureSubresourceUploadDescription desc(
-                packed.constData(), packed.size() * sizeof(qfloat16));
-            desc.setSourceSize(QSize(cols, 1));
-            desc.setDestinationTopLeft(QPoint(0, ring));
-            batch->uploadTexture(m_dssHeightTex,
-                                 QRhiTextureUploadEntry(0, 0, desc));
-        }
-    } else {
-        packRow(head, packed);
+    for (int ring : rowsToUpload) {
+        packRow(ring, packed);
         QRhiTextureSubresourceUploadDescription desc(
             packed.constData(), packed.size() * sizeof(qfloat16));
         desc.setSourceSize(QSize(cols, 1));
-        desc.setDestinationTopLeft(QPoint(0, head));
+        desc.setDestinationTopLeft(QPoint(0, ring));
         batch->uploadTexture(m_dssHeightTex,
                              QRhiTextureUploadEntry(0, 0, desc));
     }

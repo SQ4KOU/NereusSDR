@@ -99,7 +99,11 @@ void DisplayApplet::buildUI()
             QStringLiteral("Default"),
             QStringLiteral("Enhanced"),
             QStringLiteral("Spectran"),
-            QStringLiteral("Black & White")
+            QStringLiteral("Black & White"),
+            QStringLiteral("LinLog"),
+            QStringLiteral("LinRad"),
+            QStringLiteral("Custom"),
+            QStringLiteral("Clarity Blue")
         });
         applyComboStyle(m_colorSchemeCombo);
         row->addWidget(lbl);

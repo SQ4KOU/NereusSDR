@@ -198,6 +198,50 @@ private slots:
         QCOMPARE(w.dssRowsPushedForTest(), 0);
     }
 
+    // Every frequency-frame setting changes the meaning of bin indices even
+    // when the row and full-FFT bin counts stay the same.
+    void partialFold_restartsOnFrequencyFrameChange_data()
+    {
+        QTest::addColumn<int>("change");
+        QTest::newRow("visible center") << 0;
+        QTest::newRow("visible bandwidth") << 1;
+        QTest::newRow("DDC center") << 2;
+        QTest::newRow("sample rate") << 3;
+    }
+
+    void partialFold_restartsOnFrequencyFrameChange()
+    {
+        QFETCH(int, change);
+        SpectrumWidget w;
+        w.resize(400, 200);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        w.setDssRowDivider(3);
+
+        w.pushWaterfallRowForTest(row(768, -40.0f));
+        w.pushWaterfallRowForTest(row(768, -40.0f));
+        QCOMPARE(w.dssFoldCountForTest(), 2);
+        if (change == 0) {
+            w.setFrequencyRange(21.0e6, 192000.0);
+        } else if (change == 1) {
+            w.setFrequencyRange(14.225e6, 96000.0);
+        } else if (change == 2) {
+            w.setDdcCenterFrequency(21.0e6);
+        } else {
+            w.setSampleRate(384000.0);
+        }
+        w.pushWaterfallRowForTest(row(768, -100.0f));
+        QCOMPARE(w.dssFoldCountForTest(), 1);
+        QCOMPARE(w.dssRowsPushedForTest(), 0);
+        w.pushWaterfallRowForTest(row(768, -100.0f));
+        w.pushWaterfallRowForTest(row(768, -100.0f));
+
+        QCOMPARE(w.dssRowsPushedForTest(), 1);
+        QVERIFY2(w.dssNewestRowColumnForTest(384) < -95.0f,
+                 "old-frame peak leaked into retuned 3D row");
+    }
+
     // Acceptance: divider 10, six rows, then divider 3, one more row:
     // one push, count 0.
     void dividerLoweredMidFold_pushesOnNextTick()
