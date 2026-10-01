@@ -7137,6 +7137,10 @@ nereus_add_test(tst_diversity_pattern)
 # Diversity's synchronized partner DDC1 is tuned to RX1 as Thetis tunes it
 # (UpdateRX1DDSFreq), on Protocol 2 and Protocol 1.
 nereus_add_test(tst_diversity_partner_ddc)
+# The Diversity dialog edits the slice RadioModel runs diversity for (slice
+# A, by id), and disables its controls with a reason while that slice is
+# closed.
+nereus_add_test(tst_diversity_dialog_owner)
 # Phone wire batch: radio's logCategoryList (the Support dialog's categories
 # with their labels).
 nereus_add_test(tst_log_category_list)

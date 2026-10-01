@@ -971,6 +971,10 @@
 //                go, receive only, on the air, the carrier's refusal, a
 //                take, its lost link), so the device is always told. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: diversityTargetSlice() publishes the one
+//                diversity owner (slice A by id) so the Diversity dialog
+//                edits the slice this model runs diversity for. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -31208,6 +31212,11 @@ PureSignal* RadioModel::installPureSignalForTest(TxChannel* tx)
     return m_pureSignal.get();
 }
 #endif
+
+SliceModel* RadioModel::diversityTargetSlice() const
+{
+    return sliceById(kExternalDiversityTargetSliceId);
+}
 
 bool RadioModel::diversityActive() const
 {
