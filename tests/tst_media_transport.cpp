@@ -53,6 +53,7 @@
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/RelayLeg.h"
 #include "core/session/media/PcmAudioCodec.h"
+#include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteIqCodec.h"
 #include "core/session/media/RemoteMicReceiver.h"
 
@@ -65,6 +66,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QtTest>
+#include <QtEndian>
 
 #include <atomic>
 #include <chrono>
@@ -2383,11 +2385,10 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
     constexpr int kWarmupMs = 1000;
     const std::vector<int> stallsMs{80, 120, 200, 300, 420, 90, 150};
     constexpr int kBetweenStallsMs = 500;
-    int runMs = kWarmupMs + 300;
-    for (const int stall : stallsMs) {
-        runMs += stall + kBetweenStallsMs;
-    }
-    const int packets = runMs / 20 + 10;
+    // Repeat a two-second clip until the consumer stops. The owner can
+    // spend longer in qWait under load, so its nominal elapsed time cannot
+    // determine when the microphone stops sending.
+    constexpr int packets = 100;
     std::vector<QByteArray> encoded;
     {
         RemoteMicEncoder encoder;
@@ -2398,8 +2399,11 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
                 frame[static_cast<size_t>(i)] =
                     micSpeechSample(static_cast<qint64>(k) * kFrames + i);
             }
-            encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k + 1),
-                                             static_cast<quint32>(k * kFrames), kTestMicSsrc));
+            const QByteArray packet = encoder.encode(
+                frame.data(), static_cast<quint16>(k + 1),
+                static_cast<quint32>(k * kFrames), kTestMicSsrc);
+            QVERIFY(packet.size() >= OpusAudioCodecConfig::kRtpHeaderBytes);
+            encoded.push_back(packet);
         }
     }
 
@@ -2475,12 +2479,18 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
         if (offerStarted && offerReady.count() == 1 && answerReady.load()) {
             using Clock = std::chrono::steady_clock;
             std::atomic<bool> stop{false};
-            // The phone's microphone: a packet every 20 ms, on time.
+            // The phone's microphone stays active until the pump stops.
             std::thread sender([&]() {
                 const Clock::time_point start = Clock::now();
-                for (int k = 0; k < packets && !stop.load(); ++k) {
+                for (quint64 k = 0; !stop.load(); ++k) {
                     std::this_thread::sleep_until(start + std::chrono::milliseconds(20 * k));
-                    const QByteArray packet = encoded[static_cast<size_t>(k)];
+                    if (stop.load()) {
+                        break;
+                    }
+                    QByteArray packet = encoded[static_cast<size_t>(k % packets)];
+                    // Reusing the audio must not restart the RTP stream.
+                    qToBigEndian<quint16>(static_cast<quint16>(k + 1), packet.data() + 2);
+                    qToBigEndian<quint32>(static_cast<quint32>(k * kFrames), packet.data() + 4);
                     QMetaObject::invokeMethod(
                         &phoneContext,
                         [&answerer, &sent, packet]() {
