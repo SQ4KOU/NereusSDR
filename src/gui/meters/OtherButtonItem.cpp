@@ -18,6 +18,9 @@
 //                 (display duplex), no longer hidden with the status bar's
 //                 FDX. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-30 - The Power button is removed (maintainer decision): never
+//                 drawn, and a saved layout's Power bit is dropped on load.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -65,6 +68,8 @@ mw0lge@grange-lane.co.uk
 namespace NereusSDR {
 
 // From Thetis clsOtherButtons (MeterManager.cs:8225+)
+// Power ("PWR") intentionally omitted in NereusSDR (maintainer decision
+// 2026-09-30): its label stays at its Thetis index, never drawn.
 static const char* const kCoreLabels[] = {
     "PWR", "RX2", "MON", "TUN", "MOX", "2TON", "DUP", "PS",
     "PLAY", "REC", "ANF", "SNB", "MNF", "AVG", "PEAK", "CTUN",
@@ -108,6 +113,8 @@ OtherButtonItem::OtherButtonItem(QObject* parent)
             setButtonHiddenUntilBuilt(i, !UnbuiltFeatures::isBuilt(*feature));
         }
     }
+    // No Power button (maintainer decision 2026-09-30).
+    setVisibleBits(withoutOmittedButtons(visibleBits()));
 
     connect(this, &ButtonBoxItem::buttonClicked, this, &OtherButtonItem::onButtonClicked);
 }
@@ -220,8 +227,14 @@ bool OtherButtonItem::deserialize(const QString& data)
     m_w = parts[3].toFloat(); m_h = parts[4].toFloat();
     m_bindingId = parts[5].toInt(); m_zOrder = parts[6].toInt();
     if (parts.size() > 7) { setColumns(parts[7].toInt()); }
-    if (parts.size() > 8) { setVisibleBits(parts[8].toUInt()); }
+    // A layout saved with a Power button loads without it.
+    if (parts.size() > 8) { setVisibleBits(withoutOmittedButtons(parts[8].toUInt())); }
     return true;
+}
+
+uint32_t OtherButtonItem::withoutOmittedButtons(uint32_t bits)
+{
+    return bits & ~(1u << static_cast<int>(ButtonId::Power));
 }
 
 } // namespace NereusSDR

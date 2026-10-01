@@ -195,7 +195,22 @@ private slots:
             // loopback-only connection instead of counting initialization.
             QTRY_VERIFY(model->connection());
             QCOMPARE(model->currentRadioInfo().macAddress, b.macAddress);
+            // TX safety fix round 3: the hosted retry is a recovery, not the
+            // operator's disconnect, so the lost-link lock holds through it
+            // into the rebuilt link; the operator's Disconnect lifts it.
+            QVERIFY(model->isRadioLinkDown());
+            QVERIFY(model->moxController()->isRadioLinkDown());
+            // Radio > Disconnect, the way out of the lock, stays enabled.
+            QAction* radioDisconnect = nullptr;
+            for (QAction* action : sessions.window()->findChildren<QAction*>()) {
+                if (action->text() == QStringLiteral("&Disconnect")) { radioDisconnect = action; }
+            }
+            QVERIFY(radioDisconnect != nullptr);
+            QVERIFY(model->connectionState() != ConnectionState::Connected);
+            QVERIFY(radioDisconnect->isEnabled());
             model->disconnectFromRadio();
+            QVERIFY(!model->isRadioLinkDown());
+            QVERIFY(!radioDisconnect->isEnabled());
             // A late failure or discovery completion must not undo Disconnect.
             model->onConnectionStateChangedForTest(ConnectionState::LinkLost);
             emit discovery->discoveryFinished();

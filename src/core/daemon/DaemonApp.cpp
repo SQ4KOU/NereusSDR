@@ -114,6 +114,10 @@
 //               to the station server, for the Core's support bundle. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: TX safety: the radio retire-and-retry uses RadioModel's
+//               recovery retire, so a lost-link key lock holds until the
+//               rebuilt link is Connected. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1080,7 +1084,10 @@ void DaemonApp::retireRadioAndRetry()
     cancelRadioDiscovery();
     clearFftTopology();
     m_retiringRadio = true;
-    m_radioModel->disconnectFromRadio();
+    // TX safety fix round 2 (2026-09-30): a recovery retire, not the
+    // operator's disconnect, so a lost-link key lock holds until the
+    // rebuilt link is Connected.
+    m_radioModel->retireConnectionForRecovery();
     m_retiringRadio = false;
     // Parity Task 21: no radio until it is found again; it stays listed.
     if (m_stationRadios) {

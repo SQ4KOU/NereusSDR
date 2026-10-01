@@ -417,13 +417,16 @@ private slots:
 
     // A layout saved today with every function button visible loads with
     // the buttons that have no feature not drawn, and saving it keeps
-    // their saved visibility unchanged.
+    // their saved visibility unchanged. Its Power button (bit 0) is
+    // dropped: NereusSDR has no Power button (maintainer decision
+    // 2026-09-30). The load succeeds and every other button is intact.
     void everyButtonVisibleLayoutKeepsItsSavedVisibility()
     {
         QWidget dockParent;
         QSplitter splitter;
         QString savedId;
         const QString savedItem = QStringLiteral("OTHERBTNS|0|0|1|0.5|0|10|6|4294967295");
+        const QString savedWithoutPower = QStringLiteral("OTHERBTNS|0|0|1|0.5|0|10|6|4294967294");
         {
             ContainerManager mgr(&dockParent, &splitter);
             ContainerWidget* c = mgr.createContainer(1, DockMode::Floating);
@@ -446,7 +449,13 @@ private slots:
             QCOMPARE(meter->items().size(), 1);
             auto* item = qobject_cast<OtherButtonItem*>(meter->items().first());
             QVERIFY(item);
-            QCOMPARE(item->visibleBits(), 0xFFFFFFFFu);
+            QCOMPARE(item->visibleBits(), 0xFFFFFFFEu);
+            QVERIFY(!item->isButtonShown(OtherButtonItem::ButtonId::Power));
+            for (auto id : {OtherButtonItem::ButtonId::Mon, OtherButtonItem::ButtonId::Tun,
+                            OtherButtonItem::ButtonId::Mox, OtherButtonItem::ButtonId::TwoTon,
+                            OtherButtonItem::ButtonId::PsA, OtherButtonItem::ButtonId::Mute}) {
+                QVERIFY(item->isButtonShown(id));
+            }
             QVERIFY(item->isButtonShown(OtherButtonItem::ButtonId::Anf));
             QVERIFY(item->isButtonShown(OtherButtonItem::ButtonId::Vac1));
             // Parity Task 31: DUP is built (display duplex).
@@ -458,7 +467,7 @@ private slots:
                             OtherButtonItem::ButtonId::DisplayOff}) {
                 QVERIFY(!item->isButtonShown(id));
             }
-            QCOMPARE(item->serialize(), savedItem);
+            QCOMPARE(item->serialize(), savedWithoutPower);
             mgr.saveState();
         }
     }

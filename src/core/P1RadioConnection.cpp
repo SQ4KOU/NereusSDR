@@ -165,6 +165,9 @@
 //                reaches Connected unkeyed, so a loss while unkeyed never
 //                refuses the next key. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - TX safety follow-up: the refusal's log line names both
+//                ways the latch lifts. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -2471,7 +2474,8 @@ void P1RadioConnection::setMox(bool enabled)
         if (!m_linkLossRefusalLogged) {
             m_linkLossRefusalLogged = true;
             qCWarning(lcConnection) << "P1: key refused after a link loss;"
-                                    << "release and key again to transmit";
+                                    << "it is refused until the key is released or"
+                                    << "the link is back unkeyed";
         }
         return;
     }

@@ -18886,6 +18886,20 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 
 void RadioModel::disconnectFromRadio()
 {
+    retireConnectionForRecovery();
+    // TX safety fix round 2 (2026-09-30): the operator disconnected on
+    // purpose, so the lost-link lock lifts here. This runs after
+    // teardownConnection, which returns early when there is no connection,
+    // so a Disconnect made after a recovery retire still clears it.
+    if (m_radioLinkDown) {
+        m_radioLinkDown = false;
+        applyTxKeyBlock();
+        emit radioLinkDownChanged(false);
+    }
+}
+
+void RadioModel::retireConnectionForRecovery()
+{
     m_intentionalDisconnect = true;
     emit radioDisconnectRequested();
     teardownConnection();
@@ -24544,6 +24558,12 @@ void RadioModel::teardownConnection()
     // section 5.
     setConnectionState(ConnectionState::Disconnected);
 
+    // TX safety fix round 2 (2026-09-30): the forced Disconnected above never
+    // reaches onConnectionStateChanged, so a lost-link lock stays set here.
+    // Every retire passes through this teardown, the recovery retire too,
+    // and that lock must hold until the rebuilt link reaches Connected. The
+    // operator's disconnect lifts it in disconnectFromRadio.
+
     // Tear down the connection on its own worker thread via the shared
     // helper. See src/core/RadioConnectionTeardown.h for why this must
     // run on the worker — short version: the RadioConnection's QTimers
@@ -24747,17 +24767,20 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
     // TX safety fix round 1 (2026-09-30): the lost link's key block. It is
     // set on LinkLost, held through the Connecting and Probing of a
-    // reconnect, and lifted when the link is back (Connected) or closed
-    // (Disconnected). It is set before connectionStateChanged goes out so
-    // the windows lock MOX, TUN and 2TONE on that signal; the keying gate
-    // itself follows below, after LinkLost's stopAllTx. See
+    // reconnect, and lifted when the link is back (Connected). Fix round 3:
+    // a connection-reported Disconnected does not lift it. A rebuilt link's
+    // connect timeout reports Disconnected before the recovery's next retry,
+    // which would otherwise run unlocked; only Connected here and the
+    // operator's disconnectFromRadio lift it. It is set before
+    // connectionStateChanged goes out so the windows lock MOX, TUN and
+    // 2TONE on that signal; the keying gate itself follows below, after
+    // LinkLost's stopAllTx. See
     // MoxController::setRadioLinkDown for the Thetis lines.
     const bool wasRadioLinkDown = m_radioLinkDown;
     if (m_role != Role::Remote) {
         if (state == ConnectionState::LinkLost) {
             m_radioLinkDown = true;
-        } else if (state == ConnectionState::Connected
-                   || state == ConnectionState::Disconnected) {
+        } else if (state == ConnectionState::Connected) {
             m_radioLinkDown = false;
         }
     }
