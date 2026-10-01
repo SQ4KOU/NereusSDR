@@ -44,8 +44,10 @@
 #include <QSignalSpy>
 #include <QWebSocket>
 #include <QUrl>
+#include <QRegularExpression>
 
 #include <cstring>
+#include <limits>
 #include <vector>
 
 #include "core/TciServer.h"
@@ -100,6 +102,7 @@ private slots:
     void disconnect_of_an_app_that_did_not_key_leaves_the_key();
     void trx_on_a_receiver_that_is_off_keys_nothing();
     void desktop_host_trx_goes_through_ptt_admission();
+    void tx_audio_header_is_validated();
     void desktop_host_holder_and_program_ownership();
     void desktop_host_owned_two_three_broadcasts_logical_receivers();
     void stopped_server_queues_no_rx2_lines();
@@ -1489,6 +1492,60 @@ void TestTciTxMutex::desktop_host_trx_goes_through_ptt_admission()
     QVERIFY(!mox->isTciPttHeld());
     QCOMPARE(server.activeTxClientCount(), 0);
     app.socket.close();
+    server.stop();
+}
+
+// Fix wave minor: the TX_AUDIO_STREAM header. A sample rate the TX
+// resampler cannot take (outside 8000 to 384000, as audio_samplerate:) is
+// dropped; 0 passes as Thetis passes it (no resampling). A legacy header
+// (no channels field) whose length is above INT_MAX / 2 is read as mono,
+// not as stereo through an int overflow.
+void TestTciTxMutex::tx_audio_header_is_validated()
+{
+    TciServer server(nullptr);
+    QVERIFY(server.start(0));
+    QWebSocket app;
+    QSignalSpy connected(&app, &QWebSocket::connected);
+    app.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(server.port())));
+    QVERIFY(connected.wait(2000));
+    app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 1, 3000);
+
+    const auto frameAt = [](int sampleRate, int channels) {
+        std::vector<float> samples(128, 0.25f);
+        return TciBinaryFrame::buildStreamPayload(0, sampleRate,
+            static_cast<int>(TciSampleType::Float32), 128,
+            static_cast<int>(TciStreamType::TxAudioStream), channels, samples.data());
+    };
+    const auto sendAndMeasure = [&](const QByteArray& frame) {
+        const int before = server.peekTxRingSize();
+        // A mono marker frame after it shows the first was processed.
+        app.sendBinaryMessage(frame);
+        app.sendBinaryMessage(frameAt(48000, 1));
+        const int marker = 128 * int(sizeof(float));
+        if (!QTest::qWaitFor([&] { return server.peekTxRingSize() >= before + marker; }, 3000)) {
+            return -1;
+        }
+        return server.peekTxRingSize() - before - marker;
+    };
+
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(
+        QStringLiteral("TX audio dropped, sample rate 1 is outside")));
+    QCOMPARE(sendAndMeasure(frameAt(1, 1)), 0);
+    QCOMPARE(sendAndMeasure(frameAt(2000000, 1)), 0);   // logged once per app
+    QCOMPARE(sendAndMeasure(frameAt(0, 1)), 128 * int(sizeof(float)));
+    QCOMPARE(sendAndMeasure(frameAt(8000, 1)), 128 * int(sizeof(float)));
+
+    // Legacy header: channels field 0, length INT_MAX. 128 values are
+    // there; a stereo reading would fold them to 64.
+    QByteArray legacy = frameAt(48000, 0);
+    const qint32 huge = std::numeric_limits<qint32>::max();
+    for (int i = 0; i < 4; ++i) {
+        legacy[20 + i] = static_cast<char>((static_cast<quint32>(huge) >> (8 * i)) & 0xff);
+    }
+    QCOMPARE(sendAndMeasure(legacy), 128 * int(sizeof(float)));
+
+    app.close();
     server.stop();
 }
 

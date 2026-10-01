@@ -4582,6 +4582,28 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     if (streamTypeInt != static_cast<int>(TciStreamType::TxAudioStream)) { return; }
     if (length <= 0) { return; }
 
+    // Fix wave minor: the header's sample rate becomes the TX channel's
+    // resampler input rate (TxChannel::feedTciAudioBlock), whose output
+    // buffer is sized from it; a rate of 1, or of millions, made it
+    // allocate per frame without bound or build an unusable resampler.
+    // Same bounds as the audio_samplerate: interceptor (8x headroom). A
+    // rate of 0 or less is passed on as Thetis does: no resampling
+    // (cmaster.cs:1446-1447 [v2.10.3.15], inputRate <= 0 returns the
+    // input). Not in Thetis, which passes any positive rate on.
+    constexpr int kMinTxAudioSampleRate = 8000;
+    constexpr int kMaxTxAudioSampleRate = 384000;
+    if (sampleRate > 0
+        && (sampleRate < kMinTxAudioSampleRate || sampleRate > kMaxTxAudioSampleRate)) {
+        session->txFramesDropped++;
+        if (!session->txRateRejectionLogged) {
+            session->txRateRejectionLogged = true;
+            qCWarning(lcTci) << "TciServer: TX audio dropped, sample rate" << sampleRate
+                             << "is outside" << kMinTxAudioSampleRate << "to"
+                             << kMaxTxAudioSampleRate << ", peer" << session->peer;
+        }
+        return;
+    }
+
     // ── TX mutex gate ─────────────────────────────────────────────────────────
     //
     // Only the active TX client may push audio. All others silently dropped.
@@ -4631,8 +4653,12 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
             decodedValueCount -= decodedValueCount % channels;
         }
     } else {
-        // legacy/JTDX
-        channels = (actualValueCount >= length * 2) ? 2 : 1;
+            // legacy/JTDX
+        // Fix wave minor: length * 2 in 64 bits; a header length above
+        // INT_MAX / 2 overflowed the int product (undefined behaviour) and
+        // could read a mono block as stereo.
+        channels = (static_cast<qint64>(actualValueCount)
+                    >= static_cast<qint64>(length) * 2) ? 2 : 1;
         decodedValueCount = std::min(length, actualValueCount);
         if (channels > 1) {
             decodedValueCount -= decodedValueCount % channels;
