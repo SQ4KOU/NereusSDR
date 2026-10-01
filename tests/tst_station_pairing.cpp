@@ -962,6 +962,61 @@ private slots:
         QVERIFY(!core.window().isPaused(PairingWindow::Route::Service));
     }
 
+    // LINK-I4 (JJ's ruling, 2026-09-30): 19 wrong codes through the service
+    // in total still let the 20th be tried; the 20th shuts pairing through
+    // the service. Then even the right code through the service is refused
+    // with no time to try again, burning nothing, while the home network
+    // still pairs; that pairing turns the service back on.
+    void twentyWrongCodesThroughTheServiceShutIt()
+    {
+        Core core;
+        Device device;
+        const QString shut = QStringLiteral(
+            "The Core has turned off pairing from outside its network after too many wrong "
+            "codes. Pair on the Core's own network, or reopen pairing at the Core.");
+        const auto nextServiceTry = [&core] {
+            if (core.window().isPaused(PairingWindow::Route::Service)) {
+                core.advance(core.window().servicePauseRemainingMs());
+            }
+            if (core.window().currentCode().isEmpty()) {
+                core.advance(core.window().retryAfterMs());
+            }
+        };
+        for (int i = 1; i <= PairingWindow::kMaxServiceFailuresTotal; ++i) {
+            nextServiceTry();
+            QVERIFY(!core.window().isServiceShut());
+            const Outcome outcome =
+                core.pairByCodeThroughService(device, core.window().currentCode(), /*lie=*/true);
+            verifyPlainRefusal(outcome);
+            QVERIFY2(outcome.reason != shut, qPrintable(QString::number(i)));
+            QCOMPARE(core.window().serviceFailuresTotal(), i);
+        }
+        QCOMPARE(PairingWindow::kMaxServiceFailuresTotal, 20);
+        QVERIFY(core.window().isServiceShut());
+        QCOMPARE(core.window().state(), PairingWindow::State::OpenUnclaimed);
+
+        // Waiting out any pause changes nothing: still shut.
+        nextServiceTry();
+        QVERIFY(!core.window().isPaused(PairingWindow::Route::Service));
+        const QString code = core.window().currentCode();
+        const quint64 serial = core.window().codeSerial();
+        const Outcome refused = core.pairByCodeThroughService(device, code);
+        verifyPlainRefusal(refused);
+        QCOMPARE(refused.reason, shut);
+        QCOMPARE(refused.retryAfterMs, qint64(0));
+        QCOMPARE(core.window().currentCode(), code);
+        QCOMPARE(core.window().codeSerial(), serial);
+        QCOMPARE(core.window().serviceFailuresTotal(), PairingWindow::kMaxServiceFailuresTotal);
+        QVERIFY(core.store().list().isEmpty());
+
+        // The home network pairs with the same code, and that turns the
+        // service back on.
+        QCOMPARE(core.pairByCode(device, code).type, QStringLiteral("pair.confirm"));
+        QVERIFY(core.store().find(device.id()));
+        QVERIFY(!core.window().isServiceShut());
+        QCOMPARE(core.window().serviceFailuresTotal(), 0);
+    }
+
     // Task 28 fix wave (review Important 1): a connection the service
     // introduced never pairs, by code or by tap; pairing through the
     // service is the mailbox's. Nothing is burned and nothing is paired.

@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Fix wave LINK-I4: pairing through the remote access
+//               service is refused, with no time to try again, once the
+//               pairing window has shut it after too many wrong codes.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Fix wave LINK minor 2 (TX path): dropPeer stops a dropped
 //               device's transmit (VOX disarm, watchdog or stopAllTx)
 //               before anything else in the drop. J.J. Boyd (KG4VCF),
@@ -6872,6 +6876,17 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
     // remote access service, pairing through it pauses for a while. Refused
     // before any code is taken, so it burns nothing; a direct connection is
     // not paused.
+    // LINK-I4 (JJ's ruling, 2026-09-30): after too many wrong codes through
+    // the service in total, pairing through it is off until the Core
+    // reopens pairing. No time to try again: waiting does not help.
+    if (attempt->route == PairingWindow::Route::Service && m_pairingWindow->isServiceShut()) {
+        sendPairFail(transport,
+                     QStringLiteral("The Core has turned off pairing from outside its network "
+                                    "after too many wrong codes. Pair on the Core's own "
+                                    "network, or reopen pairing at the Core."),
+                     0);
+        return;
+    }
     if (m_pairingWindow->isPaused(attempt->route)) {
         sendPairFail(transport,
                      QStringLiteral("The Core has paused pairing from outside its network "

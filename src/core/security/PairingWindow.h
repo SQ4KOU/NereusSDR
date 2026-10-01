@@ -49,6 +49,15 @@
 // the first wait (kFirstRetryMs), since only the home network can take it
 // (the follow-up to Task 27's re-review, new Minor 4).
 //
+// LINK-I4 (JJ's ruling, 2026-09-30): the pauses slow guessing through
+// the service but never end it, so the codes burned through it are also
+// counted over the window's whole life. At kMaxServiceFailuresTotal (20)
+// pairing through the service shuts: every attempt through it is refused
+// with no retry time, until the Core's own console or window reopens
+// pairing (reopenAtCore()) or a device pairs. A pause, a paired device's
+// `pairing.open` and the window closing by itself leave the count alone.
+// Pairing on a direct connection is untouched while the window is open.
+//
 // The state follows the device store: the first pairing claims the Core
 // and closes an unclaimed window; a Core reset to unclaimed from its
 // console opens again (devices.revoke never removes the last device while
@@ -105,6 +114,10 @@
 //               pause shows the next code after the first wait. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK-I4 (JJ's ruling): 20 codes burned through
+//               the service in total shut pairing through it until the
+//               Core reopens pairing or a device pairs. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -145,6 +158,10 @@ public:
     /// each time up to the ceiling.
     static constexpr qint64 kFirstServicePauseMs = 60 * 1000;
     static constexpr qint64 kMaxServicePauseMs = 60 * 60 * 1000;
+    /// LINK-I4 (JJ's ruling, 2026-09-30; NereusSDR-original): codes burned
+    /// through the service, in total since the last pairing or reopening
+    /// at the Core, that shut pairing through the service.
+    static constexpr int kMaxServiceFailuresTotal = 20;
 
     /// How a pairing reached the Core: on a direct connection, or through
     /// the remote access service's mailbox.
@@ -164,6 +181,10 @@ public:
     /// closed (ClosedUnclaimed) OpenUnclaimed again, from the console.
     /// Nothing to do when it is open.
     void reopen();
+    /// LINK-I4: the Core's own console or window reopens pairing. As
+    /// reopen(), and pairing through the service turns back on (its total
+    /// count of wrong codes starts over), also while the window is open.
+    void reopenAtCore();
     /// Closes a reopened window. An unclaimed Core's window stays open.
     void close();
 
@@ -225,6 +246,12 @@ public:
     /// Milliseconds until pairing through the service resumes; 0 when it
     /// is not paused.
     qint64 servicePauseRemainingMs() const;
+    /// LINK-I4: codes burned through the service since the last pairing or
+    /// reopening at the Core.
+    int serviceFailuresTotal() const { return m_serviceFailuresTotal; }
+    /// LINK-I4: pairing through the service is shut (the total reached
+    /// kMaxServiceFailuresTotal) until reopenAtCore() or a pairing.
+    bool isServiceShut() const { return m_serviceFailuresTotal >= kMaxServiceFailuresTotal; }
 
     void setClock(Clock clock);
     /// Re-checks the wait against the clock: a code whose wait has ended
@@ -235,6 +262,8 @@ signals:
     void stateChanged(NereusSDR::PairingWindow::State state);
     /// The code changed; empty when there is none to show.
     void codeChanged(const QString& code);
+    /// LINK-I4: pairing through the service shut, or turned back on.
+    void serviceShutChanged(bool shut);
 
 private:
     static bool isOpenState(State state);
@@ -243,6 +272,9 @@ private:
     void startAfresh();
     /// Pairing through the service unpaused, its ladder back to the start.
     void endServicePause();
+    /// LINK-I4: the total count of codes burned through the service starts
+    /// over (a pairing, or reopenAtCore()).
+    void clearServiceTotal();
     /// The attempt ceiling: closes the open window.
     void closeForCeiling();
     /// Sets the state and the code, then signals each that moved.
@@ -269,6 +301,9 @@ private:
     int m_serviceFailures = 0;
     int m_servicePauses = 0;
     qint64 m_servicePausedUntil = 0;
+    /// LINK-I4: codes burned through the service since the last pairing or
+    /// reopening at the Core; never reset by a pause.
+    int m_serviceFailuresTotal = 0;
     /// When a reopened window closes by itself; 0 for none.
     qint64 m_openUntil = 0;
 };

@@ -97,6 +97,14 @@ RemoteStationPage::RemoteStationPage(QWidget* parent)
     m_pairingInstruction = new QLabel(tr("Enter this code on your device to pair it with this Core."), station);
     m_pairingInstruction->setWordWrap(true);
     stationLayout->addWidget(m_pairingInstruction);
+    // LINK-I4: pairing through the remote access service is off.
+    m_servicePairingShut = new QLabel(
+        tr("Pairing from outside your network is off after too many wrong codes. "
+           "Click Add a device to turn it back on."), station);
+    m_servicePairingShut->setObjectName(QStringLiteral("remoteAccessServicePairingShut"));
+    m_servicePairingShut->setWordWrap(true);
+    m_servicePairingShut->setVisible(false);
+    stationLayout->addWidget(m_servicePairingShut);
 
     QGroupBox* devices = addSection(tr("Paired devices"));
     QVBoxLayout* devicesLayout = qobject_cast<QVBoxLayout*>(devices->layout());
@@ -229,6 +237,7 @@ void RemoteStationPage::refresh()
     const bool showCode = m_state.runCore && m_state.pairingOpen && !m_state.pairingCode.isEmpty();
     m_pairingCode->setVisible(showCode);
     m_pairingInstruction->setVisible(showCode);
+    m_servicePairingShut->setVisible(m_state.runCore && m_state.servicePairingShut);
     applyGate(m_rename, allowed && m_state.runCore, coreReason);
     applyGate(m_addDevice, allowed && m_state.runCore, coreReason);
     m_backupPath->setText(m_state.keyBackupPath.isEmpty()

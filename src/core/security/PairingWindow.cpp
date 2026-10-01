@@ -27,6 +27,11 @@
 //               pause shows the next code after the first wait. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK-I4 (JJ's ruling): 20 codes burned through
+//               the service in total shut pairing through it until the
+//               Core reopens pairing (reopenAtCore) or a device pairs.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
@@ -196,6 +201,25 @@ void PairingWindow::reopen()
     commit(State::OpenReopened, codeFor(State::OpenReopened));
 }
 
+void PairingWindow::reopenAtCore()
+{
+    // LINK-I4: only the Core's own console or window turns pairing through
+    // the service back on; a paired device's `pairing.open` reaches
+    // reopen() alone.
+    clearServiceTotal();
+    reopen();
+}
+
+void PairingWindow::clearServiceTotal()
+{
+    const bool wasShut = isServiceShut();
+    m_serviceFailuresTotal = 0;
+    if (wasShut) {
+        qCInfo(lcPairing) << "Pairing from outside the Core's network is on again";
+        emit serviceShutChanged(false);
+    }
+}
+
 void PairingWindow::close()
 {
     if (m_state != State::OpenReopened) {
@@ -251,6 +275,8 @@ void PairingWindow::pairingSucceeded()
     // A pairing ends a pause of pairing through the service and starts its
     // ladder over (the ruling on Task 27 item I5).
     endServicePause();
+    // LINK-I4: and starts the total count over.
+    clearServiceTotal();
     if (m_state == State::OpenReopened) {
         // One device per reopening.
         commit(State::ClosedClaimed, QString());
@@ -272,6 +298,17 @@ void PairingWindow::pairingFailed(Route route)
         // the ceiling. The fifth in a row pauses pairing through the service
         // instead, for twice as long as the last pause, 1 to 60 minutes.
         streak = ++m_serviceFailures;
+        // LINK-I4 (JJ's ruling, 2026-09-30): the total over the window's
+        // life; at kMaxServiceFailuresTotal pairing through the service
+        // shuts until the Core reopens it or a device pairs.
+        ++m_serviceFailuresTotal;
+        if (m_serviceFailuresTotal == kMaxServiceFailuresTotal) {
+            qCInfo(lcPairing) << "Pairing from outside the Core's network is off after"
+                              << kMaxServiceFailuresTotal
+                              << "wrong pairing codes; reopening pairing at the Core turns "
+                                 "it back on";
+            emit serviceShutChanged(true);
+        }
         if (isOpen() && m_serviceFailures >= kMaxConsecutiveFailures) {
             const int doublings = std::min(m_servicePauses, 16);
             const qint64 pause =
@@ -313,6 +350,9 @@ qint64 PairingWindow::retryAfterMs(Route route) const
 {
     if (!isOpen()) {
         return 0;
+    }
+    if (route == Route::Service && isServiceShut()) {
+        return 0;  // LINK-I4: shut, with no time to try again
     }
     const qint64 code = m_codeInUse ? kFirstRetryMs : std::max<qint64>(0, m_nextCodeAt - now());
     return route == Route::Service ? std::max(code, servicePauseRemainingMs()) : code;

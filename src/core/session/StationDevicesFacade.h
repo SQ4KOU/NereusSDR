@@ -92,6 +92,10 @@
 //   2026-09-29: slice control plan Task 8b: retireTokenAndRevoke. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK-I4: pairing opened at the Core
+//               (openPairingAtCore) turns pairing through the service
+//               back on, and its shut state is shown on the Core. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -162,6 +166,10 @@ public:
     /// header comment for who receives the code.
     bool pairingWindowOpen() const { return m_state.pairingWindowOpen; }
     QString pairingCode() const { return m_state.pairingCode; }
+    /// LINK-I4: pairing through the remote access service is shut after
+    /// too many wrong codes (PairingWindow::isServiceShut()). Shown on the
+    /// Core's own window and console; not mirrored.
+    bool servicePairingShut() const { return m_state.servicePairingShut; }
     /// Where a device can dial this Core, as compact JSON
     /// {"addresses":["[2001:db8::5]:47910","203.0.113.7:47910"]}
     /// (CoreAddresses::toJson); an empty list while the Core does not
@@ -197,6 +205,10 @@ public:
     DeviceAdminResult retireToken();
     /// pairing.open: reopen the window (a no-op while it is open).
     DeviceAdminResult openPairing();
+    /// LINK-I4: the Core's own console or window opens pairing. As
+    /// openPairing(), and pairing through the service turns back on
+    /// (PairingWindow::reopenAtCore()), also while the window is open.
+    DeviceAdminResult openPairingAtCore();
     /// pairing.close: close a reopened window (a no-op while it is closed).
     DeviceAdminResult closePairing();
     /// iPhone app Task 17: the console's `reset --unclaimed --yes`, which no
@@ -240,6 +252,7 @@ private:
         QString keyPath;
         bool pairingWindowOpen = false;
         QString pairingCode;
+        bool servicePairingShut = false;
 
         bool operator==(const State&) const = default;
     };

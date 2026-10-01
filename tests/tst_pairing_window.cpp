@@ -410,6 +410,97 @@ private slots:
         }
     }
 
+    // ── LINK-I4 (JJ's ruling, 2026-09-30): 20 wrong codes through the
+    //    service in total shut pairing through it ──────────────────────
+
+    // The 20th, not the 19th, shuts it; pauses along the way never reset
+    // the total; the home network still pairs; a pairing turns it back on.
+    void twentyServiceBurnsInTotalShutTheService()
+    {
+        Fixture f;
+        QSignalSpy shut(f.window.get(), &PairingWindow::serviceShutChanged);
+        for (int i = 1; i <= PairingWindow::kMaxServiceFailuresTotal; ++i) {
+            if (f.window->isPaused(PairingWindow::Route::Service)) {
+                f.advance(f.window->servicePauseRemainingMs());
+            }
+            if (f.window->currentCode().isEmpty()) {
+                f.untilTheNextCode();
+            }
+            QVERIFY(!f.window->isServiceShut());
+            f.burnThroughService();
+            QCOMPARE(f.window->serviceFailuresTotal(), i);
+        }
+        QVERIFY(f.window->isServiceShut());
+        QCOMPARE(shut.size(), 1);
+        QCOMPARE(shut.first().first().toBool(), true);
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Service), qint64(0));
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+
+        // Past every pause: still shut. The home network pairs.
+        f.advance(PairingWindow::kMaxServicePauseMs);
+        QVERIFY(f.window->isServiceShut());
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Direct));
+        QVERIFY(!f.window->currentCode().isEmpty());
+        QVERIFY(f.window->takeCode(f.window->codeSerial()));
+        f.window->pairingSucceeded();
+        QVERIFY(!f.window->isServiceShut());
+        QCOMPARE(f.window->serviceFailuresTotal(), 0);
+        QCOMPARE(shut.size(), 2);
+        QCOMPARE(shut.last().first().toBool(), false);
+    }
+
+    // Only a reopening at the Core turns it back on: not a pause, not a
+    // paired device's reopen(), not the window closing. reopenAtCore()
+    // works while the window is open too.
+    void onlyAReopeningAtTheCoreTurnsTheServiceBackOn()
+    {
+        const auto shutIt = [](Fixture& f) {
+            int burned = 0;
+            while (burned < PairingWindow::kMaxServiceFailuresTotal) {
+                // A reopened window's lifetime may end on the way: a paired
+                // device reopens it, which keeps the total.
+                if (!f.window->isOpen()) {
+                    f.window->reopen();
+                } else if (f.window->isPaused(PairingWindow::Route::Service)) {
+                    f.advance(f.window->servicePauseRemainingMs());
+                } else if (f.window->currentCode().isEmpty()) {
+                    f.advance(f.window->retryAfterMs());
+                } else {
+                    f.burnThroughService();
+                    ++burned;
+                }
+            }
+            QVERIFY(f.window->isServiceShut());
+        };
+
+        // An unclaimed Core, open throughout.
+        Fixture f;
+        shutIt(f);
+        f.window->reopen();  // open already: nothing
+        QVERIFY(f.window->isServiceShut());
+        f.window->reopenAtCore();
+        QVERIFY(!f.window->isServiceShut());
+        QCOMPARE(f.window->serviceFailuresTotal(), 0);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+
+        // A claimed Core: a paired device reopens, closes and reopens.
+        Fixture g;
+        QVERIFY(g.store->add(makeDevice()));
+        g.window->reopen();
+        shutIt(g);
+        g.window->close();
+        g.window->reopen();
+        QCOMPARE(g.window->state(), PairingWindow::State::OpenReopened);
+        QVERIFY(g.window->isServiceShut());
+        // The reopened window's lifetime ends: still shut.
+        g.advance(PairingWindow::kReopenedLifetimeMs);
+        QCOMPARE(g.window->state(), PairingWindow::State::ClosedClaimed);
+        QVERIFY(g.window->isServiceShut());
+        g.window->reopenAtCore();
+        QCOMPARE(g.window->state(), PairingWindow::State::OpenReopened);
+        QVERIFY(!g.window->isServiceShut());
+    }
+
     // A pairing, or reopening the window, ends the pause and starts the
     // ladder over.
     void aPairingOrAReopeningResetsTheServicePause()
