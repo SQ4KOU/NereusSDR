@@ -109,6 +109,10 @@
 //                TX badge takes the slice, then transmit, then makes the
 //                slice the TX slice (applyTxBadgeOffer, startTxBadgeTake).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - J.J. Boyd (KG4VCF). Station VOX: a hosting window's VOX is
+//                disabled, naming the holder, while another device holds
+//                transmit (desktopVoxHolderReason, applyDesktopVoxHolderGate).
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1335,6 +1339,12 @@ private:
     QString sliceChangeRefusal(int sliceId) const;
     void refreshActiveSlicePresentation();
     bool desktopOwnsTransmit() const;
+    // Station VOX (whole-branch review, TX path): in a hosting window,
+    // while another device holds transmit, why VOX may not be armed here
+    // (that device has the transmitter); empty when it may.
+    QString desktopVoxHolderReason() const;
+    // The TX applet's VOX button and every Setup's Enable VOX follow it.
+    void applyDesktopVoxHolderGate();
     void requestDesktopTransmit(bool tune, bool on);
     void handleDesktopTakeResult(const DesktopStationController::RequestResult& result);
     ConnectionPanel* m_connectionPanel{nullptr};

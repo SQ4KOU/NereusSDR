@@ -488,6 +488,29 @@ void logAmp(PgxlConnection* pgxl, MoxController* mox, AmpLog* log)
             });
 }
 
+// Station VOX: `device` takes transmit (unless it holds it) and arms VOX
+// as a device does (its write, with its microphone line open and VOX
+// listening to it, as DaemonMediaController marks it). VOX a device armed
+// is that device's.
+void armVoxAsDevice(Core& core, LoopbackTransport* app, const Device& device, quint32 writeId)
+{
+    const QByteArray id = device.key.fingerprint();
+    if (!core.server->transmitHolder()->isHeldBy(id)) {
+        QVERIFY(core.invoke(app, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+    }
+    core.model->openRemoteMicLine(id);
+    app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "transmit", {MirrorUpdate{0, "voxEnabled", MirrorWireKind::Bool, QVariant(true)}},
+        writeId)));
+    QTRY_VERIFY(!propertyResult(app, writeId).isEmpty());
+    const QJsonObject result =
+        propertyResult(app, writeId).value(QStringLiteral("results")).toArray().first().toObject();
+    QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
+             qPrintable(result.value(QStringLiteral("reason")).toString()));
+    core.model->setRemoteMicVoxArmed(id, true);
+    QCOMPARE(core.model->remoteVoxDevice(), id);
+}
+
 } // namespace
 
 class TstStationMultiSession : public QObject {
@@ -1613,6 +1636,115 @@ private slots:
         QVERIFY(!holder->holder()->keyed);
         QVERIFY(tx.voxEnabled());
         tx.setVoxEnabled(false);
+    }
+
+    // Station VOX (whole-branch review, TX path): VOX armed at the Core
+    // while a device holds transmit keys nothing. It was armed by no
+    // device, so it is never that device's key: refused naming the holder,
+    // the holder unkeyed, its watchdog never fed a key it did not make.
+    void aStationVoxKeyWhileADeviceHoldsTransmitIsRefused()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        MoxController* mox = core.model->moxController();
+        TransmitModel& tx = core.model->transmitModel();
+        tx.setVoxEnabled(true);   // armed at the Core, not by the device
+        QVERIFY(core.server->voxArmedBy().isEmpty());
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        mox->onVoxActive(true);
+        QTest::qWait(50);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(refused.count() >= 1);
+        QCOMPARE(refused.first().first().value<TxRefusal>(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")));
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QVERIFY(!holder->holder()->keyed);
+        QVERIFY(core.model->keyedBy().deviceId.isEmpty());
+        mox->onVoxActive(false);
+        tx.setVoxEnabled(false);
+    }
+
+    // Station VOX: VOX armed at the Core and a device then taking transmit
+    // drops it (ruling 8.4, VOX disarmed at every change of holder).
+    void aStationVoxArmIsDroppedWhenADeviceTakesTransmit()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        TransmitModel& tx = core.model->transmitModel();
+        tx.setVoxEnabled(true);
+        QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QVERIFY(!tx.voxEnabled());
+    }
+
+    // Station VOX: while the station device holds transmit, VOX armed at
+    // the Core keys for it, as before, with a device signed in.
+    void aStationVoxKeyKeysWhileTheStationHoldsTransmit()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        // The station takes transmit with its own key, then unkeys.
+        mox->setMox(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        TransmitModel& tx = core.model->transmitModel();
+        tx.setVoxEnabled(true);
+        mox->onVoxActive(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QVERIFY(mox->currentKeyer().isStation());
+        QCOMPARE(mox->pttMode(), PttMode::Vox);
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QCOMPARE(core.model->keyedBy().deviceId, QByteArray(KeyerIdentity::kStationDeviceId));
+        mox->onVoxActive(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        tx.setVoxEnabled(false);
+    }
+
+    // Station VOX: VOX a device armed while it holds transmit keys as that
+    // device's, unchanged (ruling 8.4, Task 37).
+    void voxADeviceArmedKeysAsThatDevicesKey()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        armVoxAsDevice(core, appA, a, 920);
+        if (QTest::currentTestFailed()) { return; }
+        QCOMPARE(core.server->voxArmedBy(), a.key.fingerprint());
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        mox->onVoxActive(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QVERIFY(mox->currentKeyer().isStation());
+        QCOMPARE(mox->pttMode(), PttMode::Vox);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        QTRY_VERIFY(holder->holder()->keyed);
+        QCOMPARE(core.model->keyedBy().deviceId, a.key.fingerprint());
+        mox->onVoxActive(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        core.model->transmitModel().setVoxEnabled(false);
     }
 
     // tx.setTxSlice: the holder's verb (ruling 8.10), by slice id.
@@ -4812,8 +4944,10 @@ private slots:
                 QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
                 break;
             case Key::Vox:
-                QVERIFY(core.invoke(appA, "tx.take", {}).value(QStringLiteral("accepted")).toBool());
-                core.model->transmitModel().setVoxEnabled(true);
+                // Station VOX: armed by the device, so its key is the
+                // device's (VOX armed at the Core keys nothing here).
+                armVoxAsDevice(core, appA, a, 930);
+                if (QTest::currentTestFailed()) { return; }
                 mox->onVoxActive(true);   // VOX keys: the holder's key (ruling 8.4)
                 QTRY_COMPARE(mox->state(), MoxState::Tx);
                 QVERIFY(mox->currentKeyer().isStation());
@@ -4959,7 +5093,9 @@ private slots:
         // VOX keys (the holder's) during the wait: MOX comes on, its RF
         // does not, until the amplifier reports standby.
         txr.opens = 0;   // the voice key's own RF, above, is done
-        core.model->transmitModel().setVoxEnabled(true);
+        // Station VOX: armed by the holder, so its key is the holder's.
+        armVoxAsDevice(core, appA, a, 931);
+        if (QTest::currentTestFailed()) { return; }
         amp.pttDown = true;
         mox->onVoxActive(true);
         QTRY_COMPARE(mox->state(), MoxState::Tx);
