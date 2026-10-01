@@ -15,6 +15,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
 //                                    peerAddress(). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-10-01  J.J. Boyd / KG4VCF  Control logging lane:
+//                                    WebSocketTransport::linkDiagnostics()
+//                                    (TCP_INFO and unsent bytes on Linux,
+//                                    read only). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionTransport.h"
@@ -26,6 +31,15 @@
 #include <QAbstractSocket>
 #include <QWebSocket>
 #include <QThread>
+#include <QVariant>
+
+#ifdef Q_OS_LINUX
+#include <linux/sockios.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#endif
 
 namespace NereusSDR {
 
@@ -135,6 +149,47 @@ qint64 WebSocketTransport::backlogBytes() const
         return inner->bytesToWrite();
     }
     return 0;
+}
+
+SessionLinkDiagnostics WebSocketTransport::linkDiagnostics() const
+{
+    SessionLinkDiagnostics link;
+    link.buffer = SessionLinkDiagnostics::Buffer::WebSocket;
+    if (m_socket == nullptr) {
+        return link;
+    }
+    // socketOption() is not const in Qt; it only reads here.
+    auto* inner = m_socket->findChild<QAbstractSocket*>();
+    if (inner == nullptr) {
+        return link;
+    }
+    link.bufferedBytes = inner->bytesToWrite();
+    if (inner->state() != QAbstractSocket::ConnectedState) {
+        return link;
+    }
+    // Read, never set: the socket's options are left as they are.
+    const QVariant noDelay = inner->socketOption(QAbstractSocket::LowDelayOption);
+    if (noDelay.isValid()) {
+        link.noDelay = noDelay.toInt() != 0;
+    }
+#ifdef Q_OS_LINUX
+    const qintptr descriptor = inner->socketDescriptor();
+    if (descriptor >= 0) {
+        const int fd = static_cast<int>(descriptor);
+        struct tcp_info info {};
+        socklen_t length = sizeof(info);
+        if (::getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &length) == 0) {
+            link.tcpRttUs = info.tcpi_rtt;
+            link.tcpUnacked = info.tcpi_unacked;
+            link.tcpRetransmits = info.tcpi_total_retrans;
+        }
+        int notSent = 0;
+        if (::ioctl(fd, SIOCOUTQNSD, &notSent) == 0 && notSent >= 0) {
+            link.tcpNotSentBytes = static_cast<quint32>(notSent);
+        }
+    }
+#endif
+    return link;
 }
 
 WebSocketTransport::~WebSocketTransport() = default;

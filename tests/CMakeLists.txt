@@ -8469,6 +8469,12 @@ nereus_add_test(tst_tx_eq_set_curve
 nereus_add_test(tst_cfc_set_profile
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Control logging lane: the Core's log lines for each control write and
+# command, its answer and handling time, and the gaps between a device's
+# control messages, rate-limited. Loopback only, no RF, no audio device.
+nereus_add_test(tst_station_control_log
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app plan Task 25 (R-IOS-18): a remote window's VAX applet, its
 # "Station computer" section from the Core's `vax` object. Loopback only.
 nereus_add_test(tst_remote_station_vax

@@ -532,6 +532,15 @@
 //   2026-10-01: TX mic thread (JJ approved): txChannelMessage takes the
 //               keepalive's wait since its receipt (heldUs). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: each device's control writes,
+//               commands and their answers, and the gaps between its
+//               control messages, logged with a per-device rate limit.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane fix round: the log moves to
+//               ControlLog (sanitized names, receipt times, token buckets,
+//               a Core-wide cap, folded answers, the link, keepalive gaps
+//               per channel and watchdog stops). J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -558,6 +567,7 @@
 #include "core/DeviceLayoutStore.h"
 #include "core/SliceOwnership.h"
 #include "core/session/ConfirmStep.h"
+#include "core/session/ControlLog.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/ReceiverPlanner.h"
 #include "core/DisturbanceCheck.h"
@@ -988,6 +998,9 @@ public:
     void setSettingsExportClockForTest(std::function<qint64()> clock)
     { m_settingsExportNowForTest = std::move(clock); }
     void expireSettingsExportsForTest() { expireSettingsExports(); }
+    /// Control logging lane: the clock the control log reads (ms).
+    void setControlLogClockForTest(std::function<qint64()> clock)
+    { m_controlLog.setClock(std::move(clock)); }
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
@@ -1731,6 +1744,14 @@ private:
         /// gates a transmitter.
         QTimer* authDeadline = nullptr;
     };
+
+    // Control logging lane: logging only (ControlLog).
+    static ControlLog::PeerInfo controlLogPeer(const Peer& peer);
+    void noteControlIn(SessionTransport* transport, const SessionMessage& message);
+    void logControlResult(SessionTransport* transport, const SessionMessage& message);
+    SessionTransport* controlTransportForDevice(const QByteArray& deviceId) const;
+    void controlLogKeepalive(const QByteArray& deviceId, ControlLog::KeepaliveChannel channel,
+                             qint64 ageMs, bool watched);
 
     void onNewWebSocketConnection();
     void handleTxWatchTicket(SessionTransport* transport, const SessionMessage& message);
@@ -2736,6 +2757,9 @@ private:
     QElapsedTimer m_settingsExportClock;
     QTimer* m_settingsExportCleanup = nullptr;
     std::function<qint64()> m_settingsExportNowForTest;
+    // Control logging lane: the Core's log of each device's control
+    // traffic. Logging only.
+    ControlLog m_controlLog;
     /// iPhone app Task 76: the admitted session with this media epoch, or
     /// null; the earliest admitted of those live (the primary).
     SessionTransport* mediaSessionFor(quint64 epoch) const;

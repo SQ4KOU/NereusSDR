@@ -26,6 +26,10 @@
 //   8. Every stop text is plain operator words and says "the Core".
 //   9. A window's copy takes the Core's values and nothing else; clearing
 //      it keeps the last stop.
+//  10. Control logging lane: an unkey logs one line with the key's
+//      leveler, leveler gain, ALC, ALC gain and compression peaks from the
+//      readings the pump took, "none" for a reading it did not have; a
+//      second key's peaks start fresh.
 //
 // Through the Core (StationServer, over the loopback):
 //  10. Only a device whose hello declared remoteTx gets txStateVersion and
@@ -69,6 +73,9 @@
 //               send ring, on Protocol 1 and Protocol 2. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: Control logging lane: the unkey's stage peaks line, and a
+//               second key's peaks start fresh. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -275,6 +282,32 @@ void verifyStopSent(const LoopbackTransport* app, const QString& reason, const Q
 
 } // namespace
 
+// Control logging lane: collects the stage peak lines.
+class StagePeakLog {
+public:
+    StagePeakLog()
+    {
+        s_lines.clear();
+        s_previous = qInstallMessageHandler(&StagePeakLog::handle);
+    }
+    ~StagePeakLog() { qInstallMessageHandler(s_previous); }
+    QStringList lines() const { return s_lines; }
+
+private:
+    static void handle(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+    {
+        if (msg.startsWith(QStringLiteral("TX stage peaks"))) {
+            s_lines.append(msg);
+            return;
+        }
+        if (s_previous) {
+            s_previous(type, context, msg);
+        }
+    }
+    static inline QStringList s_lines;
+    static inline QtMessageHandler s_previous = nullptr;
+};
+
 // Watches the log for the MoxController's send-ring wait lines: a wait
 // the ceiling ended, or one a stop cut short. Either means an unkey began
 // to wait for the send ring.
@@ -433,6 +466,66 @@ private slots:
         tickMeters(rig.state);
         QCOMPARE(meters.count(), afterChange);
         rig.unkey();
+    }
+
+    // Control logging lane: the unkey logs the key's stage peaks once.
+    void anUnkeyLogsTheKeysStagePeaks()
+    {
+        Rig rig;
+        int reads = 0;
+        rig.state.meterPump()->setSource([&reads]() {
+            ++reads;
+            TxMeterReadings r;
+            r.levelerDb = -20.0 + reads;              // rises with each read
+            r.levelerGainDb = reads == 2 ? 14.5 : 3.0;
+            r.alcDb = -1.5;
+            r.compressionDb = reads == 3 ? 6.0 : 1.0;
+            return r;                                  // no ALC gain reading
+        });
+        StagePeakLog log;
+        rig.key();
+        for (int i = 0; i < 3; ++i) {
+            tickMeters(rig.state);
+        }
+        QCOMPARE(log.lines().size(), 0);
+        rig.unkey();
+        const int taken = reads;
+        QVERIFY(taken >= 4);
+        QCOMPARE(log.lines(),
+                 QStringList{QStringLiteral(
+                     "TX stage peaks for key 1 (%1 readings): leveler %2 dB, leveler gain "
+                     "14.5 dB, ALC -1.5 dB, ALC gain none, compression 6.0 dB")
+                                 .arg(taken)
+                                 .arg(-20.0 + taken, 0, 'f', 1)});
+        // The next unkey with no key between logs nothing more.
+        rig.unkey();
+        QCOMPARE(log.lines().size(), 1);
+
+        // A second key's peaks start fresh: lower readings than the first
+        // key's are its peaks, and the ALC gain it reads shows.
+        rig.state.meterPump()->setSource([&reads]() {
+            ++reads;
+            TxMeterReadings r;
+            r.levelerDb = -30.0;
+            r.levelerGainDb = 2.0;
+            r.alcDb = -3.0;
+            r.alcGainDb = 1.0;
+            r.compressionDb = 0.5;
+            return r;
+        });
+        reads = 0;
+        rig.key();
+        for (int i = 0; i < 2; ++i) {
+            tickMeters(rig.state);
+        }
+        rig.unkey();
+        QVERIFY(reads >= 3);
+        QCOMPARE(log.lines().size(), 2);
+        QCOMPARE(log.lines().last(),
+                 QStringLiteral("TX stage peaks for key 2 (%1 readings): leveler -30.0 dB, "
+                                "leveler gain 2.0 dB, ALC -3.0 dB, ALC gain 1.0 dB, compression "
+                                "0.5 dB")
+                     .arg(reads));
     }
 
     void unkeyedOnlyAChangeOfTheRadiosPowerIsSent()

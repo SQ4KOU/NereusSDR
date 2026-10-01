@@ -953,6 +953,16 @@
 //   2026-10-01: TX mic thread (JJ approved): a "tx" channel keepalive is
 //               heard at its receipt (txChannelMessage's heldUs). J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: one line per control write and
+//               command from a device and per answer (with its handling
+//               time), and the gaps between a device's control messages,
+//               rate-limited per device. Logging only. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane fix round: the log is ControlLog's;
+//               hooks for each keepalive's channel, a new watch, the
+//               watchdog's stop, the heartbeat and a connection's end.
+//               Logging only. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2366,8 +2376,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         },
         [this](const QByteArray& deviceId, quint64 sequence, quint32 epoch) {
             if (m_txWatchdog) {
+                // Control logging lane: logged after, as it was watched.
+                const bool watched = m_txWatchdog->isWatching(deviceId);
                 m_txWatchdog->keepalive(deviceId, sequence, epoch,
                                         RemoteTxWatchdog::Path::Auxiliary);
+                controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::TxWatch, 0, watched);
             }
         }, this);
     // iPhone app Task 71 (R-IOS-02): who holds a place, and the mirrored
@@ -2778,6 +2791,19 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
             m_txWatchdog->setHooks(std::move(hooks));
         }
+        // Control logging lane: a watchdog stop, beside the keepalives and
+        // the control state it happened in. Logging only.
+        connect(m_txWatchdog.get(), &RemoteTxWatchdog::tripped, this,
+                [this](const QByteArray& deviceId, bool linkClosed, qint64 silentMs) {
+                    SessionTransport* const transport = controlTransportForDevice(deviceId);
+                    ControlLog::PeerInfo info;
+                    info.deviceId = deviceId;
+                    if (transport != nullptr) {
+                        info = controlLogPeer(*m_peers.constFind(transport));
+                    }
+                    m_controlLog.watchdogStopped(deviceId, transport, info, linkClosed,
+                                                 silentMs);
+                });
         connect(m_radioModel, &RadioModel::keyedByChanged, this,
                 &StationServer::followKeyedForWatchdog);
 
@@ -3707,8 +3733,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // Task 37: tx.keepalive on the session's own link.
         access.keepalive = [this](const QByteArray& requester, quint64 sequence, quint32 epoch) {
             if (m_txWatchdog) {
+                // Control logging lane: logged after, as it was watched,
+                // with its wait since the control link received it.
+                const bool watched = m_txWatchdog->isWatching(requester);
+                const std::optional<qint64> waitUs = m_dispatchingTransport != nullptr
+                    ? m_dispatchingTransport->deliveringMessageWaitUs()
+                    : std::nullopt;
                 m_txWatchdog->keepalive(requester, sequence, epoch,
                                         RemoteTxWatchdog::Path::Session);
+                controlLogKeepalive(requester, ControlLog::KeepaliveChannel::Control,
+                                    waitUs.value_or(0) / 1000, watched);
             }
         };
         // Task 77 (ruling 7.7): the transmitter's own settings are the
@@ -4907,6 +4941,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const quint64 mediaEpoch = it->mediaEpoch;
     // Task 77 fix wave, M6: its tx.take copies are forgotten with it.
     m_takeCopies.remove(it->sessionId);
+    // Control logging lane: its skipped counts and folded answers.
+    m_controlLog.closed(transport, controlLogPeer(*it));
     m_peers.erase(it);
     // Parity Task 19: nothing more from any record stream.
     for (auto& [name, stream] : m_recordStreams) {
@@ -5146,7 +5182,12 @@ void StationServer::onHeartbeatTick()
         }
         ++it->pingsAwaitingPong;
         transport->ping();
+        // Control logging lane: skipped counts, folded answers and the link.
+        if (const auto peer = m_peers.constFind(transport); peer != m_peers.cend()) {
+            m_controlLog.tick(transport, controlLogPeer(*peer));
+        }
     }
+    m_controlLog.tickCore();
     // The selected relay pair and the separate leg can change after the
     // initial snapshot without changing transmit permission.
     publishTxPermitted();
@@ -5167,6 +5208,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
+    // Control logging lane: logging only; nothing below depends on it.
+    noteControlIn(transport, message);
     if (it->heldSerial != 0) {
         if (message.kind == SessionMessageKind::SessionTakeover
             && peerHasSessionHolderVersion(transport)) {
@@ -7751,6 +7794,11 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             }
             m_voxArmedBy = writer;
             if (m_txWatchdog) {
+                // Control logging lane: a new watch measures keepalive
+                // gaps afresh.
+                if (!m_txWatchdog->isWatching(writer)) {
+                    m_controlLog.keepaliveWatchStarted(writer);
+                }
                 m_txWatchdog->setVoxArmed(writer, true);
             }
             emit voxArmedByChanged(writer);
@@ -8591,7 +8639,60 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
         deliverToStation(message);
         return;
     }
+    logControlResult(transport, message);
     transport->sendText(encodeFor(transport, message));
+}
+
+ControlLog::PeerInfo StationServer::controlLogPeer(const Peer& peer)
+{
+    ControlLog::PeerInfo info;
+    info.deviceId = peer.sessionDeviceId.isEmpty() ? peer.deviceId : peer.sessionDeviceId;
+    info.signedIn = peer.authenticated;
+    info.introduced = peer.introduced;
+    info.mediaTunnel = peer.mediaTunnel.get();
+    return info;
+}
+
+void StationServer::noteControlIn(SessionTransport* transport, const SessionMessage& message)
+{
+    const auto it = m_peers.constFind(transport);
+    if (it != m_peers.cend()) {
+        m_controlLog.inbound(transport, controlLogPeer(*it), message);
+    }
+}
+
+void StationServer::logControlResult(SessionTransport* transport, const SessionMessage& message)
+{
+    const auto it = m_peers.constFind(transport);
+    if (it != m_peers.cend()) {
+        m_controlLog.answer(transport, controlLogPeer(*it), message);
+    }
+}
+
+SessionTransport* StationServer::controlTransportForDevice(const QByteArray& deviceId) const
+{
+    if (deviceId.isEmpty()) {
+        return nullptr;
+    }
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->sessionDeviceId == deviceId) {
+            return it.key();
+        }
+    }
+    return nullptr;
+}
+
+void StationServer::controlLogKeepalive(const QByteArray& deviceId,
+                                        ControlLog::KeepaliveChannel channel, qint64 ageMs,
+                                        bool watched)
+{
+    SessionTransport* const transport = controlTransportForDevice(deviceId);
+    ControlLog::PeerInfo info;
+    info.deviceId = deviceId;
+    if (transport != nullptr) {
+        info = controlLogPeer(*m_peers.constFind(transport));
+    }
+    m_controlLog.keepalive(deviceId, channel, ageMs, watched, transport, info);
 }
 
 bool StationServer::peerSeesPairingCode(SessionTransport* transport) const
@@ -8707,6 +8808,7 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
     if (!ownershipAllows(transport, message)) {
         return;
     }
+    logControlResult(transport, message);
     switch (message.kind) {
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
@@ -9525,6 +9627,10 @@ void StationServer::followKeyedForWatchdog()
     }
     if (remoteKey) {
         m_watchedKeyedDevice = keyedBy.deviceId;
+        // Control logging lane: a new watch measures keepalive gaps afresh.
+        if (!m_txWatchdog->isWatching(keyedBy.deviceId)) {
+            m_controlLog.keepaliveWatchStarted(keyedBy.deviceId);
+        }
         // A VOX key was never answered to the device, so it has no epoch
         // of it: any epoch counts.
         m_txWatchdog->setKeyed(keyedBy.deviceId, true,
@@ -9572,8 +9678,12 @@ void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& messa
     if (deviceId.isEmpty()) {
         return;
     }
+    // Control logging lane: logged after, as it was watched.
+    const bool watched = m_txWatchdog->isWatching(deviceId);
     m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel,
                             std::max<qint64>(0, heldUs) / 1000);
+    controlLogKeepalive(deviceId, ControlLog::KeepaliveChannel::MediaTx,
+                        std::max<qint64>(0, heldUs) / 1000, watched);
 }
 
 void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)
@@ -11933,6 +12043,8 @@ void StationServer::handlePathJoin(SessionTransport* transport, const SessionMes
         return;
     }
     disconnect(joiningSwitchableGuard, nullptr, this, nullptr);
+    // Control logging lane: its skipped counts and folded answers.
+    m_controlLog.closed(transport, controlLogPeer(*joining));
     m_peers.erase(joining);
     joiningSwitchableGuard->deleteLater();
     const bool started = connectionGuard

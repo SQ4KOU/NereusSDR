@@ -113,6 +113,11 @@
 //               (eqDb .. alcGroupDb) appended (txReadingsVersion 3). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-01: Control logging lane: one line per key with the peaks
+//               of the leveler, leveler gain, ALC, ALC gain and
+//               compression readings the meter pump already took. Logging
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <optional>
@@ -402,6 +407,12 @@ private:
     Holder m_holder;
     qint64 m_stationHolderForSeconds{0};
     qint64 m_stationKeyedForSeconds{0};
+
+    // Control logging lane: this key's stage reading peaks, from the
+    // readings the pump already took (kNoReadingDb while none came).
+    void logStagePeaks();
+    TxMeterReadings m_keyPeaks;
+    int m_keyReadings{0};
 
     // Each rising edge of keyed is a key; the first stop recorded for it
     // wins.

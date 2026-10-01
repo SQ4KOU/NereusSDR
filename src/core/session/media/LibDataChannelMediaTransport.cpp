@@ -72,6 +72,9 @@
 //               again and neither warns nor takes the once-a-second slot;
 //               the warning is logged after the batch is delivered. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: rttMs() and the selected
+//               pair's candidate transports. Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -1213,6 +1216,21 @@ void LibDataChannelMediaTransport::gatherIfReady()
     }
 }
 
+std::optional<qint64> LibDataChannelMediaTransport::rttMs() const
+{
+    // Control logging lane: the SCTP round-trip estimate, for the log only.
+    if (thread() != QThread::currentThread() || !d->started || !d->peer) {
+        return std::nullopt;
+    }
+    try {
+        if (const auto rtt = d->peer->rtt()) {
+            return static_cast<qint64>(rtt->count());
+        }
+    } catch (const std::exception&) {
+    }
+    return std::nullopt;
+}
+
 std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
 {
     if (thread() != QThread::currentThread() || !d->started || !d->peer) {
@@ -1238,9 +1256,28 @@ std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
                 return QString();
             }
         };
+        const auto transportName = [](const rtc::Candidate& candidate) {
+            switch (candidate.transportType()) {
+            case rtc::Candidate::TransportType::Udp:
+                return QStringLiteral("udp");
+            case rtc::Candidate::TransportType::TcpActive:
+                return QStringLiteral("tcp-active");
+            case rtc::Candidate::TransportType::TcpPassive:
+                return QStringLiteral("tcp-passive");
+            case rtc::Candidate::TransportType::TcpSo:
+                return QStringLiteral("tcp-so");
+            case rtc::Candidate::TransportType::TcpUnknown:
+                return QStringLiteral("tcp");
+            default:
+                return QString();
+            }
+        };
         MediaIcePath path;
         path.localType = typeName(local);
         path.remoteType = typeName(remote);
+        // Control logging lane: the candidates' transports, for the log.
+        path.localTransport = transportName(local);
+        path.remoteTransport = transportName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
         path.localPort = local.port().value_or(0);
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));

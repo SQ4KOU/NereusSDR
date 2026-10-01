@@ -32,6 +32,8 @@
 //               is reported only while its start is still current, as on
 //               the owner's path. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -689,6 +691,11 @@ bool MediaPeer::sendTx(const QByteArray& message)
 std::optional<MediaIcePath> MediaPeer::selectedPath() const
 {
     return d->transport ? d->transport->selectedPath() : std::nullopt;
+}
+
+std::optional<qint64> MediaPeer::rttMs() const
+{
+    return d->transport ? d->transport->rttMs() : std::nullopt;
 }
 
 bool MediaPeer::isReady() const

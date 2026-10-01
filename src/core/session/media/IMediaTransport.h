@@ -35,6 +35,9 @@
 //               microphone line delivered on a transport's own thread;
 //               txReceived carries heldUs. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: MediaIcePath's candidate
+//               transports and rttMs(). Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -58,6 +61,11 @@ namespace NereusSDR {
 struct MediaIcePath {
     QString localType;
     QString remoteType;
+    /// Control logging lane: each candidate's transport ("udp",
+    /// "tcp-active", "tcp-passive", "tcp-so", "tcp"), empty where not
+    /// known. For the log only.
+    QString localTransport;
+    QString remoteTransport;
     QString localAddress;
     quint16 localPort = 0;
     QString remoteAddress;
@@ -406,6 +414,10 @@ public:
     /// Task 27: the candidate pair in use once connected; nullopt before, or
     /// where the transport cannot say.
     virtual std::optional<MediaIcePath> selectedPath() const { return std::nullopt; }
+    /// Control logging lane: the connection's SCTP round-trip estimate in
+    /// milliseconds; nullopt before, or where the transport cannot say.
+    /// For the log only.
+    virtual std::optional<qint64> rttMs() const { return std::nullopt; }
 
     /// R-R3-23: true once both this side's description and the remote
     /// description carry the L16 rtpmap on the audio m-line, so lossless

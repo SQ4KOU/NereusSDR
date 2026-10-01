@@ -58,6 +58,13 @@
 //               application) is deleted too instead of leaking with the
 //               peers it holds; lingerTargetExistsForTest(). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: a control message carries the time
+//               its frame was reassembled on the library's thread, so the
+//               Core's log can tell the wait for this thread from the
+//               network's (deliveringMessageWaitUs()); linkDiagnostics();
+//               the selected pair's candidate transports. Measurement
+//               only: the queue and its order are unchanged. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -82,6 +89,8 @@
 #include <QtEndian>
 
 #include <rtc/rtc.hpp>
+
+#include <chrono>
 
 #include <atomic>
 #include <cstddef>
@@ -214,7 +223,17 @@ struct Event {
     QString first;
     QString second;
     quint32 id = 0;
+    /// Control logging lane: a control message's receipt (steady clock,
+    /// nanoseconds), 0 where not measured. For the log only.
+    qint64 receivedNs = 0;
 };
+
+qint64 steadyNowNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // NereusSDR's own bounds on events waiting for this object's thread: how
 // many, and the bytes of the messages among them
@@ -351,7 +370,8 @@ void onFrame(const std::weak_ptr<DataChannelTransport::Bridge>& weak, rtc::binar
         case ControlFraming::Reassembler::Result::Pending:
             break;
         case ControlFraming::Reassembler::Result::Message:
-            bridge->postLocked({Event::Kind::Message, reassembler.message(), {}, {}, 0});
+            bridge->postLocked(
+                {Event::Kind::Message, reassembler.message(), {}, {}, 0, steadyNowNs()});
             break;
         case ControlFraming::Reassembler::Result::Ping:
             bridge->pingsReceived.fetch_add(1, std::memory_order_relaxed);
@@ -964,9 +984,28 @@ std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
         if (!m_bridge->peer->getSelectedCandidatePair(&local, &remote)) {
             return std::nullopt;
         }
+        const auto transportName = [](const rtc::Candidate& candidate) {
+            switch (candidate.transportType()) {
+            case rtc::Candidate::TransportType::Udp:
+                return QStringLiteral("udp");
+            case rtc::Candidate::TransportType::TcpActive:
+                return QStringLiteral("tcp-active");
+            case rtc::Candidate::TransportType::TcpPassive:
+                return QStringLiteral("tcp-passive");
+            case rtc::Candidate::TransportType::TcpSo:
+                return QStringLiteral("tcp-so");
+            case rtc::Candidate::TransportType::TcpUnknown:
+                return QStringLiteral("tcp");
+            default:
+                return QString();
+            }
+        };
         MediaIcePath path;
         path.localType = typeName(local);
         path.remoteType = typeName(remote);
+        // Control logging lane: the candidates' transports, for the log.
+        path.localTransport = transportName(local);
+        path.remoteTransport = transportName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
         path.localPort = local.port().value_or(0);
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
@@ -1065,6 +1104,31 @@ qint64 DataChannelTransport::backlogBytes() const
         channel = m_bridge->channel;
     }
     return channel ? static_cast<qint64>(channel->bufferedAmount()) : 0;
+}
+
+SessionLinkDiagnostics DataChannelTransport::linkDiagnostics() const
+{
+    SessionLinkDiagnostics link;
+    link.buffer = SessionLinkDiagnostics::Buffer::DataChannel;
+    if (!m_bridge) {
+        return link;
+    }
+    std::shared_ptr<rtc::PeerConnection> peer;
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard lock(m_bridge->mutex);
+        peer = m_bridge->peer;
+        channel = m_bridge->channel;
+    }
+    if (channel) {
+        link.bufferedBytes = static_cast<qint64>(channel->bufferedAmount());
+    }
+    if (peer) {
+        if (const auto rtt = peer->rtt()) {
+            link.sctpRttMs = static_cast<quint32>(std::max<qint64>(0, rtt->count()));
+        }
+    }
+    return link;
 }
 
 bool DataChannelTransport::sendRawFrameForTest(const QByteArray& frame)
@@ -1354,7 +1418,15 @@ void DataChannelTransport::drain()
                         m_bridge->watchDelivered(event.bytes.size());
                         emit binaryReceived(event.bytes);
                     } else {
+                        // Control logging lane: how long it waited for
+                        // this thread, readable while it is delivered.
+                        if (event.receivedNs > 0) {
+                            m_deliveringWaitUs = (steadyNowNs() - event.receivedNs) / 1000;
+                        }
                         emit textReceived(event.bytes);
+                        if (self) {
+                            m_deliveringWaitUs.reset();
+                        }
                     }
                 }
             }

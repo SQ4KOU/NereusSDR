@@ -28,6 +28,8 @@
 //               takes a long idle gap as the line starting again. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
+//   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -144,6 +146,7 @@ public:
     bool isReady() const override;
     bool gatherCandidates(const QList<IceRelayServer>& relays) override;
     std::optional<MediaIcePath> selectedPath() const override;
+    std::optional<qint64> rttMs() const override;
     bool losslessAudioNegotiated() const override;
     bool micLosslessNegotiated() const override;
     std::optional<MediaTransportTelemetry> telemetry() const override;

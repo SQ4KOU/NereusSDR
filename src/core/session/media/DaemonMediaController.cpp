@@ -4,6 +4,12 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: Control logging lane: the media connection's selected pair
+//               (candidate types and transports, masked addresses) when
+//               first known and on every change, and its rtt in that line
+//               and in the periodic display diagnostics line. Logging
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 //   2026-10-01: TX diagnostics lane, review round: the unkey tail's start,
 //               the TX pump's longest wait for a microphone block with the
 //               radio's frame sequence step across it, and "RF start not
@@ -149,6 +155,7 @@
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/session/ControlLog.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/SliceAccessController.h"
@@ -192,6 +199,9 @@ constexpr float kFftDbmFloor = -200.0f;
 constexpr float kFftPowerFloor = 1.0e-20f;
 constexpr qint64 kAudioDiagnosticsLogIntervalMs = 2'000;
 constexpr int kDisplayDiagnosticsLogIntervalMs = 10'000;
+// Control logging lane: how often a "tx" keepalive may look at the media
+// connection's selected pair.
+constexpr qint64 kMediaPathCheckMs = 1000;
 // Distinct media error texts logged per media peer; later display-channel
 // errors are still counted in displayTransportErrors.
 constexpr qsizetype kMaxLoggedTransportErrorKinds = 16;
@@ -649,6 +659,8 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     });
     m_displayDiagnosticsTimer.setInterval(kDisplayDiagnosticsLogIntervalMs);
     connect(&m_displayDiagnosticsTimer, &QTimer::timeout, this, [this] {
+        // Control logging lane: a pair that changed since is logged.
+        logMediaPath();
         logDisplayDiagnostics(false);
     });
     // iPhone app plan Task 29: a replacement's overlap, its connect bound,
@@ -1008,10 +1020,39 @@ void DaemonMediaController::logDisplayDiagnostics(bool final)
         return;
     }
     m_displayDiagnosticsLogged = m_displayDiagnostics;
+    // Control logging lane: the media connection's SCTP rtt rides along.
+    const std::optional<qint64> rtt = m_peer ? m_peer->rttMs() : std::nullopt;
     qCInfo(lcDaemonMedia).noquote()
-        << QStringLiteral("daemon display diagnostics %1 %2")
+        << QStringLiteral("daemon display diagnostics %1 %2 mediaRttMs=%3")
                .arg(final ? QStringLiteral("final") : QStringLiteral("periodic"),
-                    daemonDisplayDiagnosticsLine(m_displayDiagnostics));
+                    daemonDisplayDiagnosticsLine(m_displayDiagnostics),
+                    rtt ? QString::number(*rtt) : QStringLiteral("none"));
+}
+
+void DaemonMediaController::logMediaPath()
+{
+    if (!m_peer) {
+        return;
+    }
+    m_mediaPathChecked.start();
+    const std::optional<MediaIcePath> path = m_peer->selectedPath();
+    if (!path) {
+        return;
+    }
+    const QString text = ControlLog::mediaPathText(*path);
+    if (text == m_mediaPathLogged) {
+        return;
+    }
+    const bool changed = !m_mediaPathLogged.isEmpty();
+    m_mediaPathLogged = text;
+    const std::optional<qint64> rtt = m_peer->rttMs();
+    const QByteArray device = m_server ? m_server->mediaSessionDevice(m_epoch) : QByteArray();
+    qCInfo(lcDaemonMedia).noquote()
+        << QStringLiteral("Media link for %1%2: %3; rtt %4")
+               .arg(device.isEmpty() ? QStringLiteral("a device not known")
+                                     : QString::fromLatin1(device.toHex()),
+                    changed ? QStringLiteral(" (changed)") : QString(), text,
+                    rtt ? QStringLiteral("%1 ms").arg(*rtt) : QStringLiteral("not measured"));
 }
 
 std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpointId) const
@@ -1881,6 +1922,9 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     m_displayDiagnosticsLogged = {};
     m_loggedTransportErrorKinds.clear();
     m_displayDiagnosticsTimer.start();
+    // Control logging lane: a new session's pair is logged afresh.
+    m_mediaPathLogged.clear();
+    m_mediaPathChecked.invalidate();
     // Task 29: a new start is a new timeline of SSRCs; no earlier peer's
     // stamp needs rewriting.
     m_sendSsrcRewrite.clear();
@@ -1998,6 +2042,8 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     });
     connect(peer, &MediaPeer::ready, this, [this, peer, peerEpoch]() {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            // Control logging lane: the pair it settled on.
+            logMediaPath();
             reconcileAudio();
             // R-R3-43: each wanted receiver stream on its own, after the
             // main one; neither restarts the other.
@@ -2030,6 +2076,14 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
             noteKeepaliveWait(heldUs);
             m_server->txChannelMessage(peerEpoch, message, heldUs);
+            // Control logging lane: while keepalives come, a change of the
+            // pair is logged within a second, beside the keepalive lines.
+            // After the watchdog has the keepalive: reading the pair and
+            // rtt takes the ICE and SCTP library locks.
+            if (!m_mediaPathChecked.isValid()
+                || m_mediaPathChecked.elapsed() >= kMediaPathCheckMs) {
+                logMediaPath();
+            }
         }
     });
     // Task 36: the microphone line's packets go to its receiver. Task 29:
@@ -2351,6 +2405,8 @@ void DaemonMediaController::finishReplacement()
     MediaPeer* const peer = m_peer.get();
     const QString connectionId = peer->connectionId();
     wireCurrentPeer(peer, connectionId);
+    // Control logging lane: the new connection's pair, as a change.
+    logMediaPath();
     // Displays go on over the new peer, each starting on a keyframe.
     for (auto& [endpointId, entry] : m_endpoints) {
         Q_UNUSED(endpointId);

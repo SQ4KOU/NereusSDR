@@ -92,6 +92,10 @@
 //   2026-10-01: TX mic thread fix round 2: the unkey line carries the
 //               over's longest "tx" keepalive wait. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: the media connection's
+//               selected pair at selection and on change, and its rtt in
+//               the periodic display diagnostics line. Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -750,6 +754,9 @@ private:
     void onMediaTransportError(const QString& message);
     void onMediaPeerError(const QString& message);
     void logDisplayDiagnostics(bool final);
+    /// Control logging lane: the media connection's selected pair, when
+    /// first known and on every change (logging only).
+    void logMediaPath();
     bool sendControl(const QJsonObject& payload) const;
     quint32 nextContextGeneration();
 
@@ -913,6 +920,10 @@ private:
     QElapsedTimer m_keyframeRefusalLog;
     qint64 m_audioDiagnosticsLastLogMs{0};
     QTimer m_displayDiagnosticsTimer;
+    /// Control logging lane: the selected pair last logged for this
+    /// peer's session, and how often a keepalive may look at it.
+    QString m_mediaPathLogged;
+    QElapsedTimer m_mediaPathChecked;
     DaemonDisplayDiagnostics m_displayDiagnostics;
     DaemonDisplayDiagnostics m_displayDiagnosticsLogged;
     QSet<QString> m_loggedTransportErrorKinds;

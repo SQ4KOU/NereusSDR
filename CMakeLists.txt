@@ -1514,6 +1514,7 @@ list(APPEND CORE_SOURCES
     # each session, the path race and its rungs, and the media replace's
     # duplicate filter.
     src/core/session/SwitchableTransport.cpp
+    src/core/session/ControlLog.cpp
     src/core/session/PathRacer.cpp
     src/core/session/RelayLeg.cpp
     src/core/session/MediaTunnel.cpp

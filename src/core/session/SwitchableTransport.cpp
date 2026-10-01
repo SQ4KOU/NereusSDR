@@ -14,6 +14,10 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: Control logging lane: linkDiagnostics() and
+//               deliveringMessageWaitUs() from the connection in use, for
+//               the Core's log only. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SwitchableTransport.h"
@@ -178,7 +182,12 @@ void SwitchableTransport::onText(SessionTransport* from, const QByteArray& wire)
             }
             return;
         }
+        const QPointer<SwitchableTransport> self(this);
+        m_delivering = from;
         emit textReceived(wire);
+        if (self) {
+            m_delivering = nullptr;
+        }
         return;
     }
     if (from == m_next && switching()) {
