@@ -9,10 +9,66 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 4: the
+//                                    paired CFC curve cancels the unsent
+//                                    scalar edits only when the new curve
+//                                    decodes (setCfcParaEqData projects
+//                                    nothing otherwise);
+//                                    unresolvedDeltaCancelRuleNames()
+//                                    checks the table's names against the
+//                                    schemas. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 3: a delta
+//                                    cancels the unsent edits its causes
+//                                    define, named per cause in
+//                                    kDeltaCancelRules (dspMode -> both
+//                                    filter edges, per Thetis
+//                                    console.cs:34513 [v2.10.3.15];
+//                                    lineInBoost -> lineInGain, per
+//                                    console.cs:40930-40932 [v2.10.3.15];
+//                                    the paired CFC curve and scalars),
+//                                    whatever the
+//                                    values. Only the dspMode row steps
+//                                    the edges back before its setter
+//                                    runs. Replaces round 2's value-
+//                                    inferred cancel and generic step-
+//                                    back. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 2: a
+//                                    cancelled edit falls back to its
+//                                    write in flight (whose answer then
+//                                    applies), else to the delta's value,
+//                                    else to the last value the Core sent
+//                                    (m_coreValues); unsent edits step
+//                                    back before a delta's setters run, so
+//                                    a cancelled edge is never saved as a
+//                                    LastFilter; a sibling behind the same
+//                                    notifier is cancelled with it. AI-
+//                                    assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 1: a delta
+//                                    whose side effect moves an edit the
+//                                    window has not sent cancels that edit
+//                                    (its hold and its coalesced write)
+//                                    and its own value applies, following
+//                                    Thetis's per-mode filter edges
+//                                    (console.cs:34513, 34766-34768
+//                                    [v2.10.3.15]). A sent edit, and a
+//                                    Core answer's side effect, still put
+//                                    the operator's value back. AI-
+//                                    assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: the hello declares
 //                                    radeReason 1, and each slice's
 //                                    radeReason applies as the Core sent it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling lane: a pending write
+//                                    keeps the operator's value, and an
+//                                    inbound apply that moves it as a side
+//                                    effect (a Core mode change rewriting
+//                                    the filter edges) puts it back
+//                                    (restoreOperatorValues), so the flush
+//                                    sends the operator's value, not the
+//                                    Core's. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters (ruling (d)): the
 //                                    hello declares rxFilterLowPass 1, so
 //                                    the CH label, WIDE badge and Filter
@@ -423,6 +479,7 @@
 #include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
+#include "core/CfcProfile.h"
 #include "core/session/SettingsHygieneWire.h"
 #include "core/session/SettingsBackupExportWire.h"
 #include "core/SettingsHygiene.h"
@@ -487,6 +544,7 @@
 #include <QWebSocket>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace NereusSDR {
@@ -986,7 +1044,24 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                     }
                     m_outboundCoalescer.update(objectKey, update);
                     if (propertyResultsAvailable()) {
-                        m_propertyWriteIds[objectKey].insert(update.name, 0);
+                        // The operator's value, held until the Core
+                        // answers this write (restoreOperatorValues).
+                        // A write of it already on its way stays known
+                        // (inFlightWriteId), so a delta that cancels
+                        // this newer edit can fall back to it.
+                        auto& writes = m_pendingWrites[objectKey];
+                        PendingWrite next{0, update, m_nextPendingWriteOrder++, 0, MirrorUpdate{}};
+                        if (const auto previous = writes.constFind(update.name);
+                            previous != writes.cend()) {
+                            if (previous->writeId != 0) {
+                                next.inFlightWriteId = previous->writeId;
+                                next.inFlightValue = previous->value;
+                            } else {
+                                next.inFlightWriteId = previous->inFlightWriteId;
+                                next.inFlightValue = previous->inFlightValue;
+                            }
+                        }
+                        writes.insert(update.name, next);
                     }
                 }
             });
@@ -2137,7 +2212,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->setStationMayCloseLastSlice(false);
     }
     m_forwardLocalChanges = false;
-    m_propertyWriteIds.clear();
+    m_pendingWrites.clear();
+    m_coreValues.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
     // drops and never keys it again by itself; nothing of it is kept.
     refreshRemoteTransmit();
@@ -4074,7 +4150,8 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
     }
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
-    m_propertyWriteIds.remove(message.objectKey);
+    m_pendingWrites.remove(message.objectKey);
+    m_coreValues.remove(message.objectKey);
     m_outboundMirror->unwatch(message.objectKey);
     if (sliceId >= 0 && !m_radioModel.isNull()) {
         InboundGuard guard(m_applyingInbound);
@@ -4109,13 +4186,23 @@ void StationClient::handleDelta(const SessionMessage& message)
         return;
     }
     QList<MirrorUpdate> current;
-    const auto pending = m_propertyWriteIds.value(message.objectKey);
+    QList<MirrorUpdate> held;
+    const auto pending = m_pendingWrites.value(message.objectKey);
     for (const auto& value : message.updates) {
         if (!pending.contains(value.name)) {
             current.append(value);
+        } else {
+            // Skipped while the operator's write holds it, unless this
+            // delta's side effects cancel an unsent hold
+            // (restoreOperatorValues): then this value applies.
+            held.append(value);
         }
     }
-    applyUpdates(target, message.objectKey, current);
+    applyUpdates(target, message.objectKey, current, SideEffectRule::Delta, held);
+    // What the Core holds, applied or not: a later cancel falls back to it.
+    for (const auto& value : held) {
+        m_coreValues[message.objectKey].insert(value.name, value);
+    }
 }
 
 void StationClient::handlePropertyResult(const SessionMessage& message)
@@ -4124,15 +4211,27 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
     if (!target || message.writeId == 0) {
         return;
     }
-    auto pending = m_propertyWriteIds.find(message.objectKey);
-    if (pending == m_propertyWriteIds.end()) {
+    auto pending = m_pendingWrites.find(message.objectKey);
+    if (pending == m_pendingWrites.end()) {
         return;
     }
     QList<MirrorUpdate> acceptedValues;
     QList<SessionPropertyResult> currentResults;
     for (const auto& result : message.propertyResults) {
         if (!pending->contains(result.property)
-            || pending->value(result.property) != message.writeId) {
+            || pending->value(result.property).writeId != message.writeId) {
+            // The answer to a write a newer unsent edit has superseded:
+            // that edit still wins, but the write is no longer on its way,
+            // and its value is now what the Core holds.
+            auto superseded = pending->find(result.property);
+            if (superseded != pending->end() && superseded->writeId == 0
+                && superseded->inFlightWriteId == message.writeId) {
+                superseded->inFlightWriteId = 0;
+                superseded->inFlightValue = MirrorUpdate{};
+                if (result.hasValue) {
+                    m_coreValues[message.objectKey].insert(result.property, result.value);
+                }
+            }
             continue;
         }
         pending->remove(result.property);
@@ -4142,7 +4241,7 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
         currentResults.append(result);
     }
     if (pending->isEmpty()) {
-        m_propertyWriteIds.erase(pending);
+        m_pendingWrites.erase(pending);
     }
     applyUpdates(target, message.objectKey, acceptedValues);
     for (const auto& result : currentResults) {
@@ -4156,10 +4255,108 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
     }
 }
 
-void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
-                                 const QList<MirrorUpdate>& updates)
+namespace {
+
+// What a change from elsewhere does to the window's unsent edits, stated
+// per cause rather than inferred from values. When a delta applies
+// `cause` to an object of `className` and moves it, every unsent edit of
+// a `dependents` property on that object is cancelled
+// (StationClient::cancelUnsentEdit): the cause's setter defines those
+// properties, so an edit made before it has no place after it.
+struct DeltaCancelRule {
+    const char* className;
+    const char* cause;
+    // Up to five, unused slots null.
+    std::array<const char*, 5> dependents;
+    // The cause's setter saves the dependents' current values somewhere
+    // of their own before it replaces them, so they step back to the
+    // Core's before it runs and a cancelled edit is never saved.
+    bool stepBack;
+    // When set, the cause defines its dependents only for a new value
+    // (decoded) this accepts; otherwise for every new value.
+    bool (*defines)(const QVariant& decoded) = nullptr;
+};
+
+// setCfcParaEqData projects only a curve that decodes onto the scalars;
+// a curve that does not decode leaves them as they are.
+bool cfcCurveDecodes(const QVariant& decoded)
 {
-    Q_UNUSED(objectKey)
+    CfcProfile::Profile profile;
+    return CfcProfile::decode(decoded.toString(), profile);
+}
+
+constexpr DeltaCancelRule kDeltaCancelRules[] = {
+    // Filter edges are per-mode state. SetRX1Mode loads the new mode's
+    // own last filter:
+    //   RX1Filter = rx1_filters[(int)new_mode].LastFilter;
+    // From Thetis console.cs:34513 [v2.10.3.15] (in SetRX1Mode, :33957),
+    // and SetRX1Filter saves the edges as the current mode's
+    // (console.cs:34766-34768 [v2.10.3.15]). SliceModel::setDspMode saves
+    // the current edges as the old mode's LastFilter before loading the
+    // new mode's, so the edges step back first.
+    { "SliceModel", "dspMode", { { "filterLow", "filterHigh" } }, true },
+    // The line-in boost sets the line-in gain index:
+    //   var lineboost = Array.IndexOf(lineinboost, line_in_boost.ToString());
+    //   NetworkIO.SetLineBoost(lineboost);
+    // From Thetis console.cs:40930-40932 [v2.10.3.15]
+    // (TransmitModel::setLineInBoost -> setLineInGain).
+    { "TransmitModel", "lineInBoost", { { "lineInGain" } }, false },
+    // NereusSDR's paired CFC curve: a curve that decodes projects onto
+    // the five scalars, and each scalar re-encodes the curve
+    // (TransmitModel::setCfcParaEqData, updatePairedCfc,
+    // updatePairedCfcArray).
+    { "TransmitModel", "cfcParaEqData",
+      { { "cfcPrecompDb", "cfcPostEqGainDb", "cfcEqFreqJson", "cfcCompressionJson",
+          "cfcPostEqBandGainJson" } }, false, &cfcCurveDecodes },
+    { "TransmitModel", "cfcPrecompDb", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcPostEqGainDb", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcEqFreqJson", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcCompressionJson", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcPostEqBandGainJson", { { "cfcParaEqData" } }, false },
+};
+
+} // namespace
+
+QList<QByteArray> StationClient::unresolvedDeltaCancelRuleNames()
+{
+    QList<QByteArray> unresolved;
+    for (const DeltaCancelRule& rule : kDeltaCancelRules) {
+        const QByteArray className(rule.className);
+        const QMetaObject* meta = nullptr;
+        if (className == "SliceModel") {
+            meta = &SliceModel::staticMetaObject;
+        } else if (className == "TransmitModel") {
+            meta = &TransmitModel::staticMetaObject;
+        }
+        if (meta == nullptr || !MirrorSchema::isMirrorable(meta)
+            || MirrorSchema::shortClassName(meta->className()) != className) {
+            unresolved.append(className);
+            continue;
+        }
+        const MirrorSchema& schema = MirrorSchema::forMetaObject(meta);
+        const auto check = [&](const char* name) {
+            if (schema.byName(QByteArray(name)) == nullptr) {
+                unresolved.append(className + '.' + name);
+            }
+        };
+        check(rule.cause);
+        for (const char* name : rule.dependents) {
+            if (name == nullptr) {
+                break;
+            }
+            check(name);
+        }
+    }
+    return unresolved;
+}
+
+void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
+                                 const QList<MirrorUpdate>& updates, SideEffectRule rule,
+                                 const QList<MirrorUpdate>& heldValues)
+{
+    if (updates.isEmpty()) {
+        return;
+    }
     const MirrorSchema& schema = MirrorSchema::forObject(target);
     const QByteArray className =
         MirrorSchema::shortClassName(target->metaObject()->className());
@@ -4170,7 +4367,64 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
     // suppressed too.
     InboundGuard guard(m_applyingInbound);
 
+    // A delta from elsewhere cancels the unsent edits its causes define
+    // (kDeltaCancelRules). Which ones is decided before any setter runs:
+    // the rules whose cause this delta carries and the window holds at a
+    // different value, and their dependents with an unsent edit here.
+    QList<const MirrorProperty*> toCancel;
+    if (rule == SideEffectRule::Delta) {
+        const auto pending = m_pendingWrites.value(objectKey);
+        QList<const MirrorProperty*> toStepBack;
+        for (const DeltaCancelRule& cancelRule : kDeltaCancelRules) {
+            if (className != cancelRule.className) {
+                continue;
+            }
+            const MirrorProperty* cause = schema.byName(cancelRule.cause);
+            const auto carried = std::find_if(
+                updates.cbegin(), updates.cend(),
+                [&](const MirrorUpdate& u) { return u.name == cancelRule.cause; });
+            if (cause == nullptr || carried == updates.cend()) {
+                continue;
+            }
+            const QVariant next = MirrorSchema::decode(*cause, carried->value);
+            if (MirrorSchema::decode(*cause, schema.read(*cause, target)) == next) {
+                continue;
+            }
+            if (cancelRule.defines != nullptr && !cancelRule.defines(next)) {
+                continue;
+            }
+            for (const char* name : cancelRule.dependents) {
+                if (name == nullptr) {
+                    break;
+                }
+                const auto write = pending.constFind(QByteArray(name));
+                const MirrorProperty* dependent = schema.byName(name);
+                if (write == pending.cend() || write->writeId != 0 || dependent == nullptr
+                    || toCancel.contains(dependent)) {
+                    continue;
+                }
+                toCancel.append(dependent);
+                if (cancelRule.stepBack) {
+                    toStepBack.append(dependent);
+                }
+            }
+        }
+        // Back to the write still in flight, else to the Core's value.
+        const auto core = m_coreValues.value(objectKey);
+        for (const MirrorProperty* prop : toStepBack) {
+            const PendingWrite write = pending.value(prop->name);
+            if (write.inFlightWriteId != 0) {
+                applyOne(target, *prop, write.inFlightValue);
+            } else if (core.contains(prop->name)) {
+                applyOne(target, *prop, core.value(prop->name));
+            }
+        }
+    }
+
+    QSet<QByteArray> applied;
     for (const MirrorUpdate& update : updates) {
+        applied.insert(update.name);
+        m_coreValues[objectKey].insert(update.name, update);
         const MirrorProperty* prop = schema.byName(update.name);
         if (prop == nullptr) {
             // A property this build does not declare. Already recorded by
@@ -4192,6 +4446,115 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
                     << "-- this property will read stale on this client";
             }
         }
+    }
+
+    for (const MirrorProperty* prop : toCancel) {
+        cancelUnsentEdit(objectKey, target, *prop, heldValues);
+    }
+
+    // Still under the guard: putting the operator's values back is not a
+    // change of theirs to send again.
+    restoreOperatorValues(objectKey, applied);
+}
+
+void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
+                                          const QSet<QByteArray>& applied)
+{
+    // The guard suppresses the observer, not the change. A Core value a
+    // setter applies can move a DIFFERENT property as a side effect
+    // (SliceModel::setDspMode rewrites both filter edges; a TransmitModel
+    // CFC scalar re-encodes the paired curve). When that property holds
+    // an operator edit the Core has not answered, the flush would read
+    // the moved value and send the Core's state back as the operator's
+    // choice. So the operator's value goes back now: it wins until the
+    // Core answers that write, and the window shows what it will send.
+    // A property the Core's message named keeps the Core's value (only an
+    // object.create names one with a pending write; a delta skips them,
+    // and a result ends the hold before it applies). An unsent edit a
+    // delta's cause defines was already cancelled (kDeltaCancelRules).
+    struct Held {
+        quint64 order;
+        QByteArray key;
+        QByteArray name;
+    };
+    QList<Held> held;
+    for (auto object = m_pendingWrites.cbegin(); object != m_pendingWrites.cend(); ++object) {
+        for (auto write = object->cbegin(); write != object->cend(); ++write) {
+            held.append(Held{write->order, object.key(), write.key()});
+        }
+    }
+    std::sort(held.begin(), held.end(),
+              [](const Held& a, const Held& b) { return a.order < b.order; });
+    for (const Held& h : held) {
+        QObject* object = m_objects.value(h.key).data();
+        auto writes = m_pendingWrites.find(h.key);
+        if (object == nullptr || writes == m_pendingWrites.end()) {
+            continue;
+        }
+        auto write = writes->find(h.name);
+        if (write == writes->end()) {
+            continue;
+        }
+        const MirrorSchema& schema = MirrorSchema::forObject(object);
+        const MirrorProperty* prop = schema.byName(h.name);
+        if (prop == nullptr) {
+            continue;
+        }
+        const QVariant live = schema.read(*prop, object);
+        if (!live.isValid()) {
+            continue;
+        }
+        if (h.key == appliedKey && applied.contains(h.name)) {
+            write->value.value = live;
+            continue;
+        }
+        if (live == write->value.value) {
+            continue;
+        }
+        const MirrorUpdate operatorValue = write->value;
+        applyOne(object, *prop, operatorValue);
+    }
+}
+
+void StationClient::cancelUnsentEdit(const QByteArray& objectKey, QObject* object,
+                                     const MirrorProperty& prop,
+                                     const QList<MirrorUpdate>& heldValues)
+{
+    auto writes = m_pendingWrites.find(objectKey);
+    if (writes == m_pendingWrites.end()) {
+        return;
+    }
+    auto write = writes->find(prop.name);
+    if (write == writes->end()) {
+        return;
+    }
+    m_outboundCoalescer.remove(objectKey, prop.ordinal);
+    if (write->inFlightWriteId != 0) {
+        // An earlier write of this property is still on its way. Back to
+        // that state: its value shows and its answer applies, so the
+        // window ends where the Core does (the Core excludes the writer
+        // from its own change).
+        write->writeId = write->inFlightWriteId;
+        write->value = write->inFlightValue;
+        write->inFlightWriteId = 0;
+        write->inFlightValue = MirrorUpdate{};
+        applyOne(object, prop, write->value);
+        return;
+    }
+    writes->erase(write);
+    if (writes->isEmpty()) {
+        m_pendingWrites.erase(writes);
+    }
+    // The delta's own value for it, else the last value the Core sent.
+    for (const MirrorUpdate& value : heldValues) {
+        if (value.name == prop.name) {
+            applyOne(object, prop, value);
+            return;
+        }
+    }
+    const auto core = m_coreValues.value(objectKey);
+    if (core.contains(prop.name)) {
+        applyOne(object, prop, core.value(prop.name));
     }
 }
 
@@ -4631,6 +4994,10 @@ void StationClient::onWriteFlushTick()
             // property again since it was marked dirty (the guard
             // suppresses the observer, not the change), and sending the
             // stale one would tell the station to undo its own value.
+            // Where the Core answers writes, an inbound SIDE EFFECT on a
+            // pending property has already been undone by
+            // restoreOperatorValues(), so the live value is the
+            // operator's.
             const MirrorProperty* prop = schema.byName(pendingUpdate.name);
             if (prop == nullptr) {
                 continue;
@@ -4648,8 +5015,22 @@ void StationClient::onWriteFlushTick()
                 if (m_nextPropertyWriteId == 0) {
                     ++m_nextPropertyWriteId;
                 }
+                auto& writes = m_pendingWrites[batch.first];
                 for (const auto& update : resolved) {
-                    m_propertyWriteIds[batch.first].insert(update.name, writeId);
+                    // The value sent is the operator's: an inbound side
+                    // effect since the edit was put back by
+                    // restoreOperatorValues(). It is held until this
+                    // write's answer.
+                    auto entry = writes.find(update.name);
+                    if (entry == writes.end()) {
+                        writes.insert(update.name,
+                                      PendingWrite{writeId, update, m_nextPendingWriteOrder++, 0, MirrorUpdate{}});
+                    } else {
+                        entry->writeId = writeId;
+                        entry->value = update;
+                        entry->inFlightWriteId = 0;
+                        entry->inFlightValue = MirrorUpdate{};
+                    }
                 }
             }
             send(SessionMessages::propertyWrite(batch.first, resolved, writeId));
