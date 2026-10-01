@@ -80,6 +80,10 @@
 //                Claude Code.
 //   2026-09-30 - Shared-input filters, follow-up: countedCandidates.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - bindToRadioFacingAddress, radioFacingAddress and the
+//                receive-socket test seams: the socket binds the address that
+//                reaches the radio (network.c:116-118, 203 [v2.10.3.15]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -565,6 +569,24 @@ private:
     // — same stop+prime+start cycle as restartStreamWithRate().
     void restartStreamWithCount(int newActiveRxCount);
 
+    // Binds m_socket to the local address that reaches m_radioInfo.address,
+    // on a port the OS chooses, as Thetis binds its listening socket to the
+    // network card's address (network.c nativeInitMetis). Called by
+    // connectToRadio() and each reconnect attempt. With no route, or if that
+    // address will not bind, warns and binds every address (Any); the socket
+    // is always left bound with the buffer sizes applied.
+    void bindToRadioFacingAddress();
+    // The local address that reaches m_radioInfo.address (a UDP connect),
+    // null if none does within kRouteLookupMs, or the test override.
+    QHostAddress radioFacingAddress() const;
+    // Test stand-in for the route lookup (setRadioFacingAddressForTest).
+    // Unconditional members: the class layout must not depend on
+    // NEREUS_BUILD_TESTS.
+    bool m_radioFacingOverridden{false};
+    QHostAddress m_radioFacingOverride;
+    // The socket buffer sizes init() sets; applied again after a rebind.
+    void applySocketBufferSizes();
+
     // --- Wire format (networkproto1.c) — implemented in Tasks 7 & 8 ---
     void sendMetisStart(bool iqAndMic);
     void sendMetisStop();
@@ -694,6 +716,10 @@ private:
     // Connect watchdog: fires this many ms after connectToRadio() if no first
     // ep6 frame arrives → emits connectFailed(Timeout, ...). Design §4.1.
     static constexpr int kConnectTimeoutMs     = 2000;
+    // How long bindToRadioFacingAddress() waits for the OS to name the local
+    // address that reaches the radio. A UDP connect sends nothing and is
+    // normally answered at once. NereusSDR-original.
+    static constexpr int kRouteLookupMs        = 100;
     // Mic-frame LOS timeout — after this long without a successful mic16
     // dispatch, inject a zero block into TxMicSource so the worker keeps
     // ticking through silence.  Matches Thetis network.c:656 [v2.10.3.13]:
@@ -1274,6 +1300,23 @@ private:
 
 #ifdef NEREUS_BUILD_TESTS
 public:
+    // Stand in for the route lookup in bindToRadioFacingAddress(): a null
+    // address is "no route", an address this host does not own cannot be
+    // bound. Both must leave the socket bound to every address.
+    void setRadioFacingAddressForTest(const QHostAddress& local) {
+        m_radioFacingOverridden = true;
+        m_radioFacingOverride = local;
+    }
+    QAbstractSocket::SocketState socketStateForTest() const {
+        return m_socket ? m_socket->state() : QAbstractSocket::UnconnectedState;
+    }
+    QHostAddress socketAddressForTest() const {
+        return m_socket ? m_socket->localAddress() : QHostAddress();
+    }
+    int socketReceiveBufferForTest() const {
+        return m_socket ? m_socket->socketOption(
+                   QAbstractSocket::ReceiveBufferSizeSocketOption).toInt() : -1;
+    }
     // Test-only helpers — allow unit tests to inject board caps without a live radio.
     void setBoardForTest(HPSDRHW board) {
         m_caps = &BoardCapsTable::forBoard(board);

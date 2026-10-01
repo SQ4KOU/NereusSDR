@@ -7982,6 +7982,10 @@ nereus_add_test(tst_receive_layout_native fakes/P1FakeRadio.cpp)
 nereus_add_test(tst_receive_slice_seed)
 nereus_add_test(tst_p2_established_silence fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_p2_established_silence PRIVATE NEREUS_BUILD_TESTS)
+# The P2 receive socket listens on the address the radio answers, so no
+# other socket on that address can take the radio's frames.
+nereus_add_test(tst_p2_loopback_bind fakes/P2FakeRadio.cpp)
+target_compile_definitions(tst_p2_loopback_bind PRIVATE NEREUS_BUILD_TESTS)
 # R-R3-49 / R-R3-11: the Network Watchdog setting does what Thetis does with
 # it. P2 fake: general packet byte 38 at connect and on change, the immediate
 # send, the keepalive only while on, loss only while on. P1 fake: the start

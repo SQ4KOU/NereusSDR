@@ -5,11 +5,15 @@
 //   1. State transitions: Disconnected → Connecting → Connected
 //   2. iqDataReceived emits correctly-shaped interleaved I/Q QVector<float>
 //   3. disconnect() stops the fake's "running" state
+//   4. the radio's frames reach this connection's socket, and no other
+//      socket on the machine bound to the address the radio answers can
+//      take them (tst_slice_cap_every_path's lost reconnect)
 //
 // Uses QTEST_MAIN (not APPLESS_MAIN) — requires QCoreApplication for socket I/O.
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <QUdpSocket>
 #include <atomic>
 #include "core/P1RadioConnection.h"
 #include "core/RadioConnection.h"
@@ -45,6 +49,23 @@ class TestP1LoopbackConnection : public QObject {
     Q_OBJECT
 
 private:
+    // Every address: dual-stack Any, or IPv4 Any when Qt keeps the IPv4
+    // socket a failed bind to an IPv4 address left behind.
+    static bool listensEverywhere(const QHostAddress& a) {
+        return a == QHostAddress(QHostAddress::Any)
+            || a == QHostAddress(QHostAddress::AnyIPv4);
+    }
+
+    // The receive buffer the kernel grants a socket asking what
+    // P1RadioConnection asks (0x400000); the kernel may cap it.
+    static int expectedReceiveBuffer() {
+        QUdpSocket probe;
+        if (!probe.bind(QHostAddress::Any, 0)) { return -2; }
+        probe.setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
+                              QVariant(0x400000));
+        return probe.socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toInt();
+    }
+
     RadioInfo makeInfo(P1FakeRadio& fake) const {
         RadioInfo info;
         info.address         = fake.localAddress();
@@ -173,6 +194,101 @@ private slots:
         // the fake's readyRead slot one event-loop turn after disconnect().
         QTRY_VERIFY_WITH_TIMEOUT(!fake.isRunning(), 1000);
 
+        fake.stop();
+    }
+
+    // tst_slice_cap_every_path once lost a reconnect: the fake streamed, and
+    // P1RadioConnection's 2 s connect watchdog still saw no ep6. The
+    // connection bound its socket to every address (Any) on a port the OS
+    // chose. On macOS the OS can hand such a socket a port that another
+    // socket already holds on one address (127.0.0.1, which every test fake
+    // and some of the app's own helpers bind), and a datagram to that
+    // address and port goes to the socket bound to the address, not to the
+    // connection. Another program took the radio's frames. The connection
+    // now binds the address itself, as Thetis does (the cites are at
+    // P1RadioConnection::bindToRadioFacingAddress), where no other socket
+    // can share the port.
+    //
+    // The OS will not hand the connection a chosen port, so this test binds
+    // the other socket second, the same sharing in the other order: asked
+    // with ShareAddress (SO_REUSEADDR), macOS lets it share a port bound to
+    // Any, and refuses it a port already bound to the same address.
+    // The collision reproduces only on macOS: a pass on Linux or Windows
+    // does not cover the fix.
+    void anotherSocketOnTheRadiosAddressCannotTakeItsFrames() {
+        P1FakeRadio fake;
+        fake.start();
+
+        P1RadioConnection conn;
+        conn.init();
+        QSignalSpy frames(&conn, &RadioConnection::frameReceived);
+
+        conn.connectToRadio(makeInfo(fake));
+        QTRY_COMPARE_WITH_TIMEOUT(conn.state(), ConnectionState::Connected, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(fake.clientPort() != 0, 3000);
+        const quint16 hostPort = fake.clientPort();
+
+        QUdpSocket other;
+        const bool otherBound =
+            other.bind(fake.localAddress(), hostPort, QAbstractSocket::ShareAddress);
+
+        frames.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(frames.count() >= 5, 2000);
+        QVERIFY2(!otherBound || !other.hasPendingDatagrams(),
+                 "the radio's frames went to another socket");
+
+        conn.disconnect();
+        fake.stop();
+    }
+
+    // With no route to the radio, connectToRadio warns and listens on every
+    // address. disconnect() closes the socket, so on a reconnect the
+    // fallback must bind it again, with the buffer sizes: before, it left
+    // the socket closed and Qt bound it on the first send without them.
+    void noRouteOnAReconnectBindsEveryAddressWithTheBuffers() {
+        P1FakeRadio fake;
+        fake.start();
+
+        P1RadioConnection conn;
+        conn.init();
+        conn.connectToRadio(makeInfo(fake));
+        QTRY_COMPARE_WITH_TIMEOUT(conn.state(), ConnectionState::Connected, 3000);
+        conn.disconnect();
+        QTRY_VERIFY_WITH_TIMEOUT(!fake.isRunning(), 1000);
+
+        conn.setRadioFacingAddressForTest(QHostAddress());
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^P1: no local address reaches")));
+        conn.connectToRadio(makeInfo(fake));
+
+        QCOMPARE(conn.socketStateForTest(), QAbstractSocket::BoundState);
+        QVERIFY(listensEverywhere(conn.socketAddressForTest()));
+        QCOMPARE(conn.socketReceiveBufferForTest(), expectedReceiveBuffer());
+        QTRY_COMPARE_WITH_TIMEOUT(conn.state(), ConnectionState::Connected, 3000);
+
+        conn.disconnect();
+        fake.stop();
+    }
+
+    // An address this host cannot bind (TEST-NET-1, RFC 5737) takes the
+    // same fallback, with its own warning.
+    void anUnbindableAddressBindsEveryAddressWithTheBuffers() {
+        P1FakeRadio fake;
+        fake.start();
+
+        P1RadioConnection conn;
+        conn.init();
+        conn.setRadioFacingAddressForTest(QHostAddress(QStringLiteral("192.0.2.1")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("^P1: could not listen on")));
+        conn.connectToRadio(makeInfo(fake));
+
+        QCOMPARE(conn.socketStateForTest(), QAbstractSocket::BoundState);
+        QVERIFY(listensEverywhere(conn.socketAddressForTest()));
+        QCOMPARE(conn.socketReceiveBufferForTest(), expectedReceiveBuffer());
+        QTRY_COMPARE_WITH_TIMEOUT(conn.state(), ConnectionState::Connected, 3000);
+
+        conn.disconnect();
         fake.stop();
     }
 
