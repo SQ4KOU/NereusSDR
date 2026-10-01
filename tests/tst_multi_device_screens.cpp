@@ -41,6 +41,10 @@
 //   2026-09-29: slice control plan Task 11: a hosting window's empty pan
 //               gets a station-device slice. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: fix wave GUI-I1 and GUI-M6: the take question does not
+//               outlive its session, and a card's Take it back is shown off
+//               once its session ends. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -435,6 +439,93 @@ private slots:
         QTRY_VERIFY(heldBy(core, w.key->fingerprint()));
         // B is told in turn.
         QTRY_VERIFY(!ofType(appB->received(), QStringLiteral("notice")).isEmpty());
+    }
+
+    // Fix wave GUI-I1: the take question answers the session it was asked
+    // in. A redial that replaces the link to another Core, whose radio
+    // holds transmit at the same holder epoch, closes it, and its Take
+    // sends nothing. Nothing keys.
+    void theTakeQuestionDoesNotOutliveItsSession()
+    {
+        Core first;
+        allowTransmit(first);
+        CoreTx firstTx(first.model.get());
+        Core second;
+        allowTransmit(second);
+        CoreTx secondTx(second.model.get());
+        Window w;
+        QVERIFY(first.server->deviceStore()->add(w.record()));
+        QVERIFY(second.server->deviceStore()->add(w.record()));
+        const QByteArray station(KeyerIdentity::kStationDeviceId);
+        for (Core* core : {&first, &second}) {
+            MoxController* mox = core->model->moxController();
+            mox->onMicPttFromRadio(true);
+            QTRY_VERIFY(heldBy(*core, station));
+            QTRY_VERIFY(mox->isMox());
+            mox->onMicPttFromRadio(false);
+            QTRY_VERIFY(!mox->isMox());
+        }
+        QCOMPARE(first.server->transmitHolder()->epoch(),
+                 second.server->transmitHolder()->epoch());
+
+        QVERIFY(w.connectTo(first));
+        QTRY_VERIFY(w.client.transmitHeldElsewhere());
+        MultiDeviceController controller(&w.client, &w.host);
+        controller.askTakeTransmit();
+        QPointer<TakeTransmitDialog> ask = openDialogOf<TakeTransmitDialog>(controller);
+        QVERIFY(ask != nullptr);
+
+        const quint32 epoch = w.client.sessionEpoch();
+        w.startTo(second);
+        QTRY_VERIFY(w.client.sessionEpoch() == epoch + 1 && w.client.isHandshakeComplete());
+        QTRY_VERIFY(w.client.transmitHeldElsewhere());
+        if (ask && ask->isVisible()) {
+            QTest::mouseClick(ask->takeButton(), Qt::LeftButton);
+        }
+        QCOMPARE(controller.lastTakeCommandId(), quint32(0));
+        QTRY_VERIFY(controller.openDialog() == nullptr);
+        QVERIFY(heldBy(second, station));
+        QVERIFY(!second.model->moxController()->isMox());
+    }
+
+    // Fix wave GUI-M6: a notice card stays to be read after its session
+    // ends, but its Take it back is shown off with the reason.
+    void aNoticeCardsTakeBackEndsWithItsSession()
+    {
+        Core core;
+        allowTransmit(core);
+        CoreTx coreTx(core.model.get());
+        Window w;
+        QVERIFY(core.server->deviceStore()->add(w.record()));
+        QVERIFY(w.connectTo(core));
+        QTRY_VERIFY(w.client.transmitTakeAvailable());
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appB));
+        MultiDeviceController controller(&w.client, &w.host);
+        controller.setNoticeHost(&w.host);
+        QVERIFY(w.client.requestTakeTransmit(false, 0, false) != 0);
+        QTRY_VERIFY(heldBy(core, w.key->fingerprint()));
+        core.invoke(appB, "tx.take", {});
+        const QJsonObject asked = firstOfType(appB->received(), QStringLiteral("confirm.request"));
+        QVERIFY(!asked.isEmpty());
+        core.invoke(appB, "confirm.proceed",
+                    {int64("id", asked.value(QStringLiteral("id")).toInteger()),
+                     int64("choice", -1)});
+        QTRY_VERIFY(heldBy(core, b.key.fingerprint()));
+        QTRY_COMPARE(controller.noticeCards().size(), 1);
+        QPointer<NoticeCard> card = controller.noticeCards().first();
+        QVERIFY(card->takeBackButton() != nullptr);
+        QVERIFY(card->takeBackButton()->isEnabled());
+
+        w.client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_VERIFY(!card->takeBackButton()->isEnabled());
+        QVERIFY(card);
+        QCOMPARE(controller.noticeCards().size(), 1);
+        QVERIFY(!card->takeBackButton()->toolTip().isEmpty());
+        QVERIFY2(OperatorWording::isPlain(card->takeBackButton()->toolTip()),
+                 qPrintable(card->takeBackButton()->toolTip()));
     }
 
     // A shared setting that asks does so with one dialog shape: Cancel

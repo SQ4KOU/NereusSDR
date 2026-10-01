@@ -15027,8 +15027,15 @@ void MainWindow::abandonTxBadgeTake()
     m_txBadgeCommandId = 0;
     m_txBadgeGranted = false;
     m_txBadgeAwaitingHolder = false;
+    // Fix wave GUI-I1: the take question the badge opened goes with the
+    // take, so its Take can no longer send tx.take for a take abandoned.
+    // After the serial moves on, so its own rejected handler does nothing.
+    const QPointer<QDialog> ask = m_txBadgeAsk;
     m_txBadgeAsk.clear();
     ++m_txBadgeSerial;
+    if (ask && ask->isVisible()) {
+        ask->reject();
+    }
 }
 
 void MainWindow::refreshFlagTransmitGates()
