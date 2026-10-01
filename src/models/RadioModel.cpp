@@ -939,6 +939,11 @@
 //                TgxlAnswerTracker; a tune on is the tuner's own TUNE only
 //                when it answers none of them. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 3: every tune=1 frame counted with
+//                no :9010 gate; an echo or a cycle's autotune answer is
+//                dropped, never keyed; entries keyed by link epoch; each
+//                answer's kind and latency logged. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2853,13 +2858,22 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // broadcasts the tuner echoes; it leaves on its answer, its own
     // rejection, its sweep's end, or the answer window. A link drop does
     // not clear it: the answer comes on :4992, not the dropped :9010 link.
+    // Round 3 (m-4): the link's sequence numbers restart on each connect,
+    // so entries are keyed by the link epoch as well.
+    connect(m_tgxlConnection, &TgxlConnection::connected, this, [this]() {
+        ++m_tgxlLinkEpoch;
+    });
+    // An `autotune` sent for a running cycle, or while a tune carrier is
+    // already up (TunerApplet.cpp extending an operator's TUN), has its
+    // carrier: the tuner's answer to it asks for nothing (m-5).
     connect(m_tgxlConnection, &TgxlConnection::autotuneSent, this, [this](quint32 seq) {
-        m_tgxlAnswers.autotuneSent(seq, tgxlAnswerNowMs());
+        m_tgxlAnswers.autotuneSent(m_tgxlLinkEpoch, seq, m_tgxlAutotuneInProgress || m_isTuning,
+                                   tgxlAnswerNowMs());
     });
     connect(m_tgxlConnection, &TgxlConnection::replyReceived, this,
             [this](quint32 seq, bool accepted, const QString&) {
         if (!accepted) {
-            m_tgxlAnswers.autotuneRejected(seq);
+            m_tgxlAnswers.autotuneRejected(m_tgxlLinkEpoch, seq);
         }
     });
     connect(m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
@@ -3068,14 +3082,23 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // PostGen tone is actually emitted. Symmetric path on tune off.
     // No latch needed here because TGXL is authoritative -- the off arrives
     // when TGXL has finished tuning regardless of who initiated.
-    // TGXL tune lane round 2 (2026-10-01): the tuner answers each tune
-    // state we broadcast with its own `transmit tune on/off` (bench
-    // 2026-05-20, commit 01ca5b824 item 8); count it while it is connected.
-    connect(m_smartSdrListener, &SmartSdrApiListener::tuneStateBroadcast,
-            this, [this](bool active) {
-        if (m_tgxlConnection && m_tgxlConnection->isConnected()) {
-            m_tgxlAnswers.tuneBroadcast(active, tgxlAnswerNowMs());
+    // TGXL tune lane round 2 (2026-10-01): the tuner answers the tune
+    // state we send with its own `transmit tune on/off` (bench
+    // 2026-05-20, commit 01ca5b824 item 8).
+    // Round 3: every tune=1 frame is counted, whether or not :9010 is up
+    // (the echo comes on :4992), and the frames and echoes of each tune
+    // are counted for the log.
+    connect(m_smartSdrListener, &SmartSdrApiListener::tuneStateSent,
+            this, [this](bool tune) {
+        m_tgxlAnswers.tuneSent(tune, tgxlAnswerNowMs());
+        if (tune) {
+            if (!m_tgxlLastTuneSent) {
+                m_tgxlTuneFramesSent = 0;
+                m_tgxlTuneEchoes = 0;
+            }
+            ++m_tgxlTuneFramesSent;
         }
+        m_tgxlLastTuneSent = tune;
     });
     connect(m_smartSdrListener, &SmartSdrApiListener::tuneRequested,
             this, [this](bool on, const QHostAddress& peer) {
@@ -3091,13 +3114,35 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // client's line, or an answer, keys as the station without
             // taking (8.9a).
             const bool fromTuner = tgxlIsPeer(peer);
-            const bool answers = fromTuner && m_tgxlAnswers.tuneOnAnswers(tgxlAnswerNowMs());
-            const bool press = fromTuner && !answers;
-            if (!press) {
+            const TgxlAnswerTracker::Answer answer =
+                fromTuner ? m_tgxlAnswers.tuneOnAnswer(tgxlAnswerNowMs())
+                          : TgxlAnswerTracker::Answer{};
+            using AnswerKind = TgxlAnswerTracker::Kind;
+            const bool press = fromTuner && answer.kind == AnswerKind::None;
+            if (!fromTuner) {
                 qCInfo(lcConnection) << "LAN PTT tune on is not the tuner's own TUNE:"
-                                     << (fromTuner ? "it answers an autotune or a tune state"
-                                                     " this computer sent"
-                                                   : "it is not from the connected Tuner Genius");
+                                        " it is not from the connected Tuner Genius";
+            } else if (!press) {
+                // Round 3 (m-1): each answer's kind and latency, and the
+                // echoes per tune, size the answer window from the bench.
+                if (answer.kind == AnswerKind::TuneOnEcho) {
+                    ++m_tgxlTuneEchoes;
+                }
+                qCInfo(lcConnection).nospace()
+                    << "TGXL answer: " << TgxlAnswerTracker::kindName(answer.kind) << " after "
+                    << answer.latencyMs << " ms (this tune: " << m_tgxlTuneEchoes << " echoes for "
+                    << m_tgxlTuneFramesSent << " tune=1 frames)";
+            }
+            // Round 3 (m-5): an echo of our tune state, or the answer to an
+            // `autotune` sent for a tune cycle, asks for nothing: it never
+            // keys and never takes. Only the answer to an `autotune` sent
+            // outside a cycle (the band-change recall, whose sweep has no
+            // other carrier) still keys, as the station, below.
+            if (answer.kind == AnswerKind::TuneOnEcho
+                || answer.kind == AnswerKind::CycleAutotune) {
+                qCInfo(lcConnection) << "LAN PTT tune on dropped: it answers"
+                                     << TgxlAnswerTracker::kindName(answer.kind);
+                return;
             }
             // 2026-05-20 bench fix: TGXL ECHOES our outbound `tune=1` in
             // the slice/transmit S-frame back to us as `transmit tune
@@ -3161,7 +3206,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
             if (tgxlIsPeer(peer)) {
                 // TGXL tune lane round 2: the echo of a tune=0 broadcast,
                 // or the tuner letting go of a sweep it started for us.
-                m_tgxlAnswers.tuneOff(tgxlAnswerNowMs());
+                const TgxlAnswerTracker::Answer answer = m_tgxlAnswers.tuneOff(tgxlAnswerNowMs());
+                if (answer.kind != TgxlAnswerTracker::Kind::None) {
+                    qCInfo(lcConnection) << "TGXL answer:"
+                                         << TgxlAnswerTracker::kindName(answer.kind) << "after"
+                                         << answer.latencyMs << "ms";
+                }
             }
             // TGXL released tune (cycle done or aborted). Drop our local
             // carrier only if WE engaged it via the autotune orchestration

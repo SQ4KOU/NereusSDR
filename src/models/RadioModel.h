@@ -532,6 +532,9 @@
 //   2026-10-01 - TGXL tune lane round 2: m_tgxlAnswers (TgxlAnswerTracker)
 //                replaces the single outstanding-autotune flag. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 3: m_tgxlLinkEpoch and the per-tune
+//                frame and echo counts. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8159,6 +8162,13 @@ private:
     /// `autotune`, each tune=1/0 broadcast), counted; a tune on that
     /// answers none of them is the tuner's own TUNE.
     TgxlAnswerTracker m_tgxlAnswers;
+    /// Round 3: counts :9010 connects; `autotune` entries carry it.
+    quint64 m_tgxlLinkEpoch{0};
+    /// Round 3: the tune=1 frames sent and the echoes answered in the
+    /// current tune, for the answer log.
+    bool m_tgxlLastTuneSent{false};
+    int m_tgxlTuneFramesSent{0};
+    int m_tgxlTuneEchoes{0};
     /// Whether `peer` (a :4992 client) is the connected Tuner Genius.
     bool tgxlIsPeer(const QHostAddress& peer) const;
     /// Monotonic milliseconds for m_tgxlAnswers.

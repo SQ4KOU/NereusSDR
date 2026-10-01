@@ -21,6 +21,10 @@
 //   2026-10-01 - TGXL tune lane round 2: tuneStateBroadcast, each tune
 //                 state change this listener broadcasts. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Round 3: tuneStateSent replaces it: every tune=1 frame
+//                 (the 1 Hz tick, a TX state resend, a new client's or a
+//                 sub's push) and each tune=0 a client can see change.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -185,12 +189,15 @@ signals:
     // Tuner Genius.
     void tuneRequested(bool on, const QHostAddress& peer);
 
-    // TGXL tune lane round 2 (2026-10-01): setTuneActive changed the tune
-    // state and broadcast `transmit tune=<active>` to every client. The
-    // Tuner Genius answers that with its own `transmit tune on/off`
-    // (bench 2026-05-20, commit 01ca5b824 item 8), which RadioModel must
-    // not take for its front-panel TUNE.
-    void tuneStateBroadcast(bool active);
+    // TGXL tune lane round 3 (2026-10-01): this listener wrote a
+    // `transmit ... tune=<tune>` frame the Tuner Genius may echo with its
+    // own `transmit tune on/off` (bench 2026-05-20, commit 01ca5b824 item
+    // 8), which RadioModel must not take for its front-panel TUNE. Emitted
+    // once per frame round for tune=1 (every broadcast, the 1 Hz tick, a new
+    // client's and a sub's push), and for tune=0 on setTuneActive(false)
+    // and on a new client's or a sub's push. Not for the idle tick's
+    // repeated tune=0, which changes nothing a client can see.
+    void tuneStateSent(bool tune);
 
     // LAN PTT MOX request from a SmartSDR-API client. Same pattern as
     // tuneRequested but for regular `transmit mox on/off` (no tune
