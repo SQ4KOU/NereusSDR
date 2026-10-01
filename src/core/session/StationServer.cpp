@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Fix wave LINK minor 2 (TX path): dropPeer stops a dropped
+//               device's transmit (VOX disarm, watchdog or stopAllTx)
+//               before anything else in the drop. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Fix wave LINK minor 5: a token check counts failures per
 //               source address. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
@@ -4772,6 +4776,46 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         return;
     }
     it->dropping = true;
+    // LINK minor 2 (TX path): the transmit stop runs first, before any
+    // other step of the drop can return early (a view's close, a record
+    // stream, the session.end, each of which can end this object or this
+    // peer's entry), so no exit path leaves the radio keyed for a device
+    // that is gone.
+    {
+        const QByteArray sessionDevice = it->sessionDeviceId;
+        // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
+        // section 4.6 item 1): the session of a device that is keyed, or has
+        // VOX armed, ended (a drop, leaving, a replacement or a revocation).
+        // The VOX it armed goes off first, then its key stops at once (the
+        // emergency stop, not the normal unkey), before the holder's own
+        // rules below run.
+        if (!sessionDevice.isEmpty() && m_txWatchdog) {
+            disarmVoxArmedBy(sessionDevice, "its connection ended");
+            if (!self) { return; }
+            // Merge of Tasks 37 and 39: a session that ended (rather than went
+            // quiet) is told to the window and the phone as a lost link, in
+            // txState's own words; recorded before the stop, so the watchdog's
+            // "went quiet" reason below does not replace it.
+            if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+                recordTransmitStop(
+                    TransmitState::kStopLinkLost,
+                    TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
+                if (!self) { return; }
+            }
+            if (m_txWatchdog->isWatching(sessionDevice)) {
+                m_txWatchdog->linkClosed(sessionDevice);
+                if (!self) { return; }
+            } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+                m_radioModel->stopAllTx(
+                    RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
+                if (!self) { return; }
+            }
+        }
+        it = m_peers.find(transport);
+        if (it == m_peers.end()) {
+            return;
+        }
+    }
     m_settingsExports.remove(it->sessionId);
     it->txWatchGeneration = ++m_nextTxWatchGeneration;
     retirePendingRelayWatch(transport);
@@ -4855,32 +4899,6 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         view->close();
         if (!self) { return; }
         if (view) view->deleteLater();
-    }
-    // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
-    // section 4.6 item 1): the session of a device that is keyed, or has
-    // VOX armed, ended (a drop, leaving, a replacement or a revocation).
-    // The VOX it armed goes off first, then its key stops at once (the
-    // emergency stop, not the normal unkey), before the holder's own
-    // rules below run.
-    if (!sessionDevice.isEmpty() && m_txWatchdog) {
-        disarmVoxArmedBy(sessionDevice, "its connection ended");
-        if (!self) { return; }
-        // Merge of Tasks 37 and 39: a session that ended (rather than went
-        // quiet) is told to the window and the phone as a lost link, in
-        // txState's own words; recorded before the stop, so the watchdog's
-        // "went quiet" reason below does not replace it.
-        if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
-            recordTransmitStop(TransmitState::kStopLinkLost,
-                               TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
-            if (!self) { return; }
-        }
-        if (m_txWatchdog->isWatching(sessionDevice)) {
-            m_txWatchdog->linkClosed(sessionDevice);
-            if (!self) { return; }
-        } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
-            m_radioModel->stopAllTx(RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
-            if (!self) { return; }
-        }
     }
     if (!owner.isEmpty()) {
         m_dispatcher->endSessionOwner(owner);
