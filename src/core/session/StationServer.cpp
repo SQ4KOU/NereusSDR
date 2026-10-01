@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Fix round 1 for LINK-I4: the pairing window is built
+//               with the Core's settings, so a restart keeps service
+//               pairing shut. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: Fix wave LINK-I4: pairing through the remote access
 //               service is refused, with no time to try again, once the
 //               pairing window has shut it after too many wrong codes.
@@ -2907,7 +2911,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 14: the pairing window before the devices object, so
     // it follows a change of the device store first and the object then
     // counts the change once.
-    m_pairingWindow = std::make_unique<PairingWindow>(*m_devices);
+    // LINK-I4 fix round 1: the count of wrong codes through the service is
+    // read from the Core's settings, so a restart keeps pairing shut.
+    m_pairingWindow = std::make_unique<PairingWindow>(*m_devices, m_settings);
     m_pairingHasher = &SpakeExchange::storedData;
     m_devicesFacade = std::make_unique<StationDevicesFacade>(
         *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());

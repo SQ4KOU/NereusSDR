@@ -32,10 +32,17 @@
 //               Core reopens pairing (reopenAtCore) or a device pairs.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: Fix round 1 for LINK-I4: the total of wrong codes
+//               through the service and the shut are kept in AppSettings
+//               (PairingServiceFailuresTotal, PairingServiceShut), read
+//               when the window is built and cleared only by
+//               reopenAtCore() or a pairing. J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
 
+#include "core/AppSettings.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingCode.h"
 
@@ -82,7 +89,57 @@ PairingWindow::PairingWindow(DeviceStore& devices, QObject* parent)
     followDevices();
 }
 
+PairingWindow::PairingWindow(DeviceStore& devices, AppSettings& settings, QObject* parent)
+    : PairingWindow(devices, parent)
+{
+    m_settings = &settings;
+    loadServiceTotal();
+}
+
 PairingWindow::~PairingWindow() = default;
+
+void PairingWindow::loadServiceTotal()
+{
+    if (m_settings == nullptr) {
+        return;
+    }
+    bool ok = false;
+    int total = m_settings->value(QLatin1String(kServiceFailuresTotalKey)).toString().toInt(&ok);
+    if (!ok || total < 0) {
+        total = 0;
+    }
+    total = std::min(total, kMaxServiceFailuresTotal);
+    if (m_settings->value(QLatin1String(kServiceShutKey)).toString() == QLatin1String("True")) {
+        total = kMaxServiceFailuresTotal;
+    }
+    m_serviceFailuresTotal = total;
+    if (isServiceShut()) {
+        qCInfo(lcPairing) << "Pairing from outside the Core's network stays off after"
+                          << kMaxServiceFailuresTotal
+                          << "wrong pairing codes; reopening pairing at the Core turns it "
+                             "back on";
+    }
+}
+
+void PairingWindow::storeServiceTotal()
+{
+    if (m_settings == nullptr) {
+        return;
+    }
+    if (m_serviceFailuresTotal == 0) {
+        m_settings->remove(QLatin1String(kServiceFailuresTotalKey));
+        m_settings->remove(QLatin1String(kServiceShutKey));
+    } else {
+        m_settings->setValue(QLatin1String(kServiceFailuresTotalKey),
+                             QString::number(m_serviceFailuresTotal));
+        m_settings->setValue(QLatin1String(kServiceShutKey),
+                             isServiceShut() ? QStringLiteral("True") : QStringLiteral("False"));
+    }
+    QString error;
+    if (!m_settings->save(&error)) {
+        qCWarning(lcPairing) << "Could not save the count of wrong pairing codes:" << error;
+    }
+}
 
 qint64 PairingWindow::now() const
 {
@@ -213,7 +270,11 @@ void PairingWindow::reopenAtCore()
 void PairingWindow::clearServiceTotal()
 {
     const bool wasShut = isServiceShut();
+    const bool hadAny = m_serviceFailuresTotal != 0;
     m_serviceFailuresTotal = 0;
+    if (hadAny) {
+        storeServiceTotal();
+    }
     if (wasShut) {
         qCInfo(lcPairing) << "Pairing from outside the Core's network is on again";
         emit serviceShutChanged(false);
@@ -301,8 +362,14 @@ void PairingWindow::pairingFailed(Route route)
         // LINK-I4 (JJ's ruling, 2026-09-30): the total over the window's
         // life; at kMaxServiceFailuresTotal pairing through the service
         // shuts until the Core reopens it or a device pairs.
-        ++m_serviceFailuresTotal;
-        if (m_serviceFailuresTotal == kMaxServiceFailuresTotal) {
+        // Fix round 1: kept in the Core's settings, so a restart of the run
+        // or of the Core does not turn it back on.
+        const bool wasShut = isServiceShut();
+        if (!wasShut) {
+            ++m_serviceFailuresTotal;
+            storeServiceTotal();
+        }
+        if (!wasShut && isServiceShut()) {
             qCInfo(lcPairing) << "Pairing from outside the Core's network is off after"
                               << kMaxServiceFailuresTotal
                               << "wrong pairing codes; reopening pairing at the Core turns "

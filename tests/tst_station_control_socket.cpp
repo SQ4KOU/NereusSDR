@@ -808,6 +808,81 @@ private slots:
         model->transmitModel().setTune(false);
     }
 
+    // LINK-I4 fix round 1: pairing through the remote access service, shut
+    // after 20 wrong codes, stays shut when a radio change restarts the
+    // Core's run (a new station server and pairing window). Only a
+    // reopening at the Core turns it back on.
+    void aShutServiceStaysShutAcrossARadioChange()
+    {
+        const auto clearKept = [] {
+            AppSettings& settings = AppSettings::instance();
+            settings.remove(QLatin1String(PairingWindow::kServiceFailuresTotalKey));
+            settings.remove(QLatin1String(PairingWindow::kServiceShutKey));
+            settings.save();
+        };
+        clearKept();
+        const auto cleanup = qScopeGuard(clearKept);
+        Core core(/*remoteOn=*/true, /*upgradedWithToken=*/true);
+        QVERIFY(core.start());
+        StationRadios* const radios = core.app->stationRadios();
+        QVERIFY(radios);
+        const auto radio = [](const QString& mac, HPSDRHW board, const QString& name) {
+            RadioInfo info;
+            info.macAddress = mac;
+            info.boardType = board;
+            info.name = name;
+            info.address = QHostAddress(QStringLiteral("192.0.2.30"));
+            return info;
+        };
+        const RadioInfo hl2 = radio(QStringLiteral("AA:BB:CC:00:21:01"), HPSDRHW::HermesLite,
+                                    QStringLiteral("Bench HL2"));
+        const RadioInfo g2 = radio(QStringLiteral("AA:BB:CC:00:21:02"), HPSDRHW::Saturn,
+                                   QStringLiteral("Bench G2"));
+        radios->setVisible({hl2, g2});
+        radios->setCurrent(hl2);
+
+        // Shut it: 20 codes burned through the service, on a test clock so
+        // the pauses pass at once.
+        PairingWindow* window = core.server()->pairingWindow();
+        qint64 clock = 5000000;
+        window->setClock([&clock] { return clock; });
+        int burned = 0;
+        while (burned < PairingWindow::kMaxServiceFailuresTotal) {
+            if (!window->isOpen()) {
+                window->reopen();
+            } else if (window->isPaused(PairingWindow::Route::Service)) {
+                clock += window->servicePauseRemainingMs();
+                window->poll();
+            } else if (window->currentCode().isEmpty()) {
+                clock += window->retryAfterMs();
+                window->poll();
+            } else {
+                QVERIFY(window->takeCode(window->codeSerial()));
+                window->pairingFailed(PairingWindow::Route::Service);
+                ++burned;
+            }
+        }
+        QVERIFY(window->isServiceShut());
+
+        // The radio change restarts the run: a new server, a new window.
+        const QPointer<StationServer> oldServer(core.server());
+        radios->onSelect(g2.macAddress);
+        QTRY_VERIFY(oldServer.isNull());
+        QTRY_VERIFY(core.server() != nullptr && core.server()->isListening());
+        PairingWindow* const after = core.server()->pairingWindow();
+        QVERIFY(after);
+        QVERIFY2(after->isServiceShut(), "a radio change turned service pairing back on");
+        QVERIFY(core.server()->devicesFacade()->servicePairingShut());
+
+        // The Core's own console turns it back on.
+        const StationControlReply open =
+            core.run({QStringLiteral("pairing"), QStringLiteral("open")});
+        QVERIFY2(open.ok, qPrintable(open.text));
+        QVERIFY(!core.server()->pairingWindow()->isServiceShut());
+        QVERIFY(!AppSettings::instance().contains(
+            QLatin1String(PairingWindow::kServiceShutKey)));
+    }
+
     // The operator's ruling of 2026-09-26 (fix wave after parity Tasks 19
     // and 21, I1 and I2): a radio change restarts the Core's run. Over the
     // Core's real listener, the chooser's answer, the confirm step's

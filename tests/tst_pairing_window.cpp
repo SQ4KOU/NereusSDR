@@ -47,6 +47,7 @@
 
 #include <memory>
 
+#include "core/AppSettings.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingCode.h"
 #include "core/security/PairingWindow.h"
@@ -79,6 +80,34 @@ struct Fixture {
     {
         window = std::make_unique<PairingWindow>(*store);
         window->setClock([this] { return clock; });
+    }
+
+    // LINK-I4 fix round 1: a window that keeps its count in `settings`.
+    explicit Fixture(AppSettings& settings)
+    {
+        window = std::make_unique<PairingWindow>(*store, settings);
+        window->setClock([this] { return clock; });
+    }
+
+    // LINK-I4: kMaxServiceFailuresTotal codes burned through the service.
+    void shutTheService()
+    {
+        int burned = 0;
+        while (burned < PairingWindow::kMaxServiceFailuresTotal) {
+            // A reopened window's lifetime may end on the way: a paired
+            // device reopens it, which keeps the total.
+            if (!window->isOpen()) {
+                window->reopen();
+            } else if (window->isPaused(PairingWindow::Route::Service)) {
+                advance(window->servicePauseRemainingMs());
+            } else if (window->currentCode().isEmpty()) {
+                advance(window->retryAfterMs());
+            } else {
+                burnThroughService();
+                ++burned;
+            }
+        }
+        QVERIFY(window->isServiceShut());
     }
 
     void advance(qint64 ms)
@@ -454,28 +483,9 @@ private slots:
     // works while the window is open too.
     void onlyAReopeningAtTheCoreTurnsTheServiceBackOn()
     {
-        const auto shutIt = [](Fixture& f) {
-            int burned = 0;
-            while (burned < PairingWindow::kMaxServiceFailuresTotal) {
-                // A reopened window's lifetime may end on the way: a paired
-                // device reopens it, which keeps the total.
-                if (!f.window->isOpen()) {
-                    f.window->reopen();
-                } else if (f.window->isPaused(PairingWindow::Route::Service)) {
-                    f.advance(f.window->servicePauseRemainingMs());
-                } else if (f.window->currentCode().isEmpty()) {
-                    f.advance(f.window->retryAfterMs());
-                } else {
-                    f.burnThroughService();
-                    ++burned;
-                }
-            }
-            QVERIFY(f.window->isServiceShut());
-        };
-
         // An unclaimed Core, open throughout.
         Fixture f;
-        shutIt(f);
+        f.shutTheService();
         f.window->reopen();  // open already: nothing
         QVERIFY(f.window->isServiceShut());
         f.window->reopenAtCore();
@@ -487,7 +497,7 @@ private slots:
         Fixture g;
         QVERIFY(g.store->add(makeDevice()));
         g.window->reopen();
-        shutIt(g);
+        g.shutTheService();
         g.window->close();
         g.window->reopen();
         QCOMPARE(g.window->state(), PairingWindow::State::OpenReopened);
@@ -499,6 +509,75 @@ private slots:
         g.window->reopenAtCore();
         QCOMPARE(g.window->state(), PairingWindow::State::OpenReopened);
         QVERIFY(!g.window->isServiceShut());
+    }
+
+    // LINK-I4 fix round 1: the shut is kept in the Core's settings. A new
+    // window from the same settings (the run restarted for a radio change,
+    // or the Core restarted) is still shut; a pause does not change that.
+    void aShutServiceStaysShutForANewWindowFromTheSameSettings()
+    {
+        QTemporaryDir settingsDir;
+        const QString path = settingsDir.filePath(QStringLiteral("NereusSDR.settings"));
+        {
+            AppSettings settings(path);
+            Fixture f(settings);
+            f.shutTheService();
+            QCOMPARE(settings.value(QLatin1String(PairingWindow::kServiceShutKey)).toString(),
+                     QStringLiteral("True"));
+        }
+        // The reboot case: the settings read back from the file.
+        AppSettings reloaded(path);
+        reloaded.load();
+        Fixture g(reloaded);
+        QVERIFY(g.window->isServiceShut());
+        QCOMPARE(g.window->serviceFailuresTotal(), PairingWindow::kMaxServiceFailuresTotal);
+        QCOMPARE(g.window->retryAfterMs(PairingWindow::Route::Service), qint64(0));
+        g.advance(PairingWindow::kMaxServicePauseMs);
+        QVERIFY(g.window->isServiceShut());
+
+        // A count short of the shut carries over too.
+        AppSettings partial(settingsDir.filePath(QStringLiteral("partial.settings")));
+        {
+            Fixture h(partial);
+            h.burnThroughService();
+            h.untilTheNextCode();
+            h.burnThroughService();
+        }
+        Fixture k(partial);
+        QCOMPARE(k.window->serviceFailuresTotal(), 2);
+        QVERIFY(!k.window->isServiceShut());
+    }
+
+    // LINK-I4 fix round 1: reopenAtCore() and a pairing clear what the
+    // settings keep.
+    void reopeningAtTheCoreClearsTheKeptShut()
+    {
+        QTemporaryDir settingsDir;
+        const QString path = settingsDir.filePath(QStringLiteral("NereusSDR.settings"));
+        AppSettings settings(path);
+        {
+            Fixture f(settings);
+            f.shutTheService();
+            f.window->reopenAtCore();
+            QVERIFY(!f.window->isServiceShut());
+        }
+        QVERIFY(!settings.contains(QLatin1String(PairingWindow::kServiceFailuresTotalKey)));
+        QVERIFY(!settings.contains(QLatin1String(PairingWindow::kServiceShutKey)));
+        AppSettings reloaded(path);
+        reloaded.load();
+        QVERIFY(!reloaded.contains(QLatin1String(PairingWindow::kServiceShutKey)));
+        Fixture g(reloaded);
+        QVERIFY(!g.window->isServiceShut());
+        QCOMPARE(g.window->serviceFailuresTotal(), 0);
+
+        // A pairing clears it as well.
+        g.burnThroughService();
+        QCOMPARE(reloaded.value(QLatin1String(PairingWindow::kServiceFailuresTotalKey)).toString(),
+                 QStringLiteral("1"));
+        g.untilTheNextCode();
+        QVERIFY(g.window->takeCode(g.window->codeSerial()));
+        g.window->pairingSucceeded();
+        QVERIFY(!reloaded.contains(QLatin1String(PairingWindow::kServiceFailuresTotalKey)));
     }
 
     // A pairing, or reopening the window, ends the pause and starts the

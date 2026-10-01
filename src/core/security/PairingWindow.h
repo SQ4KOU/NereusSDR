@@ -118,6 +118,10 @@
 //               the service in total shut pairing through it until the
 //               Core reopens pairing or a device pairs. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix round 1 for LINK-I4: a constructor that keeps the
+//               total of wrong codes through the service in AppSettings,
+//               and its two keys. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -129,6 +133,7 @@ class QTimer;
 
 namespace NereusSDR {
 
+class AppSettings;
 class DeviceStore;
 
 class PairingWindow : public QObject {
@@ -168,8 +173,20 @@ public:
     enum class Route { Direct, Service };
     Q_ENUM(Route)
 
+    /// LINK-I4 fix round 1 (NereusSDR-original): the AppSettings keys that
+    /// keep the total count of wrong codes through the service, and whether
+    /// it shut pairing through the service, across a restart of the run
+    /// (a radio change) and of the Core. Cleared only by reopenAtCore() or
+    /// a pairing.
+    static constexpr const char* kServiceFailuresTotalKey = "PairingServiceFailuresTotal";
+    static constexpr const char* kServiceShutKey = "PairingServiceShut";
+
     /// `devices` is not owned and must outlive this object.
     explicit PairingWindow(DeviceStore& devices, QObject* parent = nullptr);
+    /// As above, and the total count of wrong codes through the service is
+    /// read from `settings` and kept there. `settings` is not owned and
+    /// must outlive this object.
+    PairingWindow(DeviceStore& devices, AppSettings& settings, QObject* parent = nullptr);
     ~PairingWindow() override;
 
     State state() const { return m_state; }
@@ -275,6 +292,10 @@ private:
     /// LINK-I4: the total count of codes burned through the service starts
     /// over (a pairing, or reopenAtCore()).
     void clearServiceTotal();
+    /// LINK-I4 fix round 1: the total and the shut state, read from and
+    /// written to m_settings (nothing without it).
+    void loadServiceTotal();
+    void storeServiceTotal();
     /// The attempt ceiling: closes the open window.
     void closeForCeiling();
     /// Sets the state and the code, then signals each that moved.
@@ -304,6 +325,8 @@ private:
     /// LINK-I4: codes burned through the service since the last pairing or
     /// reopening at the Core; never reset by a pause.
     int m_serviceFailuresTotal = 0;
+    /// Where m_serviceFailuresTotal is kept; not owned, may be null.
+    AppSettings* m_settings = nullptr;
     /// When a reopened window closes by itself; 0 for none.
     qint64 m_openUntil = 0;
 };
