@@ -58,6 +58,11 @@
 //               still need (a session through the service that can be
 //               severed with the key held), not transports that now exist.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: the station's move deadline now ends the session as a
+//               lost link (LINK-I2, link section 21.2), so a key held
+//               through the move is kept, watchdog quiet, until that end
+//               and stopped at once by it (section 18.2). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -663,12 +668,14 @@ private slots:
     }
 
     // The Core's barrier is lost on the old connection, so the window
-    // never answers it: the station's move deadline reads the new
-    // connection, closes the old, the window carries on over the new one,
-    // and a key taken meanwhile is neither dropped nor made by the move:
-    // its keepalives reach the Core on the new connection before the
-    // watchdog's 400 ms.
-    void theStationsMoveDeadlineNeverDropsAHeldKey()
+    // never answers it. Link 21.2 (LINK-I2, 5e4412593): a Core that hears
+    // no path.switch from the device within its move deadline ends the
+    // session as a lost link does, and a holder whose link drops is unkeyed
+    // at once (section 18.2). A key taken during the move is held, its
+    // keepalives on the old connection and the watchdog quiet, right up to
+    // that end: the move's wait never drops it, and the session's end
+    // stops it at once as a closed link.
+    void theStationsMoveDeadlineHoldsAKeyUntilItEndsTheSession()
     {
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
@@ -678,25 +685,51 @@ private slots:
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
-        QSignalSpy moved(&h.client, &StationClient::pathChanged);
+        QSignalSpy stopped(&h.station, &RadioModel::transmitStopped);
+
+        // The moment the move's deadline ends the session, the Core closes
+        // the old connection first, before the session's own close stops
+        // transmitting: what transmit looked like then.
+        bool endSeen = false;
+        bool moxAtEnd = false;
+        qsizetype tripsAtEnd = -1;
+        QString endReason;
+        QObject::connect(h.stationLink, &SessionTransport::closed, h.stationLink,
+                         [&h, &tripped, &endSeen, &moxAtEnd, &tripsAtEnd, &endReason] {
+            endSeen = true;
+            moxAtEnd = h.station.moxController()->isMox();
+            tripsAtEnd = tripped.count();
+            endReason = h.stationLink->closeReason();
+        });
 
         MoveWhileKeying move;
         QVERIFY(move.open(h, /*severOld=*/true));
         QVERIFY(h.client.moveSessionForTest(move.clientB, PathRacer::ThisNetwork));
         QTRY_VERIFY_WITH_TIMEOUT(move.keyed, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
-        // The station's deadline, then the window over the new connection.
-        QTRY_COMPARE_WITH_TIMEOUT(moved.size(), 1, 5000);
-        QTest::qWait(1500);
-        QVERIFY(h.station.moxController()->isMox());
-        QCOMPARE(tripped.count(), 0);
-        const QList<qint64> onNew = keepaliveSequences(move.readOnNew);
-        QVERIFY2(onNew.size() >= 10, qPrintable(QString::number(onNew.size())));
-        QVERIFY(strictlyRising(onNew));
+
+        // The station's deadline ends the session, and transmit with it.
+        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
+        QVERIFY(endSeen);
+        QCOMPARE(endReason, QStringLiteral("no path.switch from the device in time"));
+        QVERIFY(moxAtEnd);
+        QCOMPARE(tripsAtEnd, qsizetype(0));
+        // The Core took the join and began the move (sessionsMoved counts
+        // joins taken); the device's barrier is what never came.
+        QCOMPARE(h.server.sessionsMoved(), 1);
+        QCOMPARE(tripped.count(), 1);
+        QVERIFY(tripOf(tripped).linkClosed);
+        QCOMPARE(stopped.count(), 1);
+        QCOMPARE(stopped.first().at(0).toString(), kStopSentence);
+        QVERIFY(!h.server.txWatchdog()->isWatchingAny());
+        // The keepalives that held the key reached the Core on the old
+        // connection, in order, through the whole wait.
+        const QList<qint64> onOld = keepaliveSequences(move.readOnOld);
+        QVERIFY2(onOld.size() >= 10, qPrintable(QString::number(onOld.size())));
+        QVERIFY(strictlyRising(onOld));
 
         h.remote.setMoxFromButton(false);
-        QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 5000);
-        QCOMPARE(tripped.count(), 0);
+        QVERIFY(!h.station.moxController()->isMox());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
