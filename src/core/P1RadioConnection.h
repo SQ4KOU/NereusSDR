@@ -80,6 +80,11 @@
 //                Claude Code.
 //   2026-09-30 - Shared-input filters, follow-up: countedCandidates.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety: a lost link and every reconnect start unkeyed
+//                (dropTransmitForNewLink) and a key after the loss is refused
+//                until released (m_linkLossLatched), as the priming frames of
+//                Thetis networkproto1.c:106-138 [v2.10.3.15] never carry MOX.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -914,6 +919,16 @@ private:
     // not once per sample, so the ordering cost is irrelevant next to the
     // surrounding ring arithmetic.
     std::atomic<bool> m_mox{false};
+    // Link-loss latch (TX safety, whole-branch review 2026-09-30). Set when
+    // the watchdog declares the link lost, and again at a reconnect attempt
+    // that found a key made during the outage. While set, setMox(true) is
+    // refused; setMox(false), the operator's release, clears it, and so
+    // does connectToRadio. Follows P2RadioConnection::m_linkLossLatched,
+    // which refuses a key through a lost link the same way; Thetis itself
+    // never reconnects a lost P1 link (see dropTransmitForNewLink).
+    // Connection thread only.
+    bool    m_linkLossLatched{false};
+    bool    m_linkLossRefusalLogged{false};
     int     m_antennaIdx{0};
     int     m_rxOnlyAnt{0};   // RX-only input mux (0..3). Bank 0 C3 bits 5-6.
     bool    m_rxOut{false};   // _Rx_1_Out relay. Bank 0 C3 bit 7.
@@ -1161,6 +1176,12 @@ private:
     // G-05 follow-up: setMox(false) drops whatever is still queued (and an
     // unused key cushion), so none of it leads the next key.
     void discardTxIqOnUnkey() noexcept;
+    // TX safety (whole-branch review 2026-09-30): every new link starts
+    // unkeyed. Unkeys (as setMox(false) does), drops the PureSignal run
+    // flag, releases the T/R relay, zeroes the drive and puts bank 0 on the
+    // next frame. Called by connectToRadio, by the watchdog when it declares
+    // the link lost, and by every reconnect attempt before its priming burst.
+    void dropTransmitForNewLink();
 
     // Hardware config from profile
     int     m_txDrive{0};
@@ -1309,6 +1330,9 @@ public:
     // R-R3-49: how long the link waits for data before it is declared lost
     // while the Network Watchdog is on.
     int watchdogSilenceMsForTest() const { return m_watchdogSilenceMs; }
+    // The keyed state the next ep2 frame's C0 bit 0 carries.
+    bool moxForTest() const { return m_mox; }
+    bool linkLossLatchedForTest() const { return m_linkLossLatched; }
     // Expose private composeCcForBank for regression-freeze capture (Task 1) and
     // byte-table assertion tests (Task 16).
     void composeCcForBankForTest(int bankIdx, quint8 out[5]) const { composeCcForBank(bankIdx, out); }

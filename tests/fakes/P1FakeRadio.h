@@ -72,6 +72,12 @@ public:
     void skipEp6Sequence(quint32 count);
 
     int  ep2FramesReceived() const;
+    // The C&C bytes of every ep2 frame received, oldest first: ten bytes per
+    // frame, C0..C4 of subframe 0 then C0..C4 of subframe 1 (frame offsets
+    // 11-15 and 523-527). Frames dropped while silent are not recorded, and
+    // the log is cleared at each metis-stop received.
+    QList<QByteArray> ep2CcReceived() const;
+    void clearEp2CcLog();
     bool isRunning()         const;
     int  metisStopCount()    const;
     // Every start/stop (EF FE 04 xx) datagram received, as it arrived on
@@ -112,6 +118,7 @@ private:
     bool         m_silent{false};
     bool         m_autoStreamEnabled{true};
     int          m_ep2Count{0};
+    QList<QByteArray> m_ep2Cc;
     int          m_stopCount{0};
     QList<QByteArray> m_metisCommands;
     quint32      m_ep6Seq{0};

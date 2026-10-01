@@ -898,6 +898,12 @@
 //                is named; a rolled-back slice gives the restored RADE
 //                owner back to the slice that held it.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety: a lost radio link unkeys everything (MOX,
+//                manual MOX, TUNE, two-tone) through stopAllTx, as Thetis
+//                powers off on loss of sync (console.cs:21339-21340 and
+//                27488-27492 [v2.10.3.15]); a P1 link back from its own
+//                reconnect gets the PureSignal enable again. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -24614,6 +24620,16 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         if (m_twoToneController) {
             m_twoToneController->setPowerOn(true);
         }
+        // TX safety (whole-branch review 2026-09-30): P1 starts every link
+        // with the PureSignal run flag off (dropTransmitForNewLink), the
+        // priming frames clean as Thetis's ForceCandCFrames are, and its own
+        // reconnect never passes through connectToRadio's pre-start push.
+        // The operator's PureSignal enable goes back once data flows.
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+            QMetaObject::invokeMethod(p1, [p1, ps = m_transmitModel.pureSigEnabled()]() {
+                p1->setPuresignalRun(ps);
+            });
+        }
         // Phase 3I Task 17 — record the most recently used radio so
         // tryAutoReconnect() targets the right entry on next launch.
         if (!m_lastRadioInfo.macAddress.isEmpty()) {
@@ -24727,6 +24743,30 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         break;
     case ConnectionState::LinkLost:
         qCWarning(lcConnection) << "Link lost to" << m_name;
+        // TX safety (whole-branch review 2026-09-30): a lost link ends every
+        // transmission, so the model, the MOX button and the windows read
+        // unkeyed and nothing is left keyed for a reconnect to resume. The
+        // P1 connection's own reconnect starts unkeyed and refuses a key
+        // until it is released (P1RadioConnection::dropTransmitForNewLink);
+        // this is the model's half. Thetis does the same on loss of sync,
+        // which powers the radio off:
+        //   From Thetis console.cs:21339-21340 [v2.10.3.15]
+        //     // set ui to power off if lost connection to radio
+        //     if (chkPower.Checked) chkPower.Checked = false;
+        // and powering off unchecks every key:
+        //   From Thetis console.cs:27486-27492 [v2.10.3.15]
+        //     m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
+        //     chkMOX.Checked = false;
+        //     chkMOX.Enabled = false;
+        //     chkTUN.Checked = false;
+        //     chkTUN.Enabled = false;
+        //     chk2TONE.Checked = false;  // MW0LGE_21a
+        // stopAllTx is NereusSDR's StopAllTx port: MOX, manual MOX, TUNE and
+        // two-tone off, MOX and the relay off to the connection at once. It
+        // does nothing when nothing is keyed.
+        if (m_role == Role::Local) {
+            stopAllTx(QStringLiteral("The link to the radio was lost, so transmitting stopped."));
+        }
         // Per-radio peripherals refactor (2026-05-26): same teardown as
         // Disconnected so peripheral sockets don't stay attached across a
         // link-loss event.

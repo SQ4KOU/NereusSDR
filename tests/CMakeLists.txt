@@ -1068,6 +1068,12 @@ target_compile_definitions(tst_p1_loopback_connection PRIVATE NEREUS_BUILD_TESTS
 nereus_add_test(tst_reconnect_on_silence fakes/P1FakeRadio.cpp)
 target_compile_definitions(tst_reconnect_on_silence PRIVATE NEREUS_BUILD_TESTS)
 
+# P1 transmit safety on a link loss: the reconnect comes back unkeyed, with
+# zero drive, the relay released and PureSignal off, and a key after the
+# loss is refused until it is released (whole-branch review 2026-09-30).
+nereus_add_test(tst_p1_reconnect_unkeyed fakes/P1FakeRadio.cpp)
+target_compile_definitions(tst_p1_reconnect_unkeyed PRIVATE NEREUS_BUILD_TESTS)
+
 # Saved-radio persistence round-trip (Phase 3I Task 15)
 nereus_add_test(tst_connection_panel_saved_radios)
 
@@ -3861,6 +3867,11 @@ target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUIL
 # not key again until released; a key queued before the stop does not key.
 nereus_add_test(tst_radio_model_stop_all_tx)
 target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
+
+# TX safety (whole-branch review 2026-09-30): a lost radio link unkeys the
+# model through stopAllTx.
+nereus_add_test(tst_radio_model_link_lost_unkey)
+target_compile_definitions(tst_radio_model_link_lost_unkey PRIVATE NEREUS_BUILD_TESTS)
 
 # iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03, R-IOS-13): the
 # Power Genius changeover. A key's RF waits at the RF-flow gate from any
