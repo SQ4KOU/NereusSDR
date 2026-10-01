@@ -10,6 +10,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 37 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): keepalives heard at their
+//               receipt; a late check lets the waiting keepalives in
+//               first. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -96,7 +100,7 @@ void RemoteTxWatchdog::update(const QByteArray& deviceId, bool keyed, bool keyed
 }
 
 bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, quint32 epoch,
-                                 Path path)
+                                 Path path, qint64 ageMs)
 {
     Q_UNUSED(path);
     auto it = m_devices.find(deviceId);
@@ -105,7 +109,8 @@ bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, q
         return false;
     }
     Watch& watch = it.value();
-    const qint64 heard = now();
+    // TX mic thread: heard when it came off the network.
+    const qint64 heard = now() - std::max<qint64>(0, ageMs);
     // Socket input can run before an overdue timer on a busy event loop.
     // Once the watch expires, no arriving packet may renew it.
     if (heard - watch.lastMs > kLinkLossDeadlineMs) {
@@ -124,7 +129,9 @@ bool RemoteTxWatchdog::keepalive(const QByteArray& deviceId, quint64 sequence, q
     // Task 29 step 2b: how long since the one before, for the measurement
     // of keyed-event tails on the web relay (nothing acts on it).
     const qint64 gap = watch.lastMs > 0 ? heard - watch.lastMs : -1;
-    watch.lastMs = heard;
+    // A keepalive that came before the watch began (and waited at the Core
+    // into it) leaves the watch's start as it is.
+    watch.lastMs = std::max(watch.lastMs, heard);
     reschedule();
     emit keepaliveHeard(deviceId, gap);
     return true;
@@ -147,6 +154,19 @@ void RemoteTxWatchdog::onTimer()
             quiet.append(it.key());
         }
     }
+    // TX mic thread: a check that fired late ran behind a stall of the
+    // event loop, and keepalives that came during it may still wait in the
+    // transports' queues. They go first (a check of 0 ms runs after the
+    // timers already due, the transports' drains among them) and are heard
+    // at their receipt; then the watch is judged.
+    const bool late = m_checkDueMs >= 0 && at > m_checkDueMs;
+    if (!quiet.isEmpty() && late && !m_lateCheckDeferred && m_hooks.startTimer) {
+        m_lateCheckDeferred = true;
+        m_checkDueMs = at;
+        m_hooks.startTimer(0);
+        return;
+    }
+    m_lateCheckDeferred = false;
     const QPointer<RemoteTxWatchdog> self(this);
     for (const QByteArray& deviceId : std::as_const(quiet)) {
         if (!self) {
@@ -188,7 +208,9 @@ void RemoteTxWatchdog::trip(const QByteArray& deviceId, bool linkClosed)
 
 void RemoteTxWatchdog::reschedule()
 {
+    m_lateCheckDeferred = false;
     if (m_devices.isEmpty()) {
+        m_checkDueMs = -1;
         if (m_hooks.stopTimer) {
             m_hooks.stopTimer();
         }
@@ -199,9 +221,11 @@ void RemoteTxWatchdog::reschedule()
         // "More than 400 ms": the first millisecond past the deadline.
         earliest = std::min(earliest, it.value().lastMs + kLinkLossDeadlineMs + 1);
     }
-    const qint64 wait = std::max<qint64>(0, earliest - now());
+    const qint64 wait =
+        std::min<qint64>(std::max<qint64>(0, earliest - now()), kLinkLossDeadlineMs + 1);
+    m_checkDueMs = now() + wait;
     if (m_hooks.startTimer) {
-        m_hooks.startTimer(static_cast<int>(std::min<qint64>(wait, kLinkLossDeadlineMs + 1)));
+        m_hooks.startTimer(static_cast<int>(wait));
     }
 }
 

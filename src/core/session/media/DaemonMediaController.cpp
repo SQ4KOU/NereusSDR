@@ -20,6 +20,12 @@
 //               50 ms); a report pending when the controller goes is
 //               logged; "Microphone line open for" logs the id as hex.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): the microphone line's
+//               packets go through MicRoute, from the transport's own
+//               thread when it has one (MediaPeer::setMicPacketSink), so a
+//               stall of the Core's event loop never holds them; "tx"
+//               keepalives carry their receipt to the watchdog. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -836,6 +842,12 @@ DaemonMediaController::~DaemonMediaController()
     // TX stall lane: an unkey whose walk is still running when the
     // controller goes (its session ended in the tail) still gets its line.
     logUnkeyStats();
+    // TX mic thread: no packet reaches the receiver from here on, whatever
+    // order the members go in.
+    {
+        const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+        m_micRoute->receiver = nullptr;
+    }
     if (m_radioModel) {
         // Parity Task 31: this device's DUP goes with its media.
         if (!m_duplexDevice.isEmpty()) {
@@ -1853,6 +1865,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // stamp needs rewriting.
     m_sendSsrcRewrite.clear();
     m_micSsrcRewrite.clear();
+    syncMicRoute();
     wireCurrentPeer(peer, connectionId);
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
@@ -1993,9 +2006,9 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     // Task 37: the "tx" data channel's keepalives go to the Core's
     // transmit watchdog, for the device this media session is for.
     connect(peer, &MediaPeer::txReceived, this,
-            [this, peer, peerEpoch](const QByteArray& message) {
+            [this, peer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
     // Task 36: the microphone line's packets go to its receiver. Task 29:
@@ -2004,9 +2017,36 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     connect(peer, &MediaPeer::micRtpReceived, this,
             [this, peer, peerEpoch](const QByteArray& packet, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
+            m_micRoute->deliver(packet, heldUs);
         }
     });
+    // TX mic thread: on a transport with a thread of its own for the line,
+    // the packets go from that thread to the receiver, never through this
+    // event loop. Every peer with the sink is this controller's current,
+    // replacement or retiring one; any other is stopped, which ends its
+    // thread.
+    peer->setMicPacketSink(micRouteSink());
+}
+
+void DaemonMediaController::MicRoute::deliver(const QByteArray& packet, qint64 heldUs)
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (receiver != nullptr) {
+        receiver->submit(rewriteRtpSsrc(packet, rewrite), heldUs);
+    }
+}
+
+void DaemonMediaController::syncMicRoute()
+{
+    const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+    m_micRoute->receiver = m_micReceiver.get();
+    m_micRoute->rewrite = m_micSsrcRewrite;
+}
+
+IMediaTransport::MicPacketSink DaemonMediaController::micRouteSink() const
+{
+    const std::shared_ptr<MicRoute> route = m_micRoute;
+    return [route](const QByteArray& packet, qint64 heldUs) { route->deliver(packet, heldUs); };
 }
 
 // ---- iPhone app plan Task 29 (R-IOS-16): replacing the media connection ----
@@ -2187,17 +2227,19 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
     });
     // Microphone packets and "tx" keepalives are taken from the new peer as
     // soon as it carries them.
-    connect(peer, &MediaPeer::txReceived, this, [this, current, peerEpoch](const QByteArray& message) {
+    connect(peer, &MediaPeer::txReceived, this,
+            [this, current, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (current() && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
     connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet,
                                                                       qint64 heldUs) {
         if (current() && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
+            m_micRoute->deliver(packet, heldUs);
         }
     });
+    peer->setMicPacketSink(micRouteSink());
     m_replacementRouted = nextIce && nextIce->mediaRouting();
     peer->setIceConfiguration(nextIce);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
@@ -2221,6 +2263,7 @@ void DaemonMediaController::onReplacementReady()
     // The new peer's microphone packets reach the receiver as its own.
     if (m_micReceiver && m_replacement && m_replacement->micAudioSsrc() != 0) {
         m_micSsrcRewrite.insert(m_replacement->micAudioSsrc(), m_micReceiver->ssrc());
+        syncMicRoute();
     }
     m_replaceOverlapTimer.start(kReplaceOverlapMs);
     qCInfo(lcDaemonMedia) << "media replacement ready; audio on both connections";
@@ -2261,15 +2304,16 @@ void DaemonMediaController::finishReplacement()
     old->disconnect(this);
     MediaPeer* const oldPeer = old.get();
     const quint64 peerEpoch = m_epoch;
-    connect(oldPeer, &MediaPeer::txReceived, this, [this, oldPeer, peerEpoch](const QByteArray& message) {
+    connect(oldPeer, &MediaPeer::txReceived, this,
+            [this, oldPeer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
     connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet,
                                                                          qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
+            m_micRoute->deliver(packet, heldUs);
         }
     });
     m_retiring = std::move(old);
@@ -2312,6 +2356,7 @@ void DaemonMediaController::failReplacement(const QString& reason)
     m_replacementReady = false;
     if (m_micReceiver) {
         m_micSsrcRewrite.remove(peer->micAudioSsrc());
+        syncMicRoute();
     }
     peer->disconnect(this);
     peer->stop();
@@ -2377,6 +2422,7 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
     m_micReceiver->setFeedWriter(m_radioModel->remoteMicWriter() == m_micDeviceId);
     refreshMicVoxArmed();
     refreshMicWatching();
+    syncMicRoute();
     qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId.toHex();
 }
 
@@ -2384,6 +2430,12 @@ void DaemonMediaController::stopMicLine()
 {
     if (!m_micReceiver && m_micDeviceId.isEmpty()) {
         return;
+    }
+    // TX mic thread: out of the route first, so no packet in delivery on
+    // the line's thread reaches it after this.
+    {
+        const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+        m_micRoute->receiver = nullptr;
     }
     if (m_micReceiver) {
         m_micReceiver->stop();
@@ -6068,6 +6120,7 @@ void DaemonMediaController::clearSession()
     clearReplacement();
     m_sendSsrcRewrite.clear();
     m_micSsrcRewrite.clear();
+    syncMicRoute();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }

@@ -31,6 +31,11 @@
 //   2026-09-30: TX stall lane: a replay of stalled drains; the buffer
 //               times each packet at its receipt in the transport. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread: the replay of a held delivery, timed at
+//               receipt (each stall runs the buffer dry once); the line
+//               decoded on a thread of its own while the owner changes the
+//               feed's use and reads the figures, and a pump pulls. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -39,15 +44,19 @@
 #include "core/session/media/RemoteMicReceiver.h"
 
 #include <QSignalSpy>
+#include <QThread>
 #include <QUuid>
 #include <QtTest>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <map>
 #include <numbers>
+#include <thread>
 #include <vector>
 
 using namespace NereusSDR;
@@ -240,7 +249,8 @@ private slots:
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
     void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
     void aLongStallsStaleAudioIsNotSentLate();
-    void aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits();
+    void aHeldDeliveryIsTimedAtReceiptAndCountedAsOwnerWaits();
+    void theLineIsDecodedOnAThreadOfItsOwn();
     void nothingIsSplicedWhileDexpTimingRuns();
 };
 
@@ -1166,14 +1176,17 @@ void TestRemoteMicReceiver::nothingIsSplicedWhileDexpTimingRuns()
 // the phone's packets reached the transport 20 ms apart, and the Core's
 // event loop handed them over 80 to 410 ms late, in bursts). The network
 // is steady and the audio is speech-like (words and pauses, so the buffer
-// sheds in the pauses); five times the owner stalls for 90 ms and then
-// delivers what it held at once, each packet carrying how long it waited
-// since its receipt. The buffer is timed on the pump's clock (fix round 1:
-// timing it at receipt took this margin away and doubled the underruns on
-// the bench's stalls): the first stall runs it dry and grows the target,
-// and the later ones are ridden through. The packets' waits are the over's
-// owner-wait figures and nothing else.
-void TestRemoteMicReceiver::aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits()
+// sheds in the pauses); five times the delivering thread stalls for 90 ms
+// and then delivers what it held at once, each packet carrying how long it
+// waited since its receipt. TX mic thread: the buffer times each packet at
+// its receipt, so the steady link never grows the margin; a stall of the
+// delivering thread runs it dry each time. On a real connection the line
+// is delivered by the transport's own thread, so a stall of the event loop
+// is not such a stall (tst_media_transport,
+// aStalledOwnerLeavesTheMicrophoneLineWhole). Timed by the drain instead
+// (fix round 1), the first stall grew the target to 119.3 ms and only it
+// ran dry.
+void TestRemoteMicReceiver::aHeldDeliveryIsTimedAtReceiptAndCountedAsOwnerWaits()
 {
     FakeTime time;
     RemoteMicFeed feed;
@@ -1249,12 +1262,13 @@ void TestRemoteMicReceiver::aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits(
                              .arg(stats.ownerWaitsLong);
     QCOMPARE(next, kPackets);
     QCOMPARE(receiver.stats().decodedPackets, quint64(kPackets));
-    // The first stall grows the margin; the stalls after it are covered.
-    QVERIFY(stats.grows >= 1);
-    QVERIFY2(largestTarget > RemoteMicConfig::kTargetDepthFrames + 48 * 50,
-             qPrintable(QString::number(largestTarget / 48.0)));
-    QCOMPARE(stats.underflows, 1);
-    QCOMPARE(underrunsAtFirstStallEnd, stats.underflows);
+    // Timed at receipt, the steady link never grows the margin, and each
+    // of the five stalls runs the buffer dry once.
+    QCOMPARE(stats.grows, 0);
+    QCOMPARE(largestTarget, RemoteMicConfig::kTargetDepthFrames);
+    QCOMPARE(stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
+    QCOMPARE(stats.underflows, 5);
+    QCOMPARE(underrunsAtFirstStallEnd, 1);
     // The waits: every packet's, the longest about the stall, and the
     // three in each stall that waited past 50 ms.
     QCOMPARE(heldOver50, 15);
@@ -1263,6 +1277,124 @@ void TestRemoteMicReceiver::aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits(
              qPrintable(QStringLiteral("%1 vs %2").arg(stats.ownerWaitMaxMs).arg(longestHeldMs)));
     QVERIFY(longestHeldMs > kStallMs - 1.0 && longestHeldMs < kStallMs + 2.0);
     QVERIFY(stats.ownerWaitMeanMs > 0.0 && stats.ownerWaitMeanMs < 5.0);
+}
+
+// TX mic thread: the line's packets are decoded and written on a thread of
+// their own (the transport's "NereusMicRx"), while the owner thread starts
+// and ends overs on the feed, watches the line and reads its figures, and
+// the pump pulls blocks. Two seconds of that, with no lock on the pump's
+// side; then a steady over plays the line's audio, and the starvation
+// check the line's thread hands to the owner has run there.
+void TestRemoteMicReceiver::theLineIsDecodedOnAThreadOfItsOwn()
+{
+    using Clock = std::chrono::steady_clock;
+    constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
+    constexpr int kPackets = 300;   // 6 s
+    std::vector<QByteArray> encoded;
+    {
+        RemoteMicEncoder encoder;
+        QVERIFY(encoder.isReady());
+        std::vector<float> frame(kFrames);
+        for (int k = 0; k < kPackets; ++k) {
+            for (int i = 0; i < kFrames; ++i) {
+                frame[static_cast<size_t>(i)] = 0.3f * static_cast<float>(std::sin(
+                    2.0 * std::numbers::pi * 1000.0 * static_cast<double>(k * kFrames + i)
+                    / 48000.0));
+            }
+            encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k),
+                                             static_cast<quint32>(k * kFrames), kMicSsrc));
+        }
+    }
+    RemoteMicFeed feed;
+    RemoteMicReceiver receiver(&feed);
+    QVERIFY(receiver.start(kMicSsrc, false));
+    QSignalSpy starved(&receiver, &RemoteMicReceiver::starved);
+
+    std::atomic<bool> stop{false};
+    std::atomic<int> submitted{0};
+    // The line's thread: a packet every 20 ms, each reporting a wait.
+    std::thread line([&]() {
+        const Clock::time_point start = Clock::now();
+        for (qint64 k = 0; k < kPackets && !stop.load(); ++k) {
+            std::this_thread::sleep_until(start + std::chrono::milliseconds(20 * k));
+            receiver.submit(encoded[static_cast<size_t>(k)], (k % 7) * 300);
+            submitted.fetch_add(1);
+        }
+    });
+    // The pump: a block every 4/3 ms.
+    std::atomic<bool> loudAfterSteady{false};
+    std::atomic<bool> steady{false};
+    std::thread pump([&]() {
+        std::vector<float> out(kBlock);
+        const Clock::time_point start = Clock::now();
+        for (qint64 b = 0; !stop.load(); ++b) {
+            std::this_thread::sleep_until(
+                start + std::chrono::microseconds(b * kBlock * 1000000 / 48000));
+            const bool steadyNow = steady.load();
+            if (feed.pullBlock(out.data(), kBlock, -1.0) == RemoteMicFeed::Pull::Audio
+                && steadyNow) {
+                for (const float sample : out) {
+                    if (std::abs(sample) > 0.1f) {
+                        loudAfterSteady.store(true);
+                    }
+                }
+            }
+        }
+    });
+
+    // Both threads end with the test, however it ends.
+    struct Join {
+        std::atomic<bool>& stop;
+        std::thread& line;
+        std::thread& pump;
+        ~Join()
+        {
+            stop.store(true);
+            for (std::thread* thread : {&line, &pump}) {
+                if (thread->joinable()) {
+                    thread->join();
+                }
+            }
+        }
+    } join{stop, line, pump};
+
+    // The owner: overs of 20 to 110 ms, the line watched in each.
+    QElapsedTimer churn;
+    churn.start();
+    int overs = 0;
+    while (churn.elapsed() < 2000) {
+        feed.setInUse(true);
+        receiver.setWatching(true);
+        QTest::qWait(20 + (overs % 10) * 10);
+        const RemoteMicReceiver::Stats stats = receiver.stats();
+        // At most the one being decoded is counted ahead of its submit's end.
+        QVERIFY(stats.decodedPackets <= static_cast<quint64>(submitted.load()) + 1);
+        QVERIFY(feed.stats().fillFrames >= 0);
+        receiver.setWatching(false);
+        feed.setInUse(false);
+        QTest::qWait(1);
+        ++overs;
+    }
+    // A steady over: the line's audio plays.
+    feed.setInUse(true);
+    receiver.setWatching(true);
+    QTest::qWait(150);
+    steady.store(true);
+    QTRY_VERIFY_WITH_TIMEOUT(loudAfterSteady.load(), 2000);
+    const int startsBefore = static_cast<int>(starved.count());
+    stop.store(true);
+    line.join();
+    pump.join();
+    QVERIFY(submitted.load() < kPackets);
+    // The line went quiet: the starvation the line's thread scheduled runs
+    // on the owner thread and reports it.
+    QTRY_VERIFY_WITH_TIMEOUT(starved.count() > startsBefore, 2000);
+    QCOMPARE(starved.last().at(0).toBool(), true);
+    receiver.setWatching(false);
+    feed.setInUse(false);
+    QVERIFY(overs > 10);
+    QVERIFY(receiver.stats().decodedPackets > 0);
+    receiver.stop();
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)

@@ -53,16 +53,24 @@
 //               and its report, so the microphone buffer times it at
 //               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): with a sink installed
+//               (setMicPacketSink), the microphone line's packets go from
+//               the library's callback to a thread of the line's own
+//               ("NereusMicRx"), which hands them to the sink, so a stall
+//               of the owner's event loop never holds them; the "tx"
+//               channel's messages carry their receipt (txReceived's
+//               heldUs). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/CandidateSourceLease.h"
 #include "core/session/IceDiagnostics.h"
-#include <QThread>
 #include "core/session/media/PcmAudioCodec.h"
 
 #include <QDebug>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include <rtc/rtc.hpp>
@@ -134,6 +142,8 @@ struct CallbackEvent {
     Kind kind;
     std::string first;
     std::string second;
+    // TX mic thread: when a TxMessage came off the network.
+    std::chrono::steady_clock::time_point receivedAt{};
 };
 
 struct PendingRtpPacket {
@@ -141,6 +151,28 @@ struct PendingRtpPacket {
     std::chrono::steady_clock::time_point receivedAt;
     // Task 36: arrived on the microphone line.
     bool mic = false;
+};
+
+// TX mic thread (JJ approved 2026-10-01): the microphone line's own thread.
+// The library's callback queues the line's packets here instead of for the
+// owner's 2 ms drain, and the thread hands them to the installed sink (the
+// receiver, which decodes and fills the transmit feed), so a stall of the
+// owner's event loop never holds the line. One thread per transport with a
+// microphone line: a Core carries a line for each transmitting device, a
+// handful at most, each thread asleep between packets, and the thread's
+// life is the transport's start to stop, with nothing shared between
+// connections to tear down.
+struct MicLane {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::deque<PendingRtpPacket> packets;
+    bool stopping = false;
+    // Whether a sink is installed (read by the callback without sinkMutex).
+    std::atomic<bool> hasSink{false};
+    // Held while the sink runs and while it is replaced, so a replaced sink
+    // is never called after setMicPacketSink() returns.
+    std::mutex sinkMutex;
+    IMediaTransport::MicPacketSink sink;
 };
 
 std::once_flag g_sctpSettingsOnce;
@@ -177,6 +209,8 @@ struct CallbackBridge {
     bool dataChannelAssigned = false;
     bool trackAssigned = false;
     bool micTrackAssigned = false;
+    // TX mic thread: the line's own queue, while it has one.
+    std::shared_ptr<MicLane> micLane;
     // Task 37: whether this side takes a "tx" channel, and the answerer's
     // once it arrived.
     bool txChannelWanted = false;
@@ -299,6 +333,22 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data, bool 
             bridge->maxRtpCallbackGap, receivedAt - bridge->lastRtpReceipt);
     }
     bridge->lastRtpReceipt = receivedAt;
+    // TX mic thread: with a sink installed, the microphone line goes to
+    // its own thread, never through the owner's drain.
+    if (mic && bridge->micLane && bridge->micLane->hasSink.load(std::memory_order_acquire)) {
+        MicLane& lane = *bridge->micLane;
+        {
+            std::lock_guard laneLock(lane.mutex);
+            if (lane.packets.size()
+                >= static_cast<std::size_t>(IMediaTransport::kReceivedRtpPacketsPerStream)) {
+                lane.packets.pop_front();
+                ++bridge->droppedRtpPackets;
+            }
+            lane.packets.push_back({std::move(data), receivedAt, true});
+        }
+        lane.wake.notify_one();
+        return;
+    }
     if (bridge->rtpPackets.size() >= bridge->rtpPacketCapacity) {
         bridge->rtpPackets.pop_front();
         ++bridge->droppedRtpPackets;
@@ -341,6 +391,8 @@ void queueTx(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     if (!bridge) {
         return;
     }
+    // TX mic thread: stamped here, so the watchdog judges it by its receipt.
+    const auto receivedAt = std::chrono::steady_clock::now();
     std::lock_guard lock(bridge->mutex);
     if (bridge->cancelled || bridge->receiveSeveredForTest || data.empty()
         || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxTxMessageBytes)) {
@@ -353,7 +405,7 @@ void queueTx(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     }
     bridge->events.push_back({CallbackEvent::Kind::TxMessage,
                               std::string(reinterpret_cast<const char*>(data.data()), data.size()),
-                              {}});
+                              {}, receivedAt});
 }
 
 void queueIq(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
@@ -435,6 +487,39 @@ QByteArray toByteArray(const rtc::binary& data)
     }
     return QByteArray(reinterpret_cast<const char*>(data.data()),
                       static_cast<qsizetype>(data.size()));
+}
+
+qint64 heldMicroseconds(std::chrono::steady_clock::time_point receivedAt)
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now() - receivedAt)
+        .count();
+}
+
+// TX mic thread: the line's thread, until the transport stops.
+void runMicLane(const std::shared_ptr<MicLane>& lane)
+{
+    std::deque<PendingRtpPacket> batch;
+    for (;;) {
+        {
+            std::unique_lock lock(lane->mutex);
+            lane->wake.wait(lock, [&lane] { return lane->stopping || !lane->packets.empty(); });
+            if (lane->stopping) {
+                return;
+            }
+            batch.swap(lane->packets);
+        }
+        {
+            const std::lock_guard sinkLock(lane->sinkMutex);
+            for (const PendingRtpPacket& packet : batch) {
+                if (!lane->sink) {
+                    break;
+                }
+                lane->sink(toByteArray(packet.data), heldMicroseconds(packet.receivedAt));
+            }
+        }
+        batch.clear();
+    }
 }
 
 // R-R3-23: whether a description's audio m-line maps the lossless payload
@@ -596,6 +681,10 @@ void logMediaRemoteCandidate(const QString& candidate, bool fromOwnedSource, boo
 
 struct LibDataChannelMediaTransport::Private {
     QTimer* drainTimer = nullptr;
+    // TX mic thread: the microphone line's queue and thread, from start()
+    // with a line to stop().
+    std::shared_ptr<MicLane> micLane;
+    std::unique_ptr<QThread> micThread;
     std::shared_ptr<CallbackBridge> bridge;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> display;
@@ -675,6 +764,16 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     d->micAudioSsrc = options.micAudioSsrc;
     d->bridge = std::make_shared<CallbackBridge>();
     d->bridge->micSsrc = options.micAudioSsrc;
+    if (options.micAudioSsrc != 0) {
+        // TX mic thread: the line's thread runs from here to stop(); it
+        // carries packets once a sink is installed.
+        d->micLane = std::make_shared<MicLane>();
+        d->bridge->micLane = d->micLane;
+        const std::shared_ptr<MicLane> lane = d->micLane;
+        d->micThread.reset(QThread::create([lane]() { runMicLane(lane); }));
+        d->micThread->setObjectName(QStringLiteral("NereusMicRx"));
+        d->micThread->start();
+    }
     d->bridge->txChannelWanted = options.txChannel;
     d->bridge->iqChannelWanted = options.iqChannel;
     // Task 36: the microphone line's packets share the queue with one more
@@ -1094,6 +1193,17 @@ void LibDataChannelMediaTransport::stop()
     stopInternal(true);
 }
 
+bool LibDataChannelMediaTransport::setMicPacketSink(MicPacketSink sink)
+{
+    if (!d->micLane) {
+        return false;
+    }
+    const std::lock_guard sinkLock(d->micLane->sinkMutex);
+    d->micLane->hasSink.store(static_cast<bool>(sink), std::memory_order_release);
+    d->micLane->sink = std::move(sink);
+    return true;
+}
+
 void LibDataChannelMediaTransport::stopInternal(bool notify)
 {
     if (!d->started && !d->peer && !d->bridge) {
@@ -1139,11 +1249,32 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->bridge->iqMessages.clear();
         d->bridge->iqBytes = 0;
         d->bridge->rtpPackets.clear();
+        d->bridge->micLane.reset();
         pendingDisplay = std::move(d->bridge->dataChannel);
         pendingIq = std::move(d->bridge->iqChannel);
         pendingTx = std::move(d->bridge->txChannel);
         pendingAudio = std::move(d->bridge->track);
         pendingMic = std::move(d->bridge->micTrack);
+    }
+    // TX mic thread: the line's thread ends here, and its sink is never
+    // called again.
+    if (d->micLane) {
+        {
+            std::lock_guard laneLock(d->micLane->mutex);
+            d->micLane->stopping = true;
+            d->micLane->packets.clear();
+        }
+        d->micLane->wake.notify_all();
+        {
+            const std::lock_guard sinkLock(d->micLane->sinkMutex);
+            d->micLane->hasSink.store(false, std::memory_order_release);
+            d->micLane->sink = nullptr;
+        }
+        if (d->micThread) {
+            d->micThread->wait();
+            d->micThread.reset();
+        }
+        d->micLane.reset();
     }
 
     if (pendingTx && pendingTx != d->tx) {
@@ -1674,7 +1805,8 @@ void LibDataChannelMediaTransport::drainCallbacks()
             break;
         case CallbackEvent::Kind::TxMessage:
             emit txReceived(QByteArray(event.first.data(),
-                                       static_cast<qsizetype>(event.first.size())));
+                                       static_cast<qsizetype>(event.first.size())),
+                            heldMicroseconds(event.receivedAt));
             break;
         case CallbackEvent::Kind::GatheringComplete:
             emit gatheringComplete();
@@ -1744,10 +1876,7 @@ void LibDataChannelMediaTransport::drainCallbacks()
         if (packet.mic) {
             // TX stall lane: the time since the library's callback took it
             // off the network, so the microphone buffer times it there.
-            const auto held = std::chrono::steady_clock::now() - packet.receivedAt;
-            emit micRtpReceived(
-                toByteArray(packet.data),
-                std::chrono::duration_cast<std::chrono::microseconds>(held).count());
+            emit micRtpReceived(toByteArray(packet.data), heldMicroseconds(packet.receivedAt));
         } else {
             emit rtpReceived(toByteArray(packet.data));
         }

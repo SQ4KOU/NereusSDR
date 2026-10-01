@@ -35,6 +35,13 @@
 //               did before); each packet's wait at the Core is measured
 //               into the over's figures only. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): submit runs on the thread
+//               that delivers the line (the transport's microphone thread
+//               on a real connection), under the line's lock; its event
+//               loop part is posted there. The feed's writer side takes a
+//               lock the pump never takes. The buffer is timed at each
+//               packet's receipt again. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -44,7 +51,9 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioRateMatcher.h"
 
+#include <QMetaObject>
 #include <QPointer>
+#include <QThread>
 #include <QTimer>
 
 #include <opus.h>
@@ -131,11 +140,13 @@ RemoteMicFeed::~RemoteMicFeed() = default;
 
 void RemoteMicFeed::setInUse(bool inUse)
 {
-    if (inUse == m_inUse) {
+    // TX mic thread: a write on the line's thread never sees half a change.
+    const std::lock_guard<std::mutex> lock(m_writerLock);
+    if (inUse == m_inUse.load(std::memory_order_relaxed)) {
         return;
     }
-    m_inUse = inUse;
-    m_framesSinceInUse = 0;
+    m_inUse.store(inUse, std::memory_order_release);
+    m_framesSinceInUse.store(0, std::memory_order_release);
     // Everything written so far is dropped by the pump when it sees this
     // change; the buffer starts again empty, from silence.
     m_clearAtBytes.store(m_writtenBytes, std::memory_order_release);
@@ -145,7 +156,8 @@ void RemoteMicFeed::setInUse(bool inUse)
 
 bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames)
 {
-    if (!m_inUse || mono == nullptr || frames <= 0) {
+    const std::lock_guard<std::mutex> lock(m_writerLock);
+    if (!m_inUse.load(std::memory_order_relaxed) || mono == nullptr || frames <= 0) {
         return false;
     }
     const qint64 bytes = static_cast<qint64>(frames) * kFloatBytes;
@@ -166,7 +178,7 @@ bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames)
     m_arrivals.tryPushCopy(reinterpret_cast<const uint8_t*>(&arrival), kArrivalBytes);
     m_input.tryPushCopy(reinterpret_cast<const uint8_t*>(mono), bytes);
     m_writtenBytes += static_cast<quint64>(bytes);
-    m_framesSinceInUse += frames;
+    m_framesSinceInUse.fetch_add(frames, std::memory_order_acq_rel);
     // One packet a write (a concealed or recovered packet is its own write):
     // the buffer's target is one packet plus its margin.
     m_packetFrames.store(std::min(frames, Cfg::kMaxDepthFrames / 2), std::memory_order_relaxed);
@@ -229,15 +241,21 @@ int RemoteMicFeed::drainInput()
 void RemoteMicFeed::takeArrivals(bool note)
 {
     // Every write whose audio the pump has read (or discarded) whole. What
-    // one drain found counts as one arrival on the pump's clock, as the
-    // drain itself did before. Each write's wait at the Core is measured
-    // for the over's figures and changes nothing else (fix round 1: timing
-    // the buffer by receipt took away the margin a stalled drain grew).
+    // one drain found counts as one arrival, timed at its first write's
+    // receipt (a lost packet rebuilt from the next one's FEC arrives with
+    // it and counts one packet late; a burst is timed by its oldest
+    // packet). TX mic thread: with the line off the event loop, the
+    // receipt is the link's timing, which fix round 1 could not yet use.
+    // Each write's wait at the Core also goes into the over's figures.
     Arrival arrival{};
     int frames = 0;
+    int heldFrames = 0;
     while (m_arrivals.peekInto(reinterpret_cast<uint8_t*>(&arrival), sizeof(Arrival))
            && arrival.endBytes <= m_readBytes) {
         m_arrivals.dropOldest(sizeof(Arrival));
+        if (frames == 0) {
+            heldFrames = arrival.heldFrames;
+        }
         frames += arrival.frames;
         if (note) {
             ++m_overOwnerWaits;
@@ -249,7 +267,7 @@ void RemoteMicFeed::takeArrivals(bool note)
         }
     }
     if (note && frames > 0) {
-        noteArrival(frames);
+        noteArrival(frames, heldFrames);
     }
 }
 
@@ -266,15 +284,17 @@ bool RemoteMicFeed::memoryDelayMin(qint64* min) const
     return true;
 }
 
-void RemoteMicFeed::noteArrival(int frames)
+void RemoteMicFeed::noteArrival(int frames, int heldFrames)
 {
     // This arrival's delay: the pump's clock now less where its first
     // frame sits in the stream. On time it is the same every arrival; a
     // late one (a jittered packet, or one rebuilt from the next packet's
     // FEC and written with it) shows as more. One past the ceiling is a
     // stall, ridden through, not jitter the margin should cover.
+    // TX stall lane: the time the packet waited at the Core after its
+    // receipt in the transport is taken off, so the delay is the link's.
     const qint64 delay = static_cast<qint64>(m_block) * kPumpBlock
-        - static_cast<qint64>(m_arrivedFrames);
+        - static_cast<qint64>(heldFrames) - static_cast<qint64>(m_arrivedFrames);
     m_arrivedFrames += static_cast<quint64>(frames);
     qint64 earliest = 0;
     if (memoryDelayMin(&earliest) && delay - earliest > marginCeiling()) {
@@ -807,23 +827,50 @@ qint64 RemoteMicReceiver::now() const
     return m_clock();
 }
 
+bool RemoteMicReceiver::isRunning() const
+{
+    const std::lock_guard<std::mutex> lock(m_lineLock);
+    return m_running;
+}
+
+quint32 RemoteMicReceiver::ssrc() const
+{
+    const std::lock_guard<std::mutex> lock(m_lineLock);
+    return m_ssrc;
+}
+
+void RemoteMicReceiver::setLosslessNegotiated(bool negotiated)
+{
+    const std::lock_guard<std::mutex> lock(m_lineLock);
+    m_lossless = negotiated;
+}
+
+RemoteMicReceiver::Stats RemoteMicReceiver::stats() const
+{
+    const std::lock_guard<std::mutex> lock(m_lineLock);
+    return m_stats;
+}
+
 bool RemoteMicReceiver::start(quint32 ssrc, bool losslessNegotiated)
 {
     stop();
     int error = OPUS_OK;
-    m_decoder->opus = opus_decoder_create(RemoteMicConfig::kSampleRate, 1, &error);
-    if (m_decoder->opus == nullptr || error != OPUS_OK) {
-        m_decoder->opus = nullptr;
+    OpusDecoder* opus = opus_decoder_create(RemoteMicConfig::kSampleRate, 1, &error);
+    if (opus == nullptr || error != OPUS_OK) {
         qCWarning(lcAudio) << "Remote microphone: the Opus decoder could not start:" << error;
         return false;
     }
-    m_ssrc = ssrc;
-    m_lossless = losslessNegotiated;
-    m_haveSequence = false;
-    m_lastOpusFrames = RemoteMicConfig::kOpusFrameSamples;
-    m_stats = {};
-    m_running = true;
-    m_lastAudioMs = now();
+    {
+        const std::lock_guard<std::mutex> lock(m_lineLock);
+        m_decoder->opus = opus;
+        m_ssrc = ssrc;
+        m_lossless = losslessNegotiated;
+        m_haveSequence = false;
+        m_lastOpusFrames = RemoteMicConfig::kOpusFrameSamples;
+        m_stats = {};
+        m_running = true;
+    }
+    m_lastAudioMs.store(now(), std::memory_order_release);
     return true;
 }
 
@@ -843,6 +890,7 @@ void RemoteMicReceiver::stop()
     m_watching = false;
     ++m_starvationGeneration;
     m_starvationCheckPending = false;
+    const std::lock_guard<std::mutex> lock(m_lineLock);
     if (m_decoder->opus != nullptr) {
         opus_decoder_destroy(m_decoder->opus);
         m_decoder->opus = nullptr;
@@ -853,45 +901,66 @@ void RemoteMicReceiver::stop()
 
 void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
 {
-    if (!m_running) {
-        return;
-    }
-    // TX stall lane: the packet's wait at the Core, for the over's figures.
-    m_heldFrames = static_cast<int>(
-        std::clamp<qint64>(heldUs, 0, 10'000'000) * Cfg::kFramesPerMs / 1000);
-    const int payloadType = audioRtpPayloadType(packet);
-    const bool opus = payloadType == RemoteMicConfig::kOpusPayloadType;
-    const bool l16 = payloadType == PcmAudioCodecConfig::kPayloadType && m_lossless;
-    AudioRtpPacket parsed;
-    if ((!opus && !l16)
-        || parseAudioRtp(packet, payloadType, parsed) != OpusAudioCodecStatus::Accepted
-        || parsed.ssrc != m_ssrc) {
-        ++m_stats.rejectedPackets;
-        return;
-    }
-    // Sequence order: a packet behind the stream (reordered too late, or a
-    // repeat) is dropped; a gap ahead is concealed before this packet.
-    int missing = 0;
-    if (m_haveSequence) {
-        const qint16 delta = static_cast<qint16>(parsed.sequence - m_expectedSequence);
-        if (delta < 0) {
-            ++m_stats.latePackets;
+    const qint64 clampedHeldUs = std::clamp<qint64>(heldUs, 0, 10'000'000);
+    bool wroteAudio = false;
+    {
+        // TX mic thread: the line's state, on whichever thread delivers it.
+        const std::lock_guard<std::mutex> lock(m_lineLock);
+        if (!m_running) {
             return;
         }
-        missing = delta;
+        // TX stall lane: the packet's wait at the Core, for its timing in
+        // the buffer and the over's figures.
+        m_heldFrames = static_cast<int>(clampedHeldUs * Cfg::kFramesPerMs / 1000);
+        const int payloadType = audioRtpPayloadType(packet);
+        const bool opus = payloadType == RemoteMicConfig::kOpusPayloadType;
+        const bool l16 = payloadType == PcmAudioCodecConfig::kPayloadType && m_lossless;
+        AudioRtpPacket parsed;
+        if ((!opus && !l16)
+            || parseAudioRtp(packet, payloadType, parsed) != OpusAudioCodecStatus::Accepted
+            || parsed.ssrc != m_ssrc) {
+            ++m_stats.rejectedPackets;
+            return;
+        }
+        // Sequence order: a packet behind the stream (reordered too late, or
+        // a repeat) is dropped; a gap ahead is concealed before this packet.
+        int missing = 0;
+        if (m_haveSequence) {
+            const qint16 delta = static_cast<qint16>(parsed.sequence - m_expectedSequence);
+            if (delta < 0) {
+                ++m_stats.latePackets;
+                return;
+            }
+            missing = delta;
+        }
+        ++m_stats.accepted;
+        const quint64 writtenBefore = m_stats.framesWritten;
+        if (opus) {
+            decodeOpus(parsed.payload, missing);
+        } else {
+            decodeL16(packet, missing);
+        }
+        m_haveSequence = true;
+        m_expectedSequence = static_cast<quint16>(parsed.sequence + 1);
+        wroteAudio = m_stats.framesWritten != writtenBefore;
     }
-    ++m_stats.accepted;
-    const quint64 writtenBefore = m_stats.framesWritten;
-    if (opus) {
-        decodeOpus(parsed.payload, missing);
-    } else {
-        decodeL16(packet, missing);
-    }
-    m_haveSequence = true;
-    m_expectedSequence = static_cast<quint16>(parsed.sequence + 1);
 
-    // Audio arrived: a starvation ends, and the next check runs from now.
-    m_lastAudioMs = now();
+    // Audio arrived (TX mic thread: when it reached the transport): a
+    // starvation ends, and the next check runs from then.
+    m_lastAudioMs.store(now() - clampedHeldUs / 1000, std::memory_order_release);
+    if (thread() == QThread::currentThread()) {
+        afterPacket(wroteAudio);
+    } else {
+        QMetaObject::invokeMethod(
+            this, [this, wroteAudio]() { afterPacket(wroteAudio); }, Qt::QueuedConnection);
+    }
+}
+
+void RemoteMicReceiver::afterPacket(bool wroteAudio)
+{
+    if (!isRunning()) {
+        return;
+    }
     if (m_starved) {
         m_starved = false;
         emit starved(false);
@@ -899,7 +968,7 @@ void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
     if (m_watching && !m_starvationCheckPending) {
         scheduleStarvationCheck(RemoteMicConfig::kStarvationMs);
     }
-    if (m_stats.framesWritten != writtenBefore) {
+    if (wroteAudio) {
         checkReady();
     }
     // Load findings 2 (R-IOS-13): the waiting key's line has started; the
@@ -999,7 +1068,7 @@ void RemoteMicReceiver::writeAudio(const float* mono, int frames)
     // Fix wave C2: one writer at a time. Another device's line is decoded
     // (its starvation and its stream stay tracked) but never reaches the
     // transmitter's feed.
-    if (!m_feedWriter) {
+    if (!m_feedWriter.load(std::memory_order_acquire)) {
         return;
     }
     if (m_feed != nullptr && m_feed->write(mono, frames, m_heldFrames)) {
@@ -1032,6 +1101,13 @@ void RemoteMicReceiver::refuseWaitAfter(int ms, bool onlyBeforeFirstPacket)
             || (onlyBeforeFirstPacket && self->m_waitLineStarted)) {
             return;
         }
+        // TX mic thread: the line's audio may be in the feed with its event
+        // loop part still posted behind a stall; a key whose buffer holds
+        // its target is answered ready, never refused for that wait.
+        self->checkReady();
+        if (self.isNull() || !self->m_waitDone || generation != self->m_waitGeneration) {
+            return;
+        }
         if (onlyBeforeFirstPacket) {
             qCInfo(lcAudio) << "Remote microphone: no packet on the line within"
                             << RemoteMicConfig::kLineStartDeadlineMs << "ms of the key";
@@ -1051,7 +1127,8 @@ void RemoteMicReceiver::cancelWait()
 
 void RemoteMicReceiver::checkReady()
 {
-    if (!m_waitDone || !m_feedWriter || m_feed == nullptr || !m_feed->inUse()
+    if (!m_waitDone || !m_feedWriter.load(std::memory_order_acquire) || m_feed == nullptr
+        || !m_feed->inUse()
         || m_feed->framesSinceInUse() < m_feed->targetFrames()) {
         return;
     }
@@ -1063,10 +1140,10 @@ void RemoteMicReceiver::checkReady()
 
 void RemoteMicReceiver::setFeedWriter(bool writer)
 {
-    if (writer == m_feedWriter) {
+    if (writer == m_feedWriter.load(std::memory_order_acquire)) {
         return;
     }
-    m_feedWriter = writer;
+    m_feedWriter.store(writer, std::memory_order_release);
     // A key waiting on this line fills from here.
     checkReady();
 }
@@ -1082,7 +1159,11 @@ void RemoteMicReceiver::setWatching(bool watching)
     if (watching) {
         // Measured from the later of the last audio and the start of the
         // watch.
-        m_lastAudioMs = std::max(m_lastAudioMs, now());
+        const qint64 at = now();
+        qint64 last = m_lastAudioMs.load(std::memory_order_acquire);
+        while (last < at
+               && !m_lastAudioMs.compare_exchange_weak(last, at, std::memory_order_acq_rel)) {
+        }
         scheduleStarvationCheck(RemoteMicConfig::kStarvationMs);
     } else if (m_starved) {
         m_starved = false;
@@ -1106,10 +1187,12 @@ void RemoteMicReceiver::scheduleStarvationCheck(int ms)
 
 void RemoteMicReceiver::checkStarvation()
 {
-    if (!m_watching || !m_running) {
+    if (!m_watching || !isRunning()) {
         return;
     }
-    const qint64 quiet = now() - m_lastAudioMs;
+    // TX mic thread: the last audio's receipt, so a stall of the event loop
+    // that delayed this check is not taken for a quiet line.
+    const qint64 quiet = now() - m_lastAudioMs.load(std::memory_order_acquire);
     if (quiet >= RemoteMicConfig::kStarvationMs) {
         if (!m_starved) {
             m_starved = true;

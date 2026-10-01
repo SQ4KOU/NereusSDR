@@ -10,6 +10,9 @@
 //   2026-10-01: TX stall lane, fix round 1: only the keyer's controller
 //               reports the unkey. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): MicRoute, the microphone
+//               line's packets delivered from the transport's own thread.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: TX stall lane: the unkey line follows MoxController (its
 //               moxChanging and moxStateChanged), so it prints on every
 //               unkey; TransmitModel::moxChanged only saw the
@@ -111,6 +114,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <mutex>
 #include <optional>
 
 namespace NereusSDR {
@@ -764,6 +768,20 @@ private:
     QTimer m_retireDrainTimer;
     QHash<quint32, quint32> m_sendSsrcRewrite;
     QHash<quint32, quint32> m_micSsrcRewrite;
+    // TX mic thread (JJ approved 2026-10-01): where the microphone line's
+    // packets go, from the transport's own thread or the event loop: this
+    // controller's receiver and SSRC rewrites, copied in under its lock
+    // whenever either changes (syncMicRoute). A packet in delivery holds
+    // the lock, so a receiver taken out of the route is never used again.
+    struct MicRoute {
+        std::mutex mutex;
+        RemoteMicReceiver* receiver{nullptr};
+        QHash<quint32, quint32> rewrite;
+        void deliver(const QByteArray& packet, qint64 heldUs);
+    };
+    std::shared_ptr<MicRoute> m_micRoute{std::make_shared<MicRoute>()};
+    void syncMicRoute();
+    IMediaTransport::MicPacketSink micRouteSink() const;
     // What the current peer's start negotiated, which a replacement keeps.
     bool m_startOfferedLossless{false};
     /// Task 29 step 2b: the media start declared the tunnel.

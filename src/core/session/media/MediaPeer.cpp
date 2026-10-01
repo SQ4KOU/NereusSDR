@@ -24,6 +24,10 @@
 //               and its report, so the microphone buffer times it at
 //               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): setMicPacketSink, the
+//               microphone line delivered on the transport's own thread
+//               with this peer's checks; txReceived carries heldUs.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -34,6 +38,7 @@
 #include <QCryptographicHash>
 #include <QJsonValue>
 #include <QList>
+#include <QMetaObject>
 #include <QPair>
 #include <QPointer>
 #include <QUuid>
@@ -145,6 +150,8 @@ struct MediaPeer::Private {
     // Task 36: 0 unless the microphone line was asked for.
     quint32 micAudioSsrc = 0;
     quint64 generation = 0;
+    // TX mic thread: the microphone line's sink, installed on each start.
+    IMediaTransport::MicPacketSink micSink;
     int remoteCandidateControls = 0;
     int localCandidateControls = 0;
     bool started = false;
@@ -342,12 +349,12 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
             });
     // Task 37: the "tx" channel's messages, bounded.
     connect(transport, &IMediaTransport::txReceived, this,
-            [self, isCurrentGeneration](const QByteArray& message) {
+            [self, isCurrentGeneration](const QByteArray& message, qint64 heldUs) {
                 if (!isCurrentGeneration() || self->d->micAudioSsrc == 0 || message.isEmpty()
                     || message.size() > IMediaTransport::kMaxTxMessageBytes) {
                     return;
                 }
-                emit self->txReceived(message);
+                emit self->txReceived(message, heldUs);
             });
     connect(transport, &IMediaTransport::ready, this,
             [self, isCurrentGeneration] {
@@ -419,7 +426,48 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
         stopInternal(false);
         return false;
     }
+    if (d->micSink) {
+        installMicSink();
+    }
     return true;
+}
+
+bool MediaPeer::setMicPacketSink(IMediaTransport::MicPacketSink sink)
+{
+    d->micSink = std::move(sink);
+    return installMicSink();
+}
+
+bool MediaPeer::installMicSink()
+{
+    if (!d->started || !d->transport || d->micAudioSsrc == 0) {
+        return false;
+    }
+    if (!d->micSink) {
+        d->transport->setMicPacketSink({});
+        return false;
+    }
+    // On the transport's thread: only this start's values, copied in. A
+    // rejection is reported on the owner's thread (this peer outlives the
+    // transport's thread: stop() ends it first).
+    const quint32 ssrc = d->micAudioSsrc;
+    MediaPeer* const peer = this;
+    IMediaTransport::MicPacketSink sink = d->micSink;
+    return d->transport->setMicPacketSink(
+        [ssrc, peer, sink](const QByteArray& packet, qint64 heldUs) {
+            if (packet.size() < IMediaTransport::kMinRawRtpBytes
+                || packet.size() > IMediaTransport::kMaxRawRtpBytes || rtpSsrc(packet) != ssrc) {
+                QMetaObject::invokeMethod(
+                    peer,
+                    [peer]() {
+                        emit peer->errorOccurred(
+                            QStringLiteral("invalid microphone RTP packet rejected"));
+                    },
+                    Qt::QueuedConnection);
+                return;
+            }
+            sink(packet, heldUs);
+        });
 }
 
 MediaPeer::StartRefusal MediaPeer::lastStartRefusal() const

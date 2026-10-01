@@ -29,6 +29,15 @@
 //   key now on (the epoch the key's answer gave it; a key the device was
 //   never answered for, VOX's, has none, so any epoch counts). Sequences
 //   start again whenever watching starts.
+// - A keepalive is heard when it came off the network (its wait at the
+//   Core since its receipt is taken off; TX mic thread, JJ approved
+//   2026-10-01), so a stall of the Core's event loop, which holds both the
+//   keepalives and this watchdog, is never taken for a quiet link. The
+//   watchdog cannot run during such a stall: a link that went quiet in it
+//   is caught when the stall ends, as the 400 ms are counted from the last
+//   keepalive's receipt. A check that fires late (behind a stall) first
+//   lets the keepalives waiting behind it in, one turn of the event loop,
+//   and then judges by when they came.
 // - More than 400 ms without one: stop(), which the Core makes StopAllTx
 //   with "The link to <device> went quiet, so the Core stopped
 //   transmitting." and the VOX that device armed turned off. The device is
@@ -57,6 +66,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 37 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): keepalives heard at their
+//               receipt (keepalive's ageMs), and a late check lets the
+//               waiting keepalives in first. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -142,7 +155,10 @@ public:
     // ---- From the link ----
 
     /// One keepalive. True when it counted (see the header comment).
-    bool keepalive(const QByteArray& deviceId, quint64 sequence, quint32 epoch, Path path);
+    /// `ageMs` (TX mic thread): how long it waited at the Core since its
+    /// receipt off the network; it is heard then.
+    bool keepalive(const QByteArray& deviceId, quint64 sequence, quint32 epoch, Path path,
+                   qint64 ageMs = 0);
     /// The device's session ended: a watched device stops at once.
     void linkClosed(const QByteArray& deviceId);
 
@@ -188,6 +204,10 @@ private:
 
     Hooks m_hooks;
     QHash<QByteArray, Watch> m_devices;
+    // TX mic thread: when the check timer was asked to fire, and whether
+    // this check already gave the waiting keepalives their turn.
+    qint64 m_checkDueMs{-1};
+    bool m_lateCheckDeferred{false};
 };
 
 } // namespace NereusSDR

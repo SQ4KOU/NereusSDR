@@ -36,11 +36,17 @@
 //   RemoteMicEncoder: the encoder a desktop remote window (and the tests)
 //     send the line with, Opus mono 20 ms frames with in-band FEC.
 //
-// Threading: the receiver, and the feed's owner half (setInUse, write),
-// run on the Core's event loop. The feed's pump half (pull) runs on the
-// transmit pump's thread and never locks, waits or allocates except when
-// the feed changes use (the rate matcher is rebuilt then). No codec work
-// runs on the pump (R-R3-06).
+// Threading: the receiver's control (start, stop, the key's wait,
+// starvation) and the feed's setInUse run on the Core's event loop. A
+// line's packets (RemoteMicReceiver::submit, which decodes and calls the
+// feed's write) run on the thread that delivers them: the media
+// transport's microphone thread on a real connection (TX mic thread, so a
+// stall of the event loop never holds the line's audio), the event loop
+// otherwise. The receiver's decoder state and the feed's writer side are
+// each under a lock of their own, which the pump never takes. The feed's
+// pump half (pull) runs on the transmit pump's thread and never locks,
+// waits or allocates except when the feed changes use (the rate matcher is
+// rebuilt then). No codec work runs on the pump (R-R3-06).
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -74,6 +80,14 @@
 //               margin); a packet's wait at the Core is a measurement
 //               only, in the over's figures (owner waits). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): submit may run on the media
+//               transport's microphone thread; the receiver's decoder
+//               state and the feed's writer side take a lock each (never
+//               the pump), the line's last audio is an atomic, and the
+//               key's wait and starvation follow on the event loop. With
+//               the line off the event loop, the buffer is timed at the
+//               packet's receipt again (a6f832b90's timing). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -85,6 +99,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace NereusSDR {
@@ -187,8 +202,9 @@ struct RemoteMicConfig {
     /// late.
     static constexpr int kStaleAfterStallMs = kStarvationMs;
     static constexpr int kStaleAfterStallFrames = kFramesPerMs * kStaleAfterStallMs;
-    /// TX stall lane: a packet that waited at the Core longer than this (a
-    /// stall of its event loop) is counted in the over's figures. Log only.
+    /// TX stall lane: a packet that waited at the Core longer than this
+    /// between its receipt and the feed (a stall of the thread delivering
+    /// it) is counted in the over's figures. Log only.
     static constexpr int kLongOwnerWaitMs = 50;
 
     static_assert(kMaxDepthMs < kStarvationMs,
@@ -241,22 +257,27 @@ public:
     RemoteMicFeed(const RemoteMicFeed&) = delete;
     RemoteMicFeed& operator=(const RemoteMicFeed&) = delete;
 
-    // ---- the owner's thread (the Core's event loop) ----
+    // ---- the writers' side: setInUse on the Core's event loop, write on
+    // ---- the thread delivering a line's packets (under m_writerLock,
+    // ---- which the pump never takes) ----
 
     /// Whether the pump takes its audio from this feed. Every change empties
     /// the feed: the audio that was waiting is dropped and the pump starts
     /// again from silence until the buffer holds its target. The margin is
     /// the link's and is kept.
     void setInUse(bool inUse);
-    bool inUse() const { return m_inUse; }
-    /// Frames written since the feed last went in use.
-    qint64 framesSinceInUse() const { return m_framesSinceInUse; }
+    bool inUse() const { return m_inUse.load(std::memory_order_acquire); }
+    /// Frames written since the feed last went in use. Any thread.
+    qint64 framesSinceInUse() const
+    {
+        return m_framesSinceInUse.load(std::memory_order_acquire);
+    }
     /// Mono 48 kHz, one packet a call. Refused (false) while not in use;
     /// audio that does not fit the pump's input ring is dropped and counted.
     /// `heldFrames` (TX stall lane): how long, in frames, the packet waited
-    /// at the Core between its receipt in the transport and this write. It
-    /// goes into the over's figures (Stats::ownerWait*) only; the buffer
-    /// still times the packet when the pump drains it.
+    /// at the Core between its receipt in the transport and this write. The
+    /// buffer times the packet that much earlier (at its receipt), and the
+    /// wait goes into the over's figures (Stats::ownerWait*).
     bool write(const float* mono, int frames, int heldFrames = 0);
     /// The buffer's target now (one packet plus the margin), in frames:
     /// what a key waits for. Any thread.
@@ -330,8 +351,9 @@ public:
         /// TX stall lane: how long the over's packets waited at the Core
         /// between their receipt in the transport and the feed (a stall of
         /// the Core's event loop), mean and longest in ms, and how many
-        /// waited over kLongOwnerWaitMs. A measurement only: the buffer's
-        /// timing is the pump's drain.
+        /// waited over kLongOwnerWaitMs. With the line on the transport's
+        /// microphone thread these stay near 0 through a stall of the
+        /// event loop.
         double ownerWaitMeanMs{0.0};
         double ownerWaitMaxMs{0.0};
         int ownerWaitsLong{0};
@@ -357,10 +379,10 @@ private:
     // Pump.
     int drainInput();
     /// TX stall lane: takes the records of the writes the pump has now read
-    /// whole. With `note`, what one drain found counts as one arrival for
-    /// the buffer's timing (noteArrival, as the drain was before), and each
-    /// write's wait at the Core goes into the over's figures; without, the
-    /// records of discarded audio are only passed.
+    /// whole. With `note`, what one drain found counts as one arrival,
+    /// timed at its first write's receipt (noteArrival), and each write's
+    /// wait at the Core goes into the over's figures; without, the records
+    /// of discarded audio are only passed.
     void takeArrivals(bool note);
     bool headIsSilent() const;
     bool canSplice() const;
@@ -372,16 +394,19 @@ private:
     int currentPacketFrames() const;
     int currentTarget() const;
     int marginCeiling() const;
-    void noteArrival(int frames);
+    void noteArrival(int frames, int heldFrames);
     bool memoryDelayMin(qint64* min) const;
     void endBlock();
     void endWindow();
     void resetWindow();
     void publishOver();
 
-    // Owner.
-    bool m_inUse{false};
-    qint64 m_framesSinceInUse{0};
+    // Writers' side: setInUse and write, serialized by m_writerLock (TX
+    // mic thread: write runs on the line's delivering thread). inUse and
+    // framesSinceInUse are read anywhere.
+    std::mutex m_writerLock;
+    std::atomic<bool> m_inUse{false};
+    std::atomic<qint64> m_framesSinceInUse{0};
     quint64 m_writtenBytes{0};
 
     // Shared.
@@ -533,14 +558,18 @@ public:
     bool start(quint32 ssrc, bool losslessNegotiated);
     /// Ends the line; a key waiting on it is answered not ready.
     void stop();
-    bool isRunning() const { return m_running; }
-    quint32 ssrc() const { return m_ssrc; }
-    void setLosslessNegotiated(bool negotiated) { m_lossless = negotiated; }
+    bool isRunning() const;
+    quint32 ssrc() const;
+    void setLosslessNegotiated(bool negotiated);
 
-    /// One RTP packet from the line (MediaPeer::micRtpReceived). `heldUs`
-    /// (TX stall lane): how long it waited between its receipt in the
-    /// transport and this call, for the over's figures (a measurement; the
-    /// buffer's timing is unchanged).
+    /// One RTP packet from the line (MediaPeer::micRtpReceived, or the
+    /// transport's microphone thread). `heldUs` (TX stall lane): how long
+    /// it waited between its receipt in the transport and this call; the
+    /// buffer times it at its receipt, and the over's figures count it.
+    /// TX mic thread: any thread. The packet's audio reaches the feed in
+    /// this call; what follows on the event loop (the key's wait, the end
+    /// of a starvation) runs in it when called there, and is posted there
+    /// otherwise.
     void submit(const QByteArray& packet, qint64 heldUs = 0);
 
     /// The key's wait (Task 36): calls done(true) as soon as the feed, in
@@ -560,7 +589,7 @@ public:
     /// its audio from (RadioModel::remoteMicWriter()); every other line is
     /// decoded but dropped. True by default (one line on its own).
     void setFeedWriter(bool writer);
-    bool isFeedWriter() const { return m_feedWriter; }
+    bool isFeedWriter() const { return m_feedWriter.load(std::memory_order_acquire); }
 
     /// Whether a device holding transmit is keyed on this line's audio now.
     /// While it is, 250 ms without audio emits starved(true), and audio
@@ -569,12 +598,15 @@ public:
     bool isWatching() const { return m_watching; }
     bool isStarved() const { return m_starved; }
 
-    Stats stats() const { return m_stats; }
+    Stats stats() const;
 
 signals:
     void starved(bool starved);
 
 private:
+    /// TX mic thread: the event loop's part of a packet (the end of a
+    /// starvation, the next starvation check, the key's wait).
+    void afterPacket(bool wroteAudio);
     void decodeOpus(const QByteArray& payload, int missing);
     void decodeL16(const QByteArray& packet, int missing);
     void writeAudio(const float* mono, int frames);
@@ -588,6 +620,10 @@ private:
     RemoteMicFeed* m_feed{nullptr};
     Clock m_clock;
     Scheduler m_scheduler;
+    // TX mic thread: the line's state below, down to m_stats, is under
+    // m_lineLock (submit may run on the transport's microphone thread).
+    // Nothing is called or emitted while it is held.
+    mutable std::mutex m_lineLock;
     std::unique_ptr<Decoder> m_decoder;
     bool m_running{false};
     bool m_lossless{false};
@@ -608,12 +644,15 @@ private:
     bool m_waitLineStarted{false};
     qint64 m_waitStartedMs{0};
 
-    bool m_feedWriter{true};
+    std::atomic<bool> m_feedWriter{true};
+    // The event loop's.
     bool m_watching{false};
     bool m_starved{false};
     bool m_starvationCheckPending{false};
     quint64 m_starvationGeneration{0};
-    qint64 m_lastAudioMs{0};
+    // TX mic thread: when the line's audio last came, on m_clock, set by
+    // the delivering thread at the packet's receipt there.
+    std::atomic<qint64> m_lastAudioMs{0};
 };
 
 } // namespace NereusSDR
