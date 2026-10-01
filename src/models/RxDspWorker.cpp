@@ -36,6 +36,12 @@
 //                 (setRadeModeSlices); the DSP thread only loads it.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30 - Fix wave (DSP-thread allocations): a RADE route's
+//                 resamplers and the RADE scratch are made when the route
+//                 is set, and each block resamples into them
+//                 (Resampler::processInto), so the DSP thread's per-block
+//                 RADE path allocates nothing. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -592,7 +598,13 @@ void RxDspWorker::setRadeRxRoute(int sliceId,
             RadeRxRoute route;
             route.bridge = std::move(bridge);
             route.epoch = route.bridge->nextEpoch();
+            // Made here, once per route, not on the block path.
+            route.down = std::make_unique<Resampler>(48000.0, 24000.0, kRadeRxMaxBlockFrames);
+            route.upL = std::make_unique<Resampler>(24000.0, 48000.0, kRadeRxMaxBlockFrames);
+            route.upR = std::make_unique<Resampler>(24000.0, 48000.0, kRadeRxMaxBlockFrames);
+            route.play.reserve(kRadeRxPlayReserveFloats);
             m_radeRxRoutes[sliceId] = std::move(route);
+            reserveRadeRxScratch();
         }
     }
     m_radeRxRouteCount.store(int(m_radeRxRoutes.size()),
@@ -602,6 +614,26 @@ void RxDspWorker::setRadeRxRoute(int sliceId,
                .arg(sliceId)
                .arg(m_radeRxRoutes.count(sliceId) != 0)
                .arg(m_radeRxRoutes.size());
+}
+
+void RxDspWorker::reserveRadeRxScratch()
+{
+    // Sized once: the block path only resizes within these capacities.
+    const auto atLeast = [](std::vector<float>& v, size_t floats) {
+        if (v.size() < floats) {
+            v.resize(floats);
+        }
+    };
+    m_radeRxIqScratch.reserve(size_t(kRadeRxMaxBlockFrames) * 2);
+    m_radeRxDueScratch.reserve(size_t(RadeRxBridge::kMaxRecordFrames) * 2);
+    m_radeRxLegL.reserve(size_t(RadeRxBridge::kMaxRecordFrames));
+    m_radeRxLegR.reserve(size_t(RadeRxBridge::kMaxRecordFrames));
+    m_radeRxOutScratch.reserve(size_t(kRadeRxMaxBlockFrames) * 2);
+    atLeast(m_radeRxDown, size_t(kRadeRxMaxBlockFrames));
+    // 24 -> 48 kHz doubles a record of up to kMaxRecordFrames, with room
+    // for r8brain's uneven output per call.
+    atLeast(m_radeRxUpL, size_t(kRadeRxMaxBlockFrames) * 2);
+    atLeast(m_radeRxUpR, size_t(kRadeRxMaxBlockFrames) * 2);
 }
 
 void RxDspWorker::clearRadeRxRoutes()
@@ -625,13 +657,11 @@ bool RxDspWorker::processRadeRxBlock(int sliceIdx, const float* audio48k,
     // Lazy-build 48→24 audio downsampler. Single resampler
     // (real audio); no Q-leg needed since RADE expects
     // imag=0.
-    if (!route.down) {
-        route.down = std::make_unique<Resampler>(48000.0, 24000.0, 4096);
-    }
+    // (Fix wave: built in setRadeRxRoute now, with the route.)
     // Downsample WDSP's outI (48 kHz mono real audio)
     // to 24 kHz.
-    const QByteArray downAudio = route.down->process(audio48k, outSize);
-    const int inFrames = int(downAudio.size() / qsizetype(sizeof(float)));
+    const int inFrames = route.down->processInto(audio48k, outSize, m_radeRxDown.data(),
+                                                 int(m_radeRxDown.size()));
     const quint32 seq = route.seq++;
     if (inFrames > 0) {
         // Build interleaved stereo float32 with audio in
@@ -642,7 +672,7 @@ bool RxDspWorker::processRadeRxBlock(int sliceIdx, const float* audio48k,
         // and freedv-gui's RADEReceiveStep:201 pattern
         // (input short[] → RADE_COMP{re=sample, im=0}).
         m_radeRxIqScratch.resize(size_t(inFrames) * 2);
-        const auto* srcAudio = reinterpret_cast<const float*>(downAudio.constData());
+        const float* srcAudio = m_radeRxDown.data();
         for (int i = 0; i < inFrames; ++i) {
             m_radeRxIqScratch[size_t(2 * i) + 0] = srcAudio[i];  // real = audio
             m_radeRxIqScratch[size_t(2 * i) + 1] = 0.0f;         // imag = 0
@@ -669,22 +699,19 @@ bool RxDspWorker::processRadeRxBlock(int sliceIdx, const float* audio48k,
     if (dueFrames > 0) {
         // The speech is 24 kHz stereo; bring each leg to 48 kHz as
         // RadioModel::onRadeSpeechReady did before this moved here.
-        if (!route.upL || !route.upR) {
-            route.upL = std::make_unique<Resampler>(24000.0, 48000.0, 4096);
-            route.upR = std::make_unique<Resampler>(24000.0, 48000.0, 4096);
-        }
         m_radeRxLegL.resize(size_t(dueFrames));
         m_radeRxLegR.resize(size_t(dueFrames));
         for (int i = 0; i < dueFrames; ++i) {
             m_radeRxLegL[size_t(i)] = m_radeRxDueScratch[size_t(2 * i)];
             m_radeRxLegR[size_t(i)] = m_radeRxDueScratch[size_t(2 * i) + 1];
         }
-        const QByteArray upL = route.upL->process(m_radeRxLegL.data(), dueFrames);
-        const QByteArray upR = route.upR->process(m_radeRxLegR.data(), dueFrames);
-        const int frames48k = int(std::min(upL.size(), upR.size())
-                                  / qsizetype(sizeof(float)));
-        const auto* left = reinterpret_cast<const float*>(upL.constData());
-        const auto* right = reinterpret_cast<const float*>(upR.constData());
+        const int upL = route.upL->processInto(m_radeRxLegL.data(), dueFrames,
+                                               m_radeRxUpL.data(), int(m_radeRxUpL.size()));
+        const int upR = route.upR->processInto(m_radeRxLegR.data(), dueFrames,
+                                               m_radeRxUpR.data(), int(m_radeRxUpR.size()));
+        const int frames48k = std::min(upL, upR);
+        const float* left = m_radeRxUpL.data();
+        const float* right = m_radeRxUpR.data();
         const size_t base = route.play.size();
         route.play.resize(base + size_t(frames48k) * 2);
         for (int i = 0; i < frames48k; ++i) {
