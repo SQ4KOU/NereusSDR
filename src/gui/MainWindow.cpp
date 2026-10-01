@@ -535,6 +535,10 @@
 //                lost-link lock holds, so the operator can lift it after an
 //                automatic recovery stops. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - The container Power button is removed (maintainer
+//                decision): no Power hooks. Radio > Disconnect's enable rule
+//                is one helper, localDisconnectAvailable. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1403,12 +1407,11 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // TX safety fix round 3 (2026-09-30): the lost-link lock lifts on the
     // operator's disconnect after the model has already reported
     // Disconnected, so Radio > Disconnect follows the lock itself too.
-    connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, [this](bool down) {
+    connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, [this]() {
         if (m_actDisconnect == nullptr || !m_radioModel->ownsLocalDsp()) {
             return;
         }
-        m_actDisconnect->setEnabled(
-            down || m_radioModel->connectionState() == ConnectionState::Connected);
+        m_actDisconnect->setEnabled(localDisconnectAvailable());
         refreshContainerControls();
     });
 
@@ -7077,22 +7080,12 @@ void MainWindow::buildUI()
             this, refreshFilterIndicators);
     refreshFilterIndicators();
 
-    // R-R3-21 / R-R3-49: the container buttons' targets. Power, the
-    // transmit gate, the panadapter of a slice and this computer's VAX
-    // outputs live on this window; the rest on RadioModel.
+    // R-R3-21 / R-R3-49: the container buttons' targets. The transmit
+    // gate, the panadapter of a slice and this computer's VAX outputs live
+    // on this window; the rest on RadioModel. (No Power button: maintainer
+    // decision 2026-09-30.)
     {
         ContainerButtonDispatcher::Hooks hooks;
-        hooks.powerOn = [this] { return m_actDisconnect && m_actDisconnect->isEnabled(); };
-        hooks.powerCanToggle = [this] { return m_actConnect && m_actConnect->isEnabled(); };
-        hooks.togglePower = [this] {
-            // Radio > Disconnect / Radio > Connect: this window's radio, or
-            // in a remote window its Core.
-            if (m_actDisconnect && m_actDisconnect->isEnabled()) {
-                m_actDisconnect->trigger();
-            } else if (m_actConnect && m_actConnect->isEnabled()) {
-                m_actConnect->trigger();
-            }
-        };
         hooks.desktopHosting = [this] { return desktopHosting(); };
         // Slice control plan Task 15 fix round 1: a slice this window
         // listens to refuses the slice buttons with the RX applet's reason.
@@ -16676,7 +16669,7 @@ void MainWindow::onConnectionStateChanged()
         // TX safety fix round 3 (2026-09-30): Disconnect also stays
         // available while the lost-link lock holds, Disconnected included
         // (an automatic recovery that stopped), since it is what lifts it.
-        m_actDisconnect->setEnabled(connected || m_radioModel->isRadioLinkDown());
+        m_actDisconnect->setEnabled(localDisconnectAvailable());
         m_actProtocolInfo->setEnabled(connected);
     }
 
@@ -16684,9 +16677,15 @@ void MainWindow::onConnectionStateChanged()
     // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
     refreshRemoteConnectionUi();
-    // R-R3-21: the container Power and transmit buttons follow the
-    // Connect / Disconnect enablement set just above.
+    // R-R3-21: the container transmit buttons follow the connection state
+    // set just above.
     refreshContainerControls();
+}
+
+bool MainWindow::localDisconnectAvailable() const
+{
+    return m_radioModel->connectionState() == ConnectionState::Connected
+        || m_radioModel->isRadioLinkDown();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

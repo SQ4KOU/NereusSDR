@@ -1636,10 +1636,16 @@ public:
     // power-off leaves chkVOX alone (console.cs:27488-27493 [v2.10.3.15]).
     bool transmitLockCoversVox() const;
     // TX safety (2026-09-30): the link to the radio is lost and not yet
-    // back (LinkLost, and the Connecting or Probing that follows it). Every
-    // key is refused (MoxController::setRadioLinkDown) and MOX, TUN and
-    // 2TONE are locked with radioLinkDownReason(). Always false on a remote
-    // window, whose Core refuses the key.
+    // back. The lock holds from LinkLost through the Disconnected wait of
+    // an automatic recovery (retireConnectionForRecovery) and the rebuilt
+    // link's Connecting and Probing, a rebuilt link's own Disconnected
+    // included, until a link reaches Connected or the operator disconnects
+    // (disconnectFromRadio). Every key is refused
+    // (MoxController::setRadioLinkDown) and MOX, TUN and 2TONE are locked
+    // with radioLinkDownReason(). Always false on a remote window, whose
+    // Core refuses the key. A radio change (the hosted replace, the Core's
+    // switchRadio) is the operator's and counts as their disconnect: it
+    // restarts the window or the Core run, so a new radio starts unlocked.
     bool isRadioLinkDown() const { return m_radioLinkDown; }
     static QString radioLinkDownReason();
 

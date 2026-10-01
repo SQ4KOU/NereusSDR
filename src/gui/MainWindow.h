@@ -1407,6 +1407,10 @@ private:
     // R-R3-21 / R-R3-49: maps each container function and band button to
     // its target on the container's own slice.
     std::unique_ptr<ContainerButtonDispatcher> m_containerButtons;
+    // TX safety fix round 4 (2026-09-30): a local window's Radio >
+    // Disconnect is available while a link is Connected or the lost-link
+    // lock holds (the operator's way to lift it and stop recovery).
+    bool localDisconnectAvailable() const;
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};

@@ -567,18 +567,21 @@ private slots:
         QSignalSpy downChanged(model, &RadioModel::radioLinkDownChanged);
         QSignalSpy rejected(mox, &MoxController::moxRejected);
 
-        // Count the rebuilt links that time out on their own.
+        // Count the rebuilt links that time out on their own. The watchers
+        // hang off `watchScope`, declared after the locals they capture, so
+        // they are disconnected before those locals go (app outlives them).
         int timedOut = 0;
         QPointer<RadioConnection> failed;
         QPointer<RadioConnection> watched;
-        connect(model, &RadioModel::connectionStateChanged, &app,
+        QObject watchScope;
+        connect(model, &RadioModel::connectionStateChanged, &watchScope,
                 [&](ConnectionState) {
             RadioConnection* const conn = model->connection();
             if (conn == nullptr || conn == watched) {
                 return;
             }
             watched = conn;
-            connect(conn, &RadioConnection::connectFailed, &app,
+            connect(conn, &RadioConnection::connectFailed, &watchScope,
                     [&, conn](ConnectFailure, const QString&) {
                 ++timedOut;
                 failed = conn;
