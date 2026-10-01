@@ -33,6 +33,9 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03): askTake;
 //               releaseStationTake removed. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the device id prints as hex in the
+//               log, not as raw bytes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -173,7 +176,7 @@ KeyingAnswer TransmitHolder::askKey(const KeyRequest& request)
     if (!request.vox) {
         disarmVox();
     }
-    qCInfo(lcDsp) << "Transmit taken by" << next.deviceId << "(nobody held it)";
+    qCInfo(lcDsp) << "Transmit taken by" << next.deviceId.toHex().constData() << "(nobody held it)";
     emit changed();
     return {KeyingVerdict::Admit, {}};
 }

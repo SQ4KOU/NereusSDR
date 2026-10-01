@@ -4,6 +4,18 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane, review round: the unkey tail's start,
+//               the TX pump's longest wait for a microphone block with the
+//               radio's frame sequence step across it, and "RF start not
+//               measured" where the send path places nothing. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the unkey line splits the padded
+//               silence into the key's start, mid-key and the unkey tail,
+//               with the first I/Q block's time and the longest mid-key
+//               silence; one line follows for each placed microphone
+//               underrun, the first radio ran dry and each catch-up burst.
+//               Measurement and logging only. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-10-01: TX stall lane: the unkey line names the device by its id in
 //               hex, as the transmit watchdog's line does, not its raw
 //               bytes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -2527,6 +2539,12 @@ void DaemonMediaController::logUnkeyStats()
         << unkeyStatsLine(snapshot.deviceId.toHex(), snapshot.rx,
                           snapshot.haveFeed ? &snapshot.feed : nullptr, send,
                           snapshot.keepaliveWaitMaxUs);
+    // TX diagnostics lane: the over's dropouts placed in time, a line each.
+    const QStringList events = unkeyEventLines(
+        snapshot.deviceId.toHex(), snapshot.haveFeed ? &snapshot.feed : nullptr, send);
+    for (const QString& event : events) {
+        qCInfo(lcDaemonMedia).noquote() << event;
+    }
 }
 
 void DaemonMediaController::noteKeepaliveWait(qint64 heldUs)
@@ -2599,15 +2617,126 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
             line << "lost " << send.overflowSamples << " samples (no other counters)";
         } else if (send.valid) {
             line << "frames " << send.framesSent << ", silence " << send.zeroPaddedSamples
-                 << " samples, late wakes " << send.lateWakes << ", catch-up bursts "
+                 << " samples";
+            // TX diagnostics lane: where the silence fell.
+            if (send.placed) {
+                line << " (start " << send.padStartSamples << ", mid-key " << send.padMidSamples
+                     << ", unkey tail " << send.padTailSamples;
+                if (send.padTailSamples > 0 && send.padTailAtMs >= 0.0) {
+                    line << " from +" << QString::number(send.padTailAtMs, 'f', 1) << " ms";
+                }
+                line << ")";
+            }
+            line << ", late wakes " << send.lateWakes << ", catch-up bursts "
                  << send.catchUpBursts << ", radio ran dry " << send.radioRanDry << ", lost "
                  << send.overflowSamples << " samples, send errors " << send.sendErrors
                  << ", deepest queue " << send.maxRingMs << " ms";
+            if (send.placed) {
+                const auto oneDecimal = [](double v) { return QString::number(v, 'f', 1); };
+                if (send.firstBlockAtMs >= 0.0) {
+                    line << ", first I/Q block at +" << oneDecimal(send.firstBlockAtMs)
+                         << " ms of the key";
+                } else {
+                    line << ", no I/Q block came";
+                }
+                if (send.longestMidPadSamples > 0) {
+                    line << ", longest mid-key silence "
+                         << oneDecimal(static_cast<double>(send.longestMidPadSamples) / 192.0)
+                         << " ms at +" << oneDecimal(send.longestMidPadAtMs) << " ms";
+                }
+                // The TX pump's longest wait for the radio's microphone
+                // block, and the radio's frame sequence step across it.
+                if (send.longestWakeGapMs >= 0.0) {
+                    const double at = send.longestWakeGapAtMs;
+                    line << ", longest wait for a microphone block "
+                         << oneDecimal(send.longestWakeGapMs) << " ms at "
+                         << (at >= 0.0 ? "+" : "") << oneDecimal(at) << " ms of the key, ";
+                    if (send.wakeGapSequenceStep >= 0) {
+                        line << "radio frame sequence step " << send.wakeGapSequenceStep;
+                    } else {
+                        line << "no radio frame sequence seen";
+                    }
+                } else {
+                    line << ", no wait for a microphone block measured";
+                }
+            }
         } else {
             line << "no counters";
         }
     }
     return text;
+}
+
+QStringList DaemonMediaController::unkeyEventLines(const QByteArray& deviceId,
+                                                   const RemoteMicFeed::Stats* feed,
+                                                   const RadioConnection::TxSendStats& send)
+{
+    // TX diagnostics lane: one line an event, bounded by what the feed and
+    // the send path place (4 underruns, 1 ran dry, 4 bursts). Log only.
+    QStringList lines;
+    const QString prefix =
+        QStringLiteral("Transmit ended (%1): ").arg(QString::fromLatin1(deviceId));
+    const auto oneDecimal = [](double v) { return QString::number(v, 'f', 1); };
+    // RF started when the TX channel's first I/Q block went out, on the
+    // steady clock the microphone's underruns are stamped with.
+    const bool haveRf = send.valid && send.placed && send.keySteadyNs >= 0
+        && send.firstBlockAtMs >= 0.0;
+    const double rfSteadyMs = haveRf
+        ? static_cast<double>(send.keySteadyNs) / 1.0e6 + send.firstBlockAtMs
+        : 0.0;
+    if (feed != nullptr) {
+        for (int k = 0; k < feed->underrunsPlacedCount; ++k) {
+            const RemoteMicFeed::Stats::Underrun& event =
+                feed->underrunsPlaced[static_cast<size_t>(k)];
+            QString text = prefix
+                + QStringLiteral("microphone underrun %1 at +%2 ms of the line")
+                      .arg(k + 1)
+                      .arg(oneDecimal(event.atLineMs));
+            if (!send.valid || !send.placed) {
+                text += QStringLiteral(", RF start not measured");
+            } else if (!haveRf) {
+                text += QStringLiteral(", RF never started");
+            } else if (event.atSteadyUs >= 0) {
+                const double sinceRf = static_cast<double>(event.atSteadyUs) / 1000.0 - rfSteadyMs;
+                text += sinceRf >= 0.0
+                    ? QStringLiteral(" and +%1 ms of RF").arg(oneDecimal(sinceRf))
+                    : QStringLiteral(", %1 ms before RF started").arg(oneDecimal(-sinceRf));
+            }
+            text += event.silentMs >= 0.0
+                ? QStringLiteral(", silent %1 ms").arg(oneDecimal(event.silentMs))
+                : QStringLiteral(", still silent at unkey");
+            text += event.arrivalGapMs >= 0.0
+                ? QStringLiteral("; largest gap between packets %1 ms")
+                      .arg(oneDecimal(event.arrivalGapMs))
+                : QStringLiteral("; no gap between packets measured");
+            text += event.lateMs >= 0.0
+                ? QStringLiteral(", latest packet %1 ms behind its timestamp")
+                      .arg(oneDecimal(event.lateMs))
+                : QStringLiteral(", no packet timestamps measured");
+            lines << text;
+        }
+    }
+    if (send.valid && send.placed) {
+        if (send.firstDryAtMs >= 0.0) {
+            lines << prefix
+                    + QStringLiteral("radio ran dry at +%1 ms of the key, after a send gap of %2 ms")
+                          .arg(oneDecimal(send.firstDryAtMs), oneDecimal(send.firstDryGapMs));
+        }
+        const int bursts = std::clamp(send.burstEvents, 0,
+                                      RadioConnection::TxSendStats::kMaxBurstEvents);
+        for (int k = 0; k < bursts; ++k) {
+            const RadioConnection::TxSendStats::Burst& burst =
+                send.bursts[static_cast<size_t>(k)];
+            lines << prefix
+                    + QStringLiteral("catch-up burst %1 at +%2 ms of the key, %3 frames after a "
+                                     "send gap of %4 ms")
+                          .arg(k + 1)
+                          .arg(oneDecimal(burst.atMs))
+                          .arg(burst.frames)
+                          .arg(oneDecimal(burst.gapMs));
+        }
+    }
+    return lines;
 }
 
 bool DaemonMediaController::carriesMicFor(const QByteArray& deviceId) const

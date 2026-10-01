@@ -70,6 +70,10 @@
 //   2026-10-01: TX mic thread fix round 2: the unkey line's "line waits"
 //               and each over's own longest "tx" keepalive wait. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the unkey line is told from the event
+//               lines that now follow it (they never carry "transmit I/Q"),
+//               and the first over's underrun is placed in one. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -431,12 +435,18 @@ struct TwoStations {
 };
 
 QStringList g_unkeyLines;
+// TX diagnostics lane: the event lines that follow an unkey line.
+QStringList g_unkeyEventLines;
 
 void captureUnkeyLines(QtMsgType, const QMessageLogContext& context, const QString& message)
 {
     if (context.category != nullptr && QByteArray(context.category) == "nereus.daemon.media"
         && message.startsWith(QLatin1String("Transmit ended ("))) {
-        g_unkeyLines.append(message);
+        if (message.contains(QLatin1String("; transmit I/Q "))) {
+            g_unkeyLines.append(message);
+        } else {
+            g_unkeyEventLines.append(message);
+        }
     }
 }
 
@@ -1279,6 +1289,7 @@ void TestTxWorkerRemoteRing::monitorReachesTheRemoteAudioAtTheSpeakersLevel()
 void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneLine()
 {
     g_unkeyLines.clear();
+    g_unkeyEventLines.clear();
     const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
     const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
 
@@ -1322,6 +1333,10 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
     // over's longest keepalive wait.
     QVERIFY2(first.contains(QStringLiteral("; line waits mean ")), qPrintable(first));
     QVERIFY2(first.contains(QStringLiteral("; keepalive waits max 90.0 ms; ")), qPrintable(first));
+    // TX diagnostics lane: the over's underrun placed in a line of its own.
+    QVERIFY2(!g_unkeyEventLines.isEmpty()
+                 && g_unkeyEventLines.at(0).contains(QStringLiteral("microphone underrun 1 at +")),
+             qPrintable(g_unkeyEventLines.join(QStringLiteral(" | "))));
 
     // A second key, ended at the Core (as the transmit watchdog ends one).
     sendCommand(station.app, "tx.key", 3903, {utf8("trigger", QStringLiteral("screen"))});
@@ -1346,6 +1361,7 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
 void TestTxWorkerRemoteRing::withTwoLinesOnlyTheKeyersControllerLogsTheUnkey()
 {
     g_unkeyLines.clear();
+    g_unkeyEventLines.clear();
     const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
     const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
 
@@ -1379,6 +1395,7 @@ void TestTxWorkerRemoteRing::withTwoLinesOnlyTheKeyersControllerLogsTheUnkey()
 void TestTxWorkerRemoteRing::aKeyAtTheCoreLogsNoMicrophoneLine()
 {
     g_unkeyLines.clear();
+    g_unkeyEventLines.clear();
     const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
     const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
 

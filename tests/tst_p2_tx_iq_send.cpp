@@ -20,6 +20,17 @@
 //   - the radio's buffer (4096 samples in the P2 gateware, Tx1_IQ_fifo.vhd:106
 //     [@8e86a61]) is never filled past the 15 ms target;
 //   - after the stall the frame rate returns to 800 a second (192 kHz / 240).
+//
+// Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane: a key with a late first block, a send
+//               thread stall and a half-second producer pause places its
+//               silence (start, mid-key, tail), its ran dry and its
+//               catch-up bursts in time. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane, review round: the unkey tail's start,
+//               and a second key whose passes place its start afresh (the
+//               send thread's own reset). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 #include <QtTest/QtTest>
 
 #include "core/P2RadioConnection.h"
@@ -316,6 +327,146 @@ private slots:
         QVERIFY2(n >= 799 && n <= 801, qPrintable(QString::number(n)));
         QCOMPARE(r.conn.txSendStats().zeroPaddedSamples, quint64(0));
         QVERIFY(r.maxLead <= kTargetLead);
+    }
+
+    // TX diagnostics lane: the TX channel's first block comes 60 ms after
+    // the key; the send thread stalls 30 ms at 1 s (the radio runs dry,
+    // then a refill); the producer gives nothing for 500 ms at 2 s (its
+    // blocks are not held for later, as while the TX channel does not
+    // send); the producer stops at 3 s and the key runs on to 3.1 s (the
+    // tail). Each is placed in time, and the three parts of the silence
+    // add up to the whole.
+    void dropoutsArePlacedInTheKey()
+    {
+        Run r;
+        r.conn.setMox(true);
+        const Run::Windows producerSilent{{0, 60 * kMs}, {2000 * kMs, 2500 * kMs},
+                                          {3000 * kMs, 4000 * kMs}};
+        const Run::Windows sender{{1000 * kMs, 1030 * kMs}};
+        for (qint64 t = 0; t < 3100 * kMs; t += kMs / 4) {
+            while (micPacketNs(r.nextMic) <= t) {
+                if (!Run::inside(producerSilent, t)) {
+                    r.pushBlock();
+                }
+                ++r.nextMic;
+            }
+            if (!Run::inside(sender, t) && t % kMs == 0) {
+                r.pass(t);
+            }
+        }
+        const auto st = r.conn.txSendStats();
+        const QString text =
+            QStringLiteral("start %1 mid %2 tail %3 total %4; first block %5 ms; longest mid "
+                           "%6 at %7 ms; dry at %8 ms gap %9 ms; bursts %10")
+                .arg(st.padStartSamples)
+                .arg(st.padMidSamples)
+                .arg(st.padTailSamples)
+                .arg(st.zeroPaddedSamples)
+                .arg(st.firstBlockAtMs)
+                .arg(st.longestMidPadSamples)
+                .arg(st.longestMidPadAtMs)
+                .arg(st.firstDryAtMs)
+                .arg(st.firstDryGapMs)
+                .arg(st.burstEvents);
+        qInfo().noquote() << text;
+        QVERIFY(st.placed);
+        QCOMPARE(st.keySteadyNs, qint64(0));
+        QCOMPARE(st.padStartSamples + st.padMidSamples + st.padTailSamples,
+                 st.zeroPaddedSamples);
+        // The start: the radio's 15 ms lead filled with silence, then 192
+        // samples a ms until the block at 60 ms.
+        QVERIFY2(st.firstBlockAtMs >= 60.0 && st.firstBlockAtMs <= 61.0, qPrintable(text));
+        QVERIFY2(st.padStartSamples >= quint64(55 * 192)
+                     && st.padStartSamples <= quint64(kTargetLead + 61 * 192),
+                 qPrintable(text));
+        // Mid-key: the longest run is from when the radio's lead and what
+        // the ring still held ran down after the pause began (the stall at
+        // 1 s left about 15 ms queued), to the pause's end; a few short
+        // runs follow while the lead climbs back over its low water.
+        QVERIFY2(st.longestMidPadAtMs >= 2000.0 && st.longestMidPadAtMs <= 2040.0,
+                 qPrintable(text));
+        const double longestEndMs =
+            st.longestMidPadAtMs + static_cast<double>(st.longestMidPadSamples) / 192.0;
+        QVERIFY2(std::abs(longestEndMs - 2500.0) <= 1.5, qPrintable(text));
+        QVERIFY2(st.padMidSamples >= st.longestMidPadSamples
+                     && st.padMidSamples <= st.longestMidPadSamples + quint64(10 * 192),
+                 qPrintable(text));
+        // The tail: from the lead's low water after 3 s to 3.1 s, placed
+        // at its start.
+        QVERIFY2(st.padTailSamples >= quint64(80 * 192) && st.padTailSamples <= quint64(100 * 192),
+                 qPrintable(text));
+        QVERIFY2(st.padTailAtMs >= 3000.0 && st.padTailAtMs <= 3020.0,
+                 qPrintable(QStringLiteral("tail from %1 ms").arg(st.padTailAtMs)));
+        const double tailEndMs = st.padTailAtMs + static_cast<double>(st.padTailSamples) / 192.0;
+        QVERIFY2(std::abs(tailEndMs - 3100.0) <= 1.5,
+                 qPrintable(QStringLiteral("tail ends %1 ms").arg(tailEndMs)));
+        // The send thread's stall: passes at 999 ms and 1030 ms.
+        QCOMPARE(st.radioRanDry, quint64(1));
+        QVERIFY2(std::abs(st.firstDryAtMs - 1030.0) < 0.01, qPrintable(text));
+        QVERIFY2(std::abs(st.firstDryGapMs - 31.0) < 0.01, qPrintable(text));
+        // Bursts: the first block's refill from its cushion, and the
+        // stall's (nothing was held through the pause to refill with).
+        QCOMPARE(st.catchUpBursts, quint64(2));
+        QCOMPARE(st.burstEvents, 2);
+        QVERIFY2(st.bursts[0].atMs >= 60.0 && st.bursts[0].atMs <= 61.0, qPrintable(text));
+        QVERIFY2(std::abs(st.bursts[0].gapMs - 1.0) < 0.01, qPrintable(text));
+        QVERIFY2(std::abs(st.bursts[1].atMs - 1030.0) < 0.01, qPrintable(text));
+        QVERIFY2(std::abs(st.bursts[1].gapMs - 31.0) < 0.01, qPrintable(text));
+        for (int i = 0; i < st.burstEvents; ++i) {
+            QVERIFY(st.bursts[static_cast<size_t>(i)].frames > 4);
+        }
+
+        // A new key starts the placement afresh.
+        r.conn.setMox(false);
+        r.conn.setMox(true);
+        const auto fresh = r.conn.txSendStats();
+        QCOMPARE(fresh.padTailSamples, quint64(0));
+        QCOMPARE(fresh.burstEvents, 0);
+        QCOMPARE(fresh.firstDryAtMs, -1.0);
+        QCOMPARE(fresh.firstBlockAtMs, -1.0);
+        QCOMPARE(fresh.padTailAtMs, -1.0);
+
+        // The send thread's own state starts afresh too: the second key's
+        // passes place its start from its own first pass, with nothing of
+        // the first key's open tail or blocks carried over.
+        constexpr qint64 kSecondKeyNs = 4000 * kMs;
+        r.nextMic = 0;
+        while (micPacketNs(r.nextMic) < kSecondKeyNs) {
+            ++r.nextMic;
+        }
+        for (qint64 t = kSecondKeyNs; t < kSecondKeyNs + 500 * kMs; t += kMs / 4) {
+            while (micPacketNs(r.nextMic) <= t) {
+                if (t >= kSecondKeyNs + 40 * kMs) {
+                    r.pushBlock();
+                }
+                ++r.nextMic;
+            }
+            if (t % kMs == 0) {
+                r.pass(t);
+            }
+        }
+        const auto second = r.conn.txSendStats();
+        const QString secondText =
+            QStringLiteral("second key at %1 ns: start %2 mid %3 tail %4 total %5; first block "
+                           "%6 ms; dry %7")
+                .arg(second.keySteadyNs)
+                .arg(second.padStartSamples)
+                .arg(second.padMidSamples)
+                .arg(second.padTailSamples)
+                .arg(second.zeroPaddedSamples)
+                .arg(second.firstBlockAtMs)
+                .arg(second.radioRanDry);
+        qInfo().noquote() << secondText;
+        QCOMPARE(second.keySteadyNs, kSecondKeyNs);
+        QVERIFY2(second.firstBlockAtMs >= 40.0 && second.firstBlockAtMs <= 41.0,
+                 qPrintable(secondText));
+        QVERIFY2(second.padStartSamples >= quint64(35 * 192)
+                     && second.padStartSamples <= quint64(kTargetLead + 41 * 192),
+                 qPrintable(secondText));
+        QCOMPARE(second.padMidSamples, quint64(0));
+        QCOMPARE(second.padTailSamples, quint64(0));
+        QCOMPARE(second.zeroPaddedSamples, second.padStartSamples);
+        QCOMPARE(second.radioRanDry, quint64(0));
     }
 
     // A socket that refuses a frame (full send buffer): the frame is kept

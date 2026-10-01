@@ -40,6 +40,11 @@
 //               later one but handed over after it cannot move the last
 //               audio back. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: TX diagnostics lane: a replay with a half-second pause in
+//               the phone's packets mid-key places the one underrun in the
+//               feed's figures (when, how long silent, the gap before it and
+//               how late the packets came). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -256,6 +261,7 @@ private slots:
     void aLongStallsStaleAudioIsNotSentLate();
     void aHeldDeliveryIsTimedAtReceiptAndCountedAsOwnerWaits();
     void theLineIsDecodedOnAThreadOfItsOwn();
+    void aMidKeyArrivalPauseIsPlacedInTheUnderrunFigures();
     void nothingIsSplicedWhileDexpTimingRuns();
 };
 
@@ -1423,6 +1429,102 @@ void TestRemoteMicReceiver::theLineIsDecodedOnAThreadOfItsOwn()
     QVERIFY(overs > 10);
     QVERIFY(receiver.stats().decodedPackets > 0);
     receiver.stop();
+}
+
+// TX diagnostics lane: the phone's audio stops arriving for half a second
+// mid-key with no sequence gap (a capture or send pause): every packet
+// after it comes 500 ms late against its RTP timestamp. The buffer runs dry
+// once, and the feed places that underrun: about one target after the
+// pause began, silent until the buffer refills after the pause, after a
+// 520 ms gap between receipts, with packets 500 ms behind their timestamps.
+void TestRemoteMicReceiver::aMidKeyArrivalPauseIsPlacedInTheUnderrunFigures()
+{
+    FakeTime time;
+    RemoteMicFeed feed;
+    RemoteMicReceiver receiver(&feed, nullptr, time.clock(), time.scheduler());
+    RemoteMicEncoder encoder;
+    QVERIFY(encoder.isReady());
+    QVERIFY(receiver.start(kMicSsrc, false));
+    feed.setInUse(true);
+
+    constexpr int kPackets = 250;   // 5 s
+    constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
+    constexpr int kPauseAt = 100;   // packets from here on come late
+    constexpr double kPauseMs = 500.0;
+    const auto receivedMs = [](int k) {
+        return 0.4 + 20.0 * k + (k >= kPauseAt ? kPauseMs : 0.0);
+    };
+    std::vector<QByteArray> encoded;
+    std::vector<float> frame(kFrames);
+    for (int k = 0; k < kPackets; ++k) {
+        for (int i = 0; i < kFrames; ++i) {
+            frame[static_cast<size_t>(i)] = speechSample(static_cast<qint64>(k) * kFrames + i);
+        }
+        encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k),
+                                         static_cast<quint32>(k * kFrames), kMicSsrc));
+    }
+
+    std::vector<float> out(kBlock);
+    int next = 0;
+    int placedBeforePause = -1;
+    // Up to 10 ms past the last packet's receipt, so the over ends with the
+    // buffer still playing.
+    const qint64 blocks =
+        static_cast<qint64>((receivedMs(kPackets - 1) + 10.0) * 48.0 / kBlock);
+    for (qint64 b = 0; b < blocks; ++b) {
+        const double nowMs = static_cast<double>(b) * kBlock * 1000.0 / 48000.0;
+        time.advanceTo(static_cast<qint64>(nowMs));
+        while (next < kPackets && receivedMs(next) <= nowMs) {
+            // Handed over at once on the line's thread; the receiver times
+            // the packet at its receipt.
+            receiver.submit(encoded[static_cast<size_t>(next)],
+                            static_cast<qint64>(std::llround((nowMs - receivedMs(next)) * 1000.0)));
+            ++next;
+        }
+        feed.pullBlock(out.data(), kBlock, -1.0);
+        if (placedBeforePause < 0 && nowMs >= 20.0 * kPauseAt) {
+            placedBeforePause = feed.stats().underrunsPlacedCount;
+        }
+    }
+    QCOMPARE(next, kPackets);
+    QCOMPARE(placedBeforePause, 0);
+
+    const RemoteMicFeed::Stats stats = feed.stats();
+    QCOMPARE(stats.underflows, 1);
+    QCOMPARE(stats.underrunsPlacedCount, 1);
+    const RemoteMicFeed::Stats::Underrun& event = stats.underrunsPlaced[0];
+    const double pauseStartMs = 20.0 * kPauseAt;
+    qInfo().noquote() << QStringLiteral("placed underrun: at +%1 ms of the line, silent %2 ms, "
+                                        "largest gap %3 ms, latest %4 ms")
+                             .arg(event.atLineMs, 0, 'f', 1)
+                             .arg(event.silentMs, 0, 'f', 1)
+                             .arg(event.arrivalGapMs, 0, 'f', 1)
+                             .arg(event.lateMs, 0, 'f', 1);
+    // It ran dry about one target after the last on-time packet.
+    QVERIFY2(event.atLineMs >= pauseStartMs
+                 && event.atLineMs <= pauseStartMs + RemoteMicConfig::kTargetDepthMs + 5.0,
+             qPrintable(QString::number(event.atLineMs)));
+    QVERIFY(event.atSteadyUs > 0);
+    // Silent until the late packets refilled it past the target: the pause
+    // less the target the buffer held, give or take a packet.
+    QVERIFY2(event.silentMs >= kPauseMs - RemoteMicConfig::kTargetDepthMs - 20.0
+                 && event.silentMs <= kPauseMs + 20.0,
+             qPrintable(QString::number(event.silentMs)));
+    // The gap: one packet's 20 ms plus the pause. The lateness: the pause.
+    // (The injected clock reads whole ms.)
+    QVERIFY2(std::abs(event.arrivalGapMs - (20.0 + kPauseMs)) <= 1.5,
+             qPrintable(QString::number(event.arrivalGapMs)));
+    QVERIFY2(std::abs(event.lateMs - kPauseMs) <= 1.5,
+             qPrintable(QString::number(event.lateMs)));
+
+    // The figures stay readable after the over and start again with the
+    // next one.
+    feed.setInUse(false);
+    feed.pullBlock(out.data(), kBlock, -1.0);
+    QCOMPARE(feed.stats().underrunsPlacedCount, 1);
+    feed.setInUse(true);
+    feed.pullBlock(out.data(), kBlock, -1.0);
+    QCOMPARE(feed.stats().underrunsPlacedCount, 0);
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)

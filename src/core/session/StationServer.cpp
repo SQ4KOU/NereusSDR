@@ -64,6 +64,9 @@
 //   2026-09-29: iPhone app plan Task 23 (R-IOS-09, audioQualityVersion 1):
 //               a device's own Opus bitrate. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the device id prints as hex in the
+//               log, not as raw bytes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // 2026-09-27: Confirm existing paired devices through the full code exchange.
 // J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 //   2026-09-27  J.J. Boyd / KG4VCF  Task 24: negotiated Settings Hygiene
@@ -9538,7 +9541,7 @@ void StationServer::disarmVoxArmedBy(const QByteArray& deviceId, const char* why
     }
     emit voxArmedByChanged({});
     if (m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
-        qCInfo(lcStation) << "VOX armed by" << deviceId << "turned off:" << why;
+        qCInfo(lcStation) << "VOX armed by" << deviceId.toHex().constData() << "turned off:" << why;
         m_radioModel->transmitModel().setVoxEnabled(false);
     }
 }

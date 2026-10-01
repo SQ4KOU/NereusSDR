@@ -37,6 +37,9 @@
 //               tells that device why (notice tuneEnded). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: TX diagnostics lane: the keying lines name the device by
+//               its id in hex, as the unkey line does, not its raw bytes.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -242,7 +245,7 @@ void RemoteKeying::handle(const Command& command, Reply reply)
         }
         if (refusal.isEmpty()) {
             refusal = TxRefusals::micNotConnected();
-            qCInfo(lcDsp) << "Key from" << command.deviceId
+            qCInfo(lcDsp) << "Key from" << command.deviceId.toHex().constData()
                           << "refused: its microphone line is not open";
         }
         const Result result = refused(refusal);
@@ -267,7 +270,7 @@ void RemoteKeying::handle(const Command& command, Reply reply)
         const quint64 generation = waiting.generation;
         const QByteArray deviceId = command.deviceId;
         m_waiting.insert(deviceId, std::move(waiting));
-        qCInfo(lcDsp) << "Key from" << deviceId << "waits for its microphone";
+        qCInfo(lcDsp) << "Key from" << deviceId.toHex().constData() << "waits for its microphone";
         QPointer<RemoteKeying> self(this);
         m_mic.prime(deviceId, [self, deviceId, generation](bool ready) {
             if (self.isNull()) {
@@ -280,7 +283,7 @@ void RemoteKeying::handle(const Command& command, Reply reply)
             const Command waited = it->command;
             const Result result = ready ? self->keyNow(waited) : refused(TxRefusals::remoteMicNotReady());
             if (!ready) {
-                qCInfo(lcDsp) << "Key from" << deviceId
+                qCInfo(lcDsp) << "Key from" << deviceId.toHex().constData()
                               << "refused: no microphone audio within the deadline";
             }
             self->finishWait(deviceId, result);
@@ -318,7 +321,7 @@ void RemoteKeying::endAutotuneFor(const QByteArray& deviceId)
     if (m_pending.has_value() && m_pending->deviceId == deviceId) {
         m_pending.reset();
     }
-    qCInfo(lcDsp) << "Tuner autotune of" << deviceId << "ended: transmit is being taken";
+    qCInfo(lcDsp) << "Tuner autotune of" << deviceId.toHex().constData() << "ended: transmit is being taken";
 }
 
 void RemoteKeying::forgetSession(const QString& session)
@@ -490,7 +493,7 @@ RemoteKeying::Result RemoteKeying::keyNow(const Command& command)
     mox->setMox(true, keyer);
     if (moxKeyedFor(command.deviceId)) {
         m_pending.reset();
-        qCInfo(lcDsp) << "Keyed for" << command.deviceId << "by" << command.trigger
+        qCInfo(lcDsp) << "Keyed for" << command.deviceId.toHex().constData() << "by" << command.trigger
                       << "epoch" << m_model->keyedBy().epoch;
         return accepted(m_model->keyedBy().epoch);
     }
@@ -523,7 +526,7 @@ RemoteKeying::Result RemoteKeying::unkey(const Command& command)
             return accepted(0);
         }
         m_model->moxController()->setMox(false);
-        qCInfo(lcDsp) << "Unkeyed the VOX key of" << command.deviceId;
+        qCInfo(lcDsp) << "Unkeyed the VOX key of" << command.deviceId.toHex().constData();
         return accepted(0);
     }
     return stopFrom(command.deviceId, false);
@@ -543,7 +546,7 @@ RemoteKeying::Result RemoteKeying::stopFrom(const QByteArray& deviceId, bool dev
             keyer.deviceId = deviceId;
             m_model->moxController()->setMox(false, keyer);
         }
-        qCInfo(lcDsp) << "Unkeyed for" << deviceId;
+        qCInfo(lcDsp) << "Unkeyed for" << deviceId.toHex().constData();
         return accepted(0);
     }
     // Nothing of this device's is on. From a device that does not hold
@@ -666,7 +669,7 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
             if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
                 m_pending.reset();
             }
-            qCInfo(lcDsp) << "Tuner autotune canceled by" << command.deviceId;
+            qCInfo(lcDsp) << "Tuner autotune canceled by" << command.deviceId.toHex().constData();
             return accepted(0);
         }
         return stopFrom(command.deviceId, false);
@@ -740,7 +743,7 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
     if (!moxKeyedFor(command.deviceId) && m_model->keyingEpoch() != epoch) {
         m_model->advanceKeyingEpoch();
     }
-    qCInfo(lcDsp) << "Tuner autotune started for" << command.deviceId << "epoch" << epoch;
+    qCInfo(lcDsp) << "Tuner autotune started for" << command.deviceId.toHex().constData() << "epoch" << epoch;
     return accepted(moxKeyedFor(command.deviceId) ? m_model->keyedBy().epoch : epoch);
 }
 

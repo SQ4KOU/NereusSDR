@@ -32,6 +32,11 @@
 //                 never promised, and to move its assertions off the
 //                 consumer thread. By J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the wake watch, from a replayed
+//                 drought in the radio's microphone frames, once paused (a
+//                 sequence step of 1) and once lost (a step of the frames
+//                 missed), and from waitForBlock itself. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.  No Thetis logic ported.
@@ -41,6 +46,7 @@
 #include <QThread>
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -386,6 +392,100 @@ private slots:
                   "(documented overrun, not a failure)", lapped, kBlocks);
         }
 
+        src.stop();
+    }
+
+    // ── 9. The wake watch places a drought in the pump's wakes ────────────
+    // A frame every 1.333 ms (64 samples at 48 kHz), the pump waking with
+    // each; from 1000 ms nothing comes for 500 ms. Paused at the radio,
+    // the next frame is the next in sequence (step 1); lost on the way,
+    // the sequence jumps by the frames missed.
+    void wakeWatch_placesADroughtAndItsSequenceStep_data()
+    {
+        QTest::addColumn<bool>("lost");
+        QTest::newRow("radio paused") << false;
+        QTest::newRow("frames lost") << true;
+    }
+    void wakeWatch_placesADroughtAndItsSequenceStep()
+    {
+        QFETCH(bool, lost);
+        constexpr qint64 kFrameNs = 4'000'000 / 3;
+        constexpr qint64 kKeyNs = 5'000'000'000;
+        constexpr qint64 kDroughtFromNs = kKeyNs + 1'000'000'000;
+        constexpr qint64 kDroughtNs = 500'000'000;
+        TxMicWakeWatch watch;
+        // Before the key: not recorded.
+        quint32 sequence = 7;
+        for (qint64 t = kKeyNs - 50 * kFrameNs; t < kKeyNs; t += kFrameNs) {
+            watch.noteSequence(sequence++);
+            watch.noteWake(t);
+        }
+        QCOMPARE(watch.stats().longestGapNs, qint64(-1));
+
+        watch.begin();
+        qint64 t = kKeyNs;
+        qint64 lastBeforeNs = -1;
+        qint64 firstAfterNs = -1;
+        while (t < kKeyNs + 2'000'000'000) {
+            if (t >= kDroughtFromNs && t < kDroughtFromNs + kDroughtNs) {
+                if (lost) {
+                    ++sequence;   // sent by the radio, never received
+                }
+                t += kFrameNs;
+                continue;
+            }
+            if (t < kDroughtFromNs) {
+                lastBeforeNs = t;
+            } else if (firstAfterNs < 0) {
+                firstAfterNs = t;
+            }
+            watch.noteSequence(sequence++);
+            watch.noteWake(t);
+            t += kFrameNs;
+        }
+        watch.end();
+        // After the unkey: not recorded.
+        watch.noteSequence(sequence + 1000);
+        watch.noteWake(t + 900'000'000);
+
+        const TxMicWakeWatch::Stats st = watch.stats();
+        const qint64 missed = (firstAfterNs - lastBeforeNs) / kFrameNs;
+        qInfo("%s: longest gap %.1f ms at +%.1f ms of the key, sequence step %lld",
+              lost ? "lost" : "paused", double(st.longestGapNs) / 1e6,
+              double(st.gapStartSteadyNs - kKeyNs) / 1e6, static_cast<long long>(st.sequenceStep));
+        QCOMPARE(st.longestGapNs, firstAfterNs - lastBeforeNs);
+        QCOMPARE(st.gapStartSteadyNs, lastBeforeNs);
+        QVERIFY(st.longestGapNs >= kDroughtNs);
+        QCOMPARE(st.sequenceStep, lost ? missed : qint64(1));
+        QVERIFY(!lost || st.sequenceStep > 300);
+
+        // A new key starts afresh: its first wake is only the baseline.
+        watch.begin();
+        QCOMPARE(watch.stats().longestGapNs, qint64(-1));
+        watch.noteWake(t + 2'000'000'000);
+        QCOMPARE(watch.stats().longestGapNs, qint64(-1));
+        watch.noteSequence(sequence + 1);
+        watch.noteWake(t + 2'000'000'000 + kFrameNs);
+        QCOMPARE(watch.stats().longestGapNs, kFrameNs);
+    }
+
+    // ── 10. waitForBlock times its wakes into the watch ───────────────────
+    void waitForBlock_notesEachWakeInTheWatch()
+    {
+        TxMicSource src;
+        src.start();
+        src.wakeWatch().begin();
+        std::vector<float> block(TxMicSource::kBlockFrames, 0.25f);
+        src.wakeWatch().noteSequence(41);
+        src.inbound(block.data(), TxMicSource::kBlockFrames);
+        QVERIFY(src.waitForBlock(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        src.wakeWatch().noteSequence(42);
+        src.inbound(block.data(), TxMicSource::kBlockFrames);
+        QVERIFY(src.waitForBlock(1000));
+        const TxMicWakeWatch::Stats st = src.wakeWatch().stats();
+        QVERIFY2(st.longestGapNs >= 50'000'000, qPrintable(QString::number(st.longestGapNs)));
+        QCOMPARE(st.sequenceStep, qint64(1));
         src.stop();
     }
 };

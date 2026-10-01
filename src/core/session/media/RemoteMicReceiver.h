@@ -88,6 +88,12 @@
 //               the line off the event loop, the buffer is timed at the
 //               packet's receipt again (a6f832b90's timing). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: each packet carries its receipt gap
+//               and its receipt minus RTP timestamp to the pump
+//               (ArrivalTiming), and the feed places the over's first
+//               underruns in time (Stats::underrunsPlaced). Measurement
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -95,9 +101,11 @@
 #include <QByteArray>
 #include <QObject>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -222,6 +230,19 @@ struct RemoteMicConfig {
 /// calls active.
 bool opusPacketCarriesFec(const QByteArray& payload);
 
+/// TX diagnostics lane: a packet's arrival as the line saw it, carried to
+/// the pump with its audio for the over's figures only
+/// (RemoteMicFeed::write).
+struct RemoteMicArrivalTiming {
+    static constexpr qint64 kNoOffset = std::numeric_limits<qint64>::min();
+    /// Time since the line's previous packet was received, in us (-1: none
+    /// before it).
+    qint64 receiptGapUs{-1};
+    /// Its receipt less its RTP timestamp's time, in us, on the line's own
+    /// scale (only differences between packets mean anything).
+    qint64 rtpOffsetUs{kNoOffset};
+};
+
 /// The boundary between the receiver and the transmit pump, and the transmit
 /// jitter buffer (R-IOS-13, 2026-09-27).
 ///
@@ -272,13 +293,15 @@ public:
     {
         return m_framesSinceInUse.load(std::memory_order_acquire);
     }
+    using ArrivalTiming = RemoteMicArrivalTiming;
     /// Mono 48 kHz, one packet a call. Refused (false) while not in use;
     /// audio that does not fit the pump's input ring is dropped and counted.
     /// `heldFrames` (TX stall lane): how long, in frames, the packet waited
     /// at the Core between its receipt in the transport and this write. The
     /// buffer times the packet that much earlier (at its receipt), and the
-    /// wait goes into the over's figures (Stats::ownerWait*).
-    bool write(const float* mono, int frames, int heldFrames = 0);
+    /// wait goes into the over's figures (Stats::ownerWait*). `timing` (TX
+    /// diagnostics lane) is measured only.
+    bool write(const float* mono, int frames, int heldFrames = 0, ArrivalTiming timing = {});
     /// The buffer's target now (one packet plus the margin), in frames:
     /// what a key waits for. Any thread.
     int targetFrames() const { return m_targetFrames.load(std::memory_order_relaxed); }
@@ -357,6 +380,26 @@ public:
         double ownerWaitMeanMs{0.0};
         double ownerWaitMaxMs{0.0};
         int ownerWaitsLong{0};
+        /// TX diagnostics lane: the over's first underruns placed in time
+        /// (kept after it ends, reset when the feed next goes in use).
+        struct Underrun {
+            /// When it came, in ms since the feed went in use (the key's
+            /// wait for the buffer), and on the steady clock in us.
+            double atLineMs{0.0};
+            qint64 atSteadyUs{-1};
+            /// How long until the buffer played again, in ms (the fade-out
+            /// block and the silence after it); -1 while it has not.
+            double silentMs{-1.0};
+            /// Around it (the two windows before it, through to playing
+            /// again): the largest gap between the line's packet receipts,
+            /// and the latest a packet came against its RTP timestamp,
+            /// measured from the over's earliest; -1 when none was known.
+            double arrivalGapMs{-1.0};
+            double lateMs{-1.0};
+        };
+        static constexpr int kMaxUnderrunsPlaced = 4;
+        int underrunsPlacedCount{0};
+        std::array<Underrun, kMaxUnderrunsPlaced> underrunsPlaced{};
     };
     Stats stats() const;
 
@@ -365,12 +408,16 @@ private:
     // TX stall lane: one record a write, in step with the input ring, so the
     // pump can measure each packet's wait at the Core. 511 records, more
     // than the input ring holds packets.
+    // TX diagnostics lane: with the receipt gap and RTP offset, 32 bytes a
+    // record, and the ring twice the size, so it still holds 511.
     struct Arrival {
         quint64 endBytes;   // m_writtenBytes after the write
         qint32 frames;
         qint32 heldFrames;
+        qint64 receiptGapUs;
+        qint64 rtpOffsetUs;
     };
-    static constexpr std::size_t kArrivalRingBytes = 8192;
+    static constexpr std::size_t kArrivalRingBytes = 16384;
     static constexpr int kBufferFrames = 65536;              // 1.37 s: stall headroom
     static constexpr int kMatcherRingFrames = 1024;          // rmatch's ring, 21 ms
 
@@ -395,6 +442,12 @@ private:
     int currentTarget() const;
     int marginCeiling() const;
     void noteArrival(int frames, int heldFrames);
+    /// TX diagnostics lane: one write's receipt gap and RTP offset into the
+    /// window's and any open underrun's figures.
+    void noteArrivalTiming(const Arrival& arrival);
+    void openUnderrun();
+    void closeUnderrun();
+    void publishUnderrun(int index);
     bool memoryDelayMin(qint64* min) const;
     void endBlock();
     void endWindow();
@@ -438,6 +491,14 @@ private:
     std::atomic<double> m_statsOwnerWaitMeanMs{0.0};
     std::atomic<double> m_statsOwnerWaitMaxMs{0.0};
     std::atomic<int> m_statsOwnerWaitsLong{0};
+    // TX diagnostics lane: the placed underruns, published field by field
+    // (log only; a reader may see one half-updated).
+    std::array<std::atomic<double>, Stats::kMaxUnderrunsPlaced> m_statsUnderrunAtMs{};
+    std::array<std::atomic<qint64>, Stats::kMaxUnderrunsPlaced> m_statsUnderrunSteadyUs{};
+    std::array<std::atomic<double>, Stats::kMaxUnderrunsPlaced> m_statsUnderrunSilentMs{};
+    std::array<std::atomic<double>, Stats::kMaxUnderrunsPlaced> m_statsUnderrunGapMs{};
+    std::array<std::atomic<double>, Stats::kMaxUnderrunsPlaced> m_statsUnderrunLateMs{};
+    std::atomic<int> m_statsUnderrunsPlaced{0};
 
     // Pump.
     std::unique_ptr<RemoteAudioRateMatcher> m_matcher;
@@ -494,6 +555,21 @@ private:
     qint64 m_overOwnerWaitSumFrames{0};
     int m_overOwnerWaitMaxFrames{0};
     int m_overOwnerWaitsLong{0};
+    // TX diagnostics lane (pump): the block the feed last changed use at,
+    // the over's arrivals and earliest RTP offset, the largest receipt gap
+    // and lateness of this window and the one before, and the placed
+    // underruns (the open one's index and start block, -1 for none).
+    quint64 m_changeBlock{0};
+    int m_overArrivals{0};
+    qint64 m_overRtpOffsetMinUs{std::numeric_limits<qint64>::max()};
+    qint64 m_windowGapMaxUs{-1};
+    qint64 m_prevWindowGapMaxUs{-1};
+    qint64 m_windowLateMaxUs{-1};
+    qint64 m_prevWindowLateMaxUs{-1};
+    std::array<Stats::Underrun, Stats::kMaxUnderrunsPlaced> m_underruns{};
+    int m_underrunsPlaced{0};
+    int m_openUnderrun{-1};
+    quint64 m_openUnderrunBlock{0};
     std::vector<float> m_monoScratch;
     std::vector<float> m_stereoScratch;
 };
@@ -634,6 +710,15 @@ private:
     // TX stall lane: the packet being submitted waited this long, in frames
     // (measured only).
     int m_heldFrames{0};
+    // TX diagnostics lane: the packet being submitted's arrival timing, and
+    // what it is measured from: the last receipt (us on m_clock, -1: none),
+    // the RTP timestamp unwrapped to frames, and the last offset.
+    RemoteMicFeed::ArrivalTiming m_timing;
+    qint64 m_lastReceiptUs{-1};
+    bool m_haveRtpTimestamp{false};
+    quint32 m_lastRtpTimestamp{0};
+    qint64 m_rtpFrames{0};
+    qint64 m_lastRtpOffsetUs{0};
     std::vector<float> m_pcm;
     Stats m_stats;
 

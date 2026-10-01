@@ -42,6 +42,12 @@
 //               lock the pump never takes. The buffer is timed at each
 //               packet's receipt again. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: submit measures each packet's receipt
+//               gap and its receipt less its RTP timestamp; the pump places
+//               the over's first underruns in time (when, how long silent,
+//               and the arrivals around them). Measurement only; nothing
+//               the buffer does changes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -92,6 +98,24 @@ qint64 steadyMs()
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
+
+qint64 steadyUs()
+{
+    using namespace std::chrono;
+    return duration_cast<microseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// TX diagnostics lane: pump blocks as ms, and us as ms.
+double blocksToMs(quint64 blocks)
+{
+    return static_cast<double>(blocks) * kPumpBlock / Cfg::kFramesPerMs;
+}
+double usToMs(qint64 us)
+{
+    return us < 0 ? -1.0 : static_cast<double>(us) / 1000.0;
+}
+// An RTP timestamp step past this is a new stream, not time passing.
+constexpr qint64 kRtpRebaseFrames = static_cast<qint64>(Cfg::kSampleRate) * 10;
 
 bool configureMatcher(RemoteAudioRateMatcher& matcher, int ringFrames)
 {
@@ -154,7 +178,7 @@ void RemoteMicFeed::setInUse(bool inUse)
     m_change.fetch_add(1, std::memory_order_acq_rel);
 }
 
-bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames)
+bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames, ArrivalTiming timing)
 {
     const std::lock_guard<std::mutex> lock(m_writerLock);
     if (!m_inUse.load(std::memory_order_relaxed) || mono == nullptr || frames <= 0) {
@@ -174,7 +198,7 @@ bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames)
         return false;
     }
     const Arrival arrival{m_writtenBytes + static_cast<quint64>(bytes), frames,
-                          std::max(0, heldFrames)};
+                          std::max(0, heldFrames), timing.receiptGapUs, timing.rtpOffsetUs};
     m_arrivals.tryPushCopy(reinterpret_cast<const uint8_t*>(&arrival), kArrivalBytes);
     m_input.tryPushCopy(reinterpret_cast<const uint8_t*>(mono), bytes);
     m_writtenBytes += static_cast<quint64>(bytes);
@@ -258,6 +282,7 @@ void RemoteMicFeed::takeArrivals(bool note)
         }
         frames += arrival.frames;
         if (note) {
+            noteArrivalTiming(arrival);
             ++m_overOwnerWaits;
             m_overOwnerWaitSumFrames += arrival.heldFrames;
             m_overOwnerWaitMaxFrames = std::max(m_overOwnerWaitMaxFrames, arrival.heldFrames);
@@ -308,6 +333,71 @@ void RemoteMicFeed::noteArrival(int frames, int heldFrames)
     }
     m_windowDelayMin = std::min(m_windowDelayMin, delay);
     m_windowDelayMax = std::max(m_windowDelayMax, delay);
+}
+
+void RemoteMicFeed::noteArrivalTiming(const Arrival& arrival)
+{
+    // TX diagnostics lane, measurement only. The over's first arrival's gap
+    // runs back to the last over, so it is not counted.
+    qint64 gapUs = m_overArrivals > 0 ? arrival.receiptGapUs : -1;
+    ++m_overArrivals;
+    qint64 lateUs = -1;
+    if (arrival.rtpOffsetUs != ArrivalTiming::kNoOffset) {
+        m_overRtpOffsetMinUs = std::min(m_overRtpOffsetMinUs, arrival.rtpOffsetUs);
+        lateUs = arrival.rtpOffsetUs - m_overRtpOffsetMinUs;
+    }
+    m_windowGapMaxUs = std::max(m_windowGapMaxUs, gapUs);
+    m_windowLateMaxUs = std::max(m_windowLateMaxUs, lateUs);
+    if (m_openUnderrun >= 0) {
+        Stats::Underrun& event = m_underruns[static_cast<size_t>(m_openUnderrun)];
+        event.arrivalGapMs = std::max(event.arrivalGapMs, usToMs(gapUs));
+        event.lateMs = std::max(event.lateMs, usToMs(lateUs));
+        publishUnderrun(m_openUnderrun);
+    }
+}
+
+void RemoteMicFeed::openUnderrun()
+{
+    // TX diagnostics lane: the first few of an over, placed. The arrivals
+    // of this window and the one before count toward it, and those until
+    // playing resumes.
+    if (m_underrunsPlaced >= Stats::kMaxUnderrunsPlaced) {
+        m_openUnderrun = -1;
+        return;
+    }
+    const int index = m_underrunsPlaced++;
+    Stats::Underrun& event = m_underruns[static_cast<size_t>(index)];
+    event.atLineMs = blocksToMs(m_block - m_changeBlock);
+    event.atSteadyUs = steadyUs();
+    event.silentMs = -1.0;
+    event.arrivalGapMs = usToMs(std::max(m_windowGapMaxUs, m_prevWindowGapMaxUs));
+    event.lateMs = usToMs(std::max(m_windowLateMaxUs, m_prevWindowLateMaxUs));
+    m_openUnderrun = index;
+    m_openUnderrunBlock = m_block;
+    publishUnderrun(index);
+    m_statsUnderrunsPlaced.store(m_underrunsPlaced, std::memory_order_release);
+}
+
+void RemoteMicFeed::closeUnderrun()
+{
+    if (m_openUnderrun < 0) {
+        return;
+    }
+    m_underruns[static_cast<size_t>(m_openUnderrun)].silentMs =
+        blocksToMs(m_block - m_openUnderrunBlock);
+    publishUnderrun(m_openUnderrun);
+    m_openUnderrun = -1;
+}
+
+void RemoteMicFeed::publishUnderrun(int index)
+{
+    const auto i = static_cast<size_t>(index);
+    const Stats::Underrun& event = m_underruns[i];
+    m_statsUnderrunAtMs[i].store(event.atLineMs, std::memory_order_relaxed);
+    m_statsUnderrunSteadyUs[i].store(event.atSteadyUs, std::memory_order_relaxed);
+    m_statsUnderrunSilentMs[i].store(event.silentMs, std::memory_order_relaxed);
+    m_statsUnderrunGapMs[i].store(event.arrivalGapMs, std::memory_order_relaxed);
+    m_statsUnderrunLateMs[i].store(event.lateMs, std::memory_order_relaxed);
 }
 
 bool RemoteMicFeed::headIsSilent() const
@@ -389,6 +479,12 @@ int RemoteMicFeed::marginCeiling() const
 
 void RemoteMicFeed::resetWindow()
 {
+    // TX diagnostics lane: this window's arrival figures become the last
+    // window's.
+    m_prevWindowGapMaxUs = m_windowGapMaxUs;
+    m_prevWindowLateMaxUs = m_windowLateMaxUs;
+    m_windowGapMaxUs = -1;
+    m_windowLateMaxUs = -1;
     m_windowStart = m_block;
     m_windowFloor = std::numeric_limits<int>::max();
     m_windowPlayed = false;
@@ -537,6 +633,13 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         std::fill(m_delayMaxMemory.begin(), m_delayMaxMemory.end(),
                   std::numeric_limits<qint64>::min());
         resetWindow();
+        // TX diagnostics lane: the over's arrival figures start again.
+        m_changeBlock = m_block;
+        m_overArrivals = 0;
+        m_overRtpOffsetMinUs = std::numeric_limits<qint64>::max();
+        m_prevWindowGapMaxUs = -1;
+        m_prevWindowLateMaxUs = -1;
+        m_openUnderrun = -1;
         m_seenChange = change;
         const bool inUse = m_inUseForPump.load(std::memory_order_acquire);
         if (inUse) {
@@ -557,6 +660,8 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
             m_overOwnerWaitSumFrames = 0;
             m_overOwnerWaitMaxFrames = 0;
             m_overOwnerWaitsLong = 0;
+            m_underrunsPlaced = 0;
+            m_statsUnderrunsPlaced.store(0, std::memory_order_release);
             publishOver();
         }
         m_statsStarted.store(false, std::memory_order_relaxed);
@@ -598,6 +703,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_resumingAfterUnderrun = false;
         m_started = true;
         m_statsStarted.store(true, std::memory_order_relaxed);
+        closeUnderrun();
     }
 
     // The over's figures and the window's floors, before this block plays.
@@ -677,6 +783,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_started = false;
         m_resumingAfterUnderrun = true;
         m_statsStarted.store(false, std::memory_order_relaxed);
+        openUnderrun();
     }
     if (!m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock)) {
         std::fill(dst, dst + frames, 0.0f);
@@ -715,6 +822,17 @@ RemoteMicFeed::Stats RemoteMicFeed::stats() const
     stats.ownerWaitMeanMs = m_statsOwnerWaitMeanMs.load(std::memory_order_relaxed);
     stats.ownerWaitMaxMs = m_statsOwnerWaitMaxMs.load(std::memory_order_relaxed);
     stats.ownerWaitsLong = m_statsOwnerWaitsLong.load(std::memory_order_relaxed);
+    stats.underrunsPlacedCount = std::clamp(m_statsUnderrunsPlaced.load(std::memory_order_acquire),
+                                            0, Stats::kMaxUnderrunsPlaced);
+    for (int k = 0; k < stats.underrunsPlacedCount; ++k) {
+        const auto i = static_cast<size_t>(k);
+        Stats::Underrun& event = stats.underrunsPlaced[i];
+        event.atLineMs = m_statsUnderrunAtMs[i].load(std::memory_order_relaxed);
+        event.atSteadyUs = m_statsUnderrunSteadyUs[i].load(std::memory_order_relaxed);
+        event.silentMs = m_statsUnderrunSilentMs[i].load(std::memory_order_relaxed);
+        event.arrivalGapMs = m_statsUnderrunGapMs[i].load(std::memory_order_relaxed);
+        event.lateMs = m_statsUnderrunLateMs[i].load(std::memory_order_relaxed);
+    }
     return stats;
 }
 
@@ -868,6 +986,10 @@ bool RemoteMicReceiver::start(quint32 ssrc, bool losslessNegotiated)
         m_haveSequence = false;
         m_lastOpusFrames = RemoteMicConfig::kOpusFrameSamples;
         m_stats = {};
+        m_lastReceiptUs = -1;
+        m_haveRtpTimestamp = false;
+        m_rtpFrames = 0;
+        m_lastRtpOffsetUs = 0;
         m_running = true;
     }
     m_lastAudioMs.store(now(), std::memory_order_release);
@@ -934,6 +1056,30 @@ void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
             missing = delta;
         }
         ++m_stats.accepted;
+        // TX diagnostics lane (measurement only): the gap since the line's
+        // last packet was received, and its receipt less its RTP
+        // timestamp's time, on the line's own scale.
+        {
+            const qint64 receiptUs = now() * 1000 - clampedHeldUs;
+            m_timing.receiptGapUs = m_lastReceiptUs >= 0 ? receiptUs - m_lastReceiptUs : -1;
+            m_lastReceiptUs = receiptUs;
+            if (!m_haveRtpTimestamp) {
+                m_haveRtpTimestamp = true;
+                m_rtpFrames = 0;
+            } else {
+                const qint64 step = static_cast<qint32>(parsed.timestamp - m_lastRtpTimestamp);
+                if (step > kRtpRebaseFrames || step < -kRtpRebaseFrames) {
+                    // A new stream on the line: it carries on from the
+                    // last packet's offset.
+                    m_rtpFrames = (receiptUs - m_lastRtpOffsetUs) * Cfg::kFramesPerMs / 1000;
+                } else {
+                    m_rtpFrames += step;
+                }
+            }
+            m_lastRtpTimestamp = parsed.timestamp;
+            m_lastRtpOffsetUs = receiptUs - m_rtpFrames * 1000 / Cfg::kFramesPerMs;
+            m_timing.rtpOffsetUs = m_lastRtpOffsetUs;
+        }
         const quint64 writtenBefore = m_stats.framesWritten;
         if (opus) {
             decodeOpus(parsed.payload, missing);
@@ -1080,7 +1226,7 @@ void RemoteMicReceiver::writeAudio(const float* mono, int frames)
     if (!m_feedWriter.load(std::memory_order_acquire)) {
         return;
     }
-    if (m_feed != nullptr && m_feed->write(mono, frames, m_heldFrames)) {
+    if (m_feed != nullptr && m_feed->write(mono, frames, m_heldFrames, m_timing)) {
         m_stats.framesWritten += static_cast<quint64>(frames);
     }
 }
