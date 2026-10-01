@@ -8260,6 +8260,12 @@ nereus_add_test(tst_level_calibration_station
 nereus_add_test(tst_shared_input_filters_link
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# RADE reason: a slice's radeReason reaches only a peer that declared
+# radeReason 1, and a remote window's mirrored slice carries it.
+nereus_add_test(tst_rade_reason_link
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_rade_reason_link PRIVATE NEREUS_BUILD_TESTS)
 # Level Cal: the window's grid stops following the noise floor while a run
 # goes and is put back after (Thetis CalibrateLevel).
 nereus_add_test(tst_level_cal_grid_follow_guard)

@@ -84,6 +84,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam setStartFailsForTest, read at the top of start().
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I1. See
 //                 RadeChannel.h for the full attribution block.
 //                 Skeleton implementation: lifecycle bodies
@@ -308,6 +310,11 @@ bool RadeChannel::start(const QString& modelPath)
         // return true` guard at RADEEngine.cpp:30 [@0cd4559]).
         return true;
     }
+#ifdef NEREUS_BUILD_TESTS
+    if (m_startFailsForTest) {
+        return false;
+    }
+#endif
     if (modelPath.isEmpty()) {
         return false;
     }

@@ -59,6 +59,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: RADE reason: radeReasonVersion, after
+//               rxFilterLowPassVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Shared-input filters (ruling (d)): rxFilterLowPassVersion,
 //               after radioMicVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -587,6 +590,11 @@ struct StationCapabilities {
     /// for none). Sent after radioMicVersion and before coreBuildInfo, only
     /// to a peer whose hello declared `rxFilterLowPass` 1; 0 otherwise.
     int rxFilterLowPassVersion = 0;
+    /// RADE reason: 1 means every slice carries `radeReason`, why the slice
+    /// is in RADE with no working decoder in plain words (empty while it
+    /// decodes). Sent after rxFilterLowPassVersion and before coreBuildInfo,
+    /// only to a peer whose hello declared `radeReason` 1; 0 otherwise.
+    int radeReasonVersion = 0;
     /// At most this many URLs are read, each at most kMaxMediaStunUrlBytes.
     static constexpr int kMaxMediaStunUrls = 8;
     static constexpr int kMaxMediaStunUrlBytes = 512;

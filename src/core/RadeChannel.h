@@ -93,6 +93,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam setStartFailsForTest.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I1. Initial skeleton
 //                 port. Hybrid sourcing: class layout / Q_OBJECT shape
 //                 / signal-slot surface / member ownership / dtor
@@ -287,6 +289,13 @@ public:
     // Test seam (R-R3-49, parity Task 3). How many times resetTx() ran.
     int resetTxCountForTest() const { return m_resetTxCountForTest; }
 
+#ifdef NEREUS_BUILD_TESTS
+    // Test seam (RADE reason). While set, start() refuses as a codec that
+    // will not open does, so a test can drive a slice whose decoder did not
+    // start. No production caller sets it.
+    void setStartFailsForTest(bool fails) { m_startFailsForTest = fails; }
+#endif
+
     // RADE end-of-over callsigns. Queue the end-of-over frame, carrying
     // `callsign` in FreeDV's format, and 200 ms of silence behind the modem
     // output already sent: emits txModemReady once with both. After it the
@@ -480,6 +489,9 @@ private:
     // txEncode(). Cleared on start() and on resetTx().
     std::atomic<int>     m_radeTxCallCount{0};
     std::atomic<int>     m_resetTxCountForTest{0};  // R-R3-49 parity Task 3
+#ifdef NEREUS_BUILD_TESTS
+    bool                 m_startFailsForTest{false};  // RADE reason seam
+#endif
 
     // RADE end-of-over callsigns: the EOO frame is queued; txEncode takes
     // no more speech until resetTx().

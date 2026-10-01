@@ -239,6 +239,9 @@
 //   2026-09-30  J.J. Boyd / KG4VCF  AlexController's NoFilterPins reason
 //                                    names the slice (JJ's ruling).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: radeStartReason (a
+//                                    slice's radeReason) is scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -789,6 +792,11 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("named(top)"), QStringLiteral("lower.first()"),
           QStringLiteral("joinRangeNames(lower)"), QStringLiteral("off.first()"),
           QStringLiteral("joinRangeNames(off)")}},
+        // RADE reason: a slice's radeReason, why a RADE slice has no
+        // working decoder. The slices are named by letter.
+        {"src/models/RadioModel.cpp", {QStringLiteral("radeStartReason")}, {}, 6,
+         {QStringLiteral("letter"),
+          QStringLiteral("letter, receiverLetter(*m_restoredRadeReceiveOwner)")}},
         // session.end, auth.result, property.result, settings.reject and
         // the refusals of a verb an older app sends.
         {"src/core/session/StationServer.cpp", {},
@@ -1829,6 +1837,12 @@ const QList<AppSideReason>& appSideReasons()
         // for another slice (lowPassHoldReason, scanned below).
         {"src/models/RadioModel.h", "rxFilter0LowPassReason",
          "the CH label's tooltip and the WIDE reason's second sentence, not a refusal"},
+        // RADE reason: why a RADE slice has no working decoder
+        // (radeStartReason, scanned above).
+        {"src/models/SliceModel.h", "radeReason",
+         "getter of the words radeStartReason made (scanned)"},
+        {"src/models/SliceModel.cpp", "setRadeReason",
+         "setter of the words radeStartReason made (scanned), or the Core's on a remote window"},
     };
     return sites;
 }

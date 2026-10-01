@@ -17,6 +17,8 @@
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam (createRadeChannel honours setRadeCreateFailsForTest and setRadeStartFailsForTest).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -927,8 +929,16 @@ RadeChannel* WdspEngine::createRadeChannel(int channelId)
     // destroyRadeChannel(id) call.  unique_ptr deletes the object first;
     // the redundant Qt parent link is harmless because Qt's destructor
     // checks for already-deleted children.
+#ifdef NEREUS_BUILD_TESTS
+    if (m_radeCreateFailsForTest) {
+        return nullptr;
+    }
+#endif
     auto channel = std::make_unique<RadeChannel>(this);
     RadeChannel* ptr = channel.get();
+#ifdef NEREUS_BUILD_TESTS
+    ptr->setStartFailsForTest(m_radeStartFailsForTest);
+#endif
     // RADE threads: the id names the decoder thread and the tick log.
     ptr->setChannelId(channelId);
 

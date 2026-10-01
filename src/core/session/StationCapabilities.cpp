@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: RADE reason: radeReasonVersion, after
+//               rxFilterLowPassVersion and before coreBuildInfo. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Shared-input filters (ruling (d)): rxFilterLowPassVersion,
 //               after radioMicVersion and before coreBuildInfo. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -522,6 +525,12 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
     if (rxFilterLowPassVersion > 0) {
         updates.append(intEntry("rxFilterLowPassVersion", rxFilterLowPassVersion));
     }
+    // RADE reason: each slice's radeReason, after rxFilterLowPassVersion and
+    // before coreBuildInfo (which stays last), only for a peer that declared
+    // radeReason.
+    if (radeReasonVersion > 0) {
+        updates.append(intEntry("radeReasonVersion", radeReasonVersion));
+    }
     if (coreBuildInfo) {
         const QByteArray json = coreBuildInfo->toJson();
         if (!json.isEmpty()) updates.append(stringEntry("coreBuildInfo", QString::fromUtf8(json)));
@@ -544,6 +553,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     int rx2AttenuatorEntries = 0;
     int radioMicEntries = 0;
     int rxFilterLowPassEntries = 0;
+    int radeReasonEntries = 0;
     for (const MirrorUpdate& u : updates) {
         if (u.name == "mediaDirectVersion") {
             // The direct media ladder: one entry, an Int64 of 1 or more.
@@ -561,6 +571,15 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 && u.value.typeId() == QMetaType::LongLong) {
                 const qlonglong version = u.value.toLongLong();
                 caps.rxFilterLowPassVersion = version > 0 && version <= 65535
+                    ? static_cast<int>(version) : 0;
+            }
+        } else if (u.name == "radeReasonVersion") {
+            // RADE reason: one entry, an Int64 of 1 or more.
+            if (++radeReasonEntries == 1 && u.ordinal == 0
+                && u.kind == MirrorWireKind::Int64
+                && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong version = u.value.toLongLong();
+                caps.radeReasonVersion = version > 0 && version <= 65535
                     ? static_cast<int>(version) : 0;
             }
         } else if (u.name == "radioMicVersion") {

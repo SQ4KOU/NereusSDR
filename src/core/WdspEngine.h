@@ -10,6 +10,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam setRadeCreateFailsForTest and setRadeStartFailsForTest.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -270,6 +272,13 @@ public:
     // No production caller sets this. Default is false, matching today's
     // behaviour exactly; initialize() is unmodified in every other respect.
     void setSynchronousInitForTest(bool enable) { m_synchronousInitForTest = enable; }
+
+    // Test-only seams (RADE reason). While set, createRadeChannel makes no
+    // channel, or makes channels whose start() refuses
+    // (RadeChannel::setStartFailsForTest), so a test can drive a RADE slice
+    // left without a working decoder. No production caller sets either.
+    void setRadeCreateFailsForTest(bool fails) { m_radeCreateFailsForTest = fails; }
+    void setRadeStartFailsForTest(bool fails) { m_radeStartFailsForTest = fails; }
 
     // Test-only observability paired with the seam above. True once
     // initialize() has entered the ASYNC branch that constructs the
@@ -834,6 +843,9 @@ private:
     // why this has to be consulted inside initialize() rather than
     // implemented as a separate pre-initialize entry point.
     bool m_synchronousInitForTest{false};
+    // Backing fields for the RADE reason seams above.
+    bool m_radeCreateFailsForTest{false};
+    bool m_radeStartFailsForTest{false};
 
     // Backing field for wisdomThreadSpawnedForTest() (declared above,
     // public, under the same guard). Set to true only at the WdspEngine.cpp

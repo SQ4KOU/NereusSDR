@@ -6,6 +6,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: SliceModel radeReason Outbound, gated on
+//                 radeReason (radeReasonVersion 1). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Shared-input filters (ruling (d)): RadioModel
 //                 rxFilter0LowPassReason and rxFilter0LowPassSlice
 //                 Outbound, gated on rxFilterLowPass
@@ -266,7 +269,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (153 entries) ----
+    // ---- SliceModel (154 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -470,6 +473,10 @@ const MirrorPolicy::Entry kEntries[] = {
     // (StationServer::fitPeerOnlyProperties).
     { "SliceModel", "radeSynced", MirrorDirection::Outbound },
     { "SliceModel", "radeFreqOffsetHz", MirrorDirection::Outbound },
+    // RADE reason (radeReasonVersion 1): why the slice is in RADE with no
+    // working decoder, read-only; only to a peer that declared radeReason
+    // (StationServer::fitPeerOnlyProperties).
+    { "SliceModel", "radeReason", MirrorDirection::Outbound },
 
     // ---- TransmitModel (87 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
@@ -1267,6 +1274,10 @@ const QList<MirrorPolicy::FeatureGate>& MirrorPolicy::featureGates()
         // (StationServer::fitPeerOnlyProperties).
         {"SliceModel", "radeSynced", "radeStatus", 1},
         {"SliceModel", "radeFreqOffsetHz", "radeStatus", 1},
+        // RADE reason (radeReasonVersion 1): why each RADE slice has no
+        // working decoder, to a peer that declared radeReason 1
+        // (StationServer::fitPeerOnlyProperties).
+        {"SliceModel", "radeReason", "radeReason", 1},
         // radioHardwareVersion 10: radio's Alex-1 low-pass in use, to a peer
         // that declared alexLpf 1 (StationServer::fitPeerOnlyProperties).
         {"RadioModel", "alexLpfBits", "alexLpf", 1},

@@ -692,6 +692,11 @@ private slots:
         QCOMPARE(radio->receiveLayoutRestoreMessage(),
                  QStringLiteral("RADE audio from receiver B stays off because that receiver "
                                 "is not running. Your saved layout is kept."));
+        // RADE reason: B's flag says the same, and A (USB) says nothing.
+        QCOMPARE(radio->sliceById(1)->radeReason(),
+                 QStringLiteral("RADE could not start on slice B: that receiver is not "
+                                "running."));
+        QVERIFY(radio->sliceById(0)->radeReason().isEmpty());
         app.stop();
         QCOMPARE(rawLayoutFromDisk(kMacA), rock);
     }
