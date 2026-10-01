@@ -7022,6 +7022,9 @@ private:
     // layer share one instance.  MAC and load() are called on connect.
     // Phase 3L commit #9.
     Hl2OptionsModel m_hl2Options;
+    // Hl2OptionsModel::changed -> applyHl2Options, while a P1 connection is
+    // up (connectHl2OptionsToConnection).
+    QMetaObject::Connection m_hl2OptionsConnection;
 
     // HL2 I/O board model — owns I2C queue and register mirror.
     // Shared with P1RadioConnection::setIoBoard() at connect time.
@@ -7431,8 +7434,10 @@ private:
     std::optional<Band> m_keptRxAntennaBand;
     bool m_bandTrackingForTest{false};
 
-    // Settings save coalescing
+    // Settings save coalescing: a save is wanted (m_settingsSaveScheduled),
+    // and scheduleSettingsSave's 500 ms timer is running.
     bool m_settingsSaveScheduled{false};
+    bool m_settingsSaveTimerArmed{false};
     bool m_receiveLayoutHydrating{false};
     bool m_stationHandoverTrackSuppressedReceiverEdits{false};
     bool m_stationHandoverSuppressedReceiverEdits{false};

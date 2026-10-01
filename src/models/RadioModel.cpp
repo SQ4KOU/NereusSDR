@@ -9835,10 +9835,15 @@ QString RadioModel::lpfBypassUnavailableReason()
 //       // MI0BOT: Support for HL2 10MHz clock input
 void RadioModel::connectHl2OptionsToConnection()
 {
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+    // applyHl2Options reads the options and m_connection, both on the main
+    // thread, so the watch runs here (context this) and only the setters
+    // cross to the connection's thread. One watch at a time: a reconnect
+    // replaces it.
+    QObject::disconnect(m_hl2OptionsConnection);
+    if (qobject_cast<P1RadioConnection*>(m_connection) != nullptr) {
         applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
+        m_hl2OptionsConnection = connect(&m_hl2Options, &Hl2OptionsModel::changed, this,
+                                         [this]() { applyHl2Options(); });
     }
 }
 
@@ -23771,11 +23776,18 @@ void RadioModel::scheduleSettingsSave(SliceModel* slice)
     if (slice) {
         m_dirtySettingsSliceIds.insert(slice->sliceIndex());
     }
-    if (m_settingsSaveScheduled) {
+    m_settingsSaveScheduled = true;
+    // Fix wave (2026-09-30): one coalescing timer at a time, tracked apart
+    // from the save it asks for. A save held back while the receive layout
+    // awaited admission (flushPendingSettingsSave, or removeSliceImpl's
+    // flush) leaves m_settingsSaveScheduled set with no timer running; a
+    // later edit still arms one, so the save is not lost.
+    if (m_settingsSaveTimerArmed) {
         return;
     }
-    m_settingsSaveScheduled = true;
+    m_settingsSaveTimerArmed = true;
     QTimer::singleShot(500, this, [this]() {
+        m_settingsSaveTimerArmed = false;
         flushPendingSettingsSave();
     });
 }

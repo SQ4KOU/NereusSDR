@@ -11407,8 +11407,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const float effectiveRow = static_cast<float>(m_wfWriteRow) + (1.0f - pushFrac);
     float rowOffset = (m_wfGpuTexH > 0)
         ? effectiveRow / static_cast<float>(m_wfGpuTexH) : 0.0f;
-    float uniforms[] = {rowOffset, 0.0f, 0.0f, 0.0f};
-    batch->updateDynamicBuffer(m_wfUbo, 0, sizeof(uniforms), uniforms);
+    // Written further down, from the frame plan, only when the waterfall
+    // draws (GUI-M1).
+    const float wfUniforms[] = {rowOffset, 0.0f, 0.0f, 0.0f};
 
     // ---- Overlay texture (static, only on state change) ----
     {
@@ -11810,7 +11811,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QSize dssOutputSize = renderTarget()->pixelSize();
         const float dssDpr =
             dssOutputSize.width() / static_cast<float>(qMax(1, w));
-        writeDssMeshUbo(batch, specRect, dssDpr);
+        // The mesh uniforms are written below, from the frame plan, only
+        // when the mesh is drawn (GUI-I2).
         // Task 10: CPU fallback surface, built/uploaded only when the mesh
         // pipeline never came up (RGBA16F unsupported at
         // initDssMeshPipeline() time -- see its warning log). Skipped
@@ -11842,10 +11844,25 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     traceIn.peakHoldReady = m_peakHoldEnabled
         && m_pxPeakHold.size() == m_renderedPixels.size();
     traceIn.showsTransmitView = showsTransmitView();
+    traceIn.waterfallPipeline = m_wfPipeline != nullptr;
     traceIn.heldTrace = m_visibleBinCount > 0;
     traceIn.heldFill = m_fftFillHasData;
     traceIn.heldPeak = m_peakHoldHasData;
     const SpectrumTraceFramePlan trace = planSpectrumTraceFrame(traceIn);
+
+    // GUI-I2 / GUI-M1 (fix wave 2026-09-30): the 3DSS mesh and waterfall
+    // uniform buffers are dynamic, so a write the frame does not bind stays
+    // pending in Metal's list (see SpectrumTraceFramePlan.h). Each is
+    // written only in a frame that draws with it.
+    if (trace.writeDssMeshUbo) {
+        const QSize dssOutputSize = renderTarget()->pixelSize();
+        const float dssDpr =
+            dssOutputSize.width() / static_cast<float>(qMax(1, w));
+        writeDssMeshUbo(batch, specRect, dssDpr);
+    }
+    if (trace.writeWaterfallUbo) {
+        batch->updateDynamicBuffer(m_wfUbo, 0, sizeof(wfUniforms), wfUniforms);
+    }
 
     // ---- FFT spectrum vertices ----
     // GPU vertex generation -- one vertex per display pixel.  Mirrors
@@ -11986,7 +12003,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const float dpr = outputSize.width() / static_cast<float>(qMax(1, w));
 
     // Draw waterfall
-    if (m_wfPipeline) {
+    if (trace.drawsWaterfall) {
         cb->setGraphicsPipeline(m_wfPipeline);
         cb->setShaderResources(m_wfSrb);
         float vpX = static_cast<float>(wfRect.x()) * dpr;

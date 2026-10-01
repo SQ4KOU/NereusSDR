@@ -28,6 +28,10 @@
 //
 // Modification history (NereusSDR):
 //   2026-09-30  J.J. Boyd (KG4VCF)  Created for the RADE threads lane.
+//   2026-09-30  J.J. Boyd (KG4VCF)  Fix wave: the input push scratch is
+//                                    sized for the largest record when the
+//                                    bridge is made. AI-assisted via
+//                                    Anthropic Claude Code.
 //                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -98,6 +102,10 @@ public:
     // The output waits here for its slot, up to radeLateBoundBlocks().
     static constexpr size_t kOutputRingBytes = 65536;
     static constexpr int kMaxRecordFrames = 2048;
+    // One record: its header and kMaxRecordFrames stereo frames, in floats.
+    static constexpr size_t kMaxRecordFloats =
+        (sizeof(Header) + size_t(kMaxRecordFrames) * 2 * sizeof(float) + sizeof(float) - 1)
+        / sizeof(float);
 
     // ── DSP thread (the only producer of input, only consumer of output) ──
     //
@@ -143,7 +151,9 @@ private:
     // this bridge (a worker being replaced) drops instead of racing the ring.
     std::atomic_flag m_inputProducer = ATOMIC_FLAG_INIT;
     std::atomic_flag m_outputConsumer = ATOMIC_FLAG_INIT;
-    std::vector<float> m_pushScratch;  // guarded by m_inputProducer
+    // Guarded by m_inputProducer. Sized for the largest record at
+    // construction, so pushInput on the DSP thread never grows it.
+    std::vector<float> m_pushScratch = std::vector<float>(kMaxRecordFloats);
 
     std::atomic<quint32> m_epoch{0};
     std::atomic<quint32> m_wake{0};

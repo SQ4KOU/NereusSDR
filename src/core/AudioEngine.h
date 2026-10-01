@@ -1260,7 +1260,8 @@ private:
     std::array<std::unique_ptr<IAudioBus>, 4> m_vaxBus;
     // R-R3-44: taken by the owner thread whenever it replaces a VAX output
     // and by a remote window's VAX feeder around every pacing read and
-    // write. The local VAX tee on the DSP thread never takes it.
+    // write. The local VAX tee on the DSP thread only try-locks it, and
+    // skips the push when it is held (RD-I10).
     std::array<std::mutex, 4> m_vaxBusMutex;
     // R-R3-44: see setVaxOutputsAllowed().
     // iPhone app Task 73: see setVaxSliceMask().

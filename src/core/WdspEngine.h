@@ -589,6 +589,14 @@ public:
     static constexpr double kTxTSlewDownSecs = 0.010;
     // From cmaster.c:182  — DSP sample rate for TX channel = 96000 Hz.
     static constexpr int kTxDspSampleRate  = 96000;
+    // The receive channel's DSP and output rates, whatever its input rate.
+    // From Thetis ChannelMaster/cmaster.c:76-78 [v2.10.3.15]
+    //   48000,                // dsp sample rate
+    //   pcm->rcvr[i].ch_outrate,  // output sample rate
+    // NereusSDR's createRxChannel callers pass 48000 for both
+    // (RadioModel.cpp openRxChannelPool), and rebuildRxChannel reopens at them.
+    static constexpr int kRxDspSampleRate    = 48000;
+    static constexpr int kRxOutputSampleRate = 48000;
     // DSP buffer size for TX channel = 2048 samples.
     //
     // Deviation from Thetis: cmaster.c:180 [v2.10.3.13] hardcodes 4096.
