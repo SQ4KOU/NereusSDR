@@ -124,6 +124,11 @@
 //                no app owns ends with the server and with an app that
 //                goes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30 - Fix round 2 (Critical 1, RD-C1): a remote window records
+//                the app whose trx:N,true it forwarded (m_remoteKeyClient);
+//                that app leaving releases the key on the Core, or the
+//                Core's answer when it comes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1986,6 +1991,7 @@ void TciServer::stop()
     m_remoteKeyEpoch = 0;
     m_remoteKeyPending = false;
     m_remoteReleaseWhilePending = false;
+    m_remoteKeyClient = nullptr;
     ++m_remoteKeyGeneration;
     const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
@@ -2305,6 +2311,27 @@ void TciServer::onClientDisconnected()
         if (!releaseAppTciKey(ws) || !client) { return; }
         it = m_clients.find(ws);
         if (it == m_clients.end()) { return; }
+    }
+
+    // Fix round 2 (Critical 1, RD-C1): in a remote window, the app whose
+    // trx:N,true was forwarded is gone, with or without TCI audio. Nothing
+    // would send its trx:N,false, so the window's key is released on the
+    // Core now, or the Core's answer is when it comes.
+    if (m_remoteWindow && !m_remoteKeyClient.isNull() && m_remoteKeyClient.data() == ws) {
+        m_remoteKeyClient = nullptr;
+        if (m_remoteKeyPending) {
+            m_remoteReleaseWhilePending = true;
+        }
+        if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+            qCInfo(lcTci) << "TciServer: the app that keyed left; unkeys this window's key, epoch"
+                          << m_remoteKeyEpoch;
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            endRemoteKey();
+            if (!self || !client) { return; }
+            it = m_clients.find(ws);
+            if (it == m_clients.end()) { return; }
+        }
     }
 
     // Phase 17: release TX audio mutex if this client held it.
@@ -3598,6 +3625,7 @@ void TciServer::setRemoteTransmit(RemoteTransmit forward)
     }
     m_remoteKeyPending = false;
     m_remoteReleaseWhilePending = false;
+    m_remoteKeyClient = nullptr;
     ++m_remoteKeyGeneration;
     m_remoteTransmit = std::move(forward);
     m_protocol->setRemoteTransmitForwarded(forwardsRemoteTransmit());
@@ -3658,6 +3686,8 @@ void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, boo
 
     m_remoteKeyPending = true;
     m_remoteReleaseWhilePending = false;
+    // Fix round 2 (Critical 1, RD-C1): which app keyed.
+    m_remoteKeyClient = asker;
     const quint64 generation = ++m_remoteKeyGeneration;
     qCInfo(lcTci) << "TciServer: trx from" << peer << "forwarded to the Core as a program's key";
     m_remoteTransmit.key([this, asker, peer, rx, hasTciArg, generation, answerAsker](
@@ -3683,8 +3713,18 @@ void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, boo
         if (m_remoteReleaseWhilePending) {
             // The app let go before the Core answered.
             m_remoteReleaseWhilePending = false;
+            m_remoteKeyClient = nullptr;
             m_remoteTransmit.unkey(answer.epoch);
             answerAsker(rx, false);
+            return;
+        }
+        // Fix round 2 (Critical 1, RD-C1): the app that asked is gone; no
+        // key is kept for it.
+        if (asker.isNull() || !m_clients.contains(asker.data())) {
+            qCInfo(lcTci) << "TciServer: the Core accepted the key for" << peer
+                          << "after it left; released, epoch" << answer.epoch;
+            m_remoteKeyClient = nullptr;
+            m_remoteTransmit.unkey(answer.epoch);
             return;
         }
         m_remoteKeyEpoch = answer.epoch;

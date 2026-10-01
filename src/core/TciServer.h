@@ -71,6 +71,11 @@
 //                Anthropic Claude Code.
 //   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-30 - Fix round 2 (Critical 1, RD-C1): a remote window records
+//                the app whose trx:N,true it forwarded (m_remoteKeyClient);
+//                that app leaving releases the key on the Core, or the
+//                Core's answer when it comes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -916,6 +921,10 @@ private:
     bool m_remoteKeyPending{false};
     bool m_remoteReleaseWhilePending{false};
     quint64 m_remoteKeyGeneration{0};
+    // Fix round 2 (Critical 1, RD-C1): the app whose trx:N,true this
+    // window forwarded, with or without ",tci". Its leaving releases the
+    // key, or the Core's answer if the key is still being asked for.
+    QPointer<QWebSocket> m_remoteKeyClient;
     // Task 35: an app's trx through a remote window that forwards transmit.
     void handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, bool wantsMox,
                          bool hasTciArg);
