@@ -723,6 +723,7 @@ private slots:
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
     void theMediaPairIsLoggedWhenKnownAndOnChange();
+    void aTxKeepaliveChecksTheMediaPairAtMostOnceASecond();
     void realDisplayErrorIsCountedAndLoggedOnce();
     // TX mic thread fix round 2.
     void realMicLineTornDownWhileItsThreadDelivers_data();
@@ -1627,6 +1628,59 @@ void TstDaemonMediaController::theMediaPairIsLoggedWhenKnownAndOnChange()
     harness.finish();
 }
 
+// Control logging lane: with the "tx" channel open, a keepalive checks
+// the pair, at most once a second; the keepalive still reaches the Core.
+void TstDaemonMediaController::aTxKeepaliveChecksTheMediaPairAtMostOnceASecond()
+{
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Harness harness;
+    harness.establishSession();
+    QVERIFY(harness.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("remoteTxVersion"), 1}},
+        harness.client.sessionEpoch()));
+    QTRY_VERIFY(harness.mediaTransport);
+    QVERIFY(harness.mediaTransport->startOptions.micAudioSsrc != 0);
+    MediaIcePath path;
+    path.localType = QStringLiteral("host");
+    path.localTransport = QStringLiteral("udp");
+    path.remoteType = QStringLiteral("host");
+    path.remoteTransport = QStringLiteral("udp");
+    path.localAddress = QStringLiteral("192.168.1.10");
+    path.localPort = 5000;
+    path.remoteAddress = QStringLiteral("192.168.1.20");
+    path.remotePort = 6000;
+    harness.mediaTransport->path = path;
+    harness.mediaTransport->becomeReady();
+    const auto links = [] {
+        return g_daemonMediaMessages.filter(QStringLiteral("Media link for "));
+    };
+    QTRY_COMPARE(links().size(), 1);
+    QVERIFY2(links().constFirst().endsWith(QStringLiteral("; rtt not measured")),
+             qPrintable(links().constFirst()));
+
+    // Changed at once: a keepalive within the second does not look.
+    path.remoteType = QStringLiteral("srflx");
+    path.remoteAddress = QStringLiteral("10.0.0.77");
+    harness.mediaTransport->path = path;
+    emit harness.mediaTransport->txReceived(QByteArrayLiteral("x"), 0);
+    QCoreApplication::processEvents();
+    QCOMPARE(links().size(), 1);
+
+    // After the second, the next keepalive does.
+    QTest::qWait(1100);
+    emit harness.mediaTransport->txReceived(QByteArrayLiteral("x"), 0);
+    QTRY_COMPARE(links().size(), 2);
+    QVERIFY2(links().constLast().contains(QStringLiteral(
+                 " (changed): direct pair, candidates local host udp, remote srflx udp, ")),
+             qPrintable(links().constLast()));
+    harness.finish();
+}
+
 void TstDaemonMediaController::displayDiagnosticsMeasureSentFramesRefusalsAndErrors()
 {
     g_daemonMediaMessages.clear();
@@ -1743,6 +1797,9 @@ void TstDaemonMediaController::displayDiagnosticsMeasureSentFramesRefusalsAndErr
                  QStringLiteral("largestKeyframe=2176 bytes/3 fragments")),
              qPrintable(finals.constFirst()));
     QVERIFY(finals.constFirst().contains(QStringLiteral("transportErrors=3")));
+    // Control logging lane: the media connection's rtt rides along.
+    QVERIFY2(finals.constFirst().contains(QStringLiteral(" mediaRttMs=")),
+             qPrintable(finals.constFirst()));
     harness.startReadyPeer();
     QCOMPARE(harness.controller.displayDiagnostics(), DaemonDisplayDiagnostics{});
     harness.finish();

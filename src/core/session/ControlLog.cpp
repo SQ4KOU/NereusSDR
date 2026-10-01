@@ -443,8 +443,7 @@ void ControlLog::inbound(SessionTransport* transport, const PeerInfo& peer,
         ? QStringLiteral("received by the transport at %1, taken from the queue at %2 (%3 ms "
                          "later)")
               .arg(clockTime(*waitUs / 1000), clockTime(0), milliseconds(*waitUs))
-        : QStringLiteral("taken by the main thread at %1 (this link gives no separate receipt "
-                         "time)")
+        : QStringLiteral("taken by the main thread at %1 (no receipt time for this message)")
               .arg(clockTime(0));
     const QString previous = sincePrevious < 0
         ? QStringLiteral("the device's first control message")
@@ -498,13 +497,14 @@ void ControlLog::answer(SessionTransport* transport, const PeerInfo& peer,
         qCInfo(lcControlLog).noquote()
             << QStringLiteral("Control out to %1: command.result %2, command %3, %4, handled in "
                               "%5 ms%6")
-                   .arg(who, safeName(message.commandVerb))
-                   .arg(message.commandId)
-                   .arg(message.accepted
+                   // One multi-argument arg: a "%1" in the reason stays text.
+                   .arg(who, safeName(message.commandVerb), QString::number(message.commandId),
+                        message.accepted
                             ? QStringLiteral("accepted")
-                            : QStringLiteral("refused (%1)").arg(safeText(message.reason)))
-                   .arg(handledMs)
-                   .arg(slow ? QStringLiteral("; ") + linkText(transport, peer) : QString());
+                            : QStringLiteral("refused (") + safeText(message.reason)
+                                  + QLatin1Char(')'),
+                        QString::number(handledMs),
+                        slow ? QStringLiteral("; ") + linkText(transport, peer) : QString());
         return;
     }
     QStringList properties;
@@ -548,13 +548,14 @@ void ControlLog::answer(SessionTransport* transport, const PeerInfo& peer,
     qCInfo(lcControlLog).noquote()
         << QStringLiteral("Control out to %1: property.result %2 %3, write %4, %5, handled in "
                           "%6 ms%7")
-               .arg(who, object, names)
-               .arg(message.writeId)
-               .arg(refused.isEmpty()
+               // One multi-argument arg: a "%1" in a reason stays text.
+               .arg(who, object, names, QString::number(message.writeId),
+                    refused.isEmpty()
                         ? QStringLiteral("accepted")
-                        : QStringLiteral("refused (%1)").arg(refused.join(QStringLiteral("; "))))
-               .arg(handledMs)
-               .arg(slow ? QStringLiteral("; ") + linkText(transport, peer) : QString());
+                        : QStringLiteral("refused (") + refused.join(QStringLiteral("; "))
+                              + QLatin1Char(')'),
+                    QString::number(handledMs),
+                    slow ? QStringLiteral("; ") + linkText(transport, peer) : QString());
 }
 
 void ControlLog::tick(SessionTransport* transport, const PeerInfo& peer)

@@ -2075,13 +2075,15 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
             [this, peer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
             noteKeepaliveWait(heldUs);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
             // Control logging lane: while keepalives come, a change of the
             // pair is logged within a second, beside the keepalive lines.
+            // After the watchdog has the keepalive: reading the pair and
+            // rtt takes the ICE and SCTP library locks.
             if (!m_mediaPathChecked.isValid()
                 || m_mediaPathChecked.elapsed() >= kMediaPathCheckMs) {
                 logMediaPath();
             }
-            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
     // Task 36: the microphone line's packets go to its receiver. Task 29:

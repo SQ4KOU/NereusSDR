@@ -306,7 +306,7 @@ private slots:
         QCOMPARE(in.size(), 1);
         QVERIFY2(QRegularExpression(QStringLiteral(
                      "^Control in from abcd: command.invoke control.a, command 1, taken by the "
-                     "main thread at %1 \\(this link gives no separate receipt time\\), the "
+                     "main thread at %1 \\(no receipt time for this message\\), the "
                      "device's first control message$").arg(kClock))
                      .match(in.first()).hasMatch(),
                  qPrintable(in.first()));
@@ -553,6 +553,31 @@ private slots:
                                             "(writes 2 to 10), slowest 3 ms"));
     }
 
+    // A reason holding "%1" or "%2" stays text: the line's own numbers and
+    // link are not substituted into it.
+    void aPercentInAReasonStaysText()
+    {
+        ProbeTransport transport(QStringLiteral("probe"));
+        ControlLog log;
+        log.setClock([this]() { return m_nowMs; });
+        LogCapture capture;
+        const ControlLog::PeerInfo peer = signedInPeer();
+        log.inbound(&transport, peer, frequencyWrite(21));
+        log.answer(&transport, peer, frequencyAnswer(21, false, QStringLiteral("At %1 of %2.")));
+        log.inbound(&transport, peer, command("control.next", 22));
+        m_nowMs += ControlLog::kSlowAnswerMs;
+        log.answer(&transport, peer, commandAnswer("control.next", 22, false,
+                                                   QStringLiteral("Now %1%2%3.")));
+        const QStringList out = capture.lines(QStringLiteral("Control out to "));
+        QCOMPARE(out.size(), 2);
+        QCOMPARE(out.at(0), QStringLiteral("Control out to abcd: property.result slice:0 "
+                                           "frequency, write 21, refused (frequency: At %1 of "
+                                           "%2.), handled in 0 ms"));
+        QCOMPARE(out.at(1), QStringLiteral("Control out to abcd: command.result control.next, "
+                                           "command 22, refused (Now %1%2%3.), handled in 50 ms; "
+                                           "send backlog 1234 bytes"));
+    }
+
     // A reused (or zero) command id: answers are matched in order, so each
     // answer gets its own invoke's handling time.
     void reusedCommandIdsMatchInOrder()
@@ -701,7 +726,7 @@ private slots:
         QCOMPARE(in.size(), 1);
         const QRegularExpression inShape(QStringLiteral(
             "^Control in from ([0-9a-f]+): property.write slice:0 frequency, write 5101, "
-            "taken by the main thread at %1 \\(this link gives no separate receipt time\\), "
+            "taken by the main thread at %1 \\(no receipt time for this message\\), "
             "0 ms after the previous control message$").arg(kClock));
         const QRegularExpressionMatch inMatch = inShape.match(in.first());
         QVERIFY2(inMatch.hasMatch(), qPrintable(in.first()));
