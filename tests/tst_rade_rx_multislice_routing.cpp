@@ -70,7 +70,6 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
-#include "core/DspControlThread.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadeRxWorker.h"
@@ -421,9 +420,8 @@ struct GrowRig {
     // new slice stays silent for depends on how soon the lane thread runs.
     bool feed(int blocks)
     {
-        DspControlThread* const lane = wdsp->receiveLane();
         for (int i = 0; i < blocks; ++i) {
-            if (lane && !lane->waitIdleForTest(5000)) {
+            if (!radio.waitForReceiveLaneForTest(5000)) {
                 return false;
             }
             feedOnce(worker);

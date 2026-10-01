@@ -42,7 +42,6 @@
 #include <thread>
 #include <vector>
 
-#include "core/DspControlThread.h"
 #include "core/P1RadioConnection.h"
 #include "core/RxChannel.h"
 #include "core/SampleRateCatalog.h"
@@ -296,6 +295,9 @@ private slots:
 
         Feeder feeder({rx});
         QVERIFY2(firstSilentChannel(feeder, 1) < 0, "the channel is silent before the stop");
+        // Then kWarmUp of steady input, so the stop lands in steady play,
+        // not in WDSP's up-slew.
+        std::this_thread::sleep_for(kWarmUp);
 
         const Clock::time_point t0 = Clock::now();
         rx->setActive(false);
@@ -324,6 +326,9 @@ private slots:
 
         Feeder feeder({rx});
         QVERIFY2(firstSilentChannel(feeder, 1) < 0, "the channel is silent before the stop");
+        // Then kWarmUp of steady input, so the stop lands in steady play,
+        // not in WDSP's up-slew.
+        std::this_thread::sleep_for(kWarmUp);
 
         rx->deactivateWithoutDrain();
         QVERIFY(!rx->isActive());
@@ -423,8 +428,7 @@ private slots:
         // (RxChannel::runOrdered); a channel the lane has not reached yet is
         // silent. Let the lane finish first, so the warm-up below is real-time
         // input to running channels, not time spent waiting for the lane.
-        DspControlThread* const lane = model.receiveLane();
-        QVERIFY(lane == nullptr || lane->waitIdleForTest(5000));
+        QVERIFY(model.waitForReceiveLaneForTest(5000));
 
         // The feeder hands every channel one block per period at its own rate.
         Feeder feeder(channels);
@@ -434,6 +438,9 @@ private slots:
                                 .arg(silent < 0 ? -1
                                                 : channels[static_cast<std::size_t>(silent)]
                                                       ->channelId())));
+        // Then kWarmUp of steady input, so the change starts in steady play,
+        // not in WDSP's up-slew.
+        std::this_thread::sleep_for(kWarmUp);
 
         // setSampleRateLive stops channel 0 last. Its off event marks the end
         // of the stops; production then disconnects the I/Q feed (step 2),
