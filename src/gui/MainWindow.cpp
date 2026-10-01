@@ -526,6 +526,13 @@
 //                on the transmit permission and its meters subscribed only
 //                while the applet shows it. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I3 and GUI-M2: a remote window's PureSignal
+//               applet is disabled with the reason below PureSignal 3,
+//               not hidden (applyRemotePureSignalAppletGate); the Core
+//               radio items show disabled with a reason in a window that
+//               runs its own radio. Fix round 1: that reason names the
+//               menu item this window has. J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2566,6 +2573,7 @@ void MainWindow::setConnectionPickerManaged(bool managed)
             ? tr("Choose a Core/radio pair or a radio for this computer")
             : tr("Open the Connection Panel (radio list + ↻ Scan)"));
     }
+    refreshCoreRadioActions();
     applyRemoteRoleGating();
 }
 
@@ -14556,8 +14564,12 @@ void MainWindow::refreshCoreRadioActions()
     // GUI-M2 (fix wave): the Core's radio items, in a window that runs its
     // own radio, wait with the reason.
     if (m_radioModel->ownsLocalDsp()) {
-        const QString local = tr("This computer runs its own radio. Change it in the "
-                                 "Connection panel (Radio > Manage Radios).");
+        // Fix round 1 (minor 3): the reason names the item this window has
+        // (a window the connection picker manages calls it Connections).
+        const QString local = m_connectionPickerManaged
+            ? tr("This computer runs its own radio. Change it in Radio > Connections.")
+            : tr("This computer runs its own radio. Change it in the Connection panel "
+                 "(Radio > Manage Radios).");
         for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
             if (a == nullptr) {
                 continue;

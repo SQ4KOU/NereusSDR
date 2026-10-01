@@ -5071,10 +5071,21 @@ private slots:
     // GUI-M2 (fix wave): a window running its own radio shows Radio >
     // Change radio, Edit radio and Forget radio disabled, with a reason that
     // points to the Connection panel (before, they were hidden).
+    void localWindowShowsCoreRadioItemsDisabledWithTheReason_data()
+    {
+        QTest::addColumn<bool>("pickerManaged");
+        QTest::addColumn<QString>("item");
+        QTest::newRow("picker") << true << QStringLiteral("Radio > Connections");
+        QTest::newRow("direct panel") << false << QStringLiteral("Radio > Manage Radios");
+    }
+
     void localWindowShowsCoreRadioItemsDisabledWithTheReason()
     {
+        QFETCH(bool, pickerManaged);
+        QFETCH(QString, item);
         Test::markAudioFirstRunDone();
         MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(pickerManaged);
         QVERIFY(window.radioModel()->ownsLocalDsp());
         // The window's menus, wherever the title bar hosts them.
         QMenu* radioMenu = nullptr;
@@ -5095,8 +5106,8 @@ private slots:
             ++found;
             QVERIFY2(action->isVisible(), qPrintable(text));
             QVERIFY2(!action->isEnabled(), qPrintable(text));
-            QVERIFY2(action->toolTip().contains(QStringLiteral("Connection panel")),
-                     qPrintable(action->toolTip()));
+            // Fix round 1 (minor 3): the item this window really has.
+            QVERIFY2(action->toolTip().contains(item), qPrintable(action->toolTip()));
             QVERIFY(OperatorWording::isPlain(action->toolTip()));
         }
         QCOMPARE(found, 3);
