@@ -120,6 +120,9 @@
 //   2026-10-01: stopRadioRecovery and m_radioChangeRestarting: a radio
 //               change ends when the run serving it stops. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: stopRadioRecovery cancels a restart still pending, and
+//               radioChangeStoppedReason. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -199,6 +202,9 @@ public:
 
     /// The session end every app gets when the Core switches to `radioName`.
     static QString radioChangeReason(const QString& radioName);
+    /// The chooser's refusal when the Core's run stops (a stop, a station
+    /// release, a disconnect) before its radio change could run.
+    static QString radioChangeStoppedReason();
 
     explicit DaemonApp(QObject* parent = nullptr);
     ~DaemonApp() override;
@@ -527,7 +533,9 @@ private:
     // The run stops looking for and reconnecting its radio (stop(), a
     // station release, the operator's disconnect). Nothing is left to serve
     // a radio change, so it ends here too, except for the stop inside a
-    // radio change's own restart (m_radioChangeRestarting).
+    // radio change's own restart (m_radioChangeRestarting). A change whose
+    // restart has not run is cancelled: the restart is not run, the chooser
+    // is refused and the choice dropped.
     void stopRadioRecovery();
     // Fix wave (M3): the on-the-air rule, again at the moment the change
     // runs. True when the radio is on the air: the change is refused and

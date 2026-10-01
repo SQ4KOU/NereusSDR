@@ -143,6 +143,11 @@
 //               no discovery, and a restart that fails drops the pending
 //               choice. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: a run stopped between a radio change's choice and its
+//               restart cancels that restart (stopRadioRecovery), so a
+//               finished stop or station release stays finished; the
+//               chooser is answered refused and the choice is dropped.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1288,6 +1293,11 @@ QString DaemonApp::radioChangeReason(const QString& radioName)
         .arg(radioName);
 }
 
+QString DaemonApp::radioChangeStoppedReason()
+{
+    return QStringLiteral("The Core stopped its radio before the change could run.");
+}
+
 void DaemonApp::stopRadioRecovery()
 {
     m_radioRecoveryEnabled = false;
@@ -1296,9 +1306,26 @@ void DaemonApp::stopRadioRecovery()
     // that would arm the change's deadline, so a change under way would stay
     // switching, refusing every window's choice. A restart's own stop is the
     // exception: the start that follows serves the change.
-    if (!m_radioChangeRestarting) {
-        endRadioSwitch();
+    if (m_radioChangeRestarting) {
+        return;
     }
+    if (m_radioChangeRestartPending) {
+        // Stopped between the choice and its restart (stop(), a station
+        // release, the operator's disconnect): the queued restart would start
+        // the run again and undo the stop, so it is cancelled
+        // (restartForRadioChange returns once this flag is clear). The change
+        // never ran: the chooser's held answer is refused, and the choice is
+        // dropped, as on the on-air refusal, since no run serves it.
+        m_radioChangeRestartPending = false;
+        qCInfo(lcApp) << "DaemonApp: the radio change was cancelled: the run stopped first";
+        if (m_stationRadios) {
+            m_stationRadios->dropPendingChoice();
+        }
+        if (StationServer* server = stationServer()) {
+            server->finishRadioChange(false, radioChangeStoppedReason());
+        }
+    }
+    endRadioSwitch();
 }
 
 void DaemonApp::endRadioSwitch()
@@ -1344,6 +1371,11 @@ bool DaemonApp::refuseRadioChangeOnAir()
 
 void DaemonApp::restartForRadioChange()
 {
+    if (!m_radioChangeRestartPending) {
+        // The run was stopped first (stopRadioRecovery cancelled the change),
+        // or another queued restart already ran it.
+        return;
+    }
     if (m_radioConnectInProgress) {
         // A connect's nested WDSP start is running; retry once it unwinds.
         QTimer::singleShot(100, this, &DaemonApp::restartForRadioChange);

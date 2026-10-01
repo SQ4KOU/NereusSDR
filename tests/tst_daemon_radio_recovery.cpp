@@ -971,6 +971,67 @@ private slots:
         app.stop();
     }
 
+    // A stop, a station release or the operator's disconnect between a
+    // window's choice and the restart that runs it: the run stays stopped
+    // (the queued restart does not start it again), the change ends, and
+    // its choice is dropped.
+    void aStopBeforeTheRestartRunsStaysStopped_data()
+    {
+        QTest::addColumn<int>("how");
+        QTest::newRow("stop") << 0;
+        QTest::newRow("station release") << 1;
+        QTest::newRow("operator disconnect") << 2;
+    }
+
+    void aStopBeforeTheRestartRunsStaysStopped()
+    {
+        QFETCH(int, how);
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, other}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+        RadioModel* const model = app.m_radioModel.get();
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QVERIFY(app.m_radioChangeRestartPending);
+        // The same turn: the restart is still queued.
+        if (how == 0) {
+            app.stop();
+        } else if (how == 1) {
+            app.beginStationRelease();
+            QCOMPARE(app.tryCompleteStationRelease(&reason),
+                     DaemonApp::StationReleaseResult::Stopped);
+        } else {
+            model->disconnectFromRadio();
+        }
+
+        // The restart's turn comes and goes without starting anything.
+        QTest::qWait(50);
+        QVERIFY(!app.m_radioRecoveryEnabled);
+        QVERIFY(!app.m_radioDiscoveryThread);
+        if (how == 2) {
+            QCOMPARE(app.m_radioModel.get(), model);
+            QVERIFY(!model->isConnected());
+            QVERIFY(!model->stationRadioChangeUnderway());
+        } else {
+            QVERIFY(!app.m_radioModel);
+        }
+        QCOMPARE(app.m_selectedRadioMac, info.macAddress.toUpper());
+        QVERIFY(!app.m_radioChangeRestartPending);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
+        app.stop();
+    }
+
     // Fix wave, M3: a key that arrives while the Core changes its radio is
     // refused (the old radio is still connected until the change runs), so
     // nothing keyed is torn down.
