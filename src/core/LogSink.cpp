@@ -16,12 +16,16 @@
 //   2026-09-27  J.J. Boyd / KG4VCF  Bounded producer retries and drain
 //                                    batches, refined with OpenAI Codex
 //                                    assistance.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave: tryDrainNow for a fatal
+//                                    message. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "LogSink.h"
 
 #include <QByteArray>
 #include <QFile>
+#include <QScopeGuard>
 
 #include <chrono>
 #include <cstdio>
@@ -29,6 +33,11 @@
 namespace NereusSDR {
 
 namespace {
+
+// Set while this thread is inside a drain, so a message logged from the
+// drain itself (a fatal from QString or QFile) never tries the drain mutex
+// it already holds.
+thread_local bool t_draining = false;
 
 std::size_t roundUpToPowerOfTwo(std::size_t value)
 {
@@ -161,6 +170,19 @@ void LogSink::drainNow()
     drainLocked();
 }
 
+bool LogSink::tryDrainNow()
+{
+    if (t_draining) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(m_drainMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        return false;
+    }
+    drainLocked();
+    return true;
+}
+
 void LogSink::writerLoop()
 {
     while (!m_stopRequested.load(std::memory_order_acquire)) {
@@ -174,6 +196,8 @@ void LogSink::writerLoop()
 
 void LogSink::drainLocked()
 {
+    t_draining = true;
+    const auto leaving = qScopeGuard([] { t_draining = false; });
     QList<QString> lines;
     QString line;
     // A producer can refill every slot as fast as it is consumed. A drain

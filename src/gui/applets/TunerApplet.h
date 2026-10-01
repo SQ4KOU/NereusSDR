@@ -36,6 +36,9 @@
 //   2026-09-25  transmitBlocked(): TUNE follows the transmit block (Task
 //                 16 fix wave M2), by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I4: remoteWindow, remoteTuneControl and the
+//               three remote reasons. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -146,6 +149,11 @@ public:
     // Group B fix wave (M5): RadioModel's one sentence, shared by both
     // windows.
     static QString onAirReason();
+    // GUI-I4 (fix wave): the reasons a remote window that may transmit
+    // shows when its Core does not run that tuner control for this app.
+    static QString noRemoteTuneReason();
+    static QString noRemoteTunerReason();
+    static QString noRemoteRelayReason();
     bool staleIndicatorVisibleForTesting() const;
 
     // R3 remote sessions are receive-only. MainWindow applies the negotiated
@@ -232,6 +240,14 @@ private:
     // and wait while the radio is on the air.
     bool remoteRelayControl() const;
     void requestRelayMove(int relay, int direction);
+    // GUI-I4 (fix wave): a remote window. Its tuner controls act only
+    // through the Core; on a Core that does not offer one, that control
+    // is disabled with the reason and never falls back to this computer's
+    // own Tuner Genius.
+    bool remoteWindow() const;
+    // A remote window on a Core that runs a Tuner Genius tune for this app
+    // (IStationLink::tgxlAutotuneAvailable).
+    bool remoteTuneControl() const;
     // The Core reports the radio on the air: MOX, TUNE or two-tone.
     bool coreOnAir() const;
     // Group B fix wave (M5): a local window's own switch, refused on the

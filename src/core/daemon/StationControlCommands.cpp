@@ -15,6 +15,10 @@
 //   2026-09-26: the command list says a packaged Core needs only sudo
 //               (R-IOS-08, R-R3-26). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: Fix wave LINK-I4: pairing opened at the Core
+//               (openPairingAtCore) turns pairing through the service
+//               back on, and its shut state is shown on the Core. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/StationControlCommands.h"
@@ -228,6 +232,11 @@ StationControlReply StationControlCommands::pairingShow(const QString& lead) con
         lines << QStringLiteral("Pairing is open for one more device.");
         break;
     }
+    if (window->isServiceShut()) {
+        // LINK-I4.
+        lines << QStringLiteral("Pairing from outside your network is off after too many wrong "
+                                "codes. Run nereusd pairing open to turn it back on.");
+    }
     const QString code = window->currentCode();
     if (!code.isEmpty()) {
         lines << QStringLiteral("Pairing code: %1").arg(code);
@@ -252,13 +261,16 @@ StationControlReply StationControlCommands::pairingOpen() const
         return {false, kCannotPair};
     }
     if (window->state() == PairingWindow::State::OpenUnclaimed) {
+        // LINK-I4: opening it here still turns pairing from outside the
+        // network back on.
+        core->devicesFacade()->openPairingAtCore();
         return pairingShow(QStringLiteral("Pairing is already open, since no device has paired "
                                           "with this Core."));
     }
     if (!core->deviceStore()->isValid()) {
         return {false, kUnreadableList};
     }
-    const DeviceAdminResult result = core->devicesFacade()->openPairing();
+    const DeviceAdminResult result = core->devicesFacade()->openPairingAtCore();
     if (!result.accepted) {
         return {false, result.reason};
     }

@@ -325,20 +325,20 @@ private slots:
         qsizetype from = 0;
 
         // Name: `setup nickname=`, saved on the Core beside it.
-        QVERIFY2(model.setPgxlNameForStation(QStringLiteral(" Shack PGXL "), &reason),
+        QVERIFY2(model.setPgxlNameForStation(QStringLiteral(" Shack_PGXL "), &reason),
                  qPrintable(reason));
         QCOMPARE(settings->pgxlAnswer(),
                  QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
-        quint32 seq = waitForCommand(peer, rx, QStringLiteral("setup nickname=Shack PGXL"), &from);
+        quint32 seq = waitForCommand(peer, rx, QStringLiteral("setup nickname=Shack_PGXL"), &from);
         QVERIFY(seq != 0);
         const qint64 before = settings->pgxlAnswerCount();
         reply(peer, seq, QStringLiteral("0|"));
-        QTRY_COMPARE(settings->pgxlNickname(), QStringLiteral("Shack PGXL"));
+        QTRY_COMPARE(settings->pgxlNickname(), QStringLiteral("Shack_PGXL"));
         QCOMPARE(settings->pgxlAnswer(), QStringLiteral("The Power Genius took the new name."));
         QVERIFY(settings->pgxlAnswerAccepted());
         QCOMPARE(settings->pgxlAnswerCount(), before + 1);
         QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_Nickname")).toString(),
-                 QStringLiteral("Shack PGXL"));
+                 QStringLiteral("Shack_PGXL"));
 
         // Bias, refused by the amp: the value is not taken; the answer says so.
         QVERIFY(model.setPgxlHardwareForStation(QStringLiteral("biasMode"),
@@ -530,7 +530,7 @@ private slots:
         qint64 now = 1'000'000;
         settings.setClockForTesting([&now] { return now; });
         QString reason;
-        QVERIFY(settings.setName(QStringLiteral("Shack PGXL"), &reason));
+        QVERIFY(settings.setName(QStringLiteral("Shack_PGXL"), &reason));
         QCOMPARE(sentCommands, QStringList{QStringLiteral("setup nickname")});
         QCOMPARE(model.pgxlAnswer(),
                  QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
@@ -558,6 +558,38 @@ private slots:
         QCOMPARE(model.pgxlAnswer(),
                  QStringLiteral("The Power Genius did not answer. Try again."));
         QVERIFY(model.pgxlNickname().isEmpty());
+    }
+
+    // RD-I11: the name is one word of the amp's `setup` line. A name with a
+    // space or '=' would add fields ("Shack bias=a" sets the bias); it is
+    // refused with a plain reason and nothing goes to the amp.
+    void aNameThatWouldAddFieldsIsRefused()
+    {
+        for (const auto device : {StationDeviceSettings::Device::Pgxl,
+                                  StationDeviceSettings::Device::Tgxl}) {
+            AccessorySettingsModel model;
+            StationDeviceSettings::Wire wire;
+            QStringList sent;
+            wire.connected = [] { return true; };
+            wire.writeSetup = [&](const QMap<QString, QString>& fields) {
+                sent.append(fields.firstKey() + QLatin1Char('=') + fields.first());
+                return quint32(7);
+            };
+            StationDeviceSettings settings(device, std::move(wire));
+            settings.setModel(&model);
+            for (const QString& bad : {QStringLiteral("Shack bias=a"),
+                                       QStringLiteral("Shack PGXL"),
+                                       QStringLiteral("led=100")}) {
+                QString reason;
+                QVERIFY(!settings.setName(bad, &reason));
+                QCOMPARE(reason, QStringLiteral("Enter a name without spaces or equals signs."));
+                QVERIFY(OperatorWording::isPlain(reason));
+            }
+            QVERIFY(sent.isEmpty());
+            QString reason;
+            QVERIFY2(settings.setName(QStringLiteral(" Shack_Amp "), &reason), qPrintable(reason));
+            QCOMPARE(sent, QStringList{QStringLiteral("nickname=Shack_Amp")});
+        }
     }
 
     void tunerGeniusAtAmpAddressIsNeverAdmitted()

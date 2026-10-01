@@ -113,6 +113,8 @@
 //                disabled, naming the holder, while another device holds
 //                transmit (desktopVoxHolderReason, applyDesktopVoxHolderGate).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I3: applyRemotePureSignalAppletGate. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -760,6 +762,7 @@ private slots:
     /// Called after both mirrored radio state and Core connection activity
     /// change; a reachable Core need not have its radio connected.
     void applyRemoteRoleGating();
+    void applyRemotePureSignalAppletGate();
 
     /// R-R3-46: Radio > Protocol Info in a remote window, from the Core's
     /// description of its radio (name, P1/P2, firmware, MAC, address).
@@ -1409,6 +1412,10 @@ private:
     // R-R3-21 / R-R3-49: maps each container function and band button to
     // its target on the container's own slice.
     std::unique_ptr<ContainerButtonDispatcher> m_containerButtons;
+    // TX safety fix round 4 (2026-09-30): a local window's Radio >
+    // Disconnect is available while a link is Connected or the lost-link
+    // lock holds (the operator's way to lift it and stop recovery).
+    bool localDisconnectAvailable() const;
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};

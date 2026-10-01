@@ -157,6 +157,9 @@
 //                                    MirrorView per device, echo per
 //                                    writer, WriterScope, currentValues().
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 1:
+//                                    MirrorCoalescer::remove. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -239,6 +242,11 @@ public:
     /// re-resolves them against the live model before anything reaches
     /// the wire.
     QList<QPair<QByteArray, QList<MirrorUpdate>>> flush();
+
+    /// Drops `objectKey`'s pending `ordinal` without returning it; the
+    /// other pending properties keep their order. Nothing pending for it
+    /// is a no-op.
+    void remove(const QByteArray& objectKey, quint16 ordinal);
 
     /// Drops everything pending without returning it.
     void clear();

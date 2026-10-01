@@ -297,10 +297,14 @@ Each refusal is followed by the close, as for a token (section 12.4).
 
 **Rate limits.** Failed device sign-ins are counted per source address and
 per device id: 10 within 60 s (`kMaxFailures`, `kWindowMs`) refuse that
-address, or that id, for 60 s (`kLockoutMs`). A sign-in refused while
-limited is not counted again. A connection through the relay has no
+address, or that id, for 60 s (`kLockoutMs`). A failed proof counts
+against the address and the relay introduction only, never the id it
+names: it did not come from that id's key, and counting it would let
+anyone who knows a paired device's id lock the device out. A proved key
+the Core has not paired counts against its id as well. A sign-in refused
+while limited is not counted again. A connection through the relay has no
 address of its own (`SessionTransport::peerAddress` is empty there), so the
-limit applies per device id and per relay introduction. The device limiter
+limit applies per relay introduction (and per id, for proved keys). The device limiter
 never consults the token's (or, later, the pairing code's), and they never
 consult it: wrong tokens do not lock out a device's key, and failed device
 sign-ins do not lock out the token.
@@ -368,6 +372,21 @@ before any code is taken, so it burns nothing. Pairing on a direct
 connection stays open throughout. A pairing, or reopening the window, ends
 the pause and starts over at 1 minute. A code burned either way rotates
 after the same wait.
+
+**The service shut** (the operator's ruling of 2026-09-30). The Core also
+counts codes burned through the rendezvous in total, however far apart;
+a pause never resets the count. The 20th
+(`PairingWindow::kMaxServiceFailuresTotal`) shuts pairing through the
+rendezvous: every mailbox `pair.start` then gets `pair.fail` with
+`retryAfterMs` 0, before any code is taken, and waiting does not help.
+Pairing on a direct connection keeps working. Only a pairing or a
+reopening at the Core (its console's `pairing open`, or Add a device in
+the Core's own window, or the reset of an unclaimed window) clears the
+count; a paired device's `pairing.open` does not. The count and the shut
+are kept in the Core's settings (`PairingServiceFailuresTotal`,
+`PairingServiceShut`), so a restart of the run (a radio change) or of the
+Core keeps pairing through the rendezvous shut. The Core's window and
+`pairing show` say so in plain words.
 
 The first pairing closes an unclaimed window, for good. `devices.revoke`
 never removes the last device while no token is active (section 9.1), so a
@@ -499,6 +518,8 @@ after it.
 | One tap with `pairing_lan_click = deny` | "This Core pairs only with its code. Use the pairing code the Core shows." | 0 |
 | One tap from off the Core's networks | "One tap works only on the Core's own network. Use the pairing code the Core shows." | 0 |
 | Another exchange holds the code | "Another device is pairing with this Core right now. Try again shortly." | 5000 |
+| Pairing through the rendezvous is paused (five wrong codes in a row through it) | "The Core has paused pairing from outside its network after several wrong codes. Try again later, or pair on the Core's own network." | the pause left |
+| Pairing through the rendezvous is shut (20 wrong codes in total through it) | "The Core has turned off pairing from outside its network after too many wrong codes. Pair on the Core's own network, or reopen pairing at the Core." | 0 |
 | No code shown yet (the wait) | "The Core is waiting before it shows a new pairing code. Try again when the new code appears." | until the next code |
 | The code changed between step 0 and step 1 | "The pairing code changed. Enter the code the Core shows now." | 0, or the wait |
 | A malformed step 1 | "The pairing code was not accepted. A new code will appear on the Core." | the wait |
@@ -8791,9 +8812,13 @@ pong on either connection counts. The new connection's connect deadline
 stays on the old one. An old connection that closes before the other end's
 `path.switch` counts as that `path.switch`: the end reads the new
 connection from then on. A new connection that closes after the move
-ends the session as a lost link does (section 12.4, retryable). An end that
-has sent `path.switch` and hears nothing more on the old connection within
-10 s closes it. A `path.switch` outside a move, or a `path.join` from a
+ends the session as a lost link does (section 12.4, retryable). A Core that
+has sent `path.switch` and hears no `path.switch` from the device on the
+old connection within 10 s ends the session as a lost link does (section
+12.4, retryable): what the device sent on the old connection may still be
+in flight, and the device reconnects and resyncs rather than lose it
+silently. A device that has sent its `path.switch` closes its end of the
+old connection once the Core has, or after 5 s. A `path.switch` outside a move, or a `path.join` from a
 device whose Core did not advertise `controlSwitchVersion`, is a message
 out of turn: `path.switch` is ignored, and `path.join` ends that connection
 as step 4 says.

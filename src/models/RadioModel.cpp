@@ -9856,10 +9856,15 @@ QString RadioModel::lpfBypassUnavailableReason()
 //       // MI0BOT: Support for HL2 10MHz clock input
 void RadioModel::connectHl2OptionsToConnection()
 {
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+    // applyHl2Options reads the options and m_connection, both on the main
+    // thread, so the watch runs here (context this) and only the setters
+    // cross to the connection's thread. One watch at a time: a reconnect
+    // replaces it.
+    QObject::disconnect(m_hl2OptionsConnection);
+    if (qobject_cast<P1RadioConnection*>(m_connection) != nullptr) {
         applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
+        m_hl2OptionsConnection = connect(&m_hl2Options, &Hl2OptionsModel::changed, this,
+                                         [this]() { applyHl2Options(); });
     }
 }
 
@@ -18902,6 +18907,20 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 
 void RadioModel::disconnectFromRadio()
 {
+    retireConnectionForRecovery();
+    // TX safety fix round 2 (2026-09-30): the operator disconnected on
+    // purpose, so the lost-link lock lifts here. This runs after
+    // teardownConnection, which returns early when there is no connection,
+    // so a Disconnect made after a recovery retire still clears it.
+    if (m_radioLinkDown) {
+        m_radioLinkDown = false;
+        applyTxKeyBlock();
+        emit radioLinkDownChanged(false);
+    }
+}
+
+void RadioModel::retireConnectionForRecovery()
+{
     m_intentionalDisconnect = true;
     emit radioDisconnectRequested();
     teardownConnection();
@@ -23792,11 +23811,18 @@ void RadioModel::scheduleSettingsSave(SliceModel* slice)
     if (slice) {
         m_dirtySettingsSliceIds.insert(slice->sliceIndex());
     }
-    if (m_settingsSaveScheduled) {
+    m_settingsSaveScheduled = true;
+    // Fix wave (2026-09-30): one coalescing timer at a time, tracked apart
+    // from the save it asks for. A save held back while the receive layout
+    // awaited admission (flushPendingSettingsSave, or removeSliceImpl's
+    // flush) leaves m_settingsSaveScheduled set with no timer running; a
+    // later edit still arms one, so the save is not lost.
+    if (m_settingsSaveTimerArmed) {
         return;
     }
-    m_settingsSaveScheduled = true;
+    m_settingsSaveTimerArmed = true;
     QTimer::singleShot(500, this, [this]() {
+        m_settingsSaveTimerArmed = false;
         flushPendingSettingsSave();
     });
 }
@@ -24553,6 +24579,12 @@ void RadioModel::teardownConnection()
     // section 5.
     setConnectionState(ConnectionState::Disconnected);
 
+    // TX safety fix round 2 (2026-09-30): the forced Disconnected above never
+    // reaches onConnectionStateChanged, so a lost-link lock stays set here.
+    // Every retire passes through this teardown, the recovery retire too,
+    // and that lock must hold until the rebuilt link reaches Connected. The
+    // operator's disconnect lifts it in disconnectFromRadio.
+
     // Tear down the connection on its own worker thread via the shared
     // helper. See src/core/RadioConnectionTeardown.h for why this must
     // run on the worker — short version: the RadioConnection's QTimers
@@ -24756,17 +24788,20 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
 {
     // TX safety fix round 1 (2026-09-30): the lost link's key block. It is
     // set on LinkLost, held through the Connecting and Probing of a
-    // reconnect, and lifted when the link is back (Connected) or closed
-    // (Disconnected). It is set before connectionStateChanged goes out so
-    // the windows lock MOX, TUN and 2TONE on that signal; the keying gate
-    // itself follows below, after LinkLost's stopAllTx. See
+    // reconnect, and lifted when the link is back (Connected). Fix round 3:
+    // a connection-reported Disconnected does not lift it. A rebuilt link's
+    // connect timeout reports Disconnected before the recovery's next retry,
+    // which would otherwise run unlocked; only Connected here and the
+    // operator's disconnectFromRadio lift it. It is set before
+    // connectionStateChanged goes out so the windows lock MOX, TUN and
+    // 2TONE on that signal; the keying gate itself follows below, after
+    // LinkLost's stopAllTx. See
     // MoxController::setRadioLinkDown for the Thetis lines.
     const bool wasRadioLinkDown = m_radioLinkDown;
     if (m_role != Role::Remote) {
         if (state == ConnectionState::LinkLost) {
             m_radioLinkDown = true;
-        } else if (state == ConnectionState::Connected
-                   || state == ConnectionState::Disconnected) {
+        } else if (state == ConnectionState::Connected) {
             m_radioLinkDown = false;
         }
     }

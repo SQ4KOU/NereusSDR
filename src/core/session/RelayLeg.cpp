@@ -14,6 +14,10 @@
 //   2026-09-29: dropSocket() sends a close frame only on an open
 //               WebSocket and aborts one still opening. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: LINK minor 11: a replaced leg drops its socket and says
+//               ended(). LINK minor 14: legs are owned from
+//               construction, no raw delete. J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RelayLeg.h"
@@ -135,28 +139,30 @@ RelayLeg::~RelayLeg()
 
 std::shared_ptr<RelayLeg> RelayLeg::create()
 {
-    auto* leg = new RelayLeg();
-    if (!leg->bindLanes()) {
-        delete leg;
-        return nullptr;
-    }
-    return std::shared_ptr<RelayLeg>(leg, [](RelayLeg* gone) {
+    // LINK minor 14: owned from the start (the constructor is private, so
+    // no make_shared); a leg whose lanes do not bind goes with its owner.
+    std::shared_ptr<RelayLeg> leg(new RelayLeg(), [](RelayLeg* gone) {
         gone->close();
         gone->deleteLater();
     });
+    if (!leg->bindLanes()) {
+        return nullptr;
+    }
+    return leg;
 }
 
 std::shared_ptr<RelayLeg> RelayLeg::createWatch()
 {
-    auto* leg = new RelayLeg(Purpose::Watch);
-    if (!leg->bindLanes()) {
-        delete leg;
-        return nullptr;
-    }
-    return std::shared_ptr<RelayLeg>(leg, [](RelayLeg* gone) {
+    // LINK minor 14: owned from the start (the constructor is private, so
+    // no make_shared); a leg whose lanes do not bind goes with its owner.
+    std::shared_ptr<RelayLeg> leg(new RelayLeg(Purpose::Watch), [](RelayLeg* gone) {
         gone->close();
         gone->deleteLater();
     });
+    if (!leg->bindLanes()) {
+        return nullptr;
+    }
+    return leg;
 }
 
 IceConfiguration::CandidateSourceFactory RelayLeg::factoryFor(std::shared_ptr<RelayLeg> leg)
@@ -650,9 +656,13 @@ void RelayLeg::onEnd(const QString& code)
     if (code == QLatin1String("replaced")) {
         // The newer connection is this leg's own (after a reset this end
         // no longer holds): nothing more here.
+        // LINK minor 11: nothing more on the wire, but the leg still ends
+        // as every other end does: its timer stopped, its socket dropped,
+        // and ended() said (with no words, section 12.4's table) so its
+        // owner does not hold a leg that is gone.
         m_afterClose = AfterClose::Stop;
-        m_state = State::Ended;
-        m_endCode = code;
+        dropSocket();
+        finish(code);
         return;
     }
     m_afterClose = AfterClose::Stop;

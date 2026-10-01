@@ -22,12 +22,45 @@
 
 #include "fakes/FakeAudioBus.h"
 
+#include <QSemaphore>
+
 #include <array>
+#include <atomic>
 #include <memory>
+#include <thread>
 
 using namespace NereusSDR;
 
 namespace {
+
+// A VAX output whose pacing query holds until the test lets it go, so a
+// thread can sit inside AudioEngine's bus lock (vaxOutputPacing) while the
+// DSP thread's tee runs. Counts any push made while that thread is inside.
+class PacingHoldBus : public FakeAudioBus {
+public:
+    PacingHoldBus() : FakeAudioBus(QStringLiteral("PacingHoldVax")) {}
+    std::optional<OutputPacing> outputPacing() const override
+    {
+        m_inside.store(true);
+        entered.release();
+        release.acquire();
+        m_inside.store(false);
+        return std::nullopt;
+    }
+    qint64 push(const char* data, qint64 bytes) override
+    {
+        if (m_inside.load()) {
+            pushesWhileHeld.fetch_add(1);
+        }
+        return FakeAudioBus::push(data, bytes);
+    }
+    mutable QSemaphore entered;
+    mutable QSemaphore release;
+    std::atomic<int> pushesWhileHeld{0};
+
+private:
+    mutable std::atomic<bool> m_inside{false};
+};
 
 // Standard test block: 2 frames of stereo float (4 floats / 16 bytes).
 // Matches what rxBlockReady will forward to push() byte-for-byte.
@@ -318,6 +351,44 @@ private slots:
         // Speakers tee still runs — VAX failure must not break the
         // primary RX audio path.
         QCOMPARE(h.speakers->pushCount(), 1);
+    }
+
+    // ── 5b. The tee keeps out of a bus another thread holds ─────────────────
+    //
+    // RD-I10 (fix wave 2026-09-30): the owner thread replaces a VAX output
+    // and a remote window's feeder writes it, both under m_vaxBusMutex. The
+    // tee on the DSP thread read the bus without the lock, so a replace
+    // could free the bus under its push. It now try-locks the bus, as the
+    // speakers push does, and drops the block while someone else holds it.
+    void teeSkipsABusHeldByAnotherThread() {
+        Harness h = makeHarness();
+        auto bus = std::make_unique<PacingHoldBus>();
+        AudioFormat fmt;
+        fmt.sampleRate = 48000;
+        fmt.channels = 2;
+        fmt.sample = AudioFormat::Sample::Float32;
+        bus->open(fmt);
+        PacingHoldBus* vax1 = bus.get();
+        h.engine->setVaxBusForTest(1, std::move(bus));
+        const int s = h.addSlice(/*vaxChannel=*/1);
+
+        // Another thread inside the bus lock.
+        std::thread holder([&h]() { (void)h.engine->vaxOutputPacing(1); });
+        vax1->entered.acquire();
+        h.engine->rxBlockReady(s, kTestSamples.data(), kTestFrames);
+        const int pushesWhileHeld = vax1->pushesWhileHeld.load();
+        const int pushes = vax1->pushCount();
+        vax1->release.release();
+        holder.join();
+
+        QCOMPARE(pushesWhileHeld, 0);
+        QCOMPARE(pushes, 0);
+        // The speakers still play the block.
+        QCOMPARE(h.speakers->pushCount(), 1);
+
+        // Free again: the next block reaches the bus.
+        h.engine->rxBlockReady(s, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax1->pushCount(), 1);
     }
 
     // ── 6. Out-of-range vaxChannel values are ignored (defensive) ──────────

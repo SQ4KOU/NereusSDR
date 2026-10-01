@@ -540,6 +540,21 @@
 //                are disabled with their reason while the link to the radio
 //                is lost. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-30: Fix wave GUI-I3 and GUI-M2: a remote window's PureSignal
+//               applet is disabled with the reason below PureSignal 3,
+//               not hidden (applyRemotePureSignalAppletGate); the Core
+//               radio items show disabled with a reason in a window that
+//               runs its own radio. Fix round 1: that reason names the
+//               menu item this window has. J.J. Boyd (KG4VCF), AI-
+//               assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety: Radio > Disconnect stays enabled while the
+//                lost-link lock holds, so the operator can lift it after an
+//                automatic recovery stops. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-30 - The container Power button is removed (maintainer
+//                decision): no Power hooks. Radio > Disconnect's enable rule
+//                is one helper, localDisconnectAvailable. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1405,6 +1420,16 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // Wire connection state changes to status bar
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
+    // TX safety fix round 3 (2026-09-30): the lost-link lock lifts on the
+    // operator's disconnect after the model has already reported
+    // Disconnected, so Radio > Disconnect follows the lock itself too.
+    connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, [this]() {
+        if (m_actDisconnect == nullptr || !m_radioModel->ownsLocalDsp()) {
+            return;
+        }
+        m_actDisconnect->setEnabled(localDisconnectAvailable());
+        refreshContainerControls();
+    });
 
     // Issue #118 — show a transient status-bar message when a band-button
     // click short-circuits (locked slice, XVTR without transverter config).
@@ -2600,6 +2625,7 @@ void MainWindow::setConnectionPickerManaged(bool managed)
             ? tr("Choose a Core/radio pair or a radio for this computer")
             : tr("Open the Connection Panel (radio list + ↻ Scan)"));
     }
+    refreshCoreRadioActions();
     applyRemoteRoleGating();
 }
 
@@ -7091,22 +7117,12 @@ void MainWindow::buildUI()
             this, refreshFilterIndicators);
     refreshFilterIndicators();
 
-    // R-R3-21 / R-R3-49: the container buttons' targets. Power, the
-    // transmit gate, the panadapter of a slice and this computer's VAX
-    // outputs live on this window; the rest on RadioModel.
+    // R-R3-21 / R-R3-49: the container buttons' targets. The transmit
+    // gate, the panadapter of a slice and this computer's VAX outputs live
+    // on this window; the rest on RadioModel. (No Power button: maintainer
+    // decision 2026-09-30.)
     {
         ContainerButtonDispatcher::Hooks hooks;
-        hooks.powerOn = [this] { return m_actDisconnect && m_actDisconnect->isEnabled(); };
-        hooks.powerCanToggle = [this] { return m_actConnect && m_actConnect->isEnabled(); };
-        hooks.togglePower = [this] {
-            // Radio > Disconnect / Radio > Connect: this window's radio, or
-            // in a remote window its Core.
-            if (m_actDisconnect && m_actDisconnect->isEnabled()) {
-                m_actDisconnect->trigger();
-            } else if (m_actConnect && m_actConnect->isEnabled()) {
-                m_actConnect->trigger();
-            }
-        };
         hooks.desktopHosting = [this] { return desktopHosting(); };
         // Slice control plan Task 15 fix round 1: a slice this window
         // listens to refuses the slice buttons with the RX applet's reason.
@@ -10065,9 +10081,10 @@ void MainWindow::buildMenuBar()
         openThisCore(ThisCoreFocus::ForgetRadio);
     });
     radioMenu->setToolTipsVisible(true);
-    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
-        a->setVisible(m_radioModel != nullptr && !m_radioModel->ownsLocalDsp());
-    }
+    // GUI-M2 (fix wave): a window running its own radio shows these
+    // disabled, with the reason pointing to the Connection panel, never
+    // hidden (refreshCoreRadioActions).
+    refreshCoreRadioActions();
     connect(radioMenu, &QMenu::aboutToShow, this, &MainWindow::refreshCoreRadioActions);
 
     radioMenu->addSeparator();
@@ -14614,6 +14631,30 @@ void MainWindow::refreshCoreRadioActions()
     if (m_actForgetCoreRadio == nullptr || m_radioModel == nullptr) {
         return;
     }
+    // GUI-M2 (fix wave): the Core's radio items, in a window that runs its
+    // own radio, wait with the reason.
+    if (m_radioModel->ownsLocalDsp()) {
+        // Fix round 1 (minor 3): the reason names the item this window has
+        // (a window the connection picker manages calls it Connections).
+        const QString local = m_connectionPickerManaged
+            ? tr("This computer runs its own radio. Change it in Radio > Connections.")
+            : tr("This computer runs its own radio. Change it in the Connection panel "
+                 "(Radio > Manage Radios).");
+        for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
+            if (a == nullptr) {
+                continue;
+            }
+            a->setEnabled(false);
+            a->setToolTip(local);
+        }
+        return;
+    }
+    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio}) {
+        if (a != nullptr) {
+            a->setEnabled(true);
+            a->setToolTip(QString());
+        }
+    }
     const QString why = forgetCoreRadioReason();
     m_actForgetCoreRadio->setEnabled(why.isEmpty());
     m_actForgetCoreRadio->setToolTip(why);
@@ -15177,6 +15218,27 @@ void MainWindow::refreshTciRemoteTransmit()
 #endif
 }
 
+// GUI-I3 (fix wave): on a remote window the PureSignal applet follows the
+// Core's radio. It hides only when that radio has no PureSignal hardware
+// (as a local HL2 or Atlas hides it); a radio that has it while the Core
+// has not advertised PureSignal 3 shows the applet disabled, with the
+// reason, as the PureSignal menu items do.
+void MainWindow::applyRemotePureSignalAppletGate()
+{
+    if (!m_pureSignalApplet) {
+        return;
+    }
+    const bool linked = m_stationClient && m_stationClient->isHandshakeComplete();
+    const bool ps3Supported = linked
+        && m_stationClient->capabilities().psAlgorithmVersion == 3;
+    const bool hardware = linked && m_radioModel->boardCapabilities().hasPureSignal;
+    m_pureSignalApplet->setEnabled(ps3Supported);
+    m_pureSignalApplet->setToolTip(ps3Supported
+        ? QString()
+        : tr("The connected Core has not advertised PureSignal 3."));
+    m_pureSignalApplet->setVisible(hardware);
+}
+
 void MainWindow::applyRemoteRoleGating()
 {
     if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
@@ -15365,10 +15427,7 @@ void MainWindow::applyRemoteRoleGating()
                 : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core."));
     }
     if (m_pureSignalApplet) {
-        const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
-            && m_stationClient->capabilities().psAlgorithmVersion == 3;
-        m_pureSignalApplet->setEnabled(ps3Supported);
-        m_pureSignalApplet->setVisible(ps3Supported);
+        applyRemotePureSignalAppletGate();
     }
     if (m_actConnect != nullptr) {
         m_actConnect->setEnabled(m_connectionPickerManaged || (m_station.isRemote() && !active));
@@ -16414,9 +16473,7 @@ void MainWindow::onConnectionStateChanged()
             m_radioModel->syncStepAttenuatorToReceiveSlice();
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
-            m_pureSignalApplet->setVisible(m_stationClient
-                && m_stationClient->isHandshakeComplete()
-                && m_stationClient->capabilities().psAlgorithmVersion == 3);
+            applyRemotePureSignalAppletGate();
         }
 
         // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is
@@ -16720,7 +16777,10 @@ void MainWindow::onConnectionStateChanged()
             && !lastMac.isEmpty()
             && s.savedRadio(lastMac).has_value();
         m_actConnect->setEnabled(m_connectionPickerManaged || hasReconnectTarget);
-        m_actDisconnect->setEnabled(connected);
+        // TX safety fix round 3 (2026-09-30): Disconnect also stays
+        // available while the lost-link lock holds, Disconnected included
+        // (an automatic recovery that stopped), since it is what lifts it.
+        m_actDisconnect->setEnabled(localDisconnectAvailable());
         m_actProtocolInfo->setEnabled(connected);
     }
 
@@ -16728,9 +16788,15 @@ void MainWindow::onConnectionStateChanged()
     // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
     refreshRemoteConnectionUi();
-    // R-R3-21: the container Power and transmit buttons follow the
-    // Connect / Disconnect enablement set just above.
+    // R-R3-21: the container transmit buttons follow the connection state
+    // set just above.
     refreshContainerControls();
+}
+
+bool MainWindow::localDisconnectAvailable() const
+{
+    return m_radioModel->connectionState() == ConnectionState::Connected
+        || m_radioModel->isRadioLinkDown();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

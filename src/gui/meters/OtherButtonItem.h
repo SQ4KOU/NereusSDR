@@ -16,6 +16,9 @@
 //                 NereusSDR feature hidden through UnbuiltFeatures, lit and
 //                 available state per button id. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 - The Power button is removed (maintainer decision): never
+//                 drawn, and a saved layout's Power bit is dropped on load.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -73,6 +76,9 @@ class OtherButtonItem : public ButtonBoxItem {
     Q_OBJECT
 
 public:
+    // Power intentionally omitted in NereusSDR (maintainer decision
+    // 2026-09-30): the id keeps its Thetis index (and its saved visibility
+    // bit), but the button is never drawn and a saved one is dropped.
     enum class ButtonId {
         Power, Rx2, Mon, Tun, Mox, TwoTon, Dup, PsA,
         Play, Rec, Anf, Snb, Mnf, Avg, PeakHold, Ctun,
@@ -122,6 +128,10 @@ signals:
 
 private:
     void onButtonClicked(int index, Qt::MouseButton button);
+
+    // The saved visibility bits with every button NereusSDR omits (Power)
+    // cleared, so a layout that holds one loads without it.
+    static uint32_t withoutOmittedButtons(uint32_t bits);
 
     static constexpr int kCoreButtonCount = 34;
     static constexpr int kMacroCount = 31;

@@ -9,6 +9,10 @@
 // draw both take drawsGeometryLayer(), so these offscreen checks guard the
 // rule on every platform CI runs. tst_spectrum_gpu_buffer_growth is the
 // end-to-end check on a real Metal QRhi.
+//
+// Fix wave 2026-09-30 (GUI-I2, GUI-M1), J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code: the 3DSS mesh and waterfall uniform buffers come
+// from the plan too, written only in a frame whose draw binds them.
 
 #include <QTest>
 
@@ -19,7 +23,7 @@ using namespace NereusSDR;
 
 namespace {
 
-constexpr int kInputCount = 14;
+constexpr int kInputCount = 15;
 
 SpectrumTraceFrameInputs inputsFromBits(unsigned bits)
 {
@@ -39,6 +43,7 @@ SpectrumTraceFrameInputs inputsFromBits(unsigned bits)
     in.heldTrace = bit(11);
     in.heldFill = bit(12);
     in.heldPeak = bit(13);
+    in.waterfallPipeline = bit(14);
     return in;
 }
 
@@ -52,6 +57,7 @@ SpectrumTraceFrameInputs live2D()
     in.hasPixels = true;
     in.panFill = true;
     in.peakHoldReady = true;
+    in.waterfallPipeline = true;
     return in;
 }
 
@@ -91,7 +97,12 @@ private slots:
                          == (!p.drawsDssMesh && in.mode3D && in.dssFallbackReady),
                      at.constData());
 
-            // Write implies bind, for each buffer (the leak).
+            // Write implies bind, for each buffer (the leak). The mesh
+            // uniforms are bound only by the mesh draw, the waterfall's
+            // only by the waterfall draw.
+            QVERIFY2(p.writeDssMeshUbo == p.drawsDssMesh, at.constData());
+            QVERIFY2(p.drawsWaterfall == in.waterfallPipeline, at.constData());
+            QVERIFY2(p.writeWaterfallUbo == p.drawsWaterfall, at.constData());
             QVERIFY2(!p.writeLine || p.bindLine, at.constData());
             QVERIFY2(!p.writeFill || p.bindFill, at.constData());
             QVERIFY2(!p.writePeak || p.bindPeak, at.constData());
@@ -154,6 +165,46 @@ private slots:
             QVERIFY(!p.writePeak);
             QCOMPARE(p.drawsDssMesh, rows);
         }
+    }
+
+    // GUI-I2: a 3D pan whose mesh is up but whose ring has no rows yet, or
+    // whose mesh never came up (the CPU fallback draws), writes no mesh
+    // uniforms: nothing binds them.
+    void mode3DWithoutMeshDraw_writesNoMeshUniforms()
+    {
+        SpectrumTraceFrameInputs in = live2D();
+        in.mode3D = true;
+        in.dssMeshReady = true;
+        in.dssHasRows = false;
+        SpectrumTraceFramePlan p = planSpectrumTraceFrame(in);
+        QVERIFY(!p.drawsDssMesh);
+        QVERIFY(!p.writeDssMeshUbo);
+
+        in.dssMeshReady = false;
+        in.dssHasRows = true;
+        in.dssFallbackReady = true;
+        p = planSpectrumTraceFrame(in);
+        QVERIFY(p.drawsDssFallback);
+        QVERIFY(!p.writeDssMeshUbo);
+
+        in.dssMeshReady = true;
+        p = planSpectrumTraceFrame(in);
+        QVERIFY(p.drawsDssMesh);
+        QVERIFY(p.writeDssMeshUbo);
+    }
+
+    // GUI-M1: no waterfall pipeline (its shaders failed to load), no
+    // waterfall uniform write.
+    void noWaterfallPipeline_writesNoWaterfallUniforms()
+    {
+        SpectrumTraceFrameInputs in = live2D();
+        in.waterfallPipeline = false;
+        SpectrumTraceFramePlan p = planSpectrumTraceFrame(in);
+        QVERIFY(!p.drawsWaterfall);
+        QVERIFY(!p.writeWaterfallUbo);
+        in.waterfallPipeline = true;
+        p = planSpectrumTraceFrame(in);
+        QVERIFY(p.drawsWaterfall && p.writeWaterfallUbo);
     }
 
     void panFillOff_writesNoFill()

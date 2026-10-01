@@ -37,6 +37,13 @@
 //   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (Task 77 fix round 4): replyRefused, a reply whose code
 //                 reads and is not zero.
+//   2026-09-30: Fix wave RD-I11: writeSetup refuses a key or value with
+//               a space or '=' (isSetupToken), so a name cannot add
+//               setup fields. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-30: Fix round 1: asSetupToken offers a name saved with
+//               spaces as one word. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -790,10 +797,44 @@ quint32 PgxlConnection::readSetup() {
     return sendCommand("setup read");
 }
 
+QString PgxlConnection::asSetupToken(const QString& text)
+{
+    QString out;
+    bool gap = false;
+    for (const QChar c : text.trimmed()) {
+        if (c.isSpace() || c == QLatin1Char('=') || c.category() == QChar::Other_Control) {
+            gap = true;
+            continue;
+        }
+        if (gap && !out.isEmpty()) {
+            out += QLatin1Char('_');
+        }
+        gap = false;
+        out += c;
+    }
+    return out;
+}
+
+bool PgxlConnection::isSetupToken(const QString& text)
+{
+    for (const QChar c : text) {
+        if (c.isSpace() || c == QLatin1Char('=') || c.category() == QChar::Other_Control) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // From FlexRadio wiki spec: setup <kv> ... (write fields as space-separated k=v pairs)
 quint32 PgxlConnection::writeSetup(const QMap<QString,QString>& fields) {
     QStringList parts;
     for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+        // RD-I11: a key or value with a space or '=' would split into
+        // fields of its own; nothing is sent.
+        if (!isSetupToken(it.key()) || !isSetupToken(it.value())) {
+            qCWarning(lcPgxl) << "setup field refused (space or '=' in it):" << it.key();
+            return 0;
+        }
         parts << QString("%1=%2").arg(it.key(), it.value());
     }
     return sendCommand(QString("setup %1").arg(parts.join(' ')));

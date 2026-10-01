@@ -633,6 +633,36 @@ private slots:
         QCOMPARE(saved.slices.first().frequencyHz, 10'125'000.0);
     }
 
+    // Fix wave (2026-09-30): a save held back while the layout awaited
+    // admission (a receiver closed then) must not stop later edits from
+    // being saved once admission is over.
+    void saveHeldBackDuringAdmissionDoesNotBlockLaterSaves()
+    {
+        RadioModel radio;
+        radio.prepareReceiveLayout(kMacB); // nothing saved
+        QVERIFY(radio.addSlice(QStringLiteral("pan-0")) >= 0);
+        const int closing = radio.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(closing >= 0);
+        // Closed while admission is pending: its save is held back.
+        radio.removeSlice(closing);
+        QVERIFY(radio.receiveLayoutPendingAdmission());
+
+        radio.completeReceiveLayoutStartup();
+        QVERIFY(!radio.receiveLayoutPendingAdmission());
+
+        // An edit after admission reaches the file through the coalescing
+        // timer, with no explicit flush.
+        radio.sliceById(0)->setFrequency(10'125'000.0);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            [] {
+                const auto saved = layoutFromDisk(kMacB);
+                return saved.state == ReceiveLayoutStore::LoadState::Loaded
+                    && saved.slices.size() == 1
+                    && saved.slices.first().frequencyHz == 10'125'000.0;
+            }(),
+            5000);
+    }
+
     void refusedRadeReceiverSaysOnceThatItsAudioStaysOff()
     {
         // The Rock's two-band pan 0, with a third pan listed ahead of B so

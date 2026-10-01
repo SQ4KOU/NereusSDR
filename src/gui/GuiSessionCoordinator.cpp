@@ -329,7 +329,9 @@ void GuiSessionCoordinator::retryHostedRadio(quint64 generation)
     const QScopedValueRollback<bool> retiring(m_retiringHostedRadio, true);
     const QString attempted = model->currentRadioInfo().macAddress;
     if (!attempted.isEmpty()) { m_stationRadios->setTarget(attempted); }
-    model->disconnectFromRadio();
+    // TX safety fix round 2 (2026-09-30): the recovery retire keeps a
+    // lost-link key lock until the rebuilt link is Connected.
+    model->retireConnectionForRecovery();
     m_stationRadios->clearCurrent();
     m_stationRadios->setSwitching(false);
     m_stationRadios->setWaiting(tr("The Core is reconnecting to its radio."));

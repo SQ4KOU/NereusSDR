@@ -51,6 +51,9 @@
 //                                    the RX applet's reason, in remote and
 //                                    hosting windows. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  The container Power button is removed
+//                                    (maintainer decision): no Power hooks.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -76,12 +79,6 @@ public:
 
     // What the window supplies: the parts that live on MainWindow.
     struct Hooks {
-        // Power: whether this window's radio (local) or Core (remote) is
-        // connected, whether a click can connect or disconnect it, and the
-        // click itself (Radio > Connect or Radio > Disconnect).
-        std::function<bool()> powerOn;
-        std::function<bool()> powerCanToggle;
-        std::function<void()> togglePower;
         // Present only while this local window hosts the Core.
         std::function<bool()> desktopHosting;
         // Slice control plan Task 15 fix round 1: why this window may not
@@ -153,7 +150,6 @@ public:
 
     // Plain reasons, exposed for tests.
     static QString noRadioTransmitReason();
-    static QString noPowerTargetReason();
 
 private:
     QString sliceUnavailableReason(int rxSource) const;

@@ -1910,6 +1910,11 @@ target_compile_definitions(tst_n2adr_preset PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_hl2_options_tab)
 target_compile_definitions(tst_hl2_options_tab PRIVATE NEREUS_BUILD_TESTS)
 
+# RD-I8 (fix wave 2026-09-30): the HL2 options watch runs on the main thread
+# and only the setters cross to the P1 connection's thread.
+nereus_add_test(tst_hl2_options_wiring_thread)
+target_compile_definitions(tst_hl2_options_wiring_thread PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-D Task 3: P1RadioConnection ↔ OcMatrix codec wiring ─────────────
 # Verifies:
 #   - Without OcMatrix wired: bank 0 C2 = 0 (legacy m_ocOutput fallback).
@@ -8342,6 +8347,10 @@ nereus_add_test(tst_support_bundle EXTRA_LABELS session)
 # Remote-window parity Task 22 (R-R3-49): the log sink no logging thread
 # waits on, a stuck writer included. Temporary files only.
 nereus_add_test(tst_log_sink EXTRA_LABELS core)
+# Fix wave (2026-09-30): a fatal message reaches the log file before Qt
+# aborts. Runs the fatal in a child process of the same binary.
+nereus_add_test(tst_core_init_fatal_log EXTRA_LABELS core)
+target_compile_definitions(tst_core_init_fatal_log PRIVATE NEREUS_BUILD_TESTS)
 # Remote-window parity Task 22 (R-R3-49, B6.4, B6.6): the Core's log,
 # logging categories and bundle in a remote window over the loopback, the
 # Support dialog and Setup > Diagnostics > Logs. No RF, no audio device.

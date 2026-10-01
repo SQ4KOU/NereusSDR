@@ -16,6 +16,9 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the session's ICE
 //               settings passed to the media transport. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: LINK minor 14: the private part is held by unique_ptr.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -150,7 +153,7 @@ struct MediaPeer::Private {
 
 MediaPeer::MediaPeer(QObject* parent, TransportFactory factory)
     : QObject(parent)
-    , d(new Private)
+    , d(std::make_unique<Private>())
 {
     d->factory = std::move(factory);
     if (!d->factory) {
@@ -163,7 +166,6 @@ MediaPeer::MediaPeer(QObject* parent, TransportFactory factory)
 MediaPeer::~MediaPeer()
 {
     stopInternal(false);
-    delete d;
 }
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,

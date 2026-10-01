@@ -65,6 +65,10 @@
 //               own PTT keys the desktop's active slice. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK minor 1 (TX path): proceedTakeTransmit
+//               checks sessionTransmitRefusal first, so a take-over from
+//               a session that may not transmit is refused. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -468,6 +472,12 @@ SessionMessage StationServer::proceedTakeTransmit(SessionTransport* transport,
                                                   const SessionMessage& invoke)
 {
     const QByteArray device = question.device;
+    // LINK minor 1: the session's own transmit rights are checked again
+    // here, as takeTransmit() and takeBackTransmit() check them: the
+    // answer to the question may come after they changed.
+    if (const TxRefusal refusal = sessionTransmitRefusal(transport); !refusal.isEmpty()) {
+        return refusalResult(invoke, refusal);
+    }
     // Ruling 8.7: a holder that was not keyed when asked and is keyed now,
     // or a different holder, is asked again; the operator always sees the
     // red question before a carrier is cut.

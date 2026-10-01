@@ -17,6 +17,9 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): setIceConfiguration()
 //               and usesIce(). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: LINK minor 14: the private part is held by unique_ptr.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -28,6 +31,7 @@
 #include <QString>
 
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
@@ -200,7 +204,8 @@ signals:
 
 private:
     struct Private;
-    Private* d;
+    // LINK minor 14: owned, not a raw pointer.
+    std::unique_ptr<Private> d;
 
     bool isCurrent(const IMediaTransport* transport, quint64 generation) const;
     bool isDeclaredAudioSsrc(quint32 ssrc) const;

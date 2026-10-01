@@ -18,7 +18,10 @@
 //   - A container set to a slice that is not open shows its buttons
 //     unavailable with a plain reason, and a click changes nothing.
 //   - With no radio, TUN, MOX and 2TON are unavailable and do nothing;
-//     MON, MNF, Peak, CTUN, VAX and Power act on their targets.
+//     MON, MNF, Peak, CTUN and VAX act on their targets.
+//   - There is no Power button (maintainer decision 2026-09-30): it is not
+//     drawn, a saved one is dropped on load, and an old Power id clicked
+//     changes nothing.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -43,6 +46,11 @@
 //                                    1: a slice another device controls
 //                                    refuses the slice buttons with the
 //                                    window's reason. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  The Power button is removed
+//                                    (maintainer decision): not drawn,
+//                                    dropped from a saved layout, and an
+//                                    old id does nothing. AI-assisted via
 //                                    Anthropic Claude Code.
 // =================================================================
 
@@ -86,7 +94,7 @@ constexpr int kSliceB = 2;
 constexpr int kSliceC = 3;
 
 const QList<Id> kConnected = {
-    Id::Power, Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
+    Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
     Id::Anf, Id::Snb, Id::Mnf, Id::PeakHold, Id::Ctun,
     Id::Vac1, Id::Vac2, Id::Mute, Id::Bin, Id::Dup,
 };
@@ -140,9 +148,6 @@ private:
         SpectrumWidget spectrumA;
         SpectrumWidget spectrumB;
         std::unique_ptr<AudioEngine> vax;
-        bool powerOn{false};
-        bool powerCanToggle{false};
-        int powerToggles{0};
         std::unique_ptr<ContainerButtonDispatcher> dispatcher;
 
         Fixture()
@@ -167,9 +172,6 @@ private:
             });
 
             ContainerButtonDispatcher::Hooks hooks;
-            hooks.powerOn = [this] { return powerOn; };
-            hooks.powerCanToggle = [this] { return powerCanToggle; };
-            hooks.togglePower = [this] { ++powerToggles; powerOn = !powerOn; };
             hooks.transmitPermitted = [] { return true; };
             hooks.spectrumFor = [this](SliceModel* s) -> SpectrumWidget* {
                 return s == a ? &spectrumA : (s == b ? &spectrumB : nullptr);
@@ -215,13 +217,16 @@ private slots:
                      qPrintable(QStringLiteral("button %1 is drawn").arg(int(id))));
             QVERIFY(OtherButtonItem::unbuiltFeatureFor(id).has_value());
         }
-        QCOMPARE(kConnected.size() + kHidden.size(), 34);
+        // Power is neither: NereusSDR has no Power button.
+        QVERIFY(!item.isButtonShown(Id::Power));
+        QCOMPARE(kConnected.size() + kHidden.size() + 1, 34);
         // The macro buttons stay hidden.
         for (int i = 34; i < item.buttonCount(); ++i) {
             QVERIFY(!item.ButtonBoxItem::isButtonShown(i));
         }
-        // Hiding wrote nothing into the saved visibility.
-        QCOMPARE(item.visibleBits(), 0xFFFFFFFFu);
+        // Hiding wrote nothing into the saved visibility; only Power's bit
+        // is cleared.
+        QCOMPARE(item.visibleBits(), 0xFFFFFFFEu);
 
         // VAC1 / VAC2 read VAX 1 / VAX 2.
         QCOMPARE(item.button(item.indexOf(Id::Vac1)).text, QStringLiteral("VAX 1"));
@@ -306,7 +311,9 @@ private slots:
     void savedVisibilityOfAHiddenButtonIsKept()
     {
         OtherButtonItem item;
-        const QString saved = QStringLiteral("OTHERBTNS|0|0|1|1|0|0|6|4294967295");
+        // Every bit but Power's: Power is not a button in NereusSDR and is
+        // dropped on load (savedPowerButtonIsDroppedOnLoad covers that).
+        const QString saved = QStringLiteral("OTHERBTNS|0|0|1|1|0|0|6|4294967294");
         QVERIFY(item.deserialize(saved));
         QVERIFY(!item.isButtonShown(Id::Rx2));
         QVERIFY(item.isButtonShown(Id::Anf));
@@ -631,30 +638,47 @@ private slots:
                  QStringLiteral("False"));
     }
 
-    void powerConnectsOrSaysWhyNot()
+    // NereusSDR has no Power button (maintainer decision 2026-09-30). An
+    // old Power id (a stale click) is unavailable and changes nothing, and
+    // apply() never lights or enables it.
+    void powerIsNotAButton()
     {
         Fixture f;
         OtherButtonItem item;
         f.dispatcher->apply(&item, kSliceA);
-        QVERIFY(!item.isButtonAvailable(Id::Power));
-        QCOMPARE(f.dispatcher->click(Id::Power, kSliceA),
-                 ContainerButtonDispatcher::noPowerTargetReason());
-        QCOMPARE(f.powerToggles, 0);
-
-        f.powerCanToggle = true;
-        f.dispatcher->apply(&item, kSliceA);
-        QVERIFY(item.isButtonAvailable(Id::Power));
+        QVERIFY(!item.isButtonShown(Id::Power));
         QVERIFY(!item.buttonState(Id::Power));
-        QVERIFY(f.dispatcher->click(Id::Power, kSliceA).isEmpty());
-        QCOMPARE(f.powerToggles, 1);
-        f.dispatcher->apply(&item, kSliceA);
-        QVERIFY(item.buttonState(Id::Power));
+        const ContainerButtonDispatcher::State st = f.dispatcher->stateOf(Id::Power, kSliceA);
+        QVERIFY(!st.available);
+        QVERIFY(!st.on);
+        const QString reason = f.dispatcher->click(Id::Power, kSliceA);
+        QVERIFY(!reason.isEmpty());
+        QVERIFY(OperatorWording::isPlain(reason));
+        QCOMPARE(f.model.connectionState(), ConnectionState::Disconnected);
+    }
+
+    // A layout saved with a Power button loads without it; the other
+    // buttons keep their saved visibility, and saving drops the Power bit.
+    void savedPowerButtonIsDroppedOnLoad()
+    {
+        const uint32_t bits = (1u << int(Id::Power)) | (1u << int(Id::Mon))
+            | (1u << int(Id::Tun)) | (1u << int(Id::Mox));
+        OtherButtonItem item;
+        QVERIFY(item.deserialize(QStringLiteral("OTHERBTNS|0.1|0.2|0.5|0.5|0|3|6|%1").arg(bits)));
+        QVERIFY(!item.isButtonShown(Id::Power));
+        QVERIFY(item.isButtonShown(Id::Mon));
+        QVERIFY(item.isButtonShown(Id::Tun));
+        QVERIFY(item.isButtonShown(Id::Mox));
+        QVERIFY(!item.isButtonShown(Id::Anf));
+        QCOMPARE(item.columns(), 6);
+        const uint32_t kept = bits & ~(1u << int(Id::Power));
+        QCOMPARE(item.visibleBits(), kept);
+        QCOMPARE(item.serialize(), QStringLiteral("OTHERBTNS|0.1|0.2|0.5|0.5|0|3|6|%1").arg(kept));
     }
 
     void everyReasonIsPlain()
     {
         Fixture f;
-        QVERIFY(OperatorWording::isPlain(ContainerButtonDispatcher::noPowerTargetReason()));
         QVERIFY(OperatorWording::isPlain(ContainerButtonDispatcher::noRadioTransmitReason()));
         for (int rx = 1; rx <= 4; ++rx) {
             QVERIFY(OperatorWording::isPlain(ContainerButtonDispatcher::noSliceReason(rx)));

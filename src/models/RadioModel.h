@@ -517,6 +517,10 @@
 //                and 2TONE until it is back (console.cs:27488-27493
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - TX safety: retireConnectionForRecovery keeps the lost-link
+//                lock through an automatic recovery; disconnectFromRadio
+//                (the operator's) lifts it. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1632,10 +1636,16 @@ public:
     // power-off leaves chkVOX alone (console.cs:27488-27493 [v2.10.3.15]).
     bool transmitLockCoversVox() const;
     // TX safety (2026-09-30): the link to the radio is lost and not yet
-    // back (LinkLost, and the Connecting or Probing that follows it). Every
-    // key is refused (MoxController::setRadioLinkDown) and MOX, TUN and
-    // 2TONE are locked with radioLinkDownReason(). Always false on a remote
-    // window, whose Core refuses the key.
+    // back. The lock holds from LinkLost through the Disconnected wait of
+    // an automatic recovery (retireConnectionForRecovery) and the rebuilt
+    // link's Connecting and Probing, a rebuilt link's own Disconnected
+    // included, until a link reaches Connected or the operator disconnects
+    // (disconnectFromRadio). Every key is refused
+    // (MoxController::setRadioLinkDown) and MOX, TUN and 2TONE are locked
+    // with radioLinkDownReason(). Always false on a remote window, whose
+    // Core refuses the key. A radio change (the hosted replace, the Core's
+    // switchRadio) is the operator's and counts as their disconnect: it
+    // restarts the window or the Core run, so a new radio starts unlocked.
     bool isRadioLinkDown() const { return m_radioLinkDown; }
     static QString radioLinkDownReason();
     // TX-parity-linkdown (fix wave): the link-down lock transmitButtonsLocked,
@@ -4779,7 +4789,15 @@ public:
     void connectToRadio(const RadioInfo& info);
     // Same selected radio, retaining live receiver state and active selection.
     void connectToRadioPreservingSlices(const RadioInfo& info);
+    // The operator's disconnect (and an application shutdown). It also lifts
+    // the lost-link key lock, even when the connection is already gone.
     void disconnectFromRadio();
+    // TX safety fix round 2 (2026-09-30): automatic recovery's retire (the
+    // Core's retire-and-reconnect, the hosted GUI's retry). Same teardown as
+    // disconnectFromRadio, but a lost-link key lock stays set through the
+    // Disconnected wait and the rebuilt link's Connecting and Probing; it
+    // lifts when a link reaches Connected.
+    void retireConnectionForRecovery();
 #ifdef NEREUS_BUILD_TESTS
     // Instance-local loopback transport setup, applied before the connection
     // moves to its worker. No global port overrides or production callers.
@@ -7030,6 +7048,9 @@ private:
     // layer share one instance.  MAC and load() are called on connect.
     // Phase 3L commit #9.
     Hl2OptionsModel m_hl2Options;
+    // Hl2OptionsModel::changed -> applyHl2Options, while a P1 connection is
+    // up (connectHl2OptionsToConnection).
+    QMetaObject::Connection m_hl2OptionsConnection;
 
     // HL2 I/O board model — owns I2C queue and register mirror.
     // Shared with P1RadioConnection::setIoBoard() at connect time.
@@ -7439,8 +7460,10 @@ private:
     std::optional<Band> m_keptRxAntennaBand;
     bool m_bandTrackingForTest{false};
 
-    // Settings save coalescing
+    // Settings save coalescing: a save is wanted (m_settingsSaveScheduled),
+    // and scheduleSettingsSave's 500 ms timer is running.
     bool m_settingsSaveScheduled{false};
+    bool m_settingsSaveTimerArmed{false};
     bool m_receiveLayoutHydrating{false};
     bool m_stationHandoverTrackSuppressedReceiverEdits{false};
     bool m_stationHandoverSuppressedReceiverEdits{false};

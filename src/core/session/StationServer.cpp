@@ -1,6 +1,21 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: Fix round 1 for LINK-I4: the pairing window is built
+//               with the Core's settings, so a restart keeps service
+//               pairing shut. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-30: Fix wave LINK-I4: pairing through the remote access
+//               service is refused, with no time to try again, once the
+//               pairing window has shut it after too many wrong codes.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave LINK minor 2 (TX path): dropPeer stops a dropped
+//               device's transmit (VOX disarm, watchdog or stopAllTx)
+//               before anything else in the drop. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave LINK minor 5: a token check counts failures per
+//               source address. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: RADE reason: radeReasonVersion 1 and each slice's
 //               radeReason only to a peer that declared radeReason 1
 //               (fitPeerOnlyProperties; before coreBuildInfo). J.J. Boyd
@@ -2896,7 +2911,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 14: the pairing window before the devices object, so
     // it follows a change of the device store first and the object then
     // counts the change once.
-    m_pairingWindow = std::make_unique<PairingWindow>(*m_devices);
+    // LINK-I4 fix round 1: the count of wrong codes through the service is
+    // read from the Core's settings, so a restart keeps pairing shut.
+    m_pairingWindow = std::make_unique<PairingWindow>(*m_devices, m_settings);
     m_pairingHasher = &SpakeExchange::storedData;
     m_devicesFacade = std::make_unique<StationDevicesFacade>(
         *m_devices, *m_tokens, *m_identity, m_settings, nullptr, m_pairingWindow.get());
@@ -4769,6 +4786,46 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         return;
     }
     it->dropping = true;
+    // LINK minor 2 (TX path): the transmit stop runs first, before any
+    // other step of the drop can return early (a view's close, a record
+    // stream, the session.end, each of which can end this object or this
+    // peer's entry), so no exit path leaves the radio keyed for a device
+    // that is gone.
+    {
+        const QByteArray sessionDevice = it->sessionDeviceId;
+        // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
+        // section 4.6 item 1): the session of a device that is keyed, or has
+        // VOX armed, ended (a drop, leaving, a replacement or a revocation).
+        // The VOX it armed goes off first, then its key stops at once (the
+        // emergency stop, not the normal unkey), before the holder's own
+        // rules below run.
+        if (!sessionDevice.isEmpty() && m_txWatchdog) {
+            disarmVoxArmedBy(sessionDevice, "its connection ended");
+            if (!self) { return; }
+            // Merge of Tasks 37 and 39: a session that ended (rather than went
+            // quiet) is told to the window and the phone as a lost link, in
+            // txState's own words; recorded before the stop, so the watchdog's
+            // "went quiet" reason below does not replace it.
+            if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+                recordTransmitStop(
+                    TransmitState::kStopLinkLost,
+                    TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
+                if (!self) { return; }
+            }
+            if (m_txWatchdog->isWatching(sessionDevice)) {
+                m_txWatchdog->linkClosed(sessionDevice);
+                if (!self) { return; }
+            } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+                m_radioModel->stopAllTx(
+                    RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
+                if (!self) { return; }
+            }
+        }
+        it = m_peers.find(transport);
+        if (it == m_peers.end()) {
+            return;
+        }
+    }
     m_settingsExports.remove(it->sessionId);
     it->txWatchGeneration = ++m_nextTxWatchGeneration;
     retirePendingRelayWatch(transport);
@@ -4852,32 +4909,6 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         view->close();
         if (!self) { return; }
         if (view) view->deleteLater();
-    }
-    // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
-    // section 4.6 item 1): the session of a device that is keyed, or has
-    // VOX armed, ended (a drop, leaving, a replacement or a revocation).
-    // The VOX it armed goes off first, then its key stops at once (the
-    // emergency stop, not the normal unkey), before the holder's own
-    // rules below run.
-    if (!sessionDevice.isEmpty() && m_txWatchdog) {
-        disarmVoxArmedBy(sessionDevice, "its connection ended");
-        if (!self) { return; }
-        // Merge of Tasks 37 and 39: a session that ended (rather than went
-        // quiet) is told to the window and the phone as a lost link, in
-        // txState's own words; recorded before the stop, so the watchdog's
-        // "went quiet" reason below does not replace it.
-        if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
-            recordTransmitStop(TransmitState::kStopLinkLost,
-                               TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
-            if (!self) { return; }
-        }
-        if (m_txWatchdog->isWatching(sessionDevice)) {
-            m_txWatchdog->linkClosed(sessionDevice);
-            if (!self) { return; }
-        } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
-            m_radioModel->stopAllTx(RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
-            if (!self) { return; }
-        }
     }
     if (!owner.isEmpty()) {
         m_dispatcher->endSessionOwner(owner);
@@ -5950,19 +5981,22 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
                    /*retryable=*/false, SessionEndCode::kPairingRequired);
             return;
         }
-        const TokenStore::VerifyResult result = m_tokens->verify(message.token);
+        // LINK minor 5: the token's limiter is kept per source address
+        // (empty over the relay).
+        const TokenStore::VerifyResult result =
+            m_tokens->verify(message.token, transport->peerAddress());
         if (result != TokenStore::VerifyResult::Accepted) {
             // THE distinction TokenStore.h says the two results exist to
             // preserve, carried through to the client's retry policy.
             //
             // RateLimited is retryable: it is transient BY CONSTRUCTION --
             // the lockout expires on TokenStore's own timer, and the
-            // refusal text literally says "try again later". Crucially, the
-            // rate limiter is global rather than per-peer (TokenStore.h:44-
-            // 48 says so outright: a lockout refuses a connection
-            // "including one carrying the correct token"), so five bad
-            // guesses from anyone who can reach the port refuse the
-            // OPERATOR's token too. Marked permanent, that turned somebody
+            // refusal text literally says "try again later". The limiter
+            // is kept per source address (LINK minor 5), but over the relay
+            // every connection shares the empty address, and a lockout
+            // refuses a connection "including one carrying the correct
+            // token", so bad guesses from a stranger sharing that source
+            // can refuse the OPERATOR's token too. Marked permanent, that turned somebody
             // else's failed guesses into the operator being locked out of
             // their own station with no automatic recovery. (A paired
             // device's key is not refused by it: see above.)
@@ -6848,6 +6882,17 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
     // remote access service, pairing through it pauses for a while. Refused
     // before any code is taken, so it burns nothing; a direct connection is
     // not paused.
+    // LINK-I4 (JJ's ruling, 2026-09-30): after too many wrong codes through
+    // the service in total, pairing through it is off until the Core
+    // reopens pairing. No time to try again: waiting does not help.
+    if (attempt->route == PairingWindow::Route::Service && m_pairingWindow->isServiceShut()) {
+        sendPairFail(transport,
+                     QStringLiteral("The Core has turned off pairing from outside its network "
+                                    "after too many wrong codes. Pair on the Core's own "
+                                    "network, or reopen pairing at the Core."),
+                     0);
+        return;
+    }
     if (m_pairingWindow->isPaused(attempt->route)) {
         sendPairFail(transport,
                      QStringLiteral("The Core has paused pairing from outside its network "

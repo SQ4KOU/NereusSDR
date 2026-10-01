@@ -21,6 +21,10 @@
 //               the line's first packet, with its own bound for that
 //               packet. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: LINK minor 12 (TX audio): a stall's held audio past
+//               kStaleAfterStallMs is trimmed to the target when the
+//               buffer starts again, not sent late. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -277,6 +281,28 @@ void RemoteMicFeed::dropBlock()
     m_silentRunFrames += kPumpBlock;
 }
 
+void RemoteMicFeed::trimStaleToTarget()
+{
+    // The oldest whole blocks go until the buffer holds its target; what a
+    // full buffer left in the input ring is drained and trimmed the same
+    // way. Nothing has played since the underrun (rmatch faded out), so
+    // this splices nothing: playback starts again from silence with the
+    // newest audio.
+    for (;;) {
+        while (m_bufferCount >= kPumpBlock
+               && m_bufferCount + m_matcherFill - kPumpBlock >= currentTarget()) {
+            m_bufferHead = (m_bufferHead + kPumpBlock) % kBufferFrames;
+            m_bufferCount -= kPumpBlock;
+        }
+        const int arrived = drainInput();
+        if (arrived <= 0) {
+            break;
+        }
+        noteArrival(arrived);
+    }
+    m_silentRunFrames = 0;
+}
+
 int RemoteMicFeed::currentPacketFrames() const
 {
     return std::max(kPumpBlock, m_packetFrames.load(std::memory_order_relaxed));
@@ -417,6 +443,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         m_bufferHead = 0;
         m_bufferCount = 0;
         m_started = false;
+        m_resumingAfterUnderrun = false;
         m_silentRunFrames = 0;
         m_underflows = 0;
         m_shedBudget = 0;
@@ -473,7 +500,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
     RemoteAudioRateMatcherStats matcher = m_matcher->stats();
     m_matcherFill = matcher.ringFillFrames;
     m_statsOverflows.store(matcher.overflows, std::memory_order_relaxed);
-    const int fill = m_bufferCount + m_matcherFill;
+    int fill = m_bufferCount + m_matcherFill;
 
     if (!m_started) {
         if (fill < currentTarget()) {
@@ -481,6 +508,13 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
             endBlock();
             return Pull::Audio;
         }
+        // LINK minor 12 (TX audio): a stall's held audio past
+        // kStaleAfterStallMs is not sent late; start again from the target.
+        if (m_resumingAfterUnderrun && fill > Cfg::kStaleAfterStallFrames) {
+            trimStaleToTarget();
+            fill = m_bufferCount + m_matcherFill;
+        }
+        m_resumingAfterUnderrun = false;
         m_started = true;
         m_statsStarted.store(true, std::memory_order_relaxed);
     }
@@ -560,6 +594,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         ++m_underflows;
         m_windowUnderrun = true;
         m_started = false;
+        m_resumingAfterUnderrun = true;
         m_statsStarted.store(false, std::memory_order_relaxed);
     }
     if (!m_matcher->takeInto(m_stereoScratch.data(), kPumpBlock)) {

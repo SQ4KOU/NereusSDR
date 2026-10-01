@@ -35,6 +35,10 @@
 //   2026-09-27  J.J. Boyd / KG4VCF  Created (remote-window parity Task 22,
 //                                    R-R3-49). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave: tryDrainNow, so a fatal
+//                                    message reaches the file before Qt
+//                                    aborts. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QList>
@@ -93,6 +97,10 @@ public:
     /// Drains what waits now, on the calling thread (a fatal message, a
     /// shutdown, a test). Waits for a drain the writer is doing.
     void drainNow();
+    /// Drains what waits now, on the calling thread, unless a drain is
+    /// already running (the writer's, or this thread's own): then false at
+    /// once. For a fatal message, which Qt follows with abort().
+    bool tryDrainNow();
 
     /// The recent lines with a sequence above `after`, oldest first.
     QList<LogSinkLine> linesSince(quint64 after) const;
@@ -125,7 +133,7 @@ private:
     std::atomic<quint64> m_dropped{0};
     quint64 m_droppedReported = 0;
 
-    std::mutex m_drainMutex;          // the writer and drainNow(), never offer()
+    std::mutex m_drainMutex;          // the writer, drainNow() and tryDrainNow(), never offer()
     QFile* m_file = nullptr;
     bool m_toStderr = false;
     std::function<void()> m_beforeWrite;

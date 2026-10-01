@@ -10,6 +10,8 @@
 // Anthropic Claude Code: the loaded phase's idle reference also ticks on its
 // own thread while the lane works, so a neighbour's load that starts after
 // the idle phase is in both.
+// 2026-09-30 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+// (fix wave, RD-I9): closingOnTheLaneDoesNotWaitOutTheDrain.
 //
 // REALTIME: the timer-gap bound is wall-clock time while two real channels
 // run slow blocks and a feeder thread hands them I/Q.
@@ -44,6 +46,7 @@
 #include "core/RxChannel.h"
 #include "core/SampleRateCatalog.h"
 #include "core/WdspEngine.h"
+#include "core/dsp/ChannelConfig.h"
 #include "core/WdspThreadCheck.h"
 #include "core/wdsp_api.h"
 #include "gui/meters/MeterPoller.h"
@@ -54,8 +57,8 @@ using namespace NereusSDR;
 
 #ifdef HAVE_WDSP
 // The leading fields of WDSP's per-channel record (third_party/wdsp/src/
-// channel.h, struct _ch), enough to read ch[0].in_rate, the rate WDSP's
-// channel really runs at. Index 0 only: the declared type is shorter than
+// channel.h, struct _ch), enough to read ch[0].in_rate, out_rate and
+// dsp_rate, the rates WDSP's channel really runs at. Index 0 only: the declared type is shorter than
 // WDSP's, so no other element may be addressed through it.
 extern "C" {
 struct WdspChannelHead {
@@ -63,6 +66,9 @@ struct WdspChannelHead {
     volatile long run;
     volatile long exchange;
     int in_rate;
+    int out_rate;
+    int in_size;
+    int dsp_rate;
 };
 extern WdspChannelHead ch[];
 }
@@ -485,6 +491,95 @@ private slots:
         QCOMPARE(inRate0, kNewRateHz);
         QCOMPARE(ch0->sampleRate(), kNewRateHz);
         QVERIFY(ch0->isActive() && one->isActive());
+
+        engine.shutdown();
+        engine.setReceiveLane(nullptr);
+        lane.stop();
+    }
+
+    // RD-I9 (fix wave 2026-09-30): the lane closes a channel, for a destroy
+    // or a rebuild, with the DSP worker quiesced, so no I/Q reaches the
+    // channel and a draining stop can only time out. WDSP's draining
+    // SetChannelState waits 100 Sleep(1) calls before it gives up
+    // (third_party/wdsp/src/channel.c:288-304), so each close cost at least
+    // kWdspDrainTimeoutMs of receive DSP. The lane closes without that wait,
+    // as Thetis's destroy_rcvr closes its channels (cmaster.c:96-108).
+    // Two destroys and two rebuilds of running channels, no feeder: with a
+    // drain per close they take at least four drain timeouts on the lane.
+    // A rebuild reopens at 48 kHz DSP and output rates whatever its input
+    // rate, as createRxChannel's callers open it (WdspEngine minor).
+    void closingOnTheLaneDoesNotWaitOutTheDrain()
+    {
+        // The draining SetChannelState's bound: 100 Sleep(1) calls.
+        constexpr int kWdspDrainTimeoutMs = 100;
+        constexpr int kCloses = 4;
+        DspControlThread lane(DspLane::Receive);
+        lane.start();
+        WdspEngine engine;
+        engine.m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        engine.setReceiveLane(&lane);
+        // Production quiesces the receive worker around each close; here no
+        // worker feeds the channels at all.
+        int quiesced = 0;
+        engine.setRxWorkerQuiesce([&quiesced]() -> std::function<void()> {
+            ++quiesced;
+            return {};
+        });
+
+        const int inSize = bufferSizeForRate(kRateHz);
+        std::array<RxChannel*, kCloses> channels{};
+        for (int id = 0; id < kCloses; ++id) {
+            channels[id] = engine.createRxChannel(id, inSize, kDspSize, kRateHz, kRateHz, kRateHz);
+            QVERIFY(channels[id]);
+        }
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        for (RxChannel* rx : channels) {
+            QVERIFY(rx->isWdspReady());
+            rx->setActive(true);
+        }
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        const int quiescedBefore = quiesced;
+
+        ChannelConfig cfg;
+        cfg.sampleRate = kRateHz;
+        cfg.bufferSize = inSize;
+        cfg.filterSize = kDspSize;
+        // Channel 0 comes back at a new input rate; its DSP and output rates
+        // stay 48 kHz, as at create (Thetis cmaster.c:76-78).
+        ChannelConfig fasterCfg = cfg;
+        fasterCfg.sampleRate = kNewRateHz;
+        fasterCfg.bufferSize = bufferSizeForRate(kNewRateHz);
+        QElapsedTimer timer;
+        timer.start();
+        engine.destroyRxChannel(1);
+        engine.destroyRxChannel(2);
+        QVERIFY(engine.rebuildRxChannel(0, fasterCfg) >= 0);
+        QVERIFY(engine.rebuildRxChannel(3, cfg) >= 0);
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        const qint64 closeMs = timer.elapsed();
+        int inRate0 = 0;
+        int dspRate0 = 0;
+        int outRate0 = 0;
+        lane.post([&inRate0, &dspRate0, &outRate0]() {
+            inRate0 = ch[0].in_rate;
+            dspRate0 = ch[0].dsp_rate;
+            outRate0 = ch[0].out_rate;
+        });
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+
+        qInfo("2 destroys and 2 rebuilds of running channels on the lane in %lld ms "
+              "(a drain per close would take at least %d ms)",
+              static_cast<long long>(closeMs), kCloses * kWdspDrainTimeoutMs);
+        QCOMPARE(quiesced - quiescedBefore, kCloses);
+        QVERIFY2(closeMs < kCloses * kWdspDrainTimeoutMs,
+                 "the lane waited out WDSP's drain on a channel no I/Q reaches");
+        RxChannel* rebuilt = engine.rxChannel(0);
+        QVERIFY(rebuilt && rebuilt->isWdspReady());
+        QCOMPARE(rebuilt->sampleRate(), kNewRateHz);
+        QVERIFY(engine.rxChannel(1) == nullptr);
+        QCOMPARE(inRate0, kNewRateHz);
+        QCOMPARE(dspRate0, kRateHz);
+        QCOMPARE(outRate0, kRateHz);
 
         engine.shutdown();
         engine.setReceiveLane(nullptr);

@@ -93,10 +93,22 @@ static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const 
 
     // Remote-window parity Task 22 (R-R3-49): the line is only offered to
     // the sink here, which never waits on the writer. Its writer thread
-    // writes the file and stderr. Fatal logging is also best effort: an
-    // audio-thread fatal must not wait on a stalled disk before Qt aborts.
+    // writes the file and stderr.
     LogSink& sink = LogSink::instance();
-    sink.offer(line);
+    const bool offered = sink.offer(line);
+    if (type == QtFatalMsg) {
+        // Fix wave (2026-09-30): Qt aborts as soon as this returns, before
+        // the writer's next pass, so the line saying why never reached the
+        // file. Drain it here, unless a drain is already running (never
+        // wait on one: it may be stalled on the disk); then, or when the
+        // ring had no room for it, the line goes straight to stderr.
+        const bool drained = sink.tryDrainNow();
+        if (!offered || !drained) {
+            const QByteArray utf8 = line.toUtf8();
+            std::fwrite(utf8.constData(), 1, static_cast<std::size_t>(utf8.size()), stderr);
+            std::fflush(stderr);
+        }
+    }
 }
 
 bool initialize(const QString& profile)

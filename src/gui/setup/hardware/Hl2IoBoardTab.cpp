@@ -46,6 +46,10 @@
 //   2026-09-28 - R-IOS-18: the N2ADR switch carries its Setup description
 //                 id. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-30: Fix round 1: the I/O board tooltip, the state machine
+//               title and the detected log line use plain punctuation,
+//               not em dashes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -376,7 +380,7 @@ void Hl2IoBoardTab::buildStatusBar(QVBoxLayout* outer)
     m_statusLabel->setToolTip(tr(
         "Detection of mi0bot's custom HL2 daughterboard at I2C address 0x41.\n"
         "If you only have the N2ADR Filter and/or smallio companion boards,\n"
-        "this will (correctly) say Not detected — those boards don't speak\n"
+        "this will (correctly) say Not detected: those boards don't speak\n"
         "this I2C protocol.  The N2ADR is driven by OC pins (see Live OC pin\n"
         "state below + Setup → Hardware → OC Outputs → HF for the matrix)."));
     QFont bold = m_statusLabel->font();
@@ -545,7 +549,7 @@ void Hl2IoBoardTab::buildConfigAndRegisterRow(QVBoxLayout* outer)
 void Hl2IoBoardTab::buildStateMachineRow(QVBoxLayout* outer)
 {
     // 12-step UpdateIOBoard state machine per mi0bot console.cs:25844-25928 [@c26a8a4]
-    auto* smGroup = new QGroupBox(tr("State machine  (UpdateIOBoard — 12 steps)"), this);
+    auto* smGroup = new QGroupBox(tr("State machine  (UpdateIOBoard, 12 steps)"), this);
     auto* smLayout = new QHBoxLayout(smGroup);
     smLayout->setSpacing(4);
 
@@ -982,7 +986,7 @@ void Hl2IoBoardTab::onDetectedChanged(bool detected)
     if (detected) {
         refreshAllRegisters();
         appendI2cLogEntry(
-            QStringLiteral("[%1] Board detected — hardware version 0x%2")
+            QStringLiteral("[%1] Board detected, hardware version 0x%2")
                 .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss.zzz")))
                 .arg(m_ioBoard->hardwareVersion(), 2, 16, QLatin1Char('0')).toUpper());
     }
@@ -1192,7 +1196,7 @@ void Hl2IoBoardTab::onProbeClicked()
     QString result;
     if (!remote) {
         result = issued ? QStringLiteral("(3 reads enqueued)")
-                        : QStringLiteral("(no P1 connection — skipped)");
+                        : QStringLiteral("(not sent: no Protocol 1 connection)");
     } else {
         result = issued ? QStringLiteral("(asked the Core)")
                         : QStringLiteral("(not sent: %1)").arg(outcome.reason);

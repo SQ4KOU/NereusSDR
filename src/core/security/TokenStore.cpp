@@ -12,6 +12,10 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24: iPhone app Task 17: moveDamagedAside(). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: LINK minor 5: the failure limiter is kept per source
+//               address. LINK minor 6: the token file is made owner-only
+//               again on every load. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/TokenStore.h"
@@ -118,6 +122,12 @@ bool TokenStore::loadExisting()
         return false;
     }
     m_token = candidate;
+    // LINK minor 6: a token file loosened since it was written is made
+    // owner-only again on every load. Best effort: a failure is logged and
+    // the token still loads.
+    if (!QFile::setPermissions(m_tokenPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        qCWarning(lcTokenStore) << "Could not make the token file owner-only:" << m_tokenPath;
+    }
     return true;
 }
 
@@ -133,7 +143,7 @@ bool TokenStore::retire()
     }
     m_token.fill(QLatin1Char('\0'));
     m_token.clear();
-    m_consecutiveFailures = 0;
+    m_failures.clear();
     return true;
 }
 
@@ -157,7 +167,7 @@ bool TokenStore::moveDamagedAside()
     m_token.clear();
     m_lastError.clear();
     m_valid = true;
-    m_consecutiveFailures = 0;
+    m_failures.clear();
     return true;
 }
 
@@ -167,31 +177,52 @@ void TokenStore::setRateLimit(int maxFailures, int lockoutMs)
     m_lockoutMs = lockoutMs < 0 ? 0 : lockoutMs;
 }
 
-bool TokenStore::isRateLimited() const
+int TokenStore::consecutiveFailures(const QString& source) const
 {
-    if (m_consecutiveFailures < m_maxFailures) {
-        return false;
-    }
-    if (!m_sinceLastFailure.isValid()) {
-        return false;
-    }
-    return m_sinceLastFailure.elapsed() < m_lockoutMs;
+    const auto it = m_failures.constFind(source);
+    return it == m_failures.constEnd() ? 0 : it->consecutive;
 }
 
-TokenStore::VerifyResult TokenStore::verify(const QString& candidate)
+bool TokenStore::isRateLimited(const QString& source) const
 {
-    if (m_consecutiveFailures >= m_maxFailures && m_sinceLastFailure.isValid()
-        && m_sinceLastFailure.elapsed() >= m_lockoutMs) {
+    const auto it = m_failures.constFind(source);
+    if (it == m_failures.constEnd() || it->consecutive < m_maxFailures) {
+        return false;
+    }
+    if (!it->sinceLastFailure.isValid()) {
+        return false;
+    }
+    return it->sinceLastFailure.elapsed() < m_lockoutMs;
+}
+
+void TokenStore::prune()
+{
+    if (m_failures.size() <= kMaxTrackedSources) {
+        return;
+    }
+    for (auto it = m_failures.begin(); it != m_failures.end();) {
+        const bool refused = it->consecutive >= m_maxFailures && it->sinceLastFailure.isValid()
+                             && it->sinceLastFailure.elapsed() < m_lockoutMs;
+        it = refused ? std::next(it) : m_failures.erase(it);
+    }
+}
+
+TokenStore::VerifyResult TokenStore::verify(const QString& candidate, const QString& source)
+{
+    auto existing = m_failures.find(source);
+    if (existing != m_failures.end() && existing->consecutive >= m_maxFailures
+        && existing->sinceLastFailure.isValid()
+        && existing->sinceLastFailure.elapsed() >= m_lockoutMs) {
         // The lockout ran out. Start a fresh count rather than leaving the
         // counter pinned at the limit, which would make every later
         // failure re-trigger the lockout immediately.
-        m_consecutiveFailures = 0;
+        existing->consecutive = 0;
     }
 
-    if (isRateLimited()) {
+    if (isRateLimited(source)) {
         qCWarning(lcTokenStore)
             << "Authentication attempt refused: rate limited after"
-            << m_consecutiveFailures << "consecutive failures";
+            << consecutiveFailures(source) << "consecutive failures";
         return VerifyResult::RateLimited;
     }
 
@@ -200,12 +231,14 @@ TokenStore::VerifyResult TokenStore::verify(const QString& candidate)
     const bool ok = m_valid && !m_token.isEmpty()
                     && constantTimeEqual(digestOf(m_token), digestOf(candidate));
     if (ok) {
-        m_consecutiveFailures = 0;
+        m_failures.remove(source);
         return VerifyResult::Accepted;
     }
 
-    ++m_consecutiveFailures;
-    m_sinceLastFailure.start();
+    SourceFailures& failures = m_failures[source];
+    ++failures.consecutive;
+    failures.sinceLastFailure.start();
+    prune();
     return VerifyResult::Rejected;
 }
 

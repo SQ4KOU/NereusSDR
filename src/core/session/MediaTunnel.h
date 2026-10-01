@@ -27,6 +27,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: LINK-I3: one retry timer while the link is full, in place
+//               of a single-shot per flush. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -50,6 +53,7 @@
 #include <memory>
 
 QT_BEGIN_NAMESPACE
+class QTimer;
 class QUdpSocket;
 QT_END_NAMESPACE
 
@@ -95,6 +99,10 @@ public:
     quint64 droppedOversize() const { return m_droppedOversize; }
     quint64 droppedWrongSender() const { return m_droppedWrongSender; }
     quint64 droppedNoRoute() const { return m_droppedNoRoute; }
+    /// Test seam: how many times flush() has asked the link for its
+    /// backlog (one per pass), so a test can see that a stalled link
+    /// is retried by one timer, not one per datagram.
+    quint64 flushPassesForTest() const { return m_flushPasses; }
 
 private:
     explicit MediaTunnel(SessionTransport* transport);
@@ -106,6 +114,10 @@ private:
     void flush();
 
     QPointer<SessionTransport> m_transport;
+    /// LINK-I3: the one retry while the link is full. Every datagram
+    /// flushes; a timer per flush would multiply while the link stalls.
+    QTimer* m_flushRetry = nullptr;
+    quint64 m_flushPasses = 0;
     struct Route {
         QUdpSocket* socket = nullptr;
         QHostAddress agentAddress;

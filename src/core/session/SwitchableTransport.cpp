@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: LINK-I2: a station that hears no path.switch in time ends
+//               the session instead of dropping what was in flight. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -38,12 +41,15 @@ SwitchableTransport::SwitchableTransport(SessionTransport* inner, Side side,
         if (m_state == State::ClientAwaitingBarrier) {
             abortClientSwitch(QStringLiteral("no path.switch from the Core in time"));
         } else if (m_state == State::StationAwaitingBarrier) {
-            // The device's barrier never came: whatever it sent on the old
-            // connection before it is lost with the connection. Read the
-            // new one from here.
-            qCInfo(lcSwitchable) << "No path.switch from the device in time;"
-                                 << "reading the new connection";
-            finishSwitch();
+            // The device's barrier never came: what it sent on the old
+            // connection after the last message read there may be in
+            // flight, and closing the old connection would drop it with no
+            // error to either end. End the session instead, as a lost link,
+            // so the device reconnects and takes a fresh snapshot rather
+            // than carrying on with state the Core never saw.
+            qCWarning(lcSwitchable) << "No path.switch from the device in time;"
+                                    << "ending the session";
+            closeLink(QStringLiteral("no path.switch from the device in time"));
         }
     });
     m_oldClose = new QTimer(this);

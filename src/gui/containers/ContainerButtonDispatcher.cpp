@@ -74,6 +74,11 @@
 //                                    facade's own reason (on the air, or
 //                                    no radio that supports PureSignal).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  The container Power button is removed
+//                                    (maintainer decision): an old Power id
+//                                    falls to the unavailable default and a
+//                                    click changes nothing. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -106,9 +111,11 @@ namespace {
 using Id = ContainerButtonDispatcher::Id;
 
 // The function buttons connected to a NereusSDR feature. Every other core
-// button is hidden through UnbuiltFeatures (OtherButtonItem).
+// button is hidden through UnbuiltFeatures (OtherButtonItem). Power is not
+// one: NereusSDR has no Power button (maintainer decision 2026-09-30), and
+// OtherButtonItem never draws it.
 constexpr Id kConnected[] = {
-    Id::Power, Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
+    Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA,
     Id::Anf, Id::Snb, Id::Mnf, Id::PeakHold, Id::Ctun,
     Id::Vac1, Id::Vac2, Id::Mute, Id::Bin, Id::Dup,
 };
@@ -188,12 +195,6 @@ QString ContainerButtonDispatcher::noRadioTransmitReason()
     return QStringLiteral("Connect a radio to transmit.");
 }
 
-QString ContainerButtonDispatcher::noPowerTargetReason()
-{
-    return QStringLiteral("There is no radio to reconnect to. Choose one under "
-                          "Radio > Manage Radios.");
-}
-
 bool ContainerButtonDispatcher::transmitBlockedRemotely() const
 {
     if (!m_model || m_model->ownsLocalDsp()) { return false; }
@@ -229,12 +230,6 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     }
 
     switch (id) {
-    case Id::Power:
-        st.on = m_hooks.powerOn && m_hooks.powerOn();
-        if (!st.on && !(m_hooks.powerCanToggle && m_hooks.powerCanToggle())) {
-            unavailable(noPowerTargetReason());
-        }
-        break;
     case Id::Mon:
         st.on = m_model->transmitModel().monEnabled();
         // R-R3-49 (parity Task 2): a transmit setting, not a key. A remote
@@ -406,9 +401,6 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
     const bool turnOn = !st.on;
 
     switch (id) {
-    case Id::Power:
-        if (m_hooks.togglePower) { m_hooks.togglePower(); }
-        break;
     case Id::Mon:
         // TxApplet's MON button (TransmitModel::setMonEnabled).
         m_model->transmitModel().setMonEnabled(turnOn);

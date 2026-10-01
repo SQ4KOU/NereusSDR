@@ -7,6 +7,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: LINK-I3: one retry timer while the link is full, in place
+//               of a single-shot per flush. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -92,6 +95,11 @@ private:
 MediaTunnel::MediaTunnel(SessionTransport* transport)
     : m_transport(transport)
 {
+    m_flushRetry = new QTimer(this);
+    m_flushRetry->setSingleShot(true);
+    m_flushRetry->setInterval(5);
+    m_flushRetry->setTimerType(Qt::PreciseTimer);
+    connect(m_flushRetry, &QTimer::timeout, this, &MediaTunnel::flush);
 }
 
 MediaTunnel::~MediaTunnel() = default;
@@ -248,8 +256,10 @@ void MediaTunnel::flush()
     if (m_transport.isNull()) {
         m_queue.clear();
         m_queuedBytes = 0;
+        m_flushRetry->stop();
         return;
     }
+    ++m_flushPasses;
     while (!m_queue.empty() && m_transport->backlogBytes() < kWriteLimitBytes) {
         const QByteArray frame = m_queue.front();
         m_queue.pop_front();
@@ -260,8 +270,13 @@ void MediaTunnel::flush()
     }
     if (!m_queue.empty()) {
         // The socket is full: try again shortly (datagrams keep coming and
-        // the oldest go first).
-        QTimer::singleShot(5, this, &MediaTunnel::flush);
+        // the oldest go first). One retry at a time: a datagram that
+        // arrives meanwhile flushes now and leaves the pending retry be.
+        if (!m_flushRetry->isActive()) {
+            m_flushRetry->start();
+        }
+    } else {
+        m_flushRetry->stop();
     }
 }
 

@@ -438,6 +438,26 @@
 //               coreSliceTakeUnavailableReason(); the hello declares
 //               sliceAccess 3. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: inbound sibling lane: a pending write keeps the operator's
+//               value (PendingWrite), restoreOperatorValues() puts it back
+//               when an inbound apply moves it as a side effect, and the
+//               pauseWriteFlushForTest / flushWritesForTest seams.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 1: a delta whose side effect
+//               moves an UNSENT edit cancels it (SideEffectRule::Delta),
+//               following Thetis's per-mode filter edges. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 2: m_coreValues (the last value
+//               the Core sent), stepBackUnsentEdits, cancelUnsentEdit, and
+//               PendingWrite's in-flight write. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 3: the unsent edits a delta
+//               cancels are named per cause (kDeltaCancelRules), not
+//               inferred from values; the generic step-back is gone.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 4: unresolvedDeltaCancelRuleNames()
+//               checks the rule table against the schemas. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -957,6 +977,18 @@ public:
     {
         m_capabilities.transmitSettingsVersion = version;
     }
+    /// Test seam: stops the write-flush timer, so a test decides when the
+    /// window's pending writes leave (flushWritesForTest). After the
+    /// handshake; the next SnapshotComplete starts the timer again.
+    void pauseWriteFlushForTest() { m_writeFlushTimer->stop(); }
+    /// Test seam: one write-flush tick, now.
+    void flushWritesForTest() { onWriteFlushTick(); }
+    /// Every class and property name in the delta cancel rules
+    /// (kDeltaCancelRules in StationClient.cpp) that the mirror schema
+    /// does not resolve, as "Class.property". Empty when the table is
+    /// sound. applyUpdates skips a name it cannot resolve, so a typo in
+    /// the table would otherwise switch its rule off silently.
+    static QList<QByteArray> unresolvedDeltaCancelRuleNames();
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.
@@ -1793,10 +1825,34 @@ private:
     void handleSettingsValue(const SessionMessage& message);
     void handleSettingsReject(const SessionMessage& message);
 
+    /// What an inbound apply does to a pending write it moves as a side
+    /// effect. Restore puts the operator's value back (a Core answer to
+    /// this window's own write, and an object.create). Delta does too,
+    /// except for the unsent edits a cause it applies defines
+    /// (kDeltaCancelRules in StationClient.cpp): those are cancelled.
+    enum class SideEffectRule { Restore, Delta };
     /// Inbound apply for one object, under the echo guard. See the class
-    /// comment's three-strategy list.
+    /// comment's three-strategy list. `heldValues` are the values a delta
+    /// carried for properties it skipped because they were pending; one
+    /// applies when its unsent edit is cancelled.
     void applyUpdates(QObject* target, const QByteArray& objectKey,
-                      const QList<MirrorUpdate>& updates);
+                      const QList<MirrorUpdate>& updates,
+                      SideEffectRule rule = SideEffectRule::Restore,
+                      const QList<MirrorUpdate>& heldValues = {});
+    /// After an inbound apply: every property with a pending write whose
+    /// live value the apply moved as a side effect (it was not one of
+    /// `applied`, the properties the Core's message named for
+    /// `appliedKey`) gets the operator's value back, under the echo
+    /// guard. Oldest operator change first, so the newest one wins.
+    void restoreOperatorValues(const QByteArray& appliedKey,
+                               const QSet<QByteArray>& applied);
+    /// Cancels the unsent edit of `prop`: its coalesced write goes, and
+    /// either its write in flight comes back (value and writeId, so that
+    /// write's answer applies) or the hold ends and the delta's value
+    /// (`heldValues`), else the last value the Core sent, applies.
+    void cancelUnsentEdit(const QByteArray& objectKey, QObject* object,
+                          const MirrorProperty& prop,
+                          const QList<MirrorUpdate>& heldValues);
     bool applyOne(QObject* target, const MirrorProperty& prop, const MirrorUpdate& update);
 
     /// Client-side adapter for daemon-to-client-only properties whose
@@ -1996,9 +2052,29 @@ private:
     QTimer* m_settingsBackupReplyTimer = nullptr;
     QTimer* m_settingsBackupOverallTimer = nullptr;
     quint32 m_nextPropertyWriteId = 1;
-    // Zero marks an edit waiting for the coalescer; nonzero marks its most
-    // recent sent batch. Both protect the value from an older answer.
-    QHash<QByteArray, QHash<QByteArray, quint32>> m_propertyWriteIds;
+    /// One property the operator changed that the Core has not answered.
+    /// writeId zero marks an edit waiting for the coalescer; nonzero marks
+    /// its most recent sent batch. Both protect the value from an older
+    /// answer. `value` is the operator's value (what the observer read
+    /// when the property went dirty, then what the flush sent); `order`
+    /// is when the operator last changed it. An unsent edit made while
+    /// an earlier write of the same property was still on its way keeps
+    /// that write's id and value (inFlightWriteId, inFlightValue) until
+    /// its answer arrives or the edit is sent.
+    struct PendingWrite {
+        quint32 writeId = 0;
+        MirrorUpdate value;
+        quint64 order = 0;
+        quint32 inFlightWriteId = 0;
+        MirrorUpdate inFlightValue;
+    };
+    /// Object key -> property name -> its pending write.
+    QHash<QByteArray, QHash<QByteArray, PendingWrite>> m_pendingWrites;
+    quint64 m_nextPendingWriteOrder = 1;
+    /// Object key -> property name -> the last value the Core sent for
+    /// it (object.create, delta, or a result's value). A delta that
+    /// cancels an unsent edit without carrying the property applies it.
+    QHash<QByteArray, QHash<QByteArray, MirrorUpdate>> m_coreValues;
 
     /// What each in-flight command was about, keyed by the commandId the
     /// station echoes back. A CommandResult carries the verb but no slice

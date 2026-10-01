@@ -653,6 +653,14 @@ private:
     // Routes one block of a RADE slice and delivers that slice's audio for
     // the block. Returns false when the slice has no route.
     bool processRadeRxBlock(int sliceIdx, const float* audio48k, int outSize);
+    // Sizes the RADE scratch below once, with a route, so the block path
+    // never grows it (fix wave: no allocation on the DSP thread's blocks).
+    void reserveRadeRxScratch();
+    // The most 48 kHz frames one RADE block's resamplers take or give (the
+    // resamplers' own maxBlockSamples, as before), and the 48 kHz stereo
+    // speech a route holds: at most four blocks kept plus one arriving.
+    static constexpr int kRadeRxMaxBlockFrames = 4096;
+    static constexpr size_t kRadeRxPlayReserveFloats = size_t(6) * kRadeRxMaxBlockFrames * 2;
 
     std::unordered_map<int, RadeRxRoute> m_radeRxRoutes;
     std::atomic<int>            m_radeRxRouteCount{0};
@@ -666,6 +674,10 @@ private:
     std::vector<float>          m_radeRxLegL;
     std::vector<float>          m_radeRxLegR;
     std::vector<float>          m_radeRxOutScratch;
+    // Resampler output: 24 kHz codec input, and each 48 kHz speech leg.
+    std::vector<float>          m_radeRxDown;
+    std::vector<float>          m_radeRxUpL;
+    std::vector<float>          m_radeRxUpR;
 };
 
 } // namespace NereusSDR

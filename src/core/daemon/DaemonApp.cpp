@@ -114,6 +114,14 @@
 //               to the station server, for the Core's support bundle. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK minor 3 (TX path): stop() stops all
+//               transmit before it tears down the listener and the
+//               radio. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-09-30: TX safety: the radio retire-and-retry uses RadioModel's
+//               recovery retire, so a lost-link key lock holds until the
+//               rebuilt link is Connected. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -444,6 +452,19 @@ bool DaemonApp::start(const DaemonConfig& cfg)
 
 void DaemonApp::stop()
 {
+    // LINK minor 3 (TX path): the radio stops transmitting before anything
+    // else goes, as beginStationRelease() does, so a SIGTERM never tears
+    // the model down under a key.
+    if (m_radioModel) {
+#ifdef NEREUS_BUILD_TESTS
+        if (m_stopAllTxForTest) {
+            m_stopAllTxForTest();
+        } else
+#endif
+        {
+            m_radioModel->stopAllTx(QStringLiteral("The Core is stopping."));
+        }
+    }
     // iPhone app Task 17: nothing answers the console or a browser once
     // the Core is going away.
     // Fix wave (I1): a radio change's restart keeps the console commands.
@@ -1080,7 +1101,10 @@ void DaemonApp::retireRadioAndRetry()
     cancelRadioDiscovery();
     clearFftTopology();
     m_retiringRadio = true;
-    m_radioModel->disconnectFromRadio();
+    // TX safety fix round 2 (2026-09-30): a recovery retire, not the
+    // operator's disconnect, so a lost-link key lock holds until the
+    // rebuilt link is Connected.
+    m_radioModel->retireConnectionForRecovery();
     m_retiringRadio = false;
     // Parity Task 21: no radio until it is found again; it stays listed.
     if (m_stationRadios) {

@@ -12,7 +12,8 @@
 //     in order across a move, over connections of different delays; the
 //     barrier never reaches the session; an old connection lost mid-move
 //     counts as the barrier; a client that hears no barrier gives up and
-//     stays; what a move holds is bounded.
+//     stays; a Core that hears none ends the session; what a move holds
+//     is bounded.
 //   - StationServer and StationClient: a signed-in session moves to a new
 //     connection with a ticket; it keeps its epoch, snapshot and sign-in;
 //     deltas and writes carry on over the new connection; the old one
@@ -434,6 +435,26 @@ private slots:
         QVERIFY(!pair.client->switching());
         pair.client->sendText(numbered("client", 7));
         QTRY_COMPARE(pair.atStation.size(), 1);
+    }
+
+    // LINK-I2: no barrier from the device in time. Whatever the device sent
+    // on the old connection may still be in flight, so the Core ends the
+    // session (the device reconnects and resyncs) instead of closing the
+    // old connection and carrying on as if nothing were lost.
+    void aStationWithNoBarrierEndsTheSession()
+    {
+        SwitchPair pair(5, 5);
+        pair.station->setSwitchDeadlineMsForTest(200);
+        QSignalSpy stationSwitched(pair.station, &SwitchableTransport::switched);
+        QSignalSpy stationClosed(pair.station, &SessionTransport::closed);
+        // The device never answers the barrier: it has not joined the new
+        // connection on its side.
+        QVERIFY(pair.station->beginStationSwitch(pair.newStation));
+        pair.newStation = nullptr;  // the switchable owns it now
+        QTRY_COMPARE(stationClosed.size(), 1);
+        QVERIFY(stationSwitched.isEmpty());
+        QVERIFY(!pair.station->isOpen());
+        QVERIFY(!pair.station->switching());
     }
 
     // What a move holds from the new connection is bounded: past it the

@@ -40,7 +40,8 @@
 //
 // ---- Rate limiting ----
 //
-// verify() counts CONSECUTIVE failures. On reaching maxFailuresPerLockout()
+// verify() counts CONSECUTIVE failures, per source address (LINK minor 5:
+// one guesser's lockout must not refuse the operator from elsewhere). On reaching maxFailuresPerLockout()
 // it refuses every further attempt -- including one carrying the correct
 // token -- until lockoutMs() has elapsed since the most recent failure,
 // then starts a fresh count. A success at any point resets the count to
@@ -86,9 +87,13 @@
 //   2026-09-24: iPhone app Task 17: moveDamagedAside() for the console's
 //               reset. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-30: LINK minor 5: the failure limiter is kept per source
+//               address. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QString>
 
 namespace NereusSDR {
@@ -167,7 +172,10 @@ public:
 
     // See the class comment for the three results and the constant-time
     // comparison. Not const: it maintains the failure counter.
-    VerifyResult verify(const QString& candidate);
+    // LINK minor 5: failures are counted per `source` (the peer's address;
+    // empty over the relay), so one guesser's lockout does not refuse the
+    // operator's token from another address.
+    VerifyResult verify(const QString& candidate, const QString& source = QString());
 
     // Overrides the two constants above. A maxFailures below 1 is
     // clamped to 1 (zero would mean "rate-limited before the first
@@ -180,10 +188,15 @@ public:
 
     // Consecutive failures since the last success (or since the last
     // lockout expired). Diagnostics and tests.
-    int consecutiveFailures() const { return m_consecutiveFailures; }
+    int consecutiveFailures(const QString& source = QString()) const;
 
-    // True while verify() would return RateLimited without checking.
-    bool isRateLimited() const;
+    // True while verify() would return RateLimited for `source` without
+    // checking.
+    bool isRateLimited(const QString& source = QString()) const;
+
+    // How many sources the limiter remembers. Past it, sources that are
+    // not refused are forgotten; a refusal in force never is.
+    static constexpr int kMaxTrackedSources = 4096;
 
 private:
     bool loadExisting();
@@ -196,11 +209,16 @@ private:
 
     int m_maxFailures{kDefaultMaxFailuresPerLockout};
     int m_lockoutMs{kDefaultLockoutMs};
-    int m_consecutiveFailures{0};
+    struct SourceFailures {
+        int consecutive{0};
+        // Restarted on every failure. Invalid (never started) until the
+        // first one, which is what isRateLimited() checks before reading
+        // it.
+        QElapsedTimer sinceLastFailure;
+    };
+    void prune();
 
-    // Restarted on every failure. Invalid (never started) until the
-    // first one, which is what isRateLimited() checks before reading it.
-    QElapsedTimer m_sinceLastFailure;
+    QHash<QString, SourceFailures> m_failures;
 };
 
 } // namespace NereusSDR
