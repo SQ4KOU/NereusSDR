@@ -36,6 +36,10 @@
 //               a space or '=' (isSetupToken), so a name cannot add
 //               setup fields. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: TGXL tune lane: the tuner's `M|` message lines
+//               (messageReceived) and its tuning flag in the state log
+//               line. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -883,6 +887,19 @@ void TgxlConnection::processLine(const QString& line,
         return;
     }
 
+    // TGXL tune lane (bench 2026-09-30): message line M|<text>, e.g.
+    // `M|Tuned SWR: 1.05:1` and `M|LOW RF POWER`
+    // (captures/flex-tgxl-direct-CONTROL.pcapng T+174.551, T+237.750).
+    if (line.startsWith(QLatin1String("M|"))) {
+        if (m_identityAdmissionRequired && !m_connected) {
+            return;
+        }
+        const QString text = line.mid(2).trimmed();
+        qCInfo(lcTgxl) << "RX M-frame:" << text;
+        emit messageReceived(text);
+        return;
+    }
+
     // State push: S0|state key=val key=val ...
     // Status poll response: S<seq>|status key=val key=val ...
     // Frame format per 4O3A TGXL API + design §6.1:
@@ -917,7 +934,10 @@ void TgxlConnection::processLine(const QString& line,
 
         // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
         if (!kvs.isEmpty()) {
-            qCInfo(lcTgxl) << "RX S-frame object=" << object << "state=" << kvs.value("state", kvs.value("status", "unknown"));
+            // TGXL tune lane: the tuning flag too, so a cycle's sweep (or
+            // its absence) is in the log.
+            qCInfo(lcTgxl) << "RX S-frame object=" << object << "state=" << kvs.value("state", kvs.value("status", "unknown"))
+                           << "tuning=" << kvs.value(QStringLiteral("tuning"), QStringLiteral("-"));
         }
 
         if (object == "state") {

@@ -917,6 +917,10 @@
 //                console.cs:27488-27493 [v2.10.3.15]); every link back
 //                (P1 and P2) gets the effective PureSignal enable again.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane: a refused tune carrier logs why it was
+//                refused, and the tuner's link dropping ends a tune cycle
+//                and drops its carrier. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2817,6 +2821,23 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_tgxlConnection = new TgxlConnection(this);
     m_tunerModel     = new TunerModel(this);
     m_tunerModel->bindConnection(m_tgxlConnection);
+    // TGXL tune lane (2026-09-30): the tuner's link dropping ends a tune
+    // cycle. Nothing else would: a hardware cycle waits for the tuner's
+    // `transmit tune off`, and a cycle whose sweep started waits for its
+    // tuning state to fall, neither of which a lost tuner sends.
+    connect(m_tgxlConnection, &TgxlConnection::disconnected, this, [this]() {
+        if (!m_tgxlAutotuneInProgress) {
+            return;
+        }
+        qCWarning(lcConnection) << "TGXL autotune: the tuner disconnected; ending the cycle"
+                                   " and dropping the carrier";
+        if (m_isTuning) {
+            // The carrier drops; manualMoxChanged(false) finishes the cycle.
+            setTune(false);
+        } else {
+            finishTgxlAutotuneCycle();
+        }
+    });
     // iPhone app plan Task 77: a device's Tuner Genius cycle ends with the
     // tuner's own sweep, as the local Tuner page ends the Core's own.
     // Task 77 fix round 3: the Power Genius's OPERATE waits for the sweep.
@@ -30494,6 +30515,13 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     }
     qCInfo(lcConnection)
         << "TGXL autotune: PGXL standby ready, engaging local TUN carrier";
+    // TGXL tune lane (2026-09-30): why setTune(true) refused, for the log.
+    // A gate refusal arrives as tuneRefused; a refusal inside the MOX walk
+    // is the controller's last refusal.
+    QString refusedReason;
+    const QMetaObject::Connection refusalCapture =
+        connect(this, &RadioModel::tuneRefused, this,
+                [&refusedReason](const QString& reason) { refusedReason = reason; });
     if (!m_tgxlAutotuneDeviceId.isEmpty()) {
         // iPhone app plan Task 77: a device's cycle keys as that device,
         // through the keying gate (its session, the holder, the watchdog).
@@ -30505,10 +30533,16 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     } else {
         setTune(true);
     }
+    disconnect(refusalCapture);
     if (!m_isTuning) {
         // Refused (the device went away, another holds transmit, a block
         // came on): nothing keyed, so the amplifier goes back now.
-        qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle";
+        if (refusedReason.isEmpty() && m_moxController) {
+            refusedReason = QStringLiteral("none given; the controller's last refusal: %1")
+                                .arg(m_moxController->lastRefusal().text);
+        }
+        qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle."
+                             << "Reason:" << refusedReason;
         finishTgxlAutotuneCycle();
         return;
     }
