@@ -199,6 +199,8 @@
         {"id": "session-verbs-nnr", "file": "sessions/verbs-nnr.json", "kind": "session", "requires": {"nnrVersion": 1, "dspAssetVersion": 1}},
         {"id": "session-verbs-dsp-assets", "file": "sessions/verbs-dsp-assets.json", "kind": "session", "requires": {"dspAssetVersion": 2}},
         {"id": "session-verbs-ps3-display", "file": "sessions/verbs-ps3-display.json", "kind": "session", "requires": {"psDisplayVersion": 1}},
+        {"id": "session-monitor-audio", "file": "sessions/monitor-audio.json", "kind": "session", "requires": {"txMonitorAudioVersion": 1, "headphonesMixVersion": 1}},
+        {"id": "session-monitor-audio-undeclared", "file": "sessions/monitor-audio-undeclared.json", "kind": "session", "requires": {"txMonitorAudioVersion": 1}},
         {"id": "session-verbs-ps3", "file": "sessions/verbs-ps3.json", "kind": "session", "requires": {"psAlgorithmVersion": 3}},
         {"id": "session-verbs-ps3-arming", "file": "sessions/verbs-ps3-arming.json", "kind": "session", "requires": {"psAlgorithmVersion": 3, "transmitSettingsVersion": 7}},
         {"id": "session-verbs-notch", "file": "sessions/verbs-notch.json", "kind": "session", "requires": {"notchControlVersion": 1}},

@@ -25,7 +25,8 @@
 // This file holds what every station runner shares: the loader, the
 // placeholder matcher and filler ("$any", "$string[:<name>]",
 // "$int[:<name>[:<min>:<max>]]", "$object", "$majors", "$capture:<name>",
-// "$ref:<name>", "$within:<t>:<v>", and {"$json": <expectation>} for a
+// "$ref:<name>", "$within:<t>:<v>", "$uuid:<name>" (a client's media
+// connection id), and {"$json": <expectation>} for a
 // station string holding JSON; section 16.1 says where each may stand and
 // how a sender fills it), the control fixture check and the session script
 // player.
@@ -68,6 +69,10 @@
 //   2026-09-30: setConnectClient()'s hook returns why a connection did
 //               not open. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: The phone's monitor-audio fixtures: the "$uuid:<name>"
+//               placeholder, a client's media connection id. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -150,7 +155,8 @@ public:
     /// (and "$int:<name>:<min>:<max>", in range) with the next whole number
     /// of `counter` (1 first in each fixture), "$object" with {}, "$majors"
     /// (a hello's majors) with [major], "$ref:<name>" with the recorded
-    /// value. Named ones
+    /// value, "$uuid:<name>" with a new canonical UUID (lower case, no
+    /// braces) for each fill. Named ones
     /// are recorded into `captures`. Any other placeholder, and any
     /// {"$json": ...} (only the station sends one), is an error.
     static QJsonValue substitute(const QJsonValue& value, Captures* captures, int* counter,

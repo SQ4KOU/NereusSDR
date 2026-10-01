@@ -28,6 +28,16 @@
 //   stationTci       the Core runs a station TCI server; it stays off (false)
 //   stepAttenuator   a step attenuator controller is bound (false)
 //   media            the station's media is enabled (false)
+//   mediaController  with media, the Core's media controllers run, as
+//                    nereusd runs them (a DaemonMediaHub making one per
+//                    session as its media starts), so a client's
+//                    media.control reaches them and they answer (false:
+//                    media.control reaches nothing). Each media
+//                    connection's transport is a stand-in that offers one
+//                    description ("v=0" and nothing else) and never
+//                    connects, gathers a candidate or becomes ready, so
+//                    what the Core sends does not depend on this
+//                    computer's network
 //   priorFailedAuthentications
 //                    other clients that each sent a wrong token before this
 //                    one connects (0); the lockout is the station's, not a
@@ -267,6 +277,12 @@
 //               another client that did not open, with its stage. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: The phone's monitor-audio fixtures:
+//               stationSetup.mediaController (a DaemonMediaHub on a
+//               stand-in transport that offers one description), and a
+//               behaviour media.control's connectionId held to the app's
+//               own. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -279,6 +295,8 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QTemporaryDir>
+#include <QTimer>
+#include <QUuid>
 
 #include <functional>
 #include <memory>
@@ -300,6 +318,8 @@
 #include "core/session/RemoteKeying.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/IMediaTransport.h"
 #include "core/station/StationRadios.h"
 #include "core/settings/SettingsScope.h"
 #include "models/Band.h"
@@ -342,6 +362,7 @@ const QStringList kSetupKeys{
     QStringLiteral("unkeyWalkMs"),
     QStringLiteral("stationRadios"),   QStringLiteral("deferOwnConnection"),
     QStringLiteral("coreListener"),    QStringLiteral("coreInterfaces"),
+    QStringLiteral("mediaController"),
 };
 
 // NEREUS_LINK_CONNECTABLE (see the file comment).
@@ -391,6 +412,32 @@ ModeSelection modeSelection()
     return ModeSelection::Both;
 }
 
+// stationSetup.mediaController: the transport each media connection gets.
+// As the Core's offerer it offers one description, after the start returns
+// (as the real transport offers once it has made one), and nothing else: no
+// candidate, never ready, so the Core's media control traffic in a fixture
+// is the same on every computer. Its description is "v=0" alone; fixtures
+// match it as any string.
+class ConformanceMediaTransport final : public IMediaTransport {
+public:
+    explicit ConformanceMediaTransport(QObject* parent) : IMediaTransport(parent) {}
+    bool start(const StartOptions& options) override
+    {
+        if (options.role == Role::Offerer) {
+            QTimer::singleShot(0, this, [this] {
+                emit localDescription(QStringLiteral("v=0\r\n"), QStringLiteral("offer"));
+            });
+        }
+        return true;
+    }
+    void stop() override {}
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray&) override { return false; }
+    bool sendRtp(const QByteArray&) override { return false; }
+    bool isReady() const override { return false; }
+};
+
 // The station a fixture's stationSetup describes. Members are declared in
 // the order that makes destruction safe: the server goes first, then the
 // model, then the controller the model points at.
@@ -407,9 +454,13 @@ struct Station {
     // Parity Task 21: the Core's radios, as nereusd attaches them.
     std::unique_ptr<StationRadios> radios;
     std::unique_ptr<StationServer> server;
+    // stationSetup.mediaController: the Core's media controllers. They
+    // hold the server and the model, so they go before either.
+    std::unique_ptr<DaemonMediaHub> mediaHub;
 
     ~Station()
     {
+        mediaHub.reset();
         server.reset();
         radios.reset();
         if (model != nullptr && stepAtt) {
@@ -576,6 +627,23 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
                                                       QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
+    }
+    // The phone's transmit monitor fixtures: the Core's media controllers,
+    // made as nereusd makes them (StationHost: a DaemonMediaHub over the
+    // server and the model), each connection on the stand-in transport.
+    const QJsonValue mediaController = setup.value(QStringLiteral("mediaController"));
+    if (!mediaController.isUndefined() && !mediaController.isBool()) {
+        return QStringLiteral("stationSetup.mediaController must be true or false");
+    }
+    if (mediaController.toBool(false)) {
+        if (!setup.value(QStringLiteral("media")).toBool(false)) {
+            return QStringLiteral("stationSetup.mediaController needs media");
+        }
+        station->mediaHub = std::make_unique<DaemonMediaHub>(
+            station->server.get(), station->model, nullptr,
+            [](QObject* parent) -> IMediaTransport* {
+                return new ConformanceMediaTransport(parent);
+            });
     }
     // Parity Task 21 (R-IOS-18): "stationRadios": the Core chooses its own
     // radio, as nereusd does. The static radio is its radio, and a second
@@ -858,6 +926,7 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                 }
                 if (text.startsWith(QStringLiteral("$capture:"))
                     || text.startsWith(QStringLiteral("$string:"))
+                    || text.startsWith(QStringLiteral("$uuid:"))
                     || text.startsWith(QStringLiteral("$int:"))
                     || (text == QStringLiteral("$any") && !summarised)
                     || text == QStringLiteral("$object") || text == QStringLiteral("$majors")) {
@@ -1024,6 +1093,19 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
             if (agreedMinor < spec.value(QStringLiteral("minMinor")).toInt()) {
                 fail(index, QStringLiteral("%1 needs a newer minor").arg(verb));
             }
+        } else if (type == QStringLiteral("media.control")) {
+            // A media connection id is the app's own: made by it for each
+            // connection ("$uuid:<name>") or one it made earlier
+            // ("$ref:<name>").
+            const QString connection = message.value(QStringLiteral("payload"))
+                                           .toObject()
+                                           .value(QStringLiteral("connectionId"))
+                                           .toString();
+            if (!connection.startsWith(QStringLiteral("$uuid:"))
+                && !connection.startsWith(QStringLiteral("$ref:"))) {
+                fail(index, QStringLiteral("a media connectionId is the app's own: "
+                                           "$uuid:<name> or $ref:<name>"));
+            }
         } else if (type == QStringLiteral("property.write")) {
             const QString writeId = message.value(QStringLiteral("writeId")).toString();
             if (!writeId.startsWith(QStringLiteral("$int:"))
@@ -1103,6 +1185,7 @@ private slots:
     void everyFixtureRunsOnTheStation();
     void appFixturesHoldOnlyWhatAConformantClientSends();
     void theConformanceCheckCatchesWhatAnAppCannotSend();
+    void mediaConnectionIdsAreTheAppsOwn();
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
     void aDeferredOwnConnectionOpensAtItsStep();
@@ -1635,6 +1718,89 @@ void TstLinkConformanceSession::appFixturesHoldOnlyWhatAConformantClientSends()
     }
     QVERIFY2(forTheApp >= 20, qPrintable(QString::number(forTheApp)));
     QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+}
+
+// The phone's monitor-audio fixtures: a media connection id is the app's
+// own. The runner fills "$uuid:<name>" with a new canonical UUID each time
+// and records it; a station message cannot hold one; a fixture for the app
+// whose media.control pins a connection id is named.
+void TstLinkConformanceSession::mediaConnectionIdsAreTheAppsOwn()
+{
+    LinkFixtures::Captures captures;
+    int counter = 0;
+    QString error;
+    const QJsonValue first = LinkFixtures::substitute(
+        QJsonValue(QStringLiteral("$uuid:media1")), &captures, &counter, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    const QJsonValue second = LinkFixtures::substitute(
+        QJsonValue(QStringLiteral("$uuid:media2")), &captures, &counter, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    for (const QJsonValue& filled : {first, second}) {
+        const QUuid uuid = QUuid::fromString(filled.toString());
+        QVERIFY(!uuid.isNull());
+        QCOMPARE(uuid.toString(QUuid::WithoutBraces), filled.toString());
+    }
+    QVERIFY(first != second);
+    QCOMPARE(captures.value(QStringLiteral("media1")), first);
+    QCOMPARE(captures.value(QStringLiteral("media2")), second);
+    QCOMPARE(counter, 0);
+    QCOMPARE(LinkFixtures::match(QJsonValue(QStringLiteral("$uuid:media1")), first, &captures),
+             QStringLiteral("$: $uuid:media1 stands only in a client message"));
+
+    const QJsonObject surface = LinkFixtures::readObject(
+        QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("surface.json")), &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    const QJsonObject base = fixture(QStringLiteral("session-monitor-audio"));
+    QVERIFY(!base.isEmpty());
+    QVERIFY(appConformanceProblems(QStringLiteral("base"), base, surface).isEmpty());
+    const auto firstPayload = [](const QJsonObject& step) {
+        return step.value(QStringLiteral("message"))
+            .toObject()
+            .value(QStringLiteral("payload"))
+            .toObject();
+    };
+    // A start whose connection id is pinned, and a station message
+    // holding "$uuid:<name>".
+    QJsonObject pinned = base;
+    QJsonObject stationUuid = base;
+    QJsonArray pinnedSteps = pinned.value(QStringLiteral("steps")).toArray();
+    QJsonArray stationSteps = stationUuid.value(QStringLiteral("steps")).toArray();
+    bool pinnedOne = false;
+    bool stationOne = false;
+    for (int i = 0; i < pinnedSteps.size(); ++i) {
+        QJsonObject step = pinnedSteps.at(i).toObject();
+        QJsonObject payload = firstPayload(step);
+        if (payload.isEmpty()) {
+            continue;
+        }
+        payload.insert(QStringLiteral("connectionId"),
+                       QStringLiteral("11111111-2222-4333-8444-555555555555"));
+        QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        message.insert(QStringLiteral("payload"), payload);
+        step.insert(QStringLiteral("message"), message);
+        if (!pinnedOne && step.value(QStringLiteral("from")) == QJsonValue(QStringLiteral("client"))) {
+            pinnedSteps.replace(i, step);
+            pinnedOne = true;
+        }
+        if (!stationOne && step.value(QStringLiteral("from")) == QJsonValue(QStringLiteral("station"))) {
+            payload.insert(QStringLiteral("connectionId"), QStringLiteral("$uuid:media1"));
+            message.insert(QStringLiteral("payload"), payload);
+            step.insert(QStringLiteral("message"), message);
+            stationSteps.replace(i, step);
+            stationOne = true;
+        }
+    }
+    QVERIFY(pinnedOne && stationOne);
+    pinned.insert(QStringLiteral("steps"), pinnedSteps);
+    stationUuid.insert(QStringLiteral("steps"), stationSteps);
+    QStringList p = appConformanceProblems(QStringLiteral("x"), pinned, surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(QStringLiteral("a media connectionId is the app's own")),
+             qPrintable(p.join('|')));
+    p = appConformanceProblems(QStringLiteral("x"), stationUuid, surface);
+    QVERIFY2(p.join(QLatin1Char('|')).contains(
+                 QStringLiteral("$.payload.connectionId is $uuid:media1, which an app runner "
+                                "cannot send")),
+             qPrintable(p.join('|')));
 }
 
 void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()

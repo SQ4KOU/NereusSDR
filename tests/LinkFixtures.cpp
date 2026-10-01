@@ -77,6 +77,10 @@
 //               open, and the connect and openOwnConnection steps report it
 //               before waiting for the station. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-01: The phone's monitor-audio fixtures: "$uuid:<name>", filled
+//               with a new canonical UUID, refused in a station message.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -100,6 +104,7 @@
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 #include <cmath>
@@ -174,6 +179,8 @@ QString placeholderArgument(const QString& text, const QString& prefix)
 //   $within:<t>:<v>      a number no further than <t> from <v>
 //   $majors              only as a hello's "majors": whole numbers from 0 to
 //                        65535, ascending, no repeats, naming its "major"
+//   $uuid:<name>         only in a client message: a canonical UUID the
+//                        client chose (a media connection id), recorded
 // and one object form, {"$json": <expectation>} (isJsonForm below).
 bool isPlaceholder(const QJsonValue& value)
 {
@@ -188,6 +195,7 @@ bool isPlaceholder(const QJsonValue& value)
         || (text.startsWith(QStringLiteral("$int:")) && text.size() > 5)
         || (text.startsWith(QStringLiteral("$capture:")) && text.size() > 9)
         || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5)
+        || (text.startsWith(QStringLiteral("$uuid:")) && text.size() > 6)
         || text.startsWith(QStringLiteral("$within:"));
 }
 
@@ -548,6 +556,9 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
         if (text == QStringLiteral("$majors")) {
             return QStringLiteral("%1: $majors stands only as a hello's majors").arg(path);
         }
+        if (text.startsWith(QStringLiteral("$uuid:"))) {
+            return QStringLiteral("%1: %2 stands only in a client message").arg(path, text);
+        }
         if (text == QStringLiteral("$object")) {
             return actual.isObject()
                        ? QString()
@@ -738,6 +749,15 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
         }
         if (text == QStringLiteral("$object")) {
             return QJsonObject{};
+        }
+        const QString uuid = placeholderArgument(text, QStringLiteral("$uuid:"));
+        if (!uuid.isEmpty()) {
+            // A media connection id is a canonical UUID the client makes
+            // for each connection (the media document's start), so the
+            // runner makes a new one each time, as a client does.
+            const QJsonValue filled(QUuid::createUuid().toString(QUuid::WithoutBraces));
+            captures->insert(uuid, filled);
+            return filled;
         }
         const QString ref = placeholderArgument(text, QStringLiteral("$ref:"));
         if (ref.isEmpty()) {
