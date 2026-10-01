@@ -7974,8 +7974,18 @@ endif()
 # the Python service on NEREUS_TEST_PYTHON (above), which needs websockets
 # and cryptography (the Linux CI job installs them from apt and points
 # NEREUS_TEST_PYTHON at /usr/bin/python3).
+# QTEST_FUNCTION_TIMEOUT 120000 for this test only (240000 on the Linux CI
+# job for the rest): QtTest's function watchdog counts from the start of the
+# hung function, and here that starts about 53 s into the process on CI, so
+# a 240 s watchdog would fire at about 293 s, too close to the 300 s TIMEOUT
+# for its crash handler to print the stacks. The longest legitimate wait in
+# this test is the dial deadline plus 10 s, about 89 s
+# (RendezvousDialer.h kDialDeadlineMs, RendezvousTestHarness.h), and its
+# slowest passing function takes about 7 s. TIMEOUT unchanged.
 if(TEST tst_rendezvous_client)
     set_tests_properties(tst_rendezvous_client PROPERTIES TIMEOUT 300)
+    set_property(TEST tst_rendezvous_client APPEND PROPERTY ENVIRONMENT
+        "QTEST_FUNCTION_TIMEOUT=120000")
 endif()
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
@@ -8952,13 +8962,15 @@ nereus_add_test(tst_remote_audio_clock)
 # gate. Measured 2026-09-22 on the M5 Max: 116 s alone (load 7.3), 212 s in a
 # full -j6 run (load 18.8 at start, 8.7 at end). PROCESSORS 2 makes a -jN run
 # start one fewer neighbour while this single-threaded loop runs.
-# R-R3-21: each hour is its own data row, so QtTest's 300 s watchdog bounds
-# one hour, not both; on a Linux aarch64 host both hours took 347 s alone
-# and were aborted by that watchdog, and 267 s at the end of a full run.
-# TIMEOUT 700 is about twice the slowest (Linux, alone) measurement.
-# Load findings 3: one hour row still passed QtTest's 300 s watchdog above
-# load 200, so each hour now runs as four quarter-hour rows carrying one
-# simulation on; the watchdog bounds a quarter. TIMEOUT unchanged.
+# R-R3-21: each hour is its own data row, so QtTest's function watchdog
+# (300 s by default; the Linux CI job sets QTEST_FUNCTION_TIMEOUT to 240 s)
+# bounds one hour, not both; on a Linux aarch64 host both hours took 347 s
+# alone and were aborted by the 300 s default, and 267 s at the end of a
+# full run. TIMEOUT 700 is about twice the slowest (Linux, alone)
+# measurement. Load findings 3: one hour row still passed the 300 s default
+# above load 200, so each hour now runs as four quarter-hour rows carrying
+# one simulation on; the watchdog bounds a quarter (all of them together
+# took 197 to 226 s on the Linux CI runner). TIMEOUT unchanged.
 if(TEST tst_remote_audio_clock)
     set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 700 PROCESSORS 2)
 endif()
