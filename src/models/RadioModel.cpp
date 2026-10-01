@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1: a remote window's locked keys still name
+//                 receive only alongside the Core's own refusal while its
+//                 link is down. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-30 - Fix round 1 (minor 4): transmitLinkDownReason picks the
 //                 link-down words by state (the window's link to the Core,
 //                 the Core without a radio, the radio's link). J.J. Boyd
@@ -27537,7 +27541,12 @@ QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) cons
         return transmitLinkDownReason();
     }
     if (transmitLinkDown()) {
-        return otherReason.isEmpty() ? transmitLinkDownReason() : otherReason;
+        if (otherReason.isEmpty()) {
+            return transmitLinkDownReason();
+        }
+        // Fix round 1: and receive only alongside it, as before the
+        // link-down lock (a window does not lose a reason it showed).
+        return m_rxOnlyEffective ? rxOnlyReasonAlongside(otherReason) : otherReason;
     }
     if (m_rxOnlyEffective) {
         return rxOnlyReasonAlongside(otherReason);
