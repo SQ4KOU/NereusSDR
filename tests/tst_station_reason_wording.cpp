@@ -58,6 +58,14 @@
 //                                    slice check forwards changeRefusal;
 //                                    levelCalHostSlice is the desktop's own.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-01  J.J. Boyd / KG4VCF  TX diagnostics lane: the unkey event
+//                                    lines (DaemonMediaController::
+//                                    unkeyEventLines) are the Core's log
+//                                    text, named exactly in
+//                                    unkeyEventLogText(); a guard holds
+//                                    each to that function and the function
+//                                    to the log. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  TX rulings: a listener's refused
 //                                    receive-level write forwards
 //                                    listenerChangeReason.
@@ -779,6 +787,36 @@ struct ReasonSource {
     bool positionedOnly = false;
 };
 
+// TX diagnostics lane: the literals of DaemonMediaController::
+// unkeyEventLines, whole, as the scan reads them (adjacent literals
+// joined). They are the Core's log text: logUnkeyStats logs each line it
+// returns with qCInfo and nothing else reads them (unkeyEventLinesAreLogOnly
+// holds both). Named whole, not by a shorter start, so the exemption
+// covers no other literal: one is exempt only if it begins with an entire
+// log sentence below, and the guard fails if any of them is written
+// outside unkeyEventLines.
+const QStringList& unkeyEventLogText()
+{
+    static const QStringList text{
+        QStringLiteral("Transmit ended (%1): "),
+        QStringLiteral("microphone underrun %1 at +%2 ms of the line"),
+        QStringLiteral(", RF start not measured"),
+        QStringLiteral(", RF never started"),
+        QStringLiteral(" and +%1 ms of RF"),
+        QStringLiteral(", %1 ms before RF started"),
+        QStringLiteral(", silent %1 ms"),
+        QStringLiteral(", still silent at unkey"),
+        QStringLiteral("; largest gap between packets %1 ms"),
+        QStringLiteral("; no gap between packets measured"),
+        QStringLiteral(", latest packet %1 ms behind its timestamp"),
+        QStringLiteral(", no packet timestamps measured"),
+        QStringLiteral("radio ran dry at +%1 ms of the key, after a send gap of %2 ms"),
+        QStringLiteral("catch-up burst %1 at +%2 ms of the key, %3 frames after a send gap of "
+                       "%4 ms"),
+    };
+    return text;
+}
+
 const QList<ReasonSource>& reasonSources()
 {
     static const QList<ReasonSource> sources{
@@ -1325,8 +1363,9 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("opusBitrateNotOfferedReason")}, {}, 1},
         // The display refusals and retirements (rejected, allocation-result).
         {"src/core/session/media/DaemonMediaController.cpp", {},
-         {// statsSummary(): a log line's text.
-          "largestKeyframe="},
+         // statsSummary(): a log line's text; unkeyEventLines(): the unkey
+         // event lines, log text (unkeyEventLogText).
+         QStringList{QStringLiteral("largestKeyframe=")} + unkeyEventLogText(),
          19, {},
          {// Parameters and fields that carry this file's own reasons.
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
@@ -2227,6 +2266,58 @@ private slots:
             QStringLiteral("fail(sliceId, stream, QStringLiteral(\"unavailable\"));"), {});
         QVERIFY(!mediaProblems.join(QLatin1Char('|')).contains(QStringLiteral("sliceId")));
         QVERIFY(mediaProblems.join(QLatin1Char('|')).contains(QStringLiteral("unavailable")));
+    }
+
+    // TX diagnostics lane: the unkey event lines' literals are exempt as
+    // log text only while they are: each is written in unkeyEventLines and
+    // nowhere else in the file, and the lines that function returns go to
+    // the log and nowhere else (one caller in src, logUnkeyStats, which
+    // logs each with qCInfo).
+    void unkeyEventLinesAreLogOnly()
+    {
+        const QString file = QStringLiteral("src/core/session/media/DaemonMediaController.cpp");
+        const QString code = codeOf(sourcePath(file));
+        QVERIFY(!code.isEmpty());
+        static const QRegularExpression eventLines(QStringLiteral("^unkeyEventLines$"));
+        static const QRegularExpression logger(QStringLiteral("^logUnkeyStats$"));
+        const QList<FunctionBody> bodies = functionsIn(code, eventLines);
+        QCOMPARE(bodies.size(), 1);
+        const QString& body = bodies.first().body;
+        for (const QString& text : unkeyEventLogText()) {
+            const QString literal = QLatin1Char('"') + text + QLatin1Char('"');
+            QVERIFY2(body.contains(literal), qPrintable(text + QStringLiteral(": not in the function")));
+            QVERIFY2(code.count(literal) == body.count(literal),
+                     qPrintable(text + QStringLiteral(": written outside unkeyEventLines")));
+        }
+
+        // The callers: in src, only logUnkeyStats, which logs each line.
+        int calls = 0;
+        QDirIterator it(sourcePath(QStringLiteral("src")),
+                        {QStringLiteral("*.cpp"), QStringLiteral("*.h")}, QDir::Files,
+                        QDirIterator::Subdirectories);
+        static const QRegularExpression call(QStringLiteral("\\bunkeyEventLines\\s*\\("));
+        while (it.hasNext()) {
+            const QString path = it.next();
+            const QString source = codeOf(path);
+            const bool own = path.endsWith(file);
+            int here = static_cast<int>(source.count(call));
+            if (own) {
+                here -= 1;   // the definition
+            } else if (path.endsWith(QStringLiteral("DaemonMediaController.h"))) {
+                here -= 1;   // the declaration
+            }
+            QVERIFY2(here == 0 || own, qPrintable(path + QStringLiteral(" calls unkeyEventLines")));
+            calls += here;
+        }
+        QCOMPARE(calls, 1);
+        const QList<FunctionBody> loggers = functionsIn(code, logger);
+        QCOMPARE(loggers.size(), 1);
+        static const QRegularExpression logged(QStringLiteral(
+            "const QStringList events = unkeyEventLines\\([^;]*\\);\\s*"
+            "for \\(const QString& event : events\\) \\{\\s*"
+            "qCInfo\\(lcDaemonMedia\\)\\.noquote\\(\\) << event;\\s*\\}"));
+        QVERIFY2(logged.match(loggers.first().body).hasMatch(),
+                 "logUnkeyStats no longer only logs the unkey event lines");
     }
 
     void everyStationReasonIsPlain()
