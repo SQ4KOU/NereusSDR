@@ -14,6 +14,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-01 - TX diagnostics lane: the "Transmit microphone" lines name
+//                 the device by its id in hex, not its raw bytes; going back
+//                 to the station's own names the device it follows, and a
+//                 line lost mid-key says the transmitter hears silence.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Fix round 1: a remote window's locked keys still name
 //                 receive only alongside the Core's own refusal while its
 //                 link is down. J.J. Boyd (KG4VCF), AI-assisted via
@@ -16248,6 +16253,7 @@ void RadioModel::updateRemoteMicSource()
     }
     const bool inUse = lineLostMidKey || !writer.isEmpty();
     const bool writerChanged = writer != m_remoteMicWriter;
+    const QByteArray previousWriter = m_remoteMicWriter;
     m_remoteMicWriter = writer;
     if (inUse == m_remoteMicInUse) {
         if (writerChanged && inUse) {
@@ -16255,7 +16261,14 @@ void RadioModel::updateRemoteMicSource()
             // device's audio is heard in this one's transmission.
             m_remoteMicFeed->setInUse(false);
             m_remoteMicFeed->setInUse(true);
-            qCInfo(lcDsp) << "Transmit microphone: the remote device" << writer;
+            if (!writer.isEmpty()) {
+                qCInfo(lcDsp).noquote() << "Transmit microphone: the remote device"
+                                        << QString::fromLatin1(writer.toHex());
+            } else {
+                qCInfo(lcDsp).noquote()
+                    << "Transmit microphone: silence, the line of the keyed device"
+                    << QString::fromLatin1(m_remoteMicKeyedDevice.toHex()) << "is gone";
+            }
         }
         if (writerChanged) {
             emit remoteMicWriterChanged(writer);
@@ -16266,8 +16279,22 @@ void RadioModel::updateRemoteMicSource()
     // Every change empties the ring: nothing of the device's audio is left
     // when the operator's source returns, and a new key starts from silence.
     m_remoteMicFeed->setInUse(inUse);
-    qCInfo(lcDsp) << "Transmit microphone:" << (inUse ? "the remote device" : "the station's own")
-                  << writer;
+    // TX diagnostics lane: the device by its id in hex. Back to the
+    // station's own, the line names the device it follows; a key whose line
+    // went away mid-key keeps the feed, silent.
+    if (!writer.isEmpty()) {
+        qCInfo(lcDsp).noquote() << "Transmit microphone: the remote device"
+                                << QString::fromLatin1(writer.toHex());
+    } else if (inUse) {
+        qCInfo(lcDsp).noquote()
+            << "Transmit microphone: silence, the line of the keyed device"
+            << QString::fromLatin1(m_remoteMicKeyedDevice.toHex()) << "is gone";
+    } else if (!previousWriter.isEmpty()) {
+        qCInfo(lcDsp).noquote() << "Transmit microphone: the station's own, after the remote device"
+                                << QString::fromLatin1(previousWriter.toHex());
+    } else {
+        qCInfo(lcDsp) << "Transmit microphone: the station's own";
+    }
     if (writerChanged) {
         emit remoteMicWriterChanged(writer);
     }
