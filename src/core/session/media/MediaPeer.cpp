@@ -28,6 +28,10 @@
 //               microphone line delivered on the transport's own thread
 //               with this peer's checks; txReceived carries heldUs.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the microphone sink's rejection
+//               is reported only while its start is still current, as on
+//               the owner's path. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -449,17 +453,24 @@ bool MediaPeer::installMicSink()
     }
     // On the transport's thread: only this start's values, copied in. A
     // rejection is reported on the owner's thread (this peer outlives the
-    // transport's thread: stop() ends it first).
+    // transport's thread: stop() ends it first), and only while this start
+    // is still current: a report posted before stop() or a restart is
+    // dropped, as on the owner's path.
     const quint32 ssrc = d->micAudioSsrc;
     MediaPeer* const peer = this;
+    const IMediaTransport* const transport = d->transport;
+    const quint64 generation = d->generation;
     IMediaTransport::MicPacketSink sink = d->micSink;
     return d->transport->setMicPacketSink(
-        [ssrc, peer, sink](const QByteArray& packet, qint64 heldUs) {
+        [ssrc, peer, transport, generation, sink](const QByteArray& packet, qint64 heldUs) {
             if (packet.size() < IMediaTransport::kMinRawRtpBytes
                 || packet.size() > IMediaTransport::kMaxRawRtpBytes || rtpSsrc(packet) != ssrc) {
                 QMetaObject::invokeMethod(
                     peer,
-                    [peer]() {
+                    [peer, transport, generation]() {
+                        if (!peer->isCurrent(transport, generation)) {
+                            return;
+                        }
                         emit peer->errorOccurred(
                             QStringLiteral("invalid microphone RTP packet rejected"));
                     },
