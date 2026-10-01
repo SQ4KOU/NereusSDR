@@ -19,6 +19,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave RD-I10: the VAX tee try-locks
+//                                    the channel's bus lock and skips the
+//                                    push while another thread holds it.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Radio codec: setRadioOutputTap, the
 //                                    station's program at the master
 //                                    volume for the radio's own speaker
@@ -2390,12 +2394,14 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         // not pushed; spec says "tags / level UI still reflect routing,
         // but no downstream audio". Taking it keeps the mix in step.
         const bool muted = m_vaxMuted[vaxIdx].load(std::memory_order_acquire);
-        // Snapshot the bus pointer into a local so the isOpen() check
-        // and the push() below observe the same IAudioBus instance.
-        // The live-reconfig contract (AudioEngine.h) forbids
-        // setVaxConfig / setVaxEnabled mid-block, but the snapshot
-        // eliminates any torn-read window should a caller violate it.
-        IAudioBus* vaxBus = m_vaxBus[vaxIdx].get();
+        // RD-I10 (fix wave 2026-09-30): the owner thread replaces or closes
+        // this output, and a remote window's feeder writes it, under
+        // m_vaxBusMutex. The tee try-locks it, as the speakers push below
+        // does: a contending replace or feeder write drops this block's
+        // push instead of the tee waiting, or reading a bus being freed.
+        // The mix is still drained, so it stays in step.
+        std::unique_lock<std::mutex> vaxLk(m_vaxBusMutex[vaxIdx], std::try_to_lock);
+        IAudioBus* vaxBus = vaxLk.owns_lock() ? m_vaxBus[vaxIdx].get() : nullptr;
         // Normally one block. More only after a slice on the channel was
         // late: then the backlog every slice has queued goes out at once.
         int mixedVax = 0;
