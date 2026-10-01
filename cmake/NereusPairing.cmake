@@ -38,20 +38,25 @@
 # =================================================================
 
 include(FetchContent)
+# The archive pins (URL and SHA-256) live in the dependency manifest, which
+# also lets CI hand over a pre-fetched, hash-checked copy of each archive.
+include("${CMAKE_CURRENT_LIST_DIR}/NereusDependencyArchives.cmake")
 
 function(nereus_add_pairing_dependency)
     if(TARGET nereus_spake2ee)
         return()
     endif()
 
+    nereus_dependency_archive(libsodium _libsodium_url _libsodium_hash)
     FetchContent_Declare(nereus_libsodium
-        URL https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz
-        URL_HASH SHA256=adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349
+        URL "${_libsodium_url}"
+        URL_HASH "${_libsodium_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(spake2ee _spake2ee_url _spake2ee_hash)
     FetchContent_Declare(nereus_spake2ee
-        URL https://codeload.github.com/jedisct1/spake2-ee/tar.gz/fd3ea61f27a75ff63b0f192c9e619b5a494d048e
-        URL_HASH SHA256=20d63587c1191b952e98b9a4d8bd557c8a6c4f6bfbac0b9fb77b28854c244bb6
+        URL "${_spake2ee_url}"
+        URL_HASH "${_spake2ee_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
     FetchContent_MakeAvailable(nereus_libsodium nereus_spake2ee)
