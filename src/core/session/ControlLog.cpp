@@ -17,6 +17,7 @@
 #include "core/session/NetworkPathSnapshot.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/media/IMediaTransport.h"
 
 #include <QDateTime>
 #include <QHostAddress>
@@ -113,6 +114,29 @@ QString ControlLog::maskedAddress(const QString& address)
         return QStringLiteral("*:") + text.section(QLatin1Char(':'), -1);
     }
     return QStringLiteral("an unrecognized address");
+}
+
+QString ControlLog::mediaPathText(const MediaIcePath& path)
+{
+    const auto candidate = [](const QString& type, const QString& transport) {
+        QString text = type.isEmpty() ? QStringLiteral("not known") : safeName(type.toUtf8());
+        if (!transport.isEmpty()) {
+            text += QLatin1Char(' ') + safeName(transport.toUtf8());
+        }
+        return text;
+    };
+    QString text = path.relayed() ? QStringLiteral("relayed pair") : QStringLiteral("direct pair");
+    if (path.viaLoopbackShim()) {
+        text += QStringLiteral(" through the loopback relay shim");
+    }
+    text += QStringLiteral(", candidates local %1, remote %2, local %3 port %4, remote %5 port %6")
+                .arg(candidate(path.localType, path.localTransport),
+                     candidate(path.remoteType, path.remoteTransport),
+                     maskedAddress(path.localAddress))
+                .arg(path.localPort)
+                .arg(maskedAddress(path.remoteAddress))
+                .arg(path.remotePort);
+    return text;
 }
 
 QString ControlLog::device(const PeerInfo& peer)

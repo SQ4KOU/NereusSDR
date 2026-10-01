@@ -29,6 +29,8 @@
 //               microphone line delivered on the transport's own thread
 //               with this peer's checks; txReceived carries heldUs.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -155,6 +157,8 @@ public:
     /// the harness and the log), nullopt before or where the transport
     /// cannot say.
     std::optional<MediaIcePath> selectedPath() const;
+    /// Control logging lane: the transport's rttMs(), for the log only.
+    std::optional<qint64> rttMs() const;
     /// Both descriptions carry the L16 rtpmap (R-R3-23).
     bool losslessAudioNegotiated() const;
     /// Task 36: both descriptions carry the L16 rtpmap on the microphone

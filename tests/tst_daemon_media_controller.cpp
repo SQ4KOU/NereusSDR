@@ -6,6 +6,9 @@
 // production reaches the source exclusively through RadioModel's tagged tap.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-01: Control logging lane: the media connection's selected pair
+//               is logged when first known and on a change, with its rtt.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-01: TX diagnostics lane, review round: the tail's start, the
 //               pump's longest wait with its sequence step, and "RF start
 //               not measured" without a placing send path. J.J. Boyd
@@ -200,7 +203,13 @@ public:
     }
     bool isReady() const override { return readyState; }
     bool losslessAudioNegotiated() const override { return losslessNegotiated; }
+    std::optional<MediaIcePath> selectedPath() const override { return path; }
+    std::optional<qint64> rttMs() const override { return rtt; }
     void becomeReady() { readyState = true; emit ready(); }
+
+    // Control logging lane: the pair and rtt the transport reports.
+    std::optional<MediaIcePath> path;
+    std::optional<qint64> rtt;
 
     bool started{false};
     bool readyState{false};
@@ -713,6 +722,7 @@ private slots:
     void destroyingControllerWithLiveBudgetSessionIsQuiet();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
+    void theMediaPairIsLoggedWhenKnownAndOnChange();
     void realDisplayErrorIsCountedAndLoggedOnce();
     // TX mic thread fix round 2.
     void realMicLineTornDownWhileItsThreadDelivers_data();
@@ -1539,6 +1549,81 @@ void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKe
     const DisplayCodecDecodeResult recovered = decoder.decode(
         harness.mediaTransport->displays.constLast());
     QCOMPARE(recovered.disposition, DisplayCodecDisposition::Accepted);
+    harness.finish();
+}
+
+// Control logging lane: the media connection's selected pair (candidate
+// types and transports, masked addresses) is logged once it is known, not
+// again while unchanged, and again on a change seen by the periodic
+// diagnostics check; each line carries the connection's rtt.
+void TstDaemonMediaController::theMediaPairIsLoggedWhenKnownAndOnChange()
+{
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Harness harness;
+    harness.establishSession();
+    QVERIFY(harness.client.mediaAvailable());
+    const QJsonObject start{
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}};
+    QVERIFY(harness.client.sendMediaControl(start, harness.client.sessionEpoch()));
+    QTRY_VERIFY(harness.mediaTransport);
+    MediaIcePath path;
+    path.localType = QStringLiteral("host");
+    path.localTransport = QStringLiteral("udp");
+    path.remoteType = QStringLiteral("srflx");
+    path.remoteTransport = QStringLiteral("udp");
+    path.localAddress = QStringLiteral("192.168.1.10");
+    path.localPort = 5000;
+    path.remoteAddress = QStringLiteral("10.0.0.77");
+    path.remotePort = 6000;
+    harness.mediaTransport->path = path;
+    harness.mediaTransport->rtt = 12;
+    harness.mediaTransport->becomeReady();
+    const auto links = [] {
+        return g_daemonMediaMessages.filter(QStringLiteral("Media link for "));
+    };
+    QTRY_COMPARE(links().size(), 1);
+    QVERIFY2(QRegularExpression(QStringLiteral(
+                 "^Media link for [0-9a-f]+: direct pair, candidates local host udp, remote "
+                 "srflx udp, local \\*\\.\\*\\.\\*\\. 10 port 5000, remote "
+                 "\\*\\.\\*\\.\\*\\. 77 port 6000; rtt 12 ms$"))
+                 .match(links().constFirst())
+                 .hasMatch(),
+             qPrintable(links().constFirst()));
+
+    // The 10 s diagnostics timer, fired here by hand.
+    QTimer* diagnostics = nullptr;
+    for (QTimer* timer : harness.controller.findChildren<QTimer*>(
+             QString(), Qt::FindDirectChildrenOnly)) {
+        if (timer->interval() == 10'000) {
+            diagnostics = timer;
+        }
+    }
+    QVERIFY(diagnostics);
+    const auto check = [diagnostics] {
+        return QMetaObject::invokeMethod(diagnostics, "timeout", Qt::DirectConnection);
+    };
+
+    // Unchanged: the check logs nothing more.
+    QVERIFY(check());
+    QCOMPARE(links().size(), 1);
+
+    // A new pair (now through a TURN relay over TCP): logged as a change.
+    path.localType = QStringLiteral("relay");
+    path.localTransport = QStringLiteral("tcp-active");
+    harness.mediaTransport->path = path;
+    harness.mediaTransport->rtt = 48;
+    QVERIFY(check());
+    QCOMPARE(links().size(), 2);
+    QVERIFY2(QRegularExpression(QStringLiteral(
+                 "^Media link for [0-9a-f]+ \\(changed\\): relayed pair, candidates local "
+                 "relay tcp-active, remote srflx udp, .*; rtt 48 ms$"))
+                 .match(links().constLast())
+                 .hasMatch(),
+             qPrintable(links().constLast()));
     harness.finish();
 }
 

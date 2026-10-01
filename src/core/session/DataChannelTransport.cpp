@@ -58,6 +58,13 @@
 //               application) is deleted too instead of leaking with the
 //               peers it holds; lingerTargetExistsForTest(). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Control logging lane: a control message carries the time
+//               its frame was reassembled on the library's thread, so the
+//               Core's log can tell the wait for this thread from the
+//               network's (deliveringMessageWaitUs()); linkDiagnostics();
+//               the selected pair's candidate transports. Measurement
+//               only: the queue and its order are unchanged. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -977,9 +984,28 @@ std::optional<MediaIcePath> DataChannelTransport::selectedPath() const
         if (!m_bridge->peer->getSelectedCandidatePair(&local, &remote)) {
             return std::nullopt;
         }
+        const auto transportName = [](const rtc::Candidate& candidate) {
+            switch (candidate.transportType()) {
+            case rtc::Candidate::TransportType::Udp:
+                return QStringLiteral("udp");
+            case rtc::Candidate::TransportType::TcpActive:
+                return QStringLiteral("tcp-active");
+            case rtc::Candidate::TransportType::TcpPassive:
+                return QStringLiteral("tcp-passive");
+            case rtc::Candidate::TransportType::TcpSo:
+                return QStringLiteral("tcp-so");
+            case rtc::Candidate::TransportType::TcpUnknown:
+                return QStringLiteral("tcp");
+            default:
+                return QString();
+            }
+        };
         MediaIcePath path;
         path.localType = typeName(local);
         path.remoteType = typeName(remote);
+        // Control logging lane: the candidates' transports, for the log.
+        path.localTransport = transportName(local);
+        path.remoteTransport = transportName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
         path.localPort = local.port().value_or(0);
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));

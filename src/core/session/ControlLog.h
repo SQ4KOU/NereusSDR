@@ -26,6 +26,7 @@
 //     on one channel while the device is watched, naming the channel (the
 //     media connection's "tx" data channel, the control link, or the
 //     transmit-watch link), kept apart from the control gap lines;
+//   * (for DaemonMediaController) the media connection's selected pair;
 //   * a transmit watchdog stop, with the channel and age of the last
 //     keepalive and the control state it happened in.
 //
@@ -57,6 +58,7 @@ namespace NereusSDR {
 
 class MediaTunnel;
 class SessionTransport;
+struct MediaIcePath;
 struct SessionMessage;
 
 class ControlLog {
@@ -152,6 +154,10 @@ public:
     static QString safeText(const QString& text);
     /// An address as the log prints one: IPv4 "*.*.*. N", IPv6 "*:last".
     static QString maskedAddress(const QString& address);
+    /// A media connection's selected pair as the log prints it: direct or
+    /// relayed, each candidate's type and transport, masked addresses and
+    /// ports.
+    static QString mediaPathText(const MediaIcePath& path);
 
 private:
     struct Pending {
