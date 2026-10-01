@@ -24532,6 +24532,17 @@ void RadioModel::teardownConnection()
     // section 5.
     setConnectionState(ConnectionState::Disconnected);
 
+    // TX safety follow-up (2026-09-30): the forced Disconnected above never
+    // reaches onConnectionStateChanged, which is what clears the lost-link
+    // block. Clear it here, so a disconnect after a LinkLost (the
+    // operator's, or the Core retiring the radio) does not leave the window
+    // saying the link is down on a station disconnected on purpose.
+    if (m_radioLinkDown) {
+        m_radioLinkDown = false;
+        applyTxKeyBlock();
+        emit radioLinkDownChanged(false);
+    }
+
     // Tear down the connection on its own worker thread via the shared
     // helper. See src/core/RadioConnectionTeardown.h for why this must
     // run on the worker — short version: the RadioConnection's QTimers

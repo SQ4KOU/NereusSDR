@@ -19,6 +19,10 @@
 //      back the lock lifts and a key reaches the connection.
 //   6. Fix round 1 (I2): the link back pushes the PureSignal enable to the
 //      connection again, whatever the protocol.
+//   7. Follow-up (Minor 1): a disconnect after a lost link (the operator's,
+//      or the Core retiring the radio) clears the lost-link lock, so the
+//      window no longer says the link is down on a station disconnected on
+//      purpose.
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
@@ -294,6 +298,30 @@ private slots:
         QVERIFY2(rig.conn.log.contains(QStringLiteral("PS on")),
                  qPrintable(rig.conn.log.join(QStringLiteral(", "))));
         QVERIFY(!rig.conn.log.contains(QStringLiteral("PS off")));
+    }
+
+    void disconnectAfterLinkLossClearsTheLock()
+    {
+        Rig rig;
+        const QString reason = QStringLiteral("The link to the radio is down.");
+        QSignalSpy downChanged(&rig.model, &RadioModel::radioLinkDownChanged);
+        rig.conn.setStateForTest(ConnectionState::LinkLost);
+        rig.model.onConnectionStateChangedForTest(ConnectionState::LinkLost);
+        pump();
+        QVERIFY(rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 1);
+
+        // The disconnect goes through teardownConnection, which sets
+        // Disconnected itself and never reaches onConnectionStateChanged.
+        rig.model.disconnectFromRadio();
+        pump();
+        QCOMPARE(rig.model.connectionState(), ConnectionState::Disconnected);
+        QVERIFY(!rig.model.isRadioLinkDown());
+        QCOMPARE(downChanged.count(), 2);
+        QCOMPARE(downChanged.at(1).at(0).toBool(), false);
+        QVERIFY(rig.model.transmitLockReasonAlongside(QString()) != reason);
+        QVERIFY(rig.model.moxController()->transmitBlockReason() != reason);
+        QVERIFY(!rig.model.moxController()->isRadioLinkDown());
     }
 };
 
