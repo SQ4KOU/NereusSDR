@@ -198,6 +198,9 @@
 //                lock follows connectionStateChanged too, so a remote
 //                window whose Core has no radio locks MOX, TUN and 2TONE.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greyed by the
+//                PureSignal facade carries the facade's reason.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -358,6 +361,10 @@ constexpr auto kTransmitSavedTooltip = "TxAppletSavedTransmitTooltip";
 // Disable a control with `reason` as its tooltip, remembering what it had,
 // or put back what it had. Shared by the keying gate and the transmit
 // settings gate, which hold disjoint controls. No model state is written.
+// Fix wave GUI-I7: PS-A's own tooltip while the facade's reason shows.
+constexpr auto kPsaFacadeSavedTooltip = "TxAppletPsaFacadeSavedTooltip";
+constexpr auto kPsaFacadeSavedDescription = "TxAppletPsaFacadeSavedDescription";
+
 void gateTransmitControl(QWidget* control, bool permitted, const QString& reason)
 {
     if (!control) { return; }
@@ -2924,6 +2931,9 @@ void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unava
     const QString reason = unavailableReason.isEmpty()
         ? tr("Remote transmit controls are not available from this Core.")
         : unavailableReason;
+    // Fix wave GUI-I7: the facade's reason off first, so this gate keeps
+    // the button's own tooltip to put back.
+    removePsaFacadeReason();
     gateTransmitControl(m_psaBtn, permitted, reason);
     syncPsaFromFacade();
     applyReceiveOnlyLock();
@@ -3108,9 +3118,33 @@ void TxApplet::syncPsaFromFacade()
     m_updatingFromModel = true;
     m_psaBtn->setChecked(automaticIntent);
     // R-R3-49 (parity Task 7): arming keys nothing, so canArm.
-    m_psaBtn->setEnabled(m_psArmingPermitted && m_psFacade
-                         && m_psFacade->available() && m_psFacade->canArm());
+    const bool canArm = m_psFacade && m_psFacade->available() && m_psFacade->canArm();
+    // Fix wave GUI-I7: greyed by the facade, with the facade's reason. The
+    // arming gate's reason, when it is on, stays (its tooltip is set).
+    removePsaFacadeReason();
+    if (m_psArmingPermitted && !canArm) {
+        const QString refusal = m_psFacade ? m_psFacade->armingRefusal() : QString();
+        const QString reason = refusal.isEmpty()
+            ? PureSignalSessionFacade::needsRadioReason() : refusal;
+        m_psaBtn->setProperty(kPsaFacadeSavedTooltip, m_psaBtn->toolTip());
+        m_psaBtn->setProperty(kPsaFacadeSavedDescription, m_psaBtn->accessibleDescription());
+        m_psaBtn->setToolTip(reason);
+        m_psaBtn->setAccessibleDescription(reason);
+    }
+    m_psaBtn->setEnabled(m_psArmingPermitted && canArm);
     m_updatingFromModel = false;
+}
+
+void TxApplet::removePsaFacadeReason()
+{
+    if (!m_psaBtn || !m_psaBtn->property(kPsaFacadeSavedTooltip).isValid()) {
+        return;
+    }
+    m_psaBtn->setToolTip(m_psaBtn->property(kPsaFacadeSavedTooltip).toString());
+    m_psaBtn->setAccessibleDescription(
+        m_psaBtn->property(kPsaFacadeSavedDescription).toString());
+    m_psaBtn->setProperty(kPsaFacadeSavedTooltip, QVariant());
+    m_psaBtn->setProperty(kPsaFacadeSavedDescription, QVariant());
 }
 
 // ---------------------------------------------------------------------------

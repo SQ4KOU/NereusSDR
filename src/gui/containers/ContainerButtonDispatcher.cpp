@@ -66,6 +66,10 @@
 //                                    window's MOX and TUNE press toggles
 //                                    against its own key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greys with the
+//                                    facade's own reason (on the air, or
+//                                    no radio that supports PureSignal).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -297,7 +301,11 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
                 ? m_hooks.pureSignalArmingReason() : QString();
             unavailable(reason.isEmpty() ? remoteReason : reason);
         } else if (!ps || !ps->available() || !ps->canArm()) {
-            unavailable(QStringLiteral("PureSignal needs a connected radio that supports it."));
+            // Fix wave GUI-I7: the facade's own reason (on the air, or no
+            // connected radio that supports PureSignal).
+            const QString refusal = ps ? ps->armingRefusal() : QString();
+            unavailable(refusal.isEmpty() ? PureSignalSessionFacade::needsRadioReason()
+                                          : refusal);
         }
         break;
     }

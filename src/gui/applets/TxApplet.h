@@ -536,6 +536,8 @@ private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
     void syncPsaFromFacade();
+    // Fix wave GUI-I7: put back PS-A's tooltip under the facade's reason.
+    void removePsaFacadeReason();
     // R-R3-45: show the MON output choice (true = headphones) without
     // writing it back, then refresh the notice.
     void showMonitorOutput(bool headphones);
