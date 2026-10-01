@@ -95,6 +95,20 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made on 2026-09-22 when the WDSP 2.10 re-merge put this
+// file on the pinned TAPR WDSP 2.10 tree at b02d5bac): keeps the independent-Q
+// (Qg/Qe) Gaussian-tail profile from the prior Thetis v2.10.3.13 integration
+// (calc_q_profile, with TAIL_MIX, TAIL_SCALE, BW_REF_HZ, MIN_SIGMA and
+// FWHM_TO_SIGMA); calc_compG and calc_compE use it when a Q array is set,
+// otherwise the pinned split linear/NURBS path; SetTXACFCOMPprofile keeps
+// the 7-argument (F, G, E, Qg, Qe) interface; the pinned split setters
+// SetTXACFCOMPGprofile and SetTXACFCOMPEprofile clear only their own Q
+// array; and destroy_cfcomp frees Qg and Qe. The 2048-point construction
+// default the CFC is built with is kept (in TXA.c).
+// The 2026-04-30 line in the history above describes the retired Thetis
+// vendor only, not this re-merge.
+
 #include "comm.h"
 
 /* Retained Nereus/Thetis Q-shaped profile compatibility. */
