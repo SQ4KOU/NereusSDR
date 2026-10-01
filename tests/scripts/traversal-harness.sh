@@ -106,7 +106,7 @@
 # it when the workflow is started by hand (workflow_dispatch).
 #
 # Usage: traversal-harness.sh --peer PATH --source DIR [--only SCENARIO]
-#                             [--probe PATH]
+#                             [--probe PATH] [--python PATH]
 #
 # Plan Task 29 Step 1: the relay floor measurement
 # (tests/scripts/floor-measurement.sh) runs the scenario floor-measure,
@@ -150,12 +150,17 @@ PEER=""
 PROBE=""
 SOURCE=""
 ONLY=""
+# The interpreter with websockets and cryptography (CMake's
+# NEREUS_TEST_PYTHON). Under sudo -E with the runner's PATH, a bare python3
+# is install-qt-action's toolcache Python, which has neither (INFRA-C1).
+PYTHON="python3"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --peer) PEER="$2"; shift 2 ;;
         --probe) PROBE="$2"; shift 2 ;;
         --source) SOURCE="$2"; shift 2 ;;
         --only) ONLY="$2"; shift 2 ;;
+        --python) PYTHON="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -172,14 +177,14 @@ if [[ "$(id -u)" != "0" ]]; then
     echo "the traversal harness needs root (network namespaces)" >&2
     exit 2
 fi
-for tool in ip nft tc python3 turnserver socat openssl unbound tayga; do
+for tool in ip nft tc "$PYTHON" turnserver socat openssl unbound tayga; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "missing: $tool" >&2
         exit 2
     fi
 done
-python3 -c "import websockets, cryptography" 2>/dev/null || {
-    echo "missing: python3 websockets and cryptography" >&2
+"$PYTHON" -c "import websockets, cryptography" 2>/dev/null || {
+    echo "missing: websockets and cryptography for $PYTHON" >&2
     exit 2
 }
 
@@ -423,11 +428,11 @@ PIDS+=($!)
 
 # ── The service: coturn, the rendezvous behind TLS ──────────────────
 
-python3 -c 'import secrets; print(secrets.token_hex(24))' > "$WORK/turn-secret"
+"$PYTHON" -c 'import secrets; print(secrets.token_hex(24))' > "$WORK/turn-secret"
 chmod 600 "$WORK/turn-secret"
 # Plan Task 29 step 2b: the web relay's own secret (never the TURN one,
 # rendezvous section 12.2), which the service mints grants with.
-python3 -c 'import secrets; print(secrets.token_hex(32))' > "$WORK/relay-secret"
+"$PYTHON" -c 'import secrets; print(secrets.token_hex(32))' > "$WORK/relay-secret"
 chmod 600 "$WORK/relay-secret"
 ip netns exec h-rvsrv turnserver -n -v --no-cli --no-tls --no-dtls --fingerprint \
     --listening-ip=198.51.100.2 --listening-ip=2001:db8:1::2 --listening-port=3478 \
@@ -456,7 +461,7 @@ fi
 if (( FLOOR )); then
     # Plan Task 29 Step 1: the service with option (E)'s relay prototype.
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
-        python3 "$SOURCE/tests/tools/floor_relay_prototype.py" --config "$WORK/rendezvous.conf" \
+        "$PYTHON" "$SOURCE/tests/tools/floor_relay_prototype.py" --config "$WORK/rendezvous.conf" \
         >"$WORK/rendezvous.log" 2>&1 &
 else
     # Plan Task 29 step 2b: the service mints web relay grants
@@ -474,7 +479,7 @@ EOF
         printf 'relay_watch_version = 1\n' >> "$WORK/rendezvous.conf"
     fi
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
-        python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
+        "$PYTHON" -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
 fi
 RENDEZVOUS_PID=$!
 PIDS+=("$RENDEZVOUS_PID")
@@ -488,7 +493,7 @@ relay_secret_file = $WORK/relay-secret
 log_level = info
 EOF
     ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
-        python3 -m nereus_relay --config "$WORK/relay.conf" >"$WORK/relay.log" 2>&1 &
+        "$PYTHON" -m nereus_relay --config "$WORK/relay.conf" >"$WORK/relay.log" 2>&1 &
     RELAY_PID=$!
     PIDS+=("$RELAY_PID")
 fi
@@ -521,7 +526,7 @@ fi
 MARKER_JSON="$(printf '"type"' | od -An -tx1 | tr -d ' \n')"
 MARKER_TX="$(printf 'NEREUS-PLAINTEXT-MARKER' | od -An -tx1 | tr -d ' \n')"
 start_front() {
-    ip netns exec h-rvsrv python3 "$SOURCE/tests/tools/harness_front.py" \
+    ip netns exec h-rvsrv "$PYTHON" "$SOURCE/tests/tools/harness_front.py" \
         --listen 198.51.100.2 --listen 2001:db8:1::2 --cert "$WORK/rv-bundle.pem" \
         --relay-socket "$WORK/relay.sock" --marker "$MARKER_JSON" --marker "$MARKER_TX" \
         --report "$WORK/front.json" >>"$WORK/front.log" 2>&1 &
@@ -617,7 +622,7 @@ run_client() {
         --ca "$WORK/ca.pem" "$@" 2>>"$WORK/client.log" | tail -n 1 || true
 }
 
-field() { python3 -c "import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2]))" "$1" "$2"; }
+field() { "$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2]))" "$1" "$2"; }
 
 # Plan Task 28: a Core as nereusd runs it, answering introductions with a
 # control connection, the desktop paired.
@@ -721,7 +726,7 @@ check_path() {
 # check_media NAME RESULT: Task 29, real audio and display decoded.
 check_media() {
     local name="$1" result="$2"
-    if python3 -c "
+    if "$PYTHON" -c "
 import json, sys
 r = json.loads(sys.argv[1])
 ok = r.get('connected') and r.get('audioDecoded', 0) > 0 and r.get('displayDecoded', 0) > 0
@@ -1063,7 +1068,7 @@ if scenario upgrade-media; then
         --upgrade-schedule-ms 15000,5000,5000 --wait-upgrade-ms 40000 --follow-media-ms 6000)"
     wait "$OPEN_PID" 2>/dev/null || true
     check_path upgrade-media "$result" 1 True
-    if python3 -c "
+    if "$PYTHON" -c "
 import json, sys
 r = json.loads(sys.argv[1])
 ok = (r.get('mediaConnections', 0) >= 2 and r.get('heardMs', 0) > 3000
@@ -1121,7 +1126,7 @@ web_only() {
 
 # front_field KEY TAG: a count from the front's report.
 front_field() {
-    python3 -c "
+    "$PYTHON" -c "
 import json, sys
 r = json.load(open(sys.argv[1]))
 print(r.get(sys.argv[2], {}).get(sys.argv[3], 0))" "$WORK/front.json" "$1" "$2" 2>/dev/null || echo 0
@@ -1137,7 +1142,7 @@ check_web_relay() {
     control="$(front_field datagrams 1)"
     media="$(front_field datagrams 2)"
     hits="$(( $(front_field markerHits 1) + $(front_field markerHits 2) ))"
-    if python3 -c "
+    if "$PYTHON" -c "
 import json, sys
 r = json.loads(sys.argv[1])
 ok = (r.get('connected') and r.get('rankAfter') == 4 and r.get('audioDecoded', 0) > 0
@@ -1174,7 +1179,7 @@ if scenario direct-wss-media; then
     start_core allow --listen "$CORE_PORT" --media
     result="$(run_session cli --direct "$CORE_URL" --media-ms 6000)"
     check_path direct-wss-media "$result" 1 any
-    if python3 -c "
+    if "$PYTHON" -c "
 import json,sys
 r=json.loads(sys.argv[1]); sys.exit(0 if r.get('audioDecoded',0)>0 and
  r.get('displayDecoded',0)>0 and r.get('mediaViaShim') else 1)" "$result"; then
@@ -1204,7 +1209,7 @@ if scenario web-to-direct-wss; then
         --follow-media-ms 6000)"
     wait "$OPEN_PID" 2>/dev/null || true
     check_path web-to-direct-wss "$result" 1 True
-    if python3 -c "
+    if "$PYTHON" -c "
 import json,sys
 r=json.loads(sys.argv[1]); sys.exit(0 if r.get('mediaConnections',0)>=2 and
  r.get('heardMs',0)>3000 and r.get('audioAfterMoveMs',-1)>=0 and
@@ -1234,7 +1239,7 @@ if scenario web-relay-rejoin; then
     wait "$BOUNCE_PID" 2>/dev/null || true
     sleep 2
     joins="$(grep -c "joined again\|joins again\|leg joined" "$WORK/relay.log" 2>/dev/null || true)"
-    if (( joins >= 2 )) && python3 -c "
+    if (( joins >= 2 )) && "$PYTHON" -c "
 import json, sys
 r = json.loads(sys.argv[1])
 ok = (r.get('connected') and r.get('rankAfter') == 4 and r.get('handshakes') == 1
@@ -1273,7 +1278,7 @@ fi
 # reports each keepalive's gap and any trip. A watchdog stop while TUNE is
 # requested fails the scenario; the observed tails remain for operator review.
 deadline_trace() {
-    python3 - "$WORK/core.log" "$WORK/session-events.log" <<'PY'
+    "$PYTHON" - "$WORK/core.log" "$WORK/session-events.log" <<'PY'
 import json, sys
 def events(path):
     with open(path) as lines:
@@ -1314,7 +1319,7 @@ deadline_netem_stats() {
     in_ns inet tc -s -j qdisc show dev inet-natc > "$prefix-in.json"
     in_ns cli nstat -az > "$prefix-cli-nstat.txt"
     in_ns rvsrv nstat -az > "$prefix-service-nstat.txt"
-    python3 - "$prefix-out.json" "$prefix-in.json" <<'PY'
+    "$PYTHON" - "$prefix-out.json" "$prefix-in.json" <<'PY'
 import json, sys
 for direction, path in zip(('client-out', 'client-in'), sys.argv[1:]):
     data = json.load(open(path))[0]
@@ -1326,7 +1331,7 @@ PY
     say "TCP retrans counters: $(grep TcpRetransSegs "$prefix-cli-nstat.txt") | $(grep TcpRetransSegs "$prefix-service-nstat.txt")"
 }
 deadline_check() {
-    python3 - "$1" "$2" "$WORK/core.log" "$WORK/session-events.log" \
+    "$PYTHON" - "$1" "$2" "$WORK/core.log" "$WORK/session-events.log" \
               "$WORK/front.json" "$deadline_output/check.json" <<'PY'
 import json
 import sys
@@ -1650,7 +1655,7 @@ floor_run() {
     service_cpu=$(( $(cpu_ticks "$RENDEZVOUS_PID") - service_before ))
     kill "$core_pid" 2>/dev/null || true
     wait "$core_pid" 2>/dev/null || true
-    python3 - "$option" "$loss" "$delay" "$rate" "$reset" "${device:-null}" "${core:-null}" \
+    "$PYTHON" - "$option" "$loss" "$delay" "$rate" "$reset" "${device:-null}" "${core:-null}" \
         "$turn_cpu" "$tls_cpu" "$service_cpu" "$ticks" >>"$FLOOR_OUT/results.jsonl" <<'PY'
 import json, sys
 a = sys.argv

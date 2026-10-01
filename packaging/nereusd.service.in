@@ -2,6 +2,7 @@
 #
 # Design: docs/architecture/2026-07-28-remote-daemon-architecture-design.md
 #         docs/architecture/2026-08-02-remote-daemon-r1-plan.md (R1 Task 12)
+#         docs/architecture/2026-09-23-station-link-v1.md (the station link)
 #
 # This is a configure_file(@ONLY) template, not a ready-to-use unit: the
 # @...@ placeholders below are substituted with the configured install
@@ -17,12 +18,9 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now nereusd
 #
-# R1 scope: this is a single-purpose radio-to-local-DSP daemon. It does not
-# yet stream audio or spectrum to a remote client over the wire (see the
-# design doc section 9 for the wire protocol this unit does not need to
-# accommodate today) -- but it DOES run the same local WDSP demodulation
-# pipeline the GUI uses (see the LimitRTPRIO comment below), which is why
-# this unit is not as bare as "R1 has no audio" might suggest.
+# Scope: nereusd is the station Core. It runs the radio and the same WDSP
+# pipeline the GUI uses, and serves the station link (control, receive and
+# transmit audio, spectrum) to the desktop and phone apps.
 
 [Unit]
 Description=NereusSDR headless SDR daemon
@@ -109,27 +107,13 @@ UMask=0077
 # smoke test, not for a static-only review.
 
 # --- Real-time audio scheduling -----------------------------------------
-# NOT premature: RadioModel::connectToRadio() (which DaemonApp::start()
-# already calls in production, R1 Task 10) unconditionally starts a
-# dedicated DSP thread per connection (RxDspWorker, the fexchange2
-# demodulation loop every slice runs through), and that thread
-# unconditionally attempts SCHED_FIFO elevation on Linux
-# (RealtimeAudioPriority.cpp: "elevate the DSP thread to real-time audio
-# scheduling so heavy system load ... does not preempt the audio feeder
-# and cause ring underruns / audible jitter"). That is the same local
-# demodulation pipeline the GUI relies on today, not a future
-# remote-audio-streaming feature -- the wire-protocol audio stream really
-# does not exist yet (design doc section 9). Elevation is soft-fail-safe
-# (logs and continues at the default scheduling policy if refused), so
-# this is an optimization, not a correctness requirement -- and the case
-# for granting it does not depend on Pi-specific load measurements: a
-# LimitRTPRIO below what the code requests defeats the elevation on any
-# hardware, loaded or not (design doc section 4.5a measured FFT and Opus
-# cost on the Pi 4 floor, not this DSP thread -- WDSP RX per slice is
-# that section's own stated open gap, so it is not cited here as
-# evidence this thread is a bottleneck). This is the same jitter
-# mitigation the desktop build already ships, not cargo-cult hardening
-# copied in without a reason.
+# Granted for RealtimeAudioPriority.cpp's SCHED_FIFO elevation ("elevate the
+# DSP thread to real-time audio scheduling so heavy system load ... does
+# not preempt the audio feeder"). Since R-R3-41 nereusd's own signal
+# processing threads use nice levels instead (see the next section), so
+# this limit is kept for any path that still asks. Elevation is
+# soft-fail-safe (logs and continues at the default scheduling policy if
+# refused), so this is an optimization, not a correctness requirement.
 #
 # 99, not the commonly-copied "@audio" convention of 95: the code requests
 # sched_get_priority_max(SCHED_FIFO) - 1, which is 98 on Linux (a fixed
@@ -140,24 +124,16 @@ UMask=0077
 # matches the kernel's own SCHED_FIFO ceiling instead of tracking the
 # "-1" in RealtimeAudioPriority.cpp exactly.
 #
-# LimitMEMLOCK deliberately NOT granted: the only core/ code path an R1
-# nereusd can reach that calls MemoryLock::lockMemory() is
-# PortAudioBus::PortAudioBus() (a ~37.5 KB ring buffer; PortAudioBus is
-# constructed by AudioEngine::ensureSpeakersOpen() / ensureTxInputOpen(),
-# which DOES run today via the same connectToRadio() path -- gated on
-# PortAudio's own global init succeeding, not on whether a physical
-# device exists, and failing open() gracefully with a logged warning when
-# it does not). FftEnginePool -- the other lockMemory() caller, over much
-# larger FFT scratch buffers -- is not constructed anywhere in R1 (see
-# DaemonApp.h). ~37.5 KB per bus, worst case two buses open at once, is
-# well inside systemd's own compiled-in default RLIMIT_MEMLOCK, and
-# lockMemory()'s own contract is best-effort (logs and continues unlocked
-# on failure -- see MemoryLock.h). An explicit grant here would change
-# nothing observable in R1; add a right-sized one, not "infinity", if a
-# later task wires FFT scratch buffers into the daemon.
+# LimitMEMLOCK deliberately NOT granted. MemoryLock::lockMemory() is called
+# by PortAudioBus (a ~37.5 KB ring buffer per open bus) and by FFTEngine for
+# its scratch buffers; nereusd builds FFT engines on demand for the media
+# path (DaemonSpectrumSource's FftEnginePool, see DaemonApp.h). lockMemory()
+# is best-effort (logs and continues unlocked on failure, see MemoryLock.h),
+# so buffers past systemd's default RLIMIT_MEMLOCK simply stay unlocked. A
+# grant, if one is ever wanted, should be right-sized, not "infinity".
 #
 # Local audio monitoring on a "shack machine" (design doc section 4.3) is
-# a secondary, explicitly-supported use case, but is NOT the primary R1
+# a secondary, explicitly-supported use case, but is NOT the primary
 # target (a headless Pi with no sound card, where nereusd.conf.sample's
 # unset audio_device resolves to the platform default and simply fails to
 # open, which is the paragraph below). A DynamicUser account has no
@@ -171,6 +147,14 @@ UMask=0077
 # the equivalent group for the target distro) added via a drop-in; not
 # granting it by default keeps the primary headless target's privilege
 # footprint smaller.
+#
+# Serial accessories (the Core's own CAT and keying endpoints on
+# /dev/ttyUSB* or /dev/ttyACM*) need the group that owns those devices,
+# for the same reason. The station images add `SupplementaryGroups=dialout`
+# through a drop-in (packaging/station-image/common/nereusd-serial.conf);
+# it is not set here because the group's name differs between distros
+# (dialout on Debian and Fedora, uucp on Arch), and a group that does not
+# exist stops the unit from starting.
 LimitRTPRIO=99
 
 # --- Signal processing priority (R-R3-41) --------------------------------
@@ -198,8 +182,8 @@ LimitNICE=-10
 
 # --- Shutdown ------------------------------------------------------------
 # A normal timeout, not a large one: the SIGTERM-during-cold-wisdom hang
-# this daemon used to have is fixed in code (R1 Task 10 fix round 1 -- see
-# server_main.cpp's own comment on the queued daemon.start() invocation),
+# this daemon used to have is fixed in code (see server_main.cpp's own
+# comment on the queued daemon.start() invocation),
 # verified live to unwind in under a second even mid-FFTW-planning. A
 # short TimeoutStopSec is deliberate: it bounds the blast radius if that
 # fix ever regresses (fails fast and loud via SIGKILL instead of quietly

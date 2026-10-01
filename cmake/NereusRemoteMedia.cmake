@@ -21,9 +21,10 @@
 #   2026-09-26: iPhone app plan Task 28 (R-IOS-16): libjuice gives its TURN
 #               allocations back when an agent is destroyed
 #               (nereus_patch_libjuice_turn_release(), the change in
-#               cmake/patches/libjuice-release-turn-allocations.c). J.J. Boyd
-#               (KG4VCF), with AI-assisted implementation via Anthropic
-#               Claude Code.
+#               cmake/patches/libjuice-release-turn-allocations.c, since
+#               replaced by the .patch files of the 2026-09-27 Task 56 entry
+#               below). J.J. Boyd (KG4VCF), with AI-assisted implementation
+#               via Anthropic Claude Code.
 #   2026-09-26: Task 28 fix wave (review Minor 6): agent.c is found among
 #               the targets' sources by the file it names, not its spelling.
 #               J.J. Boyd (KG4VCF), with AI-assisted implementation via
@@ -50,6 +51,9 @@
 #               vendor sources.
 #               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 #               OpenAI Codex.
+#   2026-09-30: fix wave (INFRA minor 7): the 2026-09-26 entry names the
+#               file the Task 56 patches replaced. J.J. Boyd (KG4VCF), with
+#               AI-assisted implementation via Anthropic Claude Code.
 #
 # =================================================================
 

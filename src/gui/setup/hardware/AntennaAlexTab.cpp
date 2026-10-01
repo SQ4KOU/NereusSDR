@@ -45,6 +45,9 @@
 //                and 6m/ByPass on RX select the low-pass as Thetis's
 //                setAlexLPF does (radioHardwareVersion 10). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - Keeps G8NJJ's setup.cs:6244 comment beside the Alex-2 gate
+//                cite (CI tag preservation). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -197,6 +200,8 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
     // is visible only for BPF2-capable boards (ANAN7000D family +
     // OrionMKII + Saturn).
     //DH1KLM  [REDPITAYA-class SKU attribution in setup.cs:6256/6261]
+    // G8NJJ. will need more work ofr high power PA
+    //   [original inline comment from setup.cs:6244, on the ANAN_G2_1K branch]
     m_alex2FiltersTab->updateBoardCapabilities(caps.hasAlex2);
     const int alex2Idx = m_subTabs->indexOf(m_alex2FiltersTab);
     if (alex2Idx >= 0) {

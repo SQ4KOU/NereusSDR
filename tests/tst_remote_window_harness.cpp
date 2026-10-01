@@ -87,6 +87,20 @@
 //                                    comes on the Core's next delta
 //                                    flush). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 1: the header's fault
+//                                    width check lays the segment out
+//                                    with the fault text in place instead
+//                                    of measuring it against the width
+//                                    chosen for the muted text.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 2: the fault case also
+//                                    checks the drawn row keeps all four
+//                                    groups. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 3: the width check
+//                                    runs every audio state's wording, the
+//                                    longest being "Audio radio offline".
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -101,6 +115,7 @@
 #include <QGroupBox>
 #include <QSpinBox>
 #include <QLabel>
+#include <QLayout>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QLoggingCategory>
@@ -665,15 +680,48 @@ private slots:
                  qPrintable(QStringLiteral("muted segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
-        QStringList faultGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
-        QCOMPARE(faultGroups.size(), 4);
-        faultGroups[1] = ConnectionSegment::audioMetricText(
-            std::nullopt, RemoteAudioStatus::State::PlaybackProblem);
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))) + 34,
-                 qPrintable(QStringLiteral("fault segment %1, text %2: %3")
-                                .arg(segment->width())
-                                .arg(headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))))
-                                .arg(faultGroups.join(QStringLiteral(" · ")))));
+        // Every audio group the header can show must fit beside the other
+        // three at 1440 px too, the longest ("Audio radio offline") above
+        // all. The segment is laid out with each state's text in place (the
+        // layout runs here, before the next telemetry refresh can put the
+        // muted text back), so the check measures the width the title bar
+        // gives that text in this platform's fonts, not whether the width
+        // chosen for "Audio muted" happens to cover it.
+        const QStringList liveGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
+        QCOMPARE(liveGroups.size(), 4);
+        QList<QLayout*> layouts;
+        for (QWidget* widget = segment->parentWidget(); widget; widget = widget->parentWidget()) {
+            if (widget->layout()) {
+                layouts.prepend(widget->layout());
+            }
+        }
+        // The row the segment draws starts 25 px in (8 px margin, 10 px dot,
+        // 8 px gap) and stops 6 px short of the right edge
+        // (ConnectionSegment::paintEvent).
+        constexpr int kSegmentTextInset = 25 + 6;
+        using AudioState = RemoteAudioStatus::State;
+        for (AudioState state : {AudioState::NotConnected, AudioState::WaitingForAudio,
+                                 AudioState::MutedHere, AudioState::RadioOffline,
+                                 AudioState::CoreCouldNotStart, AudioState::Starting,
+                                 AudioState::Playing, AudioState::Reconnecting,
+                                 AudioState::PlaybackProblem}) {
+            QStringList groups = liveGroups;
+            groups[1] = ConnectionSegment::audioMetricText(std::nullopt, state);
+            const QString text = groups.join(QStringLiteral(" · "));
+            segment->setRemoteMetrics(groups);
+            for (QLayout* layout : std::as_const(layouts)) {
+                layout->activate();
+            }
+            QCOMPARE(segment->remotePresentationText(), text);
+            QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(text) + 34,
+                     qPrintable(QStringLiteral("audio state %1: segment %2, text %3: %4")
+                                    .arg(static_cast<int>(state))
+                                    .arg(segment->width())
+                                    .arg(headerMetrics.horizontalAdvance(text))
+                                    .arg(text)));
+            // All four groups are drawn, Radio included.
+            QCOMPARE(segment->remoteTextForWidth(segment->width() - kSegmentTextInset), text);
+        }
         h.remoteModel()->audioEngine()->setMasterMuted(false);
         QVERIFY(disconnectFromRadioMenu(h));
         QTRY_VERIFY(!h.client()->isConnectionActive());

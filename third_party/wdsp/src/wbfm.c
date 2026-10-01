@@ -23,6 +23,10 @@ The author can be reached by email at
 warren@pratt.one
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): includes limits.h and ends with a newline.
+
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
 #include <limits.h>
