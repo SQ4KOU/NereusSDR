@@ -57,6 +57,14 @@
 //                 before stopping the codec. NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 - RD-I9: the receive lane's destroy and rebuild barriers stop
+//                 the channel without a drain before closing it, as Thetis's
+//                 destroy_rcvr closes without one; the quiesced worker made
+//                 every draining stop wait out WDSP's 100 ms bound. A
+//                 rebuild reopens at the 48 kHz DSP and output rates the
+//                 channel was created with, not its input rate. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  cmaster.c
@@ -693,8 +701,14 @@ void WdspEngine::destroyRxChannel(int channelId)
             const std::function<void()> release = quiesceRxWorker();
             channel->markRetired();
 #ifdef HAVE_WDSP
-            // Deactivate with drain
-            SetChannelState(channelId, 0, 1);
+            // Deactivate without a drain (RD-I9): the worker is quiesced, so
+            // no I/Q reaches the channel and a draining stop could only wait
+            // out WDSP's 100 x Sleep(1) bound (channel.c:288-304). Thetis
+            // closes its receive channels with no drain at all:
+            //   From Thetis ChannelMaster/cmaster.c:102-103 [v2.10.3.15]
+            //     for (j = 0; j < pcm->cmSubRCVR; j++)
+            //         CloseChannel (chid (inid (0, i), j));
+            SetChannelState(channelId, 0, 0);
             // Close the WDSP channel
             CloseChannel(channelId);
             // Its worker and flush threads are gone; their IDs may be reused.
@@ -1024,8 +1038,10 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
             const std::function<void()> release = quiesceRxWorker();
             retired->markRetired();
 #ifdef HAVE_WDSP
-            // Deactivate with drain before closing (mirrors destroyRxChannel).
-            SetChannelState(channelId, 0, 1);
+            // Deactivate without a drain before closing, as the lane's
+            // destroyRxChannel does (RD-I9): the worker is quiesced, so a
+            // draining stop could only time out.
+            SetChannelState(channelId, 0, 0);
             // Close the old WDSP channel.
             CloseChannel(channelId);
             ThreadPlacement::instance().forgetChannel(channelId);
@@ -1034,7 +1050,7 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
             retired->destroyWdspObjectsOnLane();
             qCInfo(lcDsp) << "Rebuild: closed RX channel" << channelId;
             openRxChannelWdsp(channelId, cfg.bufferSize, cfg.filterSize,
-                              cfg.sampleRate, cfg.sampleRate, cfg.sampleRate);
+                              cfg.sampleRate, kRxDspSampleRate, kRxOutputSampleRate);
             ptr->createWdspObjectsOnLane();
             ptr->setWdspReady(true);
             if (release) {
@@ -1077,7 +1093,7 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
     // createRxChannel() so that applyState() early-return guards fire
     // correctly for values that haven't changed.
     openRxChannelWdsp(channelId, cfg.bufferSize, cfg.filterSize,
-                      cfg.sampleRate, cfg.sampleRate, cfg.sampleRate);
+                      cfg.sampleRate, kRxDspSampleRate, kRxOutputSampleRate);
 
     // Construct a new RxChannel C++ wrapper.
     auto channel = std::make_unique<RxChannel>(channelId, cfg.bufferSize,
