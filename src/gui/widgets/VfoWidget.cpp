@@ -13,6 +13,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - VFO flag crash lane: Slice A's close-button comment no
+//                 longer names the removed m_vfoWidget. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - RADE reason: the RADE row reads "off" with the slice's
 //                 radeReason as its tooltip while its RADE decoder is not
 //                 working (setRadeReason). J.J. Boyd (KG4VCF), AI-assisted
@@ -3175,11 +3178,10 @@ void VfoWidget::buildFloatingButtons()
         emit closeRequested(m_sliceIndex);
     });
     // Phase 3F (Bug 2): Slice A (index 0) is the last-slice invariant —
-    // RadioModel::removeSlice refuses to remove the final slice, and its flag
-    // (m_vfoWidget) is referenced by many wireSliceToSpectrum lambdas whose
-    // teardown is deliberately skipped on sliceRemoved. Hiding the close
-    // button on Slice A keeps the affordance honest (a button that does
-    // nothing reads as broken) and avoids the fragile slice-0 removal path.
+    // RadioModel::removeSlice refuses to remove the final slice. Hiding the
+    // close button on Slice A keeps the affordance honest (a button that
+    // does nothing reads as broken). (Its flag is now torn down like every
+    // other when a Core closes Slice A: VFO flag crash lane, 2026-09-30.)
     if (m_sliceIndex == 0 && !isListening()) {
         m_closeBtn->hide();
     }

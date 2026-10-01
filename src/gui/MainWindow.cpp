@@ -562,6 +562,18 @@
 //                decision): no Power hooks. Radio > Disconnect's enable rule
 //                is one helper, localDisconnectAvailable. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - VFO flag crash lane: a flag's edges into its slice use the
+//                slice as context; Slice A's flag goes when its slice does,
+//                with m_vfoWidgetsBySlice its one owner; a Slice A made
+//                again is wired by id on its own pan, window-wide wiring
+//                once. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
+//   2026-10-01 - VFO flag crash lane fix round: Slice A's flag follows its
+//                pan key and rehost like every other flag; its board-caps
+//                and callsign wiring moved into createSliceFlag; Slice A's
+//                first wiring names its own pan; slice add and remove are
+//                logged. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1906,7 +1918,9 @@ QString MainWindow::windowPanFor(const SliceModel* slice) const
 
 void MainWindow::rehostSliceView(SliceModel* slice)
 {
-    if (!slice || slice->sliceIndex() == 0) { return; }  // Slice A: dedicated flag path
+    // VFO flag crash lane fix round (2026-10-01): Slice A is rehosted like
+    // every other slice; its flag is built by createSliceFlag too.
+    if (!slice) { return; }
     const int id = slice->sliceIndex();
     SpectrumWidget* dest = spectrumForSlice(slice);
     VfoWidget* flag = m_vfoWidgetsBySlice.value(id, nullptr);
@@ -4437,10 +4451,12 @@ void MainWindow::wireDss3DFloorRecallForTest(PanadapterModel* pan,
     });
 }
 
-// Phase 3F: create + fully wire a secondary slice's VfoWidget on the given
+// Phase 3F: create + fully wire a slice's VfoWidget on the given
 // SpectrumWidget. Factored out of the sliceAdded handler so the same wiring
-// is reused on panKeyChanged migration. Slice A (index 0) keeps its own
-// dedicated path in wireSliceToSpectrum(); this helper is for B+ flags.
+// is reused on panKeyChanged migration. Every flag is built here, Slice A's
+// included: wireSliceToSpectrum() calls it for Slice A and adds only the
+// window-wide wiring (applets, the dBm strip, the pan's first view), and a
+// pan move or rehost rebuilds Slice A's flag here like any other.
 //
 // What's intentionally NOT done here: per-slice rxChannel/CTUN/MaxBin/NR/ANF
 // DSP wiring (those hardcode rxChannel(0) today and are the actual Phase 3F
@@ -4541,6 +4557,14 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setStepHz(slice->stepHz());
     newFlag->setBoardCapabilities(m_radioModel->boardCapabilities());
     newFlag->setHpsdrSku(m_radioModel->hardwareProfile().model);
+    // VFO flag crash lane fix round (2026-10-01): moved here from
+    // wireSliceToSpectrum, where only Slice A's first flag had it. A flag
+    // rebuilt on a pan move (Slice A's included) keeps following the radio.
+    connect(m_radioModel, &RadioModel::currentRadioChanged, newFlag,
+            [this, newFlag]() {
+        newFlag->setBoardCapabilities(m_radioModel->boardCapabilities());
+        newFlag->setHpsdrSku(m_radioModel->hardwareProfile().model);
+    });
     // Group B fix wave: BYPS shows and writes the radio's RX bypass on TX
     // through the Alex facade: this computer's AlexController locally, the
     // Core's in a remote window (radioHardwareVersion 5).
@@ -4645,21 +4669,28 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     });
 
     // --- VfoWidget -> SliceModel (user click propagates to model) ---
-    connect(newFlag, &VfoWidget::frequencyChanged, this,
+    //
+    // VFO flag crash lane (2026-09-30): every flag-to-slice edge below has
+    // the SLICE as its context object, so Qt drops it when the slice is
+    // freed. These used `this` (the window) as context while capturing the
+    // raw slice, so a flag that outlived its slice -- Slice A's, closed from
+    // the Core in a remote window -- wrote the freed SliceModel on its next
+    // click: JJ's crash in SliceModel::lockedChanged from the lock button.
+    connect(newFlag, &VfoWidget::frequencyChanged, slice,
             [slice](double hz) { slice->setFrequency(hz); });
-    connect(newFlag, &VfoWidget::modeChanged, this,
+    connect(newFlag, &VfoWidget::modeChanged, slice,
             [slice](DSPMode mode) { slice->setDspMode(mode); });
-    connect(newFlag, &VfoWidget::filterChanged, this,
+    connect(newFlag, &VfoWidget::filterChanged, slice,
             [slice](int low, int high) { slice->setFilter(low, high); });
-    connect(newFlag, &VfoWidget::agcModeChanged, this,
+    connect(newFlag, &VfoWidget::agcModeChanged, slice,
             [slice](AGCMode mode) { slice->setAgcMode(mode); });
-    connect(newFlag, &VfoWidget::afGainChanged, this,
+    connect(newFlag, &VfoWidget::afGainChanged, slice,
             [slice](int gain) { slice->setAfGain(gain); });
-    connect(newFlag, &VfoWidget::rfGainChanged, this,
+    connect(newFlag, &VfoWidget::rfGainChanged, slice,
             [slice](int gain) { slice->setRfGain(gain); });
-    connect(newFlag, &VfoWidget::rxAntennaChanged, this,
+    connect(newFlag, &VfoWidget::rxAntennaChanged, slice,
             [slice](const QString& ant) { slice->setRxAntenna(ant); });
-    connect(newFlag, &VfoWidget::txAntennaChanged, this,
+    connect(newFlag, &VfoWidget::txAntennaChanged, slice,
             [slice](const QString& ant) { slice->setTxAntenna(ant); });
 
     // --- SliceModel -> VfoWidget (model updates repaint the flag) ---
@@ -4787,6 +4818,11 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             newFlag, &VfoWidget::setRxBypassActive);
     connect(slice, &SliceModel::lastRadeRxCallsignChanged,
             newFlag, &VfoWidget::setRadeCallsign);
+    // VFO flag crash lane fix round (2026-10-01): the seed of the cached
+    // callsign, moved here from wireSliceToSpectrum (its 2026-05-11 bench
+    // comment there gives the reason): a slice that already holds a decoded
+    // callsign paints it on the flag's first show.
+    newFlag->setRadeCallsign(slice->lastRadeRxCallsign());
     wireSliceFlagPresentation(slice, newFlag);
     connect(slice, &SliceModel::nbModeChanged, newFlag, &VfoWidget::setNbMode);
     newFlag->setNbMode(slice->nbMode());   // initial sync
@@ -4800,51 +4836,51 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         m_radioModel->transmitModel().setFilterLow(audioLow);
         m_radioModel->transmitModel().setFilterHigh(audioHigh);
     });
-    connect(newFlag, &VfoWidget::nbModeCycled, this, [slice] {
+    connect(newFlag, &VfoWidget::nbModeCycled, slice, [slice] {
         slice->setNbMode(NereusSDR::cycleNbMode(slice->nbMode()));
     });
-    connect(newFlag, &VfoWidget::anfChanged, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::anfChanged, slice, [slice](bool on) {
         slice->setAnfEnabled(on);
     });
-    connect(newFlag, &VfoWidget::nr2Changed, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::nr2Changed, slice, [slice](bool on) {
         // NR2 = EMNR in Thetis naming. Toggle: NR2→active clears any other slot.
         slice->setActiveNr(on ? NereusSDR::NrSlot::NR2 : NereusSDR::NrSlot::Off);
     });
-    connect(newFlag, &VfoWidget::snbChanged, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::snbChanged, slice, [slice](bool on) {
         slice->setSnbEnabled(on);
     });
-    connect(newFlag, &VfoWidget::apfChanged, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::apfChanged, slice, [slice](bool on) {
         slice->setApfEnabled(on);
     });
-    connect(newFlag, &VfoWidget::apfTuneHzChanged, this, [slice](int hz) {
+    connect(newFlag, &VfoWidget::apfTuneHzChanged, slice, [slice](int hz) {
         slice->setApfTuneHz(hz);
     });
-    connect(newFlag, &VfoWidget::muteChanged, this, [slice](bool v) {
+    connect(newFlag, &VfoWidget::muteChanged, slice, [slice](bool v) {
         slice->setMuted(v);
     });
-    connect(newFlag, &VfoWidget::panChanged, this, [slice](double p) {
+    connect(newFlag, &VfoWidget::panChanged, slice, [slice](double p) {
         slice->setAudioPan(p);
     });
-    connect(newFlag, &VfoWidget::squelchEnabledChanged, this, [slice](bool v) {
+    connect(newFlag, &VfoWidget::squelchEnabledChanged, slice, [slice](bool v) {
         slice->setSsqlEnabled(v);
     });
-    connect(newFlag, &VfoWidget::squelchThreshChanged, this, [slice](int v) {
+    connect(newFlag, &VfoWidget::squelchThreshChanged, slice, [slice](int v) {
         slice->setSsqlThresh(static_cast<double>(v));
     });
-    connect(newFlag, &VfoWidget::agcThreshChanged, this, [slice](int v) {
+    connect(newFlag, &VfoWidget::agcThreshChanged, slice, [slice](int v) {
         slice->setAgcThreshold(v);
     });
-    connect(newFlag, &VfoWidget::binauralChanged, this, [slice](bool v) {
+    connect(newFlag, &VfoWidget::binauralChanged, slice, [slice](bool v) {
         slice->setBinauralEnabled(v);
     });
-    connect(newFlag, &VfoWidget::quickModeRequested, this, [slice](int index) {
+    connect(newFlag, &VfoWidget::quickModeRequested, slice, [slice](int index) {
         // Quick-mode buttons: 0=USB, 1=CW, 2=DIG (matching AetherSDR defaults)
         static constexpr DSPMode kQuickModes[] = {DSPMode::USB, DSPMode::CWU, DSPMode::DIGU};
         if (index >= 0 && index < 3) {
             slice->setDspMode(kQuickModes[index]);
         }
     });
-    connect(newFlag, &VfoWidget::openSetupRequested, this, [this, slice]() {
+    connect(newFlag, &VfoWidget::openSetupRequested, slice, [this, slice]() {
         if (desktopHosting()) {
             if (!desktopSliceAllowed(slice->sliceIndex())) { return; }
             if (!selectSliceForWindow(slice->sliceIndex())) { return; }
@@ -4856,7 +4892,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         dialog->selectPage(QStringLiteral("AGC/ALC"));
         dialog->show();
     });
-    connect(newFlag, &VfoWidget::openNbSetupRequested, this, [this, slice]() {
+    connect(newFlag, &VfoWidget::openNbSetupRequested, slice, [this, slice]() {
         if (desktopHosting()) {
             if (!desktopSliceAllowed(slice->sliceIndex())) { return; }
             if (!selectSliceForWindow(slice->sliceIndex())) { return; }
@@ -4899,19 +4935,19 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
     });
-    connect(newFlag, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::ritEnabledChanged, slice, [slice](bool on) {
         slice->setRitEnabled(on);
     });
-    connect(newFlag, &VfoWidget::ritHzChanged, this, [slice](int hz) {
+    connect(newFlag, &VfoWidget::ritHzChanged, slice, [slice](int hz) {
         slice->setRitHz(hz);
     });
-    connect(newFlag, &VfoWidget::xitEnabledChanged, this, [slice](bool on) {
+    connect(newFlag, &VfoWidget::xitEnabledChanged, slice, [slice](bool on) {
         slice->setXitEnabled(on);
     });
-    connect(newFlag, &VfoWidget::xitHzChanged, this, [slice](int hz) {
+    connect(newFlag, &VfoWidget::xitHzChanged, slice, [slice](int hz) {
         slice->setXitHz(hz);
     });
-    connect(newFlag, &VfoWidget::stepCycleRequested, this, [slice]() {
+    connect(newFlag, &VfoWidget::stepCycleRequested, slice, [slice]() {
         int current = slice->stepHz();
         int next = kStageOneStepLadder[0];
         for (int i = 0; i < kStageOneStepLadderSize; ++i) {
@@ -4924,7 +4960,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         // propagate to activeSpectrumWidget()->setStepSize and newFlag->setStepHz.
         slice->setStepHz(next);
     });
-    connect(newFlag, &VfoWidget::lockChanged, this, [slice](bool locked) {
+    connect(newFlag, &VfoWidget::lockChanged, slice, [slice](bool locked) {
         slice->setLocked(locked);
     });
     if (desktopHosting()) {
@@ -7391,10 +7427,10 @@ void MainWindow::buildUI()
         activeSpectrumWidget()->setDdcCenterFrequency(freq);
         activeSpectrumWidget()->setVfoFrequency(freq);
         activeSpectrumWidget()->setFilterOffset(slice->filterLow(), slice->filterHigh());
-        if (m_vfoWidget) {
-            m_vfoWidget->setFrequency(freq);
-            m_vfoWidget->setMode(slice->dspMode());
-            m_vfoWidget->setFilter(slice->filterLow(), slice->filterHigh());
+        if (VfoWidget* flag = m_vfoWidgetsBySlice.value(slice->sliceIndex())) {
+            flag->setFrequency(freq);
+            flag->setMode(slice->dspMode());
+            flag->setFilter(slice->filterLow(), slice->filterHigh());
         }
     });
 
@@ -7514,7 +7550,7 @@ void MainWindow::buildUI()
         // Phase 3F hotfix 2026-05-27: create a per-slice VfoWidget so
         // operators can see + interact with the new slice.  The existing
         // wireSliceToSpectrum() above runs for slice 0 (Slice A) and
-        // creates m_vfoWidget; Slice B+ never had a flag, so multi-slice
+        // creates Slice A's flag; Slice B+ never had a flag, so multi-slice
         // was invisible.  We add the UI surface here and wire the same
         // intent signals (Sub-Epic C Task 9 + Sub-Epic E Task 4) plus
         // the bidirectional freq/mode/filter/AGC/gain/antenna/step state
@@ -7526,23 +7562,28 @@ void MainWindow::buildUI()
         // and are the actual Phase 3F multi-slice DSP epic).  This hotfix
         // is "make the flag appear + let the operator interact"; the
         // DSP-side per-slice fanout is the next sub-epic.
-        if (sliceIndex == 0) {
-            // Slice A is handled by wireSliceToSpectrum() which already
-            // ran via the index==0 handler at the top of this file.
-            return;
+        // VFO flag crash lane fix round (2026-10-01): Slice A's flag is
+        // still built by wireSliceToSpectrum() (the index==0 handler at the
+        // top of this file), but Slice A no longer returns here before the
+        // pan-move handler below. A remote window is sent a slice before
+        // its pan key, so a Slice A made again on another pan was docked on
+        // the active pan and, with no handler, stayed there.
+        qCInfo(lcReceiver).noquote()
+            << QStringLiteral("Slice %1 added in this window").arg(QChar(u'A' + sliceIndex));
+        if (sliceIndex != 0) {
+            if (m_vfoWidgetsBySlice.contains(sliceIndex)) {
+                return;
+            }
+            // Phase 3F: route the new flag to the SpectrumWidget that hosts the
+            // slice's pan (resolved from slice->panKey() by spectrumForSlice),
+            // NOT the active pan. This is Bug 1's fix: previously the flag landed
+            // on the active pan and stacked on pan-0 instead of the pan showing
+            // the slice's band. Ported from AetherSDR's sliceAdded path
+            // (MainWindow.cpp:11581 [@6a142807]).
+            SpectrumWidget* sw = spectrumForSlice(slice);
+            if (!sw) { return; }
+            createSliceFlag(slice, sw);
         }
-        if (m_vfoWidgetsBySlice.contains(sliceIndex)) {
-            return;
-        }
-        // Phase 3F: route the new flag to the SpectrumWidget that hosts the
-        // slice's pan (resolved from slice->panKey() by spectrumForSlice),
-        // NOT the active pan. This is Bug 1's fix: previously the flag landed
-        // on the active pan and stacked on pan-0 instead of the pan showing
-        // the slice's band. Ported from AetherSDR's sliceAdded path
-        // (MainWindow.cpp:11581 [@6a142807]).
-        SpectrumWidget* sw = spectrumForSlice(slice);
-        if (!sw) { return; }
-        createSliceFlag(slice, sw);
 
         // Phase 3F: migrate the flag when the slice's owning pan changes.
         // Remove the VfoWidget from every pan's SpectrumWidget, then re-add
@@ -7577,17 +7618,22 @@ void MainWindow::buildUI()
                 }
                 m_panStack->moveSliceToPan(idx, dest);
             }
-            if (idx == 0) { return; }  // Slice A flag is the dedicated path
-            if (m_panStack) {
-                for (auto* applet : m_panStack->allApplets()) {
-                    if (applet && applet->spectrumWidget()) {
-                        applet->spectrumWidget()->removeVfoWidget(idx);
+            // VFO flag crash lane fix round (2026-10-01): Slice A moves too
+            // (the early return that sat here for it is gone), and a flag
+            // already on the slice's pan is left alone rather than rebuilt.
+            SpectrumWidget* dest = spectrumForSlice(slice);
+            VfoWidget* flag = m_vfoWidgetsBySlice.value(idx, nullptr);
+            if (!flag || flag->parentWidget() != dest) {
+                if (m_panStack) {
+                    for (auto* applet : m_panStack->allApplets()) {
+                        if (applet && applet->spectrumWidget()) {
+                            applet->spectrumWidget()->removeVfoWidget(idx);
+                        }
                     }
                 }
+                m_vfoWidgetsBySlice.remove(idx);
+                if (dest) { createSliceFlag(slice, dest); }
             }
-            m_vfoWidgetsBySlice.remove(idx);
-            SpectrumWidget* dest = spectrumForSlice(slice);
-            if (dest) { createSliceFlag(slice, dest); }
             // Phase 3F Sub-Epic I Task 9: the slice now feeds a different
             // pan, so the FFT topology has to follow. Unconditional: the
             // model changed even when the destination pan does not exist
@@ -7607,19 +7653,27 @@ void MainWindow::buildUI()
             }
         }
         // Phase 3F hotfix 2026-05-27: remove the per-slice VfoWidget
-        // when its slice goes away.  Slice A's m_vfoWidget is owned by
-        // SpectrumWidget via Qt parent and tied to the singleton slice
-        // lifecycle; the cleanup path for it is fragile (m_vfoWidget is
-        // referenced by lambdas captured in wireSliceToSpectrum), so
-        // skip it here.  Only secondary slice flags are torn down.
+        // when its slice goes away.
+        //
+        // VFO flag crash lane (2026-09-30): Slice A's flag too. It was
+        // skipped here on the grounds that Slice A never goes, but a Core
+        // closes Slice A in a remote window (the claims rule, or its X on a
+        // listened flag), and the flag it left behind kept live buttons
+        // wired to the freed slice: a lock click crashed in
+        // SliceModel::lockedChanged, and a Slice A made again found this
+        // stale flag in m_vfoWidgetsBySlice and was never given one of its
+        // own, so it did not paint. Every flag is built by createSliceFlag
+        // and goes here; m_vfoWidgetsBySlice is its one owner.
         //
         // Phase 3F (Bug 1 follow-up): the flag may live on a non-active pan
         // now that flags route to spectrumForSlice(). Remove from EVERY pan's
         // SpectrumWidget (removeVfoWidget on a pan that doesn't host it is a
         // no-op) instead of just the active pan, which would leak the flag.
-        if (sliceIndex != 0 && m_vfoWidgetsBySlice.contains(sliceIndex)) {
+        qCInfo(lcReceiver).noquote()
+            << QStringLiteral("Slice %1 removed from this window").arg(QChar(u'A' + sliceIndex));
+        if (m_vfoWidgetsBySlice.contains(sliceIndex)) {
             VfoWidget* victim = m_vfoWidgetsBySlice.take(sliceIndex);
-            if (victim && victim != m_vfoWidget) {
+            if (victim) {
                 bool removed = false;
                 if (m_panStack) {
                     for (auto* applet : m_panStack->allApplets()) {
@@ -13607,10 +13661,23 @@ void MainWindow::showTciLogWindow() {}  // no-op in non-WebSocket builds
 
 void MainWindow::wireSliceToSpectrum()
 {
-    SliceModel* slice = m_radioModel->activeSlice();
-    if (!slice || !activeSpectrumWidget()) {
+    // VFO flag crash lane (2026-09-30): Slice A by its id. This runs on
+    // sliceAdded(0), which a remote window sees again when its Core closes
+    // Slice A and makes it again; by then the active slice is another one,
+    // and reading activeSlice() here re-wired that slice and gave the new
+    // Slice A no flag. The pan is the one hosting Slice A (the active pan
+    // when it has no pan key yet), as for every other slice's flag.
+    SliceModel* slice = m_radioModel->sliceById(0);
+    SpectrumWidget* host = slice ? spectrumForSlice(slice) : nullptr;
+    if (!slice || !host) {
         return;
     }
+    // The window-wide wiring below (applets, the dBm strip, the pan's first
+    // view) is done once; a Slice A made again gets only its own wiring, so
+    // nothing is connected twice and the pan's rate and zoom are left as
+    // they are.
+    const bool firstWiring = !m_sliceASpectrumWired;
+    m_sliceASpectrumWired = true;
 
     // Set initial spectrum display. Phase 3G-12: preserve the user's
     // persisted zoom level if present. SpectrumWidget::loadSettings()
@@ -13618,33 +13685,35 @@ void MainWindow::wireSliceToSpectrum()
     // m_bandwidthHz by this point. If the loaded value is sensible
     // (between 10 kHz and the DDC sample rate), keep it; otherwise
     // fall back to the full-span default (768 kHz = sample rate).
-    double freq = slice->frequency();
-    activeSpectrumWidget()->setDdcCenterFrequency(freq);
-    // Rate BEFORE the span, so the extended ceiling below is computed against
-    // a real DDC rate rather than the widget's construction default.
-    activeSpectrumWidget()->setSampleRate(768000.0);
+    const double freq = slice->frequency();
+    if (firstWiring) {
+        host->setDdcCenterFrequency(freq);
+        // Rate BEFORE the span, so the extended ceiling below is computed against
+        // a real DDC rate rather than the widget's construction default.
+        host->setSampleRate(768000.0);
 
-    // Same ceiling as setDisplayWindowClamped, spelled out here because the
-    // FALLBACK differs: an out-of-range stored value goes to the full-span
-    // 768 kHz default rather than to the ceiling, and there is a 10 kHz floor
-    // that only applies to a restored value. The ceiling is the shared part.
-    //
-    // The upper bound is that extended ceiling, not a hardcoded 768 kHz.
-    //
-    // saveSettings can now record a span above the DDC rate, because that is
-    // exactly what extended view is, and this test rejected every one of them
-    // and fell back to full span. So an extended zoom was always discarded at
-    // startup even though it had been persisted correctly. maxZoomOutBandwidth
-    // Hz returns the DDC rate when extended view is off, which is what the
-    // old literal meant to say. Codex, PR #318.
-    const double loadedBw = activeSpectrumWidget()->bandwidth();
-    const double ceiling  = activeSpectrumWidget()->maxZoomOutBandwidthHz();
-    const double initialBw = (loadedBw >= 10000.0 && loadedBw <= ceiling)
-                             ? loadedBw : 768000.0;
-    activeSpectrumWidget()->setFrequencyRange(freq, initialBw);
-    activeSpectrumWidget()->setVfoFrequency(freq);
-    activeSpectrumWidget()->setFilterOffset(slice->filterLow(), slice->filterHigh());
-    activeSpectrumWidget()->setStepSize(slice->stepHz());
+        // Same ceiling as setDisplayWindowClamped, spelled out here because the
+        // FALLBACK differs: an out-of-range stored value goes to the full-span
+        // 768 kHz default rather than to the ceiling, and there is a 10 kHz floor
+        // that only applies to a restored value. The ceiling is the shared part.
+        //
+        // The upper bound is that extended ceiling, not a hardcoded 768 kHz.
+        //
+        // saveSettings can now record a span above the DDC rate, because that is
+        // exactly what extended view is, and this test rejected every one of them
+        // and fell back to full span. So an extended zoom was always discarded at
+        // startup even though it had been persisted correctly. maxZoomOutBandwidth
+        // Hz returns the DDC rate when extended view is off, which is what the
+        // old literal meant to say. Codex, PR #318.
+        const double loadedBw = host->bandwidth();
+        const double ceiling  = host->maxZoomOutBandwidthHz();
+        const double initialBw = (loadedBw >= 10000.0 && loadedBw <= ceiling)
+                                 ? loadedBw : 768000.0;
+        host->setFrequencyRange(freq, initialBw);
+        host->setVfoFrequency(freq);
+        host->setFilterOffset(slice->filterLow(), slice->filterHigh());
+        host->setStepSize(slice->stepHz());
+    }
 
     // --- Create floating VFO flag widget (AetherSDR pattern) ---
     // Slice A's flag is built and wired by createSliceFlag, exactly like every
@@ -13652,9 +13721,8 @@ void MainWindow::wireSliceToSpectrum()
     // connects to it, while createSliceFlag wired far fewer -- two paths, one
     // incomplete, which is why 23 flag controls were dead on B/C/D. One path
     // now, so the two cannot drift again.
-    VfoWidget* vfo = createSliceFlag(slice, activeSpectrumWidget());
+    VfoWidget* vfo = createSliceFlag(slice, host);
     if (!vfo) { return; }
-    m_vfoWidget = vfo;
 
     // Mode-driven applet surfaces. These are SINGLE global widgets (one RADE
     // applet, one PhoneCw applet), so they follow the ACTIVE slice's mode and
@@ -13716,11 +13784,9 @@ void MainWindow::wireSliceToSpectrum()
     vfo->setRadioModel(m_radioModel);
     applyFlagTransmitGate(vfo);
     vfo->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
-    connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
-            [this, vfo]() {
-        vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
-        vfo->setHpsdrSku(m_radioModel->hardwareProfile().model);
-    });
+    // VFO flag crash lane fix round (2026-10-01): the currentRadioChanged
+    // board-caps connect moved into createSliceFlag, so a Slice A flag
+    // rebuilt on a pan move keeps it.
 
     // Phase 3F Sub-Epic C Task 9: VFO TX badge click → arbiter handoff.
     // VfoWidget emits txHandoffRequested(sliceIndex); MainWindow forwards to
@@ -13742,8 +13808,9 @@ void MainWindow::wireSliceToSpectrum()
     // Phase 3P-I-b T9: VFO BYPS button ↔ AlexController::rxOutOnTx.
     // Group B fix wave: through the Alex facade, the Core's in a remote
     // window (see createSliceFlag).
-    connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
-            vfo, &VfoWidget::setRxBypassActive);
+    // VFO flag crash lane fix round (2026-10-01): the rxOutOnTxChanged ->
+    // setRxBypassActive connect that sat here duplicated createSliceFlag's,
+    // so each change reached Slice A's flag twice. createSliceFlag's stays.
 
     // Stage C2: wire FilterPresetStore so VFO flag filter buttons use user overrides.
     vfo->setFilterPresetStore(m_radioModel->filterPresetStore());
@@ -13756,7 +13823,8 @@ void MainWindow::wireSliceToSpectrum()
     // 2026-05-11).  Seed the current cached value once so a slice that
     // already holds a decoded callsign (e.g. from before the user opened
     // a panadapter container) paints correctly on first show.
-    vfo->setRadeCallsign(slice->lastRadeRxCallsign());
+    // VFO flag crash lane fix round (2026-10-01): the seed is in
+    // createSliceFlag now, so a rebuilt Slice A flag gets it too.
 
     // --- Slice → spectrum display ---
 
@@ -13783,7 +13851,12 @@ void MainWindow::wireSliceToSpectrum()
     // Frame rate: primaryFftEngine()->outputFps() * 1.1 matches Thetis
     //   console.cs:51150 [@501e3f5]: (int)Math.Max(1, _display_fps * 1.1f).
     connect(slice, &SliceModel::filterChanged, this, [this, slice](int low, int high) {
-        QTimer::singleShot(100, this, [this, slice, low, high]() {
+        // VFO flag crash lane: the slice is tracked, not held raw. A slice
+        // closed within the 100 ms (a Core closing Slice A in a remote
+        // window) has no detector setup left to do; the window stays the
+        // timer's context for its own lifetime.
+        QTimer::singleShot(100, this, [this, slice = QPointer<SliceModel>(slice), low, high]() {
+            if (!slice) { return; }
             FFTEngine* fft = primaryFftEngine();
             if (!m_radioModel || !fft) { return; }
             WdspEngine* eng = m_radioModel->wdspEngine();
@@ -13804,28 +13877,34 @@ void MainWindow::wireSliceToSpectrum()
             // change immediately after a CTUN tune could leave the detector
             // pointing at the wrong bins until the user nudges the VFO again.
             const double ddcCenter = activeSpectrumWidget()->ddcCenterFrequency();
-            const double sliceFreq = slice ? slice->frequency() : ddcCenter;
+            const double sliceFreq = slice->frequency();
             eng->setMaxBinSliceOffsetHz(/*disp=*/0, sliceFreq - ddcCenter);
         });
     });
 
     // Plan 4 D9 (Cluster E): initial TX mode push so the overlay has the right
     // IQ-space sign convention before the first paint.
-    if (activeSpectrumWidget()) {
-        activeSpectrumWidget()->setTxMode(slice->dspMode());
+    //
+    // VFO flag crash lane fix round (2026-10-01): this block, the XIT push,
+    // the dBm strip and the CTUN lock below name Slice A's own pan (`host`,
+    // or spectrumForSlice at call time), as the view seed and the flag do,
+    // instead of the active pan.
+    if (firstWiring) {
+        host->setTxMode(slice->dspMode());
         // Initial XIT offset push + signal wires below so the TX overlay
         // centers on the actual TX frequency (RX VFO + XIT) rather than the
         // RX VFO alone.  Codex review feedback on PR #166.
         const int initialXitOffset = slice->xitEnabled() ? slice->xitHz() : 0;
-        activeSpectrumWidget()->setTxVfoOffsetHz(initialXitOffset);
+        host->setTxVfoOffsetHz(initialXitOffset);
     }
 
     // XIT-enabled toggle and XIT-Hz changes both feed the spectrum's TX
     // overlay center.  When enabled flips off, the offset goes to zero;
     // when on, the offset tracks xitHz.
     auto pushXitOffset = [this, slice]() {
-        if (!activeSpectrumWidget()) { return; }
-        activeSpectrumWidget()->setTxVfoOffsetHz(slice->xitEnabled() ? slice->xitHz() : 0);
+        SpectrumWidget* sw = spectrumForSlice(slice);
+        if (!sw) { return; }
+        sw->setTxVfoOffsetHz(slice->xitEnabled() ? slice->xitHz() : 0);
     };
     connect(slice, &SliceModel::xitEnabledChanged, this,
             [pushXitOffset](bool /*enabled*/) { pushXitOffset(); });
@@ -13945,21 +14024,23 @@ void MainWindow::wireSliceToSpectrum()
     // verify-no-captured-slice-spectrum-wiring.py keeps them from coming back.
 
     // --- dBm range strip → PanadapterModel (per-band grid storage + AppSettings) ---
-    connect(activeSpectrumWidget(), &SpectrumWidget::dbmRangeChangeRequested,
-            this, [this](float minDbm, float maxDbm) {
-        if (m_radioModel && !m_radioModel->panadapters().isEmpty()) {
-            PanadapterModel* pan = m_radioModel->panadapters().first();
-            pan->setdBmFloor(static_cast<int>(minDbm));
-            pan->setdBmCeiling(static_cast<int>(maxDbm));
-        }
-    });
+    if (firstWiring) {
+        connect(host, &SpectrumWidget::dbmRangeChangeRequested,
+                this, [this](float minDbm, float maxDbm) {
+            if (m_radioModel && !m_radioModel->panadapters().isEmpty()) {
+                PanadapterModel* pan = m_radioModel->panadapters().first();
+                pan->setdBmFloor(static_cast<int>(minDbm));
+                pan->setdBmCeiling(static_cast<int>(maxDbm));
+            }
+        });
 
-    // Set initial lock state
-    m_radioModel->receiverManager()->setDdcFrequencyLocked(
-        activeSpectrumWidget()->ctunEnabled());
+        // Set initial lock state
+        m_radioModel->receiverManager()->setDdcFrequencyLocked(
+            host->ctunEnabled());
+    }
 
     // Position the VFO flag
-    activeSpectrumWidget()->updateVfoPositions();
+    host->updateVfoPositions();
 
     // Remote Daemon R2 Task 12: the "S-meter -> VfoWidget level bar" connect
     // that used to live here (MeterPoller::smeterUpdated -> vfo->setSmeter)
@@ -13973,7 +14054,9 @@ void MainWindow::wireSliceToSpectrum()
     // filter-by-id mechanism this also used to duplicate is gone too.
 
     // --- Wire RxApplet to active slice ---
-    if (m_rxApplet) {
+    // Once: a Slice A made again is bound by the window's RX slice refresh
+    // (refreshSliceChooser), which follows the slice this window receives.
+    if (firstWiring && m_rxApplet) {
         m_rxApplet->setSlice(slice);
         refreshAutoAgcVisuals(m_radioModel, slice,
                     m_vfoWidgetsBySlice.value(slice->sliceIndex()), m_rxApplet);
@@ -14006,7 +14089,7 @@ void MainWindow::wireSliceToSpectrum()
     // the SpeechProcessorPage cross-link pattern (TransmitSetupPages.h:201).
     // (VOX-button right-click moved to TxApplet 2026-05-04 with the rest
     // of the VOX surface — see the TxApplet connect just below.)
-    if (m_phoneCwApplet) {
+    if (firstWiring && m_phoneCwApplet) {
         connect(m_phoneCwApplet, &PhoneCwApplet::openSetupRequested, this,
                 [this](const QString& /*category*/, const QString& page) {
             auto* dialog = createSetupDialog();
@@ -14023,7 +14106,7 @@ void MainWindow::wireSliceToSpectrum()
     // Right-click on the VOX button (relocated from PhoneCwApplet) opens
     // the same DexpVoxPage leaf.  Same lambda body as the PhoneCwApplet
     // connect above.
-    if (m_txApplet) {
+    if (firstWiring && m_txApplet) {
         connect(m_txApplet, &TxApplet::openSetupRequested, this,
                 [this](const QString& /*category*/, const QString& page) {
             auto* dialog = createSetupDialog();
