@@ -61,6 +61,11 @@
 //   2026-09-30 — Fix wave round 3: the kUtcToMasterGap comment states
 //                 what was measured instead of naming fonts that were not.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 — Maintainer decision 2026-10-01: the radio-offline audio
+//                 group reads "Radio offline" instead of "Audio radio
+//                 offline", and the kUtcToMasterGap comment records that
+//                 18 px now covers every audio group in the measured fonts.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TitleBar.h"
@@ -104,9 +109,9 @@ constexpr int kSpacing      = 6;
 // audio level). 18 px rather than 24 gives the connection segment 6 px
 // more at a 1440 px window. Measured offscreen with the header font
 // substituted by monospace fonts (Menlo, Monaco, Courier New, Andale Mono,
-// PT Mono): the fault wording needed 4 px more than a 24 px gap allowed,
-// and 18 covers it; the radio-offline wording, the longest, needs a gap of
-// 4 px in those fonts, so 18 does not cover it there.
+// PT Mono): the fault wording, the longest audio group, needed 4 px more
+// than a 24 px gap allowed, and 18 covers it with 2 px (Menlo) or 3 px
+// (the others) to spare.
 constexpr int kUtcToMasterGap = 18;
 
 // Fixed strip height. From AetherSDR TitleBar.cpp:30.
@@ -279,7 +284,7 @@ QString ConnectionSegment::audioMetricText(std::optional<double> kbps,
 {
     using State = RemoteAudioStatus::State;
     if (state == State::MutedHere) { return tr("Audio muted"); }
-    if (state == State::RadioOffline) { return tr("Audio radio offline"); }
+    if (state == State::RadioOffline) { return tr("Radio offline"); }
     if (state == State::CoreCouldNotStart || state == State::PlaybackProblem) {
         return tr("Audio unavailable");
     }
