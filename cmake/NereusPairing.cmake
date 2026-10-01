@@ -47,16 +47,16 @@ function(nereus_add_pairing_dependency)
         return()
     endif()
 
-    nereus_dependency_archive(libsodium _libsodium_urls _libsodium_hash)
+    nereus_dependency_archive(libsodium _libsodium_url _libsodium_hash)
     FetchContent_Declare(nereus_libsodium
-        URL ${_libsodium_urls}
-        URL_HASH ${_libsodium_hash}
+        URL "${_libsodium_url}"
+        URL_HASH "${_libsodium_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(spake2ee _spake2ee_urls _spake2ee_hash)
+    nereus_dependency_archive(spake2ee _spake2ee_url _spake2ee_hash)
     FetchContent_Declare(nereus_spake2ee
-        URL ${_spake2ee_urls}
-        URL_HASH ${_spake2ee_hash}
+        URL "${_spake2ee_url}"
+        URL_HASH "${_spake2ee_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
     FetchContent_MakeAvailable(nereus_libsodium nereus_spake2ee)

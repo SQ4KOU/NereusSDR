@@ -2436,10 +2436,24 @@ endif()
 # The Opus archive and its DRED/OSCE model come from the dependency
 # manifest: OPUS_URL is the pre-fetched copy's path when there is one,
 # OPUS_URL_HASH pins the archive, and NEREUS_OPUS_MODEL_ARCHIVE hands the
-# model to BuildOpus.cmake's vendored patch (5).
+# model to BuildOpus.cmake's vendored patch (5). A -DOPUS_URL from the
+# command line (the offline kits' Opus zip with the model) is left alone;
+# BuildOpus.cmake then requires -DOPUS_URL_HASH with it.
 # --------------------------------------------------------------------------
-nereus_dependency_archive(opus OPUS_URL OPUS_URL_HASH)
+if(NOT DEFINED OPUS_URL)
+    nereus_dependency_archive(opus OPUS_URL OPUS_URL_HASH)
+endif()
 nereus_dependency_archive_local(opus_model NEREUS_OPUS_MODEL_ARCHIVE)
+if(NEREUS_OPUS_MODEL_ARCHIVE)
+    # Checked here as well as by the fetch script: a hand-placed file in the
+    # directory must not reach a platform whose model script checks nothing.
+    file(SHA256 "${NEREUS_OPUS_MODEL_ARCHIVE}" _opus_model_have)
+    if(NOT _opus_model_have STREQUAL NEREUS_DEPENDENCY_ARCHIVE_opus_model_SHA256)
+        message(FATAL_ERROR
+            "${NEREUS_OPUS_MODEL_ARCHIVE} has SHA-256 ${_opus_model_have}, not the pinned "
+            "${NEREUS_DEPENDENCY_ARCHIVE_opus_model_SHA256}")
+    endif()
+endif()
 add_subdirectory(third_party/rade)
 
 if(NOT TARGET rade)

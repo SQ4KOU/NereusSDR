@@ -38,6 +38,8 @@
 #
 # NEREUS_FETCH_PLATFORM (default: this host) limits the work to the
 # dependencies the manifest marks for that platform.
+# NEREUS_FETCH_GIT_TIMEOUT (default 900) is the seconds one git clone or
+# fetch attempt may take before it is stopped and counted as failed.
 # NEREUS_DEPENDENCY_MANIFEST (default: the manifest next to this script)
 # is there for the script's own tests.
 #
@@ -67,6 +69,11 @@ if(NOT NEREUS_FETCH_ATTEMPTS)
 endif()
 if(NOT DEFINED NEREUS_FETCH_RETRY_DELAYS)
     set(NEREUS_FETCH_RETRY_DELAYS 10 30 60 120)
+endif()
+# Seconds one git clone or fetch may take before it counts as a failed
+# attempt (a hung transfer would otherwise hold the job to its timeout).
+if(NOT NEREUS_FETCH_GIT_TIMEOUT)
+    set(NEREUS_FETCH_GIT_TIMEOUT 900)
 endif()
 
 if(NOT NEREUS_FETCH_PLATFORM)
@@ -121,10 +128,15 @@ function(_nereus_fetch_archive name)
         message(STATUS "${name}: downloading ${_url} (attempt ${_attempt} of ${NEREUS_FETCH_ATTEMPTS})")
         file(DOWNLOAD "${_url}" "${_part}"
              STATUS _status
+             LOG _log
              TLS_VERIFY ON
              INACTIVITY_TIMEOUT 120)
         list(GET _status 0 _code)
         list(GET _status 1 _message)
+        # curl reports every HTTP error as code 22; the log has the status.
+        if(_log MATCHES "returned error: ([0-9][0-9][0-9])")
+            string(APPEND _message ", HTTP ${CMAKE_MATCH_1}")
+        endif()
         if(_code EQUAL 0)
             file(SHA256 "${_part}" _got)
             if(_got STREQUAL _sha)
@@ -157,6 +169,7 @@ function(_nereus_git_retry out_ok label clean)
         endif()
         message(STATUS "${label} (attempt ${_attempt} of ${NEREUS_FETCH_ATTEMPTS})")
         execute_process(COMMAND ${ARGN}
+                        TIMEOUT ${NEREUS_FETCH_GIT_TIMEOUT}
                         RESULT_VARIABLE _result
                         OUTPUT_VARIABLE _out
                         ERROR_VARIABLE _err)
@@ -177,6 +190,7 @@ function(_nereus_git_mirror_ok out_ok mirror ref commit)
         return()
     endif()
     execute_process(COMMAND "${GIT_EXECUTABLE}" --git-dir "${mirror}" rev-parse --verify --quiet "${ref}^{commit}"
+                    TIMEOUT 120
                     RESULT_VARIABLE _result
                     OUTPUT_VARIABLE _resolved
                     ERROR_QUIET
@@ -197,10 +211,28 @@ function(_nereus_fetch_git name)
     # there and not here would otherwise go on being checked against the
     # old one.
     if(_declared_in)
-        file(READ "${_source_root}/${_declared_in}" _text)
-        string(FIND "${_text}" "${_url}" _url_at)
-        string(FIND "${_text}" "${_ref}" _ref_at)
-        if(_url_at EQUAL -1 OR _ref_at EQUAL -1)
+        # Only a GIT_REPOSITORY line naming this URL and the GIT_TAG line
+        # that follows it count, so a comment that still names an old pin,
+        # or another declaration's tag, does not satisfy the check.
+        file(STRINGS "${_source_root}/${_declared_in}" _lines)
+        set(_url_ok FALSE)
+        set(_ref_ok FALSE)
+        set(_in_block FALSE)
+        foreach(_line IN LISTS _lines)
+            if(_line MATCHES "^[ \t]*GIT_REPOSITORY[ \t]+([^ \t#]+)")
+                set(_in_block FALSE)
+                if(CMAKE_MATCH_1 STREQUAL _url)
+                    set(_url_ok TRUE)
+                    set(_in_block TRUE)
+                endif()
+            elseif(_in_block AND _line MATCHES "^[ \t]*GIT_TAG[ \t]+([^ \t#]+)")
+                set(_in_block FALSE)
+                if(CMAKE_MATCH_1 STREQUAL _ref)
+                    set(_ref_ok TRUE)
+                endif()
+            endif()
+        endforeach()
+        if(NOT _url_ok OR NOT _ref_ok)
             message(FATAL_ERROR
                 "${name}: ${_declared_in} no longer declares ${_url} at ${_ref}. "
                 "Update cmake/NereusDependencyArchives.cmake to the new pin.")

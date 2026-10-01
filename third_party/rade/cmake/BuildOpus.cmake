@@ -18,15 +18,16 @@
 #      to bypass autotools entirely. Linux + non-universal macOS keep
 #      the autotools chain.
 #   5. URL_HASH on every ExternalProject_Add(build_opus*) (upstream
-#      declares none), and a first PATCH_COMMAND that copies a
-#      pre-fetched DRED/OSCE model into the source tree when the parent
-#      provides one (NEREUS_OPUS_MODEL_ARCHIVE). The pinned Opus's
-#      dnn/download_model.sh and download_model.bat download the model
-#      only when no copy is there, so a CI run whose dependency cache has
-#      it makes no request to media.xiph.org. The parent (NereusSDR's
-#      CMakeLists.txt) sets OPUS_URL, OPUS_URL_HASH and the model path
-#      from cmake/NereusDependencyArchives.cmake; the defaults below
-#      keep a standalone radae_nopy configure working, now hash-checked.
+#      declares none): the default OPUS_URL gets its own hash, and an
+#      OPUS_URL given by the caller must come with OPUS_URL_HASH or the
+#      configure stops. Plus the model steps of NereusOpusModel.cmake: a
+#      first PATCH_COMMAND copies a verified DRED/OSCE model into the
+#      source tree (the pre-fetched one the parent names in
+#      NEREUS_OPUS_MODEL_ARCHIVE, else a verified copy kept outside the
+#      tree), and two steps keep that copy, so neither a CI run with a
+#      dependency cache nor the re-extract of an existing build dir asks
+#      media.xiph.org for it. The pinned Opus's dnn/download_model.sh and
+#      download_model.bat download the model only when no copy is there.
 # All five are noted at their site as well. See Task A2 of
 # docs/architecture/phase3j2-3r-spots-and-rade-design.md.
 
@@ -40,28 +41,57 @@ endif (CMAKE_CROSSCOMPILING)
 
 if (NOT DEFINED OPUS_URL)
 set(OPUS_URL https://github.com/xiph/opus/archive/940d4e5af64351ca8ba8390df3f555484c567fbb.zip)
-endif (NOT DEFINED OPUS_URL)
-message(STATUS "Using Opus from ${OPUS_URL}")
-
-# NereusSDR vendored patch (5): the archive's SHA-256, checked on OPUS_URL
-# whether it is a URL or a local path. This default is the hash of the default URL
-# above; cmake/NereusDependencyArchives.cmake carries the same pin.
+# NereusSDR vendored patch (5): the default URL's SHA-256, set only with the
+# default URL. cmake/NereusDependencyArchives.cmake carries the same pin.
 if (NOT DEFINED OPUS_URL_HASH)
 set(OPUS_URL_HASH SHA256=20e37f9079ac2b80e3235cd8ce2547829e147bf44a2f5dd28a888fa3e9c24341)
 endif (NOT DEFINED OPUS_URL_HASH)
+endif (NOT DEFINED OPUS_URL)
+message(STATUS "Using Opus from ${OPUS_URL}")
 
-# NereusSDR vendored patch (5): when the parent hands over a pre-fetched
-# model archive (already SHA-256 checked against its name by
-# cmake/FetchDependencyArchives.cmake), copy it into the source tree before
-# autogen.sh / download_model.bat run; they then skip the download, and
-# download_model.sh still checks the checksum. Without one, a no-op step
-# leaves the upstream download in place.
-if (NEREUS_OPUS_MODEL_ARCHIVE AND EXISTS "${NEREUS_OPUS_MODEL_ARCHIVE}")
-message(STATUS "Using Opus model from ${NEREUS_OPUS_MODEL_ARCHIVE}")
-set(_opus_model_seed_command ${CMAKE_COMMAND} -E copy_if_different "${NEREUS_OPUS_MODEL_ARCHIVE}" <SOURCE_DIR>)
-else ()
-set(_opus_model_seed_command ${CMAKE_COMMAND} -E echo "Opus model: no local copy, the Opus build downloads it")
+# NereusSDR vendored patch (5): an OPUS_URL from the caller (a mirror, or a
+# local zip such as the offline kits' Opus zip with the model) is used only
+# with its own hash, checked on it whether it is a URL or a local path.
+if (NOT OPUS_URL_HASH)
+message(FATAL_ERROR
+    "OPUS_URL is set to ${OPUS_URL} without OPUS_URL_HASH. Pass "
+    "-DOPUS_URL_HASH=SHA256=<sha256 of that archive>; Opus is never used unverified.")
 endif ()
+
+# NereusSDR vendored patch (5): the DRED/OSCE model. The pin is the one the
+# pinned Opus's autogen.sh passes to dnn/download_model.sh (and the Windows
+# branch below passes to download_model.bat as _opus_model_sha).
+set(_opus_model_sha256 4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453)
+set(_opus_model_stash ${CMAKE_CURRENT_BINARY_DIR}/opus_model/opus_data-${_opus_model_sha256}.tar.gz)
+if (NEREUS_OPUS_MODEL_ARCHIVE)
+message(STATUS "Using Opus model from ${NEREUS_OPUS_MODEL_ARCHIVE}")
+endif ()
+set(_opus_model_script ${CMAKE_CURRENT_LIST_DIR}/NereusOpusModel.cmake)
+set(_opus_model_seed_command ${CMAKE_COMMAND}
+    -DMODE=seed
+    "-DMODEL=${NEREUS_OPUS_MODEL_ARCHIVE}"
+    "-DSTASH=${_opus_model_stash}"
+    -DSOURCE_DIR=<SOURCE_DIR>
+    -DSHA256=${_opus_model_sha256}
+    -P ${_opus_model_script})
+
+# Keep a verified copy of the model outside the source tree: before the
+# download step (an existing build dir's copy, which the re-extract would
+# wipe) and after the configure step (the copy just downloaded).
+function(_nereus_opus_model_steps project)
+    ExternalProject_Add_Step(${project} nereus_keep_model_before
+        COMMAND ${CMAKE_COMMAND} -DMODE=stash "-DSTASH=${_opus_model_stash}"
+                -DSOURCE_DIR=<SOURCE_DIR> -DSHA256=${_opus_model_sha256}
+                -P ${_opus_model_script}
+        DEPENDEES mkdir
+        DEPENDERS download)
+    ExternalProject_Add_Step(${project} nereus_keep_model_after
+        COMMAND ${CMAKE_COMMAND} -DMODE=stash "-DSTASH=${_opus_model_stash}"
+                -DSOURCE_DIR=<SOURCE_DIR> -DSHA256=${_opus_model_sha256}
+                -P ${_opus_model_script}
+        DEPENDEES configure
+        DEPENDERS build)
+endfunction()
 
 include(ExternalProject)
 if(APPLE AND BUILD_OSX_UNIVERSAL)
@@ -83,6 +113,7 @@ ExternalProject_Add(build_opus_x86
     URL ${OPUS_URL}
     URL_HASH ${OPUS_URL_HASH}
 )
+_nereus_opus_model_steps(build_opus_x86)
 ExternalProject_Add(build_opus_arm
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
@@ -99,6 +130,7 @@ ExternalProject_Add(build_opus_arm
     URL ${OPUS_URL}
     URL_HASH ${OPUS_URL_HASH}
 )
+_nereus_opus_model_steps(build_opus_arm)
 
 ExternalProject_Get_Property(build_opus_arm BINARY_DIR)
 ExternalProject_Get_Property(build_opus_arm SOURCE_DIR)
@@ -183,6 +215,7 @@ ExternalProject_Add(build_opus
     URL ${OPUS_URL}
     URL_HASH ${OPUS_URL_HASH}
 )
+_nereus_opus_model_steps(build_opus)
 
 ExternalProject_Get_Property(build_opus BINARY_DIR)
 ExternalProject_Get_Property(build_opus SOURCE_DIR)
@@ -256,6 +289,7 @@ ExternalProject_Add(build_opus
     BUILD_BYPRODUCTS ${_opus_static_lib}
     INSTALL_COMMAND ""
 )
+_nereus_opus_model_steps(build_opus)
 
 ExternalProject_Get_Property(build_opus SOURCE_DIR)
 add_library(opus STATIC IMPORTED)
@@ -301,6 +335,7 @@ ExternalProject_Add(build_opus
     URL ${OPUS_URL}
     URL_HASH ${OPUS_URL_HASH}
 )
+_nereus_opus_model_steps(build_opus)
 
 ExternalProject_Get_Property(build_opus BINARY_DIR)
 ExternalProject_Get_Property(build_opus SOURCE_DIR)

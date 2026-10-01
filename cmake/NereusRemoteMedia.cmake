@@ -195,40 +195,40 @@ function(nereus_add_remote_media_dependency)
         return()
     endif()
 
-    nereus_dependency_archive(libdatachannel _libdatachannel_urls _libdatachannel_hash)
+    nereus_dependency_archive(libdatachannel _libdatachannel_url _libdatachannel_hash)
     FetchContent_Declare(nereus_libdatachannel
-        URL ${_libdatachannel_urls}
-        URL_HASH ${_libdatachannel_hash}
+        URL "${_libdatachannel_url}"
+        URL_HASH "${_libdatachannel_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(plog _plog_urls _plog_hash)
+    nereus_dependency_archive(plog _plog_url _plog_hash)
     FetchContent_Declare(nereus_plog
-        URL ${_plog_urls}
-        URL_HASH ${_plog_hash}
+        URL "${_plog_url}"
+        URL_HASH "${_plog_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(usrsctp _usrsctp_urls _usrsctp_hash)
+    nereus_dependency_archive(usrsctp _usrsctp_url _usrsctp_hash)
     FetchContent_Declare(nereus_usrsctp
-        URL ${_usrsctp_urls}
-        URL_HASH ${_usrsctp_hash}
+        URL "${_usrsctp_url}"
+        URL_HASH "${_usrsctp_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(libjuice _libjuice_urls _libjuice_hash)
+    nereus_dependency_archive(libjuice _libjuice_url _libjuice_hash)
     FetchContent_Declare(nereus_libjuice
-        URL ${_libjuice_urls}
-        URL_HASH ${_libjuice_hash}
+        URL "${_libjuice_url}"
+        URL_HASH "${_libjuice_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(json _json_urls _json_hash)
+    nereus_dependency_archive(json _json_url _json_hash)
     FetchContent_Declare(nereus_json
-        URL ${_json_urls}
-        URL_HASH ${_json_hash}
+        URL "${_json_url}"
+        URL_HASH "${_json_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
-    nereus_dependency_archive(libsrtp _libsrtp_urls _libsrtp_hash)
+    nereus_dependency_archive(libsrtp _libsrtp_url _libsrtp_hash)
     FetchContent_Declare(nereus_libsrtp
-        URL ${_libsrtp_urls}
-        URL_HASH ${_libsrtp_hash}
+        URL "${_libsrtp_url}"
+        URL_HASH "${_libsrtp_hash}"
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
 
