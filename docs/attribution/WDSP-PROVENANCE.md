@@ -21,13 +21,14 @@ The compiled non-Windows library has an explicit list of 84 C translation
 units. It contains 77 files from the pinned WDSP 2.10 tree and seven retained
 or new Nereus files: `dsplock.c`, `linux_port.c`, `netinterface_stub.c`,
 `ps_sync_stub.c`, `rnnr.c`, `sbnr.c`, and `txgain_stub.c`. Windows removes `linux_port.c` from
-that explicit list. Upstream's dormant `snoop.c` is excluded, and its
+that explicit list (83 there). Upstream's dormant `snoop.c` is excluded, and its
 monolithic `wdsp.h` is not used as the application ABI. The obsolete local
 `FDnoiseIQ.c/.h` and `fastmath.h` were removed.
 
 Across the 169 current `.c` and `.h` files, 156 names come from the pinned
-tree and 13 are retained or new Nereus files. Of the pinned names, 124 remain
-byte-identical and 32 contain the reviewed integrations below. These counts
+tree and 13 are retained or new Nereus files. Of the pinned names, 122 remain
+byte-identical and 34 contain the reviewed integrations below (counted
+against the pinned tree on 2026-09-30). These counts
 describe source identity, not authorship: modified files retain their upstream
 notices and remain derived from WDSP.
 

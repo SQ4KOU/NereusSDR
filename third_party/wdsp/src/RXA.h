@@ -24,6 +24,11 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): adds the rnnr (NR3) and sbnr (NR4) stage
+// pointers to the RXA struct and changes RXAbp1Check to take only the channel.
+
 #ifndef _rxa_h
 #define _rxa_h
 #include "comm.h"

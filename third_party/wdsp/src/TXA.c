@@ -24,6 +24,11 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): the CFC stage is created with a fixed fft
+// size of 2048 instead of max(16384, dsp_size), for Nereus CFC compatibility.
+
 #include "comm.h"
 
 struct _txa txa[MAX_CHANNELS];
