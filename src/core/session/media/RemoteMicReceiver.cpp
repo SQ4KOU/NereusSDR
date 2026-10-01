@@ -30,6 +30,11 @@
 //               the packet waited at the Core), so a stalled drain of the
 //               Core's event loop is not counted as network jitter. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX stall lane, fix round 1: the buffer's timing is the
+//               pump's drain again (a stalled drain grows the margin, as it
+//               did before); each packet's wait at the Core is measured
+//               into the over's figures only. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -224,23 +229,27 @@ int RemoteMicFeed::drainInput()
 void RemoteMicFeed::takeArrivals(bool note)
 {
     // Every write whose audio the pump has read (or discarded) whole. What
-    // one drain found counts as one arrival, timed by its first write, as
-    // the drain itself was before (a lost packet rebuilt from the next
-    // one's FEC arrives with it and counts one packet late; a burst after a
-    // stall is timed by its oldest packet).
+    // one drain found counts as one arrival on the pump's clock, as the
+    // drain itself did before. Each write's wait at the Core is measured
+    // for the over's figures and changes nothing else (fix round 1: timing
+    // the buffer by receipt took away the margin a stalled drain grew).
     Arrival arrival{};
     int frames = 0;
-    int heldFrames = 0;
     while (m_arrivals.peekInto(reinterpret_cast<uint8_t*>(&arrival), sizeof(Arrival))
            && arrival.endBytes <= m_readBytes) {
         m_arrivals.dropOldest(sizeof(Arrival));
-        if (frames == 0) {
-            heldFrames = arrival.heldFrames;
-        }
         frames += arrival.frames;
+        if (note) {
+            ++m_overOwnerWaits;
+            m_overOwnerWaitSumFrames += arrival.heldFrames;
+            m_overOwnerWaitMaxFrames = std::max(m_overOwnerWaitMaxFrames, arrival.heldFrames);
+            if (arrival.heldFrames > Cfg::kLongOwnerWaitMs * Cfg::kFramesPerMs) {
+                ++m_overOwnerWaitsLong;
+            }
+        }
     }
     if (note && frames > 0) {
-        noteArrival(frames, heldFrames);
+        noteArrival(frames);
     }
 }
 
@@ -257,18 +266,15 @@ bool RemoteMicFeed::memoryDelayMin(qint64* min) const
     return true;
 }
 
-void RemoteMicFeed::noteArrival(int frames, int heldFrames)
+void RemoteMicFeed::noteArrival(int frames)
 {
     // This arrival's delay: the pump's clock now less where its first
     // frame sits in the stream. On time it is the same every arrival; a
     // late one (a jittered packet, or one rebuilt from the next packet's
     // FEC and written with it) shows as more. One past the ceiling is a
     // stall, ridden through, not jitter the margin should cover.
-    // TX stall lane: the time the packet waited at the Core after its
-    // receipt in the transport (a stall of the Core's event loop) is taken
-    // off, so the delay is the link's.
     const qint64 delay = static_cast<qint64>(m_block) * kPumpBlock
-        - static_cast<qint64>(heldFrames) - static_cast<qint64>(m_arrivedFrames);
+        - static_cast<qint64>(m_arrivedFrames);
     m_arrivedFrames += static_cast<quint64>(frames);
     qint64 earliest = 0;
     if (memoryDelayMin(&earliest) && delay - earliest > marginCeiling()) {
@@ -448,6 +454,14 @@ void RemoteMicFeed::publishOver()
     m_statsInserted.store(m_overInserted, std::memory_order_relaxed);
     m_statsGrows.store(m_overGrows, std::memory_order_relaxed);
     m_statsHeld.store(m_overHeld, std::memory_order_relaxed);
+    m_statsOwnerWaitMeanMs.store(
+        m_overOwnerWaits > 0 ? static_cast<double>(m_overOwnerWaitSumFrames)
+                / m_overOwnerWaits / Cfg::kFramesPerMs
+                             : 0.0,
+        std::memory_order_relaxed);
+    m_statsOwnerWaitMaxMs.store(static_cast<double>(m_overOwnerWaitMaxFrames) / Cfg::kFramesPerMs,
+                                std::memory_order_relaxed);
+    m_statsOwnerWaitsLong.store(m_overOwnerWaitsLong, std::memory_order_relaxed);
 }
 
 void RemoteMicFeed::endBlock()
@@ -519,6 +533,10 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
             m_overInserted = 0;
             m_overGrows = 0;
             m_overHeld = 0;
+            m_overOwnerWaits = 0;
+            m_overOwnerWaitSumFrames = 0;
+            m_overOwnerWaitMaxFrames = 0;
+            m_overOwnerWaitsLong = 0;
             publishOver();
         }
         m_statsStarted.store(false, std::memory_order_relaxed);
@@ -674,6 +692,9 @@ RemoteMicFeed::Stats RemoteMicFeed::stats() const
     stats.insertedFrames = m_statsInserted.load(std::memory_order_relaxed);
     stats.grows = m_statsGrows.load(std::memory_order_relaxed);
     stats.heldBlocks = m_statsHeld.load(std::memory_order_relaxed);
+    stats.ownerWaitMeanMs = m_statsOwnerWaitMeanMs.load(std::memory_order_relaxed);
+    stats.ownerWaitMaxMs = m_statsOwnerWaitMaxMs.load(std::memory_order_relaxed);
+    stats.ownerWaitsLong = m_statsOwnerWaitsLong.load(std::memory_order_relaxed);
     return stats;
 }
 
@@ -835,7 +856,7 @@ void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
     if (!m_running) {
         return;
     }
-    // TX stall lane: the packet's wait at the Core, for the feed's timing.
+    // TX stall lane: the packet's wait at the Core, for the over's figures.
     m_heldFrames = static_cast<int>(
         std::clamp<qint64>(heldUs, 0, 10'000'000) * Cfg::kFramesPerMs / 1000);
     const int payloadType = audioRtpPayloadType(packet);

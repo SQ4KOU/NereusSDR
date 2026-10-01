@@ -69,6 +69,11 @@
 //               so a stalled drain is not counted as network jitter
 //               (submit's heldUs, write's heldFrames). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX stall lane, fix round 1: the buffer is timed by the
+//               pump's drain again, as before (a stalled drain grows the
+//               margin); a packet's wait at the Core is a measurement
+//               only, in the over's figures (owner waits). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -182,6 +187,9 @@ struct RemoteMicConfig {
     /// late.
     static constexpr int kStaleAfterStallMs = kStarvationMs;
     static constexpr int kStaleAfterStallFrames = kFramesPerMs * kStaleAfterStallMs;
+    /// TX stall lane: a packet that waited at the Core longer than this (a
+    /// stall of its event loop) is counted in the over's figures. Log only.
+    static constexpr int kLongOwnerWaitMs = 50;
 
     static_assert(kMaxDepthMs < kStarvationMs,
                   "the transmit jitter buffer is shorter than the starvation deadline");
@@ -246,9 +254,9 @@ public:
     /// Mono 48 kHz, one packet a call. Refused (false) while not in use;
     /// audio that does not fit the pump's input ring is dropped and counted.
     /// `heldFrames` (TX stall lane): how long, in frames, the packet waited
-    /// at the Core between its receipt in the transport and this write. Its
-    /// arrival is timed that much earlier, so a stall of the Core's event
-    /// loop is not counted as the link's jitter.
+    /// at the Core between its receipt in the transport and this write. It
+    /// goes into the over's figures (Stats::ownerWait*) only; the buffer
+    /// still times the packet when the pump drains it.
     bool write(const float* mono, int frames, int heldFrames = 0);
     /// The buffer's target now (one packet plus the margin), in frames:
     /// what a key waits for. Any thread.
@@ -319,14 +327,22 @@ public:
         quint64 insertedFrames{0};
         int grows{0};
         int heldBlocks{0};
+        /// TX stall lane: how long the over's packets waited at the Core
+        /// between their receipt in the transport and the feed (a stall of
+        /// the Core's event loop), mean and longest in ms, and how many
+        /// waited over kLongOwnerWaitMs. A measurement only: the buffer's
+        /// timing is the pump's drain.
+        double ownerWaitMeanMs{0.0};
+        double ownerWaitMaxMs{0.0};
+        int ownerWaitsLong{0};
     };
     Stats stats() const;
 
 private:
     static constexpr std::size_t kInputRingBytes = 131072;  // 682 ms of mono float
     // TX stall lane: one record a write, in step with the input ring, so the
-    // pump times each packet at its receipt. 511 records, more than the
-    // input ring holds packets.
+    // pump can measure each packet's wait at the Core. 511 records, more
+    // than the input ring holds packets.
     struct Arrival {
         quint64 endBytes;   // m_writtenBytes after the write
         qint32 frames;
@@ -340,9 +356,11 @@ private:
     void discardAllInput();
     // Pump.
     int drainInput();
-    /// TX stall lane: times the writes the pump has now read whole as one
-    /// arrival, by the first one's receipt, or (`note` false) only passes
-    /// the records of audio it discarded.
+    /// TX stall lane: takes the records of the writes the pump has now read
+    /// whole. With `note`, what one drain found counts as one arrival for
+    /// the buffer's timing (noteArrival, as the drain was before), and each
+    /// write's wait at the Core goes into the over's figures; without, the
+    /// records of discarded audio are only passed.
     void takeArrivals(bool note);
     bool headIsSilent() const;
     bool canSplice() const;
@@ -354,7 +372,7 @@ private:
     int currentPacketFrames() const;
     int currentTarget() const;
     int marginCeiling() const;
-    void noteArrival(int frames, int heldFrames);
+    void noteArrival(int frames);
     bool memoryDelayMin(qint64* min) const;
     void endBlock();
     void endWindow();
@@ -392,6 +410,9 @@ private:
     std::atomic<quint64> m_statsInserted{0};
     std::atomic<int> m_statsGrows{0};
     std::atomic<int> m_statsHeld{0};
+    std::atomic<double> m_statsOwnerWaitMeanMs{0.0};
+    std::atomic<double> m_statsOwnerWaitMaxMs{0.0};
+    std::atomic<int> m_statsOwnerWaitsLong{0};
 
     // Pump.
     std::unique_ptr<RemoteAudioRateMatcher> m_matcher;
@@ -444,6 +465,10 @@ private:
     quint64 m_overInserted{0};
     int m_overGrows{0};
     int m_overHeld{0};
+    int m_overOwnerWaits{0};
+    qint64 m_overOwnerWaitSumFrames{0};
+    int m_overOwnerWaitMaxFrames{0};
+    int m_overOwnerWaitsLong{0};
     std::vector<float> m_monoScratch;
     std::vector<float> m_stereoScratch;
 };
@@ -514,8 +539,8 @@ public:
 
     /// One RTP packet from the line (MediaPeer::micRtpReceived). `heldUs`
     /// (TX stall lane): how long it waited between its receipt in the
-    /// transport and this call; the feed times its arrival that much
-    /// earlier.
+    /// transport and this call, for the over's figures (a measurement; the
+    /// buffer's timing is unchanged).
     void submit(const QByteArray& packet, qint64 heldUs = 0);
 
     /// The key's wait (Task 36): calls done(true) as soon as the feed, in
@@ -570,7 +595,8 @@ private:
     bool m_haveSequence{false};
     quint16 m_expectedSequence{0};
     int m_lastOpusFrames{RemoteMicConfig::kOpusFrameSamples};
-    // TX stall lane: the packet being submitted waited this long, in frames.
+    // TX stall lane: the packet being submitted waited this long, in frames
+    // (measured only).
     int m_heldFrames{0};
     std::vector<float> m_pcm;
     Stats m_stats;

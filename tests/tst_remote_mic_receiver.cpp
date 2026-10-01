@@ -240,7 +240,7 @@ private slots:
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
     void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
     void aLongStallsStaleAudioIsNotSentLate();
-    void aStalledDrainIsTimedAtReceiptNotCountedAsJitter();
+    void aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits();
     void nothingIsSplicedWhileDexpTimingRuns();
 };
 
@@ -1165,13 +1165,15 @@ void TestRemoteMicReceiver::nothingIsSplicedWhileDexpTimingRuns()
 // TX stall lane: a replay of the bench's stalled drains (Rock, 2026-10-01:
 // the phone's packets reached the transport 20 ms apart, and the Core's
 // event loop handed them over 80 to 410 ms late, in bursts). The network
-// is steady; five times the owner stalls for 90 ms and then delivers what
-// it held at once, each packet carrying how long it waited since its
-// receipt. The buffer runs dry in each stall (that is the stall), but it
-// times the packets at receipt: the link is steady, so its margin never
-// grows. Before, it timed them on delivery, took the stall for jitter and
-// grew the target to about 120 ms.
-void TestRemoteMicReceiver::aStalledDrainIsTimedAtReceiptNotCountedAsJitter()
+// is steady and the audio is speech-like (words and pauses, so the buffer
+// sheds in the pauses); five times the owner stalls for 90 ms and then
+// delivers what it held at once, each packet carrying how long it waited
+// since its receipt. The buffer is timed on the pump's clock (fix round 1:
+// timing it at receipt took this margin away and doubled the underruns on
+// the bench's stalls): the first stall runs it dry and grows the target,
+// and the later ones are ridden through. The packets' waits are the over's
+// owner-wait figures and nothing else.
+void TestRemoteMicReceiver::aStalledDrainGrowsTheMarginAndIsCountedAsOwnerWaits()
 {
     FakeTime time;
     RemoteMicFeed feed;
@@ -1182,6 +1184,7 @@ void TestRemoteMicReceiver::aStalledDrainIsTimedAtReceiptNotCountedAsJitter()
     feed.setInUse(true);
 
     constexpr int kPackets = 400;   // 8 s
+    constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
     constexpr double kStallMs = 90.0;
     const std::vector<double> stallStarts{2000.0, 3000.0, 4000.0, 5000.0, 6000.0};
     const auto receivedMs = [](int k) { return 0.4 + 20.0 * k; };
@@ -1197,42 +1200,69 @@ void TestRemoteMicReceiver::aStalledDrainIsTimedAtReceiptNotCountedAsJitter()
         return at;
     };
     std::vector<QByteArray> encoded;
+    std::vector<float> frame(kFrames);
     for (int k = 0; k < kPackets; ++k) {
-        const std::vector<float> frame =
-            toneFrame(static_cast<qint64>(k) * RemoteMicConfig::kOpusFrameSamples, 0.3f);
+        for (int i = 0; i < kFrames; ++i) {
+            frame[static_cast<size_t>(i)] = speechSample(static_cast<qint64>(k) * kFrames + i);
+        }
         encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k),
-                                         static_cast<quint32>(k * RemoteMicConfig::kOpusFrameSamples),
-                                         kMicSsrc));
+                                         static_cast<quint32>(k * kFrames), kMicSsrc));
     }
 
     std::vector<float> out(kBlock);
     int next = 0;
     int largestTarget = 0;
-    const qint64 blocks = static_cast<qint64>(kPackets) * (RemoteMicConfig::kOpusFrameSamples / kBlock);
+    int underrunsAtFirstStallEnd = -1;
+    double longestHeldMs = 0.0;
+    int heldOver50 = 0;
+    const qint64 blocks = static_cast<qint64>(kPackets) * (kFrames / kBlock);
     for (qint64 b = 0; b < blocks; ++b) {
         const double nowMs = static_cast<double>(b) * kBlock * 1000.0 / 48000.0;
         time.advanceTo(static_cast<qint64>(nowMs));
         while (next < kPackets && deliveredMs(next) <= nowMs) {
-            const auto heldUs = static_cast<qint64>(std::llround((nowMs - receivedMs(next)) * 1000.0));
-            receiver.submit(encoded[static_cast<size_t>(next)], heldUs);
+            const double heldMs = nowMs - receivedMs(next);
+            longestHeldMs = std::max(longestHeldMs, heldMs);
+            heldOver50 += heldMs > RemoteMicConfig::kLongOwnerWaitMs ? 1 : 0;
+            receiver.submit(encoded[static_cast<size_t>(next)],
+                            static_cast<qint64>(std::llround(heldMs * 1000.0)));
             ++next;
         }
         feed.pullBlock(out.data(), kBlock, -1.0);
         if (nowMs >= stallStarts.front()) {
             largestTarget = std::max(largestTarget, feed.stats().targetFrames);
         }
+        if (underrunsAtFirstStallEnd < 0 && nowMs >= stallStarts.front() + 500.0) {
+            underrunsAtFirstStallEnd = feed.stats().underflows;
+        }
     }
     const RemoteMicFeed::Stats stats = feed.stats();
     qInfo().noquote() << QStringLiteral("stalled drains: target at most %1 ms over five 90 ms "
-                                        "stalls; grew %2 times, underruns %3")
+                                        "stalls; grew %2 times, underruns %3 (%4 by the end of "
+                                        "the first); owner waits mean %5 ms, max %6 ms, %7 over "
+                                        "50 ms")
                              .arg(largestTarget / 48.0, 0, 'f', 1)
                              .arg(stats.grows)
-                             .arg(stats.underflows);
+                             .arg(stats.underflows)
+                             .arg(underrunsAtFirstStallEnd)
+                             .arg(stats.ownerWaitMeanMs, 0, 'f', 2)
+                             .arg(stats.ownerWaitMaxMs, 0, 'f', 2)
+                             .arg(stats.ownerWaitsLong);
     QCOMPARE(next, kPackets);
     QCOMPARE(receiver.stats().decodedPackets, quint64(kPackets));
-    QCOMPARE(stats.grows, 0);
-    QCOMPARE(largestTarget, RemoteMicConfig::kTargetDepthFrames);
-    QCOMPARE(stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
+    // The first stall grows the margin; the stalls after it are covered.
+    QVERIFY(stats.grows >= 1);
+    QVERIFY2(largestTarget > RemoteMicConfig::kTargetDepthFrames + 48 * 50,
+             qPrintable(QString::number(largestTarget / 48.0)));
+    QCOMPARE(stats.underflows, 1);
+    QCOMPARE(underrunsAtFirstStallEnd, stats.underflows);
+    // The waits: every packet's, the longest about the stall, and the
+    // three in each stall that waited past 50 ms.
+    QCOMPARE(heldOver50, 15);
+    QCOMPARE(stats.ownerWaitsLong, heldOver50);
+    QVERIFY2(std::abs(stats.ownerWaitMaxMs - longestHeldMs) < 0.05,
+             qPrintable(QStringLiteral("%1 vs %2").arg(stats.ownerWaitMaxMs).arg(longestHeldMs)));
+    QVERIFY(longestHeldMs > kStallMs - 1.0 && longestHeldMs < kStallMs + 2.0);
+    QVERIFY(stats.ownerWaitMeanMs > 0.0 && stats.ownerWaitMeanMs < 5.0);
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)
