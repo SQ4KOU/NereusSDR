@@ -20,6 +20,7 @@ class PgxlConnectionSetupTest : public QObject {
 private slots:
     void readSetupSendsCommand();
     void writeSetupBuildsKvCommand();
+    void writeSetupRefusesAFieldThatWouldSplit();
     void parsesSetupResponse();
     void seqIncrementsBetweenCalls();
 };
@@ -52,6 +53,21 @@ void PgxlConnectionSetupTest::writeSetupBuildsKvCommand() {
     QVERIFY(frame.contains(QStringLiteral("setup")));
     QVERIFY(frame.contains(QStringLiteral("nickname=ShackAmp")));
     QVERIFY(frame.contains(QStringLiteral("fan=Quiet")));
+}
+
+// RD-I11: a value with a space or '=' would become extra fields on the
+// amp's `setup` line ("Shack bias=a" sets the bias). Nothing is sent.
+void PgxlConnectionSetupTest::writeSetupRefusesAFieldThatWouldSplit() {
+    NereusSDR::PgxlConnection conn;
+    QSignalSpy frameSpy(&conn, &NereusSDR::PgxlConnection::testFrameWrittenForTesting);
+    for (const QString& bad : {QStringLiteral("Shack bias=a"), QStringLiteral("Shack PGXL"),
+                               QStringLiteral("a=b"), QStringLiteral("tab\there")}) {
+        QCOMPARE(conn.writeSetup({{QStringLiteral("nickname"), bad}}), quint32(0));
+    }
+    QCOMPARE(conn.writeSetup({{QStringLiteral("nick name"), QStringLiteral("Amp")}}), quint32(0));
+    QCOMPARE(frameSpy.count(), 0);
+    QVERIFY(NereusSDR::PgxlConnection::isSetupToken(QStringLiteral("Shack_PGXL")));
+    QVERIFY(!NereusSDR::PgxlConnection::isSetupToken(QStringLiteral("Shack PGXL")));
 }
 
 // parsesSetupResponse: inject a synthetic R-frame whose body contains setup kv

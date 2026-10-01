@@ -22,9 +22,14 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  A request with no answer times out
 //                                    (R-R3-47), on a monotonic clock.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave RD-I11: setName refuses a name with a space or
+//               '=' (it would add fields to the setup line). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationDeviceSettings.h"
+
+#include "core/PgxlConnection.h"
 
 #include "core/AppSettings.h"
 
@@ -231,6 +236,17 @@ bool StationDeviceSettings::setName(const QString& input, QString* reason)
             }
             return false;
         }
+    }
+    // RD-I11: the name goes out as one `nickname=` field of a
+    // space-separated `setup` line, and the amp reports it back as one
+    // word (its discovery line, LanDiscovery). A space or an equals sign
+    // would end the field and start another (`Shack bias=a`), so neither
+    // is sent.
+    if (!PgxlConnection::isSetupToken(name)) {
+        if (reason) {
+            *reason = QStringLiteral("Enter a name without spaces or equals signs.");
+        }
+        return false;
     }
     if (refuseIfOffline(reason)) {
         return false;

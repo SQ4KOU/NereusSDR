@@ -34,6 +34,10 @@
 //                 command's sequence.
 //   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (Task 77 fix round 4): replyRefused.
+//   2026-09-30: Fix wave RD-I11: writeSetup refuses a key or value with
+//               a space or '=' (isSetupToken), so a name cannot add
+//               setup fields. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -158,6 +162,11 @@ public slots:
     quint32 interlockDisable(int interlockId);
     quint32 readSetup();
     quint32 writeSetup(const QMap<QString,QString>& fields);
+
+    // True when `text` can go out as one key or value of a `setup` line:
+    // no whitespace, no '=', no control characters. writeSetup refuses
+    // a field that fails this, and the device name is held to it.
+    static bool isSetupToken(const QString& text);
     quint32 readIfconf();
     quint32 writeIfconf(const QString& ip, const QString& netmask,
                         const QString& gateway, bool dhcp);

@@ -69,6 +69,9 @@
 //                                    via Anthropic Claude Code.
 //   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave RD-I11: the nickname field takes one word (no
+//               spaces or '='), with a one-word placeholder. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -384,7 +387,12 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_nickname = new QLineEdit;
-    m_nickname->setPlaceholderText(QStringLiteral("e.g. Shack PGXL"));
+    m_nickname->setPlaceholderText(QStringLiteral("e.g. Shack_PGXL"));
+    // RD-I11: the amp and tuner take the name as one word of a `setup`
+    // line; a space or '=' would start another field. Neither can be typed.
+    m_nickname->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[^\\s=]*")), m_nickname));
+    m_nickname->setToolTip(QStringLiteral("One word: no spaces or equals signs."));
     form->addRow(QStringLiteral("Nickname:"), m_nickname);
 
     m_firmwareVersion = new QLabel(QStringLiteral("--"));

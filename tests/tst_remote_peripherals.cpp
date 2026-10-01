@@ -2703,7 +2703,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     const int remoteMark = amp.commands.size();
     const int localMark = localAmp.commands.size();
     const auto drive = [](PgxlAdvancedPage& p) {
-        editName(p.nicknameEditForTesting(), QStringLiteral("Shack PGXL"));
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack_PGXL"));
         p.biasClassAForTesting()->click();
         p.fanModeComboForTesting()->setCurrentText(QStringLiteral("Quiet"));
         p.ledSliderForTesting()->setValue(40);
@@ -2723,7 +2723,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(amp.waitFor(QStringLiteral("save"), remoteMark) >= 0);
     QVERIFY(localAmp.waitFor(QStringLiteral("save"), localMark) >= 0);
     const QStringList expected{
-        QStringLiteral("setup nickname=Shack PGXL"),
+        QStringLiteral("setup nickname=Shack_PGXL"),
         QStringLiteral("setup bias=a"),
         QStringLiteral("setup fan=quiet"),
         QStringLiteral("setup led=40"),
@@ -2769,8 +2769,8 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // ---- The amp's answers and values show on the page.
     int at = -1;
     const int answerMark = amp.commands.size();
-    editName(page.nicknameEditForTesting(), QStringLiteral("Remote Amp"));
-    at = amp.waitFor(QStringLiteral("setup nickname=Remote Amp"), answerMark);
+    editName(page.nicknameEditForTesting(), QStringLiteral("Remote_Amp"));
+    at = amp.waitFor(QStringLiteral("setup nickname=Remote_Amp"), answerMark);
     QVERIFY(at >= 0);
     NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
@@ -2778,7 +2778,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Power Genius took the new name."));
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
-    QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote Amp"));
+    QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote_Amp"));
     editName(page.nicknameEditForTesting(), QStringLiteral("Refused"));
     at = amp.waitFor(QStringLiteral("setup nickname=Refused"), answerMark);
     QVERIFY(at >= 0);
@@ -2927,7 +2927,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     const int remoteMark = tuner.commands.size();
     const int localMark = localTuner.commands.size();
     const auto drive = [](TgxlAdvancedPage& p) {
-        editName(p.nicknameEditForTesting(), QStringLiteral("Shack Tuner"));
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack_Tuner"));
         p.dhcpCheckForTesting()->setChecked(true);
         p.applyNetworkButtonForTesting()->click();
         QVERIFY(p.saveAndRebootButtonForTesting()->isEnabled());
@@ -2940,7 +2940,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QVERIFY(tuner.waitFor(QStringLiteral("ifconf read"), remoteMark) >= 0);
     QVERIFY(localTuner.waitFor(QStringLiteral("ifconf read"), localMark) >= 0);
     const QStringList expected{
-        QStringLiteral("setup nickname=Shack Tuner"),
+        QStringLiteral("setup nickname=Shack_Tuner"),
         QStringLiteral("ifconf address= netmask= gateway= dhcp=true"),
         QStringLiteral("save"),
         QStringLiteral("setup read"),
