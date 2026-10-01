@@ -27,6 +27,8 @@
 //               Claude Code.
 //   2026-09-27: sustained-producer drain regression added with OpenAI
 //               Codex assistance.
+//   2026-09-30: tryDrainNeverWaitsOnARunningDrain (fix wave), J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -145,6 +147,42 @@ private slots:
         const QList<LogSinkLine> lines = sink.linesSince(0);
         QCOMPARE(lines.size(), 1);
         QCOMPARE(lines.first().text, QStringLiteral("before any writer"));
+    }
+
+    // Fix wave (2026-09-30): the drain a fatal message runs. It drains at
+    // once with no writer, and returns at once, draining nothing, while
+    // the writer is inside a drain (stuck on its disk) or when called from
+    // inside a drain on the same thread.
+    void tryDrainNeverWaitsOnARunningDrain()
+    {
+        LogSink sink(64);
+        QVERIFY(sink.offer(QStringLiteral("no writer\n")));
+        QVERIFY(sink.tryDrainNow());
+        QCOMPARE(sink.linesSince(0).size(), 1);
+
+        std::atomic<bool> stuck{true};
+        std::atomic<bool> writing{false};
+        bool nested = true;
+        sink.setBeforeWriteForTest([&]() {
+            if (!writing.exchange(true)) {
+                // From inside the writer's own drain: refused, not a
+                // second lock of the drain mutex.
+                nested = sink.tryDrainNow();
+            }
+            while (stuck.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        });
+        sink.start();
+        QVERIFY(sink.offer(QStringLiteral("held\n")));
+        QTRY_VERIFY(writing.load());
+        QVERIFY(sink.offer(QStringLiteral("waiting\n")));
+        QVERIFY(!sink.tryDrainNow());
+        QCOMPARE(sink.linesSince(0).size(), 1);
+        stuck.store(false);
+        sink.stop();
+        QVERIFY(!nested);
+        QCOMPARE(sink.linesSince(0).size(), 3);
     }
 
     void oneDrainReturnsWhileAProducerRefillsEverySlot()
