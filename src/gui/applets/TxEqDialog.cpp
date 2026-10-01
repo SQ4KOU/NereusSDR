@@ -108,6 +108,8 @@
 //                 (eqform.cs:3539-3577 [v2.10.3.15]): the clamped value
 //                 re-fires and reaches the curve, and the range change's
 //                 rescaled points reach the model through pointsChanged.
+//                 Low and High take typed input on commit (Enter or
+//                 leaving the box), as Thetis's NumericUpDowns do.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
 // =================================================================
@@ -228,10 +230,9 @@ constexpr int    kParaHighMinHz          =      0;         // cs:589
 constexpr int    kParaHighMaxHz          =  20000;         // cs:581
 constexpr int    kParaHighDefaultHz      =  16000;         // cs:595
 
-// 1 kHz minimum spread between Low and High — mirrors
-// frmCFCConfig.cs:122-138 [v2.10.3.13] guard (eqform doesn't expose
-// the same constant explicitly but enforces the same invariant via
-// nudParaEQ_low / nudParaEQ_high handlers; we copy CFC's threshold).
+// 1 kHz minimum spread between Low and High.
+// From Thetis eqform.cs:3543, 3545, 3563, 3565 [v2.10.3.15] — the literal
+// 1000 in nudParaEQ_low_ValueChanged / nudParaEQ_high_ValueChanged.
 constexpr int    kMinFreqSpreadHz        = 1000;
 
 // Edit-row preamp (nudParaEQ_preamp) — eqform.cs:671-699 [v2.10.3.13].
@@ -787,6 +788,13 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraLowSpin->setRange(kParaLowMinHz, kParaLowMaxHz);
         m_paraLowSpin->setValue(kParaLowDefaultHz);
         m_paraLowSpin->setSuffix(QStringLiteral(" Hz"));
+        // From Thetis eqform.cs:3539-3577 [v2.10.3.15]: udParaEQ_low /
+        // udParaEQ_high are NumericUpDowns (NumericUpDownTS adds no text
+        // handling, numericupdownts.cs:33), which raise ValueChanged only
+        // when typed text is committed (Enter or leaving the box), so the
+        // spread guard and the curve's rescale run once per typed value,
+        // not per keystroke.
+        m_paraLowSpin->setKeyboardTracking(false);
         m_paraLowSpin->setToolTip(tr(
             "Lower edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz below High."));
@@ -798,6 +806,7 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraHighSpin->setRange(kParaHighMinHz, kParaHighMaxHz);
         m_paraHighSpin->setValue(kParaHighDefaultHz);
         m_paraHighSpin->setSuffix(QStringLiteral(" Hz"));
+        m_paraHighSpin->setKeyboardTracking(false);  // as Low above
         m_paraHighSpin->setToolTip(tr(
             "Upper edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz above Low."));
