@@ -10003,9 +10003,10 @@ void MainWindow::buildMenuBar()
         openThisCore(ThisCoreFocus::ForgetRadio);
     });
     radioMenu->setToolTipsVisible(true);
-    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
-        a->setVisible(m_radioModel != nullptr && !m_radioModel->ownsLocalDsp());
-    }
+    // GUI-M2 (fix wave): a window running its own radio shows these
+    // disabled, with the reason pointing to the Connection panel, never
+    // hidden (refreshCoreRadioActions).
+    refreshCoreRadioActions();
     connect(radioMenu, &QMenu::aboutToShow, this, &MainWindow::refreshCoreRadioActions);
 
     radioMenu->addSeparator();
@@ -14552,6 +14553,26 @@ void MainWindow::refreshCoreRadioActions()
     if (m_actForgetCoreRadio == nullptr || m_radioModel == nullptr) {
         return;
     }
+    // GUI-M2 (fix wave): the Core's radio items, in a window that runs its
+    // own radio, wait with the reason.
+    if (m_radioModel->ownsLocalDsp()) {
+        const QString local = tr("This computer runs its own radio. Change it in the "
+                                 "Connection panel (Radio > Manage Radios).");
+        for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
+            if (a == nullptr) {
+                continue;
+            }
+            a->setEnabled(false);
+            a->setToolTip(local);
+        }
+        return;
+    }
+    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio}) {
+        if (a != nullptr) {
+            a->setEnabled(true);
+            a->setToolTip(QString());
+        }
+    }
     const QString why = forgetCoreRadioReason();
     m_actForgetCoreRadio->setEnabled(why.isEmpty());
     m_actForgetCoreRadio->setToolTip(why);
@@ -15108,6 +15129,27 @@ void MainWindow::refreshTciRemoteTransmit()
 #endif
 }
 
+// GUI-I3 (fix wave): on a remote window the PureSignal applet follows the
+// Core's radio. It hides only when that radio has no PureSignal hardware
+// (as a local HL2 or Atlas hides it); a radio that has it while the Core
+// has not advertised PureSignal 3 shows the applet disabled, with the
+// reason, as the PureSignal menu items do.
+void MainWindow::applyRemotePureSignalAppletGate()
+{
+    if (!m_pureSignalApplet) {
+        return;
+    }
+    const bool linked = m_stationClient && m_stationClient->isHandshakeComplete();
+    const bool ps3Supported = linked
+        && m_stationClient->capabilities().psAlgorithmVersion == 3;
+    const bool hardware = linked && m_radioModel->boardCapabilities().hasPureSignal;
+    m_pureSignalApplet->setEnabled(ps3Supported);
+    m_pureSignalApplet->setToolTip(ps3Supported
+        ? QString()
+        : tr("The connected Core has not advertised PureSignal 3."));
+    m_pureSignalApplet->setVisible(hardware);
+}
+
 void MainWindow::applyRemoteRoleGating()
 {
     if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
@@ -15296,10 +15338,7 @@ void MainWindow::applyRemoteRoleGating()
                 : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core."));
     }
     if (m_pureSignalApplet) {
-        const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
-            && m_stationClient->capabilities().psAlgorithmVersion == 3;
-        m_pureSignalApplet->setEnabled(ps3Supported);
-        m_pureSignalApplet->setVisible(ps3Supported);
+        applyRemotePureSignalAppletGate();
     }
     if (m_actConnect != nullptr) {
         m_actConnect->setEnabled(m_connectionPickerManaged || (m_station.isRemote() && !active));
@@ -16345,9 +16384,7 @@ void MainWindow::onConnectionStateChanged()
             m_radioModel->syncStepAttenuatorToReceiveSlice();
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
-            m_pureSignalApplet->setVisible(m_stationClient
-                && m_stationClient->isHandshakeComplete()
-                && m_stationClient->capabilities().psAlgorithmVersion == 3);
+            applyRemotePureSignalAppletGate();
         }
 
         // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is

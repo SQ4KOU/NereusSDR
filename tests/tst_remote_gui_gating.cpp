@@ -5068,6 +5068,40 @@ private slots:
     // still behaves exactly as before. The open keys on a radio name the
     // model learns on connect, so setNameForTest stands in for a connect.
     // ====================================================================
+    // GUI-M2 (fix wave): a window running its own radio shows Radio >
+    // Change radio, Edit radio and Forget radio disabled, with a reason that
+    // points to the Connection panel (before, they were hidden).
+    void localWindowShowsCoreRadioItemsDisabledWithTheReason()
+    {
+        Test::markAudioFirstRunDone();
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        QVERIFY(window.radioModel()->ownsLocalDsp());
+        // The window's menus, wherever the title bar hosts them.
+        QMenu* radioMenu = nullptr;
+        for (QMenu* menu : window.findChildren<QMenu*>()) {
+            if (menu->title() == QStringLiteral("&Radio")) {
+                radioMenu = menu;
+            }
+        }
+        QVERIFY(radioMenu);
+        emit radioMenu->aboutToShow();
+        int found = 0;
+        for (QAction* action : radioMenu->actions()) {
+            const QString text = action->text();
+            if (text != QStringLiteral("Change radio\u2026") && text != QStringLiteral("Edit radio\u2026")
+                && text != QStringLiteral("Forget radio")) {
+                continue;
+            }
+            ++found;
+            QVERIFY2(action->isVisible(), qPrintable(text));
+            QVERIFY2(!action->isEnabled(), qPrintable(text));
+            QVERIFY2(action->toolTip().contains(QStringLiteral("Connection panel")),
+                     qPrintable(action->toolTip()));
+            QVERIFY(OperatorWording::isPlain(action->toolTip()));
+        }
+        QCOMPARE(found, 3);
+    }
+
     void localWindowDisconnectStillOpensConnections_data()
     {
         QTest::addColumn<bool>("pickerManaged");
@@ -5211,6 +5245,7 @@ int main(int argc, char** argv)
            QStringLiteral("containerPeakAndVaxButtonsFollowChangesMadeElsewhere"),
            QStringLiteral("containerButtonsActOnTheirOwnSliceLocallyAndRemotely"),
            QStringLiteral("localWindowDisconnectStillOpensConnections"),
+           QStringLiteral("localWindowShowsCoreRadioItemsDisabledWithTheReason"),
            QStringLiteral("vaxFirstRunCheckRunsInRemoteAndLocalWindows")}}});
     return arguments ? QTest::qExec(&test, *arguments) : 1;
 }
