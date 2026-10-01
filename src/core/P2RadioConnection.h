@@ -110,6 +110,11 @@
 //                test seams: the receive socket binds the address that
 //                reaches the radio (network.c:116-118, 203 [v2.10.3.15]).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TX diagnostics lane: the send thread places the key's
+//                padded silence (start, mid-key, tail), its first radio ran
+//                dry and its catch-up bursts in time (txSendStats). Measurement
+//                only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 /*
@@ -950,6 +955,31 @@ private:
     std::atomic<quint64> m_txIqOverflowSamples{0};
     std::atomic<quint64> m_txIqSendErrors{0};
     std::atomic<int> m_txIqMaxRingPairs{0};
+    // TX diagnostics lane (2026-10-01): where the key's dropouts fell.
+    // resetTxSendStats bumps the generation and clears the published
+    // figures; the send thread clears its own state when it sees the new
+    // generation, then publishes (one writer each, relaxed: log only).
+    void noteTxIqPadding(qint64 nowNs, int underrunSamples);
+    std::atomic<quint32> m_txIqDiagGeneration{0};
+    std::atomic<qint64> m_txIqKeyNs{-1};
+    std::atomic<qint64> m_txIqFirstBlockAtNs{-1};
+    std::atomic<quint64> m_txIqPadStart{0};
+    std::atomic<quint64> m_txIqPadMid{0};
+    std::atomic<quint64> m_txIqPadOpen{0};
+    std::atomic<quint64> m_txIqLongestMidPad{0};
+    std::atomic<qint64> m_txIqLongestMidPadAtNs{-1};
+    std::atomic<qint64> m_txIqFirstDryAtNs{-1};
+    std::atomic<qint64> m_txIqFirstDryGapNs{-1};
+    std::array<std::atomic<qint64>, TxSendStats::kMaxBurstEvents> m_txIqBurstAtNs{};
+    std::array<std::atomic<qint64>, TxSendStats::kMaxBurstEvents> m_txIqBurstGapNs{};
+    std::array<std::atomic<int>, TxSendStats::kMaxBurstEvents> m_txIqBurstFrames{};
+    std::atomic<int> m_txIqBurstEvents{0};
+    // Send thread only.
+    quint32 m_txIqDiagSeen{0};
+    qint64 m_txIqDiagKeyNs{-1};
+    bool m_txIqDiagSawBlock{false};
+    quint64 m_txIqDiagRun{0};
+    qint64 m_txIqDiagRunStartNs{-1};
     // Producer only: a full ring's warning, at most once a second.
     qint64 m_txIqOverflowLogNs{0};
     quint64 m_txIqOverflowLogged{0};

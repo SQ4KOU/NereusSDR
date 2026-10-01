@@ -141,6 +141,11 @@
 //                Any could share its port with another socket on that
 //                address, which then took the radio's frames. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TX diagnostics lane: serviceTxIqSend places the key's
+//                padded silence (start, mid-key, tail), its first radio ran
+//                dry and its catch-up bursts in time, for the unkey line.
+//                Measurement only; nothing sent changes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //
@@ -2404,11 +2409,64 @@ int P2RadioConnection::composeTxIqFrame(char* buf)
     return underrunSamples;
 }
 
+// TX diagnostics lane (2026-10-01): one composed frame's padding while
+// keyed, sorted by where it fell. Before the first frame carrying the TX
+// channel's I/Q it is the start; a run that ends with the I/Q resuming is
+// mid-key; the run still open when the figures are read is the unkey tail.
+// Send thread only; measurement only.
+void P2RadioConnection::noteTxIqPadding(qint64 nowNs, int underrunSamples)
+{
+    const int carried = TxIqPacer::kSamplesPerFrame - underrunSamples;
+    if (carried > 0) {
+        if (!m_txIqDiagSawBlock) {
+            m_txIqDiagSawBlock = true;
+            m_txIqFirstBlockAtNs.store(nowNs - m_txIqDiagKeyNs, std::memory_order_relaxed);
+        }
+        if (m_txIqDiagRun > 0) {
+            m_txIqPadMid.fetch_add(m_txIqDiagRun, std::memory_order_relaxed);
+            if (m_txIqDiagRun > m_txIqLongestMidPad.load(std::memory_order_relaxed)) {
+                m_txIqLongestMidPad.store(m_txIqDiagRun, std::memory_order_relaxed);
+                m_txIqLongestMidPadAtNs.store(m_txIqDiagRunStartNs - m_txIqDiagKeyNs,
+                                              std::memory_order_relaxed);
+            }
+            m_txIqDiagRun = 0;
+        }
+    }
+    if (underrunSamples <= 0) {
+        m_txIqPadOpen.store(m_txIqDiagRun, std::memory_order_relaxed);
+        return;
+    }
+    if (!m_txIqDiagSawBlock) {
+        m_txIqPadStart.fetch_add(static_cast<quint64>(underrunSamples),
+                                 std::memory_order_relaxed);
+        return;
+    }
+    if (m_txIqDiagRun == 0) {
+        m_txIqDiagRunStartNs = nowNs;
+    }
+    m_txIqDiagRun += static_cast<quint64>(underrunSamples);
+    m_txIqPadOpen.store(m_txIqDiagRun, std::memory_order_relaxed);
+}
+
 int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* ctx)
 {
     const bool keyed = m_mox.load();
     qint64 gapNs = 0;
     const double dry = m_txIqPacer.advance(nowNs, &gapNs);
+    // TX diagnostics lane: a new key (resetTxSendStats) starts the send
+    // thread's placement afresh; the key's time is its first keyed pass.
+    const quint32 diagGeneration = m_txIqDiagGeneration.load(std::memory_order_acquire);
+    if (diagGeneration != m_txIqDiagSeen) {
+        m_txIqDiagSeen = diagGeneration;
+        m_txIqDiagKeyNs = -1;
+        m_txIqDiagSawBlock = false;
+        m_txIqDiagRun = 0;
+        m_txIqDiagRunStartNs = -1;
+    }
+    if (keyed && m_txIqDiagKeyNs < 0) {
+        m_txIqDiagKeyNs = nowNs;
+        m_txIqKeyNs.store(nowNs, std::memory_order_relaxed);
+    }
     if (keyed) {
         if (gapNs > TxIqPacer::kLateWakeNs) {
             m_txIqLateWakes.fetch_add(1, std::memory_order_relaxed);
@@ -2417,7 +2475,10 @@ int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* c
         // between two passes (a stall of this thread longer than the lead).
         if (dry >= TxIqPacer::kSamplesPerFrame
             && m_txIqFramesSent.load(std::memory_order_relaxed) > 0) {
-            m_txIqRadioRanDry.fetch_add(1, std::memory_order_relaxed);
+            if (m_txIqRadioRanDry.fetch_add(1, std::memory_order_relaxed) == 0) {
+                m_txIqFirstDryAtNs.store(nowNs - m_txIqDiagKeyNs, std::memory_order_relaxed);
+                m_txIqFirstDryGapNs.store(gapNs, std::memory_order_relaxed);
+            }
         }
     }
 
@@ -2457,6 +2518,9 @@ int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* c
             m_txIqZeroPadded.fetch_add(static_cast<quint64>(underrunSamples),
                                        std::memory_order_relaxed);
         }
+        if (keyed) {
+            noteTxIqPadding(nowNs, underrunSamples);
+        }
         const TxIqSinkResult r = sink(ctx, m_txIqPendingFrame, kTxIqFrameBytes);
         if (r == TxIqSinkResult::Retry) {
             m_txIqPending = true;
@@ -2478,7 +2542,15 @@ int P2RadioConnection::serviceTxIqSend(qint64 nowNs, TxIqFrameSink sink, void* c
     // A normal pass sends 1-2 frames (one 5 ms tick's worth is 4); more is a
     // refill after this thread or the producer fell behind.
     if (keyed && sent > 4 && sentBefore > 0) {
-        m_txIqCatchUpBursts.fetch_add(1, std::memory_order_relaxed);
+        const quint64 burst = m_txIqCatchUpBursts.fetch_add(1, std::memory_order_relaxed);
+        // TX diagnostics lane: the first bursts placed in time.
+        if (burst < static_cast<quint64>(TxSendStats::kMaxBurstEvents)) {
+            const auto i = static_cast<size_t>(burst);
+            m_txIqBurstAtNs[i].store(nowNs - m_txIqDiagKeyNs, std::memory_order_relaxed);
+            m_txIqBurstGapNs[i].store(gapNs, std::memory_order_relaxed);
+            m_txIqBurstFrames[i].store(sent, std::memory_order_relaxed);
+            m_txIqBurstEvents.store(static_cast<int>(burst) + 1, std::memory_order_release);
+        }
     }
     return sent;
 }
@@ -2804,6 +2876,19 @@ void P2RadioConnection::resetTxSendStats()
     m_txIqOverflowSamples.store(0, std::memory_order_relaxed);
     m_txIqSendErrors.store(0, std::memory_order_relaxed);
     m_txIqMaxRingPairs.store(0, std::memory_order_relaxed);
+    // TX diagnostics lane: the send thread starts its placement afresh at
+    // its next pass.
+    m_txIqKeyNs.store(-1, std::memory_order_relaxed);
+    m_txIqFirstBlockAtNs.store(-1, std::memory_order_relaxed);
+    m_txIqPadStart.store(0, std::memory_order_relaxed);
+    m_txIqPadMid.store(0, std::memory_order_relaxed);
+    m_txIqPadOpen.store(0, std::memory_order_relaxed);
+    m_txIqLongestMidPad.store(0, std::memory_order_relaxed);
+    m_txIqLongestMidPadAtNs.store(-1, std::memory_order_relaxed);
+    m_txIqFirstDryAtNs.store(-1, std::memory_order_relaxed);
+    m_txIqFirstDryGapNs.store(-1, std::memory_order_relaxed);
+    m_txIqBurstEvents.store(0, std::memory_order_relaxed);
+    m_txIqDiagGeneration.fetch_add(1, std::memory_order_acq_rel);
 }
 
 RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
@@ -2818,6 +2903,26 @@ RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
     st.overflowSamples = m_txIqOverflowSamples.load(std::memory_order_relaxed);
     st.sendErrors = m_txIqSendErrors.load(std::memory_order_relaxed);
     st.maxRingMs = m_txIqMaxRingPairs.load(std::memory_order_relaxed) * 1000 / 192000;
+    // TX diagnostics lane: the placement figures, in ms since the key.
+    const auto msOf = [](qint64 ns) { return ns < 0 ? -1.0 : static_cast<double>(ns) / 1.0e6; };
+    st.placed = true;
+    st.keySteadyNs = m_txIqKeyNs.load(std::memory_order_relaxed);
+    st.firstBlockAtMs = msOf(m_txIqFirstBlockAtNs.load(std::memory_order_relaxed));
+    st.padStartSamples = m_txIqPadStart.load(std::memory_order_relaxed);
+    st.padMidSamples = m_txIqPadMid.load(std::memory_order_relaxed);
+    st.padTailSamples = m_txIqPadOpen.load(std::memory_order_relaxed);
+    st.longestMidPadSamples = m_txIqLongestMidPad.load(std::memory_order_relaxed);
+    st.longestMidPadAtMs = msOf(m_txIqLongestMidPadAtNs.load(std::memory_order_relaxed));
+    st.firstDryAtMs = msOf(m_txIqFirstDryAtNs.load(std::memory_order_relaxed));
+    st.firstDryGapMs = msOf(m_txIqFirstDryGapNs.load(std::memory_order_relaxed));
+    st.burstEvents = std::min(m_txIqBurstEvents.load(std::memory_order_acquire),
+                              TxSendStats::kMaxBurstEvents);
+    for (int i = 0; i < st.burstEvents; ++i) {
+        const auto k = static_cast<size_t>(i);
+        st.bursts[k].atMs = msOf(m_txIqBurstAtNs[k].load(std::memory_order_relaxed));
+        st.bursts[k].gapMs = msOf(m_txIqBurstGapNs[k].load(std::memory_order_relaxed));
+        st.bursts[k].frames = m_txIqBurstFrames[k].load(std::memory_order_relaxed);
+    }
     return st;
 }
 

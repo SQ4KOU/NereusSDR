@@ -5,6 +5,12 @@
 // only as pointers to where ported logic lives in the concrete subclasses
 // (P1RadioConnection.cpp, P2RadioConnection.cpp); no upstream code is
 // reproduced in this header.
+//
+// Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane: TxSendStats places a key's padded
+//               silence (start, mid-key, tail), its first radio ran dry and
+//               its catch-up bursts in time. Measurement only. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "ConnectionState.h"
 #include "RadioDiscovery.h"
@@ -710,6 +716,40 @@ public:
         /// G-07: only overflowSamples is kept (Protocol 1); the other
         /// counters are not measured and read zero.
         bool overflowOnly{false};
+
+        // TX diagnostics lane (2026-10-01): where the key's dropouts fell,
+        // in ms since the send thread's first keyed pass (the key). Only
+        // Protocol 2 measures these (placed true); measurement only.
+        bool placed{false};
+        /// The key's first keyed pass on the steady clock, in ns (-1: none),
+        /// so other steady-clock times can be set against it.
+        qint64 keySteadyNs{-1};
+        /// The first frame that carried the TX channel's I/Q, ms after the
+        /// key (-1: none came).
+        double firstBlockAtMs{-1.0};
+        /// zeroPaddedSamples split: before the first such frame (start),
+        /// in runs that ended with the I/Q resuming (mid-key), and the run
+        /// still open when read (the unkey tail).
+        quint64 padStartSamples{0};
+        quint64 padMidSamples{0};
+        quint64 padTailSamples{0};
+        /// The longest mid-key run of padding, and when it began.
+        quint64 longestMidPadSamples{0};
+        double longestMidPadAtMs{-1.0};
+        /// The first time the radio ran dry, and the send thread's gap
+        /// before that pass (-1: it never ran dry).
+        double firstDryAtMs{-1.0};
+        double firstDryGapMs{-1.0};
+        /// The first kMaxBurstEvents catch-up bursts: when, the send
+        /// thread's gap before that pass, and the frames it sent.
+        struct Burst {
+            double atMs{-1.0};
+            double gapMs{-1.0};
+            int frames{0};
+        };
+        static constexpr int kMaxBurstEvents = 4;
+        int burstEvents{0};
+        std::array<Burst, kMaxBurstEvents> bursts{};
     };
     virtual TxSendStats txSendStats() const { return {}; }
     /// R-IOS-13 (2026-09-27): what the transmit I/Q send ring holds now,

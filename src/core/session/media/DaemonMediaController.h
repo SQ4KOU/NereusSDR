@@ -7,6 +7,10 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane: unkeyEventLines, one line for each
+//               placed microphone underrun, the first radio ran dry and
+//               each catch-up burst. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-10-01: TX stall lane, fix round 1: only the keyer's controller
 //               reports the unkey. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
@@ -110,6 +114,7 @@
 #include <QPointer>
 #include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <array>
@@ -428,6 +433,13 @@ public:
                                   const RemoteMicFeed::Stats* feed,
                                   const RadioConnection::TxSendStats& send,
                                   qint64 keepaliveWaitMaxUs = -1);
+    /// TX diagnostics lane: the lines logged after it, one for each placed
+    /// microphone underrun (RemoteMicFeed::Stats::underrunsPlaced), the
+    /// first time the radio ran dry and each placed catch-up burst
+    /// (RadioConnection::TxSendStats), at most 9. Log only.
+    static QStringList unkeyEventLines(const QByteArray& deviceId,
+                                       const RemoteMicFeed::Stats* feed,
+                                       const RadioConnection::TxSendStats& send);
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
     /// a controller on its own installs it on the Core's RemoteKeying, and
     /// DaemonMediaHub installs one that routes by device, fix wave C2).
