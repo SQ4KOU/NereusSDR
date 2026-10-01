@@ -151,6 +151,11 @@
 //                pump's wake watch (begun at key, ended at unkey), and its
 //                figures in txSendStats. Measurement only. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: setReceiverFrequency tunes DDC0, DDC1 and
+//                DDC2 together to RX1 outside the Hermes class (Thetis
+//                UpdateRX1DDSFreq), so diversity's partner DDC1 is no longer
+//                left at 0 Hz. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //
@@ -1046,6 +1051,45 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
         return;
     }
     m_rx[receiverIndex].frequency = static_cast<int>(frequencyHz);
+
+    // Diversity's second leg. Outside the Hermes class, RX1 owns DDC0, DDC1
+    // and DDC2: it runs on DDC2, or on the DDC0 + DDC1 synchronized pair
+    // while diversity is on, and Thetis tunes all three to RX1's frequency
+    // together so the partner DDC1 (which carries no receiver) mixes the
+    // same signal as DDC0. The DDC0/DDC1 PureSignal override stays the
+    // codec's (network.c:936-945).
+    // From Thetis console.cs:15398-15423 UpdateRX1DDSFreq [v2.10.3.15]:
+    //   switch (HardwareSpecific.Model)
+    //   {
+    //       case HPSDRModel.HERMES:
+    //       case HPSDRModel.ANAN10:
+    //       case HPSDRModel.ANAN10E:
+    //       case HPSDRModel.ANAN100:
+    //       case HPSDRModel.ANAN100B:
+    //       case HPSDRModel.ANAN_G2E: //N1GP G2E added
+    //           NetworkIO.VFOfreq(0, rx1_dds_freq_mhz, 0);
+    //           break;
+    //       default:
+    //           NetworkIO.VFOfreq(0, rx1_dds_freq_mhz, 0);
+    //           NetworkIO.VFOfreq(1, rx1_dds_freq_mhz, 0);
+    //           NetworkIO.VFOfreq(2, rx1_dds_freq_mhz, 0);
+    //           break;
+    //   }
+    // The Hermes-class models are exactly the boards primaryRxDdcForBoard
+    // puts RX1 on DDC0 (Hermes, HermesII, HermesC10); there DDC1 is RX2's
+    // own receiver (UpdateRX2DDSFreq, console.cs:15446-15459 [v2.10.3.15])
+    // and is left alone. Before the board is known (a frequency queued
+    // ahead of connectToRadio) nothing is mirrored; the codec's assignment
+    // re-pushes the receiver's frequency once diversity moves RX1 to DDC0.
+    // DDC0, DDC1 and DDC2: the three VFOfreq ids in the default arm above.
+    constexpr int kRx1Ddcs = 3;
+    const bool hermesClass = m_caps && primaryRxDdcForBoard(m_caps->board) == 0;
+    if (m_caps && !hermesClass && receiverIndex < kRx1Ddcs) {
+        for (int ddc = 0; ddc < kRx1Ddcs; ++ddc) {
+            m_rx[ddc].frequency = static_cast<int>(frequencyHz);
+        }
+    }
+
     m_lastRetunedDdc = receiverIndex;
     recomputeReceiveFilters();
 
