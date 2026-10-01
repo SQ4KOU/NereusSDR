@@ -93,6 +93,10 @@
 //                                    of measuring it against the width
 //                                    chosen for the muted text.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 2: the fault case also
+//                                    checks the drawn row keeps all four
+//                                    groups. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -697,6 +701,12 @@ private slots:
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))))
                                 .arg(faultGroups.join(QStringLiteral(" · ")))));
+        // The row the segment draws keeps all four groups, Radio included:
+        // its text starts 25 px in (8 px margin, 10 px dot, 8 px gap) and
+        // stops 6 px short of the right edge (ConnectionSegment::paintEvent).
+        constexpr int kSegmentTextInset = 25 + 6;
+        QCOMPARE(segment->remoteTextForWidth(segment->width() - kSegmentTextInset),
+                 faultGroups.join(QStringLiteral(" · ")));
         h.remoteModel()->audioEngine()->setMasterMuted(false);
         QVERIFY(disconnectFromRadioMenu(h));
         QTRY_VERIFY(!h.client()->isConnectionActive());
