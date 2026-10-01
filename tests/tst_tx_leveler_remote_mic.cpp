@@ -85,6 +85,11 @@
 //               AI-assisted via Anthropic Claude Code. Fix wave: the lag
 //               found once per path, and only the asserted rows by
 //               default.
+//   2026-10-01: Leveler meter sampling: the Leveler and ALC gain meters
+//               are read once per DSP buffer, after the channel's worker
+//               has finished it, so the leveler statistics no longer
+//               depend on how late the worker runs. J.J. Boyd (KG4VCF),
+//               AI-assisted via OpenAI Codex.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -102,6 +107,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -110,6 +116,7 @@
 #include <map>
 #include <numbers>
 #include <random>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -127,6 +134,14 @@ constexpr quint32 kSsrc = 0x6d696301U;
 // WDSP txaMeter indices, from the shared TxMeterType map (WdspTypes.h).
 constexpr int kMeterLvlrGain = wdspTxaMeterIndex(TxMeterType::LevelerGain);
 constexpr int kMeterAlcGain = wdspTxaMeterIndex(TxMeterType::AlcGain);
+
+// One DSP buffer (2048 samples at 96 kHz, 21.33 ms) takes 1024 input frames
+// at 48 kHz: 16 pump blocks. The meters change once per DSP buffer, when the
+// channel's worker runs xtxa on it.
+constexpr int kBufferFrames = WdspEngine::kTxDspBufferSize * kInRate / WdspEngine::kTxDspSampleRate;
+constexpr int kBlocksPerBuffer = kBufferFrames / kBlock;
+constexpr double kBufferMs = 1000.0 * WdspEngine::kTxDspBufferSize / WdspEngine::kTxDspSampleRate;
+static_assert(kBlocksPerBuffer * kBlock == kBufferFrames, "a DSP buffer is whole pump blocks");
 
 enum class Path { Local, RemotePcm, OpusPhone, OpusPhoneSaveData, OpusPhoneStalls, OpusDesk,
                   OpusAudio32, OpusAudio48, OpusAudio64 };
@@ -419,8 +434,9 @@ struct Key {
 struct TxRun {
     std::vector<float> envelope;    // |I/Q| at 192 kHz
     std::vector<std::complex<float>> iq;
-    std::vector<double> lvlrGainDb; // per pump block
-    std::vector<double> alcGainDb;  // per pump block
+    std::vector<double> lvlrGainDb; // per DSP buffer, once the worker has finished it
+    std::vector<double> alcGainDb;  // per DSP buffer, once the worker has finished it
+    bool metersFinal{false};        // every buffer's meters were read after its xtxa
 };
 
 } // namespace
@@ -466,6 +482,26 @@ TxRun TestTxLevelerRemoteMic::runTx(const std::vector<float>& mic, const Key& ke
     tx->setTxCpdrGainDb(2.0);
     tx->setMicPreamp(std::pow(10.0, key.micGainDb / 20.0));
     SetChannelState(ch, 1, 0);
+    // The meters are written by the channel's worker thread, which runs xtxa
+    // on a DSP buffer after fexchange0 has already returned (dexchange
+    // releases Sem_OutReady before xtxa, iobuffs.c and main.c), so a meter
+    // read right after fexchange0 lands anywhere on the buffer's update
+    // depending on how late the worker runs. They are read instead once per
+    // DSP buffer, right after the call that completes its input, once the
+    // worker's completed-block count (GetChannelDspLoad, bumped after xtxa
+    // returns) shows that buffer done. The worker cannot start the next
+    // buffer until this loop hands it 16 more blocks. dsplock.c publishes
+    // load.blocks with release ordering and reads it with acquire ordering,
+    // after xtxa (including both xmeter calls in txa.c), so the read is that
+    // buffer's final value on every run.
+    WdspChannelLoad load{};
+    if (GetChannelDspLoad(ch, &load) < 0) {
+        SetChannelState(ch, 0, 0);
+        engine.destroyTxChannel(ch);
+        return run;
+    }
+    const long long workerBlocksAtStart = load.blocks;
+    bool metersFinal = true;
     const int blocks = static_cast<int>(mic.size()) / kBlock;
     std::vector<double> in(2 * kBlock);
     std::vector<double> out(2 * kBlock * kUp);
@@ -486,9 +522,25 @@ TxRun TestTxLevelerRemoteMic::runTx(const std::vector<float>& mic, const Key& ke
                 run.iq.emplace_back(static_cast<float>(i), static_cast<float>(q));
             }
         }
+        if ((b + 1) % kBlocksPerBuffer != 0) {
+            continue;
+        }
+        const long long buffersDone = workerBlocksAtStart + (b + 1) / kBlocksPerBuffer;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        int loadResult = GetChannelDspLoad(ch, &load);
+        while (loadResult >= 0 && load.blocks < buffersDone
+               && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+            loadResult = GetChannelDspLoad(ch, &load);
+        }
+        if (loadResult < 0 || load.blocks != buffersDone) {
+            metersFinal = false;
+            break;
+        }
         run.lvlrGainDb.push_back(GetTXAMeter(ch, kMeterLvlrGain));
         run.alcGainDb.push_back(GetTXAMeter(ch, kMeterAlcGain));
     }
+    run.metersFinal = metersFinal;
     SetChannelState(ch, 0, 0);
     engine.destroyTxChannel(ch);
 #else
@@ -611,6 +663,7 @@ struct SpeechMeasure {
     double lvlrP10{0}, lvlrP50{0}, lvlrP90{0};
     double lvlrMoveDbPer10ms{0};     // mean |change| of the leveler gain per 10 ms
     double alcP10{0};
+    bool metersFinal{false};         // TxRun::metersFinal
 };
 
 std::vector<double> frameDb(const std::vector<float>& x, int frame)
@@ -629,6 +682,9 @@ std::vector<double> frameDb(const std::vector<float>& x, int frame)
 SpeechMeasure measureSpeech(const std::vector<float>& mic, const TxRun& r)
 {
     SpeechMeasure m;
+    if (!r.metersFinal) {
+        return m;
+    }
     // Skip the first 300 ms (priming, the channel's start).
     const size_t skipIn = 14400;
     const std::vector<float> micBody(mic.begin() + static_cast<std::ptrdiff_t>(skipIn), mic.end());
@@ -689,21 +745,26 @@ SpeechMeasure measureSpeech(const std::vector<float>& mic, const TxRun& r)
     m.gapSpreadDb = std::sqrt(var / std::max<size_t>(1, gaps.size()));
     m.ceilingShare = speechSamples > 0 ? double(atCeiling) / double(speechSamples) : 0.0;
 
-    const size_t skipBlocks = skipIn / kBlock;
-    std::vector<double> lv(r.lvlrGainDb.begin() + static_cast<std::ptrdiff_t>(skipBlocks),
+    // The meters are one value per DSP buffer; skip every buffer that
+    // starts inside the first 300 ms.
+    const size_t skipBuffers = std::min<size_t>((skipIn + kBufferFrames - 1) / kBufferFrames,
+                                                r.lvlrGainDb.size());
+    std::vector<double> lv(r.lvlrGainDb.begin() + static_cast<std::ptrdiff_t>(skipBuffers),
                            r.lvlrGainDb.end());
     m.lvlrP10 = pct(lv, 0.10);
     m.lvlrP50 = pct(lv, 0.50);
     m.lvlrP90 = pct(lv, 0.90);
-    // 10 ms is 7.5 pump blocks: sample every 15 blocks (20 ms), halve.
+    // The gain steps once per DSP buffer (21.33 ms): the mean |step| per
+    // buffer, scaled to 10 ms.
     double move = 0.0;
     int nmove = 0;
-    for (size_t i = 15; i < lv.size(); i += 15) {
-        move += std::abs(lv[i] - lv[i - 15]);
+    for (size_t i = 1; i < lv.size(); ++i) {
+        move += std::abs(lv[i] - lv[i - 1]);
         ++nmove;
     }
-    m.lvlrMoveDbPer10ms = nmove > 0 ? move / nmove / 2.0 : 0.0;
-    std::vector<double> alc(r.alcGainDb.begin() + static_cast<std::ptrdiff_t>(skipBlocks),
+    m.lvlrMoveDbPer10ms = nmove > 0 ? move / nmove * 10.0 / kBufferMs : 0.0;
+    m.metersFinal = r.metersFinal;
+    std::vector<double> alc(r.alcGainDb.begin() + static_cast<std::ptrdiff_t>(skipBuffers),
                             r.alcGainDb.end());
     m.alcP10 = pct(alc, 0.10);
     return m;
@@ -813,6 +874,14 @@ void TestTxLevelerRemoteMic::remoteMicLevelsLikeLocalMic()
         const SpeechMeasure m = measure(path);
         const QByteArray what = QByteArray(pathName(path)) + " against "
             + QByteArray(pathName(basePath));
+        qInfo().noquote() << QStringLiteral("LEVEL %1: lvlr p50 %2 / %3, p90 %4 / %5, "
+                                            "move/10ms %6 / %7")
+                                 .arg(QString::fromLatin1(what))
+                                 .arg(m.lvlrP50, 0, 'f', 2).arg(base.lvlrP50, 0, 'f', 2)
+                                 .arg(m.lvlrP90, 0, 'f', 2).arg(base.lvlrP90, 0, 'f', 2)
+                                 .arg(m.lvlrMoveDbPer10ms, 0, 'f', 3)
+                                 .arg(base.lvlrMoveDbPer10ms, 0, 'f', 3);
+        QVERIFY2(base.metersFinal && m.metersFinal, what.constData());
         QVERIFY2(base.peakDb < 0.0 && m.peakDb < 0.0, what.constData());
         QVERIFY2(base.ceilingShare == 0.0 && m.ceilingShare == 0.0, what.constData());
         QVERIFY2(std::abs(m.lvlrP50 - base.lvlrP50) <= 1.0, what.constData());
@@ -999,6 +1068,7 @@ void TestTxLevelerRemoteMic::measurementMatrix()
                         r.iq.clear();
                         r.iq.shrink_to_fit();
                         QVERIFY(!r.envelope.empty());
+                        QVERIFY(r.metersFinal);
                         const SpeechMeasure m = measureSpeech(mic, r);
                         qInfo().noquote() << QStringLiteral(
                             "SPEECH %1 %2 | %3 | %4 %5 | %6 %7 %8 %9 %10 %11 | %12 %13 %14 %15 | %16 | %17 %18 %19")
@@ -1028,6 +1098,7 @@ void TestTxLevelerRemoteMic::measurementMatrix()
                         for (bool proc : {false, true}) {
                             const Key key{gain, lev, proc};
                             const TxRun r = runTx(mic, key, true);
+                            QVERIFY(r.metersFinal);
                             double fund = 0.0;
                             const double thd = burstThdN(r, hz, &fund);
                             qInfo().noquote() << QStringLiteral("TONE %1 %2 %3 | %4 | %5 %6")
@@ -1168,6 +1239,7 @@ void TestTxLevelerRemoteMic::outputHash()
     const std::vector<float> mic = micStream(Path::RemotePcm, scaled(toneBursts(150.0), -12.0));
     QVERIFY(!mic.empty());
     const TxRun r = runTx(mic, Key{10.0, true, true}, true);
+    QVERIFY(r.metersFinal);
     QVERIFY(!r.iq.empty());
     quint64 h = 1469598103934665603ULL;   // FNV-1a over the I/Q's bits
     for (const std::complex<float>& z : r.iq) {
