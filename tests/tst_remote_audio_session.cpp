@@ -1596,7 +1596,14 @@ private slots:
         // Echoes arrive and a delay is measured while silence plays.
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioDelay().estimate.has_value(), 5000);
         QVERIFY(remoteMedia.audioDelay().measurable);
-        QTest::qWait(3000);
+        // Silence plays until the clock probes have settled what the checks
+        // below need (two probes on the wire, a bound under 8 ms), instead
+        // of a fixed 3 s.
+        QTRY_VERIFY2_WITH_TIMEOUT(
+            clockProbesIn(coreControls) >= 2
+                && remoteMedia.audioDelay().estimate.has_value()
+                && remoteMedia.audioDelay().estimate->boundMs + kToleranceMs < 8.0,
+            "the clock probes did not settle the delay estimate", 10000);
 
         // Mid-block, so a block boundary is not what is found.
         onsetFrame = ((fedFrames / kFrames) + 20) * kFrames + 177;

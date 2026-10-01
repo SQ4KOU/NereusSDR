@@ -23,6 +23,9 @@
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-27: Parity Task 23 options, client records and remote controls,
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+// 2026-09-30: fix wave (INFRA minor 1): the listener retry test waits for a
+// retry's own log line instead of a fixed 2.5 s sleep. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "MultiDeviceHarness.h"
 
 #include <QtTest/QtTest>
@@ -1385,21 +1388,36 @@ private slots:
         controller.setBindOverride(QStringLiteral("127.0.0.1"));
         // Rework follow-up 2: the first failure is logged once, and the
         // retries not at all (warnings counted while it fails).
+        // Each try, retries included, logs one debug line in nereus.tci
+        // (quiet listen attempts); counting those shows a retry ran instead
+        // of sleeping for one.
         static int s_listenWarnings = 0;
+        static int s_listenAttempts = 0;
         s_listenWarnings = 0;
+        s_listenAttempts = 0;
         static QtMessageHandler s_previous = nullptr;
+        QLoggingCategory::setFilterRules(QStringLiteral("nereus.tci.debug=true"));
         s_previous = qInstallMessageHandler(
             [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
                 if (type == QtWarningMsg && text.contains(QStringLiteral("listen"))) {
                     ++s_listenWarnings;
                 }
+                if (type == QtDebugMsg && text.contains(QStringLiteral("failed to listen"))) {
+                    ++s_listenAttempts;
+                    return;
+                }
                 if (s_previous) {
                     s_previous(type, context, text);
                 }
             });
+        const auto restoreLogging = qScopeGuard([] {
+            qInstallMessageHandler(s_previous);
+            QLoggingCategory::setFilterRules(QString());
+        });
         QString reason;
         QVERIFY(controller.setEnabled(true, port, &reason));
-        QTest::qWait(2500);   // at least one retry
+        // The first try, then at least one retry.
+        QTRY_VERIFY_WITH_TIMEOUT(s_listenAttempts >= 2, 10000);
         qInstallMessageHandler(s_previous);
         QCOMPARE(s_listenWarnings, 1);
         QVERIFY(state.enabled());

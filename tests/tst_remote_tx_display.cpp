@@ -29,6 +29,9 @@
 //                 `duplex` endpoint keeps the receiver while keyed, and the
 //                 field is read only from a peer that declared 3. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : fix wave (INFRA minor 3): the stall sampler is macOS
+//                 only and runs attached with a deadline, never detached.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -438,11 +441,25 @@ struct Harness {
             QStringLiteral("nereus-mini-spectrum-stall-%1-%2.sample.txt")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QString::fromLatin1(name).replace(' ', '-')));
-        const bool started = QProcess::startDetached(
-            QStringLiteral("/usr/bin/sample"),
-            {QString::number(QCoreApplication::applicationPid()),
-             QStringLiteral("1"), QStringLiteral("-file"), path});
-        qWarning() << "spectrum stall sample" << path << "started" << started;
+#ifdef Q_OS_MAC
+        // macOS's sample(1), run attached with a deadline so a killed test
+        // leaves no sampler behind; it samples every thread of this process
+        // for one second while this one waits for it.
+        QProcess sampler;
+        sampler.start(QStringLiteral("/usr/bin/sample"),
+                      {QString::number(QCoreApplication::applicationPid()),
+                       QStringLiteral("1"), QStringLiteral("-file"), path});
+        const bool finished = sampler.waitForFinished(10000);
+        if (!finished) {
+            sampler.kill();
+            sampler.waitForFinished(1000);
+        }
+        qWarning() << "spectrum stall sample" << path << "finished" << finished
+                   << "exit code" << sampler.exitCode();
+#else
+        Q_UNUSED(path);
+        qWarning() << "spectrum stall: no sampler on this platform";
+#endif
     }
 
     void feedStream(int streamIndex)
