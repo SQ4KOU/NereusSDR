@@ -42,6 +42,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/DspControlThread.h"
 #include "core/P1RadioConnection.h"
 #include "core/RxChannel.h"
 #include "core/SampleRateCatalog.h"
@@ -232,6 +233,33 @@ double msSince(Clock::time_point t0)
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
+// How long a fed channel may take to play at all. kWarmUp of real-time input
+// is enough on an idle machine; on a loaded one (the Linux CI runner) a
+// channel was still silent after it. This is the precondition before a stop,
+// not a bound under test, so it is a deadline to wait to, not a fixed sleep.
+constexpr std::chrono::milliseconds kAudibleDeadline{5000};
+
+// Waits until each of the feeder's first `channels` channels has played (a
+// peak above zero), polling, until kAudibleDeadline. The index of the first
+// silent channel, or -1 once all play.
+int firstSilentChannel(const Feeder& feeder, int channels)
+{
+    const Clock::time_point deadline = Clock::now() + kAudibleDeadline;
+    for (;;) {
+        int silent = -1;
+        for (int c = 0; c < channels; ++c) {
+            if (!(feeder.peak(c) > 0.0f)) {
+                silent = c;
+                break;
+            }
+        }
+        if (silent < 0 || Clock::now() >= deadline) {
+            return silent;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
 // Detaches a stack-injected RadioConnection however the scope is left.
 struct DetachConnection {
     RadioModel* model{nullptr};
@@ -267,8 +295,7 @@ private slots:
         rx->setActive(true);
 
         Feeder feeder({rx});
-        std::this_thread::sleep_for(kWarmUp);
-        QVERIFY2(feeder.peak(0) > 0.0f, "the channel is silent before the stop");
+        QVERIFY2(firstSilentChannel(feeder, 1) < 0, "the channel is silent before the stop");
 
         const Clock::time_point t0 = Clock::now();
         rx->setActive(false);
@@ -296,8 +323,7 @@ private slots:
         rx->setActive(true);
 
         Feeder feeder({rx});
-        std::this_thread::sleep_for(kWarmUp);
-        QVERIFY2(feeder.peak(0) > 0.0f, "the channel is silent before the stop");
+        QVERIFY2(firstSilentChannel(feeder, 1) < 0, "the channel is silent before the stop");
 
         rx->deactivateWithoutDrain();
         QVERIFY(!rx->isActive());
@@ -318,13 +344,14 @@ private slots:
         const double restartMs = msSince(t0);
         QVERIFY(rx->isActive());
 
+        // Past the restart's up-slew, then only what the channel plays from
+        // here on counts.
         std::this_thread::sleep_for(kWarmUp);
         feeder.resetPeaks();
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        const float after = feeder.peak(0);
+        const bool audible = firstSilentChannel(feeder, 1) < 0;
         feeder.stop();
 
-        QVERIFY2(after > 0.0f, "the channel restarted silent after a no-drain stop");
+        QVERIFY2(audible, "the channel restarted silent after a no-drain stop");
         // Its stop had completed, so the restart does not wait for one.
         QVERIFY2(restartMs < kDspBlockMs,
                  qPrintable(QStringLiteral("the restart took %1 ms")
@@ -392,14 +419,21 @@ private slots:
         RxChannel* alreadyThere = channels.back();
         QVERIFY(engine->setRxChannelRate(alreadyThere->channelId(), kNewRateHz));
 
+        // The pool's channels are set up and started on the receive lane
+        // (RxChannel::runOrdered); a channel the lane has not reached yet is
+        // silent. Let the lane finish first, so the warm-up below is real-time
+        // input to running channels, not time spent waiting for the lane.
+        DspControlThread* const lane = model.receiveLane();
+        QVERIFY(lane == nullptr || lane->waitIdleForTest(5000));
+
         // The feeder hands every channel one block per period at its own rate.
         Feeder feeder(channels);
-        std::this_thread::sleep_for(kWarmUp);
-        for (int c = 0; c < kSlices; ++c) {
-            QVERIFY2(feeder.peak(c) > 0.0f,
-                     qPrintable(QStringLiteral("channel %1 silent before the change")
-                                    .arg(channels[static_cast<std::size_t>(c)]->channelId())));
-        }
+        const int silent = firstSilentChannel(feeder, kSlices);
+        QVERIFY2(silent < 0,
+                 qPrintable(QStringLiteral("channel %1 silent before the change")
+                                .arg(silent < 0 ? -1
+                                                : channels[static_cast<std::size_t>(silent)]
+                                                      ->channelId())));
 
         // setSampleRateLive stops channel 0 last. Its off event marks the end
         // of the stops; production then disconnects the I/Q feed (step 2),
