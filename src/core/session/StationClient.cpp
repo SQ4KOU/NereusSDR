@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: the hello declares
+//                                    radeReason 1, and each slice's
+//                                    radeReason applies as the Core sent it.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Shared-input filters (ruling (d)): the
 //                                    hello declares rxFilterLowPass 1, so
 //                                    the CH label, WIDE badge and Filter
@@ -815,6 +819,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // The VFO flag's RADE row shows the Core's decoder sync and frequency
     // offset (radeStatusVersion 1), as a local window's flag does.
     m_declaredFeatures.insert(QByteArrayLiteral("radeStatus"), 1);
+    // RADE reason: the VFO flag's RADE row says why the Core's RADE slice
+    // has no working decoder (radeReasonVersion 1), as a local window's does.
+    m_declaredFeatures.insert(QByteArrayLiteral("radeReason"), 1);
     // HL2 port part 2: this window shows why the Core's transmit is held
     // off (radio's txInhibitReason; txInhibitReasonVersion 1).
     m_declaredFeatures.insert(QByteArrayLiteral("txInhibitReason"), 1);
@@ -4481,6 +4488,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     }
     if (propertyName == "radeFreqOffsetHz") {
         slice->setRadeFreqOffsetHz(native.toDouble());
+        return true;
+    }
+    // radeReasonVersion 1: why the Core's RADE slice has no working decoder.
+    // Read only on the wire, set here as the Core worded it.
+    if (propertyName == "radeReason") {
+        slice->setRadeReason(native.toString());
         return true;
     }
     if (propertyName == "band") {

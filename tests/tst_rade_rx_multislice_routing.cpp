@@ -50,6 +50,10 @@
 //                 RADE owner back; item C checks A's block count. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-30 -- RADE reason: a RADE slice whose decoder create or start
+//                 fails stays muted and says why on its radeReason, and the
+//                 reason clears when it leaves RADE. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -1375,6 +1379,128 @@ private slots:
                  qPrintable(evidence));
         QVERIFY2(peakSince(vaxA, fromA) == 0.0f && peakSince(vaxB, fromB) == 0.0f,
                  qPrintable(evidence));
+    }
+
+    // ── RADE reason (2026-09-30) ────────────────────────────────────────
+
+    // A RADE slice whose decoder could not be created, or was created and
+    // did not start, stays muted and says why on its radeReason. Leaving
+    // RADE clears the reason; coming back to RADE with the cause gone
+    // decodes again.
+    void aRadeSliceWithNoWorkingDecoderSaysWhy_data()
+    {
+        QTest::addColumn<bool>("createFails");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("create fails")
+            << true
+            << QStringLiteral("RADE could not start on slice A: its RADE decoder could not be "
+                              "created.");
+        QTest::newRow("start fails")
+            << false
+            << QStringLiteral("RADE could not start on slice A: its RADE decoder did not "
+                              "start.");
+    }
+
+    void aRadeSliceWithNoWorkingDecoderSaysWhy()
+    {
+        QFETCH(bool, createFails);
+        QFETCH(QString, expected);
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        FakeAudioBus* const vaxA = rig.vaxOf(rig.sliceA);
+        QVERIFY(rig.feedUntilAudible(vaxA, 0) > 0);
+        QVERIFY(rig.sliceA->radeReason().isEmpty());
+        QSignalSpy reasons(rig.sliceA, &SliceModel::radeReasonChanged);
+
+        if (createFails) {
+            rig.wdsp->setRadeCreateFailsForTest(true);
+        } else {
+            rig.wdsp->setRadeStartFailsForTest(true);
+            QTest::ignoreMessage(QtWarningMsg,
+                                 QRegularExpression(QStringLiteral("RADE will.*not decode")));
+        }
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const failed = rig.wdsp->radeChannel(rig.a);
+        if (createFails) {
+            QVERIFY(failed == nullptr);
+            QCOMPARE(rig.worker.radeRxRouteCount(), 0);
+        } else {
+            QVERIFY(failed && !failed->isActive());
+        }
+        QCOMPARE(rig.worker.radeModeSlices(), 1u << rig.a);
+        QCOMPARE(rig.sliceA->radeReason(), expected);
+        // One change, straight to the reason: no empty or interim value.
+        QCOMPARE(reasons.size(), 1);
+        QCOMPARE(reasons.first().first().toString(), expected);
+
+        // Muted: a block every tick, every sample silent, never the sideband.
+        qsizetype from = vaxA->buffer().size();
+        constexpr int kBlocks = 256;
+        for (int i = 0; i < kBlocks; ++i) {
+            rig.feedOnce(rig.worker);
+        }
+        QCOMPARE(vaxA->buffer().size() - from,
+                 qsizetype(kBlocks) * kFrames * 2 * qsizetype(sizeof(float)));
+        QVERIFY2(peakSince(vaxA, from) == 0.0f,
+                 qPrintable(QStringLiteral("peakFailed=%1").arg(peakSince(vaxA, from))));
+
+        // The cause clears. Nothing restarts the decoder by itself: the
+        // slice stays silent with its reason until the operator changes
+        // its mode.
+        rig.wdsp->setRadeCreateFailsForTest(false);
+        rig.wdsp->setRadeStartFailsForTest(false);
+        QCoreApplication::processEvents();
+        QCOMPARE(rig.sliceA->radeReason(), expected);
+
+        // Out of RADE: the reason clears and the sideband plays.
+        rig.sliceA->setDspMode(DSPMode::USB);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.sliceA->radeReason().isEmpty());
+        QCOMPARE(rig.worker.radeModeSlices(), 0u);
+        from = vaxA->buffer().size();
+        QVERIFY(rig.feedUntilAudible(vaxA, from) > 0);
+
+        // Back to RADE: it decodes, with no reason.
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA && radeA->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QVERIFY(rig.sliceA->radeReason().isEmpty());
+        QString evidence;
+        QVERIFY2(rig.decodesOnItsOwnThread(radeA, &evidence), qPrintable(evidence));
+    }
+
+    // A RADE-U <-> RADE-L swap makes a new decoder. One that fails says so,
+    // and the next swap that works clears it.
+    void aFailedSidebandSwapSaysWhyAndTheNextSwapClearsIt()
+    {
+        AppSettings::instance().clear();
+        GrowRig rig;
+        QVERIFY(rig.setUp(/*streams=*/1));
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a));
+        QVERIFY(rig.sliceA->radeReason().isEmpty());
+
+        rig.wdsp->setRadeCreateFailsForTest(true);
+        rig.sliceA->setDspMode(DSPMode::RADE_L);
+        QCoreApplication::processEvents();
+        QVERIFY(rig.wdsp->radeChannel(rig.a) == nullptr);
+        QCOMPARE(rig.worker.radeModeSlices(), 1u << rig.a);
+        QCOMPARE(rig.sliceA->radeReason(),
+                 QStringLiteral("RADE could not start on slice A: its RADE decoder could not "
+                                "be created."));
+
+        rig.wdsp->setRadeCreateFailsForTest(false);
+        rig.sliceA->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const radeA = rig.wdsp->radeChannel(rig.a);
+        QVERIFY(radeA && radeA->isActive());
+        QCOMPARE(rig.worker.radeRxRouteCount(), 1);
+        QVERIFY(rig.sliceA->radeReason().isEmpty());
     }
 };
 

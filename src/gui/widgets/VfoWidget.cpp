@@ -13,6 +13,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: the RADE row reads "off" with the slice's
+//                 radeReason as its tooltip while its RADE decoder is not
+//                 working (setRadeReason). J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -1006,8 +1010,11 @@ void VfoWidget::setRadeActive(bool on)
     // initial "RADE ○ ---" hollow-circle state.
     if (m_snrLabel) {
         const QString prefix = radePrefixForCallsign(m_lastRadeCallsign);
+        // RADE reason: a slice whose decoder is not working reads "off".
         m_snrLabel->setText(
-            QString("%1 <font color='#505050'>○</font> ---").arg(prefix));
+            QString("%1 <font color='#505050'>○</font> %2")
+                .arg(prefix, m_radeReason.isEmpty() ? QStringLiteral("---")
+                                                    : QStringLiteral("off")));
     }
 }
 
@@ -1019,6 +1026,13 @@ void VfoWidget::setRadeSynced(bool synced)
 {
     m_lastRadeSynced = synced;
     if (!m_radeActive || !m_snrLabel) {
+        return;
+    }
+    if (!m_radeReason.isEmpty()) {
+        // RADE reason: no working decoder, so no sync or SNR to show.
+        m_snrLabel->setText(
+            QString("%1 <font color='#505050'>○</font> off")
+                .arg(radePrefixForCallsign(m_lastRadeCallsign)));
         return;
     }
     if (!synced) {
@@ -1125,6 +1139,31 @@ void VfoWidget::setRadeCallsign(const QString& callsign)
     } else {
         setRadeSynced(m_lastRadeSynced);
     }
+}
+
+void VfoWidget::setRadeReason(const QString& reason)
+{
+    m_radeReason = reason;
+    if (!m_snrLabel) {
+        return;
+    }
+    // The existing reason pattern: the plain sentence is the tooltip.
+    m_snrLabel->setToolTip(reason);
+    m_snrLabel->setAccessibleDescription(reason);
+    if (m_radeActive) {
+        // Repaints "off", or the sync and SNR text when the reason clears.
+        setRadeSynced(m_lastRadeSynced);
+    }
+}
+
+QString VfoWidget::radeRowTextForTest() const
+{
+    return m_snrLabel ? m_snrLabel->text() : QString();
+}
+
+QString VfoWidget::radeRowToolTipForTest() const
+{
+    return m_snrLabel ? m_snrLabel->toolTip() : QString();
 }
 
 void VfoWidget::updateSnrVisibility()
@@ -3011,6 +3050,8 @@ void VfoWidget::setSlice(SliceModel* slice)
         disconnect(m_slice, &SliceModel::nnrLimitChanged,
                    this, &VfoWidget::onNnrLimitChanged);
         disconnect(m_slice, &SliceModel::nrSelectionRefused, this, nullptr);
+        disconnect(m_slice, &SliceModel::radeReasonChanged,
+                   this, &VfoWidget::setRadeReason);
     }
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
@@ -3055,6 +3096,13 @@ void VfoWidget::setSlice(SliceModel* slice)
                 this, &VfoWidget::onSnrChanged);
         onSnrChanged(slice->snrDb());
     }
+    // RADE reason: why the slice's RADE decoder is not working, if it is
+    // not (the Core's, mirrored, on a remote window).
+    if (slice) {
+        connect(slice, &SliceModel::radeReasonChanged,
+                this, &VfoWidget::setRadeReason, Qt::UniqueConnection);
+    }
+    setRadeReason(slice ? slice->radeReason() : QString());
 
     // VAX selector — bidirectional wiring (Phase 3O Sub-Phase 8 Task 8.2)
     if (m_vaxSelector && slice) {

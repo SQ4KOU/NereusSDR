@@ -1,6 +1,10 @@
 // 2026-09-27: validate transmit-region writes and shared confirmations.
 // J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // Modification history (NereusSDR):
+//   2026-09-30: RADE reason: radeReasonVersion 1 and each slice's
+//               radeReason only to a peer that declared radeReason 1
+//               (fitPeerOnlyProperties; before coreBuildInfo). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: TX badge take fix round 1: peerInfoFor() counts a token
 //               session as paired under setTokenSessionsMayTransmitForTest()
 //               (tests only). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -1440,6 +1444,8 @@ constexpr PeerOnlyProperty kPeerOnlyProperties[] = {
     // The RADE decoder's sync and frequency offset (radeStatusVersion 1).
     {"SliceModel", "slice:", true, "radeSynced", "radeStatus"},
     {"SliceModel", "slice:", true, "radeFreqOffsetHz", "radeStatus"},
+    // Why a RADE slice has no working decoder (radeReasonVersion 1).
+    {"SliceModel", "slice:", true, "radeReason", "radeReason"},
     // The Alex-1 low-pass in use, for the Alex tab's lamps (alexLpf 1,
     // radioHardwareVersion 10).
     {"RadioModel", "radio", false, "alexLpfBits", "alexLpf"},
@@ -12580,6 +12586,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // coreBuildInfo on the wire).
             caps.rxFilterLowPassVersion =
                 peerDeclares(transport, QByteArrayLiteral("rxFilterLowPass"), 1) ? 1 : 0;
+            // RADE reason: each slice's radeReason, for a peer that declared
+            // radeReason 1 (after rxFilterLowPassVersion and before
+            // coreBuildInfo on the wire), the same test that sends it the
+            // property (fitPeerOnlyProperties).
+            caps.radeReasonVersion =
+                peerGetsFeatureProperties(transport, QByteArrayLiteral("radeReason")) ? 1 : 0;
             // R-IOS-13 / R-R3-49: the AM Mod Monitor's readings, appended
             // after remoteIqVersion by StationCapabilities::toUpdates().
             caps.txModMonitorVersion = txModMonitorVersion();

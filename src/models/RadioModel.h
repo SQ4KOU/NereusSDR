@@ -9,6 +9,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: RadeStartFault, beginRadeStart/endRadeStart,
+//                 refreshRadeReasons and radeStartReason, so a RADE slice
+//                 with no working decoder says why on its radeReason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - Shared-input filters (rulings (c) and (d)):
 //                 rxFilter0LowPassReason and rxFilter0LowPassSlice, declared
 //                 last; lowPassHoldReason; the counted slices and 6m/ByPass
@@ -3284,6 +3288,32 @@ public:
     // Null channel or null slice is a safe no-op.
     void wireRadeChannel(int sliceId, NereusSDR::RadeChannel* channel,
                          NereusSDR::SliceModel* slice);
+
+    // RADE reason (2026-09-30), NereusSDR-original. How the last attempt to
+    // start a slice's RADE decoder ended, kept while the slice stays in RADE
+    // so its radeReason can say why it is silent. Main thread only.
+    enum class RadeStartFault {
+        None,          // started, or no attempt failed
+        CreateFailed,  // WdspEngine::createRadeChannel gave no channel
+        StartFailed,   // RadeChannel::start returned false
+        ModelMissing,  // start refused: the configured model file is absent
+        NotRunning,    // admission refused: the receiver is not running
+    };
+    // Every path that makes and starts a RADE decoder (SliceModel's mode
+    // change, the restored owner's admission, the WDSP-init path) brackets
+    // the attempt: begin clears the slice's last fault and holds the
+    // reasons, so the route's own refreshes in between never show a
+    // passing state; end records how it ended and refreshes them.
+    void beginRadeStart(int sliceId);
+    void endRadeStart(int sliceId, RadeStartFault fault);
+    // Sets each slice's radeReason from its mode, its route and its last
+    // fault (radeStartReason). Local role only; a remote window mirrors the
+    // Core's. Runs from publishRadeModeSlices, so every slice-list change,
+    // mode change and route change refreshes it.
+    void refreshRadeReasons();
+    // The plain sentence for one slice; empty when it decodes, is not in
+    // RADE, or its receiver is not running.
+    QString radeStartReason(const SliceModel* slice) const;
 
     // Reads the latest RADE sync state for the given slice ID. Returns
     // false when the slice has no recorded sync state (e.g. RADE was
@@ -7400,6 +7430,10 @@ private:
     bool m_receiveLayoutProtected{false};
     QString m_receiveLayoutMac;
     std::optional<int> m_restoredRadeReceiveOwner;
+    // RADE reason: each RADE slice's last failed decoder start, and the
+    // open beginRadeStart brackets.
+    QHash<int, RadeStartFault> m_radeStartFaults;
+    int m_radeStartHolds{0};
     QString m_receiveLayoutRestoreState;
     QString m_receiveLayoutRestoreMessage;
     bool m_settingsRetryScheduled{false};

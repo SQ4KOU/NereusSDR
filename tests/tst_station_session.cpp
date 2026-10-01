@@ -8,6 +8,8 @@
 // heartbeat's own pings, nothing-happens checks the link's flush bound
 // (SessionWait.h), and the suite runs as more than one ctest entry.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-30: RADE reason: the remote window declares radeReason.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // tests/tst_station_session.cpp  (NereusSDR)
 // =================================================================
@@ -1425,7 +1427,8 @@ void TstStationSession::remoteWindowSeesNoSchemaSkewFromTheCurrentCore()
                                                  QByteArrayLiteral("alexLpf"),
                                                  QByteArrayLiteral("paTransmitBand"),
                                                  QByteArrayLiteral("levelCalibration"),
-                                                 QByteArrayLiteral("rxFilterLowPass")};
+                                                 QByteArrayLiteral("rxFilterLowPass"),
+                                                 QByteArrayLiteral("radeReason")};
     QSet<QByteArray> arrivedGatedFeatures;
     bool sawTransmitSchema = false;
     for (const QByteArray& wire : peer->received()) {

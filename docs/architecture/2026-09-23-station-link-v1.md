@@ -949,6 +949,14 @@ with neither property, and a change to the two alone sends that peer no
 `radio` delta at all. The station does not declare it; the desktop's
 remote window does.
 
+**`radeReason` 1** (RADE reason): the client shows why a slice in RADE has
+no working RADE decoder. A peer that declares it is sent
+`radeReasonVersion` (section 6.3) and each slice's `radeReason` (section
+7, "The RADE reason"); a peer that does not sees exactly the wire it was
+built for, with no `radeReason`, and a change to it alone sends that peer
+no slice delta. The station does not declare it; the desktop's remote
+window does.
+
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
 5.1). A client declares it only together with `deviceAuth` 1 or later, and
@@ -1132,6 +1140,7 @@ change shows as surface drift and as a change to this table.
 | `rx2AttenuatorVersion` | 1 |
 | `radioMicVersion` | 1 |
 | `rxFilterLowPassVersion` | 1 |
+| `radeReasonVersion` | 1 |
 
 <!-- /surface -->
 
@@ -2175,6 +2184,12 @@ and before `coreBuildInfo`. At 1 the `radio` object carries
 `rxFilter0LowPassReason` and `rxFilter0LowPassSlice` (section 7). A peer
 that did not declare the feature is sent no entry and neither property.
 
+**The RADE reason.** A client that declared `radeReason` 1 is sent
+`radeReasonVersion`, an `i64`, 1, after `rxFilterLowPassVersion` (or after
+the last entry before it when that is absent) and before `coreBuildInfo`.
+At 1 each `slice:<id>` object carries `radeReason` (section 7). A peer
+that did not declare the feature is sent no entry and no `radeReason`.
+
 **Core executable identity.** A client at agreed minor 11 may declare
 `coreBuildInfo` 1. After authentication, a Core with a known product version
 appends one optional `coreBuildInfo` utf8 capability after all existing
@@ -2209,7 +2224,8 @@ a peer that declared `adcAttenuators`; `paProfileVersion` only for a
 peer that declared `paProfiles` (section 6.1); `radeStatusVersion` only
 for a peer that declared `radeStatus`; `txInhibitReasonVersion` only for a
 peer that declared `txInhibitReason` (section 6.1); `paTransmitBandVersion` only for a
-peer that declared `paTransmitBand`. A client ignores a capability it does not know
+peer that declared `paTransmitBand`; `radeReasonVersion` only for a peer
+that declared `radeReason`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 **Each device's share of the display budget** (iPhone app plan Task 76; the
@@ -2401,7 +2417,8 @@ older window sees only the values it was built for.
 | 102 | `rx2AttenuatorVersion` | `i64` |
 | 103 | `radioMicVersion` | `i64` |
 | 104 | `rxFilterLowPassVersion` | `i64` |
-| 105 | `coreBuildInfo` | `utf8` |
+| 105 | `radeReasonVersion` | `i64` |
+| 106 | `coreBuildInfo` | `utf8` |
 
 <!-- /surface -->
 
@@ -2749,7 +2766,7 @@ An enum property lists the values its domain allows.
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
-**SliceModel** (153 properties)
+**SliceModel** (154 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2906,6 +2923,7 @@ An enum property lists the values its domain allows.
 | 150 | `diversityPattern` | `utf8` | outbound |  |
 | 151 | `radeSynced` | `bool` | outbound |  |
 | 152 | `radeFreqOffsetHz` | `f64` | outbound |  |
+| 153 | `radeReason` | `utf8` | outbound |  |
 
 **SpotSourceHost** (11 properties)
 
@@ -3310,6 +3328,11 @@ Notes on the keys:
   `SliceModel`; `radeStatusVersion` 1. The RADE decoder's sync and its
   frequency offset in Hz, below ("The RADE status"). Sent only to a peer
   that declared `radeStatus` 1.
+- **`slice:<id>` RADE reason.** `radeReason` (utf8, outbound, no WRITE,
+  declared last in `SliceModel`; `radeReasonVersion` 1) is why the slice is
+  in RADE with no working RADE decoder, empty when it has one or is not in
+  RADE, below ("The RADE reason"). Sent only to a peer that declared
+  `radeReason` 1.
 - **`slice:<id>` ADC and AGC readings.** `adcPeakDbfs`, `adcAverageDbfs`,
   `agcGainDb`, `agcPeakDb` and `agcAverageDb` (f64, outbound, no WRITE;
   parity Task 15) are the Core's receive meters for the slice's receiver,
@@ -4455,6 +4478,39 @@ is empty.
 - **Dot color.** Filled: yellow `#e0e040` when the SNR shown is below 5 dB
   (compared before cutting), green `#00ff88` from 5 dB up. Hollow: gray
   `#505050`.
+
+#### The RADE reason (`radeReason`)
+
+`radeReasonVersion` 1. A slice in RADE with no working RADE decoder plays
+silence, never its sideband. `radeReason` says why, in a plain sentence
+the Core writes (`RadioModel::radeStartReason`); it is empty while the
+slice decodes, while it is not in RADE, before its receiver runs and while
+a saved layout waits to be placed.
+
+| Cause | `radeReason` (slice A shown) |
+| --- | --- |
+| The decoder could not be created | RADE could not start on slice A: its RADE decoder could not be created. |
+| The decoder was created and did not start | RADE could not start on slice A: its RADE decoder did not start. |
+| The configured RADE model file is not there | RADE could not start on slice A: the RADE model file was not found. |
+| A saved layout's RADE receiver is not running | RADE could not start on slice A: that receiver is not running. |
+| A saved layout started RADE on another slice, which decodes | RADE could not start on slice A: slice B is already decoding RADE. |
+| Anything else that leaves it without a decoder | RADE is not decoding on slice A. Change slice A to another mode and back to RADE to start it. |
+
+- **When it changes.** When the slice's decoder starts or fails to, when
+  its mode changes, and when the slice list or a route changes. Leaving
+  RADE clears it. Nothing restarts a decoder by itself when the cause
+  clears: the reason stays until the slice's mode changes, and when the
+  slice decoding RADE for a saved layout leaves RADE, the other slice's
+  reason becomes the last row's.
+- **Read-only.** A write is refused as any outbound property is.
+- **Who gets it.** Only a peer whose hello declared `radeReason` 1. Its
+  `SliceModel` schema, its slice snapshots and its deltas carry it. Every
+  other peer's carry none, and a delta that would carry only it is not
+  sent to them.
+
+**Showing it as the desktop's flag does.** While `radeReason` is not
+empty the RADE row reads the prefix, a hollow gray dot and `off`
+(`RADE ○ off`), and the row's tooltip is the reason. The row stays shown.
 
 **The `vax` object** (iPhone app plan Task 25, `vaxVersion` 1). The Core
 takes a write of `ch<N>RxGain`, `ch<N>Muted` or `txGain` only from a peer

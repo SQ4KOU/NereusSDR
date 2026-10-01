@@ -8,6 +8,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: applyRadeModeChange brackets each RADE
+//                 decoder start (RadioModel::beginRadeStart, endRadeStart)
+//                 so a create or start that fails gives the slice its
+//                 radeReason; setRadeReason. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 //   2026-09-30 - setDspMode's RADE decoder start and stop moved, unchanged,
 //                 into applyRadeModeChange, which restoreFromSettings now
 //                 runs too: a restored or band-changed RADE slice played its
@@ -431,9 +436,17 @@ void SliceModel::applyRadeModeChange(DSPMode oldMode, DSPMode newMode)
             const bool oldIsRade = isRade(oldMode);
             const bool newIsRade = isRade(newMode);
 
+            // RADE reason (2026-09-30): each start below is bracketed
+            // (RadioModel::beginRadeStart, before any destroy, and
+            // endRadeStart with how it ended), so the slice's radeReason
+            // says why when it has no working decoder.
             auto wireAndStartRade = [&](RadeChannel* radeCh,
                                         const char* context) {
-                if (radeCh == nullptr) return;
+                if (radeCh == nullptr) {
+                    radio->endRadeStart(channelId,
+                                        RadioModel::RadeStartFault::CreateFailed);
+                    return;
+                }
                 radeCh->setSideband(newMode == DSPMode::RADE_U);
                 radio->wireRadeChannel(channelId, radeCh, this);
                 const QString modelPath = radeModelPath();
@@ -445,7 +458,11 @@ void SliceModel::applyRadeModeChange(DSPMode oldMode, DSPMode newMode)
                         << modelPath
                         << "- channel-swap proceeds but RADE will"
                            " not decode";
+                    radio->endRadeStart(channelId,
+                                        RadioModel::RadeStartFault::StartFailed);
+                    return;
                 }
+                radio->endRadeStart(channelId, RadioModel::RadeStartFault::None);
             };
 
             if (oldIsRade && !newIsRade) {
@@ -464,6 +481,7 @@ void SliceModel::applyRadeModeChange(DSPMode oldMode, DSPMode newMode)
                 // graph and start it with the configured model
                 // path.  WDSP-facing mode will map to USB/LSB
                 // via the dspModeChanged path.
+                radio->beginRadeStart(channelId);
                 wireAndStartRade(engine->createRadeChannel(channelId),
                                  "setDspMode(RADE)");
             } else if (oldIsRade && newIsRade) {
@@ -472,6 +490,7 @@ void SliceModel::applyRadeModeChange(DSPMode oldMode, DSPMode newMode)
                 // on a clean instance.  RxChannel is untouched;
                 // the dspModeChanged path retunes it USB <-> LSB
                 // through wdspModeFor.
+                radio->beginRadeStart(channelId);
                 engine->destroyRadeChannel(channelId);
                 wireAndStartRade(engine->createRadeChannel(channelId),
                                  "setDspMode(RADE U<->L)");
@@ -1109,6 +1128,15 @@ void SliceModel::setRadeFreqOffsetHz(double hz)
     }
     m_radeFreqOffsetHz = hz;
     emit radeFreqOffsetHzChanged(hz);
+}
+
+void SliceModel::setRadeReason(const QString& reason)
+{
+    if (m_radeReason == reason) {
+        return;
+    }
+    m_radeReason = reason;
+    emit radeReasonChanged(reason);
 }
 
 QString SliceModel::diversityPattern() const

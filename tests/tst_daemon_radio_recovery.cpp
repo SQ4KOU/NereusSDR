@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original daemon lifecycle regression tests.
 #include <QtTest/QtTest>
+#include <QDir>
 #include <QFile>
 #include <QPointer>
 #include <QThread>
@@ -827,6 +828,116 @@ private slots:
             QVERIFY(bRade && bRade->isActive());
             app.stop();
         }
+    }
+
+    // RADE reason (2026-09-30). A saved layout with two RADE receivers
+    // starts RADE on the one it names (B). A stays in RADE with no decoder,
+    // muted, and says why. When B leaves RADE nothing starts A's decoder by
+    // itself; A's reason says how to start it, and doing so clears it. With
+    // the configured model file missing, B says that instead.
+    void restoredRadeSlicesWithoutADecoderSayWhy_data()
+    {
+        QTest::addColumn<bool>("modelMissing");
+        QTest::newRow("B decodes") << false;
+        QTest::newRow("model file missing") << true;
+    }
+
+    void restoredRadeSlicesWithoutADecoderSayWhy()
+    {
+        QFETCH(bool, modelMissing);
+        NereusSDR::Test::P2FakeRadio fake;
+        QVERIFY(fake.start());
+        RadioInfo info = fake.radioInfo();
+        info.name = QStringLiteral("Fake P2 ANAN-G2");
+        info.boardType = HPSDRHW::Saturn;
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress;
+        cfg.sliceCount = 1;
+        cfg.sampleRateHz = 48000;
+
+        QString error;
+        QVERIFY2(ReceiveLayoutStore::stage(AppSettings::instance(), info.macAddress,
+                     {{0, QStringLiteral("pan-0"), 14'236'000.0, DSPMode::RADE_U},
+                      {1, QStringLiteral("pan-0"), 7'177'000.0, DSPMode::RADE_U}},
+                     &error, std::optional<int>(1)),
+                 qPrintable(error));
+        if (modelMissing) {
+            AppSettings::instance().setValue(
+                QStringLiteral("Rade/ModelPath"),
+                QDir::temp().filePath(QStringLiteral("nereus-no-such-rade-model.bin")));
+        }
+        QVERIFY2(AppSettings::instance().save(&error), qPrintable(error));
+
+        QTimer ingress;
+        ingress.setInterval(5);
+        connect(&ingress, &QTimer::timeout, &fake, [&fake]() {
+            if (fake.hasClient()) {
+                fake.sendDdc(2);
+                fake.sendDdc(3);
+                fake.sendStatus();
+            }
+        });
+        ingress.start();
+
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [info]() { return QList<RadioInfo>{info}; };
+        QVERIFY(app.start(cfg));
+        RadioModel* const model = app.m_radioModel.get();
+        model->configureP2TransportForTest(fake.outboundPortBase(),
+                                           fake.inputRolePortBase(), 2000, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 15000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            model->receiveLayoutRestoreState() == QStringLiteral("accepted")
+                || model->receiveLayoutRestoreState() == QStringLiteral("degraded"),
+            15000);
+        QCOMPARE(model->slices().size(), 2);
+        SliceModel* const a = model->sliceById(0);
+        SliceModel* const b = model->sliceById(1);
+        QVERIFY(a && b);
+        QCOMPARE(a->dspMode(), DSPMode::RADE_U);
+        QCOMPARE(b->dspMode(), DSPMode::RADE_U);
+        QCOMPARE(model->restoredRadeReceiveOwner(), std::optional<int>(1));
+        QVERIFY(model->wdspEngine()->radeChannel(0) == nullptr);
+        const QString notDecoding =
+            QStringLiteral("RADE is not decoding on slice A. Change slice A to another mode "
+                           "and back to RADE to start it.");
+
+        if (modelMissing) {
+            RadeChannel* const bRade = model->wdspEngine()->radeChannel(1);
+            QVERIFY(bRade == nullptr || !bRade->isActive());
+            QTRY_COMPARE(b->radeReason(),
+                         QStringLiteral("RADE could not start on slice B: the RADE model file "
+                                        "was not found."));
+            QCOMPARE(a->radeReason(), notDecoding);
+            app.stop();
+            return;
+        }
+
+        RadeChannel* const bRade = model->wdspEngine()->radeChannel(1);
+        QVERIFY(bRade && bRade->isActive());
+        QVERIFY2(b->radeReason().isEmpty(), qPrintable(b->radeReason()));
+        QTRY_COMPARE(a->radeReason(),
+                     QStringLiteral("RADE could not start on slice A: slice B is already "
+                                    "decoding RADE."));
+
+        // B leaves RADE. A's decoder does not start by itself.
+        b->setDspMode(DSPMode::USB);
+        QCoreApplication::processEvents();
+        QVERIFY(model->wdspEngine()->radeChannel(0) == nullptr);
+        QVERIFY(b->radeReason().isEmpty());
+        QCOMPARE(a->radeReason(), notDecoding);
+
+        // What the reason says to do starts it, and clears the reason.
+        a->setDspMode(DSPMode::USB);
+        QCoreApplication::processEvents();
+        QVERIFY(a->radeReason().isEmpty());
+        a->setDspMode(DSPMode::RADE_U);
+        QCoreApplication::processEvents();
+        RadeChannel* const aRade = model->wdspEngine()->radeChannel(0);
+        QVERIFY(aRade && aRade->isActive());
+        QVERIFY2(a->radeReason().isEmpty(), qPrintable(a->radeReason()));
+        app.stop();
     }
 };
 

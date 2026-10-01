@@ -15,6 +15,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: setRadeReason, the RADE row's "off" state and
+//                 tooltip. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -927,6 +930,9 @@ private:
     // remote window's Core sends it only when it moves, so without this an
     // SNR change alone would drop it from the flag. NaN = none yet.
     float   m_lastRadeFreqOffsetHz{std::numeric_limits<float>::quiet_NaN()};
+    // RADE reason: why the slice's RADE decoder is not working (empty when
+    // it is), from SliceModel::radeReasonChanged.
+    QString m_radeReason;
 
     // Slot wired to SliceModel::snrDbChanged. Updates m_snrValue text
     // + stylesheet color (grey/yellow/green) based on NaN-state and the
@@ -952,6 +958,14 @@ public:
     // (active/synced/snr) re-render through repaintRadeRow() so the
     // callsign survives subsequent SNR pushes.
     void setRadeCallsign(const QString& callsign);
+
+    // RADE reason (2026-09-30): why the slice is in RADE with no working
+    // decoder (SliceModel::radeReason, the Core's on a remote window). While
+    // it is set the row reads "<prefix> ○ off" and its tooltip is the
+    // reason; empty puts the row back to its sync and SNR text.
+    void setRadeReason(const QString& reason);
+    QString radeRowTextForTest() const;
+    QString radeRowToolTipForTest() const;
 
     // Slice color table: A=cyan, B=magenta, C=green, D=yellow.
     // From AetherSDR SliceColors.h. Public static so the RX applet's

@@ -12,6 +12,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: the capture declares
+//                                    radeReason, so radeReasonVersion and
+//                                    the slice's radeReason are captured.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-29  J.J. Boyd / KG4VCF  PA on-air gate re-review: the capture
 //                                    declares paTransmitBand, so
 //                                    paTransmitBandVersion and radio's
@@ -693,7 +697,10 @@ std::optional<QList<QByteArray>> liveSessionWire(
                                   // Shared-input filters, ruling (d):
                                   // rxFilterLowPassVersion and radio's
                                   // rxFilter0LowPass fields.
-                                  {"rxFilterLowPass", 1}})));
+                                  {"rxFilterLowPass", 1},
+                                  // RADE reason: radeReasonVersion and
+                                  // each slice's radeReason.
+                                  {"radeReason", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest({}, block)));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -774,6 +781,8 @@ QJsonArray captureCapabilities()
     // Shared-input filters, ruling (d): sent to a peer that declared
     // rxFilterLowPass.
     caps.rxFilterLowPassVersion = 1;
+    // RADE reason: sent to a peer that declared radeReason.
+    caps.radeReasonVersion = 1;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its

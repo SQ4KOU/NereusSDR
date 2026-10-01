@@ -14,6 +14,13 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - RADE reason: a RADE slice with no working decoder (its
+//                 create or start failed, its model file is missing, its
+//                 receiver is not running, or a saved layout started RADE on
+//                 another slice) says why on its radeReason
+//                 (refreshRadeReasons, radeStartReason; beginRadeStart and
+//                 endRadeStart around each decoder start). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Shared-input filters (rulings (c) and (d)):
 //               republishAlexAdcSlices hands the connection the slots it
 //               counted on ADC0's input, so the receive low-pass follows the
@@ -13519,6 +13526,108 @@ void RadioModel::publishRadeModeSlices()
     if (m_dspWorker != nullptr) {
         m_dspWorker->setRadeModeSlices(radeModeSliceMask());
     }
+    // RADE reason: the same changes (a slice's mode, a route, the slice
+    // list) are what can give a muted RADE slice its reason or clear it.
+    refreshRadeReasons();
+}
+
+// RADE reason (2026-09-30), NereusSDR-original. The mute above silences a
+// RADE slice with no working decoder; these say why, on the slice's
+// radeReason, which the VFO flag shows and the Core sends to a remote
+// window and the phone (radeReasonVersion 1).
+void RadioModel::beginRadeStart(int sliceId)
+{
+    ++m_radeStartHolds;
+    m_radeStartFaults.remove(sliceId);
+}
+
+void RadioModel::endRadeStart(int sliceId, RadeStartFault fault)
+{
+    if (fault == RadeStartFault::None) {
+        m_radeStartFaults.remove(sliceId);
+    } else {
+        m_radeStartFaults.insert(sliceId, fault);
+    }
+    if (m_radeStartHolds > 0) {
+        --m_radeStartHolds;
+    }
+    refreshRadeReasons();
+}
+
+void RadioModel::refreshRadeReasons()
+{
+    if (m_role != Role::Local || m_radeStartHolds > 0) {
+        return;
+    }
+    const auto isRade = [](DSPMode mode) {
+        return mode == DSPMode::RADE_U || mode == DSPMode::RADE_L;
+    };
+    // A fault lasts while its slice stays in RADE: leaving RADE, or the
+    // slice going, ends it.
+    for (auto it = m_radeStartFaults.begin(); it != m_radeStartFaults.end();) {
+        const SliceModel* const slice = sliceById(it.key());
+        if (slice == nullptr || !isRade(slice->dspMode())) {
+            it = m_radeStartFaults.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice != nullptr) {
+            slice->setRadeReason(radeStartReason(slice));
+        }
+    }
+}
+
+QString RadioModel::radeStartReason(const SliceModel* slice) const
+{
+    if (slice == nullptr || (slice->dspMode() != DSPMode::RADE_U
+                             && slice->dspMode() != DSPMode::RADE_L)) {
+        return {};
+    }
+    const int id = slice->sliceIndex();
+    const QChar letter = receiverLetter(id);
+    // Its receiver runs: a WDSP channel and a live stream. Before the radio
+    // runs, or while a saved layout waits for admission, no slice decodes
+    // and there is nothing to explain.
+    const bool receiverRuns = m_wdspEngine != nullptr && m_wdspEngine->rxChannel(id) != nullptr
+        && slice->streamIndex() >= 0
+        && m_streamAllocator.isStreamActive(slice->streamIndex());
+    switch (m_radeStartFaults.value(id, RadeStartFault::None)) {
+    case RadeStartFault::CreateFailed:
+        return tr("RADE could not start on slice %1: its RADE decoder could not be created.")
+            .arg(letter);
+    case RadeStartFault::StartFailed:
+        return tr("RADE could not start on slice %1: its RADE decoder did not start.")
+            .arg(letter);
+    case RadeStartFault::ModelMissing:
+        return tr("RADE could not start on slice %1: the RADE model file was not found.")
+            .arg(letter);
+    case RadeStartFault::NotRunning:
+        if (!receiverRuns) {
+            return tr("RADE could not start on slice %1: that receiver is not running.")
+                .arg(letter);
+        }
+        // It runs now, and nothing starts the decoder by itself: the
+        // general sentence below says how to start it.
+        break;
+    case RadeStartFault::None:
+        if (m_radeRxRoutes.contains(id) || m_receiveLayoutPendingAdmission || !receiverRuns) {
+            return {};
+        }
+        break;
+    }
+    // A saved layout starts RADE on one receiver only, the one it names
+    // (activateRestoredRadeReceiveOwner); another RADE slice is left
+    // without a decoder while that one decodes.
+    if (m_restoredRadeReceiveOwner && *m_restoredRadeReceiveOwner != id
+        && m_radeRxRoutes.contains(*m_restoredRadeReceiveOwner)
+        && !m_radeStartFaults.contains(*m_restoredRadeReceiveOwner)) {
+        return tr("RADE could not start on slice %1: slice %2 is already decoding RADE.")
+            .arg(letter, receiverLetter(*m_restoredRadeReceiveOwner));
+    }
+    return tr("RADE is not decoding on slice %1. Change slice %1 to another mode and back "
+              "to RADE to start it.").arg(letter);
 }
 
 // Phase 3F Sub-Epic I closeout, defect C3.
@@ -18275,6 +18384,10 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                                 << "at WDSP-init time (persisted mode"
                                    "was RADE; setDspMode's create branch"
                                    "had no engine)";
+                            // RADE reason: how this start ends is kept
+                            // on the slice's radeReason.
+                            beginRadeStart(sliceId);
+                            RadeStartFault radeFault = RadeStartFault::CreateFailed;
                             radeCh = m_wdspEngine->createRadeChannel(sliceId);
                             if (radeCh != nullptr) {
                                 radeCh->setSideband(
@@ -18290,11 +18403,16 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                                         .value("Rade/ModelPath",
                                                QString())
                                         .toString();
-                                radeCh->start(
+                                const bool started = radeCh->start(
                                     modelPath.isEmpty()
                                         ? QStringLiteral("dummy")
                                         : modelPath);
+                                radeFault = started ? RadeStartFault::None
+                                    : (!modelPath.isEmpty() && !QFile::exists(modelPath)
+                                           ? RadeStartFault::ModelMissing
+                                           : RadeStartFault::StartFailed);
                             }
+                            endRadeStart(sliceId, radeFault);
                         } else {
                             // RadeChannel already exists (mode-swap
                             // path created it). The non-TxWorker
@@ -18554,6 +18672,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         }
     }
     completeReceiveLayoutStartup();
+    // RADE reason: the receivers run now, so a RADE slice left without a
+    // decoder says why.
+    refreshRadeReasons();
 
     // R-R3-49: on Protocol 2 each slice comes back at the rate saved for its
     // band. WDSP is up (its channels take the new rate) and the codec exists
@@ -23315,10 +23436,14 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
                     "longer in RADE mode.").arg(receiverLetter(id));
         return false;
     }
+    // RADE reason: how this start ends is kept on the slice's radeReason
+    // (endRadeStart on each return below).
+    beginRadeStart(id);
     if (!canAdmitRadeSlice(id, slice)
         || !m_dspWorker || !m_wdspEngine || !m_wdspEngine->rxChannel(id)) {
         *error = tr("RADE audio from receiver %1 stays off because that receiver is not "
                     "running.").arg(receiverLetter(id));
+        endRadeStart(id, RadeStartFault::NotRunning);
         return false;
     }
     RadeChannel* channel = m_wdspEngine->radeChannel(id);
@@ -23338,6 +23463,7 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
     if (!channel) {
         *error = tr("RADE audio from receiver %1 stays off because its RADE decoder could "
                     "not be created.").arg(receiverLetter(id));
+        endRadeStart(id, RadeStartFault::CreateFailed);
         return false;
     }
     if (!channel->isActive()) {
@@ -23345,9 +23471,15 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
         if (!channel->start(modelPath.isEmpty() ? QStringLiteral("dummy") : modelPath)) {
             *error = tr("RADE audio from receiver %1 stays off because its RADE decoder could "
                         "not start.").arg(receiverLetter(id));
+            // RadeChannel::start refuses a configured model file that is
+            // not there before it opens the codec.
+            endRadeStart(id, !modelPath.isEmpty() && !QFile::exists(modelPath)
+                                 ? RadeStartFault::ModelMissing
+                                 : RadeStartFault::StartFailed);
             return false;
         }
     }
+    endRadeStart(id, RadeStartFault::None);
     return true;
 }
 
@@ -23396,6 +23528,9 @@ void RadioModel::completeReceiveLayoutStartup()
     }
     m_receiveLayoutPendingAdmission = false;
     m_receiveLayoutHydratedIds.clear();
+    // RADE reason: admission is over, so a RADE slice left without a
+    // decoder says why.
+    refreshRadeReasons();
     const QString closureNotice = std::exchange(m_sliceClosureNotice, QString());
     if (m_receiveLayoutProtected) {
         return;
@@ -24336,6 +24471,8 @@ void RadioModel::teardownConnection()
     m_wdspEngine->shutdown();
     // R-R3-49 (parity Task 16): no channel, no minimum notch width.
     refreshSliceMinNotchWidths();
+    // RADE reason: no receiver runs, so no RADE slice has one to give.
+    refreshRadeReasons();
 
     // Disconnect remaining signals (prevents new work being queued)
     QObject::disconnect(m_connection, nullptr, this, nullptr);

@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: radeReason, why a RADE slice has no working decoder, in
+//               plain words, declared last. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-30: applyRadeModeChange, the RADE decoder start and stop that
 //               setDspMode and restoreFromSettings (a band change, a
 //               restored slice) both run. J.J. Boyd (KG4VCF), AI-assisted
@@ -593,6 +596,14 @@ private:
     // keeps its wire ordinal.
     Q_PROPERTY(bool radeSynced READ radeSynced NOTIFY radeSyncedChanged)
     Q_PROPERTY(double radeFreqOffsetHz READ radeFreqOffsetHz NOTIFY radeFreqOffsetHzChanged)
+    // Why this slice is in RADE with no working decoder, in plain words for
+    // the operator ("RADE could not start on slice B: ..."); empty while it
+    // decodes, outside RADE, and before the receiver runs. Set by the Core's
+    // RadioModel (refreshRadeReasons); the VFO flag's RADE row shows it.
+    // Outbound, no WRITE, sent only to a peer that declared radeReason
+    // (radeReasonVersion 1; the station link document, "The RADE status").
+    // Declared last so every earlier property keeps its wire ordinal.
+    Q_PROPERTY(QString radeReason READ radeReason NOTIFY radeReasonChanged)
 
 public:
     // Receive-layout admission bounds: general receive defaults, not a
@@ -753,6 +764,10 @@ public:
     /// Change-only; the slice's RadeChannel is the writer.
     void setRadeSynced(bool synced);
     void setRadeFreqOffsetHz(double hz);
+    /// See the radeReason Q_PROPERTY. Change-only; the Core's RadioModel
+    /// is the writer (a remote window's, the Core's value as mirrored).
+    QString radeReason() const { return m_radeReason; }
+    void setRadeReason(const QString& reason);
     void setMinNotchWidthHz(double hz);
     void setAdcPeakDbfs(double dbfs);
     void setAdcAverageDbfs(double dbfs);
@@ -1403,6 +1418,8 @@ signals:
     void radeSyncedChanged(bool synced);
     /// The RADE decoder reported a new frequency offset (Hz).
     void radeFreqOffsetHzChanged(double hz);
+    /// Why this RADE slice has no working decoder changed (empty: none).
+    void radeReasonChanged(const QString& reason);
     void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
@@ -1591,6 +1608,8 @@ private:
     // radeFreqOffsetHz).
     bool    m_radeSynced{false};
     double  m_radeFreqOffsetHz{0.0};
+    // Why this RADE slice has no working decoder (radeReason).
+    QString m_radeReason;
     void noteDiversityPatternInputs();
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};
