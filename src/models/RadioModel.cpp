@@ -23764,11 +23764,18 @@ void RadioModel::scheduleSettingsSave(SliceModel* slice)
     if (slice) {
         m_dirtySettingsSliceIds.insert(slice->sliceIndex());
     }
-    if (m_settingsSaveScheduled) {
+    m_settingsSaveScheduled = true;
+    // Fix wave (2026-09-30): one coalescing timer at a time, tracked apart
+    // from the save it asks for. A save held back while the receive layout
+    // awaited admission (flushPendingSettingsSave, or removeSliceImpl's
+    // flush) leaves m_settingsSaveScheduled set with no timer running; a
+    // later edit still arms one, so the save is not lost.
+    if (m_settingsSaveTimerArmed) {
         return;
     }
-    m_settingsSaveScheduled = true;
+    m_settingsSaveTimerArmed = true;
     QTimer::singleShot(500, this, [this]() {
+        m_settingsSaveTimerArmed = false;
         flushPendingSettingsSave();
     });
 }

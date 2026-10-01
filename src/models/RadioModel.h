@@ -7415,8 +7415,10 @@ private:
     std::optional<Band> m_keptRxAntennaBand;
     bool m_bandTrackingForTest{false};
 
-    // Settings save coalescing
+    // Settings save coalescing: a save is wanted (m_settingsSaveScheduled),
+    // and scheduleSettingsSave's 500 ms timer is running.
     bool m_settingsSaveScheduled{false};
+    bool m_settingsSaveTimerArmed{false};
     bool m_receiveLayoutHydrating{false};
     bool m_stationHandoverTrackSuppressedReceiverEdits{false};
     bool m_stationHandoverSuppressedReceiverEdits{false};
