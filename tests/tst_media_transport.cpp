@@ -742,10 +742,14 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
                                        "the library), bound %4")
                             .arg(submitted).arg(sent + queued).arg(queued).arg(bound)));
 
-    // Once the receiver drains again the sender recovers, and every frame
-    // that arrives is whole.
+    // The writable event marks the library's held frame leaving its queue.
+    // Repeated send attempts in QTRY can queue another frame before the
+    // assertion observes recovery. Wait for the event, then submit once.
+    QSignalSpy writable(&offerer, &IMediaTransport::displayWritable);
     answerer.setDisplayReceiveStalledForTest(false);
-    QTRY_VERIFY_WITH_TIMEOUT(offerer.sendDisplay(frame), 10'000);
+    QTRY_VERIFY_WITH_TIMEOUT(!writable.isEmpty(), 10'000);
+    QVERIFY(!offerer.displayBusy());
+    QVERIFY(offerer.sendDisplay(frame));
     QTRY_VERIFY_WITH_TIMEOUT(!displayReceived.isEmpty(), 10'000);
     for (const QList<QVariant>& arguments : displayReceived) {
         QCOMPARE(arguments.at(0).toByteArray(), frame);
