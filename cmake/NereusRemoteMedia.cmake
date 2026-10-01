@@ -54,10 +54,17 @@
 #   2026-09-30: fix wave (INFRA minor 7): the 2026-09-26 entry names the
 #               file the Task 56 patches replaced. J.J. Boyd (KG4VCF), with
 #               AI-assisted implementation via Anthropic Claude Code.
+#   2026-10-01: the archive URLs and SHA-256 pins move, unchanged, into
+#               cmake/NereusDependencyArchives.cmake, which substitutes a
+#               pre-fetched, hash-checked local copy when CI provides
+#               one (a GitHub 504 failed CI run 36866003880). J.J. Boyd
+#               (KG4VCF), with AI-assisted implementation via Anthropic
+#               Claude Code.
 #
 # =================================================================
 
 include(FetchContent)
+include("${CMAKE_CURRENT_LIST_DIR}/NereusDependencyArchives.cmake")
 find_package(Git REQUIRED)
 
 set(_NEREUS_REMOTE_MEDIA_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
@@ -188,34 +195,40 @@ function(nereus_add_remote_media_dependency)
         return()
     endif()
 
+    nereus_dependency_archive(libdatachannel _libdatachannel_urls _libdatachannel_hash)
     FetchContent_Declare(nereus_libdatachannel
-        URL https://codeload.github.com/paullouisageneau/libdatachannel/tar.gz/refs/tags/v0.24.5
-        URL_HASH SHA256=454537c3cd526bed935d847bb2dff4046f266eef84d43b2a5f2f2f293c0026f4
+        URL ${_libdatachannel_urls}
+        URL_HASH ${_libdatachannel_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(plog _plog_urls _plog_hash)
     FetchContent_Declare(nereus_plog
-        URL https://codeload.github.com/SergiusTheBest/plog/tar.gz/94899e0b926ac1b0f4750bfbd495167b4a6ae9ef
-        URL_HASH SHA256=92a08bce559b5f28aa88d3fd9071567414b9f43a83fe2a05a6dd14f1da536072
+        URL ${_plog_urls}
+        URL_HASH ${_plog_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(usrsctp _usrsctp_urls _usrsctp_hash)
     FetchContent_Declare(nereus_usrsctp
-        URL https://codeload.github.com/paullouisageneau/usrsctp/tar.gz/fec583d54493f879d2ae44a743423bf8a04371ab
-        URL_HASH SHA256=e5c114afe73c9a0ec419fab5f5b3f63f3ce57b09b90d06ea85e63dca8aed3e7c
+        URL ${_usrsctp_urls}
+        URL_HASH ${_usrsctp_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(libjuice _libjuice_urls _libjuice_hash)
     FetchContent_Declare(nereus_libjuice
-        URL https://codeload.github.com/paullouisageneau/libjuice/tar.gz/3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6
-        URL_HASH SHA256=a6b1d55338ea12adc0177eaafd9521ac0101b6a8716c71024a668f4896fd6b7c
+        URL ${_libjuice_urls}
+        URL_HASH ${_libjuice_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(json _json_urls _json_hash)
     FetchContent_Declare(nereus_json
-        URL https://codeload.github.com/nlohmann/json/tar.gz/55f93686c01528224f448c19128836e7df245f72
-        URL_HASH SHA256=67f4cdd9ca930c9c1e130af4a437c7fc98fab77a2846fc2d2a14b4943831f8ef
+        URL ${_json_urls}
+        URL_HASH ${_json_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
+    nereus_dependency_archive(libsrtp _libsrtp_urls _libsrtp_hash)
     FetchContent_Declare(nereus_libsrtp
-        URL https://codeload.github.com/cisco/libsrtp/tar.gz/24b3bf8f19b6f5ab4cd2bcceb4f4064efca86fd5
-        URL_HASH SHA256=063478e368d7cd13d04a908d152a46f90bfa728c4b324be6d413b0b92728207c
+        URL ${_libsrtp_urls}
+        URL_HASH ${_libsrtp_hash}
         DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         SOURCE_SUBDIR __nereus_no_add_subdirectory)
 

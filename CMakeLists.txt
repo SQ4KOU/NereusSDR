@@ -560,6 +560,14 @@ if(WIN32 AND TARGET portaudio_static)
 endif()
 
 # --------------------------------------------------------------------------
+# Dependency archive pins (URL and SHA-256) and the optional directory of
+# pre-fetched, hash-checked copies CI provides (NEREUS_DEPENDENCY_ARCHIVE_DIR).
+# Used by the FFTW fallback below, the Opus build in third_party/rade, and
+# cmake/NereusPairing.cmake and cmake/NereusRemoteMedia.cmake.
+# --------------------------------------------------------------------------
+include(cmake/NereusDependencyArchives.cmake)
+
+# --------------------------------------------------------------------------
 # FFTW3 (for client-side FFT — spectrum and waterfall)
 # --------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
@@ -572,11 +580,20 @@ if(WIN32)
     # and ci.yml use). Without this, a clean Windows build fails with a
     # cryptic "No rule to make target libfftw3-3.dll" link error.
     if(NOT EXISTS "${FFTW3_ROOT}/bin/libfftw3-3.dll")
-        set(_fftw_url "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip")
+        # The pre-fetched copy when there is one, else fftw.org; either
+        # way the zip must match the pinned SHA-256.
+        nereus_dependency_archive(fftw_win64 _fftw_url _fftw_hash)
+        if(_fftw_url MATCHES "^/")
+            set(_fftw_url "file://${_fftw_url}")
+        elseif(NOT _fftw_url MATCHES "^[a-z]+://")
+            # A drive path (D:/...): file(DOWNLOAD) takes it as file:///D:/...
+            set(_fftw_url "file:///${_fftw_url}")
+        endif()
         set(_fftw_zip "${CMAKE_BINARY_DIR}/fftw-3.3.5-dll64.zip")
         set(_fftw_tmp "${CMAKE_BINARY_DIR}/fftw-tmp")
         message(STATUS "FFTW3: libfftw3-3.dll missing, fetching ${_fftw_url}")
         file(DOWNLOAD "${_fftw_url}" "${_fftw_zip}"
+             EXPECTED_HASH ${_fftw_hash}
              STATUS _fftw_dl_status
              TLS_VERIFY ON
              SHOW_PROGRESS)
@@ -2415,7 +2432,14 @@ endif()
 # We re-expose them as target-scope include dirs on NereusCore (via
 # nereus_apply_core_deps(), called below) so any future NereusSDR consumer
 # that #includes "rade_api.h" can resolve the transitive Opus headers.
+#
+# The Opus archive and its DRED/OSCE model come from the dependency
+# manifest: OPUS_URL is the pre-fetched copy's path when there is one,
+# OPUS_URL_HASH pins the archive, and NEREUS_OPUS_MODEL_ARCHIVE hands the
+# model to BuildOpus.cmake's vendored patch (5).
 # --------------------------------------------------------------------------
+nereus_dependency_archive(opus OPUS_URL OPUS_URL_HASH)
+nereus_dependency_archive_local(opus_model NEREUS_OPUS_MODEL_ARCHIVE)
 add_subdirectory(third_party/rade)
 
 if(NOT TARGET rade)

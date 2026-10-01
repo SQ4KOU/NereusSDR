@@ -17,7 +17,17 @@
 #      OPUS_DRED and OPUS_OSCE options, so the Windows path uses CMake
 #      to bypass autotools entirely. Linux + non-universal macOS keep
 #      the autotools chain.
-# All four are noted at their site as well. See Task A2 of
+#   5. URL_HASH on every ExternalProject_Add(build_opus*) (upstream
+#      declares none), and a first PATCH_COMMAND that copies a
+#      pre-fetched DRED/OSCE model into the source tree when the parent
+#      provides one (NEREUS_OPUS_MODEL_ARCHIVE). The pinned Opus's
+#      dnn/download_model.sh and download_model.bat download the model
+#      only when no copy is there, so a CI run whose dependency cache has
+#      it makes no request to media.xiph.org. The parent (NereusSDR's
+#      CMakeLists.txt) sets OPUS_URL, OPUS_URL_HASH and the model path
+#      from cmake/NereusDependencyArchives.cmake; the defaults below
+#      keep a standalone radae_nopy configure working, now hash-checked.
+# All five are noted at their site as well. See Task A2 of
 # docs/architecture/phase3j2-3r-spots-and-rade-design.md.
 
 message(STATUS "Will build opus with FARGAN")
@@ -33,6 +43,26 @@ set(OPUS_URL https://github.com/xiph/opus/archive/940d4e5af64351ca8ba8390df3f555
 endif (NOT DEFINED OPUS_URL)
 message(STATUS "Using Opus from ${OPUS_URL}")
 
+# NereusSDR vendored patch (5): the archive's SHA-256, checked on OPUS_URL
+# whether it is a URL or a local path. This default is the hash of the default URL
+# above; cmake/NereusDependencyArchives.cmake carries the same pin.
+if (NOT DEFINED OPUS_URL_HASH)
+set(OPUS_URL_HASH SHA256=20e37f9079ac2b80e3235cd8ce2547829e147bf44a2f5dd28a888fa3e9c24341)
+endif (NOT DEFINED OPUS_URL_HASH)
+
+# NereusSDR vendored patch (5): when the parent hands over a pre-fetched
+# model archive (already SHA-256 checked against its name by
+# cmake/FetchDependencyArchives.cmake), copy it into the source tree before
+# autogen.sh / download_model.bat run; they then skip the download, and
+# download_model.sh still checks the checksum. Without one, a no-op step
+# leaves the upstream download in place.
+if (NEREUS_OPUS_MODEL_ARCHIVE AND EXISTS "${NEREUS_OPUS_MODEL_ARCHIVE}")
+message(STATUS "Using Opus model from ${NEREUS_OPUS_MODEL_ARCHIVE}")
+set(_opus_model_seed_command ${CMAKE_COMMAND} -E copy_if_different "${NEREUS_OPUS_MODEL_ARCHIVE}" <SOURCE_DIR>)
+else ()
+set(_opus_model_seed_command ${CMAKE_COMMAND} -E echo "Opus model: no local copy, the Opus build downloads it")
+endif ()
+
 include(ExternalProject)
 if(APPLE AND BUILD_OSX_UNIVERSAL)
 # Opus ./configure doesn't behave properly when built as a universal binary;
@@ -40,7 +70,8 @@ if(APPLE AND BUILD_OSX_UNIVERSAL)
 ExternalProject_Add(build_opus_x86
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
-    PATCH_COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=x86_64-apple-darwin --target=x86_64-apple-darwin CFLAGS=-arch\ x86_64\ -O2\ -mmacosx-version-min=10.11
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
@@ -50,11 +81,13 @@ ExternalProject_Add(build_opus_x86
     # of phase3j2-3r-spots-and-rade-design.md.
     INSTALL_COMMAND ""
     URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
 )
 ExternalProject_Add(build_opus_arm
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
-    PATCH_COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND} --host=aarch64-apple-darwin --target=aarch64-apple-darwin CFLAGS=-arch\ arm64\ -O2\ -mmacosx-version-min=10.11
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
@@ -64,6 +97,7 @@ ExternalProject_Add(build_opus_arm
     # of phase3j2-3r-spots-and-rade-design.md.
     INSTALL_COMMAND ""
     URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
 )
 
 ExternalProject_Get_Property(build_opus_arm BINARY_DIR)
@@ -137,7 +171,8 @@ set(_opus_static_lib ${_opus_binary_dir}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUF
 ExternalProject_Add(build_opus
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     BUILD_IN_SOURCE 1
-    PATCH_COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
         --host=${_opus_host_triple}
         --target=${_opus_host_triple}
@@ -146,6 +181,7 @@ ExternalProject_Add(build_opus
     BUILD_BYPRODUCTS ${_opus_static_lib}
     INSTALL_COMMAND ""
     URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
 )
 
 ExternalProject_Get_Property(build_opus BINARY_DIR)
@@ -193,6 +229,7 @@ set(_opus_static_lib ${_opus_binary_dir}/${CMAKE_STATIC_LIBRARY_PREFIX}opus${CMA
 ExternalProject_Add(build_opus
     DOWNLOAD_EXTRACT_TIMESTAMP NO
     URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
     # Two-step patch: (1) fetch DRED/OSCE model tarball + extract into
     # dnn/ via the upstream Windows-native script; (2) apply the
     # NereusSDR opus-nnet.h.diff that adds RADE_EXPORT visibility tags
@@ -204,7 +241,8 @@ ExternalProject_Add(build_opus
     # at <SOURCE_DIR>/dnn/dnn/... and CMake configure would fail
     # looking for dnn/fargan_data.h. This matches upstream autogen.bat
     # which also runs the bat from the source root.
-    PATCH_COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> cmd /c dnn\\download_model.bat ${_opus_model_sha}
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> cmd /c dnn\\download_model.bat ${_opus_model_sha}
         COMMAND ${PATCH_EXECUTABLE} <SOURCE_DIR>/dnn/nnet.h -i ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=Release
@@ -249,7 +287,8 @@ set(_opus_static_lib ${_opus_binary_dir}/.libs/libopus${CMAKE_STATIC_LIBRARY_SUF
 
 ExternalProject_Add(build_opus
     BUILD_IN_SOURCE 1
-    PATCH_COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
+    PATCH_COMMAND ${_opus_model_seed_command}
+        COMMAND sh -c "patch dnn/nnet.h < ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff"
     CONFIGURE_COMMAND ${CONFIGURE_COMMAND}
     BUILD_COMMAND make
     # NereusSDR vendored patch: upstream uses $(MAKE), which Ninja
@@ -260,6 +299,7 @@ ExternalProject_Add(build_opus
     BUILD_BYPRODUCTS ${_opus_static_lib}
     INSTALL_COMMAND ""
     URL ${OPUS_URL}
+    URL_HASH ${OPUS_URL_HASH}
 )
 
 ExternalProject_Get_Property(build_opus BINARY_DIR)
