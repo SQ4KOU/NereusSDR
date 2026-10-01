@@ -61,6 +61,12 @@
 //               channel's messages carry their receipt (txReceived's
 //               heldUs). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: TX diagnostics lane: the "media RTP timing" warning again
+//               covers the microphone line, from the line's own thread: a
+//               gap between the line's packet receipts, or a wait on the
+//               line, over the same threshold, at most once a second. Log
+//               only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -500,6 +506,12 @@ qint64 heldMicroseconds(std::chrono::steady_clock::time_point receivedAt)
 void runMicLane(const std::shared_ptr<MicLane>& lane)
 {
     std::deque<PendingRtpPacket> batch;
+    // TX diagnostics lane: the owner's "media RTP timing" warning no longer
+    // sees the line's packets, so the line warns on its own thread, with
+    // the same threshold and at most once a second: the largest gap between
+    // its packets' receipts, and the oldest packet's wait for this thread.
+    std::chrono::steady_clock::time_point lastReceipt;
+    std::chrono::steady_clock::time_point lastWarning;
     for (;;) {
         {
             std::unique_lock lock(lane->mutex);
@@ -508,6 +520,28 @@ void runMicLane(const std::shared_ptr<MicLane>& lane)
                 return;
             }
             batch.swap(lane->packets);
+        }
+        if (!batch.empty()) {
+            const auto takenAt = std::chrono::steady_clock::now();
+            std::chrono::steady_clock::duration largestGap {};
+            for (const PendingRtpPacket& packet : batch) {
+                if (lastReceipt != std::chrono::steady_clock::time_point {}) {
+                    largestGap = std::max(largestGap, packet.receivedAt - lastReceipt);
+                }
+                lastReceipt = packet.receivedAt;
+            }
+            const auto laneWait = takenAt - batch.front().receivedAt;
+            if ((largestGap > kRtpTimingWarningThreshold || laneWait > kRtpTimingWarningThreshold)
+                && (lastWarning == std::chrono::steady_clock::time_point {}
+                    || takenAt - lastWarning >= kRtpTimingWarningInterval)) {
+                lastWarning = takenAt;
+                qWarning().nospace()
+                    << "media RTP timing (microphone): callbackGapMs="
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(largestGap).count()
+                    << " laneWaitMs="
+                    << std::chrono::duration_cast<std::chrono::milliseconds>(laneWait).count()
+                    << " batchPackets=" << batch.size();
+            }
         }
         {
             const std::lock_guard sinkLock(lane->sinkMutex);

@@ -31,6 +31,11 @@
 // owner instead, the same stalls run the buffer dry. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
 //
+// 2026-10-01: TX diagnostics lane: the microphone line's own thread warns
+// of a long gap between its packets ("media RTP timing (microphone)"), and
+// stays quiet at the phone's 20 ms pacing. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -55,6 +60,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <mutex>
 #include <numbers>
 #include <functional>
 #include <optional>
@@ -323,6 +329,7 @@ private slots:
     void micLineCarriesTheAnswerersMicrophoneAlone();
     void micPacketsReportTheirWaitForTheOwnerThread();
     void aStalledOwnerLeavesTheMicrophoneLineWhole();
+    void micLineWarnsOfALongGapFromItsOwnThread();
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
@@ -2175,6 +2182,106 @@ void TestMediaTransport::micPacketsReportTheirWaitForTheOwnerThread()
                              .arg(kStall.count())
                              .arg(static_cast<double>(longestHeldUs) / 1000.0, 0, 'f', 1);
     QVERIFY2(longestHeldUs >= 100'000, qPrintable(QString::number(longestHeldUs)));
+}
+
+namespace {
+
+// TX diagnostics lane: the "media RTP timing (microphone)" warnings, with
+// the name of the thread each came from.
+std::mutex g_micTimingLock;
+QStringList g_micTimingMessages;
+QStringList g_micTimingThreads;
+QtMessageHandler g_previousHandler = nullptr;
+
+void captureMicTiming(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (message.startsWith(QStringLiteral("media RTP timing (microphone)"))) {
+        const std::lock_guard lock(g_micTimingLock);
+        g_micTimingMessages << message;
+        g_micTimingThreads << QThread::currentThread()->objectName();
+        return;
+    }
+    if (g_previousHandler != nullptr) {
+        g_previousHandler(type, context, message);
+    }
+}
+
+int micTimingCount()
+{
+    const std::lock_guard lock(g_micTimingLock);
+    return static_cast<int>(g_micTimingMessages.size());
+}
+
+} // namespace
+
+// TX diagnostics lane: with a sink installed the line's packets bypass the
+// owner's drain, and with it the owner's "media RTP timing" warning. The
+// line's own thread warns instead: never at the phone's 20 ms pacing, and
+// once for a 300 ms gap, from "NereusMicRx".
+void TestMediaTransport::micLineWarnsOfALongGapFromItsOwnThread()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.micAudioSsrc = kTestMicSsrc;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.micAudioSsrc = kTestMicSsrc;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    std::atomic<int> delivered{0};
+    QVERIFY(offerer.setMicPacketSink(
+        [&delivered](const QByteArray&, qint64) { delivered.fetch_add(1); }));
+    {
+        const std::lock_guard lock(g_micTimingLock);
+        g_micTimingMessages.clear();
+        g_micTimingThreads.clear();
+    }
+    g_previousHandler = qInstallMessageHandler(captureMicTiming);
+    struct RestoreHandler {
+        ~RestoreHandler() { qInstallMessageHandler(g_previousHandler); }
+    } restore;
+
+    // The phone's pacing: a packet every 20 ms for half a second.
+    constexpr int kSteady = 25;
+    quint16 sequence = 1;
+    for (int k = 0; k < kSteady; ++k) {
+        QVERIFY(answerer.sendMicRtp(rtpPacket(sequence++, 40, kTestMicSsrc)));
+        QTest::qWait(20);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), kSteady, 5000);
+    const int atSteadyPacing = micTimingCount();
+
+    // Then nothing for 300 ms, and the pacing again.
+    QTest::qWait(300);
+    for (int k = 0; k < 5; ++k) {
+        QVERIFY(answerer.sendMicRtp(rtpPacket(sequence++, 40, kTestMicSsrc)));
+        QTest::qWait(20);
+    }
+    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), kSteady + 5, 5000);
+
+    QStringList messages;
+    QStringList threads;
+    {
+        const std::lock_guard lock(g_micTimingLock);
+        messages = g_micTimingMessages;
+        threads = g_micTimingThreads;
+    }
+    qInfo().noquote() << QStringLiteral("mic line warnings: ") + messages.join(QStringLiteral(" | "));
+    QCOMPARE(atSteadyPacing, 0);
+    QCOMPARE(messages.size(), 1);
+    QCOMPARE(threads.at(0), QStringLiteral("NereusMicRx"));
+    const QRegularExpressionMatch gap =
+        QRegularExpression(QStringLiteral("callbackGapMs=(\\d+) ")).match(messages.at(0));
+    QVERIFY2(gap.hasMatch(), qPrintable(messages.at(0)));
+    QVERIFY2(gap.captured(1).toInt() >= 250, qPrintable(messages.at(0)));
 }
 
 namespace {
