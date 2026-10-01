@@ -7160,6 +7160,7 @@ a JSON string:
 | `"$object"` | any JSON object | yes, but not in a fixture for the app | yes, filled with `{}` |
 | `"$majors"` | only as the `majors` of a `hello`: a non-empty array of whole numbers from 0 to 65535, ascending, without repeats, that holds the same message's `major` | yes, but not in a fixture for the app | yes, filled with `[major]`, the message's own (filled) `major` alone |
 | `"$capture:<name>"` | any value, recorded under `<name>` | yes | no |
+| `"$uuid:<name>"` | only a client's media connection id (a `media.control` payload's `connectionId`, section 11): a canonical UUID, lower case, without braces, recorded under `<name>` | no | yes, filled with a new random UUID of that form at each fill and recorded; an app's runner records the UUID its client chose for the connection |
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$ref:device:<n>"`, `"$ref:device:self"` | only in a fixture for the station alone: the id (base64url key fingerprint) of a device the station runner paired at run time, `<n>` from 1 to `otherPairedDevices` in the order it paired them, `self` its own (`pairedDevice`); recorded before the client connects | yes | yes, by the station's runner |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>`; `<t>` and `<v>` are each exactly a JSON number (RFC 8259 section 6: no `+`, no leading `.`, no `inf` or `nan`, no spaces), `<t>` at least 0; any other text is a malformed fixture | yes | no |
@@ -7398,10 +7399,12 @@ nothing an app's runner could not send its client:
 - a behaviour `settings.write` or `settings.remove` names a station-scoped
   key (section 8), and a write's `origin` is `"$string:<name>"`;
 - a behaviour message is of a kind a client sends (section 16.2);
+- a behaviour `media.control`'s `connectionId` is the app's own:
+  `"$uuid:<name>"` where it makes a connection, `"$ref:<name>"` after;
 - a scripted message holds no placeholder but `"$ref:token"`, and a
   scripted `id` or `writeId` is a literal from 1000 up;
 - a station message holds no `"$capture:<name>"` (except the station
-  `hello`'s `challenge` as `"$capture:challenge"`), `"$string:<name>"`,
+  `hello`'s `challenge` as `"$capture:challenge"`), `"$uuid:<name>"`, `"$string:<name>"`,
   `"$int:<name>"` (ranged or not), `"$object"` or `"$majors"`, and
   `"$any"` only as a summarised snapshot (below); what an app's runner
   sends for each placeholder a station message may hold is defined
@@ -7489,6 +7492,7 @@ role.
 | `stationTci` | the Core runs a station TCI server (it stays off) | false |
 | `stepAttenuator` | a step attenuator controller is bound, so the radio hardware objects are offered | false |
 | `media` | media is enabled | false |
+| `mediaController` | with `media`, the Core's media controllers run as `nereusd` runs them (one per session, made as its media starts), so a client's `media.control` is answered; each media connection's transport is a stand-in that offers one description (`"v=0"` alone, matched as `"$string"`) and never sends a candidate or connects, so the Core's media control traffic is the same on every computer. Without it a `media.control` reaches nothing | false |
 | `priorFailedAuthentications` | other clients that each sent a wrong token before this one connects | 0 |
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
@@ -7523,6 +7527,8 @@ same on every machine.
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, transmit ranges (`board.transmit`: the HL2's power and tune in dB) and relays (the G2's Ext 1 and Ext 2 on TX), and the RF power gauge its rating scales; `display` and `noiseReduction` are the same on both, and neither has the RX1 preamp. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
 | `settings-band-plan` | Two devices on a new Core: the fixture's device writes `BandPlanName` "IARU Region 1", and both devices get `settings.value` for it, then one catalogue `delta` each (`revision` 2) whose `json` marks `iaru-region1` alone `active` (`default` stays on ARRL (US)); a write of a plan the Core does not have gets `settings.reject` with the Core's value "IARU Region 1" and "This Core does not have that band plan.", to the writer alone; a `settings.remove` reaches both devices as an absent value, and the next `delta` (`revision` 3) marks ARRL (US) `active` again. The writing device's two deltas carry the catalogue's `json` in full; the other device's carry `active` and `default` for each plan and `"$any"` for the rest |
+| `monitor-audio` | The transmit monitor (the media document's "Transmit monitor (monitor-audio)"), with `mediaController`: a media `start` declaring `txMonitorAudioVersion` 1 and `headphonesMixVersion` 1 is answered with the Core's `description` (`type` `offer`, `sdp` as `"$string"`); `monitor-audio` `route` `headphones` is answered with `monitor-audio-context` `route` `headphones` and the request's `revision`, and `route` `none` with `route` `none`. A second `start` on a new connection, declaring `txMonitorAudioVersion` without `headphonesMixVersion`, gets its own `description`, and `route` `headphones` is answered `route` `speakers` (its main stream carries MON). Connection ids are `"$uuid:<name>"`, revisions `"$int:<name>:1:4294967295"`. Runs on the station and the app |
+| `monitor-audio-undeclared` | With `mediaController`, a `start` without `txMonitorAudioVersion` is answered with its `description`; a `monitor-audio` (scripted: a conformant client does not send it) gets no answer: the next message the Core sends is the `command.result` of the `ps3.subscribeDisplay` sent after it. Runs on the station alone |
 | `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |
