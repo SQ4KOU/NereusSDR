@@ -54,6 +54,11 @@
 //                 fails stays muted and says why on its radeReason, and the
 //                 reason clears when it leaves RADE. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30 -- Fix wave CI: feed() waits for the receive lane before each
+//                 block, so a new slice's settings are applied by block count,
+//                 not by how soon the lane runs (B in USB was silent through
+//                 the 512 blocks on the Linux runner). J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QElapsedTimer>
@@ -65,6 +70,7 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/DspControlThread.h"
 #include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadeRxWorker.h"
@@ -407,11 +413,19 @@ struct GrowRig {
         }
     }
 
-    // `blocks` tone blocks; each waits for every RADE decoder to go idle so
-    // the run is paced by blocks, not by this machine's load.
+    // `blocks` tone blocks; each waits for every RADE decoder and for the
+    // receive lane to go idle so the run is paced by blocks, not by this
+    // machine's load. The lane applies a slice's mode, filter, AGC and
+    // run state (RxChannel::runKeyed / runOrdered); until it has, the
+    // channel's blocks are silent, so without the wait how many blocks a
+    // new slice stays silent for depends on how soon the lane thread runs.
     bool feed(int blocks)
     {
+        DspControlThread* const lane = wdsp->receiveLane();
         for (int i = 0; i < blocks; ++i) {
+            if (lane && !lane->waitIdleForTest(5000)) {
+                return false;
+            }
             feedOnce(worker);
             for (const SliceModel* s : radio.slices()) {
                 RadeChannel* const ch = s ? wdsp->radeChannel(s->sliceIndex()) : nullptr;
