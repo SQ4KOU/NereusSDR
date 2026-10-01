@@ -24,6 +24,7 @@
 
 #include "core/SmartSdrApiListener.h"
 #include "core/TgxlConnection.h"
+#include "core/safety/TransmitHolder.h"
 
 #include <QRegularExpression>
 #include <QSignalSpy>
@@ -47,11 +48,56 @@ class TgxlCoreTuneTest : public QObject {
     Q_OBJECT
 
 private slots:
-    // Bug 2 replay (23:30:16.249): the tuner's front-panel TUNE arrives as
-    // `transmit tune on` while a device holds transmit after its own tune.
-    // The station's tune carrier is refused by the holder rules (ruling
-    // 8.9a), nothing keys, the cycle ends, and the log says why.
-    void hardwareTuneRefusedWhileADeviceHoldsTransmitSaysWhy()
+    // Bug 2 replay (23:30:16.249), with JJ's ruling (2026-09-30): the
+    // tuner's front-panel TUNE arrives as `transmit tune on` (before its
+    // `interlock ready`) while a device holds transmit after its own tune.
+    // It takes transmit as the radio's own PTT does (ruling 8.9) and keys
+    // the tune carrier once the take ends; the device is told.
+    void hardwareTuneTakesFromTheHolderAndKeys()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        tunerConnected(core);
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTune(), 5000);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        appA->clearReceived();
+
+        emit core.model->smartSdrListener()->tuneRequested(true);
+        // Ruling 8.9: nothing keys while the transfer runs.
+        QVERIFY(!mox->isMox());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+
+        QTRY_VERIFY(core.model->isTune());
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QCOMPARE(holder->holder()->source, TransmitHolder::Source::RadioPtt);
+
+        // The device that lost transmit is told, as after the radio's PTT.
+        QTRY_VERIFY(!ofType(appA->received(), QStringLiteral("notice")).isEmpty());
+        const QJsonObject notice = ofType(appA->received(), QStringLiteral("notice")).last();
+        QCOMPARE(notice.value(QStringLiteral("kind")).toString(), QStringLiteral("transmitTaken"));
+        QCOMPARE(notice.value(QStringLiteral("bySource")).toString(), QStringLiteral("radioPtt"));
+        QCOMPARE(notice.value(QStringLiteral("byName")).toString(), QStringLiteral("Radio"));
+
+        // The tuner's tune off drops the carrier and ends the cycle.
+        emit core.model->smartSdrListener()->tuneRequested(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.model->isTune());
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+    }
+
+    // The tuner lets go while its take runs: the take ends, nothing keys.
+    void hardwareTuneReleasedDuringTheTakeKeysNothing()
     {
         Core core;
         allowTransmit(core);
@@ -66,18 +112,83 @@ private slots:
         QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTune(), 5000);
-        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
 
-        QTest::ignoreMessage(QtInfoMsg,
-                             QRegularExpression(QStringLiteral(
-                                 "the tune carrier was refused; ending the cycle\\. Reason: "
-                                 "\"iPhone has the transmitter\\.\"")));
         emit core.model->smartSdrListener()->tuneRequested(true);
-
-        QVERIFY(!core.model->isTune());
-        QVERIFY(!mox->isMox());
+        emit core.model->smartSdrListener()->tuneRequested(false);
         QVERIFY(!core.model->isTgxlAutotuneInProgress());
-        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QTest::qWait(500);
+        QVERIFY(!mox->isMox());
+        QVERIFY(!core.model->isTune());
+        QCOMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // A device's tx.tunerTune never takes: with another device holding
+    // transmit it is refused, and nothing keys.
+    void aDeviceTunerTuneStillCannotTake()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        tunerConnected(core);
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTune(), 5000);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+
+        const QJsonObject answer = core.invoke(appB, "tx.tunerTune", {kOn});
+        QVERIFY(!answer.value(QStringLiteral("accepted")).toBool());
+        QVERIFY2(answer.value(QStringLiteral("reason")).toString().contains(QStringLiteral("iPhone")),
+                 qPrintable(answer.value(QStringLiteral("reason")).toString()));
+        QTest::qWait(500);
+        QVERIFY(!mox->isMox());
+        QVERIFY(!core.model->isTune());
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+    }
+
+    // The tuner's front-panel cycle gets the 3 s start watchdog: a tuner
+    // that never reports its sweep has its carrier dropped.
+    void hardwareCycleDropsOnTheSafetyTimeout()
+    {
+        Core core;
+        allowTransmit(core);
+        tunerConnected(core);
+        MoxController* mox = core.model->moxController();
+        emit core.model->smartSdrListener()->tuneRequested(true);
+        QTRY_VERIFY(mox->isMox());
+        QTest::qWait(1000);
+        QVERIFY(mox->isMox());
+        QTRY_COMPARE_WITH_TIMEOUT(mox->state(), MoxState::Rx, 5000);
+        QTRY_VERIFY(!core.model->isTune());
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+    }
+
+    // ... and its sweep's end (tuning 1 then 0) drops the carrier too.
+    void hardwareCycleDropsWhenTheSweepEnds()
+    {
+        Core core;
+        allowTransmit(core);
+        tunerConnected(core);
+        MoxController* mox = core.model->moxController();
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=1"));
+        emit core.model->smartSdrListener()->tuneRequested(true);
+        QTRY_VERIFY(mox->isMox());
+        QTest::qWait(3500);
+        QVERIFY(mox->isMox());   // the sweep runs past the start watchdog
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("S0|state tuning=0"));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.model->isTune());
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
     }
 
     // The tuner's front-panel TUNE with transmit unheld keys the station's

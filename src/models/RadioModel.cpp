@@ -921,6 +921,13 @@
 //                refused, and the tuner's link dropping ends a tune cycle
 //                and drops its carrier. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane (JJ's ruling): the tuner's front-panel TUNE
+//                takes transmit from another device and keys, as the
+//                radio's own PTT does (ruling 8.9, KeyerIdentity::
+//                tunerPress); its cycle gets the 3 s start watchdog and the
+//                drop on its sweep's end; the tuner's tune off before the
+//                carrier keys ends the cycle. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2843,7 +2850,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Task 77 fix round 3: the Power Genius's OPERATE waits for the sweep.
     connect(m_tunerModel, &TunerModel::tuningChanged, this, &RadioModel::pgxlSwitchWaitChanged);
     connect(m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
-        if (!m_tgxlAutotuneInProgress || m_tgxlAutotuneDeviceId.isEmpty()) {
+        // TGXL tune lane: the tuner's own front-panel cycle too, which may
+        // now take transmit from another device (ruling 8.9).
+        if (!m_tgxlAutotuneInProgress
+            || (m_tgxlAutotuneDeviceId.isEmpty() && !m_tgxlAutotuneFromHardware)) {
             return;
         }
         if (tuning) {
@@ -3092,6 +3102,15 @@ RadioModel::RadioModel(Role role, QObject* parent)
                        " TUN cycle owns the drop)";
                 return;
             }
+            if (!m_isTuning) {
+                // TGXL tune lane: the tuner let go before the carrier keyed
+                // (the amplifier's standby or a take still running): the
+                // cycle ends here, so nothing keys after it.
+                qCInfo(lcConnection) << "TGXL autotune: the tuner ended the cycle before the"
+                                        " carrier keyed";
+                finishTgxlAutotuneCycle();
+                return;
+            }
             setTune(false);
         }
     });
@@ -3108,6 +3127,30 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // button), which forced the operator to release the carrier manually
     // when our app TUNE was clicked.
     if (m_moxController) {
+        // TGXL tune lane (JJ's ruling, 2026-09-30; ruling 8.9): the take the
+        // tuner's front-panel TUNE asked for has ended. Its carrier keys
+        // only while that cycle still runs (the tuner has not let go, its
+        // link has not dropped), back through every gate of the cycle.
+        connect(m_moxController, &MoxController::tunerTakeFinished, this, [this](bool took) {
+            if (!m_tgxlTakePending) {
+                return;
+            }
+            m_tgxlTakePending = false;
+            if (!m_tgxlAutotuneInProgress || m_tgxlTakeGeneration != m_tgxlCycleGeneration) {
+                qCInfo(lcConnection) << "TGXL autotune: the take for the tuner's TUNE ended after"
+                                        " its cycle; nothing keys";
+                return;
+            }
+            if (!took) {
+                qCInfo(lcConnection) << "TGXL autotune: the take for the tuner's TUNE did not"
+                                        " finish; ending the cycle";
+                finishTgxlAutotuneCycle();
+                return;
+            }
+            qCInfo(lcConnection) << "TGXL autotune: transmit taken for the tuner's TUNE;"
+                                    " engaging the carrier";
+            continueTgxlAutotuneAfterStandby();
+        });
         connect(m_moxController, &MoxController::manualMoxChanged,
                 this, [this](bool isManual) {
             if (m_smartSdrListener) {
@@ -25764,6 +25807,12 @@ void RadioModel::setTune(bool on)
         if (m_moxController
             && !(m_tuneKeyer != nullptr ? m_moxController->admitKey(*m_tuneKeyer)
                                         : m_moxController->admitStationKey(PttMode::Manual))) {
+            if (m_moxController->lastAdmitTook()) {
+                // TGXL tune lane (ruling 8.9): the tuner's front-panel TUNE
+                // is taking transmit; nothing keys now, and its cycle keys
+                // when the take ends (tunerTakeFinished).
+                return;
+            }
             emit tuneRefused(m_moxController->lastRefusal().text);
             return;
         }
@@ -30530,10 +30579,28 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         keyer.source = PttMode::Manual;
         keyer.session = m_tgxlAutotuneSession;
         setTune(true, keyer);
+    } else if (m_tgxlAutotuneFromHardware) {
+        // TGXL tune lane (JJ's ruling, 2026-09-30): the tuner's own
+        // front-panel TUNE is a press at the station. It takes transmit
+        // from another device and keys as the radio's PTT does (ruling
+        // 8.9), through the same gate and take.
+        KeyerIdentity tuner = KeyerIdentity::station(PttMode::Manual);
+        tuner.tunerPress = true;
+        setTune(true, tuner);
     } else {
         setTune(true);
     }
     disconnect(refusalCapture);
+    if (!m_isTuning && m_tgxlAutotuneFromHardware && m_moxController
+        && m_moxController->lastAdmitTook()) {
+        // Ruling 8.9: the press keys nothing while the transfer runs; the
+        // carrier keys when it ends if the tuner still asks for it.
+        qCInfo(lcConnection) << "TGXL autotune: the tuner's TUNE is taking transmit from"
+                                " another device; the carrier keys when the take ends";
+        m_tgxlTakePending = true;
+        m_tgxlTakeGeneration = m_tgxlCycleGeneration;
+        return;
+    }
     if (!m_isTuning) {
         // Refused (the device went away, another holds transmit, a block
         // came on): nothing keyed, so the amplifier goes back now.
@@ -30546,20 +30613,31 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         finishTgxlAutotuneCycle();
         return;
     }
-    if (!m_tgxlAutotuneDeviceId.isEmpty()) {
+    if (!m_tgxlAutotuneDeviceId.isEmpty() || m_tgxlAutotuneFromHardware) {
         // iPhone app plan Task 77: a device's cycle has no Tuner page on the
         // Core to watch the tuner, so the Core does what the local page
         // does (TunerApplet's short watchdog and tuningChanged(false)): the
         // carrier drops when the tuner finishes, and after 3 s when the
         // tuner never started its sweep.
+        // TGXL tune lane (JJ's ruling): the tuner's front-panel cycle too,
+        // since it may now take transmit from another device and key.
         m_tgxlDeviceCycleSawTuning = m_tunerModel && m_tunerModel->isTuning();
         const QByteArray device = m_tgxlAutotuneDeviceId;
-        QTimer::singleShot(kTgxlDeviceCycleStartMs, this, [this, device]() {
-            if (m_tgxlAutotuneInProgress && m_tgxlAutotuneDeviceId == device
-                && !m_tgxlDeviceCycleSawTuning) {
+        const quint64 cycle = m_tgxlCycleGeneration;
+        QTimer::singleShot(kTgxlDeviceCycleStartMs, this, [this, device, cycle]() {
+            if (m_tgxlAutotuneInProgress && cycle == m_tgxlCycleGeneration
+                && m_tgxlAutotuneDeviceId == device && !m_tgxlDeviceCycleSawTuning) {
                 qCInfo(lcConnection) << "TGXL autotune: the tuner never started its sweep"
-                                        " for the device's cycle; dropping the carrier";
-                cancelTgxlAutotuneFor(device);
+                                        " for the cycle; dropping the carrier";
+                if (!device.isEmpty()) {
+                    cancelTgxlAutotuneFor(device);
+                } else if (m_isTuning) {
+                    // The carrier drops; manualMoxChanged(false) finishes
+                    // the cycle.
+                    setTune(false);
+                } else {
+                    finishTgxlAutotuneCycle();
+                }
             }
         });
     }

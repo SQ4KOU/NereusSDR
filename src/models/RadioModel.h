@@ -521,6 +521,10 @@
 //                lock through an automatic recovery; disconnectFromRadio
 //                (the operator's) lifts it. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-30 - TGXL tune lane (JJ's ruling): m_tgxlTakePending and
+//                m_tgxlTakeGeneration, the take the tuner's front-panel
+//                TUNE asks for (ruling 8.9). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -8129,6 +8133,11 @@ private:
     /// Task 77 fix round 4: counts cycles, so a failsafe timer left from an
     /// ended cycle never acts on a new one.
     quint64 m_tgxlCycleGeneration{0};
+    /// TGXL tune lane (JJ's ruling, 2026-09-30): the tuner's front-panel
+    /// TUNE is taking transmit from another device (ruling 8.9), for the
+    /// cycle of this generation; its carrier keys when the take ends.
+    bool m_tgxlTakePending{false};
+    quint64 m_tgxlTakeGeneration{0};
     /// Task 77 fix round 4: a relayed operate=1 held while RF may flow.
     bool m_relayedPgxlOperateHeld{false};
     void retryHeldRelayedPgxlOperate();

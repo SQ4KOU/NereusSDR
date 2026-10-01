@@ -123,6 +123,11 @@
 //               once against an expected revision as the peer's own
 //               cfcParaEqData write. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: TGXL tune lane (JJ's ruling): the Tuner Genius's own
+//               front-panel TUNE (KeyerIdentity::tunerPress) takes
+//               transmit and keys as the radio's own PTT does (ruling
+//               8.9). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -2527,7 +2532,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             // and TUNE never take here (ruling 8.9a): they are refused
             // naming the holder, and the desktop asks through tx.take's
             // rules (takeTransmitForStation).
-            if (keyer.isStation() && source == PttMode::Mic
+            // TGXL tune lane (JJ's ruling, 2026-09-30): the Tuner Genius's
+            // own front-panel TUNE is a press at the station too, and takes
+            // and keys exactly as the radio's PTT does (tunerPress, set only
+            // for a cycle the tuner started).
+            const bool radioPress =
+                keyer.isStation() && (source == PttMode::Mic || keyer.tunerPress);
+            if (radioPress
                 && m_transmitHolder->state() == TransmitHolder::State::Held
                 && !m_transmitHolder->isFenced() && !m_transmitHolder->isStopUnconfirmed()) {
                 const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
@@ -2548,7 +2559,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             // The radio's own PTT (its mic or a footswitch) is PttMode::Mic
             // from the station device (ruling 8.5).
-            request.source = keyer.isStation() && source == PttMode::Mic
+            request.source = radioPress
                                  ? TransmitHolder::Source::RadioPtt
                                  : TransmitHolder::Source::Device;
             // Slice control plan Task 11 (ruling Q8): a key that would land
