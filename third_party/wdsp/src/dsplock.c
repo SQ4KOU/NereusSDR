@@ -145,6 +145,12 @@ boydsoftprez@gmail.com
 //                 copy of the constant. By J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code
 //                 (R-R3-39).
+//   2026-10-01 - Test-only exchange hook (WDSPSetTestExchangeHook,
+//                 WdspTestExchangeHook): iobuffs.c's dexchange calls it after
+//                 releasing Sem_OutReady, so a test holds the worker there
+//                 while the caller runs ahead. One pointer test when none is
+//                 installed. By J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "comm.h"
@@ -170,6 +176,9 @@ static const int64_t kWorkerExitFastPollUs = 5000;
 
 // The caller check (see dsplock.h); 0 = none.
 WdspCallerCheckHook volatile wdsp_caller_check_hook = 0;
+
+// Test-only exchange hook (WDSPSetTestExchangeHook), 0 when none.
+WdspTestExchangeHookFn volatile wdsp_test_exchange_hook = 0;
 
 // Threads currently blocked entering each channel's csDSP.
 static volatile long dsp_waiters[MAX_CHANNELS];
@@ -766,6 +775,16 @@ long long TakeChannelDspIntervalMaxBlockUs (int channel)
 		return -1;
 	}
 	return load_exchange64 (&load_interval_max_us[channel], 0);
+}
+
+PORT
+void WDSPSetTestExchangeHook (WdspTestExchangeHookFn hook)
+{
+#ifdef _WIN32
+	InterlockedExchangePointer ((PVOID volatile*)&wdsp_test_exchange_hook, (PVOID)hook);
+#else
+	__atomic_store_n (&wdsp_test_exchange_hook, hook, __ATOMIC_RELEASE);
+#endif
 }
 
 PORT

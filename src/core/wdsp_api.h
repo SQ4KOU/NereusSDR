@@ -237,6 +237,12 @@
 //                 from third_party/wdsp/src/dsplock.c; no Thetis
 //                 counterpart. AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-10-01  WDSPSetTestExchangeHook declaration added by J.J. Boyd
+//                 (KG4VCF) so a test holds dexchange's worker after its
+//                 Sem_OutReady release while the caller runs ahead.
+//                 NereusSDR-original test seam exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -432,6 +438,12 @@ void WDSPSetTestHoldLoadPair(int channel, int hold);
 // 0) and end, with the block's start and end on the monotonic clock
 // GetChannelDspLoad's readNs uses. Never call it in production code.
 void WDSPSetTestBlockHook(void (*hook)(int channel, long long startNs, long long endNs));
+
+// Test-only (NereusSDR dsplock.c): install (or, with nullptr, remove) a
+// function iobuffs.c's dexchange calls on the channel worker right after it
+// releases Sem_OutReady. The hook must not call into WDSP. Never call it in
+// production code.
+void WDSPSetTestExchangeHook(void (*hook)(int channel));
 
 // Test-only (NereusSDR dsplock.c): how long, in microseconds, the channel's
 // latest teardown waited for its worker to leave its loop (that wait alone,

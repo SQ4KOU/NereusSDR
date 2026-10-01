@@ -451,6 +451,12 @@ if(TARGET wdsp_static)
     # leave its loop before freeing its memory (dsplock.c). REALTIME: it
     # holds an idle teardown's wait to the worker's measured wake-up time.
     nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core REALTIME)
+    # 2026-10-01: iobuffs.c's dexchange copies the worker's input chunk
+    # before it releases Sem_OutReady, so a worker held right after the
+    # release (dsplock.c's test-only exchange hook) while fexchange0's caller
+    # runs ahead leaves a real TX channel's output bit-identical. Not
+    # REALTIME: the hold waits for the caller's stall, not a wall-clock bound.
+    nereus_add_test(tst_wdsp_dexchange_order EXTRA_LABELS core)
     # R-R3-39: the DSP control lanes (ordering, keyed jobs, barriers,
     # request completion) and the WDSP caller check that counts WDSP calls
     # made from the event loop. wdsp_static arrives through the core
@@ -2942,6 +2948,13 @@ target_compile_definitions(tst_tx_mic_latency PRIVATE NEREUS_BUILD_TESTS)
 # WDSP channels: the Setup > DSP filter type reaches TXASetMP / RXASetMP as
 # Thetis sends it (Low Latency is minimum phase).
 nereus_add_test(tst_tx_latency_dsp)
+# Leveler lane (2026-10-01): remote microphone audio (the phone's Opus, a
+# desktop remote window's Opus or L16, the local microphone) through the real
+# WDSP TX channel with the Leveler and PROC, offline; the measurement matrix
+# prints with NEREUS_LEVELER_MATRIX=1.
+nereus_add_test(tst_tx_leveler_remote_mic)
+target_compile_definitions(tst_tx_leveler_remote_mic PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 # R-IOS-13 (2026-09-27): every key path (MOX, TUNE, a remote key, VOX,
 # two-tone) applies the TX-bound slice's DSP > Options before the TX
 # channel's first block, on a real WDSP TX channel.

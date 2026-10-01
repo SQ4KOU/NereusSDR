@@ -218,6 +218,7 @@ set(WDSP_EDITED_SOURCES
     src/eq.c
     src/extrapolate.c
     src/fmd.c
+    src/iobuffs.c
     src/iqc.c
     src/linux_port.c
     src/main.c

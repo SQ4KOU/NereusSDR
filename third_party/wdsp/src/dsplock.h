@@ -98,6 +98,12 @@ boydsoftprez@gmail.com
 //   2026-09-29 - Test-only WDSPGetTestWorkerPauseNs declared by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-39).
+//   2026-10-01 - Test-only exchange hook (WDSPSetTestExchangeHook,
+//                 WdspTestExchangeHook): iobuffs.c's dexchange calls it after
+//                 releasing Sem_OutReady, so a test holds the worker there
+//                 while the caller runs ahead. One pointer test when none is
+//                 installed. By J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #ifndef _dsplock_h
@@ -253,6 +259,33 @@ PORT void WDSPSetTestHoldLoadPair (int channel, int hold);
 // GetChannelDspLoad's readNs uses). A test measures the worker's busy share
 // from it without the load counters. Never call it in production code.
 PORT void WDSPSetTestBlockHook (void (*hook) (int channel, long long startNs, long long endNs));
+
+// Test-only: install (or, with 0, remove) a function iobuffs.c's dexchange
+// calls on the channel worker right after it releases Sem_OutReady (the
+// tokens that let fexchange0's caller run on). A test that blocks in it holds
+// the worker there while the caller runs ahead, which proves the input chunk
+// was already copied out. The hook must not call into WDSP. Never call it in
+// production code.
+typedef void (*WdspTestExchangeHookFn) (int channel);
+PORT void WDSPSetTestExchangeHook (WdspTestExchangeHookFn hook);
+
+// The installed exchange hook (0 = none); written only by
+// WDSPSetTestExchangeHook.
+extern WdspTestExchangeHookFn volatile wdsp_test_exchange_hook;
+
+// dexchange's call: one pointer load and one null test when none is installed.
+static __inline void WdspTestExchangeHook (int channel)
+{
+#ifdef _WIN32
+	const WdspTestExchangeHookFn hook = wdsp_test_exchange_hook;
+#else
+	const WdspTestExchangeHookFn hook = __atomic_load_n (&wdsp_test_exchange_hook, __ATOMIC_ACQUIRE);
+#endif
+	if (hook != 0)
+	{
+		hook (channel);
+	}
+}
 
 // Test-only: how long, in microseconds, the channel's latest teardown spent
 // waiting for its worker to leave its loop (WdspWaitWorkerExit alone, not
