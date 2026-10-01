@@ -455,6 +455,9 @@
 //               cancels are named per cause (kDeltaCancelRules), not
 //               inferred from values; the generic step-back is gone.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 4: unresolvedDeltaCancelRuleNames()
+//               checks the rule table against the schemas. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -980,6 +983,12 @@ public:
     void pauseWriteFlushForTest() { m_writeFlushTimer->stop(); }
     /// Test seam: one write-flush tick, now.
     void flushWritesForTest() { onWriteFlushTick(); }
+    /// Every class and property name in the delta cancel rules
+    /// (kDeltaCancelRules in StationClient.cpp) that the mirror schema
+    /// does not resolve, as "Class.property". Empty when the table is
+    /// sound. applyUpdates skips a name it cannot resolve, so a typo in
+    /// the table would otherwise switch its rule off silently.
+    static QList<QByteArray> unresolvedDeltaCancelRuleNames();
 
     /// The minor version both ends agreed on (section 7.0: negotiate down
     /// to the lower). Meaningful once the station's Hello has arrived.

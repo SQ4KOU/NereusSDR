@@ -9,6 +9,15 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 4: the
+//                                    paired CFC curve cancels the unsent
+//                                    scalar edits only when the new curve
+//                                    decodes (setCfcParaEqData projects
+//                                    nothing otherwise);
+//                                    unresolvedDeltaCancelRuleNames()
+//                                    checks the table's names against the
+//                                    schemas. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 3: a delta
 //                                    cancels the unsent edits its causes
 //                                    define, named per cause in
@@ -16,8 +25,9 @@
 //                                    filter edges, per Thetis
 //                                    console.cs:34513 [v2.10.3.15];
 //                                    lineInBoost -> lineInGain, per
-//                                    console.cs:40929-40931; the paired
-//                                    CFC curve and scalars), whatever the
+//                                    console.cs:40930-40932 [v2.10.3.15];
+//                                    the paired CFC curve and scalars),
+//                                    whatever the
 //                                    values. Only the dspMode row steps
 //                                    the edges back before its setter
 //                                    runs. Replaces round 2's value-
@@ -465,6 +475,7 @@
 #include "core/session/ModMonitorRecord.h"
 
 #include "core/AppSettings.h"
+#include "core/CfcProfile.h"
 #include "core/session/SettingsHygieneWire.h"
 #include "core/session/SettingsBackupExportWire.h"
 #include "core/SettingsHygiene.h"
@@ -4254,7 +4265,18 @@ struct DeltaCancelRule {
     // of their own before it replaces them, so they step back to the
     // Core's before it runs and a cancelled edit is never saved.
     bool stepBack;
+    // When set, the cause defines its dependents only for a new value
+    // (decoded) this accepts; otherwise for every new value.
+    bool (*defines)(const QVariant& decoded) = nullptr;
 };
+
+// setCfcParaEqData projects only a curve that decodes onto the scalars;
+// a curve that does not decode leaves them as they are.
+bool cfcCurveDecodes(const QVariant& decoded)
+{
+    CfcProfile::Profile profile;
+    return CfcProfile::decode(decoded.toString(), profile);
+}
 
 constexpr DeltaCancelRule kDeltaCancelRules[] = {
     // Filter edges are per-mode state. SetRX1Mode loads the new mode's
@@ -4269,16 +4291,16 @@ constexpr DeltaCancelRule kDeltaCancelRules[] = {
     // The line-in boost sets the line-in gain index:
     //   var lineboost = Array.IndexOf(lineinboost, line_in_boost.ToString());
     //   NetworkIO.SetLineBoost(lineboost);
-    // From Thetis console.cs:40929-40931 [v2.10.3.15]
+    // From Thetis console.cs:40930-40932 [v2.10.3.15]
     // (TransmitModel::setLineInBoost -> setLineInGain).
     { "TransmitModel", "lineInBoost", { { "lineInGain" } }, false },
-    // NereusSDR's paired CFC curve: the curve projects onto the five
-    // scalars, and each scalar re-encodes the curve
+    // NereusSDR's paired CFC curve: a curve that decodes projects onto
+    // the five scalars, and each scalar re-encodes the curve
     // (TransmitModel::setCfcParaEqData, updatePairedCfc,
     // updatePairedCfcArray).
     { "TransmitModel", "cfcParaEqData",
       { { "cfcPrecompDb", "cfcPostEqGainDb", "cfcEqFreqJson", "cfcCompressionJson",
-          "cfcPostEqBandGainJson" } }, false },
+          "cfcPostEqBandGainJson" } }, false, &cfcCurveDecodes },
     { "TransmitModel", "cfcPrecompDb", { { "cfcParaEqData" } }, false },
     { "TransmitModel", "cfcPostEqGainDb", { { "cfcParaEqData" } }, false },
     { "TransmitModel", "cfcEqFreqJson", { { "cfcParaEqData" } }, false },
@@ -4287,6 +4309,39 @@ constexpr DeltaCancelRule kDeltaCancelRules[] = {
 };
 
 } // namespace
+
+QList<QByteArray> StationClient::unresolvedDeltaCancelRuleNames()
+{
+    QList<QByteArray> unresolved;
+    for (const DeltaCancelRule& rule : kDeltaCancelRules) {
+        const QByteArray className(rule.className);
+        const QMetaObject* meta = nullptr;
+        if (className == "SliceModel") {
+            meta = &SliceModel::staticMetaObject;
+        } else if (className == "TransmitModel") {
+            meta = &TransmitModel::staticMetaObject;
+        }
+        if (meta == nullptr || !MirrorSchema::isMirrorable(meta)
+            || MirrorSchema::shortClassName(meta->className()) != className) {
+            unresolved.append(className);
+            continue;
+        }
+        const MirrorSchema& schema = MirrorSchema::forMetaObject(meta);
+        const auto check = [&](const char* name) {
+            if (schema.byName(QByteArray(name)) == nullptr) {
+                unresolved.append(className + '.' + name);
+            }
+        };
+        check(rule.cause);
+        for (const char* name : rule.dependents) {
+            if (name == nullptr) {
+                break;
+            }
+            check(name);
+        }
+    }
+    return unresolved;
+}
 
 void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
                                  const QList<MirrorUpdate>& updates, SideEffectRule rule,
@@ -4324,8 +4379,11 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
             if (cause == nullptr || carried == updates.cend()) {
                 continue;
             }
-            if (MirrorSchema::decode(*cause, schema.read(*cause, target))
-                == MirrorSchema::decode(*cause, carried->value)) {
+            const QVariant next = MirrorSchema::decode(*cause, carried->value);
+            if (MirrorSchema::decode(*cause, schema.read(*cause, target)) == next) {
+                continue;
+            }
+            if (cancelRule.defines != nullptr && !cancelRule.defines(next)) {
                 continue;
             }
             for (const char* name : cancelRule.dependents) {
