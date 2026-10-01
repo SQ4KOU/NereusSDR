@@ -24,6 +24,14 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): the destroy functions accept null, a partly
+// built model is torn down cleanly, the model source (file or built-in) is
+// recorded and read by getSource_nnet, the alpha and knee getters and setters
+// are null-safe, and the build and create log lines print the slot's own model
+// path (the create line previously passed the whole path array to %s).
+
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "comm.h"
@@ -1094,8 +1102,12 @@ static int nnet_build (NNET n)
 									 "a built-in model")) != 0)
 	{
 		selected_source = 1;
-		dprintf ("nnet: no '%s' in the working directory - slot %d is using "
-				 "its built-in model\n", nnet_model_path[n->slot], n->slot);
+		if (nnet_model_path[n->slot][0] != '\0')
+			dprintf ("nnet: could not open '%s' - slot %d is using "
+					 "its built-in model\n", nnet_model_path[n->slot], n->slot);
+		else
+			dprintf ("nnet: no model file set - slot %d is using "
+					 "its built-in model\n", n->slot);
 	}
 	else
 	{
@@ -1220,8 +1232,8 @@ NNET create_nnet_slot (int slot, int nbins, int lookahead, double floor_db)
 
 	n->ready = nnet_build (n);
 	if (!n->ready)
-		dprintf ("nnet: no usable model at '%s' - passing audio through\n",
-			nnet_model_path);
+		dprintf ("nnet: slot %d has no usable model at '%s' - passing audio through\n",
+			n->slot, nnet_model_path[n->slot]);
 	else
 		dprintf ("nnet: model loaded - ch %d/%d/%d/%d, hid %d, order %d, "
 			"bins %d/%d/%d/%d/%d\n",

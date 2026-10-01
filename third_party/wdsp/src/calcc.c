@@ -91,6 +91,22 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): bounds the PS3 correction display
+// copy (PS3_MAX_DISPLAY_SAMPLES, PS3_DISPLAY_CORRECTION_POINTS); adds the
+// state readbacks GetPSRunCal and GetPSCorrectionAvailable, the stop and
+// apply calls RequestPSCorrectionStop, StopPSCorrectionQuiescent and
+// ApplyPSCorrection, and the file-operation status and cancel calls
+// GetPSFileOperationStatus and CancelPSFileOperation; makes the save and
+// restore workers record a per-operation generation and honour
+// cancellation; cancels workers and transitions before teardown; and
+// guards IQC installation with a correction epoch and a pre-published
+// suspension flag, so a calculation or restore already in flight cannot
+// re-arm IQC after stop.
+// The "No NereusSDR-level edits" line in the historical record above
+// describes the retired May 2026 Thetis vendor only, not this file.
+
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
 #include "extrapolate.h"

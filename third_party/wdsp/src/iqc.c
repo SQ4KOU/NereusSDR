@@ -88,6 +88,19 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): adds a stopping flag to the IQC state;
+// SetTXAiqcSwap and SetTXAiqcStart return whether they installed the
+// transition and wrap new Checked variants that test a cancellation flag
+// under csDSP and stop their busy waits on stop or cancel; SetTXAiqcEnd's
+// busy wait also stops once the stopping flag is set; END clears the run
+// bit when the ramp completes; and adds SetTXAiqcStopping,
+// RequestTXAiqcEnd, StopTXAiqcQuiescent, ApplyTXAiqcRetained,
+// GetTXAiqcCorrectionAvailable and GetPSCorrectionState.
+// The "No NereusSDR-level edits" line in the historical record above
+// describes the retired May 2026 Thetis vendor only, not this file.
+
 #include "comm.h"
 
 void calc_iqc (IQC a)

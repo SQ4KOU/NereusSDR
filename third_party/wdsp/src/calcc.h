@@ -86,6 +86,14 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): includes ps3_abi.h, which declares the
+// PS3 display bounds and the correction and file-operation calls defined
+// in calcc.c and iqc.c.
+// The "No NereusSDR-level edits" line in the historical record above
+// describes the retired May 2026 Thetis vendor only, not this file.
+
 #ifndef _calcc_h
 #define _calcc_h
 

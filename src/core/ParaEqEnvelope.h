@@ -17,6 +17,9 @@
 //                 byte-identical so parametric-EQ JSON blobs
 //                 round-trip across Thetis <-> NereusSDR profile
 //                 storage.
+//   2026-09-30 — Notes what is and is not byte-identical to Thetis
+//                 (the header's mtime and OS bytes are). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -85,10 +88,10 @@ namespace NereusSDR {
 //   2. Thetis-saved profile blobs decode cleanly when imported.
 //   3. NereusSDR-saved blobs decode cleanly if exported back into Thetis.
 //
-// The output is byte-identical to Thetis's encoder for the same input
-// (modulo the gzip header mtime field — gzip permits mtime=0 and
-// Thetis's GZipStream typically writes 0; either way the inflate side
-// is unaffected).
+// The gzip header carries mtime 0 and OS 0 as Thetis's GZipStream
+// writes them, so the output is the same on every platform. Its XFL
+// byte and compressed bytes are zlib's own and may differ from
+// Thetis's byte for byte; each side's inflate reads the other's.
 namespace ParaEqEnvelope {
 
 // Encode: utf8(payload) -> gzip (deflate level 9, windowBits=31) ->

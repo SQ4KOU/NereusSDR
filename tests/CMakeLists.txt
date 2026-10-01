@@ -463,33 +463,25 @@ if(TARGET wdsp_static)
     # loop; the live rate change returns at once and finishes once; the
     # MeterPoller reads the lane's cache. REALTIME: it holds the event
     # loop's 10 ms timer to a wall-clock bound while the lane waits.
+    # Its OpenChannel plans through the shared FFTW wisdom cache with its
+    # 0.1 s plan limit (nereus_test_fftw_wisdom above), so the default 120 s
+    # holds (fix wave INFRA-I3: the 900 s override is gone).
     nereus_add_test(tst_dsp_control_receive EXTRA_LABELS core REALTIME)
-    # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
-    # 100 s under a loaded build), so the default 120 s is too close.
-    if(TEST tst_dsp_control_receive)
-        set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
-    endif()
     # R-R3-39 (Task 32): transmit DSP off the event loop. A real TX channel
     # on the transmit lane keeps the rf_delay keying order; twenty MOX, TUNE
     # and two-tone cycles with the PureSignal poll make no WDSP call on the
     # event loop while both lanes' channels run 200 ms blocks; setters queued
     # before a rebuild never run; the unkey drain is measured. REALTIME: it
-    # holds the event loop's 10 ms timer to a wall-clock bound. Its first
-    # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    # holds the event loop's 10 ms timer to a wall-clock bound. It plans
+    # through the shared wisdom cache, so the default 120 s holds.
     nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
-    if(TEST tst_dsp_control_transmit)
-        set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
-    endif()
     # Task 33 (R-IOS-03): stopping transmission at once. With both lanes
     # held for 200 ms, stopTransmitNow returns within 2 ms with the RF gate
     # shut and MOX off at the connection before either lane is free, and no
     # TX block follows it; the normal unkey drains before the hardware flip
-    # (Thetis's order). REALTIME: wall-clock bounds on real channels; the
-    # first OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    # (Thetis's order). REALTIME: wall-clock bounds on real channels; it
+    # plans through the shared wisdom cache, so the default 120 s holds.
     nereus_add_test(tst_stop_transmit_now EXTRA_LABELS core REALTIME)
-    if(TEST tst_stop_transmit_now)
-        set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
-    endif()
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -530,14 +522,12 @@ if(TARGET wdsp_static)
     # SetAnalyzer with Blackman-Harris 4T, are at least 90 dB down 66 Hz from
     # the peak and beyond; every DSP block reaches the siphon once, in order.
     # Reads the analyzer's input ring (analyzer.h), hence the WDSP headers.
-    # REALTIME: real WDSP threads, and the first SetAnalyzer plans a
-    # 32768-point FFTW_PATIENT transform with no wisdom.
+    # REALTIME: real WDSP threads. The first SetAnalyzer's 32768-point
+    # FFTW_PATIENT plan goes through the shared wisdom cache and its 0.1 s
+    # plan limit, so the default 120 s holds.
     nereus_add_test(tst_tx_analyzer_skirt EXTRA_LABELS core REALTIME)
     target_include_directories(tst_tx_analyzer_skirt PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_tx_analyzer_skirt PRIVATE WDSP_STATIC_BUILD)
-    if(TEST tst_tx_analyzer_skirt)
-        set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
-    endif()
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
@@ -7814,9 +7804,35 @@ nereus_add_test(tst_station_lan_selection)
 # advertiser. On macOS the real backend registers on this computer only and
 # the test browses for it; nothing reaches a network.
 nereus_add_test(tst_dns_sd_advertiser)
+# INFRA-C1: the interpreter the rendezvous helpers run on
+# (tests/RendezvousTestHarness.h, tests/scripts/traversal-harness.sh). It
+# needs websockets and cryptography. It is resolved once here and compiled
+# in as an absolute path, never looked up on PATH when a test runs: on the
+# Linux CI runner install-qt-action puts a toolcache Python without those
+# packages ahead of /usr/bin, so a PATH lookup started an interpreter that
+# could not import the service. CI passes -DNEREUS_TEST_PYTHON=/usr/bin/python3
+# (Ubuntu's python3-websockets and python3-cryptography from apt).
+find_program(NEREUS_TEST_PYTHON NAMES python3
+    DOC "Python 3 with websockets and cryptography, for the rendezvous test helpers")
+if(NEREUS_TEST_PYTHON)
+    execute_process(COMMAND "${NEREUS_TEST_PYTHON}" -c "import websockets, cryptography"
+        RESULT_VARIABLE _nereus_test_python_ok OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _nereus_test_python_ok EQUAL 0)
+        message(WARNING
+            "${NEREUS_TEST_PYTHON} cannot import websockets and cryptography; "
+            "the rendezvous-backed tests (tst_rendezvous_client, tst_path_racer, "
+            "tst_relay_session, tst_gui_connection_controller) will fail. Set "
+            "-DNEREUS_TEST_PYTHON to an interpreter that has them.")
+    endif()
+else()
+    message(WARNING "No python3 found; set -DNEREUS_TEST_PYTHON for the rendezvous-backed tests.")
+    set(NEREUS_TEST_PYTHON python3)
+endif()
+
 nereus_add_test(tst_gui_connection_controller)
 target_compile_definitions(tst_gui_connection_controller PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
 # device key, one tap and the code against a real StationServer over the
 # loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
@@ -7851,7 +7867,8 @@ target_include_directories(tst_ice_transport_lifetime PRIVATE
 # and a session that outlives the service.
 nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_rendezvous_client PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # iPhone app plan Task 28 (R-IOS-16): the control session over a data
 # channel on this computer: the chunking and heartbeat bytes and the framing
 # fixtures (tests/data/link/v1/framing/), each end's cap, a whole session
@@ -7884,7 +7901,15 @@ target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
 set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
 # Task 56: the Core's compiled vendor sources contain the exact reviewed
 # relay cleanup patches, including libjuice's public and internal headers.
-if(DEFINED libjuice_SOURCE_DIR AND DEFINED NEREUS_ORIGINAL_JUICE_SOURCE_DIR
+# This check and the next are plain add_test() calls, not nereus_add_test(),
+# so they are not hashed into a shard: run them in shard 0 only, not in
+# every shard (fix wave INFRA minor 8).
+set(_nereus_unsharded_checks_here FALSE)
+if(NOT NEREUS_TEST_SHARDS GREATER 0 OR NEREUS_TEST_SHARD EQUAL 0)
+    set(_nereus_unsharded_checks_here TRUE)
+endif()
+if(_nereus_unsharded_checks_here AND DEFINED libjuice_SOURCE_DIR
+   AND DEFINED NEREUS_ORIGINAL_JUICE_SOURCE_DIR
    AND DEFINED NEREUS_ORIGINAL_DC_SOURCE_DIR)
     add_test(NAME relay_cleanup_patches
         COMMAND ${CMAKE_COMMAND}
@@ -7904,7 +7929,8 @@ endif()
 # still apply to the pinned source, both library targets compile them, and
 # each opens with its pinned file's own licence notice. Configures a small
 # project only; nothing is built or fetched.
-if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
+if(_nereus_unsharded_checks_here AND DEFINED libdatachannel_SOURCE_DIR
+   AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
     add_test(NAME libdatachannel_patch_applies
         COMMAND ${CMAKE_COMMAND}
             -DREPO=${CMAKE_SOURCE_DIR}
@@ -7933,15 +7959,17 @@ if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME traversal_harness
         COMMAND bash ${CMAKE_SOURCE_DIR}/tests/scripts/traversal-harness.sh
             --peer $<TARGET_FILE:nereus_rendezvous_peer>
-            --source ${CMAKE_SOURCE_DIR})
+            --source ${CMAKE_SOURCE_DIR}
+            --python ${NEREUS_TEST_PYTHON})
     set_tests_properties(traversal_harness PROPERTIES
         LABELS traversal
         TIMEOUT 1800
         RUN_SERIAL TRUE)
 endif()
 # Real ICE connections, each within the libraries' own deadlines. It runs
-# the Python service, which needs python3 with websockets and cryptography
-# (the Linux CI job installs them from apt).
+# the Python service on NEREUS_TEST_PYTHON (above), which needs websockets
+# and cryptography (the Linux CI job installs them from apt and points
+# NEREUS_TEST_PYTHON at /usr/bin/python3).
 if(TEST tst_rendezvous_client)
     set_tests_properties(tst_rendezvous_client PROPERTIES TIMEOUT 300)
 endif()
@@ -8677,9 +8705,13 @@ if(TEST tst_link_conformance_session)
     # in-process one does.
     # Load findings 3: the two transports are now two entries of the same
     # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
-    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel,
-    # each within the same 300 s (at load 198 to 281 both together took
-    # 397 s; the limit is not raised).
+    # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel.
+    # Each keeps the 300 s override. Locally each takes about 28 s at load
+    # 10 to 14 (2026-09-30). On the Linux CI runner (01d797e56) they took
+    # 92.60 s and 104.16 s, but those runs failed (two fixtures' gzip OS
+    # byte, since fixed), so there is no passing CI time yet; 120 s would
+    # be too close. Making them faster is an open item; the limit is not
+    # raised past 300.
     set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_MODE=loopback")
@@ -8856,12 +8888,9 @@ nereus_add_test(tst_remote_iq_codec)
 # 200 ppm fast and slow for 10 simulated minutes, the key's wait and
 # starvation. Injected clocks throughout.
 nereus_add_test(tst_remote_mic_receiver)
-# Two 10-minute runs of simulated time through WDSP rmatch take tens of
-# seconds of processor time; the default 120 s would trip on a loaded
-# machine, as it would for any heavy computation.
-if(TEST tst_remote_mic_receiver)
-    set_tests_properties(tst_remote_mic_receiver PROPERTIES TIMEOUT 600)
-endif()
+# Two 10-minute runs of simulated time through WDSP rmatch: 13 s of its
+# 17 s alone, 31 s at load 10 to 14 (2026-09-30), so the default 120 s holds
+# (fix wave INFRA-I3: the 600 s override is gone).
 
 # iPhone app plan Task 36 (R-IOS-13): the remote microphone ring at the
 # transmitter: the pump's branch in the normal and RADE paths, the Core's
@@ -8927,15 +8956,10 @@ nereus_add_test(tst_daemon_audio_transitions
     fakes/LoopbackTransport.cpp
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
-# Each of its four slots connects a fresh radio with real WDSP. The first
-# connect carries the process's FFTW planning at first channel use (see
-# tst_connectable_radio_model), about 30 s; later ones reuse those plans.
-# Measured 2026-09-23: about 42 s alone at load 4.6. The default 120 s is
-# under three times that, too close for a loaded -jN run; TIMEOUT 300 is
-# about seven times the measurement.
-if(TEST tst_daemon_audio_transitions)
-    set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
-endif()
+# Each of its four slots connects a fresh radio with real WDSP. Its FFTW
+# planning goes through the shared wisdom cache with the 0.1 s plan limit
+# (it names ConnectableRadioModel), so the 30 s cold plan that once needed
+# a 300 s override is gone and the default 120 s holds (fix wave INFRA-I3).
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 # R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
 nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
@@ -9478,7 +9502,14 @@ endforeach()
 # plain words.
 nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_path_racer PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
+# 22 s at load 10 to 14 (2026-09-30), on the Python NEREUS_TEST_PYTHON
+# names, but it runs real sessions like the link conformance entries, which
+# took 3 to 4 times longer on the Linux CI runner than here. It has no
+# passing CI time yet: on 01d797e56 it failed at 3.23 s on service.start()
+# (the helper's Python lacked its packages, since fixed). It keeps the
+# 400 s override it had.
 if(TEST tst_path_racer)
     set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
 endif()
@@ -9494,10 +9525,10 @@ target_compile_definitions(tst_relay_leg PRIVATE
 # (rendezvous section 12), the Core and a window. Loopback only.
 nereus_add_test(tst_relay_session fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_relay_session PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-if(TEST tst_relay_session)
-    set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
-endif()
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
+# 5 s at load 10 to 14 (2026-09-30); the default 120 s holds (INFRA-I3:
+# the 400 s override is gone).
 # Media inside a direct WebSocket session (the media tunnel): real Core,
 # real window, real DTLS/SRTP over an in-process link. Plays real-time
 # audio, so REALTIME.

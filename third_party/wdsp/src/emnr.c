@@ -23,6 +23,12 @@ The author can be reached by email at
 warren@wpratt.com
 
 */
+
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): RXAbp1Check takes the channel and reads the
+// stage run states itself, so each set-run call clears its own run flag before
+// the check instead of passing the pending state in. The file also ends with a newline.
 #define _CRT_SECURE_NO_WARNINGS
 #include "comm.h"
 #include "calculus.h"

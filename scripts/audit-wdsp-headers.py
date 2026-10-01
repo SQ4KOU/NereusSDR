@@ -9,6 +9,15 @@ WDSP-PROVENANCE.md claim (164 full-header files + 5 exempt utilities).
 Use this whenever the WDSP vendored tree is re-synced from upstream to
 catch drift before the verifier's exemption set goes stale.
 
+It also checks the warning lists in third_party/wdsp/CMakeLists.txt
+(fix wave, 2026-09-30): every source in WDSP_SOURCES that is not in
+WDSP_EDITED_SOURCES builds with warnings off, so each of those must be
+byte-identical to its pinned_sha256 in
+docs/architecture/wdsp210-verification/source-manifest.csv, and each
+edited source must differ from it. A silenced file that differs from the
+pin fails the run, as does an edited file that matches it (the list is
+stale either way).
+
 Usage:
     python3 scripts/audit-wdsp-headers.py
     python3 scripts/audit-wdsp-headers.py --format=json
@@ -16,13 +25,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 WDSP_SRC = REPO / "third_party" / "wdsp" / "src"
+WDSP_CMAKE = REPO / "third_party" / "wdsp" / "CMakeLists.txt"
+WDSP_MANIFEST = (REPO / "docs" / "architecture" / "wdsp210-verification"
+                 / "source-manifest.csv")
 
 # Pinned TAPR WDSP 2.10 plus retained Nereus extensions, audited 2026-09-22.
 # The two Nereus ABI headers have full grants; obsolete FDnoiseIQ/fastmath
@@ -69,6 +84,42 @@ def scan():
     return rows
 
 
+def cmake_list(text: str, name: str) -> list[str]:
+    match = re.search(r"set\(" + name + r"\s*\n(.*?)\)", text, re.S)
+    if not match:
+        return []
+    return [entry for entry in match.group(1).split() if not entry.startswith("#")]
+
+
+def check_warning_lists() -> list[str]:
+    """Problems with WDSP_EDITED_SOURCES against the pinned hashes."""
+    if not WDSP_CMAKE.is_file() or not WDSP_MANIFEST.is_file():
+        return [f"missing {WDSP_CMAKE.relative_to(REPO)} or "
+                f"{WDSP_MANIFEST.relative_to(REPO)}"]
+    text = WDSP_CMAKE.read_text()
+    sources = cmake_list(text, "WDSP_SOURCES")
+    edited = cmake_list(text, "WDSP_EDITED_SOURCES")
+    if not sources or not edited:
+        return ["could not read WDSP_SOURCES or WDSP_EDITED_SOURCES"]
+    with WDSP_MANIFEST.open(newline="") as handle:
+        pinned = {row["path"]: row["pinned_sha256"]
+                  for row in csv.DictReader(handle)}
+    problems = []
+    for entry in edited:
+        if entry not in sources:
+            problems.append(f"{entry}: in WDSP_EDITED_SOURCES but not WDSP_SOURCES")
+    for entry in sources:
+        path = WDSP_CMAKE.parent / entry
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        matches_pin = digest == pinned.get(Path(entry).name, "")
+        if entry in edited and matches_pin:
+            problems.append(f"{entry}: matches the pin but is listed as edited")
+        elif entry not in edited and not matches_pin:
+            problems.append(f"{entry}: differs from the pin but builds with "
+                            "warnings silenced; add it to WDSP_EDITED_SOURCES")
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--format", choices=["text", "json"], default="text")
@@ -83,15 +134,18 @@ def main():
         if counts.get(kind, 0) != expected
     }
 
+    list_problems = check_warning_lists()
+
     if args.format == "json":
         print(json.dumps({
             "total": len(rows),
             "counts": dict(counts),
             "expected": EXPECTED,
             "drift": drift,
+            "warningListProblems": list_problems,
             "files": rows,
         }, indent=2))
-        return 1 if drift else 0
+        return 1 if drift or list_problems else 0
 
     print(f"WDSP header census — {len(rows)} files scanned under "
           f"{WDSP_SRC.relative_to(REPO)}/")
@@ -115,11 +169,21 @@ def main():
         for n in covered:
             print(f"  {n}")
 
+    if list_problems:
+        print("\nFAIL: WDSP_EDITED_SOURCES disagrees with the pinned hashes:",
+              file=sys.stderr)
+        for problem in list_problems:
+            print(f"  {problem}", file=sys.stderr)
+    else:
+        print("\nWarning lists match the pinned hashes ✓")
+
     if drift:
         print(
             f"\nFAIL: WDSP-PROVENANCE.md counts disagree with tree: {drift}",
             file=sys.stderr,
         )
+        return 1
+    if list_problems:
         return 1
     print("\nCensus matches WDSP-PROVENANCE.md ✓")
     return 0
