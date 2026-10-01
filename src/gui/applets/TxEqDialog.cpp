@@ -103,6 +103,15 @@
 //                 LoadFromJson, so it always equals the Core's txEqCurve.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-10-01 - The Low / High spread guard follows Thetis's
+//                 nudParaEQ_low / nudParaEQ_high handlers
+//                 (eqform.cs:3539-3577 [v2.10.3.15]): the clamped value
+//                 re-fires and reaches the curve, and the range change's
+//                 rescaled points reach the model through pointsChanged.
+//                 Low and High take typed input on commit (Enter or
+//                 leaving the box), as Thetis's NumericUpDowns do.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -221,10 +230,9 @@ constexpr int    kParaHighMinHz          =      0;         // cs:589
 constexpr int    kParaHighMaxHz          =  20000;         // cs:581
 constexpr int    kParaHighDefaultHz      =  16000;         // cs:595
 
-// 1 kHz minimum spread between Low and High — mirrors
-// frmCFCConfig.cs:122-138 [v2.10.3.13] guard (eqform doesn't expose
-// the same constant explicitly but enforces the same invariant via
-// nudParaEQ_low / nudParaEQ_high handlers; we copy CFC's threshold).
+// 1 kHz minimum spread between Low and High.
+// From Thetis eqform.cs:3543, 3545, 3563, 3565 [v2.10.3.15] — the literal
+// 1000 in nudParaEQ_low_ValueChanged / nudParaEQ_high_ValueChanged.
 constexpr int    kMinFreqSpreadHz        = 1000;
 
 // Edit-row preamp (nudParaEQ_preamp) — eqform.cs:671-699 [v2.10.3.13].
@@ -780,6 +788,13 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraLowSpin->setRange(kParaLowMinHz, kParaLowMaxHz);
         m_paraLowSpin->setValue(kParaLowDefaultHz);
         m_paraLowSpin->setSuffix(QStringLiteral(" Hz"));
+        // From Thetis eqform.cs:3539-3577 [v2.10.3.15]: udParaEQ_low /
+        // udParaEQ_high are NumericUpDowns (NumericUpDownTS adds no text
+        // handling, numericupdownts.cs:33), which raise ValueChanged only
+        // when typed text is committed (Enter or leaving the box), so the
+        // spread guard and the curve's rescale run once per typed value,
+        // not per keystroke.
+        m_paraLowSpin->setKeyboardTracking(false);
         m_paraLowSpin->setToolTip(tr(
             "Lower edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz below High."));
@@ -791,6 +806,7 @@ QWidget* TxEqDialog::buildParametricPanel()
         m_paraHighSpin->setRange(kParaHighMinHz, kParaHighMaxHz);
         m_paraHighSpin->setValue(kParaHighDefaultHz);
         m_paraHighSpin->setSuffix(QStringLiteral(" Hz"));
+        m_paraHighSpin->setKeyboardTracking(false);  // as Low above
         m_paraHighSpin->setToolTip(tr(
             "Upper edge of the visible parametric freq range (Hz).  "
             "Must be at least 1000 Hz above Low."));
@@ -1176,28 +1192,30 @@ void TxEqDialog::onParametricBandCountChanged()
 void TxEqDialog::onParametricLowFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraHighSpin) { return; }
-    // Enforce the 1 kHz spread guard — clamp Low so it stays at least
-    // kMinFreqSpreadHz below High.
+    // From Thetis eqform.cs:3539-3557 [v2.10.3.15] (nudParaEQ_low_ValueChanged).
+    // The clamp sets the spin box with this handler still connected, so
+    // valueChanged re-fires with the clamped value and that call moves the
+    // curve. The range setter rescales the points and emits pointsChanged,
+    // which onParametricPointsChanged stores in the model, as Thetis's
+    // ucParametricEq1_PointsChanged does (eqform.cs:3197-3213 [v2.10.3.15]).
     const int hi = m_paraHighSpin->value();
-    if (hz + kMinFreqSpreadHz > hi) {
-        QSignalBlocker b(m_paraLowSpin);
+    if (hz > hi - kMinFreqSpreadHz) {
         m_paraLowSpin->setValue(hi - kMinFreqSpreadHz);
         return;  // valueChanged will re-fire with the clamped value
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMinHz(static_cast<double>(hz));
 }
 
 void TxEqDialog::onParametricHighFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraLowSpin) { return; }
+    // From Thetis eqform.cs:3559-3577 [v2.10.3.15] (nudParaEQ_high_ValueChanged),
+    // the same shape as Low above.
     const int lo = m_paraLowSpin->value();
     if (hz < lo + kMinFreqSpreadHz) {
-        QSignalBlocker b(m_paraHighSpin);
         m_paraHighSpin->setValue(lo + kMinFreqSpreadHz);
         return;
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMaxHz(static_cast<double>(hz));
 }
 
