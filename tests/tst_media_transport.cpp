@@ -2371,17 +2371,19 @@ struct StalledOwnerRun {
     int ownerReports{0};
     QString sinkThread;
     double ownerWaitMaxMs{0.0};
+    int postRefused{0};
+    int sendRefused{0};
+    bool ownerExposed{false};
 };
 
 } // namespace
 
-// TX mic thread: the phone sends its microphone steadily (a packet every
-// 20 ms, from a thread of its own); the Core's owner thread stalls seven
-// times, 80 to 420 ms (the Rock bench's range), while a pump takes the
-// feed's 64-frame blocks in real time. Delivered by the owner
-// (micRtpReceived, the old path), each stall runs the buffer dry. With a
-// sink, the line's own thread delivers it and the stalls never reach the
-// buffer: no underruns at all.
+// Owner-isolation fixture: one pausable sample clock coordinates the phone's
+// 20 ms packets and the feed's 64-frame pulls. Source/TestPhone scheduling
+// pauses that clock; real transport delivery remains independent. The owner
+// stalls seven times while the source and pump continue, so only owner-routed
+// delivery runs the buffer dry. Independent source starvation and radio clocks
+// remain separate receiver/latency test contracts.
 void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
 {
     constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
@@ -2483,40 +2485,48 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
         if (offerStarted && offerReady.count() == 1 && answerReady.load()) {
             using Clock = std::chrono::steady_clock;
             std::atomic<bool> stop{false};
-            // The phone's microphone stays active until the pump stops.
-            std::thread sender([&]() {
-                const Clock::time_point start = Clock::now();
-                for (quint64 k = 0; !stop.load(); ++k) {
-                    std::this_thread::sleep_until(start + std::chrono::milliseconds(20 * k));
+            // A source pause must freeze the sample clock before it consumes
+            // the previous packet's lead. Wait only for TestPhone's send call,
+            // never for receipt, decode, fill or owner processing.
+            std::atomic<int> underrunsAtEnd{-1};
+            std::atomic<qint64> pumpBlocks{0};
+            std::thread coordinator([&]() {
+                std::vector<float> out(kBlock);
+                Clock::time_point deadline = Clock::now();
+                quint64 packetIndex = 0;
+                for (qint64 tick = 0; !stop.load(); ++tick) {
+                    std::this_thread::sleep_until(deadline);
                     if (stop.load()) {
                         break;
                     }
-                    QByteArray packet = encoded[static_cast<size_t>(k % packets)];
-                    // Reusing the audio must not restart the RTP stream.
-                    qToBigEndian<quint16>(static_cast<quint16>(k + 1), packet.data() + 2);
-                    qToBigEndian<quint32>(static_cast<quint32>(k * kFrames), packet.data() + 4);
-                    QMetaObject::invokeMethod(
-                        &phoneContext,
-                        [&answerer, &sent, packet]() {
-                            sent.fetch_add(answerer->sendMicRtp(packet) ? 1 : 0);
-                        },
-                        Qt::QueuedConnection);
-                }
-            });
-            // The TX pump: one block every 4/3 ms, from when the feed has
-            // started, to the end of the run.
-            std::atomic<int> underrunsAtEnd{-1};
-            std::thread pump([&]() {
-                std::vector<float> out(kBlock);
-                while (!stop.load() && !feed.stats().started) {
+                    const auto interval = ((tick + 1) * kBlock * 1000000 / 48000)
+                                        - (tick * kBlock * 1000000 / 48000);
+                    const Clock::time_point wake = Clock::now();
+                    // Preserve ordinary sub-tick wake jitter. After a missed
+                    // whole tick, rebase instead of replaying overdue pulls.
+                    Clock::time_point base = wake - deadline >= std::chrono::microseconds(interval)
+                                                ? wake : deadline;
+                    if (tick % (kFrames / kBlock) == 0) {
+                        const Clock::time_point workStart = Clock::now();
+                        QByteArray packet = encoded[static_cast<size_t>(packetIndex % packets)];
+                        // Reusing the audio must not restart the RTP stream.
+                        qToBigEndian<quint16>(static_cast<quint16>(packetIndex + 1), packet.data() + 2);
+                        qToBigEndian<quint32>(static_cast<quint32>(packetIndex * kFrames), packet.data() + 4);
+                        const bool posted = QMetaObject::invokeMethod(
+                            &phoneContext, [&]() {
+                                const bool accepted = answerer->sendMicRtp(packet);
+                                sent.fetch_add(accepted ? 1 : 0);
+                                run.sendRefused += accepted ? 0 : 1;
+                            }, Qt::BlockingQueuedConnection);
+                        run.postRefused += posted ? 0 : 1;
+                        base += Clock::now() - workStart;
+                        ++packetIndex;
+                    }
+                    // Pull through startup and underflow as the ordinary pump
+                    // does. No decoded-supply condition gates clock progress.
                     feed.pullBlock(out.data(), kBlock, -1.0);
-                    std::this_thread::sleep_for(std::chrono::microseconds(1333));
-                }
-                const Clock::time_point start = Clock::now();
-                for (qint64 b = 0; !stop.load(); ++b) {
-                    std::this_thread::sleep_until(
-                        start + std::chrono::microseconds(b * kBlock * 1000000 / 48000));
-                    feed.pullBlock(out.data(), kBlock, -1.0);
+                    pumpBlocks.fetch_add(1);
+                    deadline = base + std::chrono::microseconds(interval);
                 }
             });
 
@@ -2524,13 +2534,19 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
             QTest::qWait(kWarmupMs);
             const int underrunsAtWarmup = feed.stats().underflows;
             for (const int stall : stallsMs) {
+                const int sentBefore = sent.load();
+                const qint64 pulledBefore = pumpBlocks.load();
                 std::this_thread::sleep_for(std::chrono::milliseconds(stall));
+                // Prove both sides did more work than the maximum buffer can
+                // hold during at least one owner stall, independent of fill.
+                run.ownerExposed = run.ownerExposed
+                    || ((sent.load() - sentBefore) * kFrames > RemoteMicConfig::kMaxDepthFrames
+                        && (pumpBlocks.load() - pulledBefore) * kBlock > RemoteMicConfig::kMaxDepthFrames);
                 QTest::qWait(kBetweenStallsMs);
             }
             underrunsAtEnd.store(feed.stats().underflows - underrunsAtWarmup);
             stop.store(true);
-            pump.join();
-            sender.join();
+            coordinator.join();
             run.underruns = underrunsAtEnd.load();
             // What the phone sent reaches the Core (a packet or two may
             // still be in flight).
@@ -2561,6 +2577,12 @@ void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
                .arg(line.ownerWaitMaxMs, 0, 'f', 1)
                .arg(line.delivered)
                .arg(line.sinkThread);
+    QCOMPARE(owner.postRefused, 0);
+    QCOMPARE(owner.sendRefused, 0);
+    QCOMPARE(line.postRefused, 0);
+    QCOMPARE(line.sendRefused, 0);
+    QVERIFY(owner.ownerExposed);
+    QVERIFY(line.ownerExposed);
     // Delivered by the owner: the stalls reach the buffer and run it dry.
     QVERIFY2(owner.underruns >= 1, qPrintable(QString::number(owner.underruns)));
     QVERIFY(owner.ownerWaitMaxMs >= 80.0);
