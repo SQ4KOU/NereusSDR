@@ -105,6 +105,10 @@
 //   2026-09-30 - Shared-input filters (ruling (c)): m_countedSlotsAdc0,
 //                the DDCs the receive low-pass follows. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - bindToRadioFacingAddress, applySocketBufferSizes and
+//                kRouteLookupMs: the receive socket binds the address that
+//                reaches the radio (network.c:116-118, 203 [v2.10.3.15]).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -569,6 +573,14 @@ private:
     //   (network.c:398-404 StopReadThread) so it needs no equivalent.
     static constexpr int kStopQuiesceMs = 100;
     static constexpr int kStopDrainMs   = 20;
+
+    // The receive socket listens on the local address that reaches the radio,
+    // as Thetis's listenSock binds the network card's address
+    // (network.c:116-118, 203 [v2.10.3.15]). kRouteLookupMs bounds the route
+    // lookup (a UDP connect, which sends nothing and completes at once).
+    void bindToRadioFacingAddress();
+    void applySocketBufferSizes();
+    static constexpr int kRouteLookupMs = 100;
 
     // MOX-off grace window (2026-07-27, Codex review PR #306).  After unkey
     // the 100 ms heartbeat keeps running this long so the MOX-off state is
