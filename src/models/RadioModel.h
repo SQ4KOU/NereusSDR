@@ -3688,6 +3688,7 @@ public:
         TunerStopped,        // the tuner let go of the tune first
         CarrierNotStarted,   // the tune carrier was refused, no words given
         TransmitTaken,       // another device or the radio's PTT took transmit
+        LinkLost,            // the device's session ended (its link dropped or it left)
         NoReasonGiven,       // the backstop: an end that named no reason
     };
     /// The words of each, for the device's tuneEnded notice.

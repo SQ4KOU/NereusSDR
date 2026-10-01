@@ -375,6 +375,7 @@ enum class UnkeyedEnd {
     OnAir,
     CarrierRefused,
     TransmitTaken,
+    LinkLost,
     NoReasonGiven,
 };
 
@@ -1355,6 +1356,7 @@ private slots:
         QTest::newRow("on the air") << UnkeyedEnd::OnAir;
         QTest::newRow("carrier refused") << UnkeyedEnd::CarrierRefused;
         QTest::newRow("transmit taken") << UnkeyedEnd::TransmitTaken;
+        QTest::newRow("link lost") << UnkeyedEnd::LinkLost;
         QTest::newRow("no reason given") << UnkeyedEnd::NoReasonGiven;
     }
     void aDevicesCycleEndedUnkeyedTellsThatDeviceOnce()
@@ -1415,9 +1417,25 @@ private slots:
             QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(
                 QByteArray(KeyerIdentity::kStationDeviceId)));
             break;
+        case UnkeyedEnd::LinkLost: {
+            // A's link drops while its cycle waits; the notice is kept for
+            // it, away, and comes when it signs in again.
+            expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::LinkLost);
+            LoopbackTransport* dropped = appA;
+            dropped->closeLink(QStringLiteral("lost"));
+            QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+            QVERIFY(tuneEndedNotices(dropped).isEmpty());
+            core.now += 60000;
+            appA = core.signIn(a, kTransmitter);
+            QVERIFY(admitted(appA));
+            break;
+        }
         case UnkeyedEnd::NoReasonGiven:
-            // An end that names no reason (MOX's manual flag dropping with
-            // nothing keyed) still tells the device, with the backstop.
+            // The backstop for an end that names no reason. Every real end
+            // path names its own now (the tune-ended lane's review found
+            // none left), so this row is synthetic: MOX's manual flag
+            // dropping with nothing keyed, emitted from outside, stands
+            // for a future path that forgets its words.
             expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::NoReasonGiven);
             emit mox->manualMoxChanged(false);
             break;

@@ -969,7 +969,7 @@
 //   2026-10-01 - Tune-ended lane: every end of a device's autotune before
 //                its carrier keyed names why (the tuner disconnected or let
 //                go, receive only, on the air, the carrier's refusal, a
-//                take), so the device is always told. J.J. Boyd (KG4VCF),
+//                take, its lost link), so the device is always told. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -30354,6 +30354,8 @@ QString RadioModel::tunerTuneEndedReason(TunerTuneEnd end)
         return QStringLiteral("The Core could not start the tune carrier.");
     case TunerTuneEnd::TransmitTaken:
         return QStringLiteral("Transmit was taken, so the tune stopped.");
+    case TunerTuneEnd::LinkLost:
+        return QStringLiteral("The tune stopped because this device's link to the Core was lost.");
     case TunerTuneEnd::NoReasonGiven:
         break;
     }
@@ -30907,10 +30909,21 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     if (!m_isTuning) {
         // Refused (the device went away, another holds transmit, a block
         // came on): nothing keyed, so the amplifier goes back now.
-        // Tune-ended lane: a device's cycle is told the refusal's words.
-        const QString unkeyedReason = !refusedReason.isEmpty() ? refusedReason
-            : !gateRefusal.isEmpty() ? gateRefusal.text
-                                     : tunerTuneEndedReason(TunerTuneEnd::CarrierNotStarted);
+        // Tune-ended lane: a device's cycle is told the keying gate's
+        // refusal (TxRefusal words), else the controller's last refusal
+        // only when setTune passed exactly that on (a quiet gate refusal),
+        // else the not-started words. setTune's own literals (the power-on
+        // guard) never reach the device: they are console words, and a
+        // last refusal they did not pass on is stale.
+        QString unkeyedReason;
+        if (!gateRefusal.isEmpty()) {
+            unkeyedReason = gateRefusal.text;
+        } else if (m_moxController && !refusedReason.isEmpty()
+                   && refusedReason == m_moxController->lastRefusal().text) {
+            unkeyedReason = m_moxController->lastRefusal().text;
+        } else {
+            unkeyedReason = tunerTuneEndedReason(TunerTuneEnd::CarrierNotStarted);
+        }
         if (refusedReason.isEmpty() && m_moxController) {
             refusedReason = QStringLiteral("none given; the controller's last refusal: %1")
                                 .arg(m_moxController->lastRefusal().text);
