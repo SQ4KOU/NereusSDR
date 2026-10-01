@@ -132,6 +132,11 @@
 //               not start cannot end a change before its restart runs
 //               either. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: the restart for a radio change stops a deadline the run
+//               it restarts started, so a discovery completion queued
+//               ahead of the restart cannot end the new change early
+//               (restartForRadioChange). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1283,9 +1288,11 @@ void DaemonApp::endRadioSwitch()
     // A change chosen but not yet run (switchRadio until restartForRadioChange)
     // is never ended here: whatever reports now (the old radio's failure, its
     // late Connected, a discovery or connect that did not start) belongs to
-    // the run the change is about to restart, not to the change. Its
-    // deadline is not running yet; it starts when the new radio's connect
-    // does (finishRadioDiscovery).
+    // the run the change is about to restart, not to the change. A deadline
+    // running now is that run's too (a discovery completion queued ahead of
+    // the restart can start one); the restart stops it, and the change's own
+    // deadline starts when the new radio's connect does
+    // (finishRadioDiscovery).
     if (m_radioChangeRestartPending) {
         return;
     }
@@ -1325,6 +1332,16 @@ void DaemonApp::restartForRadioChange()
         return;
     }
     m_radioChangeRestartPending = false;
+    // The change's deadline is its own: one the run being restarted started
+    // (a discovery completion queued ahead of this turn connected the old
+    // choice while the change was switching) would otherwise outlive the
+    // restart and end this change before the new radio's first discovery.
+    // Stopped here, after the flag clears, not in switchRadio: that queued
+    // completion runs between the two and starts the deadline again.
+    // Every path from here ends the change (the on-air refusal, a failed
+    // start) or reaches finishRadioDiscovery, which ends it or starts its
+    // deadline.
+    m_radioSwitchDeadline->stop();
     // Fix wave, M3: on the air now (a key that raced the change) refuses
     // the change; nothing keyed is torn down.
     if (refuseRadioChangeOnAir()) {

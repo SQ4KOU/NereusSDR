@@ -480,7 +480,11 @@ private slots:
         QVERIFY2(app.m_stationRadios->select(info.macAddress, &reason), qPrintable(reason));
         QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel && app.m_radioModel->isConnected(), 15000);
         QTRY_VERIFY(!app.m_stationRadios->switching());
-        QCOMPARE(app.m_stationRadios->savedChoice(), info.macAddress.toUpper());
+        // The choice is saved by the Connected handler (confirmChoice),
+        // queued after the model reports connected. Under load this
+        // change's own deadline can end it before that handler runs, so
+        // wait for the save itself, not for the change to end.
+        QTRY_COMPARE(app.m_stationRadios->savedChoice(), info.macAddress.toUpper());
         QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
         app.stop();
     }
@@ -634,6 +638,89 @@ private slots:
         // The old radio's Connected does not save the pending choice.
         QCOMPARE(app.m_stationRadios->savedChoice(), savedBefore);
         QCOMPARE(app.m_stationRadios->pendingChoice(), other.macAddress.toUpper());
+        app.stop();
+    }
+
+    // A discovery completion already queued when a window chooses runs
+    // ahead of the restart: it connects the run's radio while the change is
+    // switching, so it starts a deadline. That deadline is the old run's;
+    // the restart stops it, so it cannot end the new change before the new
+    // radio is found. Here the new run's discovery is held, so only that
+    // leftover deadline could end the change.
+    void aDeadlineFromTheRunBeforeARestartDoesNotEndTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        P1FakeRadio otherFake;
+        otherFake.start();
+        RadioInfo other = infoFor(otherFake);
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        // 0: only the other radio is in sight (the run waits for its own).
+        // 1: the old run's scan, held until released, then both radios.
+        // 2: the new run's scan, held until released, then both radios.
+        std::atomic<int> phase {0};
+        std::atomic<bool> oldScanHeld {false};
+        std::atomic<bool> newScanHeld {false};
+        QSemaphore releaseOldScan;
+        QSemaphore releaseNewScan;
+        DaemonApp app;
+        prepare(app);
+        app.m_radioSwitchBoundMs = 300;
+        app.m_discoveryProviderForTest = [&]() {
+            const int now = phase.load();
+            if (now == 1) {
+                oldScanHeld = true;
+                releaseOldScan.tryAcquire(1, 30000);
+            } else if (now == 2) {
+                newScanHeld = true;
+                releaseNewScan.tryAcquire(1, 30000);
+            }
+            return now == 0 ? QList<RadioInfo>{other} : QList<RadioInfo>{info, other};
+        };
+        const auto releaseScans = qScopeGuard([&]() {
+            releaseOldScan.release(100);
+            releaseNewScan.release(100);
+        });
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_stationRadios->radioFor(other.macAddress).has_value(),
+                                 10000);
+        QVERIFY(!app.m_radioModel->connection());
+
+        // The old run's next scan finds its radio; its completion is queued
+        // before the choice is made.
+        phase = 1;
+        QTRY_VERIFY_WITH_TIMEOUT(oldScanHeld.load(), 10000);
+        QThread* const oldScan = app.m_radioDiscoveryThread.get();
+        QVERIFY(oldScan);
+        phase = 2;
+        releaseOldScan.release();
+        QVERIFY(oldScan->wait(10000));
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QVERIFY(app.m_radioChangeRestartPending);
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(newScanHeld.load(), 10000);
+        QVERIFY(app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioSwitchDeadline->isActive());
+        // Past the old run's deadline, the change is still under way.
+        QTest::qWait(app.m_radioSwitchBoundMs * 2);
+        QVERIFY(app.m_stationRadios->switching());
+        QVERIFY(app.m_radioModel->stationRadioChangeUnderway());
+        QVERIFY(!app.m_stationRadios->select(info.macAddress, &reason));
+        QCOMPARE(reason, StationRadios::switchingReason());
+
+        // The new run finds its radio, which connects and ends the change.
+        app.m_radioSwitchBoundMs = DaemonApp::kRadioSwitchConnectBoundMs;
+        releaseNewScan.release();
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 15000);
+        QCOMPARE(app.m_radioModel->connection()->radioInfo().macAddress.toUpper(),
+                 other.macAddress.toUpper());
+        QTRY_COMPARE(app.m_stationRadios->savedChoice(), other.macAddress.toUpper());
+        QTRY_VERIFY(!app.m_stationRadios->switching());
         app.stop();
     }
 
