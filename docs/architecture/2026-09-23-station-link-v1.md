@@ -297,10 +297,14 @@ Each refusal is followed by the close, as for a token (section 12.4).
 
 **Rate limits.** Failed device sign-ins are counted per source address and
 per device id: 10 within 60 s (`kMaxFailures`, `kWindowMs`) refuse that
-address, or that id, for 60 s (`kLockoutMs`). A sign-in refused while
-limited is not counted again. A connection through the relay has no
+address, or that id, for 60 s (`kLockoutMs`). A failed proof counts
+against the address and the relay introduction only, never the id it
+names: it did not come from that id's key, and counting it would let
+anyone who knows a paired device's id lock the device out. A proved key
+the Core has not paired counts against its id as well. A sign-in refused
+while limited is not counted again. A connection through the relay has no
 address of its own (`SessionTransport::peerAddress` is empty there), so the
-limit applies per device id and per relay introduction. The device limiter
+limit applies per relay introduction (and per id, for proved keys). The device limiter
 never consults the token's (or, later, the pairing code's), and they never
 consult it: wrong tokens do not lock out a device's key, and failed device
 sign-ins do not lock out the token.

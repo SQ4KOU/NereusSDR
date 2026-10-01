@@ -27,9 +27,13 @@
 //
 // Failures are counted per source address and per device id: 10 within
 // 60 s refuse that address, or that id, for 60 s (kMaxFailures,
-// kWindowMs, kLockoutMs). Connections through the relay share the relay's
-// address, so there the address is empty and the limit applies per device
-// id and per introduction instead. This limiter is the device path's
+// kWindowMs, kLockoutMs). A failed proof counts against the address and
+// introduction only, never the id: it did not come from the id's key, so
+// counting it there would let anyone who knows a paired device's id lock
+// that device out. Only a proved key that is not paired counts against
+// its id. Connections through the relay share the relay's address, so
+// there the address is empty and the limit applies per introduction (and
+// per id, for proved keys) instead. This limiter is the device path's
 // own: it never consults the pairing token's limiter or (later) the
 // pairing-code limiter, and those never consult it, so token guesses
 // cannot lock out a device key and the reverse. A refused attempt while
@@ -40,6 +44,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: LINK minor 4: a failed proof no longer counts against the
+//               device id it names. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
@@ -137,8 +144,9 @@ private:
     };
 
     qint64 now() const;
-    QStringList limitKeys(const DeviceAuthRequest& request) const;
-    void recordFailure(const DeviceAuthRequest& request);
+    /// The keys a request is limited by; the id only when `countId`.
+    QStringList limitKeys(const DeviceAuthRequest& request, bool countId) const;
+    void recordFailure(const DeviceAuthRequest& request, bool countId);
     void prune(qint64 now);
 
     const DeviceStore& m_store;
