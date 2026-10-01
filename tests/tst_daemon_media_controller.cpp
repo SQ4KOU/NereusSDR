@@ -6,6 +6,10 @@
 // production reaches the source exclusively through RadioModel's tagged tap.
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane, review round: the tail's start, the
+//               pump's longest wait with its sequence step, and "RF start
+//               not measured" without a placing send path. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-01: TX diagnostics lane: the unkey line splits its padded
 //               silence and the event lines place the over's underruns, ran
 //               dry and catch-up bursts. J.J. Boyd (KG4VCF), AI-assisted via
@@ -4893,6 +4897,7 @@ void TstDaemonMediaController::unkeyEventLinesPlaceTheOversDropouts()
     send.padStartSamples = 13'248;
     send.padMidSamples = 103'680;
     send.padTailSamples = 2'832;
+    send.padTailAtMs = 4310.0;
     send.longestMidPadSamples = 103'680;
     send.longestMidPadAtMs = 2010.25;
     send.keySteadyNs = 1'000'000'000;
@@ -4904,16 +4909,36 @@ void TstDaemonMediaController::unkeyEventLinesPlaceTheOversDropouts()
     send.burstEvents = 2;
     send.bursts[0] = {69.0, 1.0, 8};
     send.bursts[1] = {4120.5, 21.0, 12};
+    send.longestWakeGapMs = 512.0;
+    send.longestWakeGapAtMs = 2005.5;
+    send.wakeGapSequenceStep = 1;
 
     const QString line = DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, send);
     QVERIFY2(line.contains(QStringLiteral(
-                 "silence 119760 samples (start 13248, mid-key 103680, unkey tail 2832), "
-                 "late wakes 0")),
+                 "silence 119760 samples (start 13248, mid-key 103680, unkey tail 2832 from "
+                 "+4310.0 ms), late wakes 0")),
              qPrintable(line));
     QVERIFY2(line.endsWith(QStringLiteral(
                  ", first I/Q block at +69.0 ms of the key, longest mid-key silence 540.0 ms at "
-                 "+2010.3 ms")),
+                 "+2010.3 ms, longest wait for a microphone block 512.0 ms at +2005.5 ms of the "
+                 "key, radio frame sequence step 1")),
              qPrintable(line));
+    // Frames lost on the way: the step is the frames missed; a gap that
+    // began just before the send thread's first keyed pass reads negative;
+    // no sequence seen, and no wait measured, say so.
+    RadioConnection::TxSendStats lost = send;
+    lost.wakeGapSequenceStep = 385;
+    lost.longestWakeGapAtMs = -2.5;
+    QVERIFY2(DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, lost)
+                 .endsWith(QStringLiteral("512.0 ms at -2.5 ms of the key, radio frame sequence "
+                                          "step 385")),
+             qPrintable(DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, lost)));
+    lost.wakeGapSequenceStep = -1;
+    QVERIFY(DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, lost)
+                .endsWith(QStringLiteral("of the key, no radio frame sequence seen")));
+    lost.longestWakeGapMs = -1.0;
+    QVERIFY(DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, lost)
+                .endsWith(QStringLiteral(", no wait for a microphone block measured")));
 
     const QStringList events = DaemonMediaController::unkeyEventLines("ab12", &feed, send);
     QCOMPARE(events.size(), 5);
@@ -4936,13 +4961,22 @@ void TstDaemonMediaController::unkeyEventLinesPlaceTheOversDropouts()
              QStringLiteral("Transmit ended (ab12): catch-up burst 2 at +4120.5 ms of the key, "
                             "12 frames after a send gap of 21.0 ms"));
 
-    // Without a send path that places, only the underruns, against no RF.
+    // A placed path whose TX channel never sent: RF never started.
+    RadioConnection::TxSendStats neverSent = send;
+    neverSent.firstBlockAtMs = -1.0;
+    QVERIFY2(DaemonMediaController::unkeyEventLines("ab12", &feed, neverSent)
+                 .at(0)
+                 .contains(QStringLiteral("of the line, RF never started, silent")),
+             qPrintable(DaemonMediaController::unkeyEventLines("ab12", &feed, neverSent).at(0)));
+
+    // Without a send path that places (Protocol 1), only the underruns,
+    // and RF's start is not measured.
     RadioConnection::TxSendStats p1;
     p1.valid = true;
     p1.overflowOnly = true;
     const QStringList p1Events = DaemonMediaController::unkeyEventLines("ab12", &feed, p1);
     QCOMPARE(p1Events.size(), 2);
-    QVERIFY2(p1Events.at(0).contains(QStringLiteral("of the line, RF never started, silent")),
+    QVERIFY2(p1Events.at(0).contains(QStringLiteral("of the line, RF start not measured, silent")),
              qPrintable(p1Events.at(0)));
     QVERIFY(!DaemonMediaController::unkeyStatsLine("ab12", rx, &feed, p1)
                  .contains(QStringLiteral("mid-key")));

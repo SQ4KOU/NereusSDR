@@ -146,6 +146,11 @@
 //                dry and its catch-up bursts in time, for the unkey line.
 //                Measurement only; nothing sent changes. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TX diagnostics lane, review round: the unkey tail's start,
+//                each port 1026 microphone frame's sequence number to the TX
+//                pump's wake watch (begun at key, ended at unkey), and its
+//                figures in txSendStats. Measurement only. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //
@@ -1506,6 +1511,9 @@ void P2RadioConnection::setMox(bool enabled)
         m_txIqPrimePending.store(true, std::memory_order_release);
         // R-IOS-13, R-R3-42: the send path's counters run per key.
         resetTxSendStats();
+    } else if (m_txMicSource != nullptr) {
+        // TX diagnostics lane: the pump's wakes are timed during the key.
+        m_txMicSource->wakeWatch().end();
     }
     m_mox = enabled;
     if (!enabled) {
@@ -2443,6 +2451,7 @@ void P2RadioConnection::noteTxIqPadding(qint64 nowNs, int underrunSamples)
     }
     if (m_txIqDiagRun == 0) {
         m_txIqDiagRunStartNs = nowNs;
+        m_txIqPadOpenAtNs.store(nowNs - m_txIqDiagKeyNs, std::memory_order_relaxed);
     }
     m_txIqDiagRun += static_cast<quint64>(underrunSamples);
     m_txIqPadOpen.store(m_txIqDiagRun, std::memory_order_relaxed);
@@ -2883,12 +2892,17 @@ void P2RadioConnection::resetTxSendStats()
     m_txIqPadStart.store(0, std::memory_order_relaxed);
     m_txIqPadMid.store(0, std::memory_order_relaxed);
     m_txIqPadOpen.store(0, std::memory_order_relaxed);
+    m_txIqPadOpenAtNs.store(-1, std::memory_order_relaxed);
     m_txIqLongestMidPad.store(0, std::memory_order_relaxed);
     m_txIqLongestMidPadAtNs.store(-1, std::memory_order_relaxed);
     m_txIqFirstDryAtNs.store(-1, std::memory_order_relaxed);
     m_txIqFirstDryGapNs.store(-1, std::memory_order_relaxed);
     m_txIqBurstEvents.store(0, std::memory_order_relaxed);
     m_txIqDiagGeneration.fetch_add(1, std::memory_order_acq_rel);
+    // The TX pump's wakes, timed afresh for this key.
+    if (m_txMicSource != nullptr) {
+        m_txMicSource->wakeWatch().begin();
+    }
 }
 
 RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
@@ -2911,6 +2925,9 @@ RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
     st.padStartSamples = m_txIqPadStart.load(std::memory_order_relaxed);
     st.padMidSamples = m_txIqPadMid.load(std::memory_order_relaxed);
     st.padTailSamples = m_txIqPadOpen.load(std::memory_order_relaxed);
+    st.padTailAtMs = st.padTailSamples > 0
+        ? msOf(m_txIqPadOpenAtNs.load(std::memory_order_relaxed))
+        : -1.0;
     st.longestMidPadSamples = m_txIqLongestMidPad.load(std::memory_order_relaxed);
     st.longestMidPadAtMs = msOf(m_txIqLongestMidPadAtNs.load(std::memory_order_relaxed));
     st.firstDryAtMs = msOf(m_txIqFirstDryAtNs.load(std::memory_order_relaxed));
@@ -2922,6 +2939,17 @@ RadioConnection::TxSendStats P2RadioConnection::txSendStats() const
         st.bursts[k].atMs = msOf(m_txIqBurstAtNs[k].load(std::memory_order_relaxed));
         st.bursts[k].gapMs = msOf(m_txIqBurstGapNs[k].load(std::memory_order_relaxed));
         st.bursts[k].frames = m_txIqBurstFrames[k].load(std::memory_order_relaxed);
+    }
+    // The TX pump's longest wait for a microphone block during the key.
+    if (const TxMicSource* source = m_txMicSourceForStats.load(std::memory_order_acquire)) {
+        const TxMicWakeWatch::Stats wake = source->wakeWatch().stats();
+        if (wake.longestGapNs >= 0) {
+            st.longestWakeGapMs = static_cast<double>(wake.longestGapNs) / 1.0e6;
+            st.longestWakeGapAtMs = st.keySteadyNs >= 0 && wake.gapStartSteadyNs >= 0
+                ? static_cast<double>(wake.gapStartSteadyNs - st.keySteadyNs) / 1.0e6
+                : 0.0;
+            st.wakeGapSequenceStep = wake.sequenceStep;
+        }
     }
     return st;
 }
@@ -3568,7 +3596,14 @@ void P2RadioConnection::onReadyRead()
             // We use the int16/32768 form to make the byte order explicit.
             if (data.size() == 132) {
                 std::array<float, 64> samples{};
-                if (decodeMicFrame132(data, samples) && m_txMicSource != nullptr) {
+                quint32 micSequence = 0;
+                if (decodeMicFrame132(data, samples, &micSequence) && m_txMicSource != nullptr) {
+                    // TX diagnostics lane: the frame's sequence number, to
+                    // place a gap in the pump's wakes (measurement only).
+                    // From Thetis network.c:534-546 [v2.10.3.15]:
+                    //   if (seqnum != (1 + prn->tx[0].mic_in_seq_no) && seqnum != 0)
+                    //   prn->tx[0].mic_in_seq_no = seqnum;
+                    m_txMicSource->wakeWatch().noteSequence(micSequence);
                     m_txMicSource->inbound(samples.data(), 64);
                     m_lastMicAt = QDateTime::currentDateTimeUtc();
                 }
@@ -4017,6 +4052,8 @@ void P2RadioConnection::setTxMicSource(TxMicSource* src)
     // A future caller that reaches this setter without marshalling will
     // need atomic / mutex protection.
     m_txMicSource = src;
+    // TX diagnostics lane: txSendStats reads the pump's wake watch.
+    m_txMicSourceForStats.store(src, std::memory_order_release);
 
     // Stage-2 review fix I3: arm the LOS timer at attach time so the
     // mic-LOS zero-block injection (onKeepAliveTick) fires even if the

@@ -4,6 +4,11 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX diagnostics lane, review round: the unkey tail's start,
+//               the TX pump's longest wait for a microphone block with the
+//               radio's frame sequence step across it, and "RF start not
+//               measured" where the send path places nothing. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-10-01: TX diagnostics lane: the unkey line splits the padded
 //               silence into the key's start, mid-key and the unkey tail,
 //               with the first I/Q block's time and the longest mid-key
@@ -2616,7 +2621,11 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
             // TX diagnostics lane: where the silence fell.
             if (send.placed) {
                 line << " (start " << send.padStartSamples << ", mid-key " << send.padMidSamples
-                     << ", unkey tail " << send.padTailSamples << ")";
+                     << ", unkey tail " << send.padTailSamples;
+                if (send.padTailSamples > 0 && send.padTailAtMs >= 0.0) {
+                    line << " from +" << QString::number(send.padTailAtMs, 'f', 1) << " ms";
+                }
+                line << ")";
             }
             line << ", late wakes " << send.lateWakes << ", catch-up bursts "
                  << send.catchUpBursts << ", radio ran dry " << send.radioRanDry << ", lost "
@@ -2634,6 +2643,21 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                     line << ", longest mid-key silence "
                          << oneDecimal(static_cast<double>(send.longestMidPadSamples) / 192.0)
                          << " ms at +" << oneDecimal(send.longestMidPadAtMs) << " ms";
+                }
+                // The TX pump's longest wait for the radio's microphone
+                // block, and the radio's frame sequence step across it.
+                if (send.longestWakeGapMs >= 0.0) {
+                    const double at = send.longestWakeGapAtMs;
+                    line << ", longest wait for a microphone block "
+                         << oneDecimal(send.longestWakeGapMs) << " ms at "
+                         << (at >= 0.0 ? "+" : "") << oneDecimal(at) << " ms of the key, ";
+                    if (send.wakeGapSequenceStep >= 0) {
+                        line << "radio frame sequence step " << send.wakeGapSequenceStep;
+                    } else {
+                        line << "no radio frame sequence seen";
+                    }
+                } else {
+                    line << ", no wait for a microphone block measured";
                 }
             }
         } else {
@@ -2668,7 +2692,9 @@ QStringList DaemonMediaController::unkeyEventLines(const QByteArray& deviceId,
                 + QStringLiteral("microphone underrun %1 at +%2 ms of the line")
                       .arg(k + 1)
                       .arg(oneDecimal(event.atLineMs));
-            if (!haveRf) {
+            if (!send.valid || !send.placed) {
+                text += QStringLiteral(", RF start not measured");
+            } else if (!haveRf) {
                 text += QStringLiteral(", RF never started");
             } else if (event.atSteadyUs >= 0) {
                 const double sinceRf = static_cast<double>(event.atSteadyUs) / 1000.0 - rfSteadyMs;

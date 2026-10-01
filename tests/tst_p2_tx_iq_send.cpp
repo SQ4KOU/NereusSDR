@@ -27,6 +27,10 @@
 //               silence (start, mid-key, tail), its ran dry and its
 //               catch-up bursts in time. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane, review round: the unkey tail's start,
+//               and a second key whose passes place its start afresh (the
+//               send thread's own reset). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 #include <QtTest/QtTest>
 
 #include "core/P2RadioConnection.h"
@@ -387,9 +391,15 @@ private slots:
         QVERIFY2(st.padMidSamples >= st.longestMidPadSamples
                      && st.padMidSamples <= st.longestMidPadSamples + quint64(10 * 192),
                  qPrintable(text));
-        // The tail: from the lead's low water after 3 s to 3.1 s.
+        // The tail: from the lead's low water after 3 s to 3.1 s, placed
+        // at its start.
         QVERIFY2(st.padTailSamples >= quint64(80 * 192) && st.padTailSamples <= quint64(100 * 192),
                  qPrintable(text));
+        QVERIFY2(st.padTailAtMs >= 3000.0 && st.padTailAtMs <= 3020.0,
+                 qPrintable(QStringLiteral("tail from %1 ms").arg(st.padTailAtMs)));
+        const double tailEndMs = st.padTailAtMs + static_cast<double>(st.padTailSamples) / 192.0;
+        QVERIFY2(std::abs(tailEndMs - 3100.0) <= 1.5,
+                 qPrintable(QStringLiteral("tail ends %1 ms").arg(tailEndMs)));
         // The send thread's stall: passes at 999 ms and 1030 ms.
         QCOMPARE(st.radioRanDry, quint64(1));
         QVERIFY2(std::abs(st.firstDryAtMs - 1030.0) < 0.01, qPrintable(text));
@@ -414,6 +424,49 @@ private slots:
         QCOMPARE(fresh.burstEvents, 0);
         QCOMPARE(fresh.firstDryAtMs, -1.0);
         QCOMPARE(fresh.firstBlockAtMs, -1.0);
+        QCOMPARE(fresh.padTailAtMs, -1.0);
+
+        // The send thread's own state starts afresh too: the second key's
+        // passes place its start from its own first pass, with nothing of
+        // the first key's open tail or blocks carried over.
+        constexpr qint64 kSecondKeyNs = 4000 * kMs;
+        r.nextMic = 0;
+        while (micPacketNs(r.nextMic) < kSecondKeyNs) {
+            ++r.nextMic;
+        }
+        for (qint64 t = kSecondKeyNs; t < kSecondKeyNs + 500 * kMs; t += kMs / 4) {
+            while (micPacketNs(r.nextMic) <= t) {
+                if (t >= kSecondKeyNs + 40 * kMs) {
+                    r.pushBlock();
+                }
+                ++r.nextMic;
+            }
+            if (t % kMs == 0) {
+                r.pass(t);
+            }
+        }
+        const auto second = r.conn.txSendStats();
+        const QString secondText =
+            QStringLiteral("second key at %1 ns: start %2 mid %3 tail %4 total %5; first block "
+                           "%6 ms; dry %7")
+                .arg(second.keySteadyNs)
+                .arg(second.padStartSamples)
+                .arg(second.padMidSamples)
+                .arg(second.padTailSamples)
+                .arg(second.zeroPaddedSamples)
+                .arg(second.firstBlockAtMs)
+                .arg(second.radioRanDry);
+        qInfo().noquote() << secondText;
+        QCOMPARE(second.keySteadyNs, kSecondKeyNs);
+        QVERIFY2(second.firstBlockAtMs >= 40.0 && second.firstBlockAtMs <= 41.0,
+                 qPrintable(secondText));
+        QVERIFY2(second.padStartSamples >= quint64(35 * 192)
+                     && second.padStartSamples <= quint64(kTargetLead + 41 * 192),
+                 qPrintable(secondText));
+        QCOMPARE(second.padMidSamples, quint64(0));
+        QCOMPARE(second.padTailSamples, quint64(0));
+        QCOMPARE(second.zeroPaddedSamples, second.padStartSamples);
+        QCOMPARE(second.radioRanDry, quint64(0));
     }
 
     // A socket that refuses a frame (full send buffer): the frame is kept

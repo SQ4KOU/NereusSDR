@@ -115,6 +115,10 @@
 //                dry and its catch-up bursts in time (txSendStats). Measurement
 //                only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-10-01 - TX diagnostics lane, review round: the unkey tail's start,
+//                the microphone frame sequence number to the TX pump's wake
+//                watch, and its figures in txSendStats. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -966,6 +970,7 @@ private:
     std::atomic<quint64> m_txIqPadStart{0};
     std::atomic<quint64> m_txIqPadMid{0};
     std::atomic<quint64> m_txIqPadOpen{0};
+    std::atomic<qint64> m_txIqPadOpenAtNs{-1};
     std::atomic<quint64> m_txIqLongestMidPad{0};
     std::atomic<qint64> m_txIqLongestMidPadAtNs{-1};
     std::atomic<qint64> m_txIqFirstDryAtNs{-1};
@@ -980,6 +985,9 @@ private:
     bool m_txIqDiagSawBlock{false};
     quint64 m_txIqDiagRun{0};
     qint64 m_txIqDiagRunStartNs{-1};
+    // The TX pump's wake watch, read by txSendStats on the owner's thread
+    // (m_txMicSource itself is the connection thread's).
+    std::atomic<const class TxMicSource*> m_txMicSourceForStats{nullptr};
     // Producer only: a full ring's warning, at most once a second.
     qint64 m_txIqOverflowLogNs{0};
     quint64 m_txIqOverflowLogged{0};

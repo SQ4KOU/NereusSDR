@@ -11,6 +11,10 @@
 //               silence (start, mid-key, tail), its first radio ran dry and
 //               its catch-up bursts in time. Measurement only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane, review round: the unkey tail's start
+//               and the longest gap between the TX pump's wakes, with the
+//               radio's microphone frame sequence step across it. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "ConnectionState.h"
 #include "RadioDiscovery.h"
@@ -733,6 +737,8 @@ public:
         quint64 padStartSamples{0};
         quint64 padMidSamples{0};
         quint64 padTailSamples{0};
+        /// When the unkey tail began, ms after the key (-1: no tail).
+        double padTailAtMs{-1.0};
         /// The longest mid-key run of padding, and when it began.
         quint64 longestMidPadSamples{0};
         double longestMidPadAtMs{-1.0};
@@ -750,6 +756,13 @@ public:
         static constexpr int kMaxBurstEvents = 4;
         int burstEvents{0};
         std::array<Burst, kMaxBurstEvents> bursts{};
+        /// The longest gap between the TX pump's wakes during the key, when
+        /// it began (ms after the key; negative when it began before the
+        /// send thread's first keyed pass), and how far the radio's
+        /// microphone frame sequence number moved across it (-1: none seen).
+        double longestWakeGapMs{-1.0};
+        double longestWakeGapAtMs{0.0};
+        qint64 wakeGapSequenceStep{-1};
     };
     virtual TxSendStats txSendStats() const { return {}; }
     /// R-IOS-13 (2026-09-27): what the transmit I/Q send ring holds now,
