@@ -19,6 +19,11 @@
 // test-only exchange hook (called right after the release) until the caller
 // stalls on Sem_OutReady, that is, after its input copy, and checks the
 // output is bit-identical to a run without the hold.
+//
+// The guard depends on where dexchange calls the hook: it must sit between
+// the Sem_OutReady release and the input copy whenever those are in the
+// upstream order. A WDSP sync that restores the upstream order must keep the
+// hook in that position, or this test will not catch the race.
 
 #include <QtTest>
 

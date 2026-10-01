@@ -223,7 +223,7 @@ sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,c
 	// NereusSDR fix: upstream WDSP linux_port hard-coded the initial
 	// count to 0, ignoring the caller's initial_count parameter. That
 	// silently broke any call site that depends on a pre-signalled
-	// semaphore — most importantly Sem_OutReady in iobuffs.c:416,
+	// semaphore — most importantly Sem_OutReady in iobuffs.c:427,
 	// which fexchange2(bfo=1) expects to start with n free slots so
 	// the first n calls don't block. On Linux this caused a
 	// deterministic deadlock on the very first fexchange2 call: bfo

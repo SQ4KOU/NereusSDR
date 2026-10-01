@@ -607,6 +607,10 @@ void dexchange (int channel, double* in, double* out)
 	// before Sem_OutReady is released (upstream, and Thetis, release first).
 	// Once released, fexchange0's caller may run ahead and write its next
 	// input over the head of the chunk this worker has not copied yet.
+	// tst_wdsp_dexchange_order guards this through the test hook below, which
+	// must sit between the Sem_OutReady release and the input copy whenever
+	// they are in the upstream order: a sync that restores that order must
+	// keep the hook in that position, or the test will not catch the race.
 	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;

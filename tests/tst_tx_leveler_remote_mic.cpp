@@ -101,9 +101,9 @@ constexpr int kOutRate = 192000;
 constexpr int kUp = kOutRate / kInRate;
 constexpr quint32 kSsrc = 0x6d696301U;
 
-// Thetis wdsp/TXA.h:49-69 [v2.10.3.15], txaMeterType.
-constexpr int kMeterLvlrGain = 6;
-constexpr int kMeterAlcGain = 14;
+// WDSP txaMeter indices, from the shared TxMeterType map (WdspTypes.h).
+constexpr int kMeterLvlrGain = wdspTxaMeterIndex(TxMeterType::LevelerGain);
+constexpr int kMeterAlcGain = wdspTxaMeterIndex(TxMeterType::AlcGain);
 
 enum class Path { Local, RemotePcm, OpusPhone, OpusPhoneStalls, OpusDesk, OpusAudio32, OpusAudio48,
                   OpusAudio64 };
