@@ -107,6 +107,10 @@
 //                                    runs every audio state's wording, the
 //                                    longest being "Audio radio offline".
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-10-01  J.J. Boyd / KG4VCF  The radio-offline audio group now
+//                                    reads "Radio offline"; the width check
+//                                    and its 34 px margin are unchanged.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -689,7 +693,7 @@ private slots:
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
         // Every audio group the header can show must fit beside the other
-        // three at 1440 px too, the longest ("Audio radio offline") above
+        // three at 1440 px too, the longest ("Audio unavailable") above
         // all. The segment is laid out with each state's text in place (the
         // layout runs here, before the next telemetry refresh can put the
         // muted text back), so the check measures the width the title bar

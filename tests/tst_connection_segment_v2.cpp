@@ -17,6 +17,11 @@
 //
 // Design spec: docs/architecture/2026-04-30-shell-chrome-redesign-design.md
 // §4.1. Phase 3Q Sub-PR-4 D.1.
+//
+// Modification history (NereusSDR):
+//   2026-10-01  J.J. Boyd / KG4VCF  The radio-offline audio group is checked
+//                                    for its exact wording, "Radio offline".
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -259,8 +264,8 @@ private slots:
                  QStringLiteral("Audio unavailable"));
         QCOMPARE(ConnectionSegment::audioMetricText(std::nullopt, State::PlaybackProblem),
                  QStringLiteral("Audio unavailable"));
-        QVERIFY(ConnectionSegment::audioMetricText(std::nullopt, State::RadioOffline)
-                    .contains(QStringLiteral("radio offline")));
+        QCOMPARE(ConnectionSegment::audioMetricText(std::nullopt, State::RadioOffline),
+                 QStringLiteral("Radio offline"));
     }
 };
 
