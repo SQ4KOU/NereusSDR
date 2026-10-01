@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix round 1 (minor 4): the container's
+//                MOX, TUNE and 2-TONE refresh when the window's link to the
+//                Core or the Core's waiting for a radio changes.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave, hosting 2-TONE parity: a
 //                hosting window's 2-TONE (TX applet and container) asks to
 //                take transmit as its MOX and TUNE do (requestDesktopKey).
@@ -7236,6 +7240,10 @@ void MainWindow::buildUI()
         connect(m_radioModel, &RadioModel::txInhibitReasonChanged, this, refresh);
         // TX safety (2026-09-30): and a lost radio link, until it is back.
         connect(m_radioModel, &RadioModel::radioLinkDownChanged, this, refresh);
+        // Fix round 1 (minor 4): the link-down words follow the window's
+        // link to the Core and the Core's waiting for a radio.
+        connect(m_radioModel, &RadioModel::stationLinkStateChanged, this, refresh);
+        connect(m_radioModel, &RadioModel::stationRadioWaitingChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);

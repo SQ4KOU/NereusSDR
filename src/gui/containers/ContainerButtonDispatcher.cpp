@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1 (minor 4): MOX, TUNE and 2-TONE on a remote
+//                 window give the link-down words by state. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
@@ -282,7 +285,10 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);
         } else if (!m_model->isConnected()) {
-            unavailable(noRadioTransmitReason());
+            // Fix round 1 (minor 4): a remote window says which link is
+            // down (RadioModel::transmitLinkDownReason).
+            unavailable(m_model->ownsLocalDsp() ? noRadioTransmitReason()
+                                                : m_model->transmitLinkDownReason());
         } else if ((id == Id::Mox && !m_model->moxController())
                    || (id == Id::TwoTon && !m_model->twoToneController())) {
             unavailable(noRadioTransmitReason());

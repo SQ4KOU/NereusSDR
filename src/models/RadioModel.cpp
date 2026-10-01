@@ -14,6 +14,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix round 1 (minor 4): transmitLinkDownReason picks the
+//                 link-down words by state (the window's link to the Core,
+//                 the Core without a radio, the radio's link). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - TX-parity-linkdown (fix wave): a remote window whose Core
 //                 has no connection to the radio locks MOX, TUN and 2TONE
 //                 with the link-down reason (transmitLinkDown). J.J. Boyd
@@ -27461,6 +27465,28 @@ QString RadioModel::radioLinkDownReason()
     return TxRefusals::radioLinkDown().text;
 }
 
+bool RadioModel::remoteCoreLinkDown() const
+{
+    return m_role == Role::Remote && (m_station == nullptr || !m_station->stationLinkReady());
+}
+
+QString RadioModel::transmitLinkDownReason() const
+{
+    // Fix round 1 (minor 4): the reason follows the state. A lost link
+    // here, or the Core's own link to its radio lost or being rebuilt
+    // (the Core reports no radio and no waiting reason), is the radio's.
+    if (m_radioLinkDown) {
+        return radioLinkDownReason();
+    }
+    if (remoteCoreLinkDown()) {
+        return QStringLiteral("Not connected to the Core.");
+    }
+    if (m_role == Role::Remote && !isConnected() && !m_stationRadioWaiting.isEmpty()) {
+        return QStringLiteral("The Core has no radio ready.");
+    }
+    return radioLinkDownReason();
+}
+
 bool RadioModel::transmitLockCoversVox() const
 {
     // From Thetis console.cs:27488-27493 [v2.10.3.15]: loss of sync's
@@ -27504,8 +27530,14 @@ QString RadioModel::transmitLockReasonAlongside(const QString& otherReason) cons
     // TX-parity-linkdown (fix wave): on a remote window the Core's own
     // refusal (no permission confirmed, receive only) says why first, as
     // the container's reasons always have; the link-down reason otherwise.
+    // Fix round 1 (minor 4): a window whose link to the Core has closed or
+    // is not yet up says so alone; its other reasons are about a Core it
+    // cannot reach. Otherwise the link-down words follow the state.
+    if (transmitLinkDown() && m_station != nullptr && remoteCoreLinkDown()) {
+        return transmitLinkDownReason();
+    }
     if (transmitLinkDown()) {
-        return otherReason.isEmpty() ? radioLinkDownReason() : otherReason;
+        return otherReason.isEmpty() ? transmitLinkDownReason() : otherReason;
     }
     if (m_rxOnlyEffective) {
         return rxOnlyReasonAlongside(otherReason);

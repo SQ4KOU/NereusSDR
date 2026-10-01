@@ -579,6 +579,68 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // Fix round 1 (minor 4): the link-down words follow the state. The
+    // Core's link to its radio down or being rebuilt: the radio's link.
+    // The Core waiting for a radio: it has none ready. The window's own
+    // link to the Core down: not connected to the Core. The TX applet and
+    // the container say the same.
+    void linkDownWordsFollowTheState()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.isHandshakeComplete());
+        QVERIFY(h.remote.isConnected());
+        WindowControls window(h);
+        window.follow(h.client);
+        QPushButton* twoTone = buttonNamed(window.applet, QStringLiteral("2-tone test"));
+        QVERIFY(twoTone);
+        const auto expectEverywhere = [&](const QString& reason) {
+            for (QPushButton* b : {window.mox, window.tune, twoTone}) {
+                QVERIFY2(!b->isEnabled(), qPrintable(b->accessibleName()));
+                QVERIFY(!b->isHidden());
+                QCOMPARE(b->toolTip(), reason);
+            }
+            for (const auto id : {ContainerButtonDispatcher::Id::Mox,
+                                  ContainerButtonDispatcher::Id::Tun,
+                                  ContainerButtonDispatcher::Id::TwoTon}) {
+                const auto st = window.container.stateOf(id, 0);
+                QVERIFY(!st.available);
+                QCOMPARE(st.reason, reason);
+            }
+        };
+
+        // The Core's link to its radio is down or being rebuilt.
+        h.station.setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(!h.remote.isConnected());
+        expectEverywhere(QStringLiteral("The link to the radio is down."));
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+
+        // The Core waits for a radio.
+        h.station.setStationRadioWaiting(QStringLiteral("Waiting for a radio to be chosen."));
+        QTRY_VERIFY(!h.remote.stationRadioWaiting().isEmpty());
+        expectEverywhere(QStringLiteral("The Core has no radio ready."));
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+
+        // The radio is back.
+        h.station.setStationRadioWaiting(QString());
+        h.station.setConnectionStateForTest(ConnectionState::Connected);
+        QTRY_VERIFY(h.remote.isConnected());
+        QTRY_VERIFY(window.mox->isEnabled());
+
+        // The window's own link to the Core closes.
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_VERIFY(!h.remote.isConnected());
+        window.follow(h.client);
+        expectEverywhere(QStringLiteral("Not connected to the Core."));
+    }
+
     // ---- Keys -------------------------------------------------------------
 
     // MOX (the TX applet's and the container's) and TUNE key the Core's

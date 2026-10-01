@@ -202,6 +202,9 @@
 //                Tune Power slider shows the Core's value when its change
 //                is answered, whatever arrived first. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 4): the link-down
+//                words follow the window's link to the Core and the Core's
+//                waiting for a radio. AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
 //                hosting window's 2-TONE asks to take transmit, as MOX and
 //                TUNE do (setDesktopTwoToneHandler). AI-assisted via
@@ -1536,6 +1539,10 @@ void TxApplet::wireControls()
         // TX-parity-linkdown (fix wave): a remote window's Core losing or
         // regaining its radio (RadioModel::transmitLinkDown) the same way.
         connect(m_model, &RadioModel::connectionStateChanged, this, relock);
+        // Fix round 1 (minor 4): its words follow the window's link to the
+        // Core and the Core's waiting for a radio.
+        connect(m_model, &RadioModel::stationLinkStateChanged, this, relock);
+        connect(m_model, &RadioModel::stationRadioWaitingChanged, this, relock);
         applyReceiveOnlyLock();
     }
 
