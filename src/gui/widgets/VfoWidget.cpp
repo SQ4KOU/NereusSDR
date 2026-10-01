@@ -25,6 +25,8 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-10-01: Added approved compact STEP units during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 //   2026-09-23 - R-R3-21: the VAX tab's channel selector is disabled with a
 //                 plain reason on a remote-station model. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
@@ -387,6 +389,7 @@ warren@wpratt.com
 */
 
 #include "VfoWidget.h"
+#include "gui/TuneStepLabel.h"
 #include "DspParamPopup.h"
 #include "NnrControls.h"
 #include "VaxChannelSelector.h"
@@ -2124,7 +2127,7 @@ void VfoWidget::buildXRitTab()
         // Step cycle button: emits stepCycleRequested, which
         // MainWindow::createSliceFlag routes to SliceModel::changeTuneStepUp().
         m_stepCycleBtn = new QPushButton(
-            QStringLiteral("%1 Hz").arg(m_stepHz), ritWidget);
+            formatTuneStepLabel(m_stepHz), ritWidget);
         m_stepCycleBtn->setFlat(true);
         m_stepCycleBtn->setStyleSheet(
             QStringLiteral("QPushButton {"
@@ -2562,7 +2565,7 @@ void VfoWidget::setStepHz(int hz)
         m_xitLabel->setStep(hz);
     }
     if (m_stepCycleBtn) {
-        m_stepCycleBtn->setText(QStringLiteral("%1 Hz").arg(hz));
+        m_stepCycleBtn->setText(formatTuneStepLabel(hz));
     }
 }
 

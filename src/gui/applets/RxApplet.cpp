@@ -79,6 +79,8 @@
 //   2026-09-30: Fix wave GUI-M5: the step attenuator connections are
 //               kept and dropped on each slice change. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Added approved compact STEP units during PR review by
+//                 J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -182,6 +184,7 @@
 //============================================================================================//
 
 #include "RxApplet.h"
+#include "gui/TuneStepLabel.h"
 
 #include <QGuiApplication>
 
@@ -2006,7 +2009,7 @@ void RxApplet::syncFromModel()
     }
 
     // Step size label (Issue #69)
-    m_stepLabel->setText(QStringLiteral("%1 Hz").arg(m_slice->stepHz()));
+    m_stepLabel->setText(formatTuneStepLabel(m_slice->stepHz()));
 
     // NB button + NB1 tuning sliders removed from RxApplet per strict Thetis
     // parity. NB state lives on VFO flag, Setup → DSP → NB/SNB, and menu bar.
@@ -2129,7 +2132,7 @@ void RxApplet::connectSlice(SliceModel* s)
 
     // Step size model → label sync (Issue #69)
     connect(s, &SliceModel::stepHzChanged, this, [this](int hz) {
-        m_stepLabel->setText(QStringLiteral("%1 Hz").arg(hz));
+        m_stepLabel->setText(formatTuneStepLabel(hz));
     });
 
     // NB controls (button + tuning sliders) removed from RxApplet per strict

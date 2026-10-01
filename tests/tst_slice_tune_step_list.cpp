@@ -10,6 +10,8 @@
 //   2026-09-23: tune_step_list parity, ChangeTuneStepUp/Down wrap and 100 Hz
 //                default guard tests by J.J. Boyd (KG4VCF), with AI-assisted
 //                transformation via Anthropic Claude Code.
+//   2026-10-01: Added compact-label and RX arrow layout regression by
+//                J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -71,6 +73,12 @@
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <QLabel>
+#include <QPushButton>
+#include "gui/applets/RxApplet.h"
+#include "gui/widgets/TriBtn.h"
+#include "gui/widgets/VfoWidget.h"
+#include "models/RadioModel.h"
 
 #include "models/SliceModel.h"
 
@@ -121,6 +129,59 @@ class TestSliceTuneStepList : public QObject {
     Q_OBJECT
 
 private slots:
+    void stepLabels_keepCompactUnitsAndUsableArrows() {
+        RadioModel model;
+        SliceModel slice;
+        RxApplet rx(nullptr, &model);
+        rx.setSlice(&slice);
+        rx.setFixedWidth(260);
+        rx.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&rx));
+        VfoWidget flag;
+        QLabel* step = nullptr;
+        for (QLabel* label : rx.findChildren<QLabel*>()) {
+            if (label->text() == QStringLiteral("100 Hz")) { step = label; }
+        }
+        QVERIFY(step);
+        QPushButton* flagStep = nullptr;
+        for (QPushButton* button : flag.findChildren<QPushButton*>()) {
+            if (button->toolTip().startsWith(QStringLiteral("Cycle tuning step size"))) {
+                flagStep = button;
+            }
+        }
+        QVERIFY(flagStep);
+        const QStringList labels{
+            "1 Hz", "2 Hz", "10 Hz", "25 Hz", "50 Hz", "100 Hz", "250 Hz", "500 Hz",
+            "1 kHz", "2 kHz", "2.5 kHz", "5 kHz", "6.25 kHz", "9 kHz", "10 kHz",
+            "12.5 kHz", "15 kHz", "20 kHz", "25 kHz", "30 kHz", "50 kHz",
+            "100 kHz", "250 kHz", "500 kHz", "1 MHz", "10 MHz"};
+        for (int i = 0; i < kExpectedSize; ++i) {
+            slice.setStepHz(kExpected[i].stepHz);
+            flag.setStepHz(kExpected[i].stepHz);
+            QCoreApplication::processEvents();
+            QCOMPARE(step->text(), labels[i]);
+            QCOMPARE(flagStep->text(), labels[i]);
+            const int stepY = step->mapTo(&rx, QPoint{}).y();
+            int arrows = 0;
+            for (TriBtn* arrow : rx.findChildren<TriBtn*>()) {
+                if (qAbs(arrow->mapTo(&rx, QPoint{}).y() - stepY) <= 2) {
+                    ++arrows;
+                    QVERIFY2(arrow->width() >= 14, "STEP arrow clipped at normal RX width");
+                }
+            }
+            QCOMPARE(arrows, 2);
+        }
+        // A saved value must also be compact before any new step signal.
+        slice.setStepHz(1000000);
+        RxApplet restored(nullptr, &model);
+        restored.setSlice(&slice);
+        bool compactInitialValue = false;
+        for (QLabel* label : restored.findChildren<QLabel*>()) {
+            compactInitialValue |= label->text() == QStringLiteral("1 MHz");
+        }
+        QVERIFY(compactInitialValue);
+    }
+
     // ── Table parity ─────────────────────────────────────────────────────────
 
     void tableMatchesThetisPairs() {

@@ -56,8 +56,8 @@ the items the maintainer reserved for himself are listed under "Out of scope".
   version stamp.
 * **No em-dash (`—`) and no en-dash (`–`) in any new text**: code comments, the
   PROVENANCE row, commit messages. Existing em-dashes in untouched lines stay.
-* **No source cites inside user-visible strings.** This task adds no user-visible
-  string.
+* **No source cites inside user-visible strings.** New display text is limited
+  to the approved compact tuning units.
 * **GPG-sign every commit.** Never `--no-gpg-sign`, never `--no-verify`.
 * **No `Co-Authored-By` trailer** in any commit message.
 * **Commit subjects** follow the repo's conventional style, e.g.
@@ -78,9 +78,8 @@ the items the maintainer reserved for himself are listed under "Out of scope".
 
 1. **Port the pairs, not only the Hz values.** Thetis `tune_step_list` is a
    `List<TuneStep>` of `(StepHz, Name)` pairs (`TuneStep.cs:44-68`); the names are
-   ported verbatim. They are not wired to any display in this change: the STEP
-   controls keep NereusSDR's `"%1 Hz"` label (whether to show the Thetis names is a
-   maintainer question).
+   ported verbatim. They are not wired to any display: the STEP controls use
+   the native compact labels approved during review, as recorded below.
 2. **State stays in Hz.** `SliceModel` keeps `m_stepHz` and its persistence key
    `Slice<N>/Band<key>/StepHz`; there is no stored index. Every value of the old stub
    (1, 10, 100, 500, 1000, 10000) is on the new list, so persisted settings carry
@@ -106,10 +105,11 @@ the items the maintainer reserved for himself are listed under "Out of scope".
   `console.cs:1984`). Keep `m_stepHz{100}`; only its comment is corrected.
 * Per-mode step memory (`m_nTuneStepsByMode`, `TuneStepPerModeRX1`,
   `console.cs:1986-1988` and `11268-11339`). Not ported.
-* The STEP label format, `TuneStepButtonItem` (7 invented buttons against Thetis's
-  one-per-entry meter buttons, `MeterManager.cs:8040-8066`), and click-to-tune step
-  rounding (always on in NereusSDR, opt-in in Thetis, `console.cs:33470-33497`).
-  Do not touch `VfoWidget`, `SpectrumWidget` or `TuneStepButtonItem`.
+* `TuneStepButtonItem` (7 invented buttons against Thetis's one-per-entry meter
+  buttons, `MeterManager.cs:8040-8066`) and click-to-tune step rounding (always on
+  in NereusSDR, opt-in in Thetis, `console.cs:33470-33497`). Do not change
+  `SpectrumWidget` or `TuneStepButtonItem`. The compact STEP label format for
+  `RxApplet` and `VfoWidget` was approved during review; see the decision below.
 
 ## What already exists
 
@@ -288,5 +288,19 @@ anything that transmits. Single task; no prerequisites; not parallel.
   `| tests/tst_slice_tune_step_list.cpp | Project Files/Source/Console/console.cs | 1953-1984; 6124-6134 | port | thetis-samphire | verbatim tune_step_list parity (26 StepHz/Name pairs), ChangeTuneStepUp/Down wrap, 100 Hz default guard [v2.10.3.15] |`
 - [ ] **Step 7: Verify and commit.** Run the Verification commands; all green. One
   GPG-signed commit, subject `feat(slice): port Thetis tune_step_list for the STEP controls`,
-  body in plain sentences (what was ported, that the default and label format are
-  unchanged and per-mode memory is not ported), no trailer, no em-dash.
+  body in plain sentences (what was ported, the unchanged default, the approved
+  compact labels, and per-mode memory remaining out of scope), no trailer.
+
+## Label decision, October 1, 2026
+
+J.J. Boyd approved compact units for the STEP labels: Hz below 1 kHz,
+kHz below 1 MHz, and MHz above that, with a space before the unit and
+no trailing fractional zeros. For example, 12500 Hz displays as
+12.5 kHz and 10000000 Hz as 10 MHz. Both the RX applet and VFO flag use
+the same native formatter. Stored values, upstream table names, step
+cycling, and tuning arithmetic still use the original integer Hz values.
+
+The previous raw Hz labels narrowed the RX step arrows to 5 and 6 pixels
+at 10 MHz in a 260-pixel applet. The regression checks the displayed
+labels for every supported step, model changes and initial recall, and
+that both triangles fit within their buttons at the normal applet width.
