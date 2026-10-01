@@ -85,6 +85,9 @@
 //   2026-09-29: slice control plan Task 6: the owner mix also sums the
 //               slices this device listens to, at its own listen level.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line carries the
+//               over's longest "tx" keepalive wait. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -419,10 +422,12 @@ public:
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// R-IOS-13, R-R3-42: the text of the line logged at each unkey (log
     /// only, never shown to a device). `feed` is null when the Core has no
-    /// remote microphone feed.
+    /// remote microphone feed. `keepaliveWaitMaxUs` is the over's longest
+    /// wait at the Core of a "tx" keepalive, or -1 when none came.
     static QString unkeyStatsLine(const QByteArray& deviceId, const RemoteMicReceiver::Stats& rx,
                                   const RemoteMicFeed::Stats* feed,
-                                  const RadioConnection::TxSendStats& send);
+                                  const RadioConnection::TxSendStats& send,
+                                  qint64 keepaliveWaitMaxUs = -1);
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
     /// a controller on its own installs it on the Core's RemoteKeying, and
     /// DaemonMediaHub installs one that routes by device, fix wave C2).
@@ -871,8 +876,13 @@ private:
         RemoteMicReceiver::Stats rx;
         RemoteMicFeed::Stats feed;
         bool haveFeed{false};
+        qint64 keepaliveWaitMaxUs{-1};
     };
     std::optional<UnkeySnapshot> m_unkeySnapshot;
+    // TX mic thread fix round 2: the over's longest wait at the Core of a
+    // "tx" keepalive (-1: none yet), for the unkey line.
+    qint64 m_overKeepaliveWaitMaxUs{-1};
+    void noteKeepaliveWait(qint64 heldUs);
     std::map<quint32, EndpointEntry> m_endpoints;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;

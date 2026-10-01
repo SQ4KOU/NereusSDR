@@ -67,6 +67,9 @@
 //   2026-10-01: TX stall lane: the line names the device in hex. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line's "line waits"
+//               and each over's own longest "tx" keepalive wait. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -251,7 +254,10 @@ public:
         emit ready();
     }
     void deliverMic(const QByteArray& packet) { emit micRtpReceived(packet); }
-    void deliverTx(const QByteArray& message) { emit txReceived(message); }
+    void deliverTx(const QByteArray& message, qint64 heldUs = 0)
+    {
+        emit txReceived(message, heldUs);
+    }
     void closeUnexpectedly()
     {
         started = false;
@@ -1288,6 +1294,12 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
     station.sendMic();
     station.sendMic();
     QTRY_VERIFY(mox->isMox());
+    // TX mic thread fix round 2: "tx" keepalives that waited at the Core.
+    quint64 keepaliveSequence = 0;
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 90'000);
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 3'000);
     // The pump plays the 40 ms the line delivered and then runs dry: one
     // underrun in this over.
     std::vector<float> out(kBlock);
@@ -1306,6 +1318,10 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
     // The over's underruns, taken before the feed left use and reset them.
     QVERIFY2(first.contains(QStringLiteral("underruns %1,").arg(underruns)), qPrintable(first));
     QVERIFY2(first.contains(QStringLiteral("transmit I/Q")), qPrintable(first));
+    // The microphone's waits are the line's; the event loop's show in the
+    // over's longest keepalive wait.
+    QVERIFY2(first.contains(QStringLiteral("; line waits mean ")), qPrintable(first));
+    QVERIFY2(first.contains(QStringLiteral("; keepalive waits max 90.0 ms; ")), qPrintable(first));
 
     // A second key, ended at the Core (as the transmit watchdog ends one).
     sendCommand(station.app, "tx.key", 3903, {utf8("trigger", QStringLiteral("screen"))});
@@ -1313,8 +1329,13 @@ void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneL
     station.sendMic();
     station.sendMic();
     QTRY_VERIFY(mox->isMox());
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 37'000);
     mox->setMox(false);
     QTRY_COMPARE(g_unkeyLines.size(), 2);
+    // Each over's own: the first over's 90 ms is not the second's.
+    QVERIFY2(g_unkeyLines.at(1).contains(QStringLiteral("; keepalive waits max 37.0 ms; ")),
+             qPrintable(g_unkeyLines.at(1)));
     QTRY_COMPARE(mox->state(), MoxState::Rx);
     // One line per unkey, never two.
     QCOMPARE(g_unkeyLines.size(), 2);

@@ -26,6 +26,11 @@
 //               stall of the Core's event loop never holds them; "tx"
 //               keepalives carry their receipt to the watchdog. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line's microphone
+//               waits are the line's ("line waits"), and it adds the
+//               over's longest wait of a "tx" keepalive at the Core (the
+//               event loop's stall). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -814,6 +819,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
                     } else if (!oldMox && newMox) {
                         // A key cut the last unkey's walk short.
                         logUnkeyStats();
+                        m_overKeepaliveWaitMaxUs = -1;   // a new over
                     }
                 });
         connect(moxController, &MoxController::moxStateChanged, this, [this](bool on) {
@@ -827,6 +833,8 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
                     if (!mox) {
                         snapshotUnkeyStats();
                         logUnkeyStats();
+                    } else {
+                        m_overKeepaliveWaitMaxUs = -1;   // a new over
                     }
                 });
     }
@@ -2008,6 +2016,7 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     connect(peer, &MediaPeer::txReceived, this,
             [this, peer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
+            noteKeepaliveWait(heldUs);
             m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
@@ -2230,6 +2239,7 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
     connect(peer, &MediaPeer::txReceived, this,
             [this, current, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (current() && m_server) {
+            noteKeepaliveWait(heldUs);
             m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
@@ -2307,6 +2317,7 @@ void DaemonMediaController::finishReplacement()
     connect(oldPeer, &MediaPeer::txReceived, this,
             [this, oldPeer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_server) {
+            noteKeepaliveWait(heldUs);
             m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
@@ -2493,6 +2504,7 @@ void DaemonMediaController::snapshotUnkeyStats()
     UnkeySnapshot snapshot;
     snapshot.deviceId = m_micDeviceId;
     snapshot.rx = m_micReceiver->stats();
+    snapshot.keepaliveWaitMaxUs = m_overKeepaliveWaitMaxUs;
     snapshot.haveFeed = m_radioModel->remoteMicFeed() != nullptr;
     if (snapshot.haveFeed) {
         snapshot.feed = m_radioModel->remoteMicFeed()->stats();
@@ -2513,13 +2525,20 @@ void DaemonMediaController::logUnkeyStats()
     }
     qCInfo(lcDaemonMedia).noquote()
         << unkeyStatsLine(snapshot.deviceId.toHex(), snapshot.rx,
-                          snapshot.haveFeed ? &snapshot.feed : nullptr, send);
+                          snapshot.haveFeed ? &snapshot.feed : nullptr, send,
+                          snapshot.keepaliveWaitMaxUs);
+}
+
+void DaemonMediaController::noteKeepaliveWait(qint64 heldUs)
+{
+    m_overKeepaliveWaitMaxUs = std::max(m_overKeepaliveWaitMaxUs, std::max<qint64>(0, heldUs));
 }
 
 QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                                               const RemoteMicReceiver::Stats& rx,
                                               const RemoteMicFeed::Stats* feedStats,
-                                              const RadioConnection::TxSendStats& send)
+                                              const RadioConnection::TxSendStats& send,
+                                              qint64 keepaliveWaitMaxUs)
 {
     // One line (log only, never shown to a device).
     QString text;
@@ -2555,12 +2574,23 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                  << ms(feed.insertedFrames) << " ms, target grew " << feed.grows
                  << " times, held for DEXP " << feed.heldBlocks << " blocks";
             // TX stall lane: how long the over's packets waited at the Core
-            // (its event loop) before the feed had them. Measured only.
-            line << "; owner waits mean " << oneDecimal(feed.ownerWaitMeanMs) << " ms, max "
+            // before the feed had them. Measured only. TX mic thread fix
+            // round 2: the line's own thread hands them over now, so this
+            // is the line's wait, not the event loop's.
+            line << "; line waits mean " << oneDecimal(feed.ownerWaitMeanMs) << " ms, max "
                  << oneDecimal(feed.ownerWaitMaxMs) << " ms, " << feed.ownerWaitsLong
                  << " over " << RemoteMicConfig::kLongOwnerWaitMs << " ms";
         } else {
             line << "no feed";
+        }
+        // TX mic thread fix round 2: the event loop's own stall, as the
+        // longest wait at the Core of a "tx" keepalive over the over.
+        line << "; keepalive waits ";
+        if (keepaliveWaitMaxUs >= 0) {
+            line << "max " << QString::number(static_cast<double>(keepaliveWaitMaxUs) / 1000.0, 'f', 1)
+                 << " ms";
+        } else {
+            line << "none";
         }
         line << "; packets concealed " << rx.concealedPackets << ", recovered "
              << rx.recoveredPackets << ", late " << rx.latePackets << ", long gaps " << rx.longGaps

@@ -5,6 +5,11 @@
 // StationServer/StationClient control session. Synthetic I/Q is test-only;
 // production reaches the source exclusively through RadioModel's tagged tap.
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-10-01: TX mic thread fix round 2: the unkey line's "line waits"
+//               and the over's longest "tx" keepalive wait. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
 
 #include <QtTest>
 
@@ -4598,7 +4603,8 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
     RadioConnection::TxSendStats send;
     send.valid = true;
     send.framesSent = 9600;
-    const QString line = DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send);
+    const QString line =
+        DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send, 91'456);
     QVERIFY2(line.contains(QStringLiteral("target 30 ms")), qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("added latency mean 22.5 ms, max 222.8 ms")),
              qPrintable(line));
@@ -4609,8 +4615,12 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
     QVERIFY2(line.contains(QStringLiteral("target grew 1 times, held for DEXP 42 blocks")),
              qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral(
-                 "held for DEXP 42 blocks; owner waits mean 4.3 ms, max 91.0 ms, 5 over 50 ms; ")),
+                 "held for DEXP 42 blocks; line waits mean 4.3 ms, max 91.0 ms, 5 over 50 ms; "
+                 "keepalive waits max 91.5 ms; packets concealed 2")),
              qPrintable(line));
+    // TX mic thread fix round 2: an over with no "tx" keepalive says so.
+    QVERIFY(DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send)
+                .contains(QStringLiteral("; keepalive waits none; ")));
     QVERIFY2(line.contains(QStringLiteral("packets concealed 2")), qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("frames 9600")), qPrintable(line));
 
