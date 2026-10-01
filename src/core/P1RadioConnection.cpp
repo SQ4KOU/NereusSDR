@@ -148,7 +148,7 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - The receive socket binds to the local address that
 //                reaches the radio, as Thetis binds the network card's
-//                address (NetworkIO.cs:68-69, 149; network.c:116-118, 203
+//                address (NetworkIO.cs:69-70, 149; network.c:116-118, 203
 //                [v2.10.3.15]); network.c's header added below. On macOS a
 //                socket bound to Any could share its port with another
 //                socket on that address, which then took the radio's
@@ -899,7 +899,7 @@ void P1RadioConnection::applySocketBufferSizes()
 // Binds the socket to the local address this host reaches the radio from,
 // on a port the OS chooses. Thetis binds its listening socket the same way,
 // to the selected network card's own IPv4 address, port 0 unless set:
-//   From Thetis NetworkIO.cs:68-69 [v2.10.3.15]:
+//   From Thetis NetworkIO.cs:69-70 [v2.10.3.15]:
 //     string hostIP = nic.LocalIPv4.ToString();
 //     int hostPort = c.SetupForm.ListenToRadioOnUDPPort; // will be any os available port if 0, or specific if set
 //   From Thetis NetworkIO.cs:149 [v2.10.3.15]:
