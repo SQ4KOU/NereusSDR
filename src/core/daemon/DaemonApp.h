@@ -115,6 +115,8 @@
 //               value only; a rate already saved for the radio wins at start
 //               (applyConfigToSettings). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: m_radioChangeRestartPending. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -534,6 +536,10 @@ private:
     // The operator's ruling of 2026-09-26: a radio change restarts the run,
     // and every app reconnects by itself. The end reason its sessions get.
     QString m_radioChangeReason;
+    // From the choice (switchRadio) until the restart runs: a failure of
+    // the radio the run has now is not the change's, so it does not end it
+    // (retireRadioAndRetry).
+    bool m_radioChangeRestartPending {false};
     // I1: the console commands survive that restart (stop() keeps them
     // while this is set).
     bool m_keepConsoleOnStop {false};
