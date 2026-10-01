@@ -7886,7 +7886,15 @@ target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
 set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
 # Task 56: the Core's compiled vendor sources contain the exact reviewed
 # relay cleanup patches, including libjuice's public and internal headers.
-if(DEFINED libjuice_SOURCE_DIR AND DEFINED NEREUS_ORIGINAL_JUICE_SOURCE_DIR
+# This check and the next are plain add_test() calls, not nereus_add_test(),
+# so they are not hashed into a shard: run them in shard 0 only, not in
+# every shard (fix wave INFRA minor 8).
+set(_nereus_unsharded_checks_here FALSE)
+if(NOT NEREUS_TEST_SHARDS GREATER 0 OR NEREUS_TEST_SHARD EQUAL 0)
+    set(_nereus_unsharded_checks_here TRUE)
+endif()
+if(_nereus_unsharded_checks_here AND DEFINED libjuice_SOURCE_DIR
+   AND DEFINED NEREUS_ORIGINAL_JUICE_SOURCE_DIR
    AND DEFINED NEREUS_ORIGINAL_DC_SOURCE_DIR)
     add_test(NAME relay_cleanup_patches
         COMMAND ${CMAKE_COMMAND}
@@ -7906,7 +7914,8 @@ endif()
 # still apply to the pinned source, both library targets compile them, and
 # each opens with its pinned file's own licence notice. Configures a small
 # project only; nothing is built or fetched.
-if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
+if(_nereus_unsharded_checks_here AND DEFINED libdatachannel_SOURCE_DIR
+   AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
     add_test(NAME libdatachannel_patch_applies
         COMMAND ${CMAKE_COMMAND}
             -DREPO=${CMAKE_SOURCE_DIR}
