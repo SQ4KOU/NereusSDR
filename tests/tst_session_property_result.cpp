@@ -205,7 +205,7 @@ private slots:
             StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(security.path()));
             RadioModel gui(RadioModel::Role::Remote);
             // Stale client preferences must lose to the startup snapshot.
-            gui.pureSignalSettings()->setMoxDelaySeconds(9.0);
+            gui.pureSignalSettings()->setMoxDelaySeconds(0.9);
             gui.pureSignalSettings()->setLoopDelaySeconds(80.0);
             SettingsProxy proxy;
             StationClient client(&gui, &proxy);

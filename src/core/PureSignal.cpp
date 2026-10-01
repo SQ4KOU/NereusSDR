@@ -235,7 +235,9 @@ bool PureSignal::quickAttenuate() const noexcept
 
 double PureSignal::moxDelay() const noexcept
 {
-    return m_settings ? m_settings->moxDelaySeconds() : 0.1;
+    // Fix wave RD-I7: with no settings, Thetis udPSMoxDelay's Value 0.2.
+    // From Thetis PSForm.Designer.cs:368-372 [v2.10.3.15].
+    return m_settings ? m_settings->moxDelaySeconds() : PureSignalSettingsValues{}.moxDelaySeconds;
 }
 
 double PureSignal::calDelay() const noexcept
