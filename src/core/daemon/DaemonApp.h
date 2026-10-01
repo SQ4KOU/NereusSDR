@@ -117,6 +117,9 @@
 //               implementation via Anthropic Claude Code.
 //   2026-10-01: m_radioChangeRestartPending. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: stopRadioRecovery and m_radioChangeRestarting: a radio
+//               change ends when the run serving it stops. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -521,6 +524,11 @@ private:
     // connect bound passes with none of those. The pending choice is kept
     // as this run's radio either way.
     void endRadioSwitch();
+    // The run stops looking for and reconnecting its radio (stop(), a
+    // station release, the operator's disconnect). Nothing is left to serve
+    // a radio change, so it ends here too, except for the stop inside a
+    // radio change's own restart (m_radioChangeRestarting).
+    void stopRadioRecovery();
     // Fix wave (M3): the on-the-air rule, again at the moment the change
     // runs. True when the radio is on the air: the change is refused and
     // nothing is torn down.
@@ -544,6 +552,10 @@ private:
     // I1: the console commands survive that restart (stop() keeps them
     // while this is set).
     bool m_keepConsoleOnStop {false};
+    // While a radio change's restart runs start(): the stop that start()
+    // makes is the change's own, so it does not end the change
+    // (stopRadioRecovery). restartForRadioChange decides after start().
+    bool m_radioChangeRestarting {false};
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};
