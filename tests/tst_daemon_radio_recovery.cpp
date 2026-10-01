@@ -554,6 +554,89 @@ private slots:
         app.stop();
     }
 
+    // Fix wave, C1: the chosen radio's own connect failure ends the change.
+    // The change's deadline is set far past this test's wait, so the change
+    // can only end through that failure (the connect watchdog, 2000 ms), not
+    // through the deadline.
+    void theNewRadiosConnectFailureEndsTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        QUdpSocket silent;
+        QVERIFY(silent.bind(QHostAddress::LocalHost, 0));
+        RadioInfo dead = info;
+        dead.macAddress = QStringLiteral("AA:BB:CC:44:55:66");
+        dead.address = QHostAddress::LocalHost;
+        dead.port = silent.localPort();
+        DaemonApp app;
+        prepare(app);
+        app.m_radioSwitchBoundMs = 60000;
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, dead}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(dead.macAddress, &reason));
+        std::atomic<bool> deadFailed {false};
+        QTRY_VERIFY_WITH_TIMEOUT(
+            app.m_radioModel && app.m_radioModel->connection()
+                && app.m_radioModel->connection()->radioInfo().macAddress.compare(
+                       dead.macAddress, Qt::CaseInsensitive) == 0,
+            10000);
+        QVERIFY(app.m_stationRadios->switching());
+        QVERIFY(app.m_radioSwitchDeadline->isActive());
+        connect(app.m_radioModel->connection(), &RadioConnection::connectFailed,
+                app.m_radioModel->connection(),
+                [&deadFailed](ConnectFailure, const QString&) { deadFailed = true; },
+                Qt::DirectConnection);
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_stationRadios->switching(), 15000);
+        QVERIFY(deadFailed);
+        QVERIFY(!app.m_radioSwitchDeadline->isActive());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        QVERIFY(app.m_stationRadios->savedChoice().isEmpty());
+        app.stop();
+    }
+
+    // Between a choice and the restart that runs it, a Connected from the
+    // run the Core has now (the old radio's, reported late) is not the
+    // change's, so the change stays under way and a third choice is still
+    // refused. The state handler is called in that window directly, as a
+    // queued state report would reach it before the restart's turn.
+    void aConnectedBeforeTheRestartDoesNotEndTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, other}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QVERIFY(app.m_radioChangeRestartPending);
+        QVERIFY(app.m_stationRadios->switching());
+        QCOMPARE(app.m_radioModel->connectionState(), ConnectionState::Connected);
+        const QString savedBefore = app.m_stationRadios->savedChoice();
+        app.onRadioStateForRecovery(ConnectionState::Connected);
+        QVERIFY(app.m_stationRadios->switching());
+        QVERIFY(app.m_radioModel->stationRadioChangeUnderway());
+        QVERIFY(!app.m_stationRadios->select(info.macAddress, &reason));
+        QCOMPARE(reason, StationRadios::switchingReason());
+        // The old radio's Connected does not save the pending choice.
+        QCOMPARE(app.m_stationRadios->savedChoice(), savedBefore);
+        QCOMPARE(app.m_stationRadios->pendingChoice(), other.macAddress.toUpper());
+        app.stop();
+    }
+
     // Fix wave, M3: a key that arrives while the Core changes its radio is
     // refused (the old radio is still connected until the change runs), so
     // nothing keyed is torn down.

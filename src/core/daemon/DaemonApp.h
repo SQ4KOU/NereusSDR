@@ -536,9 +536,10 @@ private:
     // The operator's ruling of 2026-09-26: a radio change restarts the run,
     // and every app reconnects by itself. The end reason its sessions get.
     QString m_radioChangeReason;
-    // From the choice (switchRadio) until the restart runs: a failure of
-    // the radio the run has now is not the change's, so it does not end it
-    // (retireRadioAndRetry).
+    // From the choice (switchRadio) until the restart runs: nothing the
+    // run has now reports (a failure, a Connected, a discovery or connect
+    // that did not start) is the change's, so none of it ends the change
+    // (endRadioSwitch).
     bool m_radioChangeRestartPending {false};
     // I1: the console commands survive that restart (stop() keeps them
     // while this is set).

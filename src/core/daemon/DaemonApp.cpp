@@ -127,6 +127,11 @@
 //               the change's deadline and the connect watchdog are both
 //               2000 ms. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: the check moves into endRadioSwitch, so a Connected, a
+//               discovery with no radio to choose or a connect that did
+//               not start cannot end a change before its restart runs
+//               either. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1102,12 +1107,10 @@ void DaemonApp::retireRadioAndRetry()
     // radio change under way ends (its choice is kept as this run's radio).
     // A change chosen since then restarts the run (restartForRadioChange):
     // this failure is the old radio's, not that change's, so it stays under
-    // way. The change's deadline and the connect watchdog are both 2000 ms,
-    // so the deadline can end a change, and a window choose again, while
-    // the old radio's failure is still queued.
-    if (!m_radioChangeRestartPending) {
-        endRadioSwitch();
-    }
+    // way (endRadioSwitch keeps it). The change's deadline and the connect
+    // watchdog are both 2000 ms, so the deadline can end a change, and a
+    // window choose again, while the old radio's failure is still queued.
+    endRadioSwitch();
     // Invalidate both discovery completions and terminal reports from the
     // retired connection. RadioModel keeps the slices while retiring all DSP.
     cancelRadioDiscovery();
@@ -1277,6 +1280,15 @@ QString DaemonApp::radioChangeReason(const QString& radioName)
 
 void DaemonApp::endRadioSwitch()
 {
+    // A change chosen but not yet run (switchRadio until restartForRadioChange)
+    // is never ended here: whatever reports now (the old radio's failure, its
+    // late Connected, a discovery or connect that did not start) belongs to
+    // the run the change is about to restart, not to the change. Its
+    // deadline is not running yet; it starts when the new radio's connect
+    // does (finishRadioDiscovery).
+    if (m_radioChangeRestartPending) {
+        return;
+    }
     m_radioSwitchDeadline->stop();
     if (m_stationRadios) {
         m_stationRadios->setSwitching(false);
