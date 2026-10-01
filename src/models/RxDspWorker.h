@@ -39,6 +39,10 @@
 //                 Fix round 1: the mask width is kRadeModeMaskSlices.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: externalDiversityStreamSlices and
+//                 processSliceChunk, so every slice on the diversity target's
+//                 stream is fed from the mix. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -581,6 +585,19 @@ private:
     void drainExternalDiversity();
     void feedExternalDiversityTarget(int samples);
     bool isExternalDiversityTarget(int sliceId) const noexcept;
+    // The slices bound to the stream that hosts the diversity target (the
+    // target included), or empty when no route is active or the target is
+    // bound to no stream. Every one of them reads the mixed buffer, as every
+    // sub-receiver of Thetis's stream 0 does.
+    QVector<int> externalDiversityStreamSlices() const;
+
+    // One slice's share of a drained chunk: its WDSP channel, the RADE fork
+    // and the audio push, then sliceProcessed. The input legs are blanked in
+    // place unless blankerClaimed (the stream's single blanking pass already
+    // ran on them). Returns whether the slice reached processIq, which is
+    // what claims the pass. Engines must be wired.
+    bool processSliceChunk(int sliceIdx, float* inI, float* inQ,
+                           int inSize, int outSize, bool blankerClaimed);
 
     // Reusable interleaved stereo scratch handed to AudioEngine::rxBlockReady.
     // Sized to outSize*2 on first use and reused in-place per batch so the

@@ -19403,7 +19403,11 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // only the designated primary onto a logical user stream; the synchronized
     // partner deliberately has no logical receiver. Fork the raw hardware-DDC
     // batch to the worker once, while leaving ReceiverManager's ordinary
-    // fan-out above unchanged for every co-hosted slice. R-R3-40: the fork is
+    // fan-out above unchanged. The worker feeds the mix to every slice on
+    // the target's stream (the target and any slice sharing its stream, as
+    // Thetis's RX1 sub-receiver reads the mixed stream 0) and keeps them out
+    // of that ordinary fan-out; slices on other streams are untouched.
+    // R-R3-40: the fork is
     // ReceiverManager's stamped copy of every hardware batch (feedIqData runs
     // for each RadioConnection::iqDataReceived through the DirectConnection
     // above), so the diversity input is bounded like any receiver's.
