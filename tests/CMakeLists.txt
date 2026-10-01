@@ -7147,6 +7147,16 @@ nereus_add_test(tst_diversity_dialog_persistence)
 # Phone wire batch: the Diversity dialog's sensitivity pattern
 # (core/DiversityPattern) and the slice's diversityPattern.
 nereus_add_test(tst_diversity_pattern)
+# Diversity's synchronized partner DDC1 is tuned to RX1 as Thetis tunes it
+# (UpdateRX1DDSFreq), on Protocol 2 and Protocol 1.
+nereus_add_test(tst_diversity_partner_ddc)
+# The Diversity dialog edits the slice RadioModel runs diversity for (slice
+# A, by id), and disables its controls with a reason while that slice is
+# closed.
+nereus_add_test(tst_diversity_dialog_owner)
+# Diversity lane B4: Protocol 1 sends the diversity VFO lock (bank 0 C4
+# bit 7) while diversity runs and clears it when diversity stops.
+nereus_add_test(tst_p1_diversity_lock_bit)
 # Phone wire batch: radio's logCategoryList (the Support dialog's categories
 # with their labels).
 nereus_add_test(tst_log_category_list)

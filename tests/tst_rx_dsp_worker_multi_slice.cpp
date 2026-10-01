@@ -476,7 +476,14 @@ private slots:
         QCOMPARE(sliceSpy.at(0).at(0).toInt(), 7);
     }
 
-    void ordinary_cohosted_slices_continue_while_target_skips_normal_fanout()
+    // A slice sharing the diversity target's stream is a sub-receiver of the
+    // same receiver, and in Thetis every sub-receiver of stream 0 reads the
+    // mixed buffer: InboundBlock case 0 hands Inbound(0) the xdivEXT output
+    // (ChannelMaster/sync.c:49-51 [v2.10.3.15]) and xcmaster runs fexchange0
+    // for each sub-receiver on that one input (cmaster.c:365-366). So the
+    // co-hosted slice takes no raw primary-leg chunk, and is fed from the
+    // mix right after the target. A slice on another stream is untouched.
+    void cohosted_slices_take_the_mix_not_the_raw_primary_leg()
     {
         DiversityRecorder record;
         s_diversity = &record;
@@ -494,13 +501,23 @@ private slots:
         const QVector<float> chunk{
             1, 2, 3, 4, 5, 6, 7, 8,
         };
+        // The ordinary (raw primary-leg) fan-out: only the slice on the
+        // other stream is processed from it.
         worker.processIqBatch(10, chunk);
         worker.processIqBatch(11, chunk);
-
-        QCOMPARE(sliceSpy.count(), 2);
-        QCOMPARE(sliceSpy.at(0).at(0).toInt(), 8);
-        QCOMPARE(sliceSpy.at(1).at(0).toInt(), 9);
+        QCOMPARE(sliceSpy.count(), 1);
+        QCOMPARE(sliceSpy.at(0).at(0).toInt(), 9);
         QCOMPARE(record.processCalls, 0);
+
+        // The mixed chunk: the target, then the slice beside it.
+        sliceSpy.clear();
+        worker.processExternalDiversityIqBatch(10, chunk);
+        worker.processExternalDiversityIqBatch(11, chunk);
+        QCOMPARE(record.processCalls, 1);
+        QCOMPARE(sliceSpy.count(), 2);
+        QCOMPARE(sliceSpy.at(0).at(0).toInt(), 7);
+        QCOMPARE(sliceSpy.at(1).at(0).toInt(), 8);
+        QCOMPARE(sliceSpy.at(1).at(1).toInt(), 4);
     }
 
     void differently_chunked_sources_wait_for_equal_target_chunks()

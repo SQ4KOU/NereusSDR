@@ -543,6 +543,9 @@
 //                the words a device's autotune that ends before its carrier
 //                keyed is told; cancelTgxlAutotuneFor takes the reason.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: diversityTargetSlice(), the slice diversity
+//                runs for, for the Diversity dialog. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2004,6 +2007,12 @@ public:
     /// removal. The id doubles as the slice's WDSP RX channel id.
     /// For positional access, index slices() directly.
     SliceModel* sliceById(int sliceId) const;
+
+    /// The slice diversity runs for, by its stable id (slice A), or nullptr
+    /// while that slice is closed. The one owner RadioModel itself uses
+    /// (diversityActive, reconcileExternalDiversityRoute), published so a
+    /// diversity surface edits the same slice instead of picking its own.
+    SliceModel* diversityTargetSlice() const;
 
     /// R-R3-40: the DSP load of the slice with this ID over the latest
     /// ReceiverDspLoadSampler::kSampleIntervalMs interval, or nullopt when

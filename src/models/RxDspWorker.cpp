@@ -4,6 +4,8 @@
 //
 // Ported from Thetis source:
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
+//   Project Files/Source/ChannelMaster/cmaster.c, original licence from Thetis source is included below
+//   Project Files/Source/ChannelMaster/sync.c, original licence from Thetis source is included below
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -42,6 +44,13 @@
 //                 (Resampler::processInto), so the DSP thread's per-block
 //                 RADE path allocates nothing. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: every slice on the diversity target's
+//                 stream is fed from the mixed buffer, as every sub-receiver
+//                 of Thetis's stream 0 reads it (cmaster.c xcmaster, sync.c
+//                 InboundBlock); the per-slice drain body moves into
+//                 processSliceChunk so both paths share it. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -92,6 +101,60 @@
 // its original terms and is not affected by this dual-licensing statement in any way.        //
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
+
+// --- From cmaster.c ---
+/*  cmaster.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014-2019 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
+
+// --- From sync.c ---
+/*  sync.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
 
 #include "RxDspWorker.h"
 
@@ -500,6 +563,34 @@ void RxDspWorker::feedExternalDiversityTarget(int samples)
     if (target || !m_audioEngine) {
         emit sliceProcessed(
             m_externalDiversityRoute.targetSliceId, samples);
+    }
+
+    // The other slices on the target's stream are sub-receivers of the same
+    // receiver, and they read the same mixed buffer. ChannelMaster runs every
+    // sub-receiver of a stream on that stream's one input, which for stream 0
+    // is the diversity output (sync.c:49-51, quoted in processIqBatch):
+    //   From Thetis ChannelMaster/cmaster.c:365-366 [v2.10.3.15]
+    //     for (j = 0; j < pcm->cmSubRCVR; j++)
+    //         fexchange0 (chid (stream, j), pcm->in[stream], pcm->rcvr[rx].audio[j], &error);		// dsp
+    // One blanking pass per stream (cmaster.c:351-352 runs xanb / xnob once,
+    // before that loop): the target above blanked the mixed legs in place,
+    // so the slices after it are bypassed.
+    const QVector<int> streamSlices = externalDiversityStreamSlices();
+    bool blankerClaimed = target && m_audioEngine;
+    for (int sliceIdx : streamSlices) {
+        if (sliceIdx == m_externalDiversityRoute.targetSliceId) {
+            continue;
+        }
+        if (m_audioEngine) {
+            if (processSliceChunk(sliceIdx,
+                                  m_externalDiversityOutputI.data(),
+                                  m_externalDiversityOutputQ.data(),
+                                  samples, outSize, blankerClaimed)) {
+                blankerClaimed = true;
+            }
+        } else {
+            emit sliceProcessed(sliceIdx, samples);
+        }
     }
 }
 
@@ -928,14 +1019,25 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                                     ? sliceIt->second
                                     : QVector<int>{};
 
+    // External diversity: the stream hosting the diversity target is the
+    // one receiver whose input is the mix. Every slice on it, the target
+    // and any slice sharing its stream alike, is fed from the mixed buffer
+    // (feedExternalDiversityTarget), so none takes this raw primary-leg
+    // chunk. Thetis's sub-receivers of stream 0 all read Inbound(0), which
+    // is the xdivEXT output while diversity runs:
+    //   From Thetis ChannelMaster/sync.c:49-51 [v2.10.3.15]
+    //     case 0: // diversity receivers
+    //         xdivEXT (0, nsamples, data, psyn->divbuff);
+    //         Inbound (0, nsamples, psyn->divbuff);
+    const bool diversityStream = m_externalDiversityRoute.active()
+        && slices.contains(m_externalDiversityRoute.targetSliceId);
+    const auto fedFromDiversityMix = [this, diversityStream](int sliceId) {
+        return diversityStream || isExternalDiversityTarget(sliceId);
+    };
+
     // (Phase 3F Sub-Epic I closeout defect G1 computed a hostsSliceZero flag
     //  here to elect one stream to raise the anti-VOX fork. Sub-Epic J Task 9
     //  retired that fork; see the note at the bottom of the drain loop.)
-
-    // RxChannel::processIq writes sampleCount floats on the inactive-channel
-    // memset path and outSampleCount via fexchange2, so the reusable output
-    // scratch must cover the larger of the two.
-    const int scratchLen = qMax(inSize, outSize);
 
     // Drain whole chunks of inSize through WDSP (or skip the WDSP/audio
     // calls when engines aren't wired — chunkDrained still fires so the
@@ -952,8 +1054,8 @@ void RxDspWorker::processIqBatch(int receiverIndex,
         // tests (same rule as chunkDrained / sliceProcessed).
         const bool hasOrdinarySlice =
             std::any_of(slices.cbegin(), slices.cend(),
-                        [this](int sliceId) {
-                            return !isExternalDiversityTarget(sliceId);
+                        [&fedFromDiversityMix](int sliceId) {
+                            return !fedFromDiversityMix(sliceId);
                         });
         if (hasOrdinarySlice) {
             emit streamNoiseBlankerApplied(receiverIndex);
@@ -981,150 +1083,21 @@ void RxDspWorker::processIqBatch(int receiverIndex,
             // so it is never bypassed).
             bool streamBlankerClaimed = false;
             for (int sliceIdx : slices) {
-                if (isExternalDiversityTarget(sliceIdx)) {
+                if (fedFromDiversityMix(sliceIdx)) {
                     continue;
                 }
 
-                // Invariant: WDSP channel id == slice index.
-                RxChannel* rxCh = m_wdspEngine->rxChannel(sliceIdx);
-                if (rxCh == nullptr) {
-                    // Defensive: WDSP RxChannel should always exist now
-                    // (RadioModel creates it unconditionally per Phase 3R
-                    // K-bench restructure). If absent, skip this slice;
-                    // the chunk still drains below.
-                    continue;
+                if (processSliceChunk(sliceIdx, acc.i.data(), acc.q.data(),
+                                      inSize, outSize, streamBlankerClaimed)) {
+                    streamBlankerClaimed = true;
                 }
-
-                // Claim the stream's single blanking pass for the first
-                // slice that actually reaches processIq. Anchored on the
-                // processIq call rather than on position in `slices` so a
-                // skipped slice above cannot consume the pass and leave the
-                // chunk unblanked.
-                rxCh->setNoiseBlankerBypassed(streamBlankerClaimed);
-                streamBlankerClaimed = true;
-
-                // ── WDSP always runs ──────────────────────────────────────
-                // S-meter, spectrum, AGC, ADC-overflow detector all live
-                // inside WDSP's RxChannel internals. They MUST update
-                // every tick regardless of audio routing, so processIq
-                // runs unconditionally. The decoded audio in outI/outQ
-                // is gated below depending on whether RADE owns the
-                // speaker path for this slice.
-                if (m_sliceOutI.size() < scratchLen) {
-                    m_sliceOutI.resize(scratchLen);
-                    m_sliceOutQ.resize(scratchLen);
-                }
-                // The scratch is reused across slices and drains, so it must
-                // be zeroed exactly where the old per-drain
-                // `QVector<float> outI(inSize)` was value-initialised.
-                // fexchange2 returns without writing either output leg when
-                // the channel's exchange bit is clear (iobuffs.c:525, the
-                // whole body is inside that test), which happens across
-                // flush / restart transitions. Without the zero-fill that
-                // path would replay the previous chunk's audio instead of
-                // emitting silence. Cheaper than the allocation it replaces:
-                // the old code zero-filled the same span AND hit the heap.
-                m_sliceOutI.fill(0.0f);
-                m_sliceOutQ.fill(0.0f);
-                QVector<float>& outI = m_sliceOutI;
-                QVector<float>& outQ = m_sliceOutQ;
-                rxCh->processIq(acc.i.data(), acc.q.data(),
-                                outI.data(), outQ.data(), inSize, outSize);
-
-                // ── Phase 3R K-bench (source-first reframe): RADE RX fork
-                //
-                // freedv-gui (RADEReceiveStep.cpp:175-310 [@77e793a]) and
-                // AetherSDR (RADEEngine.cpp:200-303 [@0cd4559]) BOTH feed
-                // RADE post-SSB-demodulation REAL AUDIO (not raw DDC
-                // complex baseband). The codec internally builds RADE_COMP
-                // by setting real=audio, imag=0 — it's an audio-domain
-                // demodulator, not a baseband one.
-                //
-                // Earlier NereusSDR attempts fed the raw DDC I/Q directly
-                // and the codec never synced because the input format was
-                // wrong. This fork now uses outI (WDSP's decoded audio,
-                // 48 kHz dual-mono) → downsample to 24 kHz → interleave
-                // as I=audio, Q=0 for RadeChannel::processIq. RADE's
-                // internal 24→8 decimator + RADE_COMP assembly then
-                // matches the freedv-gui pipeline byte-for-byte.
-                //
-                // outI / outQ are dual-mono identical (RXA patch panel
-                // SetRXAPanelBinaural(channel, 0)), so we use outI as
-                // the mono audio source.
-                //
-                // RADE threads (2026-09-30): any number of slices route
-                // to RADE, each to its own decoder thread
-                // (processRadeRxBlock), which also delivers the slice's
-                // audio for this block.
-                const bool routesToRade =
-                    processRadeRxBlock(sliceIdx, outI.data(), outSize);
-                // One-shot tracer (off by default; enable with
-                // QT_LOGGING_RULES="nereus.dsp.debug=true") to confirm
-                // the RADE RX fork is reaching the codec during bench
-                // shakedown.
-                static int s_rxRadeDiagCount = 0;
-                if (routesToRade && s_rxRadeDiagCount < 3) {
-                    qCDebug(lcDsp).noquote()
-                        << QString("RxDspWorker RADE fork #%1: "
-                                   "slice=%2 outSize=%3 (audio rate=48kHz)")
-                            .arg(s_rxRadeDiagCount + 1)
-                            .arg(sliceIdx)
-                            .arg(outSize);
-                    ++s_rxRadeDiagCount;
-                }
-
-                // ── Audio routing ───────────────────────────────────────
-                // In RADE mode, WDSP audio is discarded — RADE's
-                // rxSpeechReady signal (wired in J4 to AudioEngine)
-                // owns the speaker path. Otherwise route WDSP's decoded
-                // audio to AudioEngine as before.
-                // [RADE threads: the decoded speech now reaches AudioEngine
-                // from processRadeRxBlock above, on this thread.]
-                if (!routesToRade) {
-                    // RADE gaps (2026-09-30): a slice in RADE mode whose
-                    // route is not here (yet) keeps its place in the mix
-                    // with silence. Its WDSP audio is the sideband, which
-                    // a RADE slice never plays (setRadeModeSlices).
-                    static_assert(WdspEngine::kMaxSliceChannels <= kRadeModeMaskSlices,
-                                  "every slice id needs a RADE mode bit");
-                    const bool radeWithoutRoute = sliceIdx >= 0
-                        && sliceIdx < kRadeModeMaskSlices
-                        && ((m_radeModeSlices.load(std::memory_order_acquire)
-                             >> sliceIdx) & 1u) != 0;
-                    // Phase 3F Sub-Epic I Task 4: slice 0 keeps
-                    // m_interleavedOut to itself because the anti-VOX fork
-                    // below reads it as the cancellation reference; a
-                    // secondary slice writing there would hand the DEXP
-                    // detector the wrong slice's audio. rxBlockReady
-                    // consumes the pointer synchronously, so one scratch
-                    // per role is enough.
-                    QVector<float>& scratch =
-                        (sliceIdx == 0) ? m_interleavedOut : m_interleavedOutAux;
-                    if (scratch.size() < outSize * 2) {
-                        scratch.resize(outSize * 2);
-                    }
-                    float* interleaved = scratch.data();
-                    if (radeWithoutRoute) {
-                        std::fill(interleaved, interleaved + outSize * 2, 0.0f);
-                    } else {
-                        for (int i = 0; i < outSize; ++i) {
-                            interleaved[i * 2 + 0] = outI[i];
-                            interleaved[i * 2 + 1] = outQ[i];
-                        }
-                    }
-                    // MasterMixer sums every registered slice into the one
-                    // global output, so each slice pushes under its own id.
-                    m_audioEngine->rxBlockReady(sliceIdx, interleaved, outSize);
-                }
-
-                emit sliceProcessed(sliceIdx, inSize);
             }
         } else {
             // No engines wired (unit tests): still honour the fan-out
             // contract so the signal sequence stays observable, exactly
             // as chunkDrained already fires without engines.
             for (int sliceIdx : slices) {
-                if (isExternalDiversityTarget(sliceIdx)) {
+                if (fedFromDiversityMix(sliceIdx)) {
                     continue;
                 }
                 emit sliceProcessed(sliceIdx, inSize);
@@ -1211,6 +1184,165 @@ void RxDspWorker::processIqBatch(int receiverIndex,
     }
 
     emit batchProcessed();
+}
+
+bool RxDspWorker::processSliceChunk(int sliceIdx, float* inI, float* inQ,
+                                    int inSize, int outSize,
+                                    bool blankerClaimed)
+{
+    // RxChannel::processIq writes sampleCount floats on the inactive-channel
+    // memset path and outSampleCount via fexchange2, so the reusable output
+    // scratch must cover the larger of the two.
+    const int scratchLen = qMax(inSize, outSize);
+
+    // Invariant: WDSP channel id == slice index.
+    RxChannel* rxCh = m_wdspEngine->rxChannel(sliceIdx);
+    if (rxCh == nullptr) {
+        // Defensive: WDSP RxChannel should always exist now
+        // (RadioModel creates it unconditionally per Phase 3R
+        // K-bench restructure). If absent, skip this slice;
+        // the chunk still drains below.
+        return false;
+    }
+
+    // Claim the stream's single blanking pass for the first
+    // slice that actually reaches processIq. Anchored on the
+    // processIq call rather than on position in `slices` so a
+    // skipped slice above cannot consume the pass and leave the
+    // chunk unblanked.
+    // (The caller marks the pass claimed when this returns true.)
+    rxCh->setNoiseBlankerBypassed(blankerClaimed);
+
+    // ── WDSP always runs ──────────────────────────────────────
+    // S-meter, spectrum, AGC, ADC-overflow detector all live
+    // inside WDSP's RxChannel internals. They MUST update
+    // every tick regardless of audio routing, so processIq
+    // runs unconditionally. The decoded audio in outI/outQ
+    // is gated below depending on whether RADE owns the
+    // speaker path for this slice.
+    if (m_sliceOutI.size() < scratchLen) {
+        m_sliceOutI.resize(scratchLen);
+        m_sliceOutQ.resize(scratchLen);
+    }
+    // The scratch is reused across slices and drains, so it must
+    // be zeroed exactly where the old per-drain
+    // `QVector<float> outI(inSize)` was value-initialised.
+    // fexchange2 returns without writing either output leg when
+    // the channel's exchange bit is clear (iobuffs.c:525, the
+    // whole body is inside that test), which happens across
+    // flush / restart transitions. Without the zero-fill that
+    // path would replay the previous chunk's audio instead of
+    // emitting silence. Cheaper than the allocation it replaces:
+    // the old code zero-filled the same span AND hit the heap.
+    m_sliceOutI.fill(0.0f);
+    m_sliceOutQ.fill(0.0f);
+    QVector<float>& outI = m_sliceOutI;
+    QVector<float>& outQ = m_sliceOutQ;
+    rxCh->processIq(inI, inQ,
+                    outI.data(), outQ.data(), inSize, outSize);
+
+    // ── Phase 3R K-bench (source-first reframe): RADE RX fork
+    //
+    // freedv-gui (RADEReceiveStep.cpp:175-310 [@77e793a]) and
+    // AetherSDR (RADEEngine.cpp:200-303 [@0cd4559]) BOTH feed
+    // RADE post-SSB-demodulation REAL AUDIO (not raw DDC
+    // complex baseband). The codec internally builds RADE_COMP
+    // by setting real=audio, imag=0 — it's an audio-domain
+    // demodulator, not a baseband one.
+    //
+    // Earlier NereusSDR attempts fed the raw DDC I/Q directly
+    // and the codec never synced because the input format was
+    // wrong. This fork now uses outI (WDSP's decoded audio,
+    // 48 kHz dual-mono) → downsample to 24 kHz → interleave
+    // as I=audio, Q=0 for RadeChannel::processIq. RADE's
+    // internal 24→8 decimator + RADE_COMP assembly then
+    // matches the freedv-gui pipeline byte-for-byte.
+    //
+    // outI / outQ are dual-mono identical (RXA patch panel
+    // SetRXAPanelBinaural(channel, 0)), so we use outI as
+    // the mono audio source.
+    //
+    // RADE threads (2026-09-30): any number of slices route
+    // to RADE, each to its own decoder thread
+    // (processRadeRxBlock), which also delivers the slice's
+    // audio for this block.
+    const bool routesToRade =
+        processRadeRxBlock(sliceIdx, outI.data(), outSize);
+    // One-shot tracer (off by default; enable with
+    // QT_LOGGING_RULES="nereus.dsp.debug=true") to confirm
+    // the RADE RX fork is reaching the codec during bench
+    // shakedown.
+    static int s_rxRadeDiagCount = 0;
+    if (routesToRade && s_rxRadeDiagCount < 3) {
+        qCDebug(lcDsp).noquote()
+            << QString("RxDspWorker RADE fork #%1: "
+                       "slice=%2 outSize=%3 (audio rate=48kHz)")
+                .arg(s_rxRadeDiagCount + 1)
+                .arg(sliceIdx)
+                .arg(outSize);
+        ++s_rxRadeDiagCount;
+    }
+
+    // ── Audio routing ───────────────────────────────────────
+    // In RADE mode, WDSP audio is discarded — RADE's
+    // rxSpeechReady signal (wired in J4 to AudioEngine)
+    // owns the speaker path. Otherwise route WDSP's decoded
+    // audio to AudioEngine as before.
+    // [RADE threads: the decoded speech now reaches AudioEngine
+    // from processRadeRxBlock above, on this thread.]
+    if (!routesToRade) {
+        // RADE gaps (2026-09-30): a slice in RADE mode whose
+        // route is not here (yet) keeps its place in the mix
+        // with silence. Its WDSP audio is the sideband, which
+        // a RADE slice never plays (setRadeModeSlices).
+        static_assert(WdspEngine::kMaxSliceChannels <= kRadeModeMaskSlices,
+                      "every slice id needs a RADE mode bit");
+        const bool radeWithoutRoute = sliceIdx >= 0
+            && sliceIdx < kRadeModeMaskSlices
+            && ((m_radeModeSlices.load(std::memory_order_acquire)
+                 >> sliceIdx) & 1u) != 0;
+        // Phase 3F Sub-Epic I Task 4: slice 0 keeps
+        // m_interleavedOut to itself because the anti-VOX fork
+        // below reads it as the cancellation reference; a
+        // secondary slice writing there would hand the DEXP
+        // detector the wrong slice's audio. rxBlockReady
+        // consumes the pointer synchronously, so one scratch
+        // per role is enough.
+        QVector<float>& scratch =
+            (sliceIdx == 0) ? m_interleavedOut : m_interleavedOutAux;
+        if (scratch.size() < outSize * 2) {
+            scratch.resize(outSize * 2);
+        }
+        float* interleaved = scratch.data();
+        if (radeWithoutRoute) {
+            std::fill(interleaved, interleaved + outSize * 2, 0.0f);
+        } else {
+            for (int i = 0; i < outSize; ++i) {
+                interleaved[i * 2 + 0] = outI[i];
+                interleaved[i * 2 + 1] = outQ[i];
+            }
+        }
+        // MasterMixer sums every registered slice into the one
+        // global output, so each slice pushes under its own id.
+        m_audioEngine->rxBlockReady(sliceIdx, interleaved, outSize);
+    }
+
+    emit sliceProcessed(sliceIdx, inSize);
+    return true;
+}
+
+QVector<int> RxDspWorker::externalDiversityStreamSlices() const
+{
+    if (!m_externalDiversityRoute.active()) {
+        return {};
+    }
+    for (const auto& [stream, slices] : m_streamSlices) {
+        Q_UNUSED(stream);
+        if (slices.contains(m_externalDiversityRoute.targetSliceId)) {
+            return slices;
+        }
+    }
+    return {};
 }
 
 void RxDspWorker::setStreamSlices(int streamIndex,

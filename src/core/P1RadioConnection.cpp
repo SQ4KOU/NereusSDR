@@ -168,6 +168,12 @@
 //   2026-09-30 - TX safety follow-up: the refusal's log line names both
 //                ways the latch lifts. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-01 - Diversity lane B4: setDiversity writes m_diversity, the
+//                VFO lock bit (bank 0 C4 bit 7) that had no writer, from
+//                Protocol1DDCConfig's en_diversity (console.cs:8215-8216,
+//                8544; netInterface.c:1249-1252; networkproto1.c:471
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -3700,6 +3706,36 @@ void P1RadioConnection::applyPsDdcConfig(const NereusSDR::PsDdcConfig& cfg)
             << " psFbDdc=" << m_psFbDdc
             << " psTxMonDdc=" << m_psTxMonDdc;
     }
+}
+
+// ---------------------------------------------------------------------------
+// setDiversity (diversity lane B4)
+//
+// The en_diversity argument of Protocol1DDCConfig. Thetis sets it from the
+// diversity state on every UpdateDDCs and the frame writer turns it into the
+// VFO lock:
+//   From Thetis console.cs:8215-8216 [v2.10.3.15]
+//     bool diversity_enabled = Diversity2;
+//     if (diversity_enabled) P1_diversity = 1;
+//   From Thetis console.cs:8544 [v2.10.3.15]
+//     NetworkIO.Protocol1DDCConfig(P1_DDCConfig, P1_diversity, P1_rxcount, nddc);
+//   From Thetis ChannelMaster/netInterface.c:1249-1252 [v2.10.3.15]
+//     void Protocol1DDCConfig(int ddcconfig, int en_diversity, int rxcount, int inddc)
+//     ...
+//     P1_en_diversity = en_diversity;
+//   From Thetis ChannelMaster/networkproto1.c:471 [v2.10.3.15]
+//     C4 |= (P1_en_diversity) << 7;		// if diversity, locks VFOs
+// Bank 0 goes out on the next frame so the lock lands with the assignment
+// that moved the pair, as setMox does for the MOX bit.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setDiversity(bool on)
+{
+    if (m_diversity == on) {
+        return;
+    }
+    m_diversity = on;
+    m_forceBank0Next = true;
+    qCInfo(lcConnection) << "P1: diversity VFO lock" << (on ? "on" : "off");
 }
 
 // ---------------------------------------------------------------------------

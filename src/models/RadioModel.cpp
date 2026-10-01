@@ -971,6 +971,15 @@
 //                go, receive only, on the air, the carrier's refusal, a
 //                take, its lost link), so the device is always told. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane: diversityTargetSlice() publishes the one
+//                diversity owner (slice A by id) so the Diversity dialog
+//                edits the slice this model runs diversity for. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Diversity lane B4: invokeCodecDdcAssignment sends the
+//                Protocol 1 diversity VFO lock (DdcAssignment::p1Diversity,
+//                console.cs:8215-8216, 8544 [v2.10.3.15]) to the
+//                connection, which had no writer for it. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -19399,7 +19408,11 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // only the designated primary onto a logical user stream; the synchronized
     // partner deliberately has no logical receiver. Fork the raw hardware-DDC
     // batch to the worker once, while leaving ReceiverManager's ordinary
-    // fan-out above unchanged for every co-hosted slice. R-R3-40: the fork is
+    // fan-out above unchanged. The worker feeds the mix to every slice on
+    // the target's stream (the target and any slice sharing its stream, as
+    // Thetis's RX1 sub-receiver reads the mixed stream 0) and keeps them out
+    // of that ordinary fan-out; slices on other streams are untouched.
+    // R-R3-40: the fork is
     // ReceiverManager's stamped copy of every hardware batch (feedIqData runs
     // for each RadioConnection::iqDataReceived through the DirectConnection
     // above), so the diversity input is bounded like any receiver's.
@@ -31209,6 +31222,11 @@ PureSignal* RadioModel::installPureSignalForTest(TxChannel* tx)
 }
 #endif
 
+SliceModel* RadioModel::diversityTargetSlice() const
+{
+    return sliceById(kExternalDiversityTargetSliceId);
+}
+
 bool RadioModel::diversityActive() const
 {
     // Extracted from currentCodecContext with the D1 fix, so the Alex
@@ -32300,6 +32318,27 @@ void RadioModel::invokeCodecDdcAssignment()
                 p2conn->applyDdcAssignment(assignment);
             });
         }
+    }
+
+    // Diversity lane B4: Protocol 1's half of Protocol1DDCConfig that the
+    // applyPsDdcConfig flow does not carry, the diversity VFO lock. Thetis
+    // passes P1_diversity on every UpdateDDCs:
+    //   From Thetis console.cs:8215-8216, 8544 [v2.10.3.15]
+    //     bool diversity_enabled = Diversity2;
+    //     if (diversity_enabled) P1_diversity = 1;
+    //     NetworkIO.Protocol1DDCConfig(P1_DDCConfig, P1_diversity, P1_rxcount, nddc);
+    // The codec computed the flag (DdcAssignment::p1Diversity) and nothing
+    // sent it. Every diversity change, slice A's removal and every retune
+    // comes through here, so the bit follows the state. Marshalled like the
+    // P2 push above: the flag is the connection thread's frame state.
+    if (auto* p1conn = qobject_cast<NereusSDR::P1RadioConnection*>(m_connection)) {
+        const QPointer<NereusSDR::P1RadioConnection> target(p1conn);
+        const bool lock = assignment.p1Diversity != 0;
+        QMetaObject::invokeMethod(p1conn, [target, lock]() {
+            if (target) {
+                target->setDiversity(lock);
+            }
+        });
     }
 
     publishDdcAssignment(assignment);
