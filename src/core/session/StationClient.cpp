@@ -9,6 +9,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 1: a delta
+//                                    whose side effect moves an edit the
+//                                    window has not sent cancels that edit
+//                                    (its hold and its coalesced write)
+//                                    and its own value applies, following
+//                                    Thetis's per-mode filter edges
+//                                    (console.cs:34513, 34766-34768
+//                                    [v2.10.3.15]). A sent edit, and a
+//                                    Core answer's side effect, still put
+//                                    the operator's value back. AI-
+//                                    assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling lane: a pending write
 //                                    keeps the operator's value, and an
 //                                    inbound apply that moves it as a side
@@ -4114,13 +4125,19 @@ void StationClient::handleDelta(const SessionMessage& message)
         return;
     }
     QList<MirrorUpdate> current;
+    QList<MirrorUpdate> held;
     const auto pending = m_pendingWrites.value(message.objectKey);
     for (const auto& value : message.updates) {
         if (!pending.contains(value.name)) {
             current.append(value);
+        } else {
+            // Skipped while the operator's write holds it, unless this
+            // delta's side effects cancel an unsent hold
+            // (restoreOperatorValues): then this value applies.
+            held.append(value);
         }
     }
-    applyUpdates(target, message.objectKey, current);
+    applyUpdates(target, message.objectKey, current, SideEffectRule::Delta, held);
 }
 
 void StationClient::handlePropertyResult(const SessionMessage& message)
@@ -4162,7 +4179,8 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
 }
 
 void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
-                                 const QList<MirrorUpdate>& updates)
+                                 const QList<MirrorUpdate>& updates, SideEffectRule rule,
+                                 const QList<MirrorUpdate>& heldValues)
 {
     if (updates.isEmpty()) {
         return;
@@ -4205,11 +4223,13 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
 
     // Still under the guard: putting the operator's values back is not a
     // change of theirs to send again.
-    restoreOperatorValues(objectKey, applied);
+    restoreOperatorValues(objectKey, applied, rule, heldValues);
 }
 
 void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
-                                          const QSet<QByteArray>& applied)
+                                          const QSet<QByteArray>& applied,
+                                          SideEffectRule rule,
+                                          const QList<MirrorUpdate>& heldValues)
 {
     // The guard suppresses the observer, not the change. A Core value a
     // setter applies can move a DIFFERENT property as a side effect
@@ -4222,6 +4242,18 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
     // A property the Core's message named keeps the Core's value (only an
     // object.create names one with a pending write; a delta skips them,
     // and a result ends the hold before it applies).
+    //
+    // A DELTA is different for an edit the window has not sent yet: the
+    // change came from another device or the Core itself, so the
+    // operator's unsent edit is cancelled, not put back. Thetis keeps
+    // filter edges per mode: SetRX1Mode loads the new mode's own last
+    // filter (RX1Filter = rx1_filters[(int)new_mode].LastFilter;
+    // console.cs:34513 [v2.10.3.15]) and SetRX1Filter saves the edges as
+    // the current mode's (console.cs:34766-34768 [v2.10.3.15]), so an
+    // old mode's edge has no place in the new mode. The hold and its
+    // coalesced write are dropped and the delta's own value applies. An
+    // edit already sent is still put back: the Core applies that write
+    // after its own change, and the window shows what it will hold.
     struct Held {
         quint64 order;
         QByteArray key;
@@ -4259,6 +4291,22 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
             continue;
         }
         if (live == write->value.value) {
+            continue;
+        }
+        if (rule == SideEffectRule::Delta && write->writeId == 0) {
+            writes->erase(write);
+            if (writes->isEmpty()) {
+                m_pendingWrites.erase(writes);
+            }
+            m_outboundCoalescer.remove(h.key, prop->ordinal);
+            if (h.key == appliedKey) {
+                for (const MirrorUpdate& value : heldValues) {
+                    if (value.name == h.name) {
+                        applyOne(object, *prop, value);
+                        break;
+                    }
+                }
+            }
             continue;
         }
         const MirrorUpdate operatorValue = write->value;

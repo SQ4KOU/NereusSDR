@@ -50,6 +50,19 @@ public:
     }
     void releaseFirst() { LoopbackTransport::sendText(held.takeFirst()); }
 };
+// PropertyWrite messages among what a transport's outboundText spy saw.
+int propertyWrites(const QSignalSpy& sent)
+{
+    int count = 0;
+    for (const auto& args : sent) {
+        SessionMessage message;
+        if (SessionMessages::decode(args.at(0).toByteArray(), &message)
+            && message.kind == SessionMessageKind::PropertyWrite) {
+            ++count;
+        }
+    }
+    return count;
+}
 MirrorUpdate real(const char* name, double value)
 {
     return {0, name, MirrorWireKind::Float64, value};
@@ -284,11 +297,13 @@ private slots:
         QCOMPARE(settings.value(key).toDouble(), 1.75);
     }
 
-    // Inbound sibling lane: a Core mode change lands while the operator's
-    // filter edge is still waiting for the window's flush. The mode's
-    // side effect (SliceModel::setDspMode moves both edges) must not
-    // replace the operator's edge, and the flush must send the operator's.
-    void coreModeChangeKeepsTheOperatorsUnsentFilterEdge()
+    // Inbound sibling lane, fix round 1: a Core mode change lands while
+    // the operator's filter edge is still waiting for the window's flush.
+    // Thetis keeps filter edges per mode (SetRX1Mode loads the new mode's
+    // own LastFilter, console.cs:34513 [v2.10.3.15]), so the unsent edge
+    // from the old mode is dropped: the window shows the new mode's
+    // filter and sends no write for it.
+    void coreModeChangeDropsTheOperatorsUnsentFilterEdge()
     {
         QTemporaryDir security;
         QVERIFY(security.isValid());
@@ -318,24 +333,28 @@ private slots:
 
         // The operator's edge, not yet sent.
         const int operatorLow = slice->filterLow() + 170;
-        const int operatorHigh = slice->filterHigh();
         slice->setFilterLow(operatorLow);
         QCOMPARE(slice->filterLow(), operatorLow);
 
         // The Core changes mode before the window's next flush.
         coreSlice->setDspMode(DSPMode::CWU);
+        // The "differs" guard relies on the Core and the window sharing one settings store in-process.
         QVERIFY(coreSlice->filterLow() != operatorLow);
+        const int coreLow = coreSlice->filterLow();
+        const int coreHigh = coreSlice->filterHigh();
         QTRY_COMPARE(slice->dspMode(), DSPMode::CWU);
 
-        // The flush sends the operator's edges, and the Core keeps its mode.
+        // The window shows the new mode's filter, not the old mode's edge.
+        QCOMPARE(slice->filterLow(), coreLow);
+        QCOMPARE(slice->filterHigh(), coreHigh);
+
+        // And the flush sends no write for it: the edit was dropped.
+        QSignalSpy sent(guiEnd, &LoopbackTransport::outboundText);
         client.flushWritesForTest();
-        QTRY_COMPARE(coreSlice->filterLow(), operatorLow);
-        QCOMPARE(coreSlice->filterHigh(), operatorHigh);
+        QCOMPARE(propertyWrites(sent), 0);
         QCOMPARE(coreSlice->dspMode(), DSPMode::CWU);
-        // And the window showed them throughout.
-        QCOMPARE(slice->dspMode(), DSPMode::CWU);
-        QCOMPARE(slice->filterLow(), operatorLow);
-        QCOMPARE(slice->filterHigh(), operatorHigh);
+        QCOMPARE(coreSlice->filterLow(), coreLow);
+        QCOMPARE(coreSlice->filterHigh(), coreHigh);
     }
 
     // The same side effect on an edge already SENT and not yet answered.
@@ -378,6 +397,7 @@ private slots:
 
         // The Core changes mode first; its delta reaches the window.
         coreSlice->setDspMode(DSPMode::CWU);
+        // The "differs" guard relies on the Core and the window sharing one settings store in-process.
         QVERIFY(coreSlice->filterLow() != operatorLow);
         QTRY_COMPARE(slice->dspMode(), DSPMode::CWU);
 
@@ -396,8 +416,10 @@ private slots:
 
     // Another row: TransmitModel::setLineInBoost sets lineInGain to the
     // boost's index. A Core boost change landing before the window sends
-    // the operator's own line-in gain must not replace that gain.
-    void coreLineInBoostKeepsTheOperatorsUnsentLineInGain()
+    // the operator's own line-in gain is a change from elsewhere, so the
+    // unsent gain is dropped (fix round 1): the window shows the gain the
+    // Core's boost set and sends no write for it.
+    void coreLineInBoostDropsTheOperatorsUnsentLineInGain()
     {
         QTemporaryDir security;
         QVERIFY(security.isValid());
@@ -432,13 +454,18 @@ private slots:
         // The Core's boost changes before the window's next flush.
         coreTx.setLineInBoost(6.0);
         QVERIFY(coreTx.lineInGain() != operatorGain);
+        const int coreGain = coreTx.lineInGain();
         QTRY_COMPARE(windowTx.lineInBoost(), 6.0);
 
+        // The window shows the Core's gain, not the operator's.
+        QCOMPARE(windowTx.lineInGain(), coreGain);
+
+        // And the flush sends no write for it.
+        QSignalSpy sent(guiEnd, &LoopbackTransport::outboundText);
         client.flushWritesForTest();
-        QTRY_COMPARE(coreTx.lineInGain(), operatorGain);
+        QCOMPARE(propertyWrites(sent), 0);
+        QCOMPARE(coreTx.lineInGain(), coreGain);
         QCOMPARE(coreTx.lineInBoost(), 6.0);
-        QCOMPARE(windowTx.lineInGain(), operatorGain);
-        QCOMPARE(windowTx.lineInBoost(), 6.0);
     }
 };
 

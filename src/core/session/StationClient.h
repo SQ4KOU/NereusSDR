@@ -443,6 +443,10 @@
 //               when an inbound apply moves it as a side effect, and the
 //               pauseWriteFlushForTest / flushWritesForTest seams.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 1: a delta whose side effect
+//               moves an UNSENT edit cancels it (SideEffectRule::Delta),
+//               following Thetis's per-mode filter edges. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1804,17 +1808,32 @@ private:
     void handleSettingsValue(const SessionMessage& message);
     void handleSettingsReject(const SessionMessage& message);
 
+    /// What an inbound apply does to a pending write it moves as a side
+    /// effect. Restore puts the operator's value back (a Core answer to
+    /// this window's own write, and an object.create). Delta does too for
+    /// a write already sent, but cancels an unsent one (see
+    /// restoreOperatorValues).
+    enum class SideEffectRule { Restore, Delta };
     /// Inbound apply for one object, under the echo guard. See the class
-    /// comment's three-strategy list.
+    /// comment's three-strategy list. `heldValues` are the values a delta
+    /// carried for properties it skipped because they were pending; one
+    /// applies only when its hold is cancelled.
     void applyUpdates(QObject* target, const QByteArray& objectKey,
-                      const QList<MirrorUpdate>& updates);
+                      const QList<MirrorUpdate>& updates,
+                      SideEffectRule rule = SideEffectRule::Restore,
+                      const QList<MirrorUpdate>& heldValues = {});
     /// After an inbound apply: every property with a pending write whose
     /// live value the apply moved as a side effect (it was not one of
     /// `applied`, the properties the Core's message named for
     /// `appliedKey`) gets the operator's value back, under the echo
     /// guard. Oldest operator change first, so the newest one wins.
+    /// Under SideEffectRule::Delta an UNSENT write (writeId zero) is
+    /// cancelled instead: its hold and its coalesced write are dropped,
+    /// and the delta's own value for it (`heldValues`) applies.
     void restoreOperatorValues(const QByteArray& appliedKey,
-                               const QSet<QByteArray>& applied);
+                               const QSet<QByteArray>& applied,
+                               SideEffectRule rule,
+                               const QList<MirrorUpdate>& heldValues);
     bool applyOne(QObject* target, const MirrorProperty& prop, const MirrorUpdate& update);
 
     /// Client-side adapter for daemon-to-client-only properties whose

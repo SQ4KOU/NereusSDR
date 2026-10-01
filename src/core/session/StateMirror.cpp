@@ -36,6 +36,10 @@
 //                                    ApplyingGuard); the single-session API
 //                                    is served by a view of its own. AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 1:
+//                                    MirrorCoalescer::remove drops one
+//                                    pending property. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
@@ -186,6 +190,23 @@ QList<QPair<QByteArray, QList<MirrorUpdate>>> MirrorCoalescer::flush()
         out.append(qMakePair(key, batch));
     }
     return out;
+}
+
+void MirrorCoalescer::remove(const QByteArray& objectKey, quint16 ordinal)
+{
+    QMutexLocker locker(&m_mutex);
+    auto valuesIt = m_values.find(objectKey);
+    if (valuesIt == m_values.end() || valuesIt.value().remove(ordinal) == 0) {
+        return;
+    }
+    m_ordinalOrder[objectKey].removeAll(ordinal);
+    if (valuesIt.value().isEmpty()) {
+        // Nothing left for this object: it leaves the arrival order too,
+        // so flush() does not hand back an empty batch.
+        m_values.erase(valuesIt);
+        m_ordinalOrder.remove(objectKey);
+        m_objectOrder.removeAll(objectKey);
+    }
 }
 
 void MirrorCoalescer::clear()
