@@ -7970,6 +7970,13 @@ nereus_split_test(tst_remote_window_harness
 nereus_add_test(tst_pan_actions_per_pan fakes/RemoteWindowHarness.cpp)
 target_compile_definitions(tst_pan_actions_per_pan PRIVATE NEREUS_BUILD_TESTS)
 
+# VFO flag crash lane (2026-09-30): Slice A closed from its flag in a remote
+# window leaves no flag writing the freed slice, and a Slice A made again
+# gets a flag and a pan bound to the new slice. Loopback WebSocket and test
+# models only; no RF, no audio device.
+nereus_add_test(tst_remote_window_slice_a_close fakes/RemoteWindowHarness.cpp)
+target_compile_definitions(tst_remote_window_slice_a_close PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
 # replaced while its SliceModel and MainWindow remain alive during a pan-layout
 # rehome. Every direct model-to-flag presentation edge must therefore share the

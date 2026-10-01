@@ -86,6 +86,9 @@
 //                 the receive trace takes the transmit calibration, and a
 //                 change while keyed swaps the view and resets the peaks.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : VFO flag crash lane: test seams for the VFO marker and
+//                 passband. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -1409,6 +1412,11 @@ public:
     QRgb dbmToRgbForTest(float dbm) const  { return dbmToRgb(dbm); }
     void setWfLowThresholdForTest(float dbm)  { m_wfLowThreshold  = dbm; }
     void setWfHighThresholdForTest(float dbm) { m_wfHighThreshold = dbm; }
+    // VFO flag crash lane: this pan's VFO marker and passband, which the
+    // slice the pan hosts drives.
+    double vfoFrequencyForTest() const { return m_vfoHz; }
+    int filterLowForTest() const { return m_filterLowHz; }
+    int filterHighForTest() const { return m_filterHighHz; }
 #endif
 
     // ---- Per-pan settings persistence ----

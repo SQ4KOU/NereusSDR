@@ -115,6 +115,10 @@
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-30: Fix wave GUI-I3: applyRemotePureSignalAppletGate. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - VFO flag crash lane: m_vfoWidget removed (Slice A's flag
+//                is in m_vfoWidgetsBySlice like every other);
+//                m_sliceASpectrumWired. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1865,11 +1869,14 @@ private:
     // controller from inside the widget (auto-wired via RadioModel).
     PsaIndicatorWidget* m_psaIndicator{nullptr};
 
-    // VFO flag widget (Phase 3E)
-    class VfoWidget* m_vfoWidget{nullptr};
+    // VFO flag crash lane (2026-09-30): wireSliceToSpectrum's window-wide
+    // wiring is done; a Slice A made again gets only its own. (The separate
+    // m_vfoWidget pointer to Slice A's flag is gone: it survived Slice A's
+    // close in a remote window, and m_vfoWidgetsBySlice is the one owner.)
+    bool m_sliceASpectrumWired{false};
 
     // Phase 3F hotfix 2026-05-27: per-slice VfoWidget tracking. Slice 0
-    // (Slice A) maps to the existing m_vfoWidget for backward compat;
+    // (Slice A) is in it like every other slice;
     // additional slices created via +PAN / Ctrl+R get their own VfoWidget
     // via SpectrumWidget::addVfoWidget(N) wired in the sliceAdded handler.
     // Without this hash, multi-slice was invisible: the slice landed in

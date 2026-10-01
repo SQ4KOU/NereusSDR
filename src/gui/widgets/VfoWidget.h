@@ -15,6 +15,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - VFO flag crash lane: lockButtonForTest, sliceForTest.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 //   2026-09-30 - RADE reason: setRadeReason, the RADE row's "off" state and
 //                 tooltip. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
@@ -561,6 +564,10 @@ public:
     // flag's close button" without this. Exposed read-only, same pattern as
     // the SNR-row seams below.
     QPushButton* closeButtonForTest() const { return m_closeBtn; }
+    // VFO flag crash lane: the floating lock button, and the slice this
+    // flag is bound to, for the remote window's close-and-reopen case.
+    QPushButton* lockButtonForTest() const { return m_lockBtn; }
+    SliceModel* sliceForTest() const { return m_slice.data(); }
     // R-R3-49: the floating record and play buttons, for the unbuilt
     // feature sweep.
     QPushButton* recordButtonForTest() const { return m_recBtn; }
