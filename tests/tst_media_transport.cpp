@@ -20,6 +20,11 @@
 // that message's handler is taken. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
 //
+// 2026-09-30: TX stall lane: a microphone packet reports how long it
+// waited between its receipt and its report, so a stalled owner thread is
+// not taken for the link's jitter. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -305,6 +310,7 @@ private slots:
     void headphonesMixIsDeclaredLastAndCrossesBesideTheOthers();
     void micLineIsOfferedOnlyWhenAsked();
     void micLineCarriesTheAnswerersMicrophoneAlone();
+    void micPacketsReportTheirWaitForTheOwnerThread();
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
@@ -2101,6 +2107,62 @@ void TestMediaTransport::micLineIsOfferedOnlyWhenAsked()
     }
     // The answer's other sections do not change with the line.
     QCOMPARE(answers[1], answers[0]);
+}
+
+// TX stall lane: the owner thread drains received packets on a 2 ms timer,
+// so a packet that arrives while it is busy waits. Each microphone packet
+// reports that wait (from the library's callback to the report): never
+// more than the time since it was sent, and most of a 150 ms stall of the
+// owner thread when one comes between its receipt and its report.
+void TestMediaTransport::micPacketsReportTheirWaitForTheOwnerThread()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.micAudioSsrc = kTestMicSsrc;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.micAudioSsrc = kTestMicSsrc;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    QElapsedTimer sinceSent;
+    QList<qint64> heldUs;
+    QList<qint64> sinceSentUs;
+    connect(&offerer, &IMediaTransport::micRtpReceived, this,
+            [&heldUs, &sinceSentUs, &sinceSent](const QByteArray&, qint64 held) {
+                heldUs.append(held);
+                sinceSentUs.append(sinceSent.nsecsElapsed() / 1000);
+            });
+
+    constexpr auto kStall = std::chrono::milliseconds(150);
+    constexpr int kAttempts = 3;
+    qint64 longestHeldUs = 0;
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        const int before = static_cast<int>(heldUs.size());
+        sinceSent.start();
+        QVERIFY(answerer.sendMicRtp(rtpPacket(static_cast<quint16>(attempt + 1), 40,
+                                              kTestMicSsrc)));
+        // The owner thread (this one) is busy: nothing is drained.
+        std::this_thread::sleep_for(kStall);
+        QTRY_COMPARE_WITH_TIMEOUT(static_cast<int>(heldUs.size()), before + 1, 5000);
+        const qint64 held = heldUs.at(before);
+        QVERIFY2(held >= 0, qPrintable(QString::number(held)));
+        QVERIFY2(held <= sinceSentUs.at(before),
+                 qPrintable(QStringLiteral("held %1 us, sent %2 us ago")
+                                .arg(held).arg(sinceSentUs.at(before))));
+        longestHeldUs = std::max(longestHeldUs, held);
+    }
+    qInfo().noquote() << QStringLiteral("owner stall of %1 ms: the longest reported wait %2 ms")
+                             .arg(kStall.count())
+                             .arg(static_cast<double>(longestHeldUs) / 1000.0, 0, 'f', 1);
+    QVERIFY2(longestHeldUs >= 100'000, qPrintable(QString::number(longestHeldUs)));
 }
 
 // Task 36: the answerer's microphone crosses to the offerer on the

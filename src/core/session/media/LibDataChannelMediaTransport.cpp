@@ -48,6 +48,11 @@
 //               PeerClosed) is never dropped from a full event queue.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -1737,7 +1742,12 @@ void LibDataChannelMediaTransport::drainCallbacks()
     for (const PendingRtpPacket& packet : rtpPackets) {
         // Task 36: the microphone line's packets are reported apart.
         if (packet.mic) {
-            emit micRtpReceived(toByteArray(packet.data));
+            // TX stall lane: the time since the library's callback took it
+            // off the network, so the microphone buffer times it there.
+            const auto held = std::chrono::steady_clock::now() - packet.receivedAt;
+            emit micRtpReceived(
+                toByteArray(packet.data),
+                std::chrono::duration_cast<std::chrono::microseconds>(held).count());
         } else {
             emit rtpReceived(toByteArray(packet.data));
         }

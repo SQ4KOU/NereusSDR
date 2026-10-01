@@ -26,6 +26,11 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -410,8 +415,11 @@ signals:
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: an RTP packet that arrived on the microphone line. Never
-    /// also reported by rtpReceived().
-    void micRtpReceived(const QByteArray& packet);
+    /// also reported by rtpReceived(). TX stall lane: `heldUs` is how long
+    /// the packet waited between its receipt off the network and this
+    /// report (0 when the transport does not know), so a stall of the
+    /// thread that reports it is not taken for the link's jitter.
+    void micRtpReceived(const QByteArray& packet, qint64 heldUs = 0);
     /// Task 37: a message that arrived on the "tx" data channel.
     void txReceived(const QByteArray& message);
     /// The connection is up and the display channel and audio line are

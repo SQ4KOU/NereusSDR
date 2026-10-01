@@ -7,8 +7,9 @@
 //   2026-09-30: TX stall lane: the unkey line follows MoxController (its
 //               moxChanging and moxStateChanged), so it prints on every
 //               unkey; TransmitModel::moxChanged only saw the
-//               no-controller fallback. J.J. Boyd (KG4VCF), AI-assisted
-//               via Anthropic Claude Code.
+//               no-controller fallback. The microphone line's packets
+//               carry their wait at the Core (heldUs) to the receiver.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -1988,9 +1989,9 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     // after a replacement they carry this peer's SSRC, which the receiver
     // started before it takes as its own.
     connect(peer, &MediaPeer::micRtpReceived, this,
-            [this, peer, peerEpoch](const QByteArray& packet) {
+            [this, peer, peerEpoch](const QByteArray& packet, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
         }
     });
 }
@@ -2178,9 +2179,10 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
             m_server->txChannelMessage(peerEpoch, message);
         }
     });
-    connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet) {
+    connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet,
+                                                                      qint64 heldUs) {
         if (current() && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
         }
     });
     m_replacementRouted = nextIce && nextIce->mediaRouting();
@@ -2251,9 +2253,10 @@ void DaemonMediaController::finishReplacement()
             m_server->txChannelMessage(peerEpoch, message);
         }
     });
-    connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet) {
+    connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet,
+                                                                         qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite), heldUs);
         }
     });
     m_retiring = std::move(old);

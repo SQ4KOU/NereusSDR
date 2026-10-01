@@ -20,6 +20,11 @@
 //   2026-09-30: LINK minor 14: the private part is held by unique_ptr.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -192,7 +197,8 @@ signals:
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: a packet on the microphone line carrying micAudioSsrc().
-    void micRtpReceived(const QByteArray& packet);
+    /// TX stall lane: `heldUs` as IMediaTransport::micRtpReceived.
+    void micRtpReceived(const QByteArray& packet, qint64 heldUs = 0);
     /// Task 37: a message on the "tx" data channel.
     void txReceived(const QByteArray& message);
     void ready();

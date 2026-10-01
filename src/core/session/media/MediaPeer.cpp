@@ -19,6 +19,11 @@
 //   2026-09-30: LINK minor 14: the private part is held by unique_ptr.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -321,7 +326,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     // Task 36: the microphone line carries its one SSRC; anything else on it
     // is refused and reported, as on the main line.
     connect(transport, &IMediaTransport::micRtpReceived, this,
-            [self, isCurrentGeneration](const QByteArray& packet) {
+            [self, isCurrentGeneration](const QByteArray& packet, qint64 heldUs) {
                 if (!isCurrentGeneration()) {
                     return;
                 }
@@ -333,7 +338,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                         QStringLiteral("invalid microphone RTP packet rejected"));
                     return;
                 }
-                emit self->micRtpReceived(packet);
+                emit self->micRtpReceived(packet, heldUs);
             });
     // Task 37: the "tx" channel's messages, bounded.
     connect(transport, &IMediaTransport::txReceived, this,

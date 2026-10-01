@@ -25,6 +25,11 @@
 //               kStaleAfterStallMs is trimmed to the target when the
 //               buffer starts again, not sent late. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: arrivals are timed at their receipt in the
+//               transport (an arrival record per write, carrying how long
+//               the packet waited at the Core), so a stalled drain of the
+//               Core's event loop is not counted as network jitter. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -133,16 +138,28 @@ void RemoteMicFeed::setInUse(bool inUse)
     m_change.fetch_add(1, std::memory_order_acq_rel);
 }
 
-bool RemoteMicFeed::write(const float* mono, int frames)
+bool RemoteMicFeed::write(const float* mono, int frames, int heldFrames)
 {
     if (!m_inUse || mono == nullptr || frames <= 0) {
         return false;
     }
     const qint64 bytes = static_cast<qint64>(frames) * kFloatBytes;
-    if (m_input.tryPushCopy(reinterpret_cast<const uint8_t*>(mono), bytes) != bytes) {
+    // TX stall lane: the arrival's record goes first, so the pump finds it
+    // by the time it reads the audio; both fit or neither is written (this
+    // side only adds, so the room it sees is the least there is).
+    constexpr qint64 kArrivalBytes = static_cast<qint64>(sizeof(Arrival));
+    const qint64 inputRoom =
+        static_cast<qint64>(m_input.capacity() - 1 - m_input.usedBytes());
+    const qint64 arrivalRoom =
+        static_cast<qint64>(m_arrivals.capacity() - 1 - m_arrivals.usedBytes());
+    if (bytes > inputRoom || kArrivalBytes > arrivalRoom) {
         m_droppedFrames.fetch_add(static_cast<quint64>(frames), std::memory_order_relaxed);
         return false;
     }
+    const Arrival arrival{m_writtenBytes + static_cast<quint64>(bytes), frames,
+                          std::max(0, heldFrames)};
+    m_arrivals.tryPushCopy(reinterpret_cast<const uint8_t*>(&arrival), kArrivalBytes);
+    m_input.tryPushCopy(reinterpret_cast<const uint8_t*>(mono), bytes);
     m_writtenBytes += static_cast<quint64>(bytes);
     m_framesSinceInUse += frames;
     // One packet a write (a concealed or recovered packet is its own write):
@@ -204,6 +221,29 @@ int RemoteMicFeed::drainInput()
     return drained;
 }
 
+void RemoteMicFeed::takeArrivals(bool note)
+{
+    // Every write whose audio the pump has read (or discarded) whole. What
+    // one drain found counts as one arrival, timed by its first write, as
+    // the drain itself was before (a lost packet rebuilt from the next
+    // one's FEC arrives with it and counts one packet late; a burst after a
+    // stall is timed by its oldest packet).
+    Arrival arrival{};
+    int frames = 0;
+    int heldFrames = 0;
+    while (m_arrivals.peekInto(reinterpret_cast<uint8_t*>(&arrival), sizeof(Arrival))
+           && arrival.endBytes <= m_readBytes) {
+        m_arrivals.dropOldest(sizeof(Arrival));
+        if (frames == 0) {
+            heldFrames = arrival.heldFrames;
+        }
+        frames += arrival.frames;
+    }
+    if (note && frames > 0) {
+        noteArrival(frames, heldFrames);
+    }
+}
+
 bool RemoteMicFeed::memoryDelayMin(qint64* min) const
 {
     qint64 lowest = m_windowArrived ? m_windowDelayMin : std::numeric_limits<qint64>::max();
@@ -217,15 +257,18 @@ bool RemoteMicFeed::memoryDelayMin(qint64* min) const
     return true;
 }
 
-void RemoteMicFeed::noteArrival(int frames)
+void RemoteMicFeed::noteArrival(int frames, int heldFrames)
 {
     // This arrival's delay: the pump's clock now less where its first
     // frame sits in the stream. On time it is the same every arrival; a
     // late one (a jittered packet, or one rebuilt from the next packet's
     // FEC and written with it) shows as more. One past the ceiling is a
     // stall, ridden through, not jitter the margin should cover.
+    // TX stall lane: the time the packet waited at the Core after its
+    // receipt in the transport (a stall of the Core's event loop) is taken
+    // off, so the delay is the link's.
     const qint64 delay = static_cast<qint64>(m_block) * kPumpBlock
-        - static_cast<qint64>(m_arrivedFrames);
+        - static_cast<qint64>(heldFrames) - static_cast<qint64>(m_arrivedFrames);
     m_arrivedFrames += static_cast<quint64>(frames);
     qint64 earliest = 0;
     if (memoryDelayMin(&earliest) && delay - earliest > marginCeiling()) {
@@ -298,7 +341,7 @@ void RemoteMicFeed::trimStaleToTarget()
         if (arrived <= 0) {
             break;
         }
-        noteArrival(arrived);
+        takeArrivals(true);
     }
     m_silentRunFrames = 0;
 }
@@ -430,6 +473,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         // buffer again. Rebuilding the matcher is the one allocation on
         // this thread, once per key or VOX change, never per block.
         discardInputTo(m_clearAtBytes.load(std::memory_order_acquire));
+        takeArrivals(false);
         m_matcher->reset();
         // WDSP rmatch starts with its ring half full of silence
         // (calc_rmatch: n_ring = rsize / 2). Read it out, so the buffer
@@ -486,6 +530,7 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
     }
     if (!m_inUseForPump.load(std::memory_order_acquire)) {
         discardAllInput();
+        takeArrivals(false);
         m_bufferCount = 0;
         return Pull::NotInUse;
     }
@@ -493,10 +538,8 @@ RemoteMicFeed::Pull RemoteMicFeed::pullBlock(float* dst, int frames, double down
         return Pull::NotInUse;
     }
 
-    const int arrived = drainInput();
-    if (arrived > 0) {
-        noteArrival(arrived);
-    }
+    drainInput();
+    takeArrivals(true);
     RemoteAudioRateMatcherStats matcher = m_matcher->stats();
     m_matcherFill = matcher.ringFillFrames;
     m_statsOverflows.store(matcher.overflows, std::memory_order_relaxed);
@@ -787,11 +830,14 @@ void RemoteMicReceiver::stop()
     m_ssrc = 0;
 }
 
-void RemoteMicReceiver::submit(const QByteArray& packet)
+void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
 {
     if (!m_running) {
         return;
     }
+    // TX stall lane: the packet's wait at the Core, for the feed's timing.
+    m_heldFrames = static_cast<int>(
+        std::clamp<qint64>(heldUs, 0, 10'000'000) * Cfg::kFramesPerMs / 1000);
     const int payloadType = audioRtpPayloadType(packet);
     const bool opus = payloadType == RemoteMicConfig::kOpusPayloadType;
     const bool l16 = payloadType == PcmAudioCodecConfig::kPayloadType && m_lossless;
@@ -935,7 +981,7 @@ void RemoteMicReceiver::writeAudio(const float* mono, int frames)
     if (!m_feedWriter) {
         return;
     }
-    if (m_feed != nullptr && m_feed->write(mono, frames)) {
+    if (m_feed != nullptr && m_feed->write(mono, frames, m_heldFrames)) {
         m_stats.framesWritten += static_cast<quint64>(frames);
     }
 }

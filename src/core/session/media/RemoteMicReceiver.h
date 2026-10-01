@@ -64,6 +64,11 @@
 //   2026-09-30: LINK minor 12 (TX audio): kStaleAfterStallMs and the
 //               trim on resuming after a long stall. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: each packet is timed at its receipt in the
+//               transport, not when the Core's event loop hands it over,
+//               so a stalled drain is not counted as network jitter
+//               (submit's heldUs, write's heldFrames). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -240,7 +245,11 @@ public:
     qint64 framesSinceInUse() const { return m_framesSinceInUse; }
     /// Mono 48 kHz, one packet a call. Refused (false) while not in use;
     /// audio that does not fit the pump's input ring is dropped and counted.
-    bool write(const float* mono, int frames);
+    /// `heldFrames` (TX stall lane): how long, in frames, the packet waited
+    /// at the Core between its receipt in the transport and this write. Its
+    /// arrival is timed that much earlier, so a stall of the Core's event
+    /// loop is not counted as the link's jitter.
+    bool write(const float* mono, int frames, int heldFrames = 0);
     /// The buffer's target now (one packet plus the margin), in frames:
     /// what a key waits for. Any thread.
     int targetFrames() const { return m_targetFrames.load(std::memory_order_relaxed); }
@@ -315,6 +324,15 @@ public:
 
 private:
     static constexpr std::size_t kInputRingBytes = 131072;  // 682 ms of mono float
+    // TX stall lane: one record a write, in step with the input ring, so the
+    // pump times each packet at its receipt. 511 records, more than the
+    // input ring holds packets.
+    struct Arrival {
+        quint64 endBytes;   // m_writtenBytes after the write
+        qint32 frames;
+        qint32 heldFrames;
+    };
+    static constexpr std::size_t kArrivalRingBytes = 8192;
     static constexpr int kBufferFrames = 65536;              // 1.37 s: stall headroom
     static constexpr int kMatcherRingFrames = 1024;          // rmatch's ring, 21 ms
 
@@ -322,6 +340,10 @@ private:
     void discardAllInput();
     // Pump.
     int drainInput();
+    /// TX stall lane: times the writes the pump has now read whole as one
+    /// arrival, by the first one's receipt, or (`note` false) only passes
+    /// the records of audio it discarded.
+    void takeArrivals(bool note);
     bool headIsSilent() const;
     bool canSplice() const;
     void popBlock(float* mono);
@@ -332,7 +354,7 @@ private:
     int currentPacketFrames() const;
     int currentTarget() const;
     int marginCeiling() const;
-    void noteArrival(int frames);
+    void noteArrival(int frames, int heldFrames);
     bool memoryDelayMin(qint64* min) const;
     void endBlock();
     void endWindow();
@@ -346,6 +368,7 @@ private:
 
     // Shared.
     AudioRingSpsc<kInputRingBytes> m_input;
+    AudioRingSpsc<kArrivalRingBytes> m_arrivals;
     std::atomic<bool> m_inUseForPump{false};
     std::atomic<quint64> m_clearAtBytes{0};
     std::atomic<quint64> m_change{0};
@@ -489,8 +512,11 @@ public:
     quint32 ssrc() const { return m_ssrc; }
     void setLosslessNegotiated(bool negotiated) { m_lossless = negotiated; }
 
-    /// One RTP packet from the line (MediaPeer::micRtpReceived).
-    void submit(const QByteArray& packet);
+    /// One RTP packet from the line (MediaPeer::micRtpReceived). `heldUs`
+    /// (TX stall lane): how long it waited between its receipt in the
+    /// transport and this call; the feed times its arrival that much
+    /// earlier.
+    void submit(const QByteArray& packet, qint64 heldUs = 0);
 
     /// The key's wait (Task 36): calls done(true) as soon as the feed, in
     /// use, holds its target (RemoteMicFeed::targetFrames, 30 ms on a
@@ -544,6 +570,8 @@ private:
     bool m_haveSequence{false};
     quint16 m_expectedSequence{0};
     int m_lastOpusFrames{RemoteMicConfig::kOpusFrameSamples};
+    // TX stall lane: the packet being submitted waited this long, in frames.
+    int m_heldFrames{0};
     std::vector<float> m_pcm;
     Stats m_stats;
 

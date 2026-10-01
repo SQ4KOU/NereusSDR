@@ -28,6 +28,9 @@
 //               it back, and a stall's excess shed only in silence. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: TX stall lane: a replay of stalled drains; the buffer
+//               times each packet at its receipt in the transport. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -237,6 +240,7 @@ private slots:
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
     void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
     void aLongStallsStaleAudioIsNotSentLate();
+    void aStalledDrainIsTimedAtReceiptNotCountedAsJitter();
     void nothingIsSplicedWhileDexpTimingRuns();
 };
 
@@ -1156,6 +1160,79 @@ void TestRemoteMicReceiver::nothingIsSplicedWhileDexpTimingRuns()
                      qPrintable(QStringLiteral("word %1: %2").arg(w).arg(length)));
         }
     }
+}
+
+// TX stall lane: a replay of the bench's stalled drains (Rock, 2026-10-01:
+// the phone's packets reached the transport 20 ms apart, and the Core's
+// event loop handed them over 80 to 410 ms late, in bursts). The network
+// is steady; five times the owner stalls for 90 ms and then delivers what
+// it held at once, each packet carrying how long it waited since its
+// receipt. The buffer runs dry in each stall (that is the stall), but it
+// times the packets at receipt: the link is steady, so its margin never
+// grows. Before, it timed them on delivery, took the stall for jitter and
+// grew the target to about 120 ms.
+void TestRemoteMicReceiver::aStalledDrainIsTimedAtReceiptNotCountedAsJitter()
+{
+    FakeTime time;
+    RemoteMicFeed feed;
+    RemoteMicReceiver receiver(&feed, nullptr, time.clock(), time.scheduler());
+    RemoteMicEncoder encoder;
+    QVERIFY(encoder.isReady());
+    QVERIFY(receiver.start(kMicSsrc, false));
+    feed.setInUse(true);
+
+    constexpr int kPackets = 400;   // 8 s
+    constexpr double kStallMs = 90.0;
+    const std::vector<double> stallStarts{2000.0, 3000.0, 4000.0, 5000.0, 6000.0};
+    const auto receivedMs = [](int k) { return 0.4 + 20.0 * k; };
+    // When the owner hands packet k over: at once, or at the end of the
+    // stall it arrived in.
+    const auto deliveredMs = [&](int k) {
+        const double at = receivedMs(k);
+        for (const double start : stallStarts) {
+            if (at >= start && at < start + kStallMs) {
+                return start + kStallMs;
+            }
+        }
+        return at;
+    };
+    std::vector<QByteArray> encoded;
+    for (int k = 0; k < kPackets; ++k) {
+        const std::vector<float> frame =
+            toneFrame(static_cast<qint64>(k) * RemoteMicConfig::kOpusFrameSamples, 0.3f);
+        encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k),
+                                         static_cast<quint32>(k * RemoteMicConfig::kOpusFrameSamples),
+                                         kMicSsrc));
+    }
+
+    std::vector<float> out(kBlock);
+    int next = 0;
+    int largestTarget = 0;
+    const qint64 blocks = static_cast<qint64>(kPackets) * (RemoteMicConfig::kOpusFrameSamples / kBlock);
+    for (qint64 b = 0; b < blocks; ++b) {
+        const double nowMs = static_cast<double>(b) * kBlock * 1000.0 / 48000.0;
+        time.advanceTo(static_cast<qint64>(nowMs));
+        while (next < kPackets && deliveredMs(next) <= nowMs) {
+            const auto heldUs = static_cast<qint64>(std::llround((nowMs - receivedMs(next)) * 1000.0));
+            receiver.submit(encoded[static_cast<size_t>(next)], heldUs);
+            ++next;
+        }
+        feed.pullBlock(out.data(), kBlock, -1.0);
+        if (nowMs >= stallStarts.front()) {
+            largestTarget = std::max(largestTarget, feed.stats().targetFrames);
+        }
+    }
+    const RemoteMicFeed::Stats stats = feed.stats();
+    qInfo().noquote() << QStringLiteral("stalled drains: target at most %1 ms over five 90 ms "
+                                        "stalls; grew %2 times, underruns %3")
+                             .arg(largestTarget / 48.0, 0, 'f', 1)
+                             .arg(stats.grows)
+                             .arg(stats.underflows);
+    QCOMPARE(next, kPackets);
+    QCOMPARE(receiver.stats().decodedPackets, quint64(kPackets));
+    QCOMPARE(stats.grows, 0);
+    QCOMPARE(largestTarget, RemoteMicConfig::kTargetDepthFrames);
+    QCOMPARE(stats.targetFrames, RemoteMicConfig::kTargetDepthFrames);
 }
 
 QTEST_GUILESS_MAIN(TestRemoteMicReceiver)
