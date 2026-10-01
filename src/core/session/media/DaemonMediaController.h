@@ -7,6 +7,9 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX stall lane, fix round 1: only the keyer's controller
+//               reports the unkey. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-30: TX stall lane: the unkey line follows MoxController (its
 //               moxChanging and moxStateChanged), so it prints on every
 //               unkey; TransmitModel::moxChanged only saw the
@@ -604,7 +607,8 @@ private:
     // (MoxController::moxChanging, before the feed leaves use and its
     // underrun count resets), and the line is logged when the walk ends
     // (moxStateChanged(false)), with the send path's counters then; a key
-    // that cuts the walk short logs it first.
+    // that cuts the walk short logs it first. Only the controller whose
+    // device holds the key on its line takes the figures (fix round 1).
     void snapshotUnkeyStats();
     void logUnkeyStats();
     bool acceptPeerControl(const QJsonObject& control);

@@ -4591,6 +4591,10 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
     feed.insertedFrames = 0;
     feed.grows = 1;
     feed.heldBlocks = 42;
+    // TX stall lane: the over's waits at the Core's event loop.
+    feed.ownerWaitMeanMs = 4.25;
+    feed.ownerWaitMaxMs = 91.0;
+    feed.ownerWaitsLong = 5;
     RadioConnection::TxSendStats send;
     send.valid = true;
     send.framesSent = 9600;
@@ -4603,6 +4607,9 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
     QVERIFY2(line.contains(QStringLiteral("shed 196.0 ms (188.0 ms for the ring), inserted 0.0 ms")),
              qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("target grew 1 times, held for DEXP 42 blocks")),
+             qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral(
+                 "held for DEXP 42 blocks; owner waits mean 4.3 ms, max 91.0 ms, 5 over 50 ms; ")),
              qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("packets concealed 2")), qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("frames 9600")), qPrintable(line));

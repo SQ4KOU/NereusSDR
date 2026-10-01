@@ -14,6 +14,12 @@
 //               no-controller fallback. The microphone line's packets
 //               carry their wait at the Core (heldUs) to the receiver.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX stall lane, fix round 1: only the controller whose
+//               device holds the key on its line reports the unkey; the
+//               line adds the over's owner waits (mean, max, count over
+//               50 ms); a report pending when the controller goes is
+//               logged; "Microphone line open for" logs the id as hex.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -827,6 +833,9 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
 
 DaemonMediaController::~DaemonMediaController()
 {
+    // TX stall lane: an unkey whose walk is still running when the
+    // controller goes (its session ended in the tail) still gets its line.
+    logUnkeyStats();
     if (m_radioModel) {
         // Parity Task 31: this device's DUP goes with its media.
         if (!m_duplexDevice.isEmpty()) {
@@ -2368,7 +2377,7 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
     m_micReceiver->setFeedWriter(m_radioModel->remoteMicWriter() == m_micDeviceId);
     refreshMicVoxArmed();
     refreshMicWatching();
-    qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId;
+    qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId.toHex();
 }
 
 void DaemonMediaController::stopMicLine()
@@ -2420,9 +2429,12 @@ void DaemonMediaController::refreshMicWatching()
 
 void DaemonMediaController::snapshotUnkeyStats()
 {
-    // Only the controller carrying a microphone line reports, so a key
-    // from a device gives one line.
-    if (!m_micReceiver || !m_radioModel) {
+    // Only the controller whose device holds the key on its microphone
+    // line reports (refreshMicWatching's test, taken here before the walk
+    // clears the keyer), so an unkey gives one line, under the keyer's id,
+    // and a key that is not on a remote line gives none.
+    if (!m_micReceiver || !m_radioModel || !m_radioModel->remoteMicInUse()
+        || m_radioModel->keyedBy().deviceId != m_micDeviceId) {
         m_unkeySnapshot.reset();
         return;
     }
@@ -2490,6 +2502,11 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                  << ms(feed.shedForRingFrames) << " ms for the ring), inserted "
                  << ms(feed.insertedFrames) << " ms, target grew " << feed.grows
                  << " times, held for DEXP " << feed.heldBlocks << " blocks";
+            // TX stall lane: how long the over's packets waited at the Core
+            // (its event loop) before the feed had them. Measured only.
+            line << "; owner waits mean " << oneDecimal(feed.ownerWaitMeanMs) << " ms, max "
+                 << oneDecimal(feed.ownerWaitMaxMs) << " ms, " << feed.ownerWaitsLong
+                 << " over " << RemoteMicConfig::kLongOwnerWaitMs << " ms";
         } else {
             line << "no feed";
         }
