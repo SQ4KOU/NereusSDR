@@ -8,6 +8,7 @@
 #include "core/SliceOwnership.h"
 #include "core/TciServer.h"
 #include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/safety/TxRefusal.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -57,6 +58,28 @@
 using namespace NereusSDR;
 
 namespace {
+
+// Fix round 2 (minor 2): a TX channel that records the two-tone
+// generator's run state, so a test sees the 2-tone test start.
+class ToneRecordingTxChannel : public TxChannel {
+public:
+    ToneRecordingTxChannel() : TxChannel(1) {}
+    void setTxPostGenMode(int) override {}
+    void setTxPostGenTTFreq1(double) override {}
+    void setTxPostGenTTFreq2(double) override {}
+    void setTxPostGenTTMag1(double) override {}
+    void setTxPostGenTTMag2(double) override {}
+    void setTxPostGenTTPulseToneFreq1(double) override {}
+    void setTxPostGenTTPulseToneFreq2(double) override {}
+    void setTxPostGenTTPulseMag1(double) override {}
+    void setTxPostGenTTPulseMag2(double) override {}
+    void setTxPostGenTTPulseFreq(int) override {}
+    void setTxPostGenTTPulseDutyCycle(double) override {}
+    void setTxPostGenTTPulseTransition(double) override {}
+    void setTxPostGenTTPulseIQOut(bool) override {}
+    void setTxPostGenRun(bool on) override { runs.append(on); }
+    QList<bool> runs;
+};
 StationHostOptions optionsFor(AppSettings& settings, const QString& directory)
 {
     StationHostOptions options;
@@ -1359,6 +1382,15 @@ private slots:
         QVERIFY(tx && tx->twoToneButton());
         TwoToneController* twoTone = model->twoToneController();
         QVERIFY(twoTone);
+        // Fix round 2 (minor 2): a recording TX channel, so the start is
+        // seen (twoToneActiveChanged and the generator's run), not read
+        // from a log line. No radio is connected; nothing leaves the test.
+        ToneRecordingTxChannel tone;
+        twoTone->setTxChannel(&tone);
+        twoTone->setSliceModel(model->activeSlice());
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setPowerOn(true);
+        QSignalSpy activeChanged(twoTone, &TwoToneController::twoToneActiveChanged);
         TransmitHolder* holder = controller.server()->transmitHolder();
         QObject peerSession;
         DeviceSessionRegistry::Entry peer;
@@ -1402,17 +1434,21 @@ private slots:
         QVERIFY(!twoTone->isActive());
         QVERIFY(holder->isHeldBy(peer.deviceId));
         QPointer<TakeTransmitDialog> taken(question);
-        // With transmit taken, the test is started for this computer. This
-        // model has no TX channel, so the controller says it cannot run
-        // and nothing keys; that message is the proof the start was asked.
-        QTest::ignoreMessage(QtWarningMsg,
-            "TwoToneController: missing dependencies (tx/txChannel/mox); cannot activate.");
+        // Nothing started while the question was open or cancelled.
+        QVERIFY(activeChanged.isEmpty());
+        QVERIFY(!tone.runs.contains(true));
+        // With transmit taken, the test is started for this computer.
         question->takeButton()->click();
         QTRY_VERIFY(taken.isNull());
         QTRY_VERIFY(holder->isHeldBy(SliceOwnership::stationDevice()));
-        QVERIFY(!twoTone->isActive());
+        QTRY_VERIFY(twoTone->isActive());
+        QCOMPARE(activeChanged.size(), 1);
+        QCOMPARE(activeChanged.first().first().toBool(), true);
+        QVERIFY(tone.runs.contains(true));
         model->setTwoTone(false);
         QTRY_VERIFY(!twoTone->isActive());
+        QCOMPARE(tone.runs.last(), false);
+        twoTone->setTxChannel(nullptr);
         controller.stop();
     }
 
