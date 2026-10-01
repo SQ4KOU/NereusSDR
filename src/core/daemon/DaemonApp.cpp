@@ -137,6 +137,17 @@
 //               ahead of the restart cannot end the new change early
 //               (restartForRadioChange). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: a radio change ends when the run serving it stops
+//               (stopRadioRecovery: stop(), a station release, the
+//               operator's disconnect), when its restart starts a run with
+//               no discovery, and a restart that fails drops the pending
+//               choice. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-01: a run stopped between a radio change's choice and its
+//               restart cancels that restart (stopRadioRecovery), so a
+//               finished stop or station release stays finished; the
+//               chooser is answered refused and the choice is dropped.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -283,8 +294,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     m_radioRunGeneration = runGeneration;
     connect(m_radioModel.get(), &RadioModel::radioDisconnectRequested, this, [this]() {
         if (!m_retiringRadio) {
-            m_radioRecoveryEnabled = false;
-            cancelRadioDiscovery();
+            stopRadioRecovery();
         }
     });
     // iPhone app plan Task 34: the station-side receive-only policy is the
@@ -490,8 +500,7 @@ void DaemonApp::stop()
     if (m_stationHost) {
         m_stationHost->quiesce();
     }
-    m_radioRecoveryEnabled = false;
-    cancelRadioDiscovery();
+    stopRadioRecovery();
     // Parity Task 21: a rescan still listening is dropped.
     ++m_radioScanGeneration;
     if (m_radioScanThread) {
@@ -596,8 +605,7 @@ void DaemonApp::beginStationRelease()
         }
     }
     if (m_stationHost) { m_stationHost->quiesce(); }
-    m_radioRecoveryEnabled = false;
-    cancelRadioDiscovery();
+    stopRadioRecovery();
     if (m_radioRetryTimer) { m_radioRetryTimer->stop(); }
 }
 
@@ -1051,6 +1059,8 @@ void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
         return;
     }
     if (!m_radioRecoveryEnabled) {
+        // Turned off during the connect (stopRadioRecovery), which ended a
+        // radio change under way.
         return;
     }
     if (RadioConnection* const connection = m_radioModel->connection()) {
@@ -1283,6 +1293,41 @@ QString DaemonApp::radioChangeReason(const QString& radioName)
         .arg(radioName);
 }
 
+QString DaemonApp::radioChangeStoppedReason()
+{
+    return QStringLiteral("The Core stopped its radio before the change could run.");
+}
+
+void DaemonApp::stopRadioRecovery()
+{
+    m_radioRecoveryEnabled = false;
+    cancelRadioDiscovery();
+    // No discovery is left to find a changed radio, and no connect can start
+    // that would arm the change's deadline, so a change under way would stay
+    // switching, refusing every window's choice. A restart's own stop is the
+    // exception: the start that follows serves the change.
+    if (m_radioChangeRestarting) {
+        return;
+    }
+    if (m_radioChangeRestartPending) {
+        // Stopped between the choice and its restart (stop(), a station
+        // release, the operator's disconnect): the queued restart would start
+        // the run again and undo the stop, so it is cancelled
+        // (restartForRadioChange returns once this flag is clear). The change
+        // never ran: the chooser's held answer is refused, and the choice is
+        // dropped, as on the on-air refusal, since no run serves it.
+        m_radioChangeRestartPending = false;
+        qCInfo(lcApp) << "DaemonApp: the radio change was cancelled: the run stopped first";
+        if (m_stationRadios) {
+            m_stationRadios->dropPendingChoice();
+        }
+        if (StationServer* server = stationServer()) {
+            server->finishRadioChange(false, radioChangeStoppedReason());
+        }
+    }
+    endRadioSwitch();
+}
+
 void DaemonApp::endRadioSwitch()
 {
     // A change chosen but not yet run (switchRadio until restartForRadioChange)
@@ -1326,6 +1371,11 @@ bool DaemonApp::refuseRadioChangeOnAir()
 
 void DaemonApp::restartForRadioChange()
 {
+    if (!m_radioChangeRestartPending) {
+        // The run was stopped first (stopRadioRecovery cancelled the change),
+        // or another queued restart already ran it.
+        return;
+    }
     if (m_radioConnectInProgress) {
         // A connect's nested WDSP start is running; retry once it unwinds.
         QTimer::singleShot(100, this, &DaemonApp::restartForRadioChange);
@@ -1339,8 +1389,9 @@ void DaemonApp::restartForRadioChange()
     // Stopped here, after the flag clears, not in switchRadio: that queued
     // completion runs between the two and starts the deadline again.
     // Every path from here ends the change (the on-air refusal, a failed
-    // start) or reaches finishRadioDiscovery, which ends it or starts its
-    // deadline.
+    // start, a run with no discovery) or reaches finishRadioDiscovery,
+    // which ends it or starts its deadline. Recovery turned off before
+    // that (stopRadioRecovery) ends it too.
     m_radioSwitchDeadline->stop();
     // Fix wave, M3: on the air now (a key that raced the change) refuses
     // the change; nothing keyed is torn down.
@@ -1359,10 +1410,21 @@ void DaemonApp::restartForRadioChange()
     const DaemonConfig cfg = m_radioConfig;
     // Fix wave (I1): the console commands answer across the restart.
     m_keepConsoleOnStop = true;
+    m_radioChangeRestarting = true;
     const bool started = start(cfg);
+    m_radioChangeRestarting = false;
     m_keepConsoleOnStop = false;
     if (!started) {
         qCWarning(lcApp) << "DaemonApp: the Core could not restart for its new radio";
+        // The old run goes on with its own radio, so the choice belongs to
+        // no run: kept, a later start() in this process would switch to it
+        // unasked, and forget() would refuse that radio as in use.
+        if (m_stationRadios) {
+            m_stationRadios->dropPendingChoice();
+        }
+        endRadioSwitch();
+    } else if (!m_radioRecoveryEnabled) {
+        // A run with no discovery (a test board) never finds the new radio.
         endRadioSwitch();
     }
 }

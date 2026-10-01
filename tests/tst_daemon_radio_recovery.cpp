@@ -105,6 +105,22 @@ void prepare(DaemonApp& app)
     RadioDiscovery::clearHoldOffForTest();
 }
 
+// Discovery that answers `radios`, except while `hold` is set: then the
+// scan waits (`held` says one is waiting) until it is let go or the Core
+// cancels it (requestInterruption), as a real scan's cancellation does.
+std::function<QList<RadioInfo>()> holdableScans(const QList<RadioInfo>& radios,
+                                                std::atomic<bool>& hold,
+                                                std::atomic<bool>& held)
+{
+    return [radios, &hold, &held]() {
+        while (hold.load() && !QThread::currentThread()->isInterruptionRequested()) {
+            held = true;
+            QThread::msleep(1);
+        }
+        return radios;
+    };
+}
+
 // Exercise the real P2 assembler-to-FFT boundary. UDP parsing has its own
 // focused coverage; this fixture controls delivery around the two queues.
 void feedWidebandBurst(P2RadioConnection* connection)
@@ -721,6 +737,298 @@ private slots:
                  other.macAddress.toUpper());
         QTRY_COMPARE(app.m_stationRadios->savedChoice(), other.macAddress.toUpper());
         QTRY_VERIFY(!app.m_stationRadios->switching());
+        app.stop();
+    }
+
+    // After a radio change's restart and before the new run's first
+    // discovery, the operator disconnects: the run stops looking for the
+    // radio, so nothing would end the change (no connect, no deadline).
+    // It ends where the run stops, so a window can choose again.
+    void aDisconnectAfterTheRestartEndsTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        std::atomic<bool> hold {false};
+        std::atomic<bool> held {false};
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = holdableScans({info, other}, hold, held);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        hold = true;
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(held.load(), 10000);
+        QVERIFY(app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioSwitchDeadline->isActive());
+
+        app.m_radioModel->disconnectFromRadio();
+        QVERIFY(!app.m_radioRecoveryEnabled);
+        QVERIFY(!app.m_radioDiscoveryThread);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        app.stop();
+    }
+
+    // The same moment, ended by a station release instead: the release
+    // cancels discovery, so it ends the change too.
+    void aStationReleaseAfterTheRestartEndsTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        std::atomic<bool> hold {false};
+        std::atomic<bool> held {false};
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = holdableScans({info, other}, hold, held);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        hold = true;
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(held.load(), 10000);
+        QVERIFY(app.m_stationRadios->switching());
+
+        app.beginStationRelease();
+        QVERIFY(!app.m_radioDiscoveryThread);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        app.stop();
+    }
+
+    // The operator disconnects while the new radio's connect is running
+    // (its nested WDSP start): finishRadioDiscovery then returns with
+    // recovery off and arms no deadline. The disconnect ends the change.
+    void aDisconnectDuringTheNewRadiosConnectEndsTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        P1FakeRadio otherFake;
+        otherFake.start();
+        RadioInfo other = infoFor(otherFake);
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        std::atomic<bool> hold {false};
+        std::atomic<bool> held {false};
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = holdableScans({info, other}, hold, held);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        hold = true;
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(held.load(), 10000);
+        bool insideConnect = false;
+        connect(app.m_radioModel->wdspEngine(), &WdspEngine::initializedChanged,
+                &app, [&](bool ready) {
+            if (ready && !insideConnect) {
+                insideConnect = app.m_radioConnectInProgress;
+                app.m_radioModel->disconnectFromRadio();
+            }
+        });
+        hold = false;
+        QTRY_VERIFY_WITH_TIMEOUT(insideConnect, 10000);
+        QTRY_VERIFY(!app.m_radioConnectInProgress);
+        QVERIFY(!app.m_radioRecoveryEnabled);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioSwitchDeadline->isActive());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        app.stop();
+    }
+
+    // The Core stops while the new radio's connect is running: the stop is
+    // deferred (finishRadioDiscovery's m_stopDeferred return) and arms no
+    // deadline. The stop ends the change, so the Core started again in
+    // this process is not left refusing every choice and every key.
+    void aStopDuringTheNewRadiosConnectEndsTheChange()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        P1FakeRadio otherFake;
+        otherFake.start();
+        RadioInfo other = infoFor(otherFake);
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        std::atomic<bool> hold {false};
+        std::atomic<bool> held {false};
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = holdableScans({info, other}, hold, held);
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        hold = true;
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(held.load(), 10000);
+        bool deferred = false;
+        connect(app.m_radioModel->wdspEngine(), &WdspEngine::initializedChanged,
+                &app, [&](bool ready) {
+            if (ready && !deferred) {
+                app.stop();
+                deferred = app.m_stopDeferred;
+            }
+        });
+        hold = false;
+        QTRY_VERIFY_WITH_TIMEOUT(deferred, 10000);
+        QTRY_VERIFY(!app.m_radioModel);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioSwitchDeadline->isActive());
+
+        QVERIFY(app.start(cfg));
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        app.stop();
+    }
+
+    // A restart onto a run with no discovery (the test board) never finds
+    // the chosen radio, so the restart ends the change itself.
+    void aRestartOntoATestBoardEndsTheChange()
+    {
+        DaemonApp app;
+        prepare(app);
+        app.primeBoardForTest(HPSDRHW::HermesLite, QStringLiteral("AA:BB:CC:11:22:33"));
+        QVERIFY(app.start(testCoreConfig()));
+        RadioInfo other;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        other.boardType = HPSDRHW::HermesLite;
+        other.protocol = ProtocolVersion::Protocol1;
+        app.m_stationRadios->setVisible({other});
+
+        QString reason;
+        QVERIFY2(app.m_stationRadios->select(other.macAddress, &reason), qPrintable(reason));
+        QVERIFY(app.m_stationRadios->switching());
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QVERIFY(app.m_radioModel);
+        QVERIFY(!app.m_radioRecoveryEnabled);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+        app.stop();
+    }
+
+    // A restart whose start() fails (its configuration does not validate)
+    // leaves the old run on its own radio. The change ends and its choice
+    // is dropped: kept, the next start() in this process would switch to a
+    // radio nobody chose for it, and forget() would refuse that radio.
+    void aRestartThatCannotStartDropsTheChoice()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, other}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+        RadioModel* const model = app.m_radioModel.get();
+
+        DaemonConfig invalid = cfg;
+        invalid.displayApplicationBytesPerSecond = 1;
+        invalid.spectrumSampleUnitsPerSecond.reset();
+        QString error;
+        QVERIFY(!invalid.validate(&error));
+        app.m_radioConfig = invalid;
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_radioChangeRestartPending, 10000);
+        QCOMPARE(app.m_radioModel.get(), model);
+        QVERIFY(model->isConnected());
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(!model->stationRadioChangeUnderway());
+        QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
+        QCOMPARE(app.m_selectedRadioMac, info.macAddress.toUpper());
+        QVERIFY2(app.m_stationRadios->forget(other.macAddress, &reason), qPrintable(reason));
+
+        app.stop();
+        QVERIFY(app.start(cfg));
+        QCOMPARE(app.m_selectedRadioMac, info.macAddress.toUpper());
+        app.stop();
+    }
+
+    // A stop, a station release or the operator's disconnect between a
+    // window's choice and the restart that runs it: the run stays stopped
+    // (the queued restart does not start it again), the change ends, and
+    // its choice is dropped.
+    void aStopBeforeTheRestartRunsStaysStopped_data()
+    {
+        QTest::addColumn<int>("how");
+        QTest::newRow("stop") << 0;
+        QTest::newRow("station release") << 1;
+        QTest::newRow("operator disconnect") << 2;
+    }
+
+    void aStopBeforeTheRestartRunsStaysStopped()
+    {
+        QFETCH(int, how);
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, other}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+        RadioModel* const model = app.m_radioModel.get();
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        QVERIFY(app.m_radioChangeRestartPending);
+        // The same turn: the restart is still queued.
+        if (how == 0) {
+            app.stop();
+        } else if (how == 1) {
+            app.beginStationRelease();
+            QCOMPARE(app.tryCompleteStationRelease(&reason),
+                     DaemonApp::StationReleaseResult::Stopped);
+        } else {
+            model->disconnectFromRadio();
+        }
+
+        // The restart's turn comes and goes without starting anything.
+        QTest::qWait(50);
+        QVERIFY(!app.m_radioRecoveryEnabled);
+        QVERIFY(!app.m_radioDiscoveryThread);
+        if (how == 2) {
+            QCOMPARE(app.m_radioModel.get(), model);
+            QVERIFY(!model->isConnected());
+            QVERIFY(!model->stationRadioChangeUnderway());
+        } else {
+            QVERIFY(!app.m_radioModel);
+        }
+        QCOMPARE(app.m_selectedRadioMac, info.macAddress.toUpper());
+        QVERIFY(!app.m_radioChangeRestartPending);
+        QVERIFY(!app.m_stationRadios->switching());
+        QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
         app.stop();
     }
 
