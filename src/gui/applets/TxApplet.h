@@ -140,6 +140,9 @@
 //   2026-09-29  J.J. Boyd / KG4VCF  Slice control plan Task 11 fix: holds
 //                the transmit slice's band while transmitting (m_txBand).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 5): m_psBoardUnknown,
+//                PS-A shown disabled while the board is not known.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -739,6 +742,10 @@ private:
     bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
     bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
     bool m_psArmingPermitted{true};       // R-R3-49 (parity Task 7)
+    // Fix round 1 (minor 5): the board is not known (no radio, so the caps
+    // fall back to Unknown) and does not say it has PureSignal: PS-A shows,
+    // disabled, with PureSignalSessionFacade::needsRadioReason().
+    bool m_psBoardUnknown{false};
     QString m_txProcessingReason;
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.

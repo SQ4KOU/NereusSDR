@@ -227,6 +227,8 @@ private slots:
         QVERIFY(psa);
 
         BoardCapabilities capabilities{};
+        // Fix round 1 (minor 5): a known board without PureSignal hides it.
+        capabilities.board = HPSDRHW::Atlas;
         capabilities.hasPureSignal = false;
         applet.setBoardCapabilities(capabilities);
         QVERIFY(psa->isHidden());
@@ -246,6 +248,44 @@ private slots:
         psa->click();
         QCOMPARE(harness.requests.size(), 2);
         QCOMPARE(harness.requests.last().action, Ps3Action::OffReset);
+    }
+
+    // Fix round 1 (minor 5): with no radio connected the board is not
+    // known (the caps fall back to Unknown): PS-A shows, disabled, with
+    // the reason, until the board is known. Only a known board without
+    // PureSignal hides it.
+    void txApplet_psaShowsDisabledUntilTheBoardIsKnown()
+    {
+        RemotePs3Harness harness;
+        TxApplet applet(&harness.radio);
+        applet.setTransmitPermitted(true);
+        auto* psa = button(applet, "TxAppletPsaBtn");
+        QVERIFY(psa);
+        const QString ownTip = psa->toolTip();
+
+        BoardCapabilities capabilities{};
+        QCOMPARE(capabilities.board, HPSDRHW::Unknown);
+        QVERIFY(!capabilities.hasPureSignal);
+        applet.setBoardCapabilities(capabilities);
+        QVERIFY(!psa->isHidden());
+        QVERIFY(!psa->isEnabled());
+        QCOMPARE(psa->toolTip(),
+                 QStringLiteral("PureSignal needs a connected radio that supports it."));
+        QCOMPARE(psa->accessibleDescription(),
+                 QStringLiteral("PureSignal needs a connected radio that supports it."));
+        psa->click();
+        QCOMPARE(harness.requests.size(), 0);
+
+        capabilities.board = HPSDRHW::Atlas;
+        applet.setBoardCapabilities(capabilities);
+        QVERIFY(psa->isHidden());
+
+        capabilities.board = HPSDRHW::OrionMKII;
+        capabilities.hasPureSignal = true;
+        applet.setBoardCapabilities(capabilities);
+        QVERIFY(!psa->isHidden());
+        QVERIFY(psa->isEnabled());
+        QCOMPARE(psa->toolTip(), ownTip);
     }
 
     void txApplet_psaShowsReadbackButRefusesRemoteActuation()

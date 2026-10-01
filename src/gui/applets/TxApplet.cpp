@@ -202,6 +202,10 @@
 //                Tune Power slider shows the Core's value when its change
 //                is answered, whatever arrived first. AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 5): PS-A shows,
+//                disabled with its reason, while the board is not known;
+//                only a known board without PureSignal hides it.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix round 1 (minor 4): the link-down
 //                words follow the window's link to the Core and the Core's
 //                waiting for a radio. AI-assisted via Anthropic Claude Code.
@@ -3134,7 +3138,13 @@ void TxApplet::requestRemoteTunePower(int watts)
 void TxApplet::setBoardCapabilities(const NereusSDR::BoardCapabilities& caps)
 {
     if (!m_psaBtn) { return; }
-    m_psaBtn->setVisible(caps.hasPureSignal);
+    // Fix round 1 (minor 5): with no radio the caps fall back to Unknown.
+    // PS-A shows, disabled with its reason, until the board is known; only
+    // a known board without PureSignal hides it.
+    const bool boardUnknown = caps.board == HPSDRHW::Unknown;
+    m_psBoardUnknown = boardUnknown && !caps.hasPureSignal;
+    m_psaBtn->setVisible(caps.hasPureSignal || boardUnknown);
+    syncPsaFromFacade();
 }
 
 // ---------------------------------------------------------------------------
@@ -3162,12 +3172,15 @@ void TxApplet::syncPsaFromFacade()
     m_updatingFromModel = true;
     m_psaBtn->setChecked(automaticIntent);
     // R-R3-49 (parity Task 7): arming keys nothing, so canArm.
-    const bool canArm = m_psFacade && m_psFacade->available() && m_psFacade->canArm();
+    const bool canArm = !m_psBoardUnknown && m_psFacade && m_psFacade->available()
+        && m_psFacade->canArm();
     // Fix wave GUI-I7: greyed by the facade, with the facade's reason. The
     // arming gate's reason, when it is on, stays (its tooltip is set).
     removePsaFacadeReason();
     if (m_psArmingPermitted && !canArm) {
-        const QString refusal = m_psFacade ? m_psFacade->armingRefusal() : QString();
+        // Fix round 1 (minor 5): a board not known says it needs one.
+        const QString refusal = m_psBoardUnknown || !m_psFacade ? QString()
+                                                               : m_psFacade->armingRefusal();
         const QString reason = refusal.isEmpty()
             ? PureSignalSessionFacade::needsRadioReason() : refusal;
         m_psaBtn->setProperty(kPsaFacadeSavedTooltip, m_psaBtn->toolTip());
