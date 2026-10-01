@@ -38,6 +38,9 @@
 //               this peer's candidates, the ones it admits, its states and
 //               its selected pair, redacted. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-30: LINK minor 9: the lingering close holds the application
+//               through a QPointer. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -1462,8 +1465,10 @@ struct Linger {
 bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
                        const std::shared_ptr<rtc::DataChannel>& channel)
 {
-    QCoreApplication* app = QCoreApplication::instance();
-    if (app == nullptr || !peer || !channel || !channel->isOpen()) {
+    // LINK minor 9: guarded, not raw: the state callback runs on
+    // libdatachannel's thread and may come after the application is gone.
+    const QPointer<QCoreApplication> app = QCoreApplication::instance();
+    if (app.isNull() || !peer || !channel || !channel->isOpen()) {
         return false;
     }
     auto linger = std::make_shared<Linger>();
@@ -1476,14 +1481,17 @@ bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
             && state != rtc::PeerConnection::State::Disconnected) {
             return;
         }
-        QMetaObject::invokeMethod(app, [weak]() {
+        if (app.isNull()) {
+            return;
+        }
+        QMetaObject::invokeMethod(app.data(), [weak]() {
             if (const auto held = weak.lock()) {
                 held->release();
             }
         }, Qt::QueuedConnection);
     });
     // The timer's copy holds the connection until the deadline at most.
-    QTimer::singleShot(DataChannelTransport::kCloseDrainDeadlineMs, app,
+    QTimer::singleShot(DataChannelTransport::kCloseDrainDeadlineMs, app.data(),
                        [linger]() { linger->release(); });
     channel->resetCallbacks();
     channel->close();

@@ -659,9 +659,15 @@ private slots:
         QTRY_VERIFY(watchAgent.hasPendingDatagrams());
         QCOMPARE(watchAgent.receiveDatagram().data(), QByteArray("response"));
         QVERIFY(!primaryAgent.hasPendingDatagrams());
+        // LINK minor 11: a replaced leg ends as every other end does, its
+        // ended() said with no words.
+        QSignalSpy watchEnded(watch.get(), &RelayLeg::ended);
         second->socket->sendBinaryMessage(QByteArray("\x83replaced", 9));
-        second->socket->close();
         QTRY_COMPARE(watch->state(), RelayLeg::State::Ended);
+        QTRY_COMPARE(watchEnded.size(), 1);
+        QCOMPARE(watchEnded.first().at(0).toString(), QStringLiteral("replaced"));
+        QVERIFY(watchEnded.first().at(1).toString().isEmpty());
+        second->socket->close();
         QCOMPARE(primary->state(), RelayLeg::State::Connecting);
         primaryAgent.writeDatagram("still-live", QHostAddress::LocalHost, primary->lanePort(1));
         QTRY_VERIFY(first->received.contains(QByteArray("\x01still-live", 11)));
