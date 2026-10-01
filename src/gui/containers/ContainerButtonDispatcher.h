@@ -92,6 +92,8 @@ public:
         std::function<bool()> desktopTuneOn;
         std::function<void(bool)> requestDesktopMox;
         std::function<void(bool)> requestDesktopTune;
+        // Fix wave (hosting 2-TONE parity): 2TONE in a hosting window.
+        std::function<void(bool)> requestDesktopTwoTone;
         // Remote windows: whether the Core takes this window's transmit
         // controls, and the reason shown when it does not.
         std::function<bool()> transmitPermitted;

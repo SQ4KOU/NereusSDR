@@ -198,6 +198,10 @@
 //                lock follows connectionStateChanged too, so a remote
 //                window whose Core has no radio locks MOX, TUN and 2TONE.
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
+//                hosting window's 2-TONE asks to take transmit, as MOX and
+//                TUNE do (setDesktopTwoToneHandler). AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greyed by the
 //                PureSignal facade carries the facade's reason.
 //                AI-assisted via Anthropic Claude Code.
@@ -1873,6 +1877,17 @@ void TxApplet::wireControls()
             m_model->setTwoTone(on);
             return;
         }
+        // Fix wave (hosting 2-TONE parity): a hosting window asks to take
+        // transmit first. The button shows the test's own state after.
+        if (m_desktopTwoToneRequest) {
+            const QPointer<TxApplet> self(this);
+            m_desktopTwoToneRequest(on);
+            if (self && m_twoToneBtn) {
+                const QSignalBlocker blocker(m_twoToneBtn);
+                m_twoToneBtn->setChecked(m_twoToneCtrl && m_twoToneCtrl->isActive());
+            }
+            return;
+        }
         if (!m_twoToneCtrl) { return; }
         m_twoToneCtrl->setActive(on);
     });
@@ -2105,6 +2120,11 @@ void TxApplet::setDesktopKeyHandlers(std::function<void(bool)> mox,
     m_desktopMoxOn = std::move(moxOn);
     m_desktopTuneOn = std::move(tuneOn);
     syncFromModel();
+}
+
+void TxApplet::setDesktopTwoToneHandler(std::function<void(bool)> request)
+{
+    m_desktopTwoToneRequest = std::move(request);
 }
 
 void TxApplet::setTransmitSliceResolver(std::function<SliceModel*()> resolver)

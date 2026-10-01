@@ -427,6 +427,9 @@ public:
                                std::function<bool()> moxOn,
                                std::function<bool()> tuneOn);
     void syncDesktopKeyState();
+    // Fix wave (hosting 2-TONE parity): a hosting window's 2-TONE press
+    // goes through the holder gate's take question. Empty: direct-local.
+    void setDesktopTwoToneHandler(std::function<void(bool)> request);
     /// Slice control plan Task 11 (Q15): the slice this window transmits
     /// on. The TX band, the per-band RF power, the MOX mode tooltip and the
     /// TX filter status follow it, never a slice this window only listens
@@ -714,6 +717,7 @@ private:
     std::function<void(bool)> m_desktopTuneRequest;
     std::function<bool()> m_desktopMoxOn;
     std::function<bool()> m_desktopTuneOn;
+    std::function<void(bool)> m_desktopTwoToneRequest;
     std::function<SliceModel*()> m_transmitSliceResolver;
     // Slice control plan Task 11 (U8): the transmit-slice letter row.
     QHBoxLayout* m_txSliceRow = nullptr;

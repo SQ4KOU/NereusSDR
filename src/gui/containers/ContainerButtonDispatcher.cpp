@@ -66,6 +66,10 @@
 //                                    window's MOX and TUNE press toggles
 //                                    against its own key. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave, hosting 2-TONE parity: a
+//                                    hosting window's 2TONE asks to take
+//                                    transmit, as MOX and TUNE do.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I7: PS-A greys with the
 //                                    facade's own reason (on the air, or
 //                                    no radio that supports PureSignal).
@@ -433,7 +437,14 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
     case Id::TwoTon:
         // TxApplet's 2-TONE button (RadioModel::setTwoTone: the
         // TwoToneController here, the Core's in a remote window).
-        m_model->setTwoTone(turnOn);
+        // Fix wave (hosting 2-TONE parity): a hosting window asks to take
+        // transmit first, as for MOX and TUNE.
+        if (m_hooks.desktopHosting && m_hooks.desktopHosting()
+            && m_hooks.requestDesktopTwoTone) {
+            m_hooks.requestDesktopTwoTone(turnOn);
+        } else {
+            m_model->setTwoTone(turnOn);
+        }
         break;
     case Id::PsA:
         // TxApplet's PS-A button: automatic calibration on, or Off/reset.

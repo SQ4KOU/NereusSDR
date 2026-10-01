@@ -11,6 +11,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave, hosting 2-TONE parity: a
+//                hosting window's 2-TONE (TX applet and container) asks to
+//                take transmit as its MOX and TUNE do (requestDesktopKey).
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - J.J. Boyd (KG4VCF). Fix wave GUI-I5: the container's MON
 //                and PS-A hooks carry the transmit holder's reason, as the
 //                TX applet's do. GUI-I1: abandonTxBadgeTake rejects the
@@ -2406,6 +2410,10 @@ void MainWindow::refreshDesktopStationState()
                 [this] { return desktopOwnsTransmit() && m_radioModel
                     && m_radioModel->moxController() && m_radioModel->moxController()->isMox(); },
                 [this] { return desktopOwnsTransmit() && m_radioModel && m_radioModel->isTune(); });
+            // Fix wave (hosting 2-TONE parity): 2-TONE asks as MOX does.
+            m_txApplet->setDesktopTwoToneHandler([this](bool on) {
+                requestDesktopKey(DesktopStationController::Key::TwoTone, on);
+            });
             // Slice control plan Task 11: the TX applet's band, per-band
             // power and every transmit control follow the slice transmit is
             // bound to, never a slice this window only listens to.
@@ -2420,6 +2428,7 @@ void MainWindow::refreshDesktopStationState()
                 [this]() { return transmitSliceChoiceReason(); });
         } else {
             m_txApplet->setDesktopKeyHandlers({}, {}, {}, {});
+            m_txApplet->setDesktopTwoToneHandler({});
             m_txApplet->setTransmitSliceResolver({});
             m_txApplet->setTransmitSliceChoices({}, {}, {});
         }
@@ -2467,12 +2476,21 @@ void MainWindow::applyDesktopVoxHolderGate()
 
 void MainWindow::requestDesktopTransmit(bool tune, bool on)
 {
+    requestDesktopKey(tune ? DesktopStationController::Key::Tune
+                           : DesktopStationController::Key::Mox, on);
+}
+
+void MainWindow::requestDesktopKey(DesktopStationController::Key key, bool on)
+{
     if (!desktopHosting()) { return; }
     const QPointer<MainWindow> self(this);
     if (m_desktopTakeDialog) { m_desktopTakeDialog->close(); }
     if (!self || !desktopHosting()) { return; }
     const QPointer<DesktopStationController> controller(m_desktopStationController);
-    const auto result = tune ? controller->requestTune(on) : controller->requestMox(on);
+    using Key = DesktopStationController::Key;
+    const auto result = key == Key::Tune      ? controller->requestTune(on)
+                      : key == Key::TwoTone   ? controller->requestTwoTone(on)
+                                              : controller->requestMox(on);
     if (!self || !controller || controller != m_desktopStationController) { return; }
     handleDesktopTakeResult(result);
     if (!self) { return; }
@@ -2502,6 +2520,12 @@ void MainWindow::handleDesktopTakeResult(
         dialog->detailLabel()->setText(question.holderKeyed
             ? tr("The other device is on the air. Taking over unkeys it before tuning.")
             : tr("The other device holds transmit. Take it to begin tuning."));
+    } else if (question.key == DesktopStationController::Key::TwoTone) {
+        // Fix wave (hosting 2-TONE parity).
+        dialog->detailLabel()->setText(question.holderKeyed
+            ? tr("The other device is on the air. Taking over unkeys it before "
+                 "the 2-tone test starts.")
+            : tr("The other device holds transmit. Take it to start the 2-tone test."));
     }
     m_desktopTakeDialog = dialog;
     const QPointer<DesktopStationController> controller = m_desktopStationController;
@@ -7096,6 +7120,10 @@ void MainWindow::buildUI()
         };
         hooks.requestDesktopMox = [this](bool on) { requestDesktopTransmit(false, on); };
         hooks.requestDesktopTune = [this](bool on) { requestDesktopTransmit(true, on); };
+        // Fix wave (hosting 2-TONE parity): 2TONE asks as MOX does.
+        hooks.requestDesktopTwoTone = [this](bool on) {
+            requestDesktopKey(DesktopStationController::Key::TwoTone, on);
+        };
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
         // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
         // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
