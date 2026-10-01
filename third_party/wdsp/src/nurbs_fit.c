@@ -24,11 +24,6 @@ warren@pratt.one
 
 */
 
-// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
-// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
-// pinned TAPR WDSP 2.10 tree at b02d5bac): includes linux_port.h on non-Windows builds
-// and drops one blank line.
-
 /* This file was developed with the assistance of Claude (Anthropic),
  * an AI assistant, including both earlier implementations and the
  * subsequent clean-room rewrite.  The earlier AI-generated
@@ -44,6 +39,11 @@ warren@pratt.one
   * No GPL-encumbered or proprietary source code was consulted
   * in the writing of this file.
   */
+
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): includes linux_port.h on non-Windows builds
+// and drops one blank line.
 
 
 #define _CRT_SECURE_NO_WARNINGS

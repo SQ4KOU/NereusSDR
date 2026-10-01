@@ -24,16 +24,16 @@ warren@wpratt.com
 
 */
 
-// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
-// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
-// pinned TAPR WDSP 2.10 tree at b02d5bac): removes __declspec(dllexport) from four
-// declarations, since WDSP is linked here as a static library.
-
 /************************************************************************************************
 *																								*
 *							  VERSION FOR COMPLEX DOUBLE-PRECISION								*
 *																								*
 ************************************************************************************************/
+
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): removes __declspec(dllexport) from four
+// declarations, since WDSP is linked here as a static library.
 
 #ifndef _resample_h
 #define _resample_h
