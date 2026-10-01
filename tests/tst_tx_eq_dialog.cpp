@@ -58,6 +58,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <cmath>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -127,6 +128,30 @@ void compareToWidget(const QJsonObject& curve, const ParametricEqWidget* w)
         const QJsonObject p = points.at(i).toObject();
         const ParametricEqWidget::EqPoint& e = w->points().at(i);
         QCOMPARE(p.value(QStringLiteral("frequencyHz")).toDouble(), e.frequencyHz);
+        QCOMPARE(p.value(QStringLiteral("gainDb")).toDouble(), e.gainDb);
+        QCOMPARE(p.value(QStringLiteral("q")).toDouble(), e.q);
+    }
+}
+
+// As compareToWidget, for a curve the dialog saved after a range change:
+// the saved frequencies are the widget's rounded to 0.001 Hz (Thetis
+// ucParametricEq.cs SaveToJsonFromPoints, Math.Round(F, 3)
+// [v2.10.3.15]), and a rescale leaves the widget's unrounded.
+void compareSavedToWidget(const QJsonObject& curve, const ParametricEqWidget* w)
+{
+    QVERIFY(w);
+    QCOMPARE(curve.value(QStringLiteral("parametric")).toBool(), w->parametricEq());
+    QCOMPARE(curve.value(QStringLiteral("preampDb")).toDouble(), w->globalGainDb());
+    QCOMPARE(curve.value(QStringLiteral("minHz")).toDouble(), w->frequencyMinHz());
+    QCOMPARE(curve.value(QStringLiteral("maxHz")).toDouble(), w->frequencyMaxHz());
+    const QJsonArray points = curve.value(QStringLiteral("points")).toArray();
+    QCOMPARE(points.size(), w->points().size());
+    for (int i = 0; i < points.size(); ++i) {
+        const QJsonObject p = points.at(i).toObject();
+        const ParametricEqWidget::EqPoint& e = w->points().at(i);
+        QVERIFY2(std::abs(p.value(QStringLiteral("frequencyHz")).toDouble() - e.frequencyHz)
+                     <= 0.0005,
+                 qPrintable(QStringLiteral("point %1").arg(i)));
         QCOMPARE(p.value(QStringLiteral("gainDb")).toDouble(), e.gainDb);
         QCOMPARE(p.value(QStringLiteral("q")).toDouble(), e.q);
     }
@@ -794,6 +819,86 @@ private slots:
         compareToWidget(QJsonDocument::fromJson(
                             ParaEqCurve::txEqCurveJson(QString()).toUtf8()).object(),
                         dlg.parametricWidget());
+    }
+
+    // ── 16d. Low / High spread guard ───────────────────────────────
+    // From Thetis eqform.cs:3539-3577 [v2.10.3.15]: a Low within 1000 Hz
+    // of High is set to High - 1000 with the handler still attached, so
+    // ValueChanged re-fires and the clamped value reaches the curve
+    // (FrequencyMinHz), whose PointsChanged stores the rescaled points.
+    void lowWithinSpreadClampsAndReachesCurve()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        ParametricEqWidget* w = dlg.parametricWidget();
+        auto* low  = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaLowSpin"));
+        auto* high = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaHighSpin"));
+        QVERIFY(w && low && high);
+        high->setValue(3000);
+        QCOMPARE(w->frequencyMaxHz(), 3000.0);
+
+        QSignalSpy spy(&tx, &TransmitModel::txEqParaEqDataChanged);
+        low->setValue(2500);
+        QCOMPARE(low->value(), 2000);
+        QCOMPARE(w->frequencyMinHz(), 2000.0);
+        QCOMPARE(spy.count(), 1);
+        const QJsonObject curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("minHz")).toDouble(), 2000.0);
+        compareSavedToWidget(curve, w);
+    }
+
+    void highWithinSpreadClampsAndReachesCurve()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        ParametricEqWidget* w = dlg.parametricWidget();
+        auto* low  = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaLowSpin"));
+        auto* high = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaHighSpin"));
+        QVERIFY(w && low && high);
+        low->setValue(1500);
+        QCOMPARE(w->frequencyMinHz(), 1500.0);
+
+        QSignalSpy spy(&tx, &TransmitModel::txEqParaEqDataChanged);
+        high->setValue(2000);
+        QCOMPARE(high->value(), 2500);
+        QCOMPARE(w->frequencyMaxHz(), 2500.0);
+        QCOMPARE(spy.count(), 1);
+        const QJsonObject curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("maxHz")).toDouble(), 2500.0);
+        compareSavedToWidget(curve, w);
+    }
+
+    // A Low or High outside the spread moves the curve's range, rescales
+    // its points (ucParametricEq.cs FrequencyMinHz / FrequencyMaxHz), and
+    // the rescaled points reach the model once (eqform.cs:3197-3213
+    // [v2.10.3.15], ucParametricEq1_PointsChanged).
+    void lowHighRescaleReachesModelOnce()
+    {
+        RadioModel rm;
+        TxEqDialog dlg(&rm);
+        TransmitModel& tx = rm.transmitModel();
+        ParametricEqWidget* w = dlg.parametricWidget();
+        auto* low  = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaLowSpin"));
+        auto* high = dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaHighSpin"));
+        QVERIFY(w && low && high);
+
+        QSignalSpy spy(&tx, &TransmitModel::txEqParaEqDataChanged);
+        high->setValue(3000);
+        QCOMPARE(spy.count(), 1);
+        QJsonObject curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("maxHz")).toDouble(), 3000.0);
+        compareSavedToWidget(curve, w);
+
+        low->setValue(200);
+        QCOMPARE(spy.count(), 2);
+        curve = curveOf(tx);
+        QCOMPARE(curve.value(QStringLiteral("minHz")).toDouble(), 200.0);
+        compareSavedToWidget(curve, w);
+        // The spin boxes still show the curve's range.
+        QCOMPARE(low->value(), 200);
+        QCOMPARE(high->value(), 3000);
     }
 
     // ── 17. closeEvent hides instead of destroying ──────────────────

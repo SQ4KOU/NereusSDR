@@ -103,6 +103,13 @@
 //                 LoadFromJson, so it always equals the Core's txEqCurve.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-10-01 - The Low / High spread guard follows Thetis's
+//                 nudParaEQ_low / nudParaEQ_high handlers
+//                 (eqform.cs:3539-3577 [v2.10.3.15]): the clamped value
+//                 re-fires and reaches the curve, and the range change's
+//                 rescaled points reach the model through pointsChanged.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -1176,28 +1183,30 @@ void TxEqDialog::onParametricBandCountChanged()
 void TxEqDialog::onParametricLowFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraHighSpin) { return; }
-    // Enforce the 1 kHz spread guard — clamp Low so it stays at least
-    // kMinFreqSpreadHz below High.
+    // From Thetis eqform.cs:3539-3557 [v2.10.3.15] (nudParaEQ_low_ValueChanged).
+    // The clamp sets the spin box with this handler still connected, so
+    // valueChanged re-fires with the clamped value and that call moves the
+    // curve. The range setter rescales the points and emits pointsChanged,
+    // which onParametricPointsChanged stores in the model, as Thetis's
+    // ucParametricEq1_PointsChanged does (eqform.cs:3197-3213 [v2.10.3.15]).
     const int hi = m_paraHighSpin->value();
-    if (hz + kMinFreqSpreadHz > hi) {
-        QSignalBlocker b(m_paraLowSpin);
+    if (hz > hi - kMinFreqSpreadHz) {
         m_paraLowSpin->setValue(hi - kMinFreqSpreadHz);
         return;  // valueChanged will re-fire with the clamped value
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMinHz(static_cast<double>(hz));
 }
 
 void TxEqDialog::onParametricHighFreqChanged(int hz)
 {
     if (!m_parametricWidget || !m_paraLowSpin) { return; }
+    // From Thetis eqform.cs:3559-3577 [v2.10.3.15] (nudParaEQ_high_ValueChanged),
+    // the same shape as Low above.
     const int lo = m_paraLowSpin->value();
     if (hz < lo + kMinFreqSpreadHz) {
-        QSignalBlocker b(m_paraHighSpin);
         m_paraHighSpin->setValue(lo + kMinFreqSpreadHz);
         return;
     }
-    QSignalBlocker b(m_parametricWidget);
     m_parametricWidget->setFrequencyMaxHz(static_cast<double>(hz));
 }
 
