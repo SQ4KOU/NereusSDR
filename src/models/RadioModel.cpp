@@ -9823,10 +9823,15 @@ QString RadioModel::lpfBypassUnavailableReason()
 //       // MI0BOT: Support for HL2 10MHz clock input
 void RadioModel::connectHl2OptionsToConnection()
 {
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
+    // applyHl2Options reads the options and m_connection, both on the main
+    // thread, so the watch runs here (context this) and only the setters
+    // cross to the connection's thread. One watch at a time: a reconnect
+    // replaces it.
+    QObject::disconnect(m_hl2OptionsConnection);
+    if (qobject_cast<P1RadioConnection*>(m_connection) != nullptr) {
         applyHl2Options();
-        connect(&m_hl2Options, &Hl2OptionsModel::changed, p1,
-                [this]() { applyHl2Options(); });
+        m_hl2OptionsConnection = connect(&m_hl2Options, &Hl2OptionsModel::changed, this,
+                                         [this]() { applyHl2Options(); });
     }
 }
 
