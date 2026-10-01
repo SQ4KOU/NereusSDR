@@ -7,7 +7,9 @@
 // =================================================================
 //
 // One decision, per GPU frame, of which of the spectrum's 2D trace
-// buffers (line, fill, peak hold) the frame writes and which it binds.
+// buffers (line, fill, peak hold) the frame writes and which it binds, and
+// of whether it writes the 3DSS mesh and waterfall uniform buffers, which
+// are dynamic too and bound only by their own draws.
 // SpectrumWidget::renderGpuFrame() takes both its uploads and its draw
 // calls from it, so the two cannot drift apart.
 //
@@ -27,6 +29,10 @@
 // Modification history (NereusSDR):
 //   2026-09-30 — Created for the GUI memory leak fix. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-30 — Fix wave GUI-I2 / GUI-M1: the 3DSS mesh uniform buffer is
+//                 written only in a frame that draws the mesh, and the
+//                 waterfall's only in a frame that draws the waterfall.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 namespace NereusSDR {
@@ -43,6 +49,7 @@ struct SpectrumTraceFrameInputs {
     bool panFill{false};           // pan fill is on
     bool peakHoldReady{false};     // peak hold is on and sized to the pixels
     bool showsTransmitView{false}; // keyed with DUP off (the MOX overlay)
+    bool waterfallPipeline{false}; // the waterfall pipeline exists
     // What the buffers held entering the frame.
     bool heldTrace{false};         // the line buffer holds a trace
     bool heldFill{false};          // the fill buffer holds that trace's fill
@@ -54,6 +61,10 @@ struct SpectrumTraceFramePlan {
     bool drawsDssMesh{false};
     bool drawsDssFallback{false};
     bool drawsTrace{false};
+    // The waterfall draw, and the uniform buffers only these draws bind.
+    bool drawsWaterfall{false};
+    bool writeDssMeshUbo{false};
+    bool writeWaterfallUbo{false};
     // Whether the 2D trace region is the one this frame could draw (the
     // trace buffers may be written only then).
     bool traceRegion{false};
@@ -80,6 +91,11 @@ inline SpectrumTraceFramePlan planSpectrumTraceFrame(const SpectrumTraceFrameInp
     p.drawsDssMesh = is3D && in.dssHasRows;
     p.drawsDssFallback = !p.drawsDssMesh && in.mode3D && in.dssFallbackReady;
     p.traceRegion = !p.drawsDssMesh && !p.drawsDssFallback && !is3D && in.tracePipelines;
+    // The mesh uniforms are bound only by the mesh draw: a mesh that never
+    // came up, or a ring with no rows yet, writes none.
+    p.writeDssMeshUbo = p.drawsDssMesh;
+    p.drawsWaterfall = in.waterfallPipeline;
+    p.writeWaterfallUbo = p.drawsWaterfall;
 
     // Writes: only when the trace region is drawn this frame.
     p.writeLine = p.traceRegion && in.hasPixels && in.traceBuffers;

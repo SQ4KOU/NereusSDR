@@ -14,6 +14,10 @@
 // at once. Registered NATIVE_WINDOW with the extra `gpu` label; it skips where
 // no QRhi comes up, and reads heap statistics on macOS only (the Metal path
 // is where the pending list lives).
+//
+// Fix wave 2026-09-30 (GUI-I2), J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code: a 3D pan with no rows in its ring draws no mesh,
+// so it writes no mesh uniforms.
 
 #include <QTest>
 #include <QSignalSpy>
@@ -71,11 +75,14 @@ class TestSpectrumGpuBufferGrowth : public QObject {
 private:
     // Feeds one spectrum frame and waits for the widget to submit a GPU
     // frame for it. False when no frame came within the timeout.
+    // An empty bins vector feeds nothing: the frame redraws what is there.
     static bool renderOneFrame(SpectrumWidget& w, QSignalSpy& submitted,
                                const QVector<float>& bins)
     {
         const int before = submitted.count();
-        w.updateSpectrumLinear(0, bins, 2.0, -10.0);
+        if (!bins.isEmpty()) {
+            w.updateSpectrumLinear(0, bins, 2.0, -10.0);
+        }
         w.update();
         return QTest::qWaitFor([&] { return submitted.count() > before; }, 2000);
     }
@@ -90,11 +97,11 @@ private:
     // Measures the heap growth across kMeasuredFrames GPU frames. NoGpu only
     // when the very first frame never arrives (the platform gave the widget
     // no QRhi); a timeout after that is a stall, which the caller fails.
-    static GrowthRun measureGrowth(SpectrumWidget& w)
+    static GrowthRun measureGrowth(SpectrumWidget& w, bool feed)
     {
         GrowthRun run;
         QSignalSpy submitted(&w, &QRhiWidget::frameSubmitted);
-        const QVector<float> bins = syntheticBins();
+        const QVector<float> bins = feed ? syntheticBins() : QVector<float>{};
         qint64 before = 0;
         for (int i = 0; i < kWarmupFrames + kMeasuredFrames; ++i) {
             if (i == kWarmupFrames) {
@@ -121,9 +128,9 @@ private:
 
     // Runs the measurement and scores it: skip without a GPU, fail on a
     // stall or on growth over the budget.
-    static void verifyNoGrowth(SpectrumWidget& w, const char* what)
+    static void verifyNoGrowth(SpectrumWidget& w, const char* what, bool feed = true)
     {
-        const GrowthRun run = measureGrowth(w);
+        const GrowthRun run = measureGrowth(w, feed);
         if (run.outcome == GrowthRun::Outcome::NoGpu) {
             QSKIP("no QRhi on this platform; the GPU frame path did not run");
         }
@@ -162,6 +169,16 @@ private slots:
         showWidget(w);
         w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
         verifyNoGrowth(w, "3D");
+    }
+
+    // GUI-I2: a 3D pan with no spectrum data has no rows in its ring, so the
+    // mesh is not drawn and its uniform buffer is never bound.
+    void mode3DNoRows_framesDoNotGrowTheHeap()
+    {
+        SpectrumWidget w;
+        showWidget(w);
+        w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        verifyNoGrowth(w, "3D with no rows", /*feed=*/false);
     }
 
     // A 2D pan with pan fill off never binds the fill buffer.
