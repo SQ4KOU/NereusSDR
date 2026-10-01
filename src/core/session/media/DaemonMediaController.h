@@ -7,6 +7,11 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-30: TX stall lane: the unkey line follows MoxController (its
+//               moxChanging and moxStateChanged), so it prints on every
+//               unkey; TransmitModel::moxChanged only saw the
+//               no-controller fallback. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: m_currentRouted and
 //               m_replacementRouted. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
@@ -595,6 +600,12 @@ private:
     void refreshMicWatching();
     // R-IOS-13, R-R3-42: at each unkey, one info line with this line's
     // microphone statistics and the transmit I/Q send path's counters.
+    // TX stall lane: the microphone figures are taken as the unkey starts
+    // (MoxController::moxChanging, before the feed leaves use and its
+    // underrun count resets), and the line is logged when the walk ends
+    // (moxStateChanged(false)), with the send path's counters then; a key
+    // that cuts the walk short logs it first.
+    void snapshotUnkeyStats();
     void logUnkeyStats();
     bool acceptPeerControl(const QJsonObject& control);
     // iPhone app plan Task 29 (R-IOS-16; the media document, "Replacing
@@ -832,6 +843,14 @@ private:
     // device it is for.
     std::unique_ptr<RemoteMicReceiver> m_micReceiver;
     QByteArray m_micDeviceId;
+    // TX stall lane: the microphone figures of the unkey in progress.
+    struct UnkeySnapshot {
+        QByteArray deviceId;
+        RemoteMicReceiver::Stats rx;
+        RemoteMicFeed::Stats feed;
+        bool haveFeed{false};
+    };
+    std::optional<UnkeySnapshot> m_unkeySnapshot;
     std::map<quint32, EndpointEntry> m_endpoints;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;

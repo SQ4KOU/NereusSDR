@@ -4,6 +4,11 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-09-30: TX stall lane: the unkey line follows MoxController (its
+//               moxChanging and moxStateChanged), so it prints on every
+//               unkey; TransmitModel::moxChanged only saw the
+//               no-controller fallback. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -782,12 +787,32 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             &DaemonMediaController::refreshMicWatching);
     connect(m_radioModel, &RadioModel::remoteMicInUseChanged, this,
             [this](bool) { refreshMicWatching(); });
-    connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged, this,
-            [this](bool mox) {
-                if (!mox) {
-                    logUnkeyStats();
-                }
-            });
+    // TX stall lane: MoxController owns MOX, so the unkey line follows its
+    // walk; TransmitModel::moxChanged only sees the no-controller fallback.
+    if (MoxController* moxController = m_radioModel->moxController()) {
+        connect(moxController, &MoxController::moxChanging, this,
+                [this](int, bool oldMox, bool newMox) {
+                    if (oldMox && !newMox) {
+                        snapshotUnkeyStats();
+                    } else if (!oldMox && newMox) {
+                        // A key cut the last unkey's walk short.
+                        logUnkeyStats();
+                    }
+                });
+        connect(moxController, &MoxController::moxStateChanged, this, [this](bool on) {
+            if (!on) {
+                logUnkeyStats();
+            }
+        });
+    } else {
+        connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged, this,
+                [this](bool mox) {
+                    if (!mox) {
+                        snapshotUnkeyStats();
+                        logUnkeyStats();
+                    }
+                });
+    }
     // Task 76: a controller bound to a session starts with it at once
     // (DaemonMediaHub makes it as that session's media starts).
     if (m_boundEpoch != 0 && m_server->mediaAvailable(m_boundEpoch)) {
@@ -2386,24 +2411,38 @@ void DaemonMediaController::refreshMicWatching()
     m_micReceiver->setWatching(keyed);
 }
 
-void DaemonMediaController::logUnkeyStats()
+void DaemonMediaController::snapshotUnkeyStats()
 {
     // Only the controller carrying a microphone line reports, so a key
     // from a device gives one line.
     if (!m_micReceiver || !m_radioModel) {
+        m_unkeySnapshot.reset();
         return;
     }
-    RemoteMicFeed::Stats feed;
-    const bool haveFeed = m_radioModel->remoteMicFeed() != nullptr;
-    if (haveFeed) {
-        feed = m_radioModel->remoteMicFeed()->stats();
+    UnkeySnapshot snapshot;
+    snapshot.deviceId = m_micDeviceId;
+    snapshot.rx = m_micReceiver->stats();
+    snapshot.haveFeed = m_radioModel->remoteMicFeed() != nullptr;
+    if (snapshot.haveFeed) {
+        snapshot.feed = m_radioModel->remoteMicFeed()->stats();
     }
+    m_unkeySnapshot = std::move(snapshot);
+}
+
+void DaemonMediaController::logUnkeyStats()
+{
+    if (!m_unkeySnapshot || !m_radioModel) {
+        return;
+    }
+    const UnkeySnapshot snapshot = std::move(*m_unkeySnapshot);
+    m_unkeySnapshot.reset();
     RadioConnection::TxSendStats send;
     if (const RadioConnection* conn = m_radioModel->connection()) {
         send = conn->txSendStats();
     }
     qCInfo(lcDaemonMedia).noquote()
-        << unkeyStatsLine(m_micDeviceId, m_micReceiver->stats(), haveFeed ? &feed : nullptr, send);
+        << unkeyStatsLine(snapshot.deviceId, snapshot.rx,
+                          snapshot.haveFeed ? &snapshot.feed : nullptr, send);
 }
 
 QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,

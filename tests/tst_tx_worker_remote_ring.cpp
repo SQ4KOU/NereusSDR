@@ -60,6 +60,10 @@
 //               mediaSessionOwnsSlice is mediaSessionControlsSlice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: every unkey through MoxController logs the
+//               microphone line's figures once, with the underruns of
+//               the over. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -81,6 +85,7 @@
 #include "fakes/FakeAudioBus.h"
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <QStandardPaths>
 
 #include <atomic>
@@ -416,6 +421,16 @@ struct TwoStations {
     void sendMicB() { sendMic(transportB, encoderB, sequenceB, kConnectionB); }
 };
 
+QStringList g_unkeyLines;
+
+void captureUnkeyLines(QtMsgType, const QMessageLogContext& context, const QString& message)
+{
+    if (context.category != nullptr && QByteArray(context.category) == "nereus.daemon.media"
+        && message.startsWith(QLatin1String("Transmit ended ("))) {
+        g_unkeyLines.append(message);
+    }
+}
+
 } // namespace
 
 class TestTxWorkerRemoteRing : public QObject {
@@ -453,6 +468,7 @@ private slots:
     void aLineClosedWhileItsKeyWaitsIsRefusedAtOnce();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
     void voxFromTheDevicesMicrophoneIsTheDevices();
+    void everyUnkeyThroughTheMoxControllerLogsTheMicrophoneLine();
 
     // ---- The monitor ------------------------------------------------------------
 
@@ -1244,6 +1260,58 @@ void TestTxWorkerRemoteRing::monitorReachesTheRemoteAudioAtTheSpeakersLevel()
     }
     // MON at its volume: 0.4 x 0.5.
     QVERIFY2(std::abs(peak - 0.2) < 0.01, qPrintable(QString::number(peak)));
+}
+
+// TX stall lane: MoxController owns MOX, so the unkey's line follows its
+// walk. Before, the line hung off TransmitModel::moxChanged, which a
+// controller's unkey never reaches, and it never printed on the bench.
+void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneLine()
+{
+    g_unkeyLines.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Station station;
+    QVERIFY(station.startMedia(true));
+    MoxController* mox = station.core.model->moxController();
+    RemoteMicFeed* feed = station.core.model->remoteMicFeed();
+    QVERIFY(feed != nullptr);
+
+    // A device's key, unkeyed by the device.
+    sendCommand(station.app, "tx.key", 3901, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(station.core.model->remoteMicInUse());
+    station.sendMic();
+    station.sendMic();
+    QTRY_VERIFY(mox->isMox());
+    // The pump plays the 40 ms the line delivered and then runs dry: one
+    // underrun in this over.
+    std::vector<float> out(kBlock);
+    for (int block = 0; block < 60; ++block) {
+        QVERIFY(feed->pull(out.data(), kBlock));
+    }
+    const int underruns = feed->stats().underflows;
+    QVERIFY(underruns >= 1);
+    sendCommand(station.app, "tx.unkey", 3902,
+                {int64("epoch", station.core.model->keyedBy().epoch)});
+    QTRY_VERIFY(!mox->isMox());
+    QTRY_COMPARE(g_unkeyLines.size(), 1);
+    const QString first = g_unkeyLines.at(0);
+    QVERIFY2(first.contains(QString::fromLatin1(station.deviceId())), qPrintable(first));
+    // The over's underruns, taken before the feed left use and reset them.
+    QVERIFY2(first.contains(QStringLiteral("underruns %1,").arg(underruns)), qPrintable(first));
+    QVERIFY2(first.contains(QStringLiteral("transmit I/Q")), qPrintable(first));
+
+    // A second key, ended at the Core (as the transmit watchdog ends one).
+    sendCommand(station.app, "tx.key", 3903, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(station.core.model->remoteMicInUse());
+    station.sendMic();
+    station.sendMic();
+    QTRY_VERIFY(mox->isMox());
+    mox->setMox(false);
+    QTRY_COMPARE(g_unkeyLines.size(), 2);
+    QTRY_COMPARE(mox->state(), MoxState::Rx);
+    // One line per unkey, never two.
+    QCOMPARE(g_unkeyLines.size(), 2);
 }
 
 QTEST_MAIN(TestTxWorkerRemoteRing)
