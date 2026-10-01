@@ -36,6 +36,12 @@
 // stays quiet at the phone's 20 ms pacing. J.J. Boyd (KG4VCF), AI-assisted
 // via Anthropic Claude Code.
 //
+// 2026-10-01: TX diagnostics lane, review round: MicLineTimingWatch replayed
+// (20 ms pacing, a line idle between keys, a 300 ms gap in the next second,
+// the once-a-second limit), and the loopback check no longer depends on
+// real-time pacing. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -330,6 +336,7 @@ private slots:
     void micPacketsReportTheirWaitForTheOwnerThread();
     void aStalledOwnerLeavesTheMicrophoneLineWhole();
     void micLineWarnsOfALongGapFromItsOwnThread();
+    void micLineTimingTakesAnIdleGapAsTheLineStarting();
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
@@ -2216,8 +2223,10 @@ int micTimingCount()
 
 // TX diagnostics lane: with a sink installed the line's packets bypass the
 // owner's drain, and with it the owner's "media RTP timing" warning. The
-// line's own thread warns instead: never at the phone's 20 ms pacing, and
-// once for a 300 ms gap, from "NereusMicRx".
+// line's own thread warns instead, from "NereusMicRx". Two packets 1.1 s
+// apart: past the once-a-second limit, under the idle bound, so the second
+// warns whatever the lane's other timing (MicLineTimingWatch's replayed
+// test covers the pacing).
 void TestMediaTransport::micLineWarnsOfALongGapFromItsOwnThread()
 {
     LibDataChannelMediaTransport offerer;
@@ -2249,23 +2258,12 @@ void TestMediaTransport::micLineWarnsOfALongGapFromItsOwnThread()
         ~RestoreHandler() { qInstallMessageHandler(g_previousHandler); }
     } restore;
 
-    // The phone's pacing: a packet every 20 ms for half a second.
-    constexpr int kSteady = 25;
-    quint16 sequence = 1;
-    for (int k = 0; k < kSteady; ++k) {
-        QVERIFY(answerer.sendMicRtp(rtpPacket(sequence++, 40, kTestMicSsrc)));
-        QTest::qWait(20);
-    }
-    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), kSteady, 5000);
-    const int atSteadyPacing = micTimingCount();
-
-    // Then nothing for 300 ms, and the pacing again.
-    QTest::qWait(300);
-    for (int k = 0; k < 5; ++k) {
-        QVERIFY(answerer.sendMicRtp(rtpPacket(sequence++, 40, kTestMicSsrc)));
-        QTest::qWait(20);
-    }
-    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), kSteady + 5, 5000);
+    QVERIFY(answerer.sendMicRtp(rtpPacket(1, 40, kTestMicSsrc)));
+    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), 1, 5000);
+    QTest::qWait(1100);
+    QVERIFY(answerer.sendMicRtp(rtpPacket(2, 40, kTestMicSsrc)));
+    QTRY_COMPARE_WITH_TIMEOUT(delivered.load(), 2, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(micTimingCount() >= 1, 5000);
 
     QStringList messages;
     QStringList threads;
@@ -2275,13 +2273,65 @@ void TestMediaTransport::micLineWarnsOfALongGapFromItsOwnThread()
         threads = g_micTimingThreads;
     }
     qInfo().noquote() << QStringLiteral("mic line warnings: ") + messages.join(QStringLiteral(" | "));
-    QCOMPARE(atSteadyPacing, 0);
-    QCOMPARE(messages.size(), 1);
-    QCOMPARE(threads.at(0), QStringLiteral("NereusMicRx"));
+    QVERIFY(messages.size() <= 2);
+    for (const QString& thread : std::as_const(threads)) {
+        QCOMPARE(thread, QStringLiteral("NereusMicRx"));
+    }
     const QRegularExpressionMatch gap =
-        QRegularExpression(QStringLiteral("callbackGapMs=(\\d+) ")).match(messages.at(0));
-    QVERIFY2(gap.hasMatch(), qPrintable(messages.at(0)));
-    QVERIFY2(gap.captured(1).toInt() >= 250, qPrintable(messages.at(0)));
+        QRegularExpression(QStringLiteral("callbackGapMs=(\\d+) ")).match(messages.last());
+    QVERIFY2(gap.hasMatch(), qPrintable(messages.last()));
+    QVERIFY2(gap.captured(1).toInt() >= 1000, qPrintable(messages.last()));
+}
+
+// TX diagnostics lane: the line's warning, replayed. The phone's 20 ms
+// pacing never warns; a line idle between keys (5 s) resuming does not
+// warn and leaves the once-a-second slot alone, so a 300 ms gap half a
+// second later warns; a second gap inside that second does not.
+void TestMediaTransport::micLineTimingTakesAnIdleGapAsTheLineStarting()
+{
+    using Clock = MicLineTimingWatch::Clock;
+    using std::chrono::milliseconds;
+    MicLineTimingWatch watch;
+    const Clock::time_point origin = Clock::now();
+    const auto at = [origin](qint64 ms) { return origin + milliseconds(ms); };
+    // One packet a batch, taken 1 ms after its receipt.
+    const auto packet = [&watch, &at](qint64 ms) {
+        watch.beginBatch();
+        watch.noteReceipt(at(ms));
+        return watch.endBatch(at(ms), at(ms + 1), 1);
+    };
+
+    qint64 ms = 0;
+    for (; ms <= 1000; ms += 20) {
+        QVERIFY2(!packet(ms), qPrintable(QStringLiteral("warned at %1 ms").arg(ms)));
+    }
+    // Unkey; the line is idle for 5 s; the next key's packets.
+    ms += 5000;
+    QVERIFY(!packet(ms));
+    for (int k = 0; k < 10; ++k) {
+        ms += 20;
+        QVERIFY(!packet(ms));
+    }
+    // A 300 ms gap, inside the second after the line started again.
+    ms += 300;
+    const std::optional<MicLineTimingWatch::Warning> warned = packet(ms);
+    QVERIFY(warned.has_value());
+    QCOMPARE(warned->callbackGapMs, qint64(300));
+    QCOMPARE(warned->laneWaitMs, qint64(1));
+    QCOMPARE(warned->batchPackets, 1);
+    // Another inside the same second: held back by the limit.
+    ms += 200;
+    QVERIFY(!packet(ms));
+    // A late lane, a second on: warns for the wait.
+    ms += 1000;
+    watch.beginBatch();
+    watch.noteReceipt(at(ms));
+    watch.noteReceipt(at(ms + 20));
+    const std::optional<MicLineTimingWatch::Warning> late =
+        watch.endBatch(at(ms), at(ms + 120), 2);
+    QVERIFY(late.has_value());
+    QCOMPARE(late->laneWaitMs, qint64(120));
+    QCOMPARE(late->batchPackets, 2);
 }
 
 namespace {

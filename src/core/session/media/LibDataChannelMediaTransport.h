@@ -23,11 +23,16 @@
 //   2026-10-01: TX mic thread (JJ approved): setMicPacketSink, the
 //               microphone line on a thread of its own. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane, review round: MicLineTimingWatch, the
+//               microphone line's own "media RTP timing" warning, which
+//               takes a long idle gap as the line starting again. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
 
+#include <chrono>
 #include <memory>
 #include <optional>
 
@@ -66,6 +71,45 @@ QString opusOfferFormatParameters(int targetBitrate);
 /// 24 kbit/s average, 10 ms minimum packet time (RFC 7587 section 6.1: the
 /// Core's receive preferences, matching the app's microphone encoder).
 QString micLineOpusFormatParameters();
+
+/// TX diagnostics lane: when the microphone line warns of its timing, on
+/// its own thread ("media RTP timing (microphone)"). Per batch the lane
+/// takes: the largest gap between its packets' receipts, and the first
+/// packet's wait for the lane; either past kThreshold warns, at most once a
+/// kInterval. A gap past kIdleBound is the line starting again (the device
+/// sends only while it transmits or VOX is armed), not a stall: it is not
+/// counted and leaves the once-a-kInterval slot alone. The lane's thread
+/// only; no lock, no allocation.
+class MicLineTimingWatch {
+public:
+    using Clock = std::chrono::steady_clock;
+    /// The owner's "media RTP timing" threshold and interval.
+    static constexpr std::chrono::milliseconds kThreshold{80};
+    static constexpr std::chrono::milliseconds kInterval{1000};
+    /// 2 s: eight times the microphone buffer's 250 ms starvation point
+    /// (RemoteMicFeed's kStarvationMs), which a gap inside a key has long
+    /// passed by then, and the unkey line places it as an underrun; and
+    /// shorter than a pause between two keys, which is seconds.
+    static constexpr std::chrono::milliseconds kIdleBound{2000};
+
+    struct Warning {
+        qint64 callbackGapMs{0};
+        qint64 laneWaitMs{0};
+        int batchPackets{0};
+    };
+
+    void beginBatch() { m_largestGap = {}; }
+    void noteReceipt(Clock::time_point receivedAt);
+    /// The batch's warning, if it warns; `firstReceivedAt` is its first
+    /// packet's receipt, `takenAt` when the lane took it.
+    std::optional<Warning> endBatch(Clock::time_point firstReceivedAt, Clock::time_point takenAt,
+                                    int packets);
+
+private:
+    Clock::time_point m_lastReceipt{};
+    Clock::time_point m_lastWarning{};
+    Clock::duration m_largestGap{};
+};
 
 class LibDataChannelMediaTransport final : public IMediaTransport {
     Q_OBJECT
