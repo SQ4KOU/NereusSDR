@@ -9,7 +9,7 @@
 // with the fake STUN/TURN server tests/tools/fake_turn_server.py) and a
 // Core with its StationServer, as tst_rendezvous_client stands them up,
 // shared with tst_path_racer. A test that includes this defines
-// NEREUS_SOURCE_DIR (tests/CMakeLists.txt). Nothing here reaches beyond
+// NEREUS_SOURCE_DIR and NEREUS_TEST_PYTHON (tests/CMakeLists.txt). Nothing here reaches beyond
 // this computer.
 //
 // =================================================================
@@ -40,6 +40,10 @@
 //               setParentPidForTest() and serviceProcess() for the test of
 //               that. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: INFRA-C1: the helpers start on testPython(), the
+//               interpreter CMake resolved (NEREUS_TEST_PYTHON), not on
+//               whatever python3 is first on PATH. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -121,6 +125,15 @@ struct TestKey {
 // gives every test a home of its own (tests/CMakeLists.txt), and Python
 // finds a user's packages under the home directory, so the service is
 // started with the account's real one.
+// The interpreter the helpers run on: an absolute path CMake resolved at
+// configure time (NEREUS_TEST_PYTHON), never a PATH lookup here. On the
+// Linux CI runner a PATH lookup found install-qt-action's toolcache Python,
+// which has no websockets, and every service start failed (INFRA-C1).
+inline QString testPython()
+{
+    return QStringLiteral(NEREUS_TEST_PYTHON);
+}
+
 inline QProcessEnvironment pythonEnvironment()
 {
     QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
@@ -244,7 +257,7 @@ public:
         // return; --parent-pid also ends it when this test process is killed
         // or crashes, when no destructor runs. The launcher runs the
         // service's own main unchanged.
-        m_process->start(QStringLiteral("python3"),
+        m_process->start(testPython(),
                          {QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/rendezvous_service_for_test.py"),
                           QStringLiteral("--parent-pid"),
                           QString::number(m_parentPid != 0 ? m_parentPid
@@ -252,8 +265,8 @@ public:
                           QStringLiteral("--config"),
                           m_dir.filePath(QStringLiteral("rendezvous.conf"))});
         if (!m_process->waitForStarted(static_cast<int>(deadline.remainingTime()))) {
-            m_startFailure = QStringLiteral("python3 did not start: %1")
-                                 .arg(m_process->errorString());
+            m_startFailure = QStringLiteral("%1 did not start: %2")
+                                 .arg(testPython(), m_process->errorString());
             return false;
         }
         while (true) {
@@ -387,7 +400,7 @@ private:
         if (m_relayFull) {
             arguments.append(QStringLiteral("--quota-full"));
         }
-        m_turn->start(QStringLiteral("python3"), arguments);
+        m_turn->start(testPython(), arguments);
         if (!m_turn->waitForStarted(10000)) {
             return false;
         }

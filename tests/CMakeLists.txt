@@ -7789,9 +7789,35 @@ nereus_add_test(tst_station_lan_selection)
 # advertiser. On macOS the real backend registers on this computer only and
 # the test browses for it; nothing reaches a network.
 nereus_add_test(tst_dns_sd_advertiser)
+# INFRA-C1: the interpreter the rendezvous helpers run on
+# (tests/RendezvousTestHarness.h, tests/scripts/traversal-harness.sh). It
+# needs websockets and cryptography. It is resolved once here and compiled
+# in as an absolute path, never looked up on PATH when a test runs: on the
+# Linux CI runner install-qt-action puts a toolcache Python without those
+# packages ahead of /usr/bin, so a PATH lookup started an interpreter that
+# could not import the service. CI passes -DNEREUS_TEST_PYTHON=/usr/bin/python3
+# (Ubuntu's python3-websockets and python3-cryptography from apt).
+find_program(NEREUS_TEST_PYTHON NAMES python3
+    DOC "Python 3 with websockets and cryptography, for the rendezvous test helpers")
+if(NEREUS_TEST_PYTHON)
+    execute_process(COMMAND "${NEREUS_TEST_PYTHON}" -c "import websockets, cryptography"
+        RESULT_VARIABLE _nereus_test_python_ok OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _nereus_test_python_ok EQUAL 0)
+        message(WARNING
+            "${NEREUS_TEST_PYTHON} cannot import websockets and cryptography; "
+            "the rendezvous-backed tests (tst_rendezvous_client, tst_path_racer, "
+            "tst_relay_session, tst_gui_connection_controller) will fail. Set "
+            "-DNEREUS_TEST_PYTHON to an interpreter that has them.")
+    endif()
+else()
+    message(WARNING "No python3 found; set -DNEREUS_TEST_PYTHON for the rendezvous-backed tests.")
+    set(NEREUS_TEST_PYTHON python3)
+endif()
+
 nereus_add_test(tst_gui_connection_controller)
 target_compile_definitions(tst_gui_connection_controller PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
 # device key, one tap and the code against a real StationServer over the
 # loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
@@ -7826,7 +7852,8 @@ target_include_directories(tst_ice_transport_lifetime PRIVATE
 # and a session that outlives the service.
 nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_rendezvous_client PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # iPhone app plan Task 28 (R-IOS-16): the control session over a data
 # channel on this computer: the chunking and heartbeat bytes and the framing
 # fixtures (tests/data/link/v1/framing/), each end's cap, a whole session
@@ -7908,15 +7935,17 @@ if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME traversal_harness
         COMMAND bash ${CMAKE_SOURCE_DIR}/tests/scripts/traversal-harness.sh
             --peer $<TARGET_FILE:nereus_rendezvous_peer>
-            --source ${CMAKE_SOURCE_DIR})
+            --source ${CMAKE_SOURCE_DIR}
+            --python ${NEREUS_TEST_PYTHON})
     set_tests_properties(traversal_harness PROPERTIES
         LABELS traversal
         TIMEOUT 1800
         RUN_SERIAL TRUE)
 endif()
 # Real ICE connections, each within the libraries' own deadlines. It runs
-# the Python service, which needs python3 with websockets and cryptography
-# (the Linux CI job installs them from apt).
+# the Python service on NEREUS_TEST_PYTHON (above), which needs websockets
+# and cryptography (the Linux CI job installs them from apt and points
+# NEREUS_TEST_PYTHON at /usr/bin/python3).
 if(TEST tst_rendezvous_client)
     set_tests_properties(tst_rendezvous_client PROPERTIES TIMEOUT 300)
 endif()
@@ -9444,7 +9473,8 @@ endforeach()
 # plain words.
 nereus_add_test(tst_path_racer fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_path_racer PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 if(TEST tst_path_racer)
     set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
 endif()
@@ -9460,7 +9490,8 @@ target_compile_definitions(tst_relay_leg PRIVATE
 # (rendezvous section 12), the Core and a window. Loopback only.
 nereus_add_test(tst_relay_session fakes/LoopbackTransport.cpp EXTRA_LABELS session)
 target_compile_definitions(tst_relay_session PRIVATE
-    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 if(TEST tst_relay_session)
     set_tests_properties(tst_relay_session PROPERTIES TIMEOUT 400)
 endif()
