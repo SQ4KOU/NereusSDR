@@ -53,6 +53,11 @@
 //               state callback took the same lock, and the process hung at
 //               exit (tst_station_tx_watch_relay). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: the teardown clears routineAdded, so a context object made
+//               after it (a close later in the same teardown, or a later
+//               application) is deleted too instead of leaking with the
+//               peers it holds; lingerTargetExistsForTest(). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -1482,9 +1487,12 @@ struct Linger {
 // state callback runs on libdatachannel's thread, so it never reads the
 // application there: it posts to `target` under `mutex`, and the
 // application's teardown (a post routine, run first in QCoreApplication's
-// destructor) deletes `target` under the same lock. A post is then either
+// destructor) takes `target` out under the same lock and deletes it after
+// the lock is released (endLingerContext says why). A post is then either
 // made to a live object or not made at all; one still queued is dropped
-// with the object.
+// with the object. The teardown also clears `routineAdded`, so the next
+// target, made by a close later in the same teardown or by a later
+// application, adds the post routine again and is deleted in its turn.
 struct LingerContext {
     std::mutex mutex;
     std::unique_ptr<QObject> target;
@@ -1507,10 +1515,16 @@ void endLingerContext()
     // same lock. Once the target is taken, a callback finds none and posts
     // nothing, and one that already posted did so under the lock, so its
     // event is queued to the live object and dropped with it.
+    //
+    // Qt runs the post routines once and forgets them, so the next target
+    // adds this routine again: one made by a close later in this teardown
+    // (Qt runs a routine added while the routines run, qt_call_post_routines
+    // in Qt 6.8.3 and 6.11), or by a later application.
     std::unique_ptr<QObject> target;
     {
         std::lock_guard lock(context.mutex);
         target = std::move(context.target);
+        context.routineAdded = false;
     }
     target.reset();
 }
@@ -1579,6 +1593,13 @@ bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
 }
 
 } // namespace
+
+bool DataChannelTransport::lingerTargetExistsForTest()
+{
+    LingerContext& context = lingerContext();
+    std::lock_guard lock(context.mutex);
+    return context.target != nullptr;
+}
 
 void DataChannelTransport::stopPeer(bool linger)
 {

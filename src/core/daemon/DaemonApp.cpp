@@ -122,6 +122,16 @@
 //               recovery retire, so a lost-link key lock holds until the
 //               rebuilt link is Connected. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: a late failure of the radio a change left behind no longer
+//               ends the change chosen after it (m_radioChangeRestartPending):
+//               the change's deadline and the connect watchdog are both
+//               2000 ms. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-01: the check moves into endRadioSwitch, so a Connected, a
+//               discovery with no radio to choose or a connect that did
+//               not start cannot end a change before its restart runs
+//               either. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -1095,6 +1105,11 @@ void DaemonApp::retireRadioAndRetry()
     }
     // Fix wave, C1: the new radio's connect failed or its link was lost, so a
     // radio change under way ends (its choice is kept as this run's radio).
+    // A change chosen since then restarts the run (restartForRadioChange):
+    // this failure is the old radio's, not that change's, so it stays under
+    // way (endRadioSwitch keeps it). The change's deadline and the connect
+    // watchdog are both 2000 ms, so the deadline can end a change, and a
+    // window choose again, while the old radio's failure is still queued.
     endRadioSwitch();
     // Invalidate both discovery completions and terminal reports from the
     // retired connection. RadioModel keeps the slices while retiring all DSP.
@@ -1253,6 +1268,7 @@ void DaemonApp::switchRadio(const QString& mac)
     if (StationServer* server = stationServer()) {
         server->holdRadioChangeAnswers();
     }
+    m_radioChangeRestartPending = true;
     QTimer::singleShot(0, this, &DaemonApp::restartForRadioChange);
 }
 
@@ -1264,6 +1280,15 @@ QString DaemonApp::radioChangeReason(const QString& radioName)
 
 void DaemonApp::endRadioSwitch()
 {
+    // A change chosen but not yet run (switchRadio until restartForRadioChange)
+    // is never ended here: whatever reports now (the old radio's failure, its
+    // late Connected, a discovery or connect that did not start) belongs to
+    // the run the change is about to restart, not to the change. Its
+    // deadline is not running yet; it starts when the new radio's connect
+    // does (finishRadioDiscovery).
+    if (m_radioChangeRestartPending) {
+        return;
+    }
     m_radioSwitchDeadline->stop();
     if (m_stationRadios) {
         m_stationRadios->setSwitching(false);
@@ -1299,6 +1324,7 @@ void DaemonApp::restartForRadioChange()
         QTimer::singleShot(100, this, &DaemonApp::restartForRadioChange);
         return;
     }
+    m_radioChangeRestartPending = false;
     // Fix wave, M3: on the air now (a key that raced the change) refuses
     // the change; nothing keyed is torn down.
     if (refuseRadioChangeOnAir()) {

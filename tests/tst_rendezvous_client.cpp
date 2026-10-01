@@ -83,6 +83,9 @@
 //               LocalService starts ends with the process it is tied to.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-01: NEREUS_ICE_DIAG is read in initTestCase, so a CI run can
+//               log its ICE checks. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -130,6 +133,7 @@
 #include "core/security/SpakeExchange.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/DataChannelTransport.h"
+#include "core/session/IceDiagnostics.h"
 #include "core/session/RendezvousDialer.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/IceConfiguration.h"
@@ -1414,6 +1418,9 @@ private:
 private slots:
     void initTestCase()
     {
+        // NEREUS_ICE_DIAG=1 logs this run's ICE checks, as it does for the
+        // Core; installed before any peer is made.
+        IceDiagnostics::installFromEnvironment();
         qRegisterMetaType<RendezvousIntroduction>();
         qRegisterMetaType<Wire::Turn>();
         QVERIFY2(QFile::exists(kSuite + QStringLiteral("/manifest.json")), qPrintable(kSuite));
