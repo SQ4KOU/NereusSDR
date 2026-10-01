@@ -22,6 +22,9 @@
 //               rather than restarted, so the stop bound no longer rests on
 //               where the event loop puts a restarted check. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX diagnostics lane: the device id prints as hex in the
+//               log, not as raw bytes. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/RemoteTxWatchdog.h"
@@ -92,7 +95,7 @@ void RemoteTxWatchdog::update(const QByteArray& deviceId, bool keyed, bool keyed
     if (!watch.keyed && !watch.voxArmed) {
         if (wasWatched) {
             m_devices.erase(it);
-            qCDebug(lcDsp) << "Transmit watchdog: no longer watching" << deviceId;
+            qCDebug(lcDsp) << "Transmit watchdog: no longer watching" << deviceId.toHex().constData();
             reschedule();
         }
         return;
