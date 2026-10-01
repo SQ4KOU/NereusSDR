@@ -26,6 +26,10 @@
 // 2026-09-30: fix wave (INFRA minor 1): the listener retry test waits for a
 // retry's own log line instead of a fixed 2.5 s sleep. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-30: fix wave round 1: that test turns the TCI log category on
+// through LogManager and puts it back the same way, so the process keeps
+// LogManager's filter rules instead of an empty set. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "MultiDeviceHarness.h"
 
 #include <QtTest/QtTest>
@@ -39,6 +43,7 @@
 
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
 #include "core/SliceOwnership.h"
 #include "core/RfKitBandFollow.h"
 #include "core/StationNetwork.h"
@@ -1396,7 +1401,13 @@ private slots:
         s_listenWarnings = 0;
         s_listenAttempts = 0;
         static QtMessageHandler s_previous = nullptr;
-        QLoggingCategory::setFilterRules(QStringLiteral("nereus.tci.debug=true"));
+        // Through LogManager, so its filter rules stay in force and only
+        // this category changes; its setting lives in the in-memory
+        // AppSettings that init() and cleanup() clear.
+        auto& logs = LogManager::instance();
+        const QString tciCategory = QStringLiteral("nereus.tci");
+        const bool tciWasEnabled = logs.isEnabled(tciCategory);
+        logs.setEnabled(tciCategory, true);
         s_previous = qInstallMessageHandler(
             [](QtMsgType type, const QMessageLogContext& context, const QString& text) {
                 if (type == QtWarningMsg && text.contains(QStringLiteral("listen"))) {
@@ -1410,9 +1421,9 @@ private slots:
                     s_previous(type, context, text);
                 }
             });
-        const auto restoreLogging = qScopeGuard([] {
+        const auto restoreLogging = qScopeGuard([&logs, tciCategory, tciWasEnabled] {
             qInstallMessageHandler(s_previous);
-            QLoggingCategory::setFilterRules(QString());
+            logs.setEnabled(tciCategory, tciWasEnabled);
         });
         QString reason;
         QVERIFY(controller.setEnabled(true, port, &reason));
