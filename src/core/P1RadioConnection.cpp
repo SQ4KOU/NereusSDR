@@ -5,6 +5,7 @@
 // Ported from Thetis sources:
 //   Project Files/Source/ChannelMaster/networkproto1.c, original licence from Thetis source is included below
 //   Project Files/Source/ChannelMaster/netInterface.c, original licence from Thetis source is included below
+//   Project Files/Source/ChannelMaster/network.c, original licence from Thetis source is included below
 //   Project Files/Source/Console/HPSDR/NetworkIO.cs (upstream has no top-of-file header — project-level LICENSE applies)
 //   Project Files/Source/Console/cmaster.cs, original licence from Thetis source is included below
 //   Project Files/Source/Console/console.cs, original licence from Thetis source is included below
@@ -145,6 +146,14 @@
 //   2026-09-30 - Review fix: ocBandFrequencyHz reports the receiver
 //                hl2ReceivePins takes the pins from. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - The receive socket binds to the local address that
+//                reaches the radio, as Thetis binds the network card's
+//                address (NetworkIO.cs:68-69, 149; network.c:116-118, 203
+//                [v2.10.3.15]); network.c's header added below. On macOS a
+//                socket bound to Any could share its port with another
+//                socket on that address, which then took the radio's
+//                frames. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*
@@ -172,6 +181,28 @@
  * netinterface.c
  * Copyright (C) 2006,2007  Bill Tracey (bill@ejwt.com) (KD5TFD)
  * Copyright (C) 2010-2020 Doug Wigley (W5WC)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ *
+ */
+
+
+// --- From network.c ---
+/*
+ * network.c
+ * Copyright (C) 2015-2020 Doug Wigley (W5WC)
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -801,17 +832,7 @@ void P1RadioConnection::init()
         return;
     }
 
-    // 2026-05-26 KG4VCF bench fix: bumped recv buffer from Thetis's
-    // 1000 KB (0xfa000) to 4 MB.  See the matching block in
-    // P2RadioConnection::init() for the full rationale -- short
-    // summary: even with the ConnectionThread elevated to
-    // USER_INTERACTIVE QoS, brief preemption windows under heavy
-    // build load can stall the kernel-to-userspace handoff long
-    // enough to drop I/Q frames at the smaller buffer size.
-    m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption,
-                              QVariant(0xfa000));
-    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
-                              QVariant(0x400000));  // 4 MB requested; kernel may cap
+    applySocketBufferSizes();
 
     connect(m_socket, &QUdpSocket::readyRead, this, &P1RadioConnection::onReadyRead);
 
@@ -852,6 +873,93 @@ void P1RadioConnection::init()
 }
 
 // ---------------------------------------------------------------------------
+// applySocketBufferSizes
+//
+// The send and receive buffer sizes, set on every bind (init() and
+// bindToRadioFacingAddress(); a closed socket loses them).
+// ---------------------------------------------------------------------------
+void P1RadioConnection::applySocketBufferSizes()
+{
+    // 2026-05-26 KG4VCF bench fix: bumped recv buffer from Thetis's
+    // 1000 KB (0xfa000) to 4 MB.  See the matching block in
+    // P2RadioConnection::init() for the full rationale -- short
+    // summary: even with the ConnectionThread elevated to
+    // USER_INTERACTIVE QoS, brief preemption windows under heavy
+    // build load can stall the kernel-to-userspace handoff long
+    // enough to drop I/Q frames at the smaller buffer size.
+    m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption,
+                              QVariant(0xfa000));
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
+                              QVariant(0x400000));  // 4 MB requested; kernel may cap
+}
+
+// ---------------------------------------------------------------------------
+// bindToRadioFacingAddress
+//
+// Binds the socket to the local address this host reaches the radio from,
+// on a port the OS chooses. Thetis binds its listening socket the same way,
+// to the selected network card's own IPv4 address, port 0 unless set:
+//   From Thetis NetworkIO.cs:68-69 [v2.10.3.15]:
+//     string hostIP = nic.LocalIPv4.ToString();
+//     int hostPort = c.SetupForm.ListenToRadioOnUDPPort; // will be any os available port if 0, or specific if set
+//   From Thetis NetworkIO.cs:149 [v2.10.3.15]:
+//     ret = nativeInitMetis(radioIP, ratioPort, hostIP, hostPort, protocol, model_id);
+//   From Thetis network.c:116-118 and 203 [v2.10.3.15]:
+//     local.sin_port = htons((u_short)localport);
+//     local.sin_family = AF_INET;
+//     local.sin_addr.s_addr = inet_addr(localaddr);
+//     rc = bind(listenSock, (SOCKADDR*)&local, sizeof(local));
+//
+// NereusSDR bound to every address (Any) instead. On macOS the OS can give
+// a socket bound to Any a port that another socket already holds on one
+// address, and a datagram to that address and port goes to the other
+// socket: the radio streams, its frames go elsewhere, and the connect
+// watchdog fires (tst_slice_cap_every_path lost a reconnect this way to
+// another program's socket on 127.0.0.1). A socket bound to the address
+// itself gets a port no other socket holds there.
+//
+// NereusSDR has no network card selection, so the address is the one the
+// OS routes to the radio from: the source address the radio answers. A UDP
+// connect sends nothing. With no route the socket keeps its binding, as
+// before.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::bindToRadioFacingAddress()
+{
+    if (!m_socket || m_radioInfo.address.isNull()) { return; }
+
+    QHostAddress local;
+    {
+        QUdpSocket route;
+        route.connectToHost(m_radioInfo.address, m_radioInfo.port);
+        if (route.waitForConnected(kRouteLookupMs)) {
+            local = route.localAddress();
+        }
+    }
+    if (local.isNull()) {
+        qCWarning(lcConnection) << "P1: no local address reaches"
+                                << m_radioInfo.address.toString()
+                                << "; listening on every address";
+        return;
+    }
+    if (m_socket->state() == QAbstractSocket::BoundState
+        && m_socket->localAddress() == local) {
+        return;
+    }
+
+    m_socket->close();
+    if (!m_socket->bind(local, 0)) {
+        qCWarning(lcConnection) << "P1: could not listen on" << local.toString()
+                                << "(" << m_socket->errorString()
+                                << "); listening on every address";
+        if (!m_socket->bind(QHostAddress::Any, 0)) {
+            qCWarning(lcConnection) << "P1: Failed to bind UDP socket";
+            return;
+        }
+    }
+    applySocketBufferSizes();
+}
+
+// ---------------------------------------------------------------------------
 // connectToRadio
 //
 // Binds the socket, sends metis-start, transitions to Connected.
@@ -866,6 +974,8 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     }
 
     m_radioInfo = info;
+    // Listen on the address the radio answers, before anything is sent.
+    bindToRadioFacingAddress();
     // Use HardwareProfile for caps (Phase 3I-RP).
     // Fall back to board-byte lookup if setHardwareProfile() was never called
     // (e.g. direct construction in tests without RadioModel).

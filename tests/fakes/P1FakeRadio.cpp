@@ -150,6 +150,12 @@ void P1FakeRadio::skipEp6Sequence(quint32 count)
     m_ep6Seq += count;
 }
 
+quint16 P1FakeRadio::clientPort() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_clientPort;
+}
+
 int P1FakeRadio::ep2FramesReceived() const
 {
     QMutexLocker lock(&m_mutex);

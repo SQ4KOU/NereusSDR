@@ -71,6 +71,11 @@ public:
     // past the one it would have had.
     void skipEp6Sequence(quint32 count);
 
+    // The port the fake streams ep6 to: the sender port of the last
+    // metis-start, as a radio answers the host that started it. 0 before
+    // any start.
+    quint16 clientPort() const;
+
     int  ep2FramesReceived() const;
     bool isRunning()         const;
     int  metisStopCount()    const;

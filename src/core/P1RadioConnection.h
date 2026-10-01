@@ -565,6 +565,14 @@ private:
     // — same stop+prime+start cycle as restartStreamWithRate().
     void restartStreamWithCount(int newActiveRxCount);
 
+    // Binds m_socket to the local address that reaches m_radioInfo.address,
+    // on a port the OS chooses, as Thetis binds its listening socket to the
+    // network card's address (network.c nativeInitMetis). Called by
+    // connectToRadio(). Stays on the current binding if no route is found.
+    void bindToRadioFacingAddress();
+    // The socket buffer sizes init() sets; applied again after a rebind.
+    void applySocketBufferSizes();
+
     // --- Wire format (networkproto1.c) — implemented in Tasks 7 & 8 ---
     void sendMetisStart(bool iqAndMic);
     void sendMetisStop();
@@ -694,6 +702,10 @@ private:
     // Connect watchdog: fires this many ms after connectToRadio() if no first
     // ep6 frame arrives → emits connectFailed(Timeout, ...). Design §4.1.
     static constexpr int kConnectTimeoutMs     = 2000;
+    // How long bindToRadioFacingAddress() waits for the OS to name the local
+    // address that reaches the radio. A UDP connect sends nothing and is
+    // normally answered at once. NereusSDR-original.
+    static constexpr int kRouteLookupMs        = 100;
     // Mic-frame LOS timeout — after this long without a successful mic16
     // dispatch, inject a zero block into TxMicSource so the worker keeps
     // ticking through silence.  Matches Thetis network.c:656 [v2.10.3.13]:
