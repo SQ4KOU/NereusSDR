@@ -9,6 +9,21 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 3: a delta
+//                                    cancels the unsent edits its causes
+//                                    define, named per cause in
+//                                    kDeltaCancelRules (dspMode -> both
+//                                    filter edges, per Thetis
+//                                    console.cs:34513 [v2.10.3.15];
+//                                    lineInBoost -> lineInGain, per
+//                                    console.cs:40929-40931; the paired
+//                                    CFC curve and scalars), whatever the
+//                                    values. Only the dspMode row steps
+//                                    the edges back before its setter
+//                                    runs. Replaces round 2's value-
+//                                    inferred cancel and generic step-
+//                                    back. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  Inbound sibling fix round 2: a
 //                                    cancelled edit falls back to its
 //                                    write in flight (whose answer then
@@ -514,6 +529,7 @@
 #include <QWebSocket>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace NereusSDR {
@@ -4221,6 +4237,57 @@ void StationClient::handlePropertyResult(const SessionMessage& message)
     }
 }
 
+namespace {
+
+// What a change from elsewhere does to the window's unsent edits, stated
+// per cause rather than inferred from values. When a delta applies
+// `cause` to an object of `className` and moves it, every unsent edit of
+// a `dependents` property on that object is cancelled
+// (StationClient::cancelUnsentEdit): the cause's setter defines those
+// properties, so an edit made before it has no place after it.
+struct DeltaCancelRule {
+    const char* className;
+    const char* cause;
+    // Up to five, unused slots null.
+    std::array<const char*, 5> dependents;
+    // The cause's setter saves the dependents' current values somewhere
+    // of their own before it replaces them, so they step back to the
+    // Core's before it runs and a cancelled edit is never saved.
+    bool stepBack;
+};
+
+constexpr DeltaCancelRule kDeltaCancelRules[] = {
+    // Filter edges are per-mode state. SetRX1Mode loads the new mode's
+    // own last filter:
+    //   RX1Filter = rx1_filters[(int)new_mode].LastFilter;
+    // From Thetis console.cs:34513 [v2.10.3.15] (in SetRX1Mode, :33957),
+    // and SetRX1Filter saves the edges as the current mode's
+    // (console.cs:34766-34768 [v2.10.3.15]). SliceModel::setDspMode saves
+    // the current edges as the old mode's LastFilter before loading the
+    // new mode's, so the edges step back first.
+    { "SliceModel", "dspMode", { { "filterLow", "filterHigh" } }, true },
+    // The line-in boost sets the line-in gain index:
+    //   var lineboost = Array.IndexOf(lineinboost, line_in_boost.ToString());
+    //   NetworkIO.SetLineBoost(lineboost);
+    // From Thetis console.cs:40929-40931 [v2.10.3.15]
+    // (TransmitModel::setLineInBoost -> setLineInGain).
+    { "TransmitModel", "lineInBoost", { { "lineInGain" } }, false },
+    // NereusSDR's paired CFC curve: the curve projects onto the five
+    // scalars, and each scalar re-encodes the curve
+    // (TransmitModel::setCfcParaEqData, updatePairedCfc,
+    // updatePairedCfcArray).
+    { "TransmitModel", "cfcParaEqData",
+      { { "cfcPrecompDb", "cfcPostEqGainDb", "cfcEqFreqJson", "cfcCompressionJson",
+          "cfcPostEqBandGainJson" } }, false },
+    { "TransmitModel", "cfcPrecompDb", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcPostEqGainDb", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcEqFreqJson", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcCompressionJson", { { "cfcParaEqData" } }, false },
+    { "TransmitModel", "cfcPostEqBandGainJson", { { "cfcParaEqData" } }, false },
+};
+
+} // namespace
+
 void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
                                  const QList<MirrorUpdate>& updates, SideEffectRule rule,
                                  const QList<MirrorUpdate>& heldValues)
@@ -4238,16 +4305,55 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
     // suppressed too.
     InboundGuard guard(m_applyingInbound);
 
-    // A delta may cancel an unsent edit on this object (see
-    // restoreOperatorValues). Before its setters run, each unsent edit
-    // steps back to what the window last had from the Core (or to its
-    // write still in flight), so a side effect never saves an edit that
-    // may be cancelled: SliceModel::setDspMode stores the current edges
-    // as the old mode's LastFilter. `baselines` is what each one read
-    // after that step; moving away from it is the side effect.
-    QHash<QByteArray, QVariant> baselines;
+    // A delta from elsewhere cancels the unsent edits its causes define
+    // (kDeltaCancelRules). Which ones is decided before any setter runs:
+    // the rules whose cause this delta carries and the window holds at a
+    // different value, and their dependents with an unsent edit here.
+    QList<const MirrorProperty*> toCancel;
     if (rule == SideEffectRule::Delta) {
-        baselines = stepBackUnsentEdits(target, objectKey);
+        const auto pending = m_pendingWrites.value(objectKey);
+        QList<const MirrorProperty*> toStepBack;
+        for (const DeltaCancelRule& cancelRule : kDeltaCancelRules) {
+            if (className != cancelRule.className) {
+                continue;
+            }
+            const MirrorProperty* cause = schema.byName(cancelRule.cause);
+            const auto carried = std::find_if(
+                updates.cbegin(), updates.cend(),
+                [&](const MirrorUpdate& u) { return u.name == cancelRule.cause; });
+            if (cause == nullptr || carried == updates.cend()) {
+                continue;
+            }
+            if (MirrorSchema::decode(*cause, schema.read(*cause, target))
+                == MirrorSchema::decode(*cause, carried->value)) {
+                continue;
+            }
+            for (const char* name : cancelRule.dependents) {
+                if (name == nullptr) {
+                    break;
+                }
+                const auto write = pending.constFind(QByteArray(name));
+                const MirrorProperty* dependent = schema.byName(name);
+                if (write == pending.cend() || write->writeId != 0 || dependent == nullptr
+                    || toCancel.contains(dependent)) {
+                    continue;
+                }
+                toCancel.append(dependent);
+                if (cancelRule.stepBack) {
+                    toStepBack.append(dependent);
+                }
+            }
+        }
+        // Back to the write still in flight, else to the Core's value.
+        const auto core = m_coreValues.value(objectKey);
+        for (const MirrorProperty* prop : toStepBack) {
+            const PendingWrite write = pending.value(prop->name);
+            if (write.inFlightWriteId != 0) {
+                applyOne(target, *prop, write.inFlightValue);
+            } else if (core.contains(prop->name)) {
+                applyOne(target, *prop, core.value(prop->name));
+            }
+        }
     }
 
     QSet<QByteArray> applied;
@@ -4277,44 +4383,17 @@ void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
         }
     }
 
+    for (const MirrorProperty* prop : toCancel) {
+        cancelUnsentEdit(objectKey, target, *prop, heldValues);
+    }
+
     // Still under the guard: putting the operator's values back is not a
     // change of theirs to send again.
-    restoreOperatorValues(objectKey, applied, rule, heldValues, baselines);
-}
-
-QHash<QByteArray, QVariant> StationClient::stepBackUnsentEdits(QObject* target,
-                                                               const QByteArray& objectKey)
-{
-    QHash<QByteArray, QVariant> baselines;
-    const auto writes = m_pendingWrites.constFind(objectKey);
-    if (writes == m_pendingWrites.cend()) {
-        return baselines;
-    }
-    const MirrorSchema& schema = MirrorSchema::forObject(target);
-    const auto core = m_coreValues.value(objectKey);
-    for (auto write = writes->cbegin(); write != writes->cend(); ++write) {
-        if (write->writeId != 0) {
-            continue;
-        }
-        const MirrorProperty* prop = schema.byName(write.key());
-        if (prop == nullptr) {
-            continue;
-        }
-        if (write->inFlightWriteId != 0) {
-            applyOne(target, *prop, write->inFlightValue);
-        } else if (core.contains(write.key())) {
-            applyOne(target, *prop, core.value(write.key()));
-        }
-        baselines.insert(write.key(), schema.read(*prop, target));
-    }
-    return baselines;
+    restoreOperatorValues(objectKey, applied);
 }
 
 void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
-                                          const QSet<QByteArray>& applied,
-                                          SideEffectRule rule,
-                                          const QList<MirrorUpdate>& heldValues,
-                                          const QHash<QByteArray, QVariant>& baselines)
+                                          const QSet<QByteArray>& applied)
 {
     // The guard suppresses the observer, not the change. A Core value a
     // setter applies can move a DIFFERENT property as a side effect
@@ -4326,20 +4405,8 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
     // Core answers that write, and the window shows what it will send.
     // A property the Core's message named keeps the Core's value (only an
     // object.create names one with a pending write; a delta skips them,
-    // and a result ends the hold before it applies).
-    //
-    // A DELTA is different for an edit the window has not sent yet: the
-    // change came from another device or the Core itself, so the
-    // operator's unsent edit is cancelled, not put back. Thetis keeps
-    // filter edges per mode: SetRX1Mode loads the new mode's own last
-    // filter (RX1Filter = rx1_filters[(int)new_mode].LastFilter;
-    // console.cs:34513 [v2.10.3.15]) and SetRX1Filter saves the edges as
-    // the current mode's (console.cs:34766-34768 [v2.10.3.15]), so an
-    // old mode's edge has no place in the new mode. The hold and its
-    // coalesced write are dropped and the Core's value applies (see
-    // cancelUnsentEdit). An edit already sent is still put back: the
-    // Core applies that write after its own change, and the window shows
-    // what it will hold.
+    // and a result ends the hold before it applies). An unsent edit a
+    // delta's cause defines was already cancelled (kDeltaCancelRules).
     struct Held {
         quint64 order;
         QByteArray key;
@@ -4353,7 +4420,6 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
     }
     std::sort(held.begin(), held.end(),
               [](const Held& a, const Held& b) { return a.order < b.order; });
-    QSet<int> cancelledNotifiers;
     for (const Held& h : held) {
         QObject* object = m_objects.value(h.key).data();
         auto writes = m_pendingWrites.find(h.key);
@@ -4377,55 +4443,11 @@ void StationClient::restoreOperatorValues(const QByteArray& appliedKey,
             write->value.value = live;
             continue;
         }
-        if (rule == SideEffectRule::Delta && write->writeId == 0) {
-            // Moved means moved by this delta: away from where the edit
-            // was stepped back to (stepBackUnsentEdits), or, on another
-            // object, away from the operator's value.
-            const bool stepped = h.key == appliedKey && baselines.contains(h.name);
-            const QVariant before = stepped ? baselines.value(h.name) : write->value.value;
-            if (live != before) {
-                if (h.key == appliedKey) {
-                    cancelledNotifiers.insert(prop->notifyMethodIndex);
-                }
-                cancelUnsentEdit(h.key, object, *prop,
-                                 h.key == appliedKey ? heldValues : QList<MirrorUpdate>{});
-                continue;
-            }
-        }
         if (live == write->value.value) {
             continue;
         }
         const MirrorUpdate operatorValue = write->value;
         applyOne(object, *prop, operatorValue);
-    }
-
-    // Properties behind one notifier move together (filterChanged names
-    // both edges). When the delta cancelled one, an unsent edit of a
-    // sibling the delta carried is cancelled too, even where its value
-    // happened not to move: the old mode's edge must not be sent into
-    // the new mode.
-    if (cancelledNotifiers.isEmpty()) {
-        return;
-    }
-    QObject* object = m_objects.value(appliedKey).data();
-    const auto writes = m_pendingWrites.value(appliedKey);
-    if (object == nullptr || writes.isEmpty()) {
-        return;
-    }
-    const MirrorSchema& schema = MirrorSchema::forObject(object);
-    for (auto write = writes.cbegin(); write != writes.cend(); ++write) {
-        if (write->writeId != 0) {
-            continue;
-        }
-        const MirrorProperty* prop = schema.byName(write.key());
-        if (prop == nullptr || !cancelledNotifiers.contains(prop->notifyMethodIndex)) {
-            continue;
-        }
-        const bool carried = std::any_of(heldValues.cbegin(), heldValues.cend(),
-                                         [&](const MirrorUpdate& v) { return v.name == write.key(); });
-        if (carried) {
-            cancelUnsentEdit(appliedKey, object, *prop, heldValues);
-        }
     }
 }
 

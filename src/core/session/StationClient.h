@@ -451,6 +451,10 @@
 //               the Core sent), stepBackUnsentEdits, cancelUnsentEdit, and
 //               PendingWrite's in-flight write. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: inbound sibling fix round 3: the unsent edits a delta
+//               cancels are named per cause (kDeltaCancelRules), not
+//               inferred from values; the generic step-back is gone.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -1814,14 +1818,14 @@ private:
 
     /// What an inbound apply does to a pending write it moves as a side
     /// effect. Restore puts the operator's value back (a Core answer to
-    /// this window's own write, and an object.create). Delta does too for
-    /// a write already sent, but cancels an unsent one (see
-    /// restoreOperatorValues).
+    /// this window's own write, and an object.create). Delta does too,
+    /// except for the unsent edits a cause it applies defines
+    /// (kDeltaCancelRules in StationClient.cpp): those are cancelled.
     enum class SideEffectRule { Restore, Delta };
     /// Inbound apply for one object, under the echo guard. See the class
     /// comment's three-strategy list. `heldValues` are the values a delta
     /// carried for properties it skipped because they were pending; one
-    /// applies only when its hold is cancelled.
+    /// applies when its unsent edit is cancelled.
     void applyUpdates(QObject* target, const QByteArray& objectKey,
                       const QList<MirrorUpdate>& updates,
                       SideEffectRule rule = SideEffectRule::Restore,
@@ -1831,20 +1835,8 @@ private:
     /// `applied`, the properties the Core's message named for
     /// `appliedKey`) gets the operator's value back, under the echo
     /// guard. Oldest operator change first, so the newest one wins.
-    /// Under SideEffectRule::Delta an UNSENT write (writeId zero) is
-    /// cancelled instead: its hold and its coalesced write are dropped,
-    /// and the delta's own value for it (`heldValues`) applies.
     void restoreOperatorValues(const QByteArray& appliedKey,
-                               const QSet<QByteArray>& applied,
-                               SideEffectRule rule,
-                               const QList<MirrorUpdate>& heldValues,
-                               const QHash<QByteArray, QVariant>& baselines);
-    /// Before a delta's setters run: every unsent edit on `objectKey`
-    /// steps back to its write in flight, else to the last value the
-    /// Core sent, so a side effect never saves an edit the delta may
-    /// cancel. Returns what each one read after the step.
-    QHash<QByteArray, QVariant> stepBackUnsentEdits(QObject* target,
-                                                    const QByteArray& objectKey);
+                               const QSet<QByteArray>& applied);
     /// Cancels the unsent edit of `prop`: its coalesced write goes, and
     /// either its write in flight comes back (value and writeId, so that
     /// write's answer applies) or the hold ends and the delta's value
