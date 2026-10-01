@@ -14,6 +14,10 @@
 //   2026-09-24 - R-R3-22 / R-R3-47: on the Core, listens on the station
 //                 network only (setStationBind). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane fix round: tuneRequested carries the
+//                 sender's address, so the Core takes transmit only for
+//                 the connected Tuner Genius. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -171,7 +175,12 @@ signals:
     // ends up actually engaging the carrier instead of being ACKed-and-
     // dropped. NereusSDR-native: AetherSDR has no equivalent because the
     // real FlexRadio handles this internally.
-    void tuneRequested(bool on);
+    //
+    // TGXL tune lane (2026-10-01): `peer` is the sender's address. Any
+    // SmartSDR-API client may send these lines; RadioModel treats one as
+    // the Tuner Genius's front-panel TUNE only when `peer` is the connected
+    // Tuner Genius.
+    void tuneRequested(bool on, const QHostAddress& peer);
 
     // LAN PTT MOX request from a SmartSDR-API client. Same pattern as
     // tuneRequested but for regular `transmit mox on/off` (no tune

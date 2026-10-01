@@ -11,6 +11,9 @@
 // AI tooling: Anthropic Claude Code.
 // Modified 2026-09-24 by J.J. Boyd (KG4VCF): R-R3-22 / R-R3-47 station
 // network binding (setStationBind); AI-assisted via Anthropic Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane fix round,
+// tuneRequested carries the sender's address; AI-assisted via Anthropic
+// Claude Code.
 
 #include "SmartSdrApiListener.h"
 
@@ -1145,7 +1148,7 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
         if (initIt != m_clients.end() && !initIt->interlockName.isEmpty()) {
             m_lastTuneInitiator = initIt->interlockName;
         }
-        emit tuneRequested(true);
+        emit tuneRequested(true, sock->peerAddress());
     } else if (emitTuneOff) {
         qCInfo(lcSmartSdr) << "LAN PTT tune off from"
                            << sock->peerAddress().toString();
@@ -1158,7 +1161,7 @@ void SmartSdrApiListener::dispatchLine(QTcpSocket* sock, const QString& line)
         // (the MIC-source fallback) instead of the canonical
         // reason=AMP:TG. Clear AFTER the emit returns so the next TUNE
         // cycle starts with a fresh initiator slot.
-        emit tuneRequested(false);
+        emit tuneRequested(false, sock->peerAddress());
         m_lastTuneInitiator.clear();
     } else if (emitMoxOn) {
         qCInfo(lcSmartSdr) << "LAN PTT mox on from"

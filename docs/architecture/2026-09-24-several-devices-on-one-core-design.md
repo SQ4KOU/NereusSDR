@@ -1443,6 +1443,20 @@ state, and takes through `tx.take`'s rules (ruling 8.7) before it keys. The desk
 which is the radio's own PTT, still takes transmit at once (ruling 8.9). With transmit unheld,
 the button takes and keys at once, as any person's key does (D63).
 
+**Ruling 8.9b. The Tuner Genius's own front-panel TUNE takes as the radio's PTT does
+(maintainer, 2026-10-01).** The operator pressing TUNE on the Tuner Genius is at the station,
+so the press is the confirmation, as for the radio's own PTT (ruling 8.9). While another device
+holds transmit, the press takes it through the same transfer (the holder is told
+`transmitTaken`, by "Radio", source `radioPtt`), keys nothing while the transfer runs, and keys
+the tune carrier when it ends only if the tuner's cycle is still running. Every other gate
+stays: the cycle never starts while the radio is on the air (so it never unkeys a holder), the
+amplifier rules, TX inhibit, the PA trip and receive only, and the 3 s start watchdog. The press
+is only a `transmit tune on` that the connected Tuner Genius sends from its own address on the
+SmartSDR API port, and never while an `autotune` the Core sent the tuner (the Tuner page, a
+device's tune, the band-change recall) is unanswered: the tuner's answer to that is not a press.
+The tuner's `tuning=1` alone, another SmartSDR API client's line, and a device's `tx.tunerTune`
+never take; they are station or device keys under ruling 8.9a and the holder rules.
+
 ### 8.6 Take it back
 
 For transmit, `notice.takeBack` is `tx.take` with its usual confirmation: red when the taker is

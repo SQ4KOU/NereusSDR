@@ -40,6 +40,9 @@
 //               (messageReceived) and its tuning flag in the state log
 //               line. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-10-01: TGXL tune lane fix round: autotuneSent for every
+//               `autotune` written. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -970,6 +973,10 @@ quint32 TgxlConnection::writeProtocolCommand(const QString& cmd)
     qCInfo(lcTgxl) << "TX seq=" << seq << "cmd:" << cmd;
     ++m_framesOut;
     m_bytesOut += quint64(line.size());
+    if (cmd == QLatin1String("autotune")) {
+        // TGXL tune lane fix round: before the test seam, which is last.
+        emit autotuneSent(seq);
+    }
     // Emit last: a direct test/diagnostic consumer may delete this object.
     emit testFrameWrittenForTesting(line.trimmed());  // test seam
     return seq;

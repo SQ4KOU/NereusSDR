@@ -525,6 +525,10 @@
 //                m_tgxlTakeGeneration, the take the tuner's front-panel
 //                TUNE asks for (ruling 8.9). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane fix round: m_tgxlAutotuneTunerPress,
+//                m_tgxlPendingTunerPress, the outstanding autotune and
+//                tgxlIsPeer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -632,6 +636,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QHash>
+#include <QHostAddress>
 #include <QObject>
 #include <QPointer>
 #include <QMap>
@@ -8138,6 +8143,19 @@ private:
     /// cycle of this generation; its carrier keys when the take ends.
     bool m_tgxlTakePending{false};
     quint64 m_tgxlTakeGeneration{0};
+    /// TGXL tune lane fix round (2026-10-01): this cycle is the tuner's own
+    /// front-panel TUNE (its `transmit tune on`, from its address, not an
+    /// answer to our autotune); only such a cycle takes transmit.
+    bool m_tgxlAutotuneTunerPress{false};
+    /// Set by the LAN PTT handler for the one startTgxlAutotune call it
+    /// makes; beginTgxlAutotune takes it.
+    bool m_tgxlPendingTunerPress{false};
+    /// An `autotune` this computer sent the tuner is unanswered (its
+    /// sequence): the tuner's next `transmit tune on` is its answer.
+    bool m_tgxlCoreAutotuneOutstanding{false};
+    quint32 m_tgxlCoreAutotuneSeq{0};
+    /// Whether `peer` (a :4992 client) is the connected Tuner Genius.
+    bool tgxlIsPeer(const QHostAddress& peer) const;
     /// Task 77 fix round 4: a relayed operate=1 held while RF may flow.
     bool m_relayedPgxlOperateHeld{false};
     void retryHeldRelayedPgxlOperate();
