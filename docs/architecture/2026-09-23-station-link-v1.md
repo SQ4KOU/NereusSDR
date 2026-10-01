@@ -373,6 +373,21 @@ connection stays open throughout. A pairing, or reopening the window, ends
 the pause and starts over at 1 minute. A code burned either way rotates
 after the same wait.
 
+**The service shut** (the operator's ruling of 2026-09-30). The Core also
+counts codes burned through the rendezvous in total, however far apart;
+a pause never resets the count. The 20th
+(`PairingWindow::kMaxServiceFailuresTotal`) shuts pairing through the
+rendezvous: every mailbox `pair.start` then gets `pair.fail` with
+`retryAfterMs` 0, before any code is taken, and waiting does not help.
+Pairing on a direct connection keeps working. Only a pairing or a
+reopening at the Core (its console's `pairing open`, or Add a device in
+the Core's own window, or the reset of an unclaimed window) clears the
+count; a paired device's `pairing.open` does not. The count and the shut
+are kept in the Core's settings (`PairingServiceFailuresTotal`,
+`PairingServiceShut`), so a restart of the run (a radio change) or of the
+Core keeps pairing through the rendezvous shut. The Core's window and
+`pairing show` say so in plain words.
+
 The first pairing closes an unclaimed window, for good. `devices.revoke`
 never removes the last device while no token is active (section 9.1), so a
 claimed Core becomes unclaimed again only through its console's `reset
@@ -503,6 +518,8 @@ after it.
 | One tap with `pairing_lan_click = deny` | "This Core pairs only with its code. Use the pairing code the Core shows." | 0 |
 | One tap from off the Core's networks | "One tap works only on the Core's own network. Use the pairing code the Core shows." | 0 |
 | Another exchange holds the code | "Another device is pairing with this Core right now. Try again shortly." | 5000 |
+| Pairing through the rendezvous is paused (five wrong codes in a row through it) | "The Core has paused pairing from outside its network after several wrong codes. Try again later, or pair on the Core's own network." | the pause left |
+| Pairing through the rendezvous is shut (20 wrong codes in total through it) | "The Core has turned off pairing from outside its network after too many wrong codes. Pair on the Core's own network, or reopen pairing at the Core." | 0 |
 | No code shown yet (the wait) | "The Core is waiting before it shows a new pairing code. Try again when the new code appears." | until the next code |
 | The code changed between step 0 and step 1 | "The pairing code changed. Enter the code the Core shows now." | 0, or the wait |
 | A malformed step 1 | "The pairing code was not accepted. A new code will appear on the Core." | the wait |
