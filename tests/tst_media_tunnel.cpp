@@ -44,6 +44,7 @@
 
 #include <QtTest>
 
+#include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QNetworkDatagram>
 #include <QUdpSocket>
@@ -193,6 +194,20 @@ private:
     bool m_cut = false;
     quint64 m_dropped = 0;
 };
+
+// LINK-I3: a control link whose socket stays full, as during a stall:
+// it carries binary and reports a backlog over the tunnel's write limit.
+class StalledLink final : public SessionTransport {
+public:
+    void sendText(const QByteArray&) override {}
+    void ping() override {}
+    void closeLink(const QString&) override {}
+    bool isOpen() const override { return true; }
+    QString peerDescription() const override { return QStringLiteral("stalled"); }
+    bool sendBinary(const QByteArray&) override { return false; }
+    bool carriesBinary() const override { return true; }
+    qint64 backlogBytes() const override { return MediaTunnel::kWriteLimitBytes; }
+};
 } // namespace
 
 class TstMediaTunnel final : public QObject {
@@ -228,6 +243,47 @@ private slots:
         QVERIFY(path->localPort != 0);
         control.closeLink(QStringLiteral("test done"));
         QVERIFY(!source->networkPathSnapshot());
+        source->stop();
+    }
+
+    // LINK-I3: while the control link is stalled, every datagram that
+    // arrives flushes and finds the link full. One retry timer runs, not one
+    // chain per datagram: over a window the tunnel makes at most one pass
+    // per retry interval, plus the passes the datagrams themselves make.
+    void aStalledLinkIsRetriedByOneTimer()
+    {
+        StalledLink link;
+        auto tunnel = MediaTunnel::create(&link);
+        QVERIFY(tunnel);
+        IceConfiguration ice = MediaTunnel::iceFor(tunnel, std::nullopt);
+        auto source = ice.makeCandidateSource(
+            IceConfiguration::kMediaLane, QStringLiteral("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+        QVERIFY(source);
+        quint16 port = 0;
+        source->start([&](const QString& candidate) {
+            port = candidate.split(' ').at(5).toUShort();
+        });
+        QVERIFY(port != 0);
+        QUdpSocket agent;
+        QVERIFY(agent.bind(QHostAddress::LocalHost, 0));
+        constexpr int kDatagrams = 40;
+        for (int i = 0; i < kDatagrams; ++i) {
+            agent.writeDatagram(QByteArray("media"), QHostAddress::LocalHost, port);
+            // Each datagram its own read, so each one flushes.
+            const quint64 before = tunnel->flushPassesForTest();
+            QTRY_VERIFY(tunnel->flushPassesForTest() > before);
+        }
+        const quint64 start = tunnel->flushPassesForTest();
+        QElapsedTimer window;
+        window.start();
+        QTest::qWait(200);
+        const qint64 elapsedMs = window.elapsed();
+        const quint64 passes = tunnel->flushPassesForTest() - start;
+        // One 5 ms retry chain: at most elapsed / 5 passes, plus the one
+        // already armed when the window opened.
+        QVERIFY2(passes <= quint64(elapsedMs / 5 + 1),
+                 qPrintable(QStringLiteral("%1 flush passes in %2 ms").arg(passes).arg(elapsedMs)));
+        QVERIFY(passes >= 1);  // the retry still runs while data waits
         source->stop();
     }
 

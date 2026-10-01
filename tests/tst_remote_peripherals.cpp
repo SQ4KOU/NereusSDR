@@ -213,6 +213,9 @@ public:
     bool tgxlWhole{false};
     QStringList tgxlRequests;
     bool tgxlControlAvailable() const override { return tgxlControl; }
+    // Task 77: the Core runs TUNE for this window (tx.tunerTune).
+    bool autotune{false};
+    bool tgxlAutotuneAvailable() const override { return autotune; }
     bool tgxlOperateAppliesWhole() const override { return tgxlControl && tgxlWhole; }
     CommandOutcome requestTgxlAntenna(int port) override
     {
@@ -614,6 +617,9 @@ private slots:
     void remoteTunerMenuRecallsOpensAdvancedAndCopiesTheCore();
     void advancedAndInterlockEntriesOpenTheirFourO3ATab();
     void olderCoreLeavesTheTunerSwitchesGreyed();
+    void aWindowThatMayTransmitNeverFallsBackToItsOwnTuner();
+    void remoteTuneWaitsWhileTheCoresTuneIsOn();
+    void aNameSavedWithSpacesStillTakesEdits();
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
@@ -2703,7 +2709,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     const int remoteMark = amp.commands.size();
     const int localMark = localAmp.commands.size();
     const auto drive = [](PgxlAdvancedPage& p) {
-        editName(p.nicknameEditForTesting(), QStringLiteral("Shack PGXL"));
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack_PGXL"));
         p.biasClassAForTesting()->click();
         p.fanModeComboForTesting()->setCurrentText(QStringLiteral("Quiet"));
         p.ledSliderForTesting()->setValue(40);
@@ -2723,7 +2729,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     QVERIFY(amp.waitFor(QStringLiteral("save"), remoteMark) >= 0);
     QVERIFY(localAmp.waitFor(QStringLiteral("save"), localMark) >= 0);
     const QStringList expected{
-        QStringLiteral("setup nickname=Shack PGXL"),
+        QStringLiteral("setup nickname=Shack_PGXL"),
         QStringLiteral("setup bias=a"),
         QStringLiteral("setup fan=quiet"),
         QStringLiteral("setup led=40"),
@@ -2769,8 +2775,8 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // ---- The amp's answers and values show on the page.
     int at = -1;
     const int answerMark = amp.commands.size();
-    editName(page.nicknameEditForTesting(), QStringLiteral("Remote Amp"));
-    at = amp.waitFor(QStringLiteral("setup nickname=Remote Amp"), answerMark);
+    editName(page.nicknameEditForTesting(), QStringLiteral("Remote_Amp"));
+    at = amp.waitFor(QStringLiteral("setup nickname=Remote_Amp"), answerMark);
     QVERIFY(at >= 0);
     NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("Sent to the Power Genius. Waiting for its answer."));
@@ -2778,7 +2784,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     NEREUS_TRY_COMPARE(page.deviceAnswerForTesting(),
                  QStringLiteral("The Power Genius took the new name."));
     QVERIFY(OperatorWording::isPlain(page.deviceAnswerForTesting()));
-    QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote Amp"));
+    QCOMPARE(window.accessorySettingsModel()->pgxlNickname(), QStringLiteral("Remote_Amp"));
     editName(page.nicknameEditForTesting(), QStringLiteral("Refused"));
     at = amp.waitFor(QStringLiteral("setup nickname=Refused"), answerMark);
     QVERIFY(at >= 0);
@@ -2927,7 +2933,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     const int remoteMark = tuner.commands.size();
     const int localMark = localTuner.commands.size();
     const auto drive = [](TgxlAdvancedPage& p) {
-        editName(p.nicknameEditForTesting(), QStringLiteral("Shack Tuner"));
+        editName(p.nicknameEditForTesting(), QStringLiteral("Shack_Tuner"));
         p.dhcpCheckForTesting()->setChecked(true);
         p.applyNetworkButtonForTesting()->click();
         QVERIFY(p.saveAndRebootButtonForTesting()->isEnabled());
@@ -2940,7 +2946,7 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QVERIFY(tuner.waitFor(QStringLiteral("ifconf read"), remoteMark) >= 0);
     QVERIFY(localTuner.waitFor(QStringLiteral("ifconf read"), localMark) >= 0);
     const QStringList expected{
-        QStringLiteral("setup nickname=Shack Tuner"),
+        QStringLiteral("setup nickname=Shack_Tuner"),
         QStringLiteral("ifconf address= netmask= gateway= dhcp=true"),
         QStringLiteral("save"),
         QStringLiteral("setup read"),
@@ -3638,6 +3644,120 @@ void RemotePeripheralsTest::olderCoreLeavesTheTunerSwitchesGreyed()
     QVERIFY(!outcome.sent);
     QCOMPARE(outcome.reason, IStationLink::tgxlControlUnavailableReason());
     QVERIFY(OperatorWording::isPlain(outcome.reason));
+    model.detachStation();
+}
+
+// GUI-I4 (fix wave): a remote window that may transmit, on a Core that
+// does not run the tuner for this app (no remoteTgxlControlVersion 2, no
+// tx.tunerTune), leaves TUNE, ANT, OPERATE and the relay bars disabled with
+// the reason. Before, they were live and acted on this computer's own Tuner
+// Genius. A Core that switches it but does not move relays (version below
+// 4) leaves only the relay bars disabled, with their own reason.
+void RemotePeripheralsTest::aWindowThatMayTransmitNeverFallsBackToItsOwnTuner()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    model.attachStation(&link);
+    TunerApplet applet(&model, model.tunerModel());
+    applet.setTransmitPermitted(true, QString());
+    model.reportStationLinkStateChanged();
+
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::noRemoteTuneReason());
+    for (int port = 1; port <= 3; ++port) {
+        QVERIFY(!applet.antennaButtonForTesting(port)->isEnabled());
+        QCOMPARE(applet.antennaButtonForTesting(port)->toolTip(),
+                 TunerApplet::noRemoteTunerReason());
+    }
+    QVERIFY(!applet.operateButtonForTesting()->isEnabled());
+    QCOMPARE(applet.operateButtonForTesting()->toolTip(), TunerApplet::noRemoteTunerReason());
+    for (int relay = 0; relay < 3; ++relay) {
+        QVERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::noRemoteTunerReason());
+    }
+    for (const QString& reason : {TunerApplet::noRemoteTuneReason(),
+                                  TunerApplet::noRemoteTunerReason(),
+                                  TunerApplet::noRemoteRelayReason()}) {
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    }
+
+    // Switching through the Core, relays not: only the bars wait.
+    link.tgxlControl = true;
+    model.reportStationLinkStateChanged();
+    applet.setTransmitPermitted(true, QString());
+    QVERIFY(applet.antennaButtonForTesting(1)->isEnabled());
+    QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    for (int relay = 0; relay < 3; ++relay) {
+        QVERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
+        QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), TunerApplet::noRemoteRelayReason());
+    }
+    QVERIFY(link.tgxlRequests.isEmpty());
+    model.detachStation();
+}
+
+// Fix round 1 (minor 4): a name saved with spaces before names were one
+// word is offered with underscores, so the box accepts it and an edit is
+// saved. Before, the box held text its validator never accepted, so
+// editingFinished never fired and edits went nowhere.
+void RemotePeripheralsTest::aNameSavedWithSpacesStillTakesEdits()
+{
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("PGXL_Nickname"), QStringLiteral("Shack PGXL"));
+    AppSettings::instance().setValue(QStringLiteral("TGXL_Nickname"), QStringLiteral("Shack Tuner"));
+    const auto cleanup = qScopeGuard([] { AppSettings::instance().clear(); });
+    RadioModel local;
+    PgxlAdvancedPage amp(&local);
+    TgxlAdvancedPage tuner(&local);
+    const auto check = [](QLineEdit* edit, const QString& offered, const QString& key) {
+        QCOMPARE(edit->text(), offered);
+        QVERIFY(edit->hasAcceptableInput());
+        QSignalSpy finished(edit, &QLineEdit::editingFinished);
+        QTest::keyClick(edit, Qt::Key_End);
+        QTest::keyClicks(edit, QStringLiteral("2"));
+        QTest::keyClick(edit, Qt::Key_Return);
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(AppSettings::instance().value(key).toString(), offered + QStringLiteral("2"));
+    };
+    check(amp.nicknameEditForTesting(), QStringLiteral("Shack_PGXL"),
+          QStringLiteral("PGXL_Nickname"));
+    if (QTest::currentTestFailed()) { return; }
+    check(tuner.nicknameEditForTesting(), QStringLiteral("Shack_Tuner"),
+          QStringLiteral("TGXL_Nickname"));
+}
+
+// Fix round 1 (minor 1): in a remote window on a Core that runs TUNE for
+// it, the Core's TUN on leaves TUNE disabled with the on-air reason, and a
+// click that gets through anyway starts nothing here (no local cycle, no
+// request) and puts the reason back.
+void RemotePeripheralsTest::remoteTuneWaitsWhileTheCoresTuneIsOn()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    link.tgxlControl = true;
+    link.autotune = true;
+    model.attachStation(&link);
+    TunerApplet applet(&model, model.tunerModel());
+    applet.setTransmitPermitted(true, QString());
+    model.reportStationLinkStateChanged();
+    QVERIFY(applet.tuneButtonForTesting()->isEnabled());
+
+    model.transmitModel().setTune(true);   // the Core's TUN, mirrored
+    NEREUS_TRY_VERIFY(model.isCoreOnAir());
+    NEREUS_TRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+
+    applet.tuneButtonForTesting()->setEnabled(true);   // gets through anyway
+    emit applet.tuneButtonForTesting()->clicked();
+    QVERIFY(!model.isTgxlAutotuneInProgress());
+    QVERIFY(!model.isTune());
+    QVERIFY(link.tgxlRequests.isEmpty());
+    QVERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), TunerApplet::onAirReason());
+
+    model.transmitModel().setTune(false);
+    NEREUS_TRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
     model.detachStation();
 }
 

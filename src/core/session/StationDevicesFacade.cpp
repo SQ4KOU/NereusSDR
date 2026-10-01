@@ -34,6 +34,10 @@
 //   2026-09-29: slice control plan Task 8b: retireTokenAndRevoke and
 //               revokeStopsPairingToken. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: Fix wave LINK-I4: pairing opened at the Core
+//               (openPairingAtCore) turns pairing through the service
+//               back on, and its shut state is shown on the Core. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -144,6 +148,7 @@ StationDevicesFacade::State StationDevicesFacade::compute() const
     if (m_pairingWindow != nullptr) {
         state.pairingWindowOpen = m_pairingWindow->isOpen();
         state.pairingCode = m_pairingWindow->currentCode();
+        state.servicePairingShut = m_pairingWindow->isServiceShut();
     }
     return state;
 }
@@ -158,6 +163,8 @@ void StationDevicesFacade::attachPairingWindow(PairingWindow* window)
         connect(m_pairingWindow, &PairingWindow::stateChanged, this,
                 &StationDevicesFacade::refresh);
         connect(m_pairingWindow, &PairingWindow::codeChanged, this,
+                &StationDevicesFacade::refresh);
+        connect(m_pairingWindow, &PairingWindow::serviceShutChanged, this,
                 &StationDevicesFacade::refresh);
     }
 }
@@ -356,6 +363,15 @@ DeviceAdminResult StationDevicesFacade::openPairing()
     return {true, QString()};
 }
 
+DeviceAdminResult StationDevicesFacade::openPairingAtCore()
+{
+    if (m_pairingWindow == nullptr) {
+        return {false, QStringLiteral("This Core cannot pair new devices.")};
+    }
+    m_pairingWindow->reopenAtCore();
+    return {true, QString()};
+}
+
 DeviceAdminResult StationDevicesFacade::closePairing()
 {
     if (m_pairingWindow == nullptr) {
@@ -389,7 +405,8 @@ DeviceAdminResult StationDevicesFacade::resetUnclaimed()
     // The device list's change opens a claimed Core's window; one the
     // attempt ceiling had closed (already unclaimed) opens here, afresh.
     if (m_pairingWindow != nullptr) {
-        m_pairingWindow->reopen();
+        // LINK-I4: the console's reset is a reopening at the Core.
+        m_pairingWindow->reopenAtCore();
     }
     refresh();
     resumeRefresh();

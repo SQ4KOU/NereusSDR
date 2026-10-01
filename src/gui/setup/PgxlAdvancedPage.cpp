@@ -69,6 +69,13 @@
 //                                    via Anthropic Claude Code.
 //   2026-09-29 -- R-R3-49 / R-IOS-18: Setup description version 15 ids.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave RD-I11: the nickname field takes one word (no
+//               spaces or '='), with a one-word placeholder. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix round 1: a saved, mirrored or device-read name with
+//               spaces is offered with underscores, so the one-word box
+//               takes edits. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -384,7 +391,12 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
     form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_nickname = new QLineEdit;
-    m_nickname->setPlaceholderText(QStringLiteral("e.g. Shack PGXL"));
+    m_nickname->setPlaceholderText(QStringLiteral("e.g. Shack_PGXL"));
+    // RD-I11: the amp and tuner take the name as one word of a `setup`
+    // line; a space or '=' would start another field. Neither can be typed.
+    m_nickname->setValidator(new QRegularExpressionValidator(
+        QRegularExpression(QStringLiteral("[^\\s=]*")), m_nickname));
+    m_nickname->setToolTip(QStringLiteral("One word: no spaces or equals signs."));
     form->addRow(QStringLiteral("Nickname:"), m_nickname);
 
     m_firmwareVersion = new QLabel(QStringLiteral("--"));
@@ -449,8 +461,12 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
     });
 
     // Load persisted nickname
+    // Fix round 1 (minor 4): a name saved with spaces before names were one
+    // word is offered with underscores, so the box takes edits again (the
+    // validator never accepts the old text, and editingFinished never fires).
     auto& s = AppSettings::instance();
-    m_nickname->setText(s.value(QStringLiteral("PGXL_Nickname"), QString{}).toString());
+    m_nickname->setText(PgxlConnection::asSetupToken(
+        s.value(QStringLiteral("PGXL_Nickname"), QString{}).toString()));
 }
 
 void PgxlAdvancedPage::buildHardwareSection(QVBoxLayout* topLay)
@@ -898,7 +914,7 @@ void PgxlAdvancedPage::refreshRemoteDevice()
     const AccessorySettingsModel::Device amp = m_model->accessorySettingsModel()->pgxl();
     m_updatingFromDevice = true;
     if (!amp.nickname.isEmpty() && !m_nickname->hasFocus()) {
-        m_nickname->setText(amp.nickname);
+        m_nickname->setText(PgxlConnection::asSetupToken(amp.nickname));
         m_nickname->setModified(false);
     }
     if (amp.biasMode == QLatin1String("ClassA")) {
@@ -1170,7 +1186,7 @@ void PgxlAdvancedPage::onSetupResponse(const QMap<QString, QString>& fields)
     m_updatingFromDevice = true;
 
     if (fields.contains(QStringLiteral("nickname"))) {
-        m_nickname->setText(fields.value(QStringLiteral("nickname")));
+        m_nickname->setText(PgxlConnection::asSetupToken(fields.value(QStringLiteral("nickname"))));
     }
     if (fields.contains(QStringLiteral("bias"))) {
         QString bias = fields.value(QStringLiteral("bias")).toLower();

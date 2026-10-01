@@ -427,7 +427,7 @@ void SkinsPage::buildUI()
 
     m_importBtn = new QPushButton(QStringLiteral("Import..."), skinGroup);
     m_importBtn->setEnabled(false);  // NYI
-    m_importBtn->setToolTip(QStringLiteral("Import a skin made for Thetis"));
+    m_importBtn->setToolTip(QStringLiteral("Importing a skin made for Thetis is not available in this version."));
     m_importBtn->setAutoDefault(false);
     btnRow->addWidget(m_importBtn);
 

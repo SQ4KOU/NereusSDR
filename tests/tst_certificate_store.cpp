@@ -29,6 +29,7 @@
 #include "core/AppSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
+#include "fakes/UpgradedCoreToken.h"
 
 #ifdef Q_OS_UNIX
 #include <unistd.h>
@@ -401,6 +402,46 @@ private slots:
               "Windows (task-17-brief.md Step 1); the on-disk ACL is set "
               "best-effort by CertificateStore but not meaningfully "
               "assertable here.");
+#endif
+    }
+
+    // LINK minor 6: a private key loosened on disk after it was written is
+    // made owner-only again when the store loads it.
+    void aLoosenedKeyIsOwnerOnlyAgainOnLoad()
+    {
+#ifdef Q_OS_UNIX
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QString keyPath;
+        QString fingerprint;
+        {
+            CertificateStore first(tmp.path());
+            QVERIFY2(first.isValid(), qPrintable(first.lastError()));
+            keyPath = first.privateKeyPath();
+            fingerprint = first.fingerprintSha256();
+        }
+        QVERIFY(QFile::setPermissions(keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                   | QFileDevice::ReadGroup
+                                                   | QFileDevice::ReadOther));
+        CertificateStore second(tmp.path());
+        QVERIFY2(second.isValid(), qPrintable(second.lastError()));
+        QCOMPARE(second.fingerprintSha256(), fingerprint);  // loaded, not regenerated
+        const QFileDevice::Permissions forbidden =
+            QFileDevice::ReadGroup  | QFileDevice::WriteGroup  | QFileDevice::ExeGroup |
+            QFileDevice::ReadOther  | QFileDevice::WriteOther  | QFileDevice::ExeOther;
+        QCOMPARE(QFile(keyPath).permissions() & forbidden, QFileDevice::Permissions());
+
+        // The token file, the same way.
+        const QString tokenDir =
+            NereusSDR::Test::seedUpgradedCoreToken(tmp.filePath(QStringLiteral("token")));
+        const QString tokenPath = TokenStore(tokenDir).tokenPath();
+        QVERIFY(QFile::setPermissions(tokenPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner
+                                                     | QFileDevice::ReadOther));
+        TokenStore token(tokenDir);
+        QVERIFY(token.isActive());
+        QCOMPARE(QFile(tokenPath).permissions() & forbidden, QFileDevice::Permissions());
+#else
+        QSKIP("QFile::permissions() mirrors owner bits into group/other on Windows.");
 #endif
     }
 

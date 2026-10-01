@@ -348,6 +348,7 @@ private slots:
     // ---- TokenStore (task 18 step 3) ----
     void tokenIsGeneratedNotChosenAndPersists();
     void tokenVerifyIsRateLimitedAfterRepeatedFailures();
+    void tokenFailuresFromOneSourceDoNotLimitAnother();
 
     // ---- The connect sequence, over a non-TLS in-process link ----
     void handshakeCompletesInSectionSevenZeroOrder();
@@ -2209,6 +2210,32 @@ void TstStationSession::tokenVerifyIsRateLimitedAfterRepeatedFailures()
     NEREUS_TRY_VERIFY(!store.isRateLimited());
     QCOMPARE(store.verify(store.token()), TokenStore::VerifyResult::Accepted);
     QCOMPARE(store.consecutiveFailures(), 0);
+}
+
+// LINK minor 5: the token's limiter is kept per source address. A guesser's
+// lockout refuses that guesser, not the operator's right token from another
+// address.
+void TstStationSession::tokenFailuresFromOneSourceDoNotLimitAnother()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    TokenStore store(NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+    QVERIFY(store.isActive());
+    store.setRateLimit(3, 60000);
+    const QString guesser = QStringLiteral("198.51.100.9");
+    const QString operatorAddress = QStringLiteral("192.0.2.7");
+
+    for (int i = 0; i < 3; ++i) {
+        QCOMPARE(store.verify(QStringLiteral("nope"), guesser),
+                 TokenStore::VerifyResult::Rejected);
+    }
+    QVERIFY(store.isRateLimited(guesser));
+    QCOMPARE(store.verify(store.token(), guesser), TokenStore::VerifyResult::RateLimited);
+    QVERIFY(!store.isRateLimited(operatorAddress));
+    QCOMPARE(store.consecutiveFailures(operatorAddress), 0);
+    QCOMPARE(store.verify(store.token(), operatorAddress), TokenStore::VerifyResult::Accepted);
+    // The guesser stays refused.
+    QCOMPARE(store.verify(store.token(), guesser), TokenStore::VerifyResult::RateLimited);
 }
 
 // ── The connect sequence ─────────────────────────────────────────────────

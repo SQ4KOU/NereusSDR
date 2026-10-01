@@ -35,6 +35,8 @@
 //                 attenuator and preamp controls are held too, with the same
 //                 reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-30: Fix wave GUI-M5: m_stepAttConnections. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -445,6 +447,9 @@ private:
     NereusSDR::HPSDRHW m_preampBoard{NereusSDR::HPSDRHW::Hermes};
     bool            m_preampAlex{false};
     bool            m_preampShowsRx2{false};
+    // GUI-M5 (fix wave): connectSlice's attenuator connections, dropped
+    // before the next slice's are made.
+    QList<QMetaObject::Connection> m_stepAttConnections;
     QSpinBox*       m_stepAttSpin{nullptr};   // Page 1: S-ATT mode
 
     // Controls 9 + 10: AGC

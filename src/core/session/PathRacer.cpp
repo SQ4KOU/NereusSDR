@@ -15,6 +15,9 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: LINK minor 10: a standby the Core closed is released and
+//               deleted. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -364,8 +367,9 @@ void PathRacer::onOpened(int index, SessionTransport* transport)
             endRung(index, e.hello.isEmpty() ? Outcome::NoAnswer : Outcome::Failed, QString());
         } else if (e.standby) {
             // A standby the Core closed (its connect deadline): gone.
+            // LINK minor 10: released (deleted), not only forgotten.
             e.standby = false;
-            e.transport = nullptr;
+            releaseTransport(e, /*close=*/false);
         }
     });
     entry.helloTimer = new QTimer(this);

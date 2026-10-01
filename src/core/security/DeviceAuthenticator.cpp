@@ -8,6 +8,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-30: Fix wave LINK minor 4: a failed proof counts against the
+//               address and the relay introduction, never the id it
+//               names. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/security/DeviceAuthenticator.h"
@@ -104,10 +108,13 @@ QByteArray DeviceAuthenticator::transcript(const QByteArray& challenge,
     return kTranscriptPrefix + challenge + certSha256 + sha256(stationSpki) + sha256(deviceSpki);
 }
 
-QStringList DeviceAuthenticator::limitKeys(const DeviceAuthRequest& request) const
+QStringList DeviceAuthenticator::limitKeys(const DeviceAuthRequest& request,
+                                           bool countId) const
 {
     QStringList keys;
-    keys.append(boundedKey(QStringLiteral("id:"), request.id));
+    if (countId) {
+        keys.append(boundedKey(QStringLiteral("id:"), request.id));
+    }
     if (!request.sourceAddress.isEmpty()) {
         keys.append(boundedKey(QStringLiteral("address:"), request.sourceAddress));
     }
@@ -120,7 +127,7 @@ QStringList DeviceAuthenticator::limitKeys(const DeviceAuthRequest& request) con
 bool DeviceAuthenticator::isRateLimited(const DeviceAuthRequest& request) const
 {
     const qint64 time = now();
-    for (const QString& key : limitKeys(request)) {
+    for (const QString& key : limitKeys(request, /*countId=*/true)) {
         const auto it = m_limits.constFind(key);
         if (it != m_limits.constEnd() && it->refusedUntil > time) {
             return true;
@@ -129,10 +136,10 @@ bool DeviceAuthenticator::isRateLimited(const DeviceAuthRequest& request) const
     return false;
 }
 
-void DeviceAuthenticator::recordFailure(const DeviceAuthRequest& request)
+void DeviceAuthenticator::recordFailure(const DeviceAuthRequest& request, bool countId)
 {
     const qint64 time = now();
-    for (const QString& key : limitKeys(request)) {
+    for (const QString& key : limitKeys(request, countId)) {
         Limit& limit = m_limits[key];
         while (!limit.failures.isEmpty() && time - limit.failures.first() >= kWindowMs) {
             limit.failures.removeFirst();
@@ -202,18 +209,25 @@ AuthOutcome DeviceAuthenticator::verify(const DeviceAuthRequest& request,
     }
     AuthOutcome outcome = verifyPossession(request, challenge, certSha256);
     if (outcome.result != AuthOutcome::Result::Proved) {
-        recordFailure(request);
+        // LINK minor 4: a proof that failed did not come from the id's key,
+        // so anyone who knows a paired device's id could send it. It counts
+        // against the source (address, introduction) only; counted against
+        // the id it would let a stranger lock a paired device out.
+        recordFailure(request, /*countId=*/false);
         return outcome;
     }
+    // From here the request's key signed this connection's transcript and
+    // its id is that key's fingerprint: the failures are the key holder's
+    // own and count against the id as well.
     const std::optional<PairedDevice> device = m_store.find(outcome.deviceId);
     if (!device) {
         outcome.result = AuthOutcome::Result::NotPaired;
-        recordFailure(request);
+        recordFailure(request, /*countId=*/true);
         return outcome;
     }
     if (device->publicKeySpki != outcome.publicKeySpki) {
         outcome.result = AuthOutcome::Result::ProofFailed;
-        recordFailure(request);
+        recordFailure(request, /*countId=*/true);
         return outcome;
     }
     outcome.result = AuthOutcome::Result::Admitted;

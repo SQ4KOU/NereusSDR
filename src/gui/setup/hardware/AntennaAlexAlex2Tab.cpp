@@ -21,6 +21,9 @@
 //   2026-09-29 - R-R3-49 / R-IOS-18: the receive filter rows carry their
 //                Setup description ids (version 13). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-M4: plain wording for the filters tooltip.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 //
 //=================================================================
@@ -216,7 +219,7 @@ AntennaAlexAlex2Tab::AntennaAlexAlex2Tab(RadioModel* model, QWidget* parent)
     m_selectedLabel->setStyleSheet(
         QStringLiteral("QLabel { color: palette(mid); font-size: 10px; }"));
     m_selectedLabel->setToolTip(
-        tr("Live filter selection — derived from PanadapterModel center frequency."));
+        tr("The filters in use, from the panadapter's center frequency."));
 
     statusLayout->addWidget(m_statusLed);
     statusLayout->addWidget(m_statusLabel);

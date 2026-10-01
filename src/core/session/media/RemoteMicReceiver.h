@@ -30,7 +30,9 @@
 //     in silence: a whole near-silent 64-frame block, deep in a pause, is
 //     dropped before TX DSP, so the transmitted I/Q never splices. After
 //     every change of use it gives the pump silence until it holds its
-//     target, then audio.
+//     target, then audio. A stall that ran the buffer dry and then
+//     delivers more than kStaleAfterStallMs at once is stale: the buffer
+//     starts again at its target with the newest audio (LINK minor 12).
 //   RemoteMicEncoder: the encoder a desktop remote window (and the tests)
 //     send the line with, Opus mono 20 ms frames with in-band FEC.
 //
@@ -59,6 +61,9 @@
 //               packet to come, so a line's cold start does not refuse
 //               every key. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-30: LINK minor 12 (TX audio): kStaleAfterStallMs and the
+//               trim on resuming after a long stall. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -164,11 +169,21 @@ struct RemoteMicConfig {
     /// the same reason; a key comes at most kLineStartDeadlineMs plus
     /// kReadyDeadlineMs after it arrives.
     static constexpr int kLineStartDeadlineMs = 1000;
+    /// LINK minor 12: after a stall the line delivers what it held at
+    /// once. Up to this much (the time a keyed line may go silent before
+    /// it counts as starved) still plays whole and is shed in pauses; past
+    /// it the audio is stale, and the buffer starts again from its target
+    /// with the newest audio, so the radio never sends speech seconds
+    /// late.
+    static constexpr int kStaleAfterStallMs = kStarvationMs;
+    static constexpr int kStaleAfterStallFrames = kFramesPerMs * kStaleAfterStallMs;
 
     static_assert(kMaxDepthMs < kStarvationMs,
                   "the transmit jitter buffer is shorter than the starvation deadline");
     static_assert(kTargetDepthMs < kReadyDeadlineMs,
                   "a key can reach the smallest target before its deadline");
+    static_assert(kMaxDepthMs < kStaleAfterStallMs,
+                  "a stall's audio is stale only past what the buffer could hold");
     static_assert(kReadyDeadlineMs < kLineStartDeadlineMs,
                   "a line gets longer to start than to fill once started");
 };
@@ -311,6 +326,9 @@ private:
     bool canSplice() const;
     void popBlock(float* mono);
     void dropBlock();
+    /// LINK minor 12: drops the oldest audio, buffered and still in the
+    /// input ring, down to the target (resuming after a long stall).
+    void trimStaleToTarget();
     int currentPacketFrames() const;
     int currentTarget() const;
     int marginCeiling() const;
@@ -357,6 +375,9 @@ private:
     quint64 m_seenChange{0};
     quint64 m_readBytes{0};
     bool m_started{false};
+    // LINK minor 12: the buffer ran dry while in use; the next start may
+    // find a stall's held audio.
+    bool m_resumingAfterUnderrun{false};
     std::vector<float> m_buffer;   // the jitter buffer, a ring of kBufferFrames
     int m_bufferHead{0};
     int m_bufferCount{0};

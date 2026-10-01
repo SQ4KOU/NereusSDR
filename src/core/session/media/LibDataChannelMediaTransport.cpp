@@ -44,6 +44,10 @@
 //               where it is sent, or as not sent on the tunnel alone, and
 //               the tunnel-only refusal of a remote candidate is logged.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: LINK minor 8: a connection's end (PeerFailed,
+//               PeerClosed) is never dropped from a full event queue.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -201,9 +205,27 @@ void queueEvent(const std::weak_ptr<CallbackBridge>& weak,
     if (bridge->cancelled) {
         return;
     }
+    // LINK minor 8: the connection's end (PeerFailed, PeerClosed) is never
+    // dropped, however full the queue is: a lost end would leave the
+    // session holding a media connection that is gone. A connection
+    // reports each only a few times, so they stay bounded past the cap.
+    const auto isLifecycle = [](CallbackEvent::Kind k) {
+        return k == CallbackEvent::Kind::PeerFailed || k == CallbackEvent::Kind::PeerClosed;
+    };
+    if (isLifecycle(kind)) {
+        bridge->events.push_back({kind, std::move(first), std::move(second)});
+        return;
+    }
     if (bridge->events.size() >= kMaxPendingEvents) {
         if (!bridge->overflowReported) {
-            bridge->events.pop_front();
+            // Make room by the oldest event that is not the connection's
+            // end.
+            const auto oldest = std::find_if(
+                bridge->events.begin(), bridge->events.end(),
+                [&isLifecycle](const CallbackEvent& e) { return !isLifecycle(e.kind); });
+            if (oldest != bridge->events.end()) {
+                bridge->events.erase(oldest);
+            }
             bridge->events.push_back({CallbackEvent::Kind::Error,
                                       "media callback queue overflow", {}});
             bridge->overflowReported = true;

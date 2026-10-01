@@ -236,6 +236,7 @@ private slots:
     void steadyPacketsHoldTheSmallestTargetWithoutUnderrun();
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
     void aStallsExcessIsShedInSilenceNeverUnderTheVoice();
+    void aLongStallsStaleAudioIsNotSentLate();
     void nothingIsSplicedWhileDexpTimingRuns();
 };
 
@@ -1084,6 +1085,35 @@ void TestRemoteMicReceiver::aStallsExcessIsShedInSilenceNeverUnderTheVoice()
              qPrintable(QString::number(largestStep(run.played, 0))));
 }
 
+
+// LINK minor 12 (TX audio): the link stalls for a whole second mid-over and
+// then delivers everything it held at once. Past kStaleAfterStallMs the
+// held audio is stale: the buffer starts again at its target with the
+// newest audio instead of sending speech a second late and waiting for
+// pauses to shed it.
+void TestRemoteMicReceiver::aLongStallsStaleAudioIsNotSentLate()
+{
+    RemoteMicFeed feed;
+    feed.setInUse(true);
+    constexpr int kStallFirst = 70;
+    constexpr int kStallLast = 119;   // 1 s of packets held
+    constexpr double kStallEndMs = 20.0 * (kStallLast + 1) + 0.4;
+    const auto arrival = [](int k) {
+        const double onTime = 0.4 + 20.0 * k;
+        return k >= kStallFirst && k <= kStallLast ? kStallEndMs : onTime;
+    };
+    const qint64 stallEndBlock = static_cast<qint64>(kStallEndMs * 48.0 / kBlock) + 1;
+    const FeedRun run = runFeed(feed, 300, arrival);
+    QCOMPARE(run.stats.underflows, 1);
+    // From the block the held audio landed on, the buffer never holds more
+    // than the ceiling: nothing a second old is waiting to go out.
+    int largest = 0;
+    for (size_t b = static_cast<size_t>(stallEndBlock); b < run.fillAfterBlock.size(); ++b) {
+        largest = std::max(largest, run.fillAfterBlock[b]);
+    }
+    QVERIFY2(largest <= RemoteMicConfig::kMaxDepthFrames,
+             qPrintable(QStringLiteral("%1 frames buffered after the stall").arg(largest)));
+}
 
 // R-IOS-13: while DEXP's own timing runs (its hold, decay or VOX turn-off,
 // which it counts in the samples it processes), the buffer splices

@@ -162,7 +162,11 @@ private slots:
         QCOMPARE(procLevelSpy.count(), 0);
         QCOMPARE(vaxSpy.count(), 0);
         QCOMPARE(dexpSpy.count(), 0);
-        QCOMPARE(setupSpy.count(), 0);
+        // GUI-M3 (fix wave): the DEXP right-click opens Setup's DEXP/VOX
+        // page, which gates its own controls; the VAX right-click stays
+        // gated.
+        QCOMPARE(setupSpy.count(), 1);
+        QCOMPARE(setupSpy.first().at(1).toString(), QStringLiteral("DEXP/VOX"));
 
         // Remote snapshots still update the unavailable controls.
         remote.transmitModel().setCpdrOn(true);

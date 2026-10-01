@@ -52,6 +52,8 @@ public:
         QString pairingCode;
         QString keyBackupPath;
         bool pairingOpen = false;
+        /// LINK-I4: pairing through the remote access service is off.
+        bool servicePairingShut = false;
         bool keyBackupAcknowledged = false;
         QVector<Device> devices;
     };
@@ -99,6 +101,7 @@ private:
     QLabel* m_reachability = nullptr;
     QLabel* m_pairingCode = nullptr;
     QLabel* m_pairingInstruction = nullptr;
+    QLabel* m_servicePairingShut = nullptr;
     QVBoxLayout* m_devicesLayout = nullptr;
     QWidget* m_deviceRows = nullptr;
     QPushButton* m_addDevice = nullptr;

@@ -727,6 +727,37 @@ private slots:
         QCOMPARE(daemon.tryCompleteStationRelease(&reason),
                  DaemonApp::StationReleaseResult::Stopped);
     }
+
+    // LINK minor 3 (TX path): a SIGTERM's stop() stops transmit first, as
+    // the release does, before the station or the model goes.
+    void stopStopsTransmitFirst()
+    {
+        QTcpServer portProbe;
+        QVERIFY(portProbe.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = portProbe.serverPort();
+        portProbe.close();
+        DaemonConfig config = DaemonConfig::defaults();
+        config.remoteBind = QStringLiteral("127.0.0.1");
+        config.remotePort = port;
+        config.statusPage = false;
+        DaemonApp daemon;
+        daemon.primeBoardForTest(HPSDRHW::HermesLite,
+                                 QStringLiteral("02:00:00:00:00:51"));
+        QVERIFY(daemon.start(config));
+        QVERIFY(daemon.stationListenerReady());
+        int stops = 0;
+        bool stopWasFirst = false;
+        daemon.setStopAllTxForTest([&] {
+            if (stops++ == 0) {
+                stopWasFirst = daemon.stationListenerReady()
+                               && daemon.radioModelForTest() != nullptr;
+            }
+        });
+        daemon.stop();
+        QCOMPARE(stops, 1);
+        QVERIFY(stopWasFirst);
+        QVERIFY(!daemon.stationListenerReady());
+    }
 };
 
 int main(int argc, char* argv[])

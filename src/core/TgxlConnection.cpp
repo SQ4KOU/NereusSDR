@@ -32,9 +32,14 @@
 //   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (R-R3-47, R-R3-22): replyReceived for every answer of a
 //                 connected tuner (the Core's device settings).
+//   2026-09-30: Fix wave RD-I11: writeSetup refuses a key or value with
+//               a space or '=' (isSetupToken), so a name cannot add
+//               setup fields. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
+#include "PgxlConnection.h"
 #include "RouteProbe.h"
 #include <QDateTime>
 #include <QLoggingCategory>
@@ -1008,6 +1013,12 @@ quint32 TgxlConnection::writeSetup(const QMap<QString,QString>& fields)
 {
     QStringList parts;
     for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+        // RD-I11: a key or value with a space or '=' would split into
+        // fields of its own; nothing is sent.
+        if (!PgxlConnection::isSetupToken(it.key()) || !PgxlConnection::isSetupToken(it.value())) {
+            qCWarning(lcTgxl) << "setup field refused (space or '=' in it):" << it.key();
+            return 0;
+        }
         parts << QString("%1=%2").arg(it.key(), it.value());
     }
     return sendCommand(QString("setup %1").arg(parts.join(' ')));

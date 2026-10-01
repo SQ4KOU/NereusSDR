@@ -113,6 +113,8 @@
 //                disabled, naming the holder, while another device holds
 //                transmit (desktopVoxHolderReason, applyDesktopVoxHolderGate).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30: Fix wave GUI-I3: applyRemotePureSignalAppletGate. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -760,6 +762,7 @@ private slots:
     /// Called after both mirrored radio state and Core connection activity
     /// change; a reachable Core need not have its radio connected.
     void applyRemoteRoleGating();
+    void applyRemotePureSignalAppletGate();
 
     /// R-R3-46: Radio > Protocol Info in a remote window, from the Core's
     /// description of its radio (name, P1/P2, firmware, MAC, address).

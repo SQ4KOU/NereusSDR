@@ -41,8 +41,9 @@
 // counts as that barrier. A client that hears no barrier within
 // kSwitchDeadlineMs, or whose new connection closes first, gives the move
 // up (switchFailed()) and stays on the old connection; a station that
-// hears none within kSwitchDeadlineMs closes the old connection and reads
-// the new one. Once the move is done, the new connection closing ends the
+// hears none within kSwitchDeadlineMs ends the session (closed()), since
+// messages in flight on the old connection would otherwise be lost
+// silently. Once the move is done, the new connection closing ends the
 // session as any connection closing does (closed()). What is held is
 // bounded (kMaxHeldCaps times the inbound cap); past it the session ends.
 //
@@ -50,6 +51,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: LINK-I2: a station that hears no path.switch in time ends
+//               the session instead of dropping what was in flight. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.

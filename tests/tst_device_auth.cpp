@@ -14,8 +14,9 @@
 //     code, and the connection closes;
 //   - the rate limits: 10 failures in 60 s refuse that address, or that
 //     id, for 60 s (an injected clock, no sleeps); over the relay (no
-//     address) the limit is per id and per introduction; a refusal while
-//     limited is not counted again;
+//     address) the limit is per id and per introduction; a failed proof
+//     never counts against the id it names; a refusal while limited is
+//     not counted again;
 //   - the two limiters never meet: wrong tokens do not lock out a device's
 //     key, and failed device sign-ins do not lock out the token;
 //   - a new Core (no token) refuses token sign-in with "This Core uses
@@ -407,6 +408,8 @@ private slots:
                     .admitted());
     }
 
+    // A proved key the Core has not paired, failing ten times from ten
+    // addresses: that id is refused everywhere, and another is not.
     void tenFailuresForOneIdRefuseThatIdEverywhere()
     {
         QTemporaryDir coreDir;
@@ -414,26 +417,53 @@ private slots:
         DeviceStore store(coreDir.path());
         qint64 now = 0;
         DeviceAuthenticator auth(store, core, [&now]() { return now; });
-        Device phone;
+        Device stranger;
         Device other;
-        QVERIFY(store.add(phone.record()));
         QVERIFY(store.add(other.record()));
         const QByteArray cert = sha256(QByteArrayLiteral("certificate"));
         const QByteArray challenge = auth.newChallenge();
 
         for (int i = 0; i < DeviceAuthenticator::kMaxFailures; ++i) {
-            DeviceAuthRequest bad =
-                phone.request(randomChallenge(), cert, core.publicKeySpki(),
-                              QStringLiteral("198.51.100.%1").arg(i + 1));
-            QCOMPARE(auth.verify(bad, challenge, cert).result, AuthOutcome::Result::ProofFailed);
+            const DeviceAuthRequest unpaired =
+                stranger.request(challenge, cert, core.publicKeySpki(),
+                                 QStringLiteral("198.51.100.%1").arg(i + 1));
+            QCOMPARE(auth.verify(unpaired, challenge, cert).result,
+                     AuthOutcome::Result::NotPaired);
         }
-        QCOMPARE(auth.verify(phone.request(challenge, cert, core.publicKeySpki(),
-                                           QStringLiteral("192.0.2.7")),
+        QCOMPARE(auth.verify(stranger.request(challenge, cert, core.publicKeySpki(),
+                                              QStringLiteral("192.0.2.7")),
                              challenge, cert)
                      .result,
                  AuthOutcome::Result::RateLimited);
         // Another device is not affected.
         QVERIFY(auth.verify(other.request(challenge, cert, core.publicKeySpki(),
+                                          QStringLiteral("192.0.2.7")),
+                            challenge, cert)
+                    .admitted());
+    }
+
+    // LINK minor 4: failed proofs that name a paired device's id, from many
+    // addresses, never lock that device out. They did not come from its
+    // key; anyone who knows the id could send them.
+    void failedProofsNamingAnIdNeverLockItOut()
+    {
+        QTemporaryDir coreDir;
+        const StationIdentity core = StationIdentity::loadOrCreate(coreDir.path());
+        DeviceStore store(coreDir.path());
+        qint64 now = 0;
+        DeviceAuthenticator auth(store, core, [&now]() { return now; });
+        Device phone;
+        QVERIFY(store.add(phone.record()));
+        const QByteArray cert = sha256(QByteArrayLiteral("certificate"));
+        const QByteArray challenge = auth.newChallenge();
+
+        for (int i = 0; i < 3 * DeviceAuthenticator::kMaxFailures; ++i) {
+            DeviceAuthRequest bad =
+                phone.request(randomChallenge(), cert, core.publicKeySpki(),
+                              QStringLiteral("198.51.100.%1").arg(i + 1));
+            QCOMPARE(auth.verify(bad, challenge, cert).result, AuthOutcome::Result::ProofFailed);
+        }
+        QVERIFY(auth.verify(phone.request(challenge, cert, core.publicKeySpki(),
                                           QStringLiteral("192.0.2.7")),
                             challenge, cert)
                     .admitted());

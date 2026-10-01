@@ -144,6 +144,7 @@
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
+#include "gui/applets/PureSignalApplet.h"
 #include "gui/applets/RadeApplet.h"
 #include "gui/applets/RxApplet.h"
 #include "core/TxSliceArbiter.h"
@@ -1544,6 +1545,42 @@ private slots:
         }
     }
 
+    // GUI-I3 (fix wave): the PureSignal applet follows the Core's radio.
+    // A radio with PureSignal hardware on a Core that has not advertised
+    // PureSignal 3 shows the applet disabled with the reason (before, it was
+    // hidden); PureSignal 3 enables it; a radio without the hardware (Atlas)
+    // hides it, as a local window does.
+    void pureSignalAppletIsDisabledNotHiddenBelowPureSignal3()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        auto* applet = h.window()->findChild<PureSignalApplet*>();
+        QVERIFY(applet);
+        const QString reason = QStringLiteral("The connected Core has not advertised PureSignal 3.");
+
+        StationCapabilities older = coreRadio(h, HPSDRHW::Saturn, HPSDRModel::ANAN_G2_1K,
+                                              QStringLiteral("AA:BB:CC:DD:EE:46"));
+        older.psAlgorithmVersion = 0;
+        h.pushCapabilities(older);
+        QTRY_COMPARE(h.client()->capabilities().psAlgorithmVersion, 0);
+        QTRY_VERIFY(!applet->isHidden());
+        QVERIFY(!applet->isEnabled());
+        QCOMPARE(applet->toolTip(), reason);
+        QVERIFY(OperatorWording::isPlain(reason));
+
+        StationCapabilities ps3 = older;
+        ps3.psAlgorithmVersion = 3;
+        h.pushCapabilities(ps3);
+        QTRY_VERIFY(applet->isEnabled());
+        QVERIFY(!applet->isHidden());
+        QVERIFY(applet->toolTip().isEmpty());
+
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Atlas, HPSDRModel::HPSDR,
+                                     QStringLiteral("AA:BB:CC:DD:EE:01")));
+        QTRY_VERIFY(applet->isHidden());
+    }
+
     // R-R3-46: the window follows the Core's radio. A Saturn ANAN-G2 1K
     // brings its preamp items and attenuator range to the RX applet, its
     // antenna labels to the VFO flag and its tabs to Hardware Config;
@@ -2526,6 +2563,7 @@ int main(int argc, char** argv)
            QStringLiteral("hardwareConfigReceiveSettingsReachTheCore"),
            QStringLiteral("olderCoreLeavesAttenuatorControlsDisabledWithAReason"),
            QStringLiteral("windowFollowsTheCoresRadio"),
+           QStringLiteral("pureSignalAppletIsDisabledNotHiddenBelowPureSignal3"),
            QStringLiteral("capabilityChangeRegatesWithoutReconnect")}}});
     return arguments ? QTest::qExec(&test, *arguments) : 1;
 }

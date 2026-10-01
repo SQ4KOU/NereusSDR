@@ -412,7 +412,8 @@ bool GuiDesktopStationRuntime::addDevice()
     StationDevicesFacade* facade = m_controller->server()
         ? m_controller->server()->devicesFacade() : nullptr;
     if (!facade) { fail(tr("Run a Core on this computer first.")); return false; }
-    const DeviceAdminResult result = facade->openPairing();
+    // LINK-I4: this computer's Core window is the Core.
+    const DeviceAdminResult result = facade->openPairingAtCore();
     if (!result.accepted) { fail(result.reason); return false; }
     updateState();
     return true;
@@ -536,6 +537,7 @@ void GuiDesktopStationRuntime::updateState()
             ? next.stationName : facade->stationLabel();
         next.pairingOpen = facade->pairingWindowOpen();
         next.pairingCode = facade->pairingCode();
+        next.servicePairingShut = facade->servicePairingShut();
         next.keyBackupPath = facade->keyPath();
         next.keyBackupAcknowledged = facade->keyBackupAcknowledged();
         const QJsonArray list = QJsonDocument::fromJson(facade->listJson().toUtf8()).array();
@@ -628,6 +630,7 @@ bool GuiDesktopStationRuntime::sameState(const RemoteStationPage::State& a,
         || a.transmitting != b.transmitting || a.stationName != b.stationName
         || a.reachabilityText != b.reachabilityText || a.pairingCode != b.pairingCode
         || a.keyBackupPath != b.keyBackupPath || a.pairingOpen != b.pairingOpen
+        || a.servicePairingShut != b.servicePairingShut
         || a.keyBackupAcknowledged != b.keyBackupAcknowledged
         || a.devices.size() != b.devices.size()) { return false; }
     for (qsizetype i = 0; i < a.devices.size(); ++i) {
