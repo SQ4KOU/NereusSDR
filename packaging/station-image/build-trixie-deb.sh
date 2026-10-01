@@ -57,7 +57,13 @@ deps=$(dpkg-shlibdeps -O --ignore-missing-info \
     -e"$core_lib" -e"$rade_lib" | sed -n 's/^shlibs:Depends=//p')
 test -n "$deps"
 cd /workspace
-LD_LIBRARY_PATH="$libdir" ldd /tmp/nereus-debroot/usr/bin/nereusd > /tmp/nereus-ldd.txt
+# No LD_LIBRARY_PATH: the staged binaries must find their own libraries
+# through the RUNPATH they ship ($ORIGIN-relative), exactly as they will
+# under systemd on the installed system.
+: > /tmp/nereus-ldd.txt
+for elf in /tmp/nereus-debroot/usr/bin/nereusd "$core_lib" "$rade_lib"; do
+    env -u LD_LIBRARY_PATH ldd "$elf" >> /tmp/nereus-ldd.txt
+done
 if grep -q 'not found' /tmp/nereus-ldd.txt; then
     cat /tmp/nereus-ldd.txt >&2
     exit 1

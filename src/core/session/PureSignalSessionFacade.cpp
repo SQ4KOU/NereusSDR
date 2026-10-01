@@ -227,12 +227,42 @@ bool PureSignalSessionFacade::canArm() const
 
 QString PureSignalSessionFacade::armingRefusal() const
 {
-    if (!remote() || !m_remoteArmingOffered || m_remoteTxPermitted || canArm()) {
+    // Fix wave GUI-I7: a reason whenever canArm() is false, so no control
+    // that follows canArm greys without one.
+    if (canArm()) {
         return {};
+    }
+    if (!remote() || !m_available || !m_remoteRuntimeCanActuate) {
+        // A station: its PureSignal needs a connected radio that has it
+        // (RadioModel's readiness predicate). A window: its Core's does.
+        return needsRadioReason();
+    }
+    if (!m_remoteArmingOffered) {
+        // A Core below transmitSettingsVersion 7 arms only for a window
+        // that may transmit, as requestAction says.
+        return QStringLiteral("PureSignal cannot be run from a remote window.");
     }
     if (m_radio->isCoreOnAir()) {
         return RadioModel::onAirReason();
     }
+    return needsRadioReason();
+}
+
+QString PureSignalSessionFacade::twoToneRefusal() const
+{
+    // Fix wave GUI-I7: the two-tone test keys the radio, so it follows
+    // canActuate(); this says why when canActuate() is false.
+    if (m_canActuate) {
+        return {};
+    }
+    if (!remote() || !m_available || !m_remoteRuntimeCanActuate) {
+        return needsRadioReason();
+    }
+    return QStringLiteral("The 2-tone test needs permission to transmit from the Core.");
+}
+
+QString PureSignalSessionFacade::needsRadioReason()
+{
     return QStringLiteral("PureSignal needs a connected radio that supports it.");
 }
 

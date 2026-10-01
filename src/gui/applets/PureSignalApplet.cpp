@@ -26,6 +26,9 @@
 //                 reason while the Core's radio is on the air; 2-Tone stays
 //                 on canActuate. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-30 - Fix wave GUI-I7: Calibrate, Auto-Cal and 2-Tone grey
+//                 with the facade's reason whenever they cannot run.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  PSForm.cs
@@ -431,10 +434,14 @@ void PureSignalApplet::refreshFromFacade()
     // R-R3-49 (parity Task 7): arming keys nothing and follows canArm; the
     // two-tone test keys the radio and stays on canActuate.
     const bool canArm = available && m_facade->canArm();
-    const QString armingRefusal = m_facade ? m_facade->armingRefusal() : QString();
+    const QString armingRefusal = m_facade ? m_facade->armingRefusal()
+                                           : PureSignalSessionFacade::needsRadioReason();
     gateWithReason(m_calibrateBtn, canArm, armingRefusal);
     gateWithReason(m_autoCalBtn, canArm, armingRefusal);
-    m_twoToneBtn->setEnabled(canActuate);
+    // Fix wave GUI-I7: the two-tone test greys with its reason too.
+    gateWithReason(m_twoToneBtn, canActuate,
+                   m_facade ? m_facade->twoToneRefusal()
+                            : PureSignalSessionFacade::needsRadioReason());
     // Opening the station asset manager is read-only. The dialog and facade
     // gate the actual restore action on transmit permission.
     m_restoreBtn->setEnabled(available && !status.restorePending && !status.savePending);

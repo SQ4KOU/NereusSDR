@@ -1353,6 +1353,8 @@ private:
     // The TX applet's VOX button and every Setup's Enable VOX follow it.
     void applyDesktopVoxHolderGate();
     void requestDesktopTransmit(bool tune, bool on);
+    // Fix wave (hosting 2-TONE parity): MOX, TUNE and the 2-tone test.
+    void requestDesktopKey(DesktopStationController::Key key, bool on);
     void handleDesktopTakeResult(const DesktopStationController::RequestResult& result);
     ConnectionPanel* m_connectionPanel{nullptr};
     SupportDialog* m_supportDialog{nullptr};

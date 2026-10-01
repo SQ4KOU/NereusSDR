@@ -23,6 +23,11 @@ The author can be reached by email at
 warren@pratt.one
 
 */
+
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): adds getRun_cfir, a read-only accessor for the
+// stage's run flag.
 #define _CRT_SECURE_NO_DEPRECATE
 #include "comm.h"
 

@@ -93,6 +93,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave (RADE EOO): queueEndOfOver
+//                 encodes the held speech first and never waits for the
+//                 decoder; a busy codec defers the EOO (onSent callback).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  RADE reason: test seam setStartFailsForTest.
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I1. Initial skeleton
@@ -197,6 +201,7 @@
 #include <QString>
 #include <atomic>
 #include <functional>
+#include <vector>
 #include <memory>
 #include <mutex>
 
@@ -302,7 +307,17 @@ public:
     // channel encodes no more speech until resetTx(), as FreeDV stops
     // taking microphone audio once the over is ending. Returns false (and
     // sends nothing) when the channel is not running.
-    bool queueEndOfOver(const QString& callsign);
+    //
+    // Fix wave (RADE EOO): speech recorded before the release (blocks held
+    // while the decoder had the codec, and whole LPCNet frames waiting in
+    // the accumulator) is encoded and emitted first, as FreeDV encodes the
+    // recorded audio left while ending TX before the EOO. The main thread
+    // never waits for the decoder: with the codec busy the EOO is sent
+    // once the decode releases it (queued to this object's thread), and
+    // true is returned at once. `onSent` runs on this object's thread
+    // right after the EOO's txModemReady; a dropped over (dropTxAudio,
+    // resetTx, stop) cancels a deferred EOO and its onSent.
+    bool queueEndOfOver(const QString& callsign, std::function<void()> onSent = {});
     bool endOfOverQueued() const { return m_endOfOverQueued; }
 
     // The samples queueEndOfOver adds at 8 kHz: rade_n_tx_eoo_out(), the
@@ -423,6 +438,13 @@ signals:
     void rxTextDecoded(const QString& callsign, const QString& grid);
 
 private:
+    // Fix wave (RADE EOO). Encode m_txHeld then m_txAccum into modem
+    // chunks; m_codecMutex held by the caller.
+    void encodeSpeechLocked(std::vector<QByteArray>& modemOut);
+    // Send a pending end-of-over if the codec is free. Main thread.
+    enum class EndOfOverRun { Sent, Busy, Failed, NothingPending };
+    EndOfOverRun runPendingEndOfOver();
+
     // Custom deleter for the opaque FARGANState handle so we can hold it
     // in unique_ptr<void, FarganDeleter> without dragging the opus
     // FARGAN header into the include surface. The operator() resolves
@@ -496,6 +518,12 @@ private:
     // RADE end-of-over callsigns: the EOO frame is queued; txEncode takes
     // no more speech until resetTx().
     std::atomic<bool>    m_endOfOverQueued{false};
+    // Fix wave (RADE EOO): an end-of-over waiting for the decoder to
+    // release the codec. The flag is read by the decoder thread after it
+    // releases m_codecMutex; the callsign and callback are main-thread only.
+    std::atomic<bool>    m_endOfOverPending{false};
+    QString              m_pendingEndOfOverCallsign;
+    std::function<void()> m_pendingEndOfOverSent;
 
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the

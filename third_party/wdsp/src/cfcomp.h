@@ -80,6 +80,14 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made on 2026-09-22 when the WDSP 2.10 re-merge put this
+// file on the pinned TAPR WDSP 2.10 tree at b02d5bac): adds the Qg and Qe arrays
+// to the CFCOMP struct, which hold the per-point Q values of the 7-argument
+// SetTXACFCOMPprofile (F, G, E, Qg, Qe) in cfcomp.c.
+// The 2026-04-30 line in the history above describes the retired Thetis
+// vendor only, not this re-merge.
+
 #ifndef _cfcomp_h
 #define _cfcomp_h
 

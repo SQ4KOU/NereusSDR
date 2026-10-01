@@ -47,6 +47,10 @@
 //   2026-09-24: Part C fix wave (R2-I1): the Host check accepts
 //               only this computer's own names, whole. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-30: fix wave (INFRA-I4): a page that leaves the connection
+//               open is reported by name instead of passing silently into
+//               the status check. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -161,10 +165,12 @@ struct Core {
         }
         socket.write(request);
         QByteArray received;
-        [[maybe_unused]] const bool waited1 = QTest::qWaitFor([&socket, &received]() {
-            received += socket.readAll();
-            return socket.state() == QAbstractSocket::UnconnectedState;
-        }, 5000);
+        if (!QTest::qWaitFor([&socket, &received]() {
+                received += socket.readAll();
+                return socket.state() == QAbstractSocket::UnconnectedState;
+            }, 5000)) {
+            qWarning() << "fetch: the page did not close the connection within 5 s";
+        }
         received += socket.readAll();
         return received;
     }
@@ -220,10 +226,12 @@ int fetchStatus(const QHostAddress& address, quint16 port)
                              : address.toString();
     socket.write("GET / HTTP/1.1\r\nHost: " + host.toLatin1() + "\r\n\r\n");
     QByteArray received;
-    [[maybe_unused]] const bool closed = QTest::qWaitFor([&socket, &received]() {
-        received += socket.readAll();
-        return socket.state() == QAbstractSocket::UnconnectedState;
-    }, 5000);
+    if (!QTest::qWaitFor([&socket, &received]() {
+            received += socket.readAll();
+            return socket.state() == QAbstractSocket::UnconnectedState;
+        }, 5000)) {
+        qWarning() << "fetchStatus: the page did not close the connection within 5 s";
+    }
     received += socket.readAll();
     return statusOf(received);
 }

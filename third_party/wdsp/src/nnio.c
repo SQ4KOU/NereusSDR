@@ -24,6 +24,12 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): model-file reading is bounded: a maximum file
+// size (NNIO_MAX_FILE_BYTES), overflow-checked size arithmetic, and checks for
+// bad names, duplicate tensors and overlapping data before a tensor is used.
+
 #define _CRT_SECURE_NO_WARNINGS
 
 #include "comm.h"

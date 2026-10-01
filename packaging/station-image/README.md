@@ -44,7 +44,8 @@ and Wi-Fi through a trusted first-boot setup or per-card imaging process;
 never put those values in the shared image artifact.
 
 The image stage installs `avahi-daemon`, the sample `/etc/nereusd.conf`, and
-enables the existing `nereusd.service` with `DynamicUser=yes`. A one-time
+enables the existing `nereusd.service` with `DynamicUser=yes`, plus a drop-in
+that adds the `dialout` group so serial accessories can be opened. A one-time
 service sets the hostname `nereus-station` before the daemon starts. Avahi
 publishes `nereus-station.local`; the station's own Bonjour advertisement is
 handled by `nereusd`. With `radio_mac` empty, the daemon uses the sole visible

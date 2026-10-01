@@ -87,6 +87,26 @@
 //                                    comes on the Core's next delta
 //                                    flush). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I1: the badge's take
+//                                    question closes with the link and
+//                                    when its take is abandoned. GUI-I5:
+//                                    a container's MON and PS-A follow
+//                                    the transmit holder.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 1: the header's fault
+//                                    width check lays the segment out
+//                                    with the fault text in place instead
+//                                    of measuring it against the width
+//                                    chosen for the muted text.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 2: the fault case also
+//                                    checks the drawn row keeps all four
+//                                    groups. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 3: the width check
+//                                    runs every audio state's wording, the
+//                                    longest being "Audio radio offline".
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -101,6 +121,7 @@
 #include <QGroupBox>
 #include <QSpinBox>
 #include <QLabel>
+#include <QLayout>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QLoggingCategory>
@@ -141,6 +162,7 @@
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SetupDialog.h"
+#include "gui/multidevice/MultiDeviceController.h"
 #include "gui/multidevice/TakeTransmitDialog.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
@@ -167,6 +189,7 @@
 #include "fakes/RemoteWindowHarness.h"
 #include "core/SliceOwnership.h"
 #include "core/session/DeviceSessionRegistry.h"
+#include "gui/applets/TxApplet.h"
 #include "gui/containers/ContainerManager.h"
 #include "gui/containers/ContainerWidget.h"
 #include "gui/meters/MeterWidget.h"
@@ -665,15 +688,48 @@ private slots:
                  qPrintable(QStringLiteral("muted segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
-        QStringList faultGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
-        QCOMPARE(faultGroups.size(), 4);
-        faultGroups[1] = ConnectionSegment::audioMetricText(
-            std::nullopt, RemoteAudioStatus::State::PlaybackProblem);
-        QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))) + 34,
-                 qPrintable(QStringLiteral("fault segment %1, text %2: %3")
-                                .arg(segment->width())
-                                .arg(headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))))
-                                .arg(faultGroups.join(QStringLiteral(" · ")))));
+        // Every audio group the header can show must fit beside the other
+        // three at 1440 px too, the longest ("Audio radio offline") above
+        // all. The segment is laid out with each state's text in place (the
+        // layout runs here, before the next telemetry refresh can put the
+        // muted text back), so the check measures the width the title bar
+        // gives that text in this platform's fonts, not whether the width
+        // chosen for "Audio muted" happens to cover it.
+        const QStringList liveGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
+        QCOMPARE(liveGroups.size(), 4);
+        QList<QLayout*> layouts;
+        for (QWidget* widget = segment->parentWidget(); widget; widget = widget->parentWidget()) {
+            if (widget->layout()) {
+                layouts.prepend(widget->layout());
+            }
+        }
+        // The row the segment draws starts 25 px in (8 px margin, 10 px dot,
+        // 8 px gap) and stops 6 px short of the right edge
+        // (ConnectionSegment::paintEvent).
+        constexpr int kSegmentTextInset = 25 + 6;
+        using AudioState = RemoteAudioStatus::State;
+        for (AudioState state : {AudioState::NotConnected, AudioState::WaitingForAudio,
+                                 AudioState::MutedHere, AudioState::RadioOffline,
+                                 AudioState::CoreCouldNotStart, AudioState::Starting,
+                                 AudioState::Playing, AudioState::Reconnecting,
+                                 AudioState::PlaybackProblem}) {
+            QStringList groups = liveGroups;
+            groups[1] = ConnectionSegment::audioMetricText(std::nullopt, state);
+            const QString text = groups.join(QStringLiteral(" · "));
+            segment->setRemoteMetrics(groups);
+            for (QLayout* layout : std::as_const(layouts)) {
+                layout->activate();
+            }
+            QCOMPARE(segment->remotePresentationText(), text);
+            QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(text) + 34,
+                     qPrintable(QStringLiteral("audio state %1: segment %2, text %3: %4")
+                                    .arg(static_cast<int>(state))
+                                    .arg(segment->width())
+                                    .arg(headerMetrics.horizontalAdvance(text))
+                                    .arg(text)));
+            // All four groups are drawn, Radio included.
+            QCOMPARE(segment->remoteTextForWidth(segment->width() - kSegmentTextInset), text);
+        }
         h.remoteModel()->audioEngine()->setMasterMuted(false);
         QVERIFY(disconnectFromRadioMenu(h));
         QTRY_VERIFY(!h.client()->isConnectionActive());
@@ -2108,9 +2164,12 @@ private slots:
         QTRY_VERIFY(badge->isEnabled());
         badge->click();
         QTRY_VERIFY(h.window()->findChild<TakeTransmitDialog*>() != nullptr);
+        const QPointer<TakeTransmitDialog> openAsk = h.window()->findChild<TakeTransmitDialog*>();
         h.dropLink();
         QTRY_VERIFY_WITH_TIMEOUT(h.acceptedConnections() == 2
                                  && client->isHandshakeComplete(), 10000);
+        // Fix wave GUI-I1: the question went with the link.
+        QTRY_VERIFY(!openAsk || !openAsk->isVisible());
         // The bench Core numbers each token session it accepts.
         client->setTokenSessionHolderForTest(QStringLiteral("token:2"));
         // The client names itself per session from the handshake and each
@@ -2163,6 +2222,107 @@ private slots:
         }
         QVERIFY(!client->holdsTransmitHere());
         QVERIFY(h.txSliceCommands().isEmpty());
+        QVERIFY(!h.station().mox());
+    }
+
+    // Fix wave GUI-I1: a badge take abandoned while its question is open
+    // (here a refusal arrives for it) closes the question, so its Take can
+    // no longer send tx.take. Nothing keys.
+    void remoteTxBadgeAskClosesWhenTheTakeIsAbandoned()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        TransmitHolder::Holder phoneHolder;
+        phoneHolder.deviceId = phone;
+        phoneHolder.name = QStringLiteral("Living room iPhone");
+        phoneHolder.shortName = QStringLiteral("iPhone");
+        phoneHolder.kind = QStringLiteral("phone");
+        TransmitHolder* holder = h.server().transmitHolder();
+        holder->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        QTRY_VERIFY(flagFor(h, 1) != nullptr);
+        auto* badge = flagFor(h, 1)->findChild<QPushButton*>(QStringLiteral("VfoTxBadge"));
+        QTRY_VERIFY(badge->isEnabled());
+        badge->click();
+        QTRY_VERIFY(h.window()->findChild<TakeTransmitDialog*>() != nullptr);
+        const QPointer<TakeTransmitDialog> ask = h.window()->findChild<TakeTransmitDialog*>();
+        auto* controller = h.window()->findChild<MultiDeviceController*>();
+        QVERIFY(controller);
+
+        emit controller->refusal(QStringLiteral("Transmit is changing hands. Try again in a moment."));
+        QTRY_VERIFY(!ask || !ask->isVisible());
+        QVERIFY(controller->openDialog() == nullptr);
+        QVERIFY(holder->isHeldBy(phone));
+        QVERIFY(!h.station().mox());
+    }
+
+    // Fix wave GUI-I5: a container's MON and PS-A follow the transmit holder
+    // as the TX applet's do: while the phone holds transmit, MON is shown
+    // disabled with the Core's holder reason, and PS-A says the same
+    // reason as the TX applet's PS-A. Nothing keys.
+    void remoteContainerMonAndPsaFollowTheTransmitHolder()
+    {
+        RemoteWindowHarness h(sharingOptions(2, QStringLiteral("2v")));
+        QVERIFY(h.start());
+        h.server().setRemoteTransmitAllowed(true);
+        h.server().setTokenSessionsMayTransmitForTest(true);
+        StationClient* client = h.client();
+        QVERIFY(client);
+        QVERIFY(connectSharing(h));
+        StationCapabilities granted = h.server().buildCapabilities();
+        granted.txPermitted = true;
+        h.pushCapabilities(granted);
+        QTRY_VERIFY(client->capabilities().txPermitted);
+        QObject phoneSession;
+        const QByteArray phone = admitPhone(h, phoneSession);
+        QVERIFY(!phone.isEmpty());
+        auto* manager = h.window()->findChild<ContainerManager*>();
+        QVERIFY(manager);
+        ContainerWidget* container = manager->createContainer(1, DockMode::Floating);
+        auto* meter = new MeterWidget();
+        container->setContent(meter);
+        auto* buttons = new OtherButtonItem();
+        meter->addItem(buttons);
+        container->wireInteractiveItem(buttons);
+        const auto destroy = qScopeGuard([manager, container] {
+            manager->destroyContainer(container->id());
+        });
+        using Id = OtherButtonItem::ButtonId;
+        QTRY_VERIFY(buttons->isButtonAvailable(Id::Mon));
+
+        TransmitHolder::Holder phoneHolder;
+        phoneHolder.deviceId = phone;
+        phoneHolder.name = QStringLiteral("Living room iPhone");
+        phoneHolder.shortName = QStringLiteral("iPhone");
+        phoneHolder.kind = QStringLiteral("phone");
+        h.server().transmitHolder()->transferTo(phoneHolder, QStringLiteral("test"));
+        QTRY_VERIFY(client->transmitHeldElsewhere());
+        const QString holderReason = client->otherHolderReason();
+        QVERIFY(!holderReason.isEmpty());
+        QTRY_VERIFY(!buttons->isButtonAvailable(Id::Mon));
+        QCOMPARE(buttons->buttonUnavailableReason(buttons->indexOf(Id::Mon)), holderReason);
+        QVERIFY(!buttons->isButtonAvailable(Id::PsA));
+        auto* applet = h.window()->findChild<TxApplet*>();
+        QVERIFY(applet);
+        QPushButton* psa = nullptr;
+        for (QPushButton* b : applet->findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("PS-A")) { psa = b; }
+        }
+        QVERIFY(psa);
+        QVERIFY(!psa->isEnabled());
+        QCOMPARE(buttons->buttonUnavailableReason(buttons->indexOf(Id::PsA)), psa->toolTip());
         QVERIFY(!h.station().mox());
     }
 

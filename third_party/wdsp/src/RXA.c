@@ -24,6 +24,14 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): creates, destroys, runs and resizes the
+// retained NR3 (rnnr) and NR4 (sbnr) stages alongside the others (create,
+// destroy, xrxa, setSamplerate, setBuffers and setSize), includes nnr, rnnr
+// and sbnr in the bpsnba check, and RXAbp1Check reads the stage run states
+// itself from the channel.
+
 #include "comm.h"
 
 struct _rxa rxa[MAX_CHANNELS];

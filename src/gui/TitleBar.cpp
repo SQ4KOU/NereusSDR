@@ -52,6 +52,15 @@
 //   2026-08-02 — Task A7 (bottom-banner cleanup): single-row UTC clock,
 //                 inserted after MasterOutputWidget and before the 💡
 //                 feature-request button. See TitleBar.h for rationale.
+//   2026-09-30 — Fix wave round 2 (maintainer decision 2026-09-30): the
+//                 gap after the UTC clock is kUtcToMasterGap, 18 px instead
+//                 of 24, so the connection segment keeps all four remote
+//                 groups at a 1440 px window when the header font is
+//                 monospace. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-30 — Fix wave round 3: the kUtcToMasterGap comment states
+//                 what was measured instead of naming fonts that were not.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TitleBar.h"
@@ -89,6 +98,16 @@ constexpr int kMarginTop    = 2;
 constexpr int kMarginRight  = 8;
 constexpr int kMarginBottom = 2;
 constexpr int kSpacing      = 6;
+
+// Gap between the UTC clock and the master output slider. It keeps the
+// clock from reading as part of the slider (a mis-drag there changes the
+// audio level). 18 px rather than 24 gives the connection segment 6 px
+// more at a 1440 px window. Measured offscreen with the header font
+// substituted by monospace fonts (Menlo, Monaco, Courier New, Andale Mono,
+// PT Mono): the fault wording needed 4 px more than a 24 px gap allowed,
+// and 18 covers it; the radio-offline wording, the longest, needs a gap of
+// 4 px in those fonts, so 18 does not cover it there.
+constexpr int kUtcToMasterGap = 18;
 
 // Fixed strip height. From AetherSDR TitleBar.cpp:30.
 constexpr int kStripHeight = 32;
@@ -685,7 +704,7 @@ TitleBar::TitleBar(AudioEngine* audio, QWidget* parent)
         "QLabel { color: #8aa8c0; font-size: 11px;"
         " font-family: 'SF Mono', Menlo, monospace; }"));
     m_hbox->addWidget(m_utcLabel);
-    m_hbox->addSpacing(24);
+    m_hbox->addSpacing(kUtcToMasterGap);
 
     // ── MasterOutputWidget — Task 10b composite ────────────────────────────
     m_master = new MasterOutputWidget(audio, this);

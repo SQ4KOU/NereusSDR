@@ -24,6 +24,12 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): adds getRun_emphp, a null-safe read-only
+// accessor for the stage's run flag. The FCIMP note below is part of the same
+// set of changes.
+
 // NereusSDR modification note (2026-09-22): retain the replacement FCIMP
 // returned during coefficient-count resize.  Pinned upstream b02d5bac
 // discarded it after freeing the previous object, causing a use-after-free.

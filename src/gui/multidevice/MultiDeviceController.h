@@ -33,6 +33,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-30: fix wave GUI-I1 and GUI-M6: dialogs close with their
+//               session and are stamped with it; a card's Take it back is
+//               shown off once its session ends. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
@@ -149,6 +153,12 @@ private:
                            const QString& reason, bool awaitingConfirmation);
     void showDialog(QDialog* dialog);
     void closeDialogQuietly();
+    // Fix wave GUI-I1 / GUI-M6: the session's epoch (0 without a client),
+    // the session ending, and a stale card's Take it back shown off.
+    quint32 currentEpoch() const;
+    void onSessionEnded();
+    void refreshCardsForSession();
+    static QString sessionEndedTakeBackReason();
 
     QPointer<StationClient> m_client;
     QPointer<QWidget> m_dialogParent;
@@ -160,6 +170,12 @@ private:
     /// The open dialog is the fifth-device choice.
     bool m_dialogIsHeld = false;
     QHash<qint64, QPointer<NoticeCard>> m_cards;
+    /// The session each card's notice came in (fix wave GUI-M6).
+    QHash<qint64, quint32> m_cardEpochs;
+    /// The session the open dialog was asked in (fix wave GUI-I1).
+    quint32 m_dialogEpoch = 0;
+    /// The session sessionEnded last ended (fix wave GUI-M6).
+    quint32 m_endedEpoch = 0;
 };
 
 } // namespace NereusSDR

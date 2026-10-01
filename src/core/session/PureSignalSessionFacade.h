@@ -70,10 +70,16 @@ public:
     /// for a Core that offers arming while its radio is off the air; the
     /// two-tone test stays on canActuate() (remote transmit).
     bool canArm() const;
-    /// R-R3-49 (parity Task 7): why canArm() is false, for a Core that
-    /// offers arming: its radio is on the air, or PureSignal is not ready.
-    /// Empty otherwise, so a window keeps the reason it gave before.
+    /// R-R3-49 (parity Task 7), fix wave GUI-I7: why canArm() is false
+    /// (the radio is on the air, PureSignal has no connected radio that
+    /// supports it, or an older Core arms only for a window that may
+    /// transmit). Empty exactly when canArm() is true.
     QString armingRefusal() const;
+    /// Fix wave GUI-I7: why canActuate() is false, for the two-tone test.
+    /// Empty exactly when canActuate() is true.
+    QString twoToneRefusal() const;
+    /// "PureSignal needs a connected radio that supports it."
+    static QString needsRadioReason();
     /// R-R3-49 (parity Task 7): why a Core that offers arming refuses a
     /// pureSignalSettings change now (its radio is on the air). Empty
     /// otherwise.

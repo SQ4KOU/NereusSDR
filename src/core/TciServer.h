@@ -71,6 +71,11 @@
 //                Anthropic Claude Code.
 //   2026-09-28 - Desktop-host TCI receiver ownership and holder admission.
 //                NereusSDR-original, AI-assisted via OpenAI Codex.
+//   2026-09-30 - Fix round 2 (Critical 1, RD-C1): a remote window records
+//                the app whose trx:N,true it forwarded (m_remoteKeyClient);
+//                that app leaving releases the key on the Core, or the
+//                Core's answer when it comes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -803,6 +808,16 @@ private:
     // both run on the Qt event loop that owns TciServer).  No additional locking.
     QPointer<QWebSocket> m_txAudioActiveClient;
 
+    // Fix wave RD-C1 (JJ ruling 1): the app whose trx raised the TCI PTT
+    // level (MoxController::isTciPttHeld) on a server that keys locally.
+    // Cleared when the level drops. Its disconnect, or this server
+    // stopping, releases that key before its TX audio lock.
+    QPointer<QWebSocket> m_tciPttClient;
+    // Releases the TCI key of `client` (any keying app when null) through
+    // MoxController::onTciPtt(false), and a TCI level no app owns (fix
+    // round 1). False when a callback destroyed this server meanwhile.
+    bool releaseAppTciKey(QWebSocket* client);
+
     // ── Phase 19: sensor broadcast timers ────────────────────────────────────
     //
     // From Thetis TCIServer.cs:2554-2581 [v2.10.3.13] — setRxSensorsEnabled /
@@ -906,6 +921,10 @@ private:
     bool m_remoteKeyPending{false};
     bool m_remoteReleaseWhilePending{false};
     quint64 m_remoteKeyGeneration{0};
+    // Fix round 2 (Critical 1, RD-C1): the app whose trx:N,true this
+    // window forwarded, with or without ",tci". Its leaving releases the
+    // key, or the Core's answer if the key is still being asked for.
+    QPointer<QWebSocket> m_remoteKeyClient;
     // Task 35: an app's trx through a remote window that forwards transmit.
     void handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, bool wantsMox,
                          bool hasTciArg);

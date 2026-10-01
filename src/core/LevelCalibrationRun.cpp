@@ -37,6 +37,11 @@
 //   2026-09-29 - Level Cal fix wave: RX2's preamp is its own mode, set
 //                through the controller's RX2PreampMode port. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - runStep() runs a copy of the step, so a step that ends
+//                the run (cancel() from a host call) is not destroyed while
+//                it runs (CI: SIGSEGV in tst_level_calibration_run on
+//                Linux). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -279,7 +284,13 @@ void LevelCalibrationRun::runStep(int index, quint64 generation)
         fail(QStringLiteral("Level calibration stopped because the radio started transmitting."));
         return;
     }
-    m_steps[size_t(index)].action();
+    // A step can end the run while it runs: a host call it makes can
+    // cancel(), and finish() clears m_steps, destroying the closure being
+    // executed. Run a copy so the step outlives that (Linux CI: a SIGSEGV
+    // in cancel_restoresEverything, where libstdc++ keeps the closure on
+    // the heap).
+    const std::function<void()> action = m_steps[size_t(index)].action;
+    action();
     if (!m_running || generation != m_generation) {
         return;
     }

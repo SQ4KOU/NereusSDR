@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/SliceOwnership.h"
+#include "core/TwoToneController.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/StationServer.h"
 #include "models/RadioModel.h"
@@ -131,6 +132,11 @@ DesktopStationController::RequestResult DesktopStationController::requestTune(bo
     return request(Key::Tune, on);
 }
 
+DesktopStationController::RequestResult DesktopStationController::requestTwoTone(bool on)
+{
+    return request(Key::TwoTone, on);
+}
+
 DesktopStationController::RequestResult DesktopStationController::requestTakeTransmit()
 {
     supersedeTake();
@@ -177,6 +183,11 @@ DesktopStationController::RequestResult DesktopStationController::request(Key ke
     supersedeTake();
     ++m_intentGeneration;
     m_question.reset();
+    if (!on && key == Key::TwoTone) {
+        // Stopping the test needs no transmit; the button always could.
+        if (m_model) { m_model->setTwoTone(false); }
+        return {RequestState::NoChange, {}, {}};
+    }
     if (!on) {
         bool& requested = key == Key::Mox ? m_moxRequested : m_tuneRequested;
         const bool wasRequested = requested;
@@ -313,6 +324,11 @@ void DesktopStationController::keyNow(Key key)
     const QPointer<DesktopStationController> self(this);
     const QPointer<RadioModel> model(m_model);
     const quint64 intent = m_intentGeneration;
+    if (key == Key::TwoTone) {
+        // TwoToneController::setActive, with the station's own keyer.
+        model->setTwoTone(true);
+        return;
+    }
     if (key == Key::Mox) {
         model->setMoxFromButton(true);
         if (!self || !model || self->m_model != model || self->m_intentGeneration != intent) {

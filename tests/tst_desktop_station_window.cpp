@@ -7,6 +7,8 @@
 #include "core/AppSettings.h"
 #include "core/SliceOwnership.h"
 #include "core/TciServer.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/safety/TxRefusal.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -56,6 +58,28 @@
 using namespace NereusSDR;
 
 namespace {
+
+// Fix round 2 (minor 2): a TX channel that records the two-tone
+// generator's run state, so a test sees the 2-tone test start.
+class ToneRecordingTxChannel : public TxChannel {
+public:
+    ToneRecordingTxChannel() : TxChannel(1) {}
+    void setTxPostGenMode(int) override {}
+    void setTxPostGenTTFreq1(double) override {}
+    void setTxPostGenTTFreq2(double) override {}
+    void setTxPostGenTTMag1(double) override {}
+    void setTxPostGenTTMag2(double) override {}
+    void setTxPostGenTTPulseToneFreq1(double) override {}
+    void setTxPostGenTTPulseToneFreq2(double) override {}
+    void setTxPostGenTTPulseMag1(double) override {}
+    void setTxPostGenTTPulseMag2(double) override {}
+    void setTxPostGenTTPulseFreq(int) override {}
+    void setTxPostGenTTPulseDutyCycle(double) override {}
+    void setTxPostGenTTPulseTransition(double) override {}
+    void setTxPostGenTTPulseIQOut(bool) override {}
+    void setTxPostGenRun(bool on) override { runs.append(on); }
+    QList<bool> runs;
+};
 StationHostOptions optionsFor(AppSettings& settings, const QString& directory)
 {
     StationHostOptions options;
@@ -1333,6 +1357,99 @@ private slots:
         QVERIFY(!pending || !pending->isVisible());
         QVERIFY(!controller.enabled());
         QCOMPARE(tx->tuneButton()->isChecked(), model->isTune());
+    }
+
+    // Fix wave (hosting 2-TONE parity): while another device holds
+    // transmit, the hosting window's 2-TONE asks to take it, as its MOX and
+    // TUNE do, from the TX applet and from a container. Nothing keys until
+    // the question is answered.
+    void hostTwoToneAsksTheTakeQuestion()
+    {
+        if (!QSslSocket::supportsSsl()) { QSKIP("Qt reports no working TLS backend."); }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        RadioModel* model = window.radioModel();
+        model->setBoardForTest(HPSDRHW::Saturn);
+        model->configureStreamPool(5, 5, 192000);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(model->addSlice(QStringLiteral("pan-0")) >= 0);
+        DesktopStationController controller(model, optionsFor(settings, directory.path()));
+        window.setDesktopStationController(&controller);
+        QVERIFY(controller.start(true));
+        TxApplet* tx = window.findChild<TxApplet*>();
+        QVERIFY(tx && tx->twoToneButton());
+        TwoToneController* twoTone = model->twoToneController();
+        QVERIFY(twoTone);
+        // Fix round 2 (minor 2): a recording TX channel, so the start is
+        // seen (twoToneActiveChanged and the generator's run), not read
+        // from a log line. No radio is connected; nothing leaves the test.
+        ToneRecordingTxChannel tone;
+        twoTone->setTxChannel(&tone);
+        twoTone->setSliceModel(model->activeSlice());
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setPowerOn(true);
+        QSignalSpy activeChanged(twoTone, &TwoToneController::twoToneActiveChanged);
+        TransmitHolder* holder = controller.server()->transmitHolder();
+        QObject peerSession;
+        DeviceSessionRegistry::Entry peer;
+        peer.deviceId = QByteArrayLiteral("token:phone");
+        peer.kind = DeviceSessionRegistry::Kind::Token;
+        peer.name = QStringLiteral("Phone");
+        peer.shortName = QStringLiteral("Phone");
+        peer.deviceKind = QStringLiteral("phone");
+        QCOMPARE(controller.server()->deviceSessions()->admit(peer, &peerSession).admission,
+                 DeviceSessionRegistry::Admission::Admitted);
+        TransmitHolder::KeyRequest key;
+        key.deviceId = peer.deviceId;
+        QCOMPARE(holder->askKey(key).verdict, KeyingVerdict::Admit);
+
+        // The TX applet's 2-TONE asks.
+        tx->twoToneButton()->click();
+        TakeTransmitDialog* question = window.findChild<TakeTransmitDialog*>();
+        QVERIFY(question);
+        QCOMPARE(question->questionLabel()->text(), QStringLiteral("Take transmit from Phone?"));
+        QCOMPARE(question->detailLabel()->text(),
+                 QStringLiteral("The other device holds transmit. Take it to start the "
+                                "2-tone test."));
+        QVERIFY(!tx->twoToneButton()->isChecked());
+        QVERIFY(!twoTone->isActive());
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        QPointer<TakeTransmitDialog> cancelled(question);
+        question->cancelButton()->click();
+        QTRY_VERIFY(cancelled.isNull());
+        QVERIFY(!twoTone->isActive());
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        QVERIFY(!tx->twoToneButton()->isChecked());
+
+        // The container's 2TONE asks the same question; taking it moves
+        // transmit to this computer.
+        ContainerWidget* container = window.findChild<ContainerWidget*>();
+        QVERIFY(container);
+        QVERIFY(QMetaObject::invokeMethod(container, "otherButtonClicked", Qt::DirectConnection,
+            Q_ARG(int, int(OtherButtonItem::ButtonId::TwoTon))));
+        question = window.findChild<TakeTransmitDialog*>();
+        QVERIFY(question);
+        QVERIFY(!twoTone->isActive());
+        QVERIFY(holder->isHeldBy(peer.deviceId));
+        QPointer<TakeTransmitDialog> taken(question);
+        // Nothing started while the question was open or cancelled.
+        QVERIFY(activeChanged.isEmpty());
+        QVERIFY(!tone.runs.contains(true));
+        // With transmit taken, the test is started for this computer.
+        question->takeButton()->click();
+        QTRY_VERIFY(taken.isNull());
+        QTRY_VERIFY(holder->isHeldBy(SliceOwnership::stationDevice()));
+        QTRY_VERIFY(twoTone->isActive());
+        QCOMPARE(activeChanged.size(), 1);
+        QCOMPARE(activeChanged.first().first().toBool(), true);
+        QVERIFY(tone.runs.contains(true));
+        model->setTwoTone(false);
+        QTRY_VERIFY(!twoTone->isActive());
+        QCOMPARE(tone.runs.last(), false);
+        twoTone->setTxChannel(nullptr);
+        controller.stop();
     }
 
     // Station VOX (whole-branch review, TX path): while another device holds

@@ -29,6 +29,14 @@
 //                 `duplex` endpoint keeps the receiver while keyed, and the
 //                 field is read only from a peer that declared 3. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : fix wave (INFRA minor 3): the stall sampler is macOS
+//                 only and runs attached with a deadline, never detached.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30 : fix wave round 1: the sampler is a Harness member started
+//                 without waiting, so the wait that captures a stall keeps
+//                 feeding; the Harness reaps it (bounded) and kills it if
+//                 it overruns. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -77,6 +85,7 @@
 #include <cmath>
 #include <functional>
 #include <numbers>
+#include <memory>
 #include <optional>
 
 using namespace NereusSDR;
@@ -257,6 +266,9 @@ struct Harness {
     QMap<MediaSourceKey, qint64> sourceFrameMs;
     QHash<int, qint64> firstIqMs;
     QHash<int, int> iqSubmissions;
+    // The stall sampler, attached to this Harness so it never outlives it.
+    std::unique_ptr<QProcess> sampler;
+    QString samplerPath;
 
     explicit Harness(bool withAnalyzer = true,
                      std::optional<DisplayBudgetLimits> limits = std::nullopt)
@@ -314,6 +326,7 @@ struct Harness {
     }
     ~Harness()
     {
+        reapSampler();
         controller.reset();
         radio.setTxAnalyzer(nullptr);
     }
@@ -438,11 +451,41 @@ struct Harness {
             QStringLiteral("nereus-mini-spectrum-stall-%1-%2.sample.txt")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QString::fromLatin1(name).replace(' ', '-')));
-        const bool started = QProcess::startDetached(
-            QStringLiteral("/usr/bin/sample"),
-            {QString::number(QCoreApplication::applicationPid()),
-             QStringLiteral("1"), QStringLiteral("-file"), path});
-        qWarning() << "spectrum stall sample" << path << "started" << started;
+#ifdef Q_OS_MAC
+        // macOS's sample(1), attached to this Harness and started without
+        // waiting: it samples every thread of this process for one second
+        // while the caller's wait goes on feeding, and the Harness reaps it.
+        if (sampler) {
+            return;
+        }
+        sampler = std::make_unique<QProcess>();
+        samplerPath = path;
+        sampler->start(QStringLiteral("/usr/bin/sample"),
+                       {QString::number(QCoreApplication::applicationPid()),
+                        QStringLiteral("1"), QStringLiteral("-file"), path});
+        qWarning() << "spectrum stall sample started" << path;
+#else
+        Q_UNUSED(path);
+        qWarning() << "spectrum stall: no sampler on this platform";
+#endif
+    }
+
+    void reapSampler()
+    {
+        if (!sampler) {
+            return;
+        }
+        // sample(1) runs for one second; give it ten to write its file,
+        // then kill it so no sampler outlives the test.
+        const bool finished = sampler->state() == QProcess::NotRunning
+            || sampler->waitForFinished(10000);
+        if (!finished) {
+            sampler->kill();
+            sampler->waitForFinished(1000);
+        }
+        qWarning() << "spectrum stall sample" << samplerPath
+                   << "finished" << finished << "exit code" << sampler->exitCode();
+        sampler.reset();
     }
 
     void feedStream(int streamIndex)

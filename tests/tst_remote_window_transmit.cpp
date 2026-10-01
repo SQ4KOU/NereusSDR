@@ -82,6 +82,13 @@
 //   2026-09-30: TX rulings review (I-1): with this window's VOX armed the
 //               lit MOX's press after a release unkeys. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: fix wave GUI-I6: the Tune Power slider holds while dragged
+//               and while its change is on its way. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX-parity-linkdown (fix wave): a window whose Core has no
+//               connection to the radio shows MOX, TUNE and 2-TONE
+//               disabled with the reason; VOX is left alone. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -530,6 +537,108 @@ private slots:
         QCOMPARE(window.container.stateOf(ContainerButtonDispatcher::Id::Mox, 0).reason,
                  QStringLiteral("This Core is set to receive only."));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // TX-parity-linkdown (fix wave): the Core loses its radio while the
+    // window stays signed in. MOX, TUNE and 2-TONE show disabled with the
+    // reason, never hidden, until the radio is back; VOX is left as it was,
+    // as Thetis's power-off leaves chkVOX (console.cs:27488-27493).
+    void aCoreWithoutItsRadioLocksTheWindowsKeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.isHandshakeComplete());
+        QVERIFY(h.remote.isConnected());
+        WindowControls window(h);
+        window.follow(h.client);
+        QPushButton* twoTone = buttonNamed(window.applet, QStringLiteral("2-tone test"));
+        QVERIFY(twoTone);
+        QVERIFY(window.mox->isEnabled());
+        QVERIFY(window.tune->isEnabled());
+        QVERIFY(twoTone->isEnabled());
+        const bool voxBefore = window.vox->isEnabled();
+
+        h.station.setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(!h.remote.isConnected());
+        const QString reason = RadioModel::radioLinkDownReason();
+        for (QPushButton* b : {window.mox, window.tune, twoTone}) {
+            QVERIFY2(!b->isEnabled(), qPrintable(b->accessibleName()));
+            QVERIFY(!b->isHidden());
+            QCOMPARE(b->toolTip(), reason);
+        }
+        QCOMPARE(window.vox->isEnabled(), voxBefore);
+
+        h.station.setConnectionStateForTest(ConnectionState::Connected);
+        QTRY_VERIFY(h.remote.isConnected());
+        QVERIFY(window.mox->isEnabled());
+        QVERIFY(window.tune->isEnabled());
+        QVERIFY(twoTone->isEnabled());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix round 1 (minor 4): the link-down words follow the state. The
+    // Core's link to its radio down or being rebuilt: the radio's link.
+    // The Core waiting for a radio: it has none ready. The window's own
+    // link to the Core down: not connected to the Core. The TX applet and
+    // the container say the same.
+    void linkDownWordsFollowTheState()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.isHandshakeComplete());
+        QVERIFY(h.remote.isConnected());
+        WindowControls window(h);
+        window.follow(h.client);
+        QPushButton* twoTone = buttonNamed(window.applet, QStringLiteral("2-tone test"));
+        QVERIFY(twoTone);
+        const auto expectEverywhere = [&](const QString& reason) {
+            for (QPushButton* b : {window.mox, window.tune, twoTone}) {
+                QVERIFY2(!b->isEnabled(), qPrintable(b->accessibleName()));
+                QVERIFY(!b->isHidden());
+                QCOMPARE(b->toolTip(), reason);
+            }
+            for (const auto id : {ContainerButtonDispatcher::Id::Mox,
+                                  ContainerButtonDispatcher::Id::Tun,
+                                  ContainerButtonDispatcher::Id::TwoTon}) {
+                const auto st = window.container.stateOf(id, 0);
+                QVERIFY(!st.available);
+                QCOMPARE(st.reason, reason);
+            }
+        };
+
+        // The Core's link to its radio is down or being rebuilt.
+        h.station.setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(!h.remote.isConnected());
+        expectEverywhere(QStringLiteral("The link to the radio is down."));
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+
+        // The Core waits for a radio.
+        h.station.setStationRadioWaiting(QStringLiteral("Waiting for a radio to be chosen."));
+        QTRY_VERIFY(!h.remote.stationRadioWaiting().isEmpty());
+        expectEverywhere(QStringLiteral("The Core has no radio ready."));
+        if (QTest::currentTestFailed()) {
+            return;
+        }
+
+        // The radio is back.
+        h.station.setStationRadioWaiting(QString());
+        h.station.setConnectionStateForTest(ConnectionState::Connected);
+        QTRY_VERIFY(h.remote.isConnected());
+        QTRY_VERIFY(window.mox->isEnabled());
+
+        // The window's own link to the Core closes.
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_VERIFY(!h.remote.isConnected());
+        window.follow(h.client);
+        expectEverywhere(QStringLiteral("Not connected to the Core."));
     }
 
     // ---- Keys -------------------------------------------------------------
@@ -1512,6 +1621,93 @@ private slots:
         QTRY_COMPARE(core.tunePowerForTxBand(), tuneWanted);
         QTRY_COMPARE(h.remote.transmitModel().tunePowerForTxBand(), tuneWanted);
         // Nothing keyed.
+        QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix wave GUI-I6: the window's Tune Power slider does not snap back to
+    // the Core's value while the operator holds it or while its own change
+    // is on its way to the Core. Nothing keys.
+    void tunePowerSliderHoldsWhileDraggedAndWhileItsChangeIsOnItsWay()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QVERIFY(h.client.transmitSettingsAvailable(2));
+        WindowControls window(h);
+        window.follow(h.client);
+        window.applet.setTransmitSettingsPermitted(true, {});
+        window.applet.setTransmitChainSettingsPermitted(true, {});
+        QSlider* tune = nullptr;
+        for (QSlider* slider : window.applet.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("Tune power")) { tune = slider; }
+        }
+        QVERIFY(tune && tune->isEnabled());
+        TransmitModel& core = h.station.transmitModel();
+        TransmitModel& mirror = h.remote.transmitModel();
+        QVERIFY(core.setTunePowerForTxBand(20));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 20);
+        QTRY_COMPARE(tune->value(), 20);
+
+        // The operator drags to 40; meanwhile the Core's value moves to 30.
+        tune->setSliderDown(true);
+        tune->setValue(40);
+        QVERIFY(core.setTunePowerForTxBand(30));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 30);
+        QCOMPARE(tune->value(), 40);
+
+        // Released: the change goes, and is on its way until answered.
+        QList<int> shown;
+        connect(tune, &QSlider::valueChanged, this, [&shown](int v) { shown.append(v); });
+        tune->setSliderDown(false);
+        QVERIFY(mirror.tunePowerForTxBandWriteInFlight());
+        QTRY_COMPARE(core.tunePowerForTxBand(), 40);
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 40);
+        QTRY_VERIFY(!mirror.tunePowerForTxBandWriteInFlight());
+        QCOMPARE(tune->value(), 40);
+        QVERIFY2(!shown.contains(30), qPrintable(QStringLiteral("shown %1").arg(shown.size())));
+        QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix round 1 (minor 2): the slider does not depend on the Core's
+    // answer arriving before its next value. A value that arrives while the
+    // change is on its way (the Core's own later change, or its clamp) shows
+    // once the change is answered. Nothing keys.
+    void tunePowerSliderShowsTheCoresValueWhenItsChangeIsAnswered()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client);
+        window.applet.setTransmitSettingsPermitted(true, {});
+        window.applet.setTransmitChainSettingsPermitted(true, {});
+        QSlider* tune = nullptr;
+        for (QSlider* slider : window.applet.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("Tune power")) { tune = slider; }
+        }
+        QVERIFY(tune && tune->isEnabled());
+        TransmitModel& core = h.station.transmitModel();
+        TransmitModel& mirror = h.remote.transmitModel();
+        QVERIFY(core.setTunePowerForTxBand(20));
+        QTRY_COMPARE(tune->value(), 20);
+
+        // The window's change is on its way, and the Core's value (45)
+        // arrives before its answer.
+        mirror.setTunePowerForTxBandWriteInFlight(true);
+        QVERIFY(core.setTunePowerForTxBand(45));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 45);
+        QCOMPARE(tune->value(), 20);
+        // The answer: the slider shows the Core's value.
+        mirror.setTunePowerForTxBandWriteInFlight(false);
+        QCOMPARE(tune->value(), 45);
         QVERIFY(!h.station.moxController()->isMox());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }

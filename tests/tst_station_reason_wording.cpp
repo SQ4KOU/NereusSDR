@@ -1688,6 +1688,10 @@ const QList<AppSideReason>& appSideReasons()
          "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
+        // Fix round 1 (minor 4): the link-down words MOX, TUNE and 2-TONE
+        // show, by state.
+        {"src/models/RadioModel.cpp", "transmitLinkDownReason",
+         "a window's own reason MOX, TUNE and 2-TONE are locked while a link is down"},
         // Level Cal 2: the hosting desktop's own Calibration tab shows it on
         // a disabled Start; no verb sends it. Its sentences are
         // StationServer's ownedElsewhereReason and listenerChangeReason

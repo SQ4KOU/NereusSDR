@@ -86,6 +86,16 @@ warren@pratt.one
 
 */
 
+// NereusSDR modifications (2026-09-30 notice, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code; changes made between 2026-09-22 and 2026-09-30 against the
+// pinned TAPR WDSP 2.10 tree at b02d5bac): adds the stopping field to the IQC
+// struct; SetTXAiqcSwap and SetTXAiqcStart return int; and declares
+// SetTXAiqcSwapChecked, SetTXAiqcStartChecked, SetTXAiqcStopping,
+// RequestTXAiqcEnd, StopTXAiqcQuiescent, ApplyTXAiqcRetained and
+// GetTXAiqcCorrectionAvailable.
+// The "No NereusSDR-level edits" line in the historical record above
+// describes the retired May 2026 Thetis vendor only, not this file.
+
 #ifndef _iqc_h
 #define _iqc_h
 #include "nurbs_spline.h"

@@ -18,7 +18,9 @@ struct PureSignalSettingsValues {
     bool runCalibrationProcessing{true};
     bool autoAttenuate{true};
     bool quickAttenuate{false};
-    double moxDelaySeconds{0.1};
+    // Fix wave RD-I7: Thetis udPSMoxDelay, Value 0.2, Minimum 0.1,
+    // Maximum 1.0. From Thetis PSForm.Designer.cs:346-372 [v2.10.3.15].
+    double moxDelaySeconds{0.2};
     double loopDelaySeconds{0.0};
     double requestedTxDelayNs{150.0};
     bool hardwarePeakOverrideEnabled{false};
