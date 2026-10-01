@@ -946,8 +946,17 @@ void RemoteMicReceiver::submit(const QByteArray& packet, qint64 heldUs)
     }
 
     // Audio arrived (TX mic thread: when it reached the transport): a
-    // starvation ends, and the next check runs from then.
-    m_lastAudioMs.store(now() - clampedHeldUs / 1000, std::memory_order_release);
+    // starvation ends, and the next check runs from then. Fix round 2: it
+    // only moves forward (as in setWatching), so a packet received before a
+    // watch began but handled after it cannot move it back.
+    {
+        const qint64 receivedAt = now() - clampedHeldUs / 1000;
+        qint64 last = m_lastAudioMs.load(std::memory_order_acquire);
+        while (last < receivedAt
+               && !m_lastAudioMs.compare_exchange_weak(last, receivedAt,
+                                                       std::memory_order_acq_rel)) {
+        }
+    }
     if (thread() == QThread::currentThread()) {
         afterPacket(wroteAudio);
     } else {

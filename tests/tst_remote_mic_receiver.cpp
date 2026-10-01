@@ -36,6 +36,10 @@
 //               decoded on a thread of its own while the owner changes the
 //               feed's use and reads the figures, and a pump pulls. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: a packet received before a
+//               later one but handed over after it cannot move the last
+//               audio back. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -244,6 +248,7 @@ private slots:
     void keyWaitRefusesALineThatStartsThenStops();
     void keyWaitEndedAfterItsFirstPacketIsAnsweredOnlyByTheEnd();
     void starvationIsSignalledOnlyWhileWatched();
+    void anOlderReceiptCannotMoveTheLastAudioBack();
     // R-IOS-13 (2026-09-27): the small adaptive buffer.
     void steadyPacketsHoldTheSmallestTargetWithoutUnderrun();
     void jitterGrowsTheTargetAndASteadyLinkEasesItBack();
@@ -945,6 +950,29 @@ void TestRemoteMicReceiver::starvationIsSignalledOnlyWhileWatched()
     QCOMPARE(starved.at(3).at(0).toBool(), false);
     time.advanceTo(time.nowMs + 1000);
     QCOMPARE(starved.count(), 4);
+}
+
+// TX mic thread fix round 2: the last audio only moves forward. A packet
+// received at 1100 ms is handed over at once; one received at 900 ms (held
+// 200 ms) is handed over after it. Starvation is still measured from 1100.
+void TestRemoteMicReceiver::anOlderReceiptCannotMoveTheLastAudioBack()
+{
+    FakeTime time;
+    RemoteMicFeed feed;
+    RemoteMicReceiver receiver(&feed, nullptr, time.clock(), time.scheduler());
+    QSignalSpy starved(&receiver, &RemoteMicReceiver::starved);
+    QVERIFY(receiver.start(kMicSsrc, true));
+    feed.setInUse(true);
+    time.advanceTo(1000);
+    receiver.setWatching(true);
+    time.advanceTo(1100);
+    receiver.submit(l16Packet(0.1f, 1, 0));
+    receiver.submit(l16Packet(0.1f, 2, 192), 200'000);
+    time.advanceTo(1349);
+    QCOMPARE(starved.count(), 0);
+    time.advanceTo(1350);
+    QCOMPARE(starved.count(), 1);
+    QCOMPARE(starved.at(0).at(0).toBool(), true);
 }
 
 // R-IOS-13: steady 20 ms packets play from the smallest target, 30 ms (one
