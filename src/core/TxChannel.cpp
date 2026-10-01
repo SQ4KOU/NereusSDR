@@ -951,7 +951,7 @@ TxChannel::~TxChannel()
 // future regressions (or test fixtures that construct two TxChannels)
 // surface immediately.
 //
-// Cite: Thetis cmaster.cs:1125 [v2.10.3.13] — analogous registration
+// Cite: Thetis cmaster.cs:1134 [v2.10.3.15] — analogous registration
 // against the ChannelMaster wrapper VOX (`SendCBPushVox(0, PushVoxDel)`).
 // NereusSDR has no ChannelMaster shim, so the registration goes against
 // WDSP's DEXP pushvox directly (wdsp/dexp.c:399-403 [v2.10.3.13]).
@@ -998,7 +998,7 @@ void TxChannel::registerVoxCallbackOnLane()
     if (txa[m_channelId].rsmpin.p == nullptr) return;
     if (pdexp[m_channelId] == nullptr) return;
     // From Thetis wdsp/dexp.c:399-403 [v2.10.3.13] — SendCBPushDexpVox impl.
-    // Cite: Thetis cmaster.cs:1125 [v2.10.3.13] — analogous registration.
+    // Cite: Thetis cmaster.cs:1134 [v2.10.3.15] — analogous registration.
     SendCBPushDexpVox(m_channelId, &TxChannel::s_pushVoxCallback);
 #endif
 }
@@ -1513,7 +1513,7 @@ quint64 TxChannel::setRunningAsync(bool on)
     // (bench-measured TX I/Q peak 0.214 vs Thetis 0.98 on HL2 at the same
     // mag=0.99999 tune-tone setting).
     //
-    // Authoritative source: Thetis ChannelMaster/cmaster.cs:525-533 [v2.10.3.14]
+    // Authoritative source: Thetis Console/cmaster.cs:525-533 [v2.10.3.15]
     //   if (CurrentRadioProtocol == RadioProtocol.USB) //p1
     //       WDSP.SetTXACFIRRun(txch, false);
     //   else
@@ -5076,7 +5076,7 @@ void TxChannel::setTxAmCarrierLevel(int percent)
     }
     runKeyed(laneParameter("setTxAmCarrierLevel"), [this, pct = m_amCarrierPct]() {
         if (!txaOpenLive()) return;
-        // From Thetis setup.cs:9965 [v2.10.3.15]:
+        // From Thetis setup.cs:9706-9709 [v2.10.3.15]:
         //   console.radio.GetDSPTX(0).TXAMCarrierLevel =
         //       Math.Sqrt(0.01 * (double)udTXAMCarrierLevel.Value) * 0.5;
         const double cLevel = std::sqrt(0.01 * static_cast<double>(pct)) * 0.5;
@@ -5670,7 +5670,7 @@ qint64 TxChannel::onModeChanged(DSPMode newMode)
 //
 // Set the TXA fixed-gain scalar applied uniformly to the I and Q audio paths.
 // Wraps the cmaster/ChannelMaster SetTXFixedGain entry point used by Thetis
-// at cmaster.cs:1115-1119 [v2.10.3.13] CMSetTXOutputLevel:
+// at cmaster.cs:1124-1128 [v2.10.3.15] CMSetTXOutputLevel:
 //
 //   public static void CMSetTXOutputLevel()
 //   {
@@ -5715,8 +5715,7 @@ void TxChannel::setTxFixedGain(double level)
     if (!std::isnan(m_lastFixedGain) && level == m_lastFixedGain) return;
     m_lastFixedGain = level;
 #ifdef HAVE_WDSP
-    // From Thetis cmaster.cs:1115-1119 [v2.10.3.13] CMSetTXOutputLevel —
-    // Upstream tags preserved: //MW0LGE (from cited cmaster.cs:1114) [v2.10.3.15]
+    // From Thetis cmaster.cs:1124-1128 [v2.10.3.15] CMSetTXOutputLevel —
     // cmaster.SetTXFixedGain(0, level, level).  cmaster.SetTXFixedGain is
     // the C# P/Invoke at cmaster.cs:273-274 [v2.10.3.13]; the native impl
     // is Thetis ChannelMaster/txgain.c:127-134 [v2.10.3.13] —

@@ -760,7 +760,7 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
 // CreateRadio -> create_sync -> create_divEXT, InboundBlock -> xdivEXT, and
 // DestroyRadio -> destroy_sync -> destroy_divEXT. From Thetis
 // ChannelMaster/cmsetup.c:89-102 and sync.c:32-51
-// [v2.10.3.15 @501e3f5].
+// [v2.10.3.15].
 //
 // The WDSP C API performs no id or lifetime validation and dereferences
 // pdiv[id] directly (div.c:104-186), so every public method below validates
