@@ -119,6 +119,9 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 // Modification history (NereusSDR):
+//   2026-09-30 - Fix wave GUI-I6: tunePowerForTxBandWriteInFlight, a
+//                window's Tune Power change on its way to the Core.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-30 - CFC echo: updatePairedCfc / updatePairedCfcArray return
 //                 false for a value the paired curve already holds, so the
 //                 setter's own mirror path decides. J.J. Boyd (KG4VCF),
@@ -748,6 +751,11 @@ public:
     /// A window: the Core refused a Tune Power change; the slider shows the
     /// Core's value again.
     void reportTunePowerForTxBandRefused();
+    /// Fix wave GUI-I6: a window's Tune Power change is on its way to the
+    /// Core (sent, not yet answered). StationClient sets it; the TX applet
+    /// does not show the Core's older value over the operator's meanwhile.
+    void setTunePowerForTxBandWriteInFlight(bool inFlight) { m_tunePowerWriteInFlight = inFlight; }
+    bool tunePowerForTxBandWriteInFlight() const { return m_tunePowerWriteInFlight; }
     /// The plain words a Core gives for a value outside a mirrored
     /// setting's range, or empty when `value` is in range (or the property
     /// has no range here). `propertyName` is the property's name on the
@@ -2659,6 +2667,7 @@ private:
     Band m_tuneTxBand{Band::Band20m};
     bool m_tuneTxBandKnown{false};
     int  m_tunePowerForTxBand{50};
+    bool m_tunePowerWriteInFlight{false};  // fix wave GUI-I6
     // R-R3-49 (parity Task 3): the Core's TX profiles (see activeTxProfile).
     QString m_activeTxProfile;
     QString m_txProfilesJson{QStringLiteral("[]")};

@@ -82,6 +82,9 @@
 //   2026-09-30: TX rulings review (I-1): with this window's VOX armed the
 //               lit MOX's press after a release unkeys. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: fix wave GUI-I6: the Tune Power slider holds while dragged
+//               and while its change is on its way. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 //   2026-09-30: TX-parity-linkdown (fix wave): a window whose Core has no
 //               connection to the radio shows MOX, TUNE and 2-TONE
 //               disabled with the reason; VOX is left alone. J.J. Boyd
@@ -1556,6 +1559,54 @@ private slots:
         QTRY_COMPARE(core.tunePowerForTxBand(), tuneWanted);
         QTRY_COMPARE(h.remote.transmitModel().tunePowerForTxBand(), tuneWanted);
         // Nothing keyed.
+        QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix wave GUI-I6: the window's Tune Power slider does not snap back to
+    // the Core's value while the operator holds it or while its own change
+    // is on its way to the Core. Nothing keys.
+    void tunePowerSliderHoldsWhileDraggedAndWhileItsChangeIsOnItsWay()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QVERIFY(h.client.transmitSettingsAvailable(2));
+        WindowControls window(h);
+        window.follow(h.client);
+        window.applet.setTransmitSettingsPermitted(true, {});
+        window.applet.setTransmitChainSettingsPermitted(true, {});
+        QSlider* tune = nullptr;
+        for (QSlider* slider : window.applet.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("Tune power")) { tune = slider; }
+        }
+        QVERIFY(tune && tune->isEnabled());
+        TransmitModel& core = h.station.transmitModel();
+        TransmitModel& mirror = h.remote.transmitModel();
+        QVERIFY(core.setTunePowerForTxBand(20));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 20);
+        QTRY_COMPARE(tune->value(), 20);
+
+        // The operator drags to 40; meanwhile the Core's value moves to 30.
+        tune->setSliderDown(true);
+        tune->setValue(40);
+        QVERIFY(core.setTunePowerForTxBand(30));
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 30);
+        QCOMPARE(tune->value(), 40);
+
+        // Released: the change goes, and is on its way until answered.
+        QList<int> shown;
+        connect(tune, &QSlider::valueChanged, this, [&shown](int v) { shown.append(v); });
+        tune->setSliderDown(false);
+        QVERIFY(mirror.tunePowerForTxBandWriteInFlight());
+        QTRY_COMPARE(core.tunePowerForTxBand(), 40);
+        QTRY_COMPARE(mirror.tunePowerForTxBand(), 40);
+        QTRY_VERIFY(!mirror.tunePowerForTxBandWriteInFlight());
+        QCOMPARE(tune->value(), 40);
+        QVERIFY2(!shown.contains(30), qPrintable(QStringLiteral("shown %1").arg(shown.size())));
         QVERIFY(!h.station.moxController()->isMox());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }

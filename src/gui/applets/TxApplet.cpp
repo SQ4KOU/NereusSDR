@@ -190,6 +190,10 @@
 //                (RadioModel::radioLinkDownChanged); VOX stays as Thetis's
 //                power-off leaves it (console.cs:27488-27493 [v2.10.3.15]).
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave GUI-I6: a remote window's
+//                Tune Power slider ignores the Core's value while held or
+//                while its change is on its way.
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-30  J.J. Boyd / KG4VCF  TX-parity-linkdown (fix wave): the
 //                lock follows connectionStateChanged too, so a remote
 //                window whose Core has no radio locks MOX, TUN and 2TONE.
@@ -1288,6 +1292,14 @@ void TxApplet::wireControls()
     connect(&tx, &TransmitModel::tunePowerForTxBandChanged,
             this, [this, &tx](int watts) {
         if (!remoteTunePower() && !tx.tuneTxBandKnown()) { return; }
+        // Fix wave GUI-I6: the Core's value does not move the slider out
+        // from under the operator's hand, nor back to an older value while
+        // the operator's change is on its way (the Core's next value, after
+        // its answer, shows; a refusal shows the Core's value again).
+        if (remoteTunePower()
+            && (m_tunePwrSlider->isSliderDown() || tx.tunePowerForTxBandWriteInFlight())) {
+            return;
+        }
         QSignalBlocker b(m_tunePwrSlider);
         m_updatingFromModel = true;
         m_tunePwrSlider->setValue(watts);
