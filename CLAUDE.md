@@ -108,8 +108,9 @@ Full conventions in [CONTRIBUTING.md](CONTRIBUTING.md). Non-negotiables:
 strings `"True"` / `"False"`.
 
 * Radio-authoritative, never persisted: antenna selection.
-* Saved and sent to the radio on connect, as Thetis does (console.cs:2174-2179):
-  ADC attenuation, preamp, per-band TX power. Connecting never keys.
+* Saved and sent to the radio on connect, as Thetis does: ADC attenuation and
+  preamp (console.cs:2174-2179), per-band TX power (console.cs:3089-3093,
+  4903-4910, 17528-17542). Connecting never keys.
 * Per-MAC under `hardware/<mac>/...`: sample rate, active RX count.
 * Client-authoritative, persisted: VFO, mode, filter, DSP settings, layout, UI
   and display preferences.
