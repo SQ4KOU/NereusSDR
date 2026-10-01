@@ -539,6 +539,10 @@
 //   2026-10-01 - TGXL tune lane round 3: m_tgxlLinkEpoch and the per-tune
 //                frame and echo counts. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-10-01 - Tune-ended lane: TunerTuneEnd and tunerTuneEndedReason,
+//                the words a device's autotune that ends before its carrier
+//                keyed is told; cancelTgxlAutotuneFor takes the reason.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3677,6 +3681,17 @@ public:
     /// the amplifier did not go to standby for it (or was put back in
     /// operate during the wait).
     static QString ampNotStandbyForTuneText();
+    /// Tune-ended lane (2026-10-01): why a device's autotune ended before
+    /// its carrier keyed, where no refusal of its own says it.
+    enum class TunerTuneEnd {
+        TunerDisconnected,   // the Tuner Genius link dropped
+        TunerStopped,        // the tuner let go of the tune first
+        CarrierNotStarted,   // the tune carrier was refused, no words given
+        TransmitTaken,       // another device or the radio's PTT took transmit
+        NoReasonGiven,       // the backstop: an end that named no reason
+    };
+    /// The words of each, for the device's tuneEnded notice.
+    static QString tunerTuneEndedReason(TunerTuneEnd end);
     /// Task 77 fix round 4: the amplifier reported operating, commanded by
     /// nobody, while the radio transmitted (a fault clearing by itself, or
     /// its front panel): the key is stopped with these words.
@@ -5104,7 +5119,11 @@ public slots:
     bool startTgxlAutotuneFor(const KeyerIdentity& keyer, QString* reason);
     /// Ends `deviceId`'s autotune cycle (its carrier, and the amplifier
     /// back to operate). False when no cycle of that device runs.
-    bool cancelTgxlAutotuneFor(const QByteArray& deviceId);
+    /// Tune-ended lane: `unkeyedReason`, the words the device is told when
+    /// the cycle ends before its carrier keyed (tgxlAutotuneEnded); empty
+    /// for the device's own stop, which its answer already tells it.
+    bool cancelTgxlAutotuneFor(const QByteArray& deviceId,
+                               const QString& unkeyedReason = QString());
     bool isTgxlAutotuneInProgress() const { return m_tgxlAutotuneInProgress; }
     /// The device the running autotune keys for; empty for the Core's own
     /// (its Tuner page, a Tuner Genius hardware TUNE) or when none runs.
@@ -8163,6 +8182,8 @@ private:
     /// Task 77 fix round 4: `unkeyedReason`, the words for a cycle that ends
     /// without keying because of the amplifier (carried on tgxlAutotuneEnded
     /// to the device whose cycle it was).
+    /// Tune-ended lane: every end before the carrier keyed names its own
+    /// reason; RemoteKeying fills in a backstop for one that does not.
     void finishTgxlAutotuneCycle(const QString& unkeyedReason = QString());
     /// Task 77 fix round 4: counts cycles, so a failsafe timer left from an
     /// ended cycle never acts on a new one.

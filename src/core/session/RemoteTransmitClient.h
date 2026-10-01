@@ -71,6 +71,10 @@
 //               else of this window keeps the radio on the air. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: Tune-ended lane: tunerTuneEnded, the Core's notice that
+//               this window's Tuner Genius autotune ended before its
+//               carrier keyed. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -170,6 +174,10 @@ public:
     /// (tx.tunerTune {on}); the carrier it keys is this window's, watched
     /// like TUNE's.
     void setTunerTune(bool on);
+    /// Tune-ended lane: the Core ended this window's Tuner Genius autotune
+    /// before its carrier keyed (its notice tuneEnded). The TUNE asked for
+    /// is over: the next press asks it on again, and its keepalives stop.
+    void tunerTuneEnded();
 
     // ---- A program through this window's TCI server ("tci") ----
     void keyForProgram(std::function<void(const Answer&)> answer);

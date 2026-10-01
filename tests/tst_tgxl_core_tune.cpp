@@ -45,6 +45,11 @@
 //               counted, an idle push is not; the recall's answer keys as
 //               a station key and never takes. J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-10-01: tune-ended lane: each end of a device's cycle before its
+//               carrier keyed tells that device once (notice tuneEnded,
+//               plain words) and nobody else; its own stop and a keyed
+//               cycle are not told. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -55,6 +60,7 @@
 #include "core/TgxlConnection.h"
 #include "core/TuneMemoryStore.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/safety/TxRefusal.h"
 #include "models/SliceModel.h"
 
 #include <QHostAddress>
@@ -322,7 +328,59 @@ void plainTuneBy(Core& core, FakeTuner& tuner, LoopbackTransport* app)
     QTest::qWait(100);
 }
 
+// Tune-ended lane: the tuneEnded notices `app` was sent.
+QList<QJsonObject> tuneEndedNotices(const LoopbackTransport* app)
+{
+    QList<QJsonObject> found;
+    for (const QJsonObject& n : ofType(app->received(), QStringLiteral("notice"))) {
+        if (n.value(QStringLiteral("kind")).toString() == QStringLiteral("tuneEnded")) {
+            found.append(n);
+        }
+    }
+    return found;
+}
+
+// Tune-ended lane: the Power Genius reports operating, so a device's cycle
+// waits for its standby with nothing keyed.
+void ampOperating(Core& core)
+{
+    PgxlConnection* amp = core.model->pgxlConnection();
+    amp->injectLineForTesting(QStringLiteral("V3.8.9"));
+    amp->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+}
+
+// Tune-ended lane: station VOX armed by `device`, which holds transmit (as
+// tst_station_multi_session's armVoxAsDevice), so its key is the holder's.
+void armVoxAsHolder(Core& core, LoopbackTransport* app, const Device& device, quint32 writeId)
+{
+    const QByteArray id = device.key.fingerprint();
+    QVERIFY(core.server->transmitHolder()->isHeldBy(id));
+    core.model->openRemoteMicLine(id);
+    app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        "transmit", {MirrorUpdate{0, "voxEnabled", MirrorWireKind::Bool, QVariant(true)}},
+        writeId)));
+    QTRY_VERIFY(!propertyResult(app, writeId).isEmpty());
+    const QJsonObject result =
+        propertyResult(app, writeId).value(QStringLiteral("results")).toArray().first().toObject();
+    QVERIFY2(result.value(QStringLiteral("accepted")).toBool(),
+             qPrintable(result.value(QStringLiteral("reason")).toString()));
+    core.model->setRemoteMicVoxArmed(id, true);
+}
+
+// Tune-ended lane: the ends of a device's cycle before its carrier keyed.
+enum class UnkeyedEnd {
+    TunerDisconnected,
+    TunerLetGo,
+    ReceiveOnly,
+    OnAir,
+    CarrierRefused,
+    TransmitTaken,
+    NoReasonGiven,
+};
+
 } // namespace
+
+Q_DECLARE_METATYPE(UnkeyedEnd)
 
 class TgxlCoreTuneTest : public QObject {
     Q_OBJECT
@@ -1281,6 +1339,171 @@ private slots:
         QTRY_COMPARE(mox->state(), MoxState::Rx);
         QTRY_VERIFY(!core.model->isTune());
         QVERIFY(!core.model->isTgxlAutotuneInProgress());
+    }
+
+    // Tune-ended lane: every end of a device's tx.tunerTune (answered
+    // accepted) before its carrier keyed tells that device, once, why, in
+    // plain words (notice tuneEnded, about its own request: no `by` keys,
+    // no Take it back). The other device is told nothing. Each cycle waits
+    // for the amplifier's standby, so nothing has keyed when it ends.
+    void aDevicesCycleEndedUnkeyedTellsThatDeviceOnce_data()
+    {
+        QTest::addColumn<UnkeyedEnd>("end");
+        QTest::newRow("tuner disconnected") << UnkeyedEnd::TunerDisconnected;
+        QTest::newRow("tuner let go") << UnkeyedEnd::TunerLetGo;
+        QTest::newRow("receive only") << UnkeyedEnd::ReceiveOnly;
+        QTest::newRow("on the air") << UnkeyedEnd::OnAir;
+        QTest::newRow("carrier refused") << UnkeyedEnd::CarrierRefused;
+        QTest::newRow("transmit taken") << UnkeyedEnd::TransmitTaken;
+        QTest::newRow("no reason given") << UnkeyedEnd::NoReasonGiven;
+    }
+    void aDevicesCycleEndedUnkeyedTellsThatDeviceOnce()
+    {
+        QFETCH(UnkeyedEnd, end);
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        ampOperating(core);
+        MoxController* mox = core.model->moxController();
+        PgxlConnection* amp = core.model->pgxlConnection();
+
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!mox->isMox());   // waiting for the amplifier's standby
+        QCOMPARE(core.model->tgxlAutotuneDeviceId(), a.key.fingerprint());
+
+        QString expected;
+        switch (end) {
+        case UnkeyedEnd::TunerDisconnected:
+            expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::TunerDisconnected);
+            tuner.dropLink();
+            break;
+        case UnkeyedEnd::TunerLetGo:
+            expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::TunerStopped);
+            tuner.lan.send(QStringLiteral("transmit tune off"));
+            break;
+        case UnkeyedEnd::ReceiveOnly:
+            expected = TxRefusals::stationReceiveOnly().text;
+            core.model->setReceiveOnlyStationPolicy(true);
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        case UnkeyedEnd::OnAir:
+            expected = TxRefusals::radioOnAir().text;
+            armVoxAsHolder(core, appA, a, 940);
+            if (QTest::currentTestFailed()) { return; }
+            mox->onVoxActive(true);
+            QTRY_COMPARE(mox->state(), MoxState::Tx);
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        case UnkeyedEnd::CarrierRefused:
+            expected = TxRefusals::txInhibited().text;
+            mox->setTxInhibited(true);
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        case UnkeyedEnd::TransmitTaken:
+            expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::TransmitTaken);
+            mox->onMicPttFromRadio(true);
+            QTRY_VERIFY(core.server->transmitHolder()->isHeldBy(
+                QByteArray(KeyerIdentity::kStationDeviceId)));
+            break;
+        case UnkeyedEnd::NoReasonGiven:
+            // An end that names no reason (MOX's manual flag dropping with
+            // nothing keyed) still tells the device, with the backstop.
+            expected = RadioModel::tunerTuneEndedReason(RadioModel::TunerTuneEnd::NoReasonGiven);
+            emit mox->manualMoxChanged(false);
+            break;
+        }
+        QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!core.model->isTune());
+
+        QTRY_COMPARE(tuneEndedNotices(appA).size(), 1);
+        const QJsonObject told = tuneEndedNotices(appA).first();
+        const QString reason = told.value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, expected);
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        QCOMPARE(told.value(QStringLiteral("takeBack")).toBool(true), false);
+        QVERIFY(!told.contains(QStringLiteral("byDeviceId")));
+        QTest::qWait(300);
+        QCOMPARE(tuneEndedNotices(appA).size(), 1);
+        QVERIFY(tuneEndedNotices(appB).isEmpty());
+
+        if (end == UnkeyedEnd::OnAir) {
+            mox->onVoxActive(false);
+            QTRY_COMPARE(mox->state(), MoxState::Rx);
+            core.model->transmitModel().setVoxEnabled(false);
+        } else if (end == UnkeyedEnd::TransmitTaken) {
+            mox->onMicPttFromRadio(false);
+            QTRY_COMPARE(mox->state(), MoxState::Rx);
+        } else {
+            QVERIFY(!mox->isMox());
+        }
+        if (end == UnkeyedEnd::CarrierRefused) {
+            mox->setTxInhibited(false);
+        }
+    }
+
+    // Tune-ended lane: no tuneEnded where the device already knows. Its own
+    // tx.tunerTune or tx.tune off answers it; a cycle whose carrier keyed
+    // ends as any key does (keyedBy and txState), whatever ends it.
+    void aStoppedOrKeyedCycleIsNotToldTuneEnded_data()
+    {
+        QTest::addColumn<int>("how");
+        QTest::newRow("own tunerTune off") << 0;
+        QTest::newRow("own tune off") << 1;
+        QTest::newRow("keyed, sweep ends") << 2;
+        QTest::newRow("keyed, tuner disconnected") << 3;
+    }
+    void aStoppedOrKeyedCycleIsNotToldTuneEnded()
+    {
+        QFETCH(int, how);
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        MoxController* mox = core.model->moxController();
+        if (how <= 1) {
+            ampOperating(core);
+        }
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        switch (how) {
+        case 0:
+            QVERIFY(core.invoke(appA, "tx.tunerTune", {kOff}).value(QStringLiteral("accepted")).toBool());
+            break;
+        case 1:
+            QVERIFY(core.invoke(appA, "tx.tune", {kOff}).value(QStringLiteral("accepted")).toBool());
+            break;
+        case 2:
+            QTRY_VERIFY(mox->isMox());
+            tuner.push(QStringLiteral("S0|state tuning=1"));
+            QTest::qWait(100);
+            tuner.push(QStringLiteral("S0|state tuning=0"));
+            break;
+        default:
+            QTRY_VERIFY(mox->isMox());
+            tuner.push(QStringLiteral("S0|state tuning=1"));
+            QTest::qWait(100);
+            tuner.dropLink();
+            break;
+        }
+        QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.model->isTune());
+        QTest::qWait(300);
+        QVERIFY(tuneEndedNotices(appA).isEmpty());
     }
 
     // The tuner's `M|` messages (why a tune ended) reach the log and a signal.

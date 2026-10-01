@@ -966,6 +966,11 @@
 //                dropped, never keyed; entries keyed by link epoch; each
 //                answer's kind and latency logged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - Tune-ended lane: every end of a device's autotune before
+//                its carrier keyed names why (the tuner disconnected or let
+//                go, receive only, on the air, the carrier's refusal, a
+//                take), so the device is always told. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2911,7 +2916,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // The carrier drops; manualMoxChanged(false) finishes the cycle.
             setTune(false);
         } else {
-            finishTgxlAutotuneCycle();
+            // Tune-ended lane: a device's cycle is told why.
+            finishTgxlAutotuneCycle(tunerTuneEndedReason(TunerTuneEnd::TunerDisconnected));
         }
     });
     // iPhone app plan Task 77: a device's Tuner Genius cycle ends with the
@@ -3256,7 +3262,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 // cycle ends here, so nothing keys after it.
                 qCInfo(lcConnection) << "TGXL autotune: the tuner ended the cycle before the"
                                         " carrier keyed";
-                finishTgxlAutotuneCycle();
+                // Tune-ended lane: a device's cycle is told why.
+                finishTgxlAutotuneCycle(tunerTuneEndedReason(TunerTuneEnd::TunerStopped));
                 return;
             }
             setTune(false);
@@ -3290,6 +3297,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
             if (!took) {
                 qCInfo(lcConnection) << "TGXL autotune: the take for the tuner's TUNE did not"
                                         " finish; ending the cycle";
+                // Tune-ended lane: only the tuner's own front-panel TUNE
+                // takes, and that cycle is never a device's, so nobody is
+                // told.
                 finishTgxlAutotuneCycle();
                 return;
             }
@@ -30317,7 +30327,7 @@ bool RadioModel::startTgxlAutotuneFor(const KeyerIdentity& keyer, QString* reaso
     return true;
 }
 
-bool RadioModel::cancelTgxlAutotuneFor(const QByteArray& deviceId)
+bool RadioModel::cancelTgxlAutotuneFor(const QByteArray& deviceId, const QString& unkeyedReason)
 {
     if (!m_tgxlAutotuneInProgress || deviceId.isEmpty() || m_tgxlAutotuneDeviceId != deviceId) {
         return false;
@@ -30326,9 +30336,28 @@ bool RadioModel::cancelTgxlAutotuneFor(const QByteArray& deviceId)
         // The carrier drops; manualMoxChanged(false) finishes the cycle.
         setTune(false);
     } else {
-        finishTgxlAutotuneCycle();
+        finishTgxlAutotuneCycle(unkeyedReason);
     }
     return true;
+}
+
+QString RadioModel::tunerTuneEndedReason(TunerTuneEnd end)
+{
+    // Tune-ended lane (2026-10-01): a device's tuneEnded notice, where no
+    // refusal of the path's own says what happened.
+    switch (end) {
+    case TunerTuneEnd::TunerDisconnected:
+        return QStringLiteral("The Tuner Genius disconnected from the Core, so the tune stopped.");
+    case TunerTuneEnd::TunerStopped:
+        return QStringLiteral("The tuner stopped the tune before the carrier started.");
+    case TunerTuneEnd::CarrierNotStarted:
+        return QStringLiteral("The Core could not start the tune carrier.");
+    case TunerTuneEnd::TransmitTaken:
+        return QStringLiteral("Transmit was taken, so the tune stopped.");
+    case TunerTuneEnd::NoReasonGiven:
+        break;
+    }
+    return QStringLiteral("The tune stopped before the carrier started.");
 }
 
 void RadioModel::finishTgxlAutotuneCycle(const QString& unkeyedReason)
@@ -30788,7 +30817,8 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     if (receiveOnlyTxOperationsBlocked()) {
         // Task 77 fix round 2: one ending for every cycle (its device and
         // the amplifier's restore included).
-        finishTgxlAutotuneCycle();
+        // Tune-ended lane: a device's cycle is told why.
+        finishTgxlAutotuneCycle(TxRefusals::stationReceiveOnly().text);
         setTune(false);
         return;
     }
@@ -30805,7 +30835,8 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         // back once nothing is keyed or pending.
         qCInfo(lcConnection) << "TGXL autotune: the radio is on the air; ending the"
                                 " cycle without keying";
-        finishTgxlAutotuneCycle();
+        // Tune-ended lane: a device's cycle is told why.
+        finishTgxlAutotuneCycle(TxRefusals::radioOnAir().text);
         return;
     }
     if (m_pgxlConnection && m_pgxlConnection->isConnected()
@@ -30834,6 +30865,14 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     const QMetaObject::Connection refusalCapture =
         connect(this, &RadioModel::tuneRefused, this,
                 [&refusedReason](const QString& reason) { refusedReason = reason; });
+    // Tune-ended lane: and the keying gate's own refusal, in the words a
+    // device's cycle is told.
+    TxRefusal gateRefusal;
+    QMetaObject::Connection gateCapture;
+    if (m_moxController) {
+        gateCapture = connect(m_moxController, &MoxController::moxRefused, this,
+                              [&gateRefusal](const TxRefusal& refusal) { gateRefusal = refusal; });
+    }
     if (!m_tgxlAutotuneDeviceId.isEmpty()) {
         // iPhone app plan Task 77: a device's cycle keys as that device,
         // through the keying gate (its session, the holder, the watchdog).
@@ -30854,6 +30893,7 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
         setTune(true);
     }
     disconnect(refusalCapture);
+    disconnect(gateCapture);
     if (!m_isTuning && m_tgxlAutotuneTunerPress && m_moxController
         && m_moxController->lastAdmitTook()) {
         // Ruling 8.9: the press keys nothing while the transfer runs; the
@@ -30867,13 +30907,17 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     if (!m_isTuning) {
         // Refused (the device went away, another holds transmit, a block
         // came on): nothing keyed, so the amplifier goes back now.
+        // Tune-ended lane: a device's cycle is told the refusal's words.
+        const QString unkeyedReason = !refusedReason.isEmpty() ? refusedReason
+            : !gateRefusal.isEmpty() ? gateRefusal.text
+                                     : tunerTuneEndedReason(TunerTuneEnd::CarrierNotStarted);
         if (refusedReason.isEmpty() && m_moxController) {
             refusedReason = QStringLiteral("none given; the controller's last refusal: %1")
                                 .arg(m_moxController->lastRefusal().text);
         }
         qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle."
                              << "Reason:" << refusedReason;
-        finishTgxlAutotuneCycle();
+        finishTgxlAutotuneCycle(unkeyedReason);
         return;
     }
     if (!m_tgxlAutotuneDeviceId.isEmpty() || m_tgxlAutotuneFromHardware) {

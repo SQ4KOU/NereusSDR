@@ -39,6 +39,10 @@
 //               (VOX, two-tone, TUNE, a program key, MOX for TUNE). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-10-01: Tune-ended lane: tunerTuneEnded, the Core's notice that
+//               this window's Tuner Genius autotune ended before its
+//               carrier keyed. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -390,6 +394,19 @@ void RemoteTransmitClient::setTunerTune(bool on)
                                                                 : kNoLinkReason),
                      QString(), QString());
     }
+    refreshKeepalive();
+}
+
+void RemoteTransmitClient::tunerTuneEnded()
+{
+    // Tune-ended lane (2026-10-01): with no carrier keyed, no `transmitting`
+    // or stop comes to end the tune this window asked for; the Core's
+    // notice does.
+    if (!m_tuneAsked) {
+        return;
+    }
+    m_tuneAsked = false;
+    qCInfo(lcRemoteTransmit) << "The Core ended this window's tuner tune before it keyed";
     refreshKeepalive();
 }
 

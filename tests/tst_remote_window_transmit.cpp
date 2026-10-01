@@ -89,6 +89,11 @@
 //               connection to the radio shows MOX, TUNE and 2-TONE
 //               disabled with the reason; VOX is left alone. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: tune-ended lane: the Core's tuneEnded notice ends the
+//               Tuner Genius tune the window asked for (TUNE asks on
+//               again, keepalives stop) on each end before its carrier
+//               keyed. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -111,7 +116,10 @@
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"
 #include "core/MoxController.h"
+#include "core/PgxlConnection.h"
 #include "core/SliceOwnership.h"
+#include "core/SmartSdrApiListener.h"
+#include "core/TgxlConnection.h"
 #include "core/TciBinaryFrame.h"
 #include "core/TciServer.h"
 #include "core/TxSliceArbiter.h"
@@ -119,6 +127,7 @@
 #include "core/safety/TxRefusal.h"
 #include "core/meters/TxMeterPump.h"
 #include "core/safety/TxTimeOutTimer.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/session/RemoteTransmitClient.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -339,6 +348,22 @@ struct WindowControls {
     }
 };
 
+// Tune-ended lane: the Core's Tuner Genius and Power Genius have no socket
+// in aTuneEndedNoticeEndsTheWindowsTunerTune (their lines are injected), so
+// their unopened-socket write warnings are not findings there. Same filter
+// as tst_tgxl_core_tune.
+QtMessageHandler g_unopenedSocketsPrevious = nullptr;
+void quietUnopenedSockets(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+{
+    if (msg.startsWith(QLatin1String("QIODevice::write"))
+        && msg.contains(QLatin1String("device not open"))) {
+        return;
+    }
+    if (g_unopenedSocketsPrevious != nullptr) {
+        g_unopenedSocketsPrevious(type, context, msg);
+    }
+}
+
 } // namespace
 
 class TestRemoteWindowTransmit : public QObject {
@@ -434,6 +459,92 @@ private slots:
         QVERIFY(acceptedOff);
         tx->keepaliveTick();
         QCOMPARE(independentHeartbeats, independentBefore + 1);
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Tune-ended lane: the window's Tuner Genius tune (tx.tunerTune) that
+    // the Core ends before its carrier keyed sends no `transmitting` and no
+    // stop, only its notice tuneEnded. The window leaves its tune on it:
+    // the next TUNE press asks on again and the keepalives stop. Each end
+    // waits for the amplifier's standby first, so nothing keys.
+    void aTuneEndedNoticeEndsTheWindowsTunerTune_data()
+    {
+        QTest::addColumn<int>("how");
+        QTest::newRow("tuner disconnected") << 0;
+        QTest::newRow("tuner let go") << 1;
+        QTest::newRow("receive only") << 2;
+        QTest::newRow("amplifier operating") << 3;
+        QTest::newRow("transmit taken") << 4;
+        QTest::newRow("carrier refused") << 5;
+    }
+    void aTuneEndedNoticeEndsTheWindowsTunerTune()
+    {
+        QFETCH(int, how);
+        g_unopenedSocketsPrevious = qInstallMessageHandler(quietUnopenedSockets);
+        const auto restoreHandler =
+            qScopeGuard([]() { qInstallMessageHandler(g_unopenedSocketsPrevious); });
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        RemoteTransmitClient* tx = h.client.remoteTransmit();
+        QVERIFY(tx != nullptr);
+        h.station.tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* amp = h.station.pgxlConnection();
+        amp->injectLineForTesting(QStringLiteral("V3.8.9"));
+        amp->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        MoxController* coreMox = h.station.moxController();
+
+        tx->setTunerTune(true);
+        QTRY_VERIFY(h.station.isTgxlAutotuneInProgress());
+        QVERIFY(tx->tuneAsked());
+        QVERIFY(tx->keepaliveRunning());
+        QVERIFY(!coreMox->isMox());
+        QVERIFY(!h.remote.tunePressAsksOn(true));   // a press now asks off
+
+        switch (how) {
+        case 0:
+            emit h.station.tgxlConnection()->disconnected();
+            break;
+        case 1:
+            emit h.station.smartSdrListener()->tuneRequested(false, QHostAddress());
+            break;
+        case 2:
+            h.station.setReceiveOnlyStationPolicy(true);
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        case 3:
+            amp->sendCommand(QStringLiteral("operate=1"));
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        case 4:
+            coreMox->onMicPttFromRadio(true);
+            break;
+        default:
+            coreMox->setTxInhibited(true);
+            amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+            break;
+        }
+        QTRY_VERIFY(!h.station.isTgxlAutotuneInProgress());
+        QTRY_VERIFY(!tx->tuneAsked());
+        QVERIFY(!tx->keepaliveRunning() || how == 4);
+        QVERIFY(h.remote.tunePressAsksOn(true));
+        int told = 0;
+        for (const RemotePrompt& notice : h.client.remoteDevices()->notices()) {
+            if (notice.prompt.kind == QLatin1String("tuneEnded")) {
+                ++told;
+                QVERIFY2(OperatorWording::isPlain(notice.reason), qPrintable(notice.reason));
+            }
+        }
+        QCOMPARE(told, 1);
+        if (how == 4) {
+            coreMox->onMicPttFromRadio(false);
+            QTRY_COMPARE(coreMox->state(), MoxState::Rx);
+        } else {
+            QVERIFY(!coreMox->isMox());
+        }
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

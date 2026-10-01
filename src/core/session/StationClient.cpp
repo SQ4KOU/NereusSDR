@@ -474,6 +474,10 @@
 //               and the slice access mirror learns whether the Core's own
 //               slice may be taken. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-10-01: tune-ended lane: a tuneEnded notice ends the Tuner Genius
+//               tune this window asked for (RemoteTransmitClient), so TUNE
+//               and its keepalives do not stay on. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/NetworkTrouble.h"
@@ -2994,6 +2998,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         }
         break;
     case SessionMessageKind::Notice:
+        // Tune-ended lane: the Core ended this window's tuner tune before
+        // its carrier keyed; nothing else tells the transmit client.
+        if (message.prompt.kind == QLatin1String("tuneEnded")) {
+            m_remoteTransmit->tunerTuneEnded();
+        }
         if (m_declaredSessionHolder) {
             m_remoteDevices->addNotice(message.prompt, message.reason);
         }
