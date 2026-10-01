@@ -18,6 +18,9 @@
 //                 sender's address, so the Core takes transmit only for
 //                 the connected Tuner Genius. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-10-01 - TGXL tune lane round 2: tuneStateBroadcast, each tune
+//                 state change this listener broadcasts. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -181,6 +184,13 @@ signals:
     // the Tuner Genius's front-panel TUNE only when `peer` is the connected
     // Tuner Genius.
     void tuneRequested(bool on, const QHostAddress& peer);
+
+    // TGXL tune lane round 2 (2026-10-01): setTuneActive changed the tune
+    // state and broadcast `transmit tune=<active>` to every client. The
+    // Tuner Genius answers that with its own `transmit tune on/off`
+    // (bench 2026-05-20, commit 01ca5b824 item 8), which RadioModel must
+    // not take for its front-panel TUNE.
+    void tuneStateBroadcast(bool active);
 
     // LAN PTT MOX request from a SmartSDR-API client. Same pattern as
     // tuneRequested but for regular `transmit mox on/off` (no tune

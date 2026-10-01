@@ -1452,8 +1452,12 @@ the tune carrier when it ends only if the tuner's cycle is still running. Every 
 stays: the cycle never starts while the radio is on the air (so it never unkeys a holder), the
 amplifier rules, TX inhibit, the PA trip and receive only, and the 3 s start watchdog. The press
 is only a `transmit tune on` that the connected Tuner Genius sends from its own address on the
-SmartSDR API port, and never while an `autotune` the Core sent the tuner (the Tuner page, a
-device's tune, the band-change recall) is unanswered: the tuner's answer to that is not a press.
+SmartSDR API port and answers nothing the Core sent the tuner. The tuner answers each `autotune`
+the Core sends (the Tuner page, a device's tune, the band-change recall) and echoes each
+`transmit tune=1/0` the Core broadcasts with its own tune on or off. The Core counts each of
+these until its answer arrives, the tuner refuses that `autotune`, the sweep it started ends, or
+3 s pass (the capture shows the answer at 503 ms; 3 s is the Core's existing tuner start
+window). A tune on is the tuner's own TUNE only when nothing is waiting for one.
 The tuner's `tuning=1` alone, another SmartSDR API client's line, and a device's `tx.tunerTune`
 never take; they are station or device keys under ruling 8.9a and the holder rules.
 

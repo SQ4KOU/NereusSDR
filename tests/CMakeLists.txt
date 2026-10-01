@@ -8196,6 +8196,9 @@ nereus_add_test(tst_station_multi_session
 nereus_add_test(tst_tgxl_core_tune
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# TGXL tune lane round 2: what the Core sent the tuner that it may answer
+# with its own tune on/off, as one table of sequences. No sockets.
+nereus_add_test(tst_tgxl_answer_tracker)
 nereus_add_test(tst_station_fifth_device
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

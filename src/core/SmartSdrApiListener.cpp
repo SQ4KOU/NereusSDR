@@ -14,6 +14,9 @@
 // Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane fix round,
 // tuneRequested carries the sender's address; AI-assisted via Anthropic
 // Claude Code.
+// Modified 2026-10-01 by J.J. Boyd (KG4VCF): TGXL tune lane round 2,
+// tuneStateBroadcast on each tune state change; AI-assisted via Anthropic
+// Claude Code.
 
 #include "SmartSdrApiListener.h"
 
@@ -246,6 +249,7 @@ void SmartSdrApiListener::setTuneActive(bool active)
     m_tuneActive = active;
     qCInfo(lcSmartSdr) << "tune state change -> broadcasting transmit tune=" << (active ? 1 : 0);
     broadcastSliceState();
+    emit tuneStateBroadcast(active);
 }
 
 bool SmartSdrApiListener::hasInterlockedAmp() const

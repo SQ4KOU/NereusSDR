@@ -13,9 +13,12 @@
 // `R<seq>|0|`, and pushes `S0|state tuning=1/0` and `M|<text>` lines. On
 // the Core's SmartSDR API listener it sends `C<seq>|transmit tune on/off`
 // from its own address: on a front-panel press, as its answer to an
-// `autotune`, and when it ends or gives up a tune. Every test drives those
-// lines over real sockets: the fake tuner is at ::1, and any other client
-// connects from 127.0.0.1.
+// `autotune`, and when it ends or gives up a tune. As the bench showed
+// (2026-05-20, commit 01ca5b824 item 8) it also echoes each change of the
+// Core's broadcast `transmit ... tune=<0|1>` with its own tune on/off
+// (echoTuneState; a test that needs the echo late turns it off and sends
+// it itself). Every test drives those lines over real sockets: the fake
+// tuner is at ::1, and any other client connects from 127.0.0.1.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -26,12 +29,18 @@
 //               the listener; the sender, our own autotune and tuning=1
 //               cases; the untested ends. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-10-01: round 2: the fake tuner echoes the Core's tune state;
+//               a late echo of a device's plain tune, the amplifier-wait
+//               press, a v4-mapped tuner, and the answer window's
+//               recoveries (rejection, a sweep, a reconnect, the window).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
 
 #include "core/PgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
+#include "core/TgxlAnswerTracker.h"
 #include "core/TgxlConnection.h"
 #include "core/TuneMemoryStore.h"
 #include "core/safety/TransmitHolder.h"
@@ -68,11 +77,20 @@ void quietUnopenedSockets(QtMsgType type, const QMessageLogContext& context, con
 // A SmartSDR-API client of the Core's listener, from a given address.
 class LanClient {
 public:
+    LanClient()
+    {
+        QObject::connect(&m_sock, &QTcpSocket::readyRead, &m_sock, [this]() { readStatus(); });
+    }
     bool connectTo(const QHostAddress& listener, quint16 port)
     {
         m_sock.connectToHost(listener, port);
         return m_sock.waitForConnected(2000);
     }
+    /// The tune state the Core last broadcast to this client.
+    bool tuneSeen() const { return m_tuneSeen; }
+    /// Echo each change of that state with `transmit tune on/off`, as the
+    /// Tuner Genius does.
+    bool echoTuneState{false};
     void send(const QString& command)
     {
         m_sock.write(QStringLiteral("C%1|%2\n").arg(++m_seq).arg(command).toUtf8());
@@ -81,23 +99,53 @@ public:
     void close() { m_sock.abort(); }
 
 private:
+    void readStatus()
+    {
+        while (m_sock.canReadLine()) {
+            const QString line = QString::fromUtf8(m_sock.readLine());
+            const int at = line.indexOf(QLatin1String("|transmit "));
+            if (at < 0) {
+                continue;
+            }
+            const int key = line.indexOf(QLatin1String(" tune="), at);
+            if (key < 0) {
+                continue;
+            }
+            const bool tune = line.mid(key + 6, 1) == QLatin1String("1");
+            if (tune == m_tuneSeen) {
+                continue;
+            }
+            m_tuneSeen = tune;
+            if (echoTuneState) {
+                send(tune ? QStringLiteral("transmit tune on") : QStringLiteral("transmit tune off"));
+            }
+        }
+    }
+
     QTcpSocket m_sock;
     int m_seq{0};
+    bool m_tuneSeen{false};
 };
 
 // The Tuner Genius: its :9010 control port, and its LAN PTT client.
 class FakeTuner : public QObject {
 public:
-    bool listen()
+    FakeTuner()
     {
+        lan.echoTuneState = true;
         connect(&m_server, &QTcpServer::newConnection, this, [this]() {
             m_conn = m_server.nextPendingConnection();
             connect(m_conn, &QTcpSocket::readyRead, this, [this]() { readCommands(); });
             m_conn->write("V1.2.17\n");
             m_conn->flush();
         });
-        return m_server.listen(QHostAddress::LocalHostIPv6, 0);
     }
+    bool listen(const QHostAddress& at = QHostAddress::LocalHostIPv6)
+    {
+        return m_server.listen(at, 0);
+    }
+    /// Answer `autotune` R<seq>|1| (refused) instead of R<seq>|0|.
+    bool rejectAutotune{false};
     quint16 port() const { return m_server.serverPort(); }
     void push(const QString& line)
     {
@@ -125,8 +173,13 @@ private:
             if (!line.startsWith(QLatin1Char('C')) || bar < 0) {
                 continue;
             }
-            m_commands << line.mid(bar + 1);
-            m_conn->write(QStringLiteral("R%1|0|\n").arg(line.mid(1, bar - 1)).toUtf8());
+            const QString command = line.mid(bar + 1);
+            m_commands << command;
+            const bool refuse = rejectAutotune && command == QLatin1String("autotune");
+            m_conn->write(QStringLiteral("R%1|%2|\n")
+                              .arg(line.mid(1, bar - 1))
+                              .arg(refuse ? 1 : 0)
+                              .toUtf8());
             m_conn->flush();
         }
     }
@@ -138,18 +191,66 @@ private:
 
 // The Core with its SmartSDR API listener up (any address, a free port)
 // and the fake tuner connected on :9010 and to the listener from ::1.
-bool startTuner(Core& core, FakeTuner& tuner)
+// `tunerAt` is where the tuner listens and the Core dials it; `lanFrom` is
+// the address its LAN PTT client dials the listener at.
+bool startTuner(Core& core, FakeTuner& tuner,
+                const QHostAddress& tunerAt = QHostAddress::LocalHostIPv6,
+                const QString& dial = QStringLiteral("::1"),
+                const QHostAddress& lanFrom = QHostAddress::LocalHostIPv6)
 {
     SmartSdrApiListener* listener = core.model->smartSdrListener();
-    if (!listener->start(QHostAddress::Any, 0) || !tuner.listen()) {
+    if (!listener->start(QHostAddress::Any, 0) || !tuner.listen(tunerAt)) {
         return false;
     }
-    core.model->tgxlConnection()->connectToTgxl(QStringLiteral("::1"), tuner.port());
+    core.model->tgxlConnection()->connectToTgxl(dial, tuner.port());
     if (!QTest::qWaitFor([&core]() { return core.model->tgxlConnection()->isConnected(); },
                          3000)) {
         return false;
     }
-    return tuner.lan.connectTo(QHostAddress::LocalHostIPv6, listener->serverPort());
+    return tuner.lan.connectTo(lanFrom, listener->serverPort());
+}
+
+// The band-change recall armed for 40 m and 20 m; each call moves the TX
+// slice to the other band, so the Core sends one more `autotune`.
+void armRecall(Core& core)
+{
+    AppSettings::instance().setValue(QStringLiteral("TGXL_AutoTuneMemoryRecall"),
+                                     QStringLiteral("True"));
+    core.model->tuneMemoryStore()->store({1, Band::Band40m, 10, 20, 30, 1});
+    core.model->tuneMemoryStore()->store({1, Band::Band20m, 10, 20, 30, 1});
+}
+void recallOnce(Core& core, FakeTuner& tuner)
+{
+    SliceModel* tx = core.model->txBoundSlice();
+    QVERIFY(tx != nullptr);
+    const int before = tuner.count(QStringLiteral("autotune"));
+    tx->setFrequency(tx->frequency() < 10'000'000.0 ? 14'100'000.0 : 7'100'000.0);
+    QTRY_COMPARE(tuner.count(QStringLiteral("autotune")), before + 1);
+    QTest::qWait(100);   // its reply is read
+}
+
+// The tuner's tune on (and its tune off) take nothing: the holder keeps
+// transmit and nothing keys.
+void tuneOnTakesNothing(Core& core, FakeTuner& tuner, const QByteArray& holderId)
+{
+    tuner.lan.send(QStringLiteral("transmit tune on"));
+    QTest::qWait(500);
+    QVERIFY(!core.model->moxController()->isMox());
+    QVERIFY(!core.model->isTune());
+    QVERIFY(!core.model->isTgxlAutotuneInProgress());
+    QVERIFY(core.server->transmitHolder()->isHeldBy(holderId));
+}
+
+// The tuner's tune on is its own TUNE: it takes and keys; its tune off
+// ends it.
+void tuneOnTakesAndKeys(Core& core, FakeTuner& tuner)
+{
+    tuner.lan.send(QStringLiteral("transmit tune on"));
+    QTRY_VERIFY(core.model->moxController()->isMox());
+    QVERIFY(core.server->transmitHolder()->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+    tuner.lan.send(QStringLiteral("transmit tune off"));
+    QTRY_COMPARE(core.model->moxController()->state(), MoxState::Rx);
+    QTRY_VERIFY(!core.model->isTune());
 }
 
 // Device A holds transmit, unkeyed, after its own app TUNE, which the
@@ -169,6 +270,8 @@ void deviceHoldsAfterItsTune(Core& core, FakeTuner& tuner, LoopbackTransport* ap
     QTRY_COMPARE(mox->state(), MoxState::Rx);
     QTRY_VERIFY_WITH_TIMEOUT(!core.model->isTune(), 5000);
     QVERIFY(!core.model->isTgxlAutotuneInProgress());
+    QTRY_VERIFY(!tuner.lan.tuneSeen());   // and its echo of tune=0 is sent
+    QTest::qWait(100);
 }
 
 } // namespace
@@ -320,6 +423,198 @@ private slots:
         QVERIFY(!core.model->isTune());
         QVERIFY(!core.model->isTgxlAutotuneInProgress());
         QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+    }
+
+    // I-A (round 2): a device's plain tune short enough that the tuner's
+    // echo of our tune=1 arrives after the carrier dropped. The echo
+    // answers that broadcast and takes nothing; once both echoes are in,
+    // the tuner's next tune on is its own TUNE again.
+    void lateEchoOfAPlainTuneDoesNotTake()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        tuner.lan.echoTuneState = false;
+        MoxController* mox = core.model->moxController();
+
+        QVERIFY(core.invoke(appA, "tx.tune", {kOn}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune());
+        QTRY_VERIFY(tuner.lan.tuneSeen());
+        QVERIFY(core.invoke(appA, "tx.tune", {kOff}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.model->isTune());
+        QTRY_VERIFY(!tuner.lan.tuneSeen());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
+        QCOMPARE(tuner.count(QStringLiteral("autotune")), 0);
+
+        tuneOnTakesNothing(core, tuner, a.key.fingerprint());   // the late echo of tune=1
+        tuner.lan.send(QStringLiteral("transmit tune off"));    // the echo of tune=0
+        QTest::qWait(100);
+        tuner.lan.echoTuneState = true;
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // m-A (round 2): two autotunes in flight, the second refused: the
+    // first's answer still takes nothing (counted, not one flag).
+    void aRefusedAutotuneLeavesAnEarlierOneCounted()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        armRecall(core);
+        recallOnce(core, tuner);
+        tuner.rejectAutotune = true;
+        recallOnce(core, tuner);
+        tuneOnTakesNothing(core, tuner, a.key.fingerprint());
+    }
+
+    // m-B: recovery by the tuner refusing the autotune: nothing is left
+    // to answer, so its next tune on is its own TUNE.
+    void aRefusedAutotuneIsNotWaitedFor()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        armRecall(core);
+        tuner.rejectAutotune = true;
+        recallOnce(core, tuner);
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // m-A / m-B: a tuning fall left from an earlier sweep does not clear
+    // an autotune sent after it went up; a sweep that starts after the
+    // send and ends without a tune on does.
+    void onlyTheAutotunesOwnSweepClearsIt()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        armRecall(core);
+
+        tuner.push(QStringLiteral("S0|state tuning=1"));   // an earlier sweep
+        QTest::qWait(100);
+        recallOnce(core, tuner);
+        tuner.push(QStringLiteral("S0|state tuning=0"));   // ... ends
+        QTest::qWait(100);
+        tuneOnTakesNothing(core, tuner, a.key.fingerprint());
+        tuner.lan.send(QStringLiteral("transmit tune off"));
+        QTest::qWait(100);
+
+        recallOnce(core, tuner);
+        tuner.push(QStringLiteral("S0|state tuning=1"));   // its own sweep
+        tuner.push(QStringLiteral("S0|state tuning=0"));
+        QTest::qWait(100);
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // m-A / m-B: the tuner's link dropping and coming back inside the
+    // answer window does not clear the autotune (its answer comes on the
+    // SmartSDR API port); the window does.
+    void aReconnectDoesNotClearAnAutotuneTheWindowDoes()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        armRecall(core);
+        recallOnce(core, tuner);
+
+        TgxlConnection* link = core.model->tgxlConnection();
+        tuner.dropLink();
+        QTRY_VERIFY(!link->isConnected());
+        QVERIFY(tuner.listen());
+        link->connectToTgxl(QStringLiteral("::1"), tuner.port());
+        QTRY_VERIFY_WITH_TIMEOUT(link->isConnected(), 3000);
+        tuneOnTakesNothing(core, tuner, a.key.fingerprint());
+        tuner.lan.send(QStringLiteral("transmit tune off"));
+
+        recallOnce(core, tuner);
+        QTest::qWait(int(TgxlAnswerTracker::kAnswerWindowMs) + 200);
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // m-B: the tuner seen at its IPv4 address on :9010 and at the mapped
+    // IPv6 form of it on the listener is the same tuner: its press takes.
+    void aMappedAddressIsTheSameTuner()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QSignalSpy lines(core.model->smartSdrListener(), &SmartSdrApiListener::tuneRequested);
+        QVERIFY(startTuner(core, tuner, QHostAddress::Any, QStringLiteral("127.0.0.1"),
+                           QHostAddress(QStringLiteral("::ffff:127.0.0.1"))));
+        QCOMPARE(QHostAddress(core.model->tgxlConnection()->peerAddress()).protocol(),
+                 QAbstractSocket::IPv4Protocol);
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        QVERIFY(!lines.isEmpty());
+        const QHostAddress seen = lines.first().at(1).value<QHostAddress>();
+        QCOMPARE(seen.protocol(), QAbstractSocket::IPv6Protocol);
+        QVERIFY2(seen.toString().startsWith(QLatin1String("::ffff:")), qPrintable(seen.toString()));
+        tuneOnTakesAndKeys(core, tuner);
+    }
+
+    // m-B: a cycle a desktop's Tuner page started from the tuner's
+    // tuning=1 is waiting for the amplifier's standby when the tuner's own
+    // press arrives: the press makes it the tuner's TUNE, which takes.
+    void aPressDuringTheAmplifierWaitMakesTheCycleTheTuners()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        FakeTuner tuner;
+        QVERIFY(startTuner(core, tuner));
+        deviceHoldsAfterItsTune(core, tuner, appA);
+        MoxController* mox = core.model->moxController();
+        PgxlConnection* amp = core.model->pgxlConnection();
+        amp->injectLineForTesting(QStringLiteral("V3.8.9"));
+        amp->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+
+        core.model->startTgxlAutotune(true);
+        QTRY_VERIFY(core.model->isTgxlAutotuneInProgress());
+        QVERIFY(!mox->isMox());   // waiting for the amplifier's standby
+        tuner.lan.send(QStringLiteral("transmit tune on"));
+        QTest::qWait(200);
+        amp->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(mox->isMox());
+        QVERIFY(core.server->transmitHolder()->isHeldBy(
+            QByteArray(KeyerIdentity::kStationDeviceId)));
+        tuner.lan.send(QStringLiteral("transmit tune off"));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 
     // I1: a cycle a desktop's Tuner page starts from the tuner's tuning=1

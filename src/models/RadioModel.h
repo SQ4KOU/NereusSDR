@@ -529,6 +529,9 @@
 //                m_tgxlPendingTunerPress, the outstanding autotune and
 //                tgxlIsPeer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-10-01 - TGXL tune lane round 2: m_tgxlAnswers (TgxlAnswerTracker)
+//                replaces the single outstanding-autotune flag. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -587,6 +590,7 @@
 #include "core/ReceiveLayoutStore.h"
 #include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/PgxlConnection.h"
+#include "core/TgxlAnswerTracker.h"
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
@@ -8150,12 +8154,15 @@ private:
     /// Set by the LAN PTT handler for the one startTgxlAutotune call it
     /// makes; beginTgxlAutotune takes it.
     bool m_tgxlPendingTunerPress{false};
-    /// An `autotune` this computer sent the tuner is unanswered (its
-    /// sequence): the tuner's next `transmit tune on` is its answer.
-    bool m_tgxlCoreAutotuneOutstanding{false};
-    quint32 m_tgxlCoreAutotuneSeq{0};
+    /// TGXL tune lane round 2: everything this computer sent the tuner
+    /// that it may answer with its own `transmit tune on/off` (each
+    /// `autotune`, each tune=1/0 broadcast), counted; a tune on that
+    /// answers none of them is the tuner's own TUNE.
+    TgxlAnswerTracker m_tgxlAnswers;
     /// Whether `peer` (a :4992 client) is the connected Tuner Genius.
     bool tgxlIsPeer(const QHostAddress& peer) const;
+    /// Monotonic milliseconds for m_tgxlAnswers.
+    static qint64 tgxlAnswerNowMs();
     /// Task 77 fix round 4: a relayed operate=1 held while RF may flow.
     bool m_relayedPgxlOperateHeld{false};
     void retryHeldRelayedPgxlOperate();
