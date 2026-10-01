@@ -20,6 +20,17 @@
 // that message's handler is taken. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
 //
+// 2026-09-30: TX stall lane: a microphone packet reports how long it
+// waited between its receipt and its report, so a stalled owner thread is
+// not taken for the link's jitter. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
+//
+// 2026-10-01: TX mic thread: with a sink installed, the microphone line is
+// delivered by its own thread, so a stalled owner thread (80 to 420 ms,
+// speech-like audio, a real pump) leaves the line whole; delivered by the
+// owner instead, the same stalls run the buffer dry. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -28,6 +39,7 @@
 #include "core/session/RelayLeg.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteIqCodec.h"
+#include "core/session/media/RemoteMicReceiver.h"
 
 #include <QElapsedTimer>
 #include <QPointer>
@@ -35,11 +47,15 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
+#include <QThread>
 #include <QTimer>
 #include <QtTest>
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <memory>
+#include <numbers>
 #include <functional>
 #include <optional>
 #include <thread>
@@ -305,6 +321,8 @@ private slots:
     void headphonesMixIsDeclaredLastAndCrossesBesideTheOthers();
     void micLineIsOfferedOnlyWhenAsked();
     void micLineCarriesTheAnswerersMicrophoneAlone();
+    void micPacketsReportTheirWaitForTheOwnerThread();
+    void aStalledOwnerLeavesTheMicrophoneLineWhole();
     void micLineCarriesLosslessWhenOffered();
     void micSsrcPreconditionsRefuseSilently();
     void dedicatedIqChannelPreservesOrder();
@@ -2101,6 +2119,284 @@ void TestMediaTransport::micLineIsOfferedOnlyWhenAsked()
     }
     // The answer's other sections do not change with the line.
     QCOMPARE(answers[1], answers[0]);
+}
+
+// TX stall lane: the owner thread drains received packets on a 2 ms timer,
+// so a packet that arrives while it is busy waits. Each microphone packet
+// reports that wait (from the library's callback to the report): never
+// more than the time since it was sent, and most of a 150 ms stall of the
+// owner thread when one comes between its receipt and its report.
+void TestMediaTransport::micPacketsReportTheirWaitForTheOwnerThread()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.micAudioSsrc = kTestMicSsrc;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.micAudioSsrc = kTestMicSsrc;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    QElapsedTimer sinceSent;
+    QList<qint64> heldUs;
+    QList<qint64> sinceSentUs;
+    connect(&offerer, &IMediaTransport::micRtpReceived, this,
+            [&heldUs, &sinceSentUs, &sinceSent](const QByteArray&, qint64 held) {
+                heldUs.append(held);
+                sinceSentUs.append(sinceSent.nsecsElapsed() / 1000);
+            });
+
+    constexpr auto kStall = std::chrono::milliseconds(150);
+    constexpr int kAttempts = 3;
+    qint64 longestHeldUs = 0;
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        const int before = static_cast<int>(heldUs.size());
+        sinceSent.start();
+        QVERIFY(answerer.sendMicRtp(rtpPacket(static_cast<quint16>(attempt + 1), 40,
+                                              kTestMicSsrc)));
+        // The owner thread (this one) is busy: nothing is drained.
+        std::this_thread::sleep_for(kStall);
+        QTRY_COMPARE_WITH_TIMEOUT(static_cast<int>(heldUs.size()), before + 1, 5000);
+        const qint64 held = heldUs.at(before);
+        QVERIFY2(held >= 0, qPrintable(QString::number(held)));
+        QVERIFY2(held <= sinceSentUs.at(before),
+                 qPrintable(QStringLiteral("held %1 us, sent %2 us ago")
+                                .arg(held).arg(sinceSentUs.at(before))));
+        longestHeldUs = std::max(longestHeldUs, held);
+    }
+    qInfo().noquote() << QStringLiteral("owner stall of %1 ms: the longest reported wait %2 ms")
+                             .arg(kStall.count())
+                             .arg(static_cast<double>(longestHeldUs) / 1000.0, 0, 'f', 1);
+    QVERIFY2(longestHeldUs >= 100'000, qPrintable(QString::number(longestHeldUs)));
+}
+
+namespace {
+
+// Speech-like test audio, as tst_remote_mic_receiver's: a 300 ms word of
+// tone, then 200 ms of near silence.
+float micSpeechSample(qint64 n)
+{
+    constexpr qint64 kWordFrames = 48 * 300;
+    constexpr qint64 kCycleFrames = 48 * 500;
+    if (n % kCycleFrames < kWordFrames) {
+        return 0.3f * static_cast<float>(
+            std::sin(2.0 * std::numbers::pi * 1000.0 * static_cast<double>(n) / 48000.0));
+    }
+    quint32 h = static_cast<quint32>(n) * 2654435761U;
+    h ^= h >> 15;
+    h *= 2246822519U;
+    h ^= h >> 13;
+    return 3.0e-4f * (static_cast<float>(h & 0xffffU) / 32768.0f - 1.0f);
+}
+
+struct StalledOwnerRun {
+    int underruns{-1};
+    bool sinkSet{false};
+    int sent{0};
+    int delivered{0};
+    int ownerReports{0};
+    QString sinkThread;
+    double ownerWaitMaxMs{0.0};
+};
+
+} // namespace
+
+// TX mic thread: the phone sends its microphone steadily (a packet every
+// 20 ms, from a thread of its own); the Core's owner thread stalls seven
+// times, 80 to 420 ms (the Rock bench's range), while a pump takes the
+// feed's 64-frame blocks in real time. Delivered by the owner
+// (micRtpReceived, the old path), each stall runs the buffer dry. With a
+// sink, the line's own thread delivers it and the stalls never reach the
+// buffer: no underruns at all.
+void TestMediaTransport::aStalledOwnerLeavesTheMicrophoneLineWhole()
+{
+    constexpr int kFrames = RemoteMicConfig::kOpusFrameSamples;
+    constexpr int kBlock = RemoteMicConfig::kPumpBlockFrames;
+    constexpr int kWarmupMs = 1000;
+    const std::vector<int> stallsMs{80, 120, 200, 300, 420, 90, 150};
+    constexpr int kBetweenStallsMs = 500;
+    int runMs = kWarmupMs + 300;
+    for (const int stall : stallsMs) {
+        runMs += stall + kBetweenStallsMs;
+    }
+    const int packets = runMs / 20 + 10;
+    std::vector<QByteArray> encoded;
+    {
+        RemoteMicEncoder encoder;
+        QVERIFY(encoder.isReady());
+        std::vector<float> frame(kFrames);
+        for (int k = 0; k < packets; ++k) {
+            for (int i = 0; i < kFrames; ++i) {
+                frame[static_cast<size_t>(i)] =
+                    micSpeechSample(static_cast<qint64>(k) * kFrames + i);
+            }
+            encoded.push_back(encoder.encode(frame.data(), static_cast<quint16>(k + 1),
+                                             static_cast<quint32>(k * kFrames), kTestMicSsrc));
+        }
+    }
+
+    const auto runOnce = [&](bool lineThread) {
+        StalledOwnerRun run;
+        RemoteMicFeed feed;
+        RemoteMicReceiver receiver(&feed);
+        if (!receiver.start(kTestMicSsrc, false)) {
+            return run;
+        }
+        feed.setInUse(true);
+
+        // The phone: its transport lives on a thread of its own.
+        QThread phoneThread;
+        phoneThread.setObjectName(QStringLiteral("TestPhone"));
+        phoneThread.start();
+        QObject phoneContext;
+        phoneContext.moveToThread(&phoneThread);
+        std::unique_ptr<LibDataChannelMediaTransport> answerer;
+        const auto onPhone = [&phoneContext](auto work) {
+            QMetaObject::invokeMethod(&phoneContext, work, Qt::BlockingQueuedConnection);
+        };
+        onPhone([&answerer]() { answerer = std::make_unique<LibDataChannelMediaTransport>(); });
+
+        LibDataChannelMediaTransport offerer;
+        wire(offerer, *answerer);
+        QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+        QSignalSpy offerErrors(&offerer, &IMediaTransport::errorOccurred);
+        std::atomic<bool> answerReady{false};
+        connect(answerer.get(), &IMediaTransport::ready, &phoneContext,
+                [&answerReady]() { answerReady.store(true); });
+        bool answerStarted = false;
+        onPhone([&]() {
+            IMediaTransport::StartOptions options{IMediaTransport::Role::Answerer,
+                                                  kTestAudioSsrc};
+            options.micAudioSsrc = kTestMicSsrc;
+            answerStarted = answerer->start(options);
+        });
+        IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer,
+                                                   kTestAudioSsrc};
+        offerOptions.micAudioSsrc = kTestMicSsrc;
+        const bool offerStarted = answerStarted && offerer.start(offerOptions);
+        QElapsedTimer waitReady;
+        waitReady.start();
+        while (offerStarted && (offerReady.count() == 0 || !answerReady.load())
+               && waitReady.elapsed() < 10000) {
+            QTest::qWait(10);
+        }
+
+        std::atomic<int> sent{0};
+        std::atomic<int> delivered{0};
+        std::mutex sinkThreadLock;
+        if (lineThread) {
+            run.sinkSet = offerer.setMicPacketSink(
+                [&receiver, &delivered, &run, &sinkThreadLock](const QByteArray& packet,
+                                                                qint64 heldUs) {
+                    if (delivered.fetch_add(1) == 0) {
+                        const std::lock_guard lock(sinkThreadLock);
+                        run.sinkThread = QThread::currentThread()->objectName();
+                    }
+                    receiver.submit(packet, heldUs);
+                });
+        }
+        connect(&offerer, &IMediaTransport::micRtpReceived, this,
+                [&receiver, &run](const QByteArray& packet, qint64 heldUs) {
+                    ++run.ownerReports;
+                    // Without a sink the owner delivers, as before.
+                    if (!run.sinkSet) {
+                        receiver.submit(packet, heldUs);
+                    }
+                });
+
+        if (offerStarted && offerReady.count() == 1 && answerReady.load()) {
+            using Clock = std::chrono::steady_clock;
+            std::atomic<bool> stop{false};
+            // The phone's microphone: a packet every 20 ms, on time.
+            std::thread sender([&]() {
+                const Clock::time_point start = Clock::now();
+                for (int k = 0; k < packets && !stop.load(); ++k) {
+                    std::this_thread::sleep_until(start + std::chrono::milliseconds(20 * k));
+                    const QByteArray packet = encoded[static_cast<size_t>(k)];
+                    QMetaObject::invokeMethod(
+                        &phoneContext,
+                        [&answerer, &sent, packet]() {
+                            sent.fetch_add(answerer->sendMicRtp(packet) ? 1 : 0);
+                        },
+                        Qt::QueuedConnection);
+                }
+            });
+            // The TX pump: one block every 4/3 ms, from when the feed has
+            // started, to the end of the run.
+            std::atomic<int> underrunsAtEnd{-1};
+            std::thread pump([&]() {
+                std::vector<float> out(kBlock);
+                while (!stop.load() && !feed.stats().started) {
+                    feed.pullBlock(out.data(), kBlock, -1.0);
+                    std::this_thread::sleep_for(std::chrono::microseconds(1333));
+                }
+                const Clock::time_point start = Clock::now();
+                for (qint64 b = 0; !stop.load(); ++b) {
+                    std::this_thread::sleep_until(
+                        start + std::chrono::microseconds(b * kBlock * 1000000 / 48000));
+                    feed.pullBlock(out.data(), kBlock, -1.0);
+                }
+            });
+
+            // The owner thread: works, then stalls.
+            QTest::qWait(kWarmupMs);
+            const int underrunsAtWarmup = feed.stats().underflows;
+            for (const int stall : stallsMs) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(stall));
+                QTest::qWait(kBetweenStallsMs);
+            }
+            underrunsAtEnd.store(feed.stats().underflows - underrunsAtWarmup);
+            stop.store(true);
+            pump.join();
+            sender.join();
+            run.underruns = underrunsAtEnd.load();
+            // What the phone sent reaches the Core (a packet or two may
+            // still be in flight).
+            QTest::qWait(100);
+            run.ownerWaitMaxMs = feed.stats().ownerWaitMaxMs;
+        }
+        run.delivered = delivered.load();
+        offerer.stop();
+        onPhone([&run, &sent]() { run.sent = sent.load(); });
+        onPhone([&answerer]() { answerer.reset(); });
+        phoneThread.quit();
+        phoneThread.wait();
+        if (offerErrors.count() != 0) {
+            run.underruns = -1;
+        }
+        return run;
+    };
+
+    const StalledOwnerRun owner = runOnce(false);
+    const StalledOwnerRun line = runOnce(true);
+    qInfo().noquote()
+        << QStringLiteral("seven owner stalls of 80-420 ms: delivered by the owner, %1 "
+                          "underruns (longest wait %2 ms); by the line's thread, %3 underruns "
+                          "(longest wait %4 ms, %5 packets on \"%6\")")
+               .arg(owner.underruns)
+               .arg(owner.ownerWaitMaxMs, 0, 'f', 1)
+               .arg(line.underruns)
+               .arg(line.ownerWaitMaxMs, 0, 'f', 1)
+               .arg(line.delivered)
+               .arg(line.sinkThread);
+    // Delivered by the owner: the stalls reach the buffer and run it dry.
+    QVERIFY2(owner.underruns >= 1, qPrintable(QString::number(owner.underruns)));
+    QVERIFY(owner.ownerWaitMaxMs >= 80.0);
+    // Delivered by the line's own thread: the line stays whole, every
+    // packet comes by that thread, and nothing reaches the owner's signal.
+    QCOMPARE(line.underruns, 0);
+    QVERIFY(line.sinkSet);
+    QCOMPARE(line.sinkThread, QStringLiteral("NereusMicRx"));
+    QVERIFY2(line.sent > 0 && line.delivered == line.sent,
+             qPrintable(QStringLiteral("%1 of %2").arg(line.delivered).arg(line.sent)));
+    QCOMPARE(line.ownerReports, 0);
 }
 
 // Task 36: the answerer's microphone crosses to the offerer on the

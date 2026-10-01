@@ -20,6 +20,15 @@
 //   2026-09-30: LINK minor 14: the private part is held by unique_ptr.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): setMicPacketSink, the
+//               microphone line delivered on the transport's own thread
+//               with this peer's checks; txReceived carries heldUs.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -183,6 +192,13 @@ public:
     /// four receiver SSRCs or the headphones SSRC is replaced by the next
     /// integer (wrapping) until it is none of these.
     static quint32 micAudioSsrcForConnection(const QString& connectionId);
+    /// TX mic thread (JJ approved 2026-10-01): delivers the microphone
+    /// line's packets to `sink` on the transport's own thread, with the
+    /// checks micRtpReceived() has (the line's SSRC and size), for this
+    /// start and every later one, until an empty sink is set. True when the
+    /// current transport takes it; otherwise (or before a start) the line
+    /// stays on micRtpReceived(). The sink must be safe on any thread.
+    bool setMicPacketSink(IMediaTransport::MicPacketSink sink);
     std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:
@@ -192,9 +208,11 @@ signals:
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: a packet on the microphone line carrying micAudioSsrc().
-    void micRtpReceived(const QByteArray& packet);
-    /// Task 37: a message on the "tx" data channel.
-    void txReceived(const QByteArray& message);
+    /// TX stall lane: `heldUs` as IMediaTransport::micRtpReceived.
+    void micRtpReceived(const QByteArray& packet, qint64 heldUs = 0);
+    /// Task 37: a message on the "tx" data channel. TX mic thread:
+    /// `heldUs` as IMediaTransport::txReceived.
+    void txReceived(const QByteArray& message, qint64 heldUs = 0);
     void ready();
     void closed();
     void connectionFailed(const QString& message);
@@ -210,6 +228,8 @@ private:
     bool isCurrent(const IMediaTransport* transport, quint64 generation) const;
     bool isDeclaredAudioSsrc(quint32 ssrc) const;
     void stopInternal(bool notify);
+    /// TX mic thread: installs the stored sink on the current transport.
+    bool installMicSink();
 };
 
 } // namespace NereusSDR

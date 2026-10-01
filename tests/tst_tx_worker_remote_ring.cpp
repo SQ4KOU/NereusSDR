@@ -60,6 +60,16 @@
 //               mediaSessionOwnsSlice is mediaSessionControlsSlice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: every unkey through MoxController logs the
+//               microphone line's figures once, with the underruns of
+//               the over. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-10-01: TX stall lane: the line names the device in hex. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line's "line waits"
+//               and each over's own longest "tx" keepalive wait. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -81,6 +91,7 @@
 #include "fakes/FakeAudioBus.h"
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <QStandardPaths>
 
 #include <atomic>
@@ -243,7 +254,10 @@ public:
         emit ready();
     }
     void deliverMic(const QByteArray& packet) { emit micRtpReceived(packet); }
-    void deliverTx(const QByteArray& message) { emit txReceived(message); }
+    void deliverTx(const QByteArray& message, qint64 heldUs = 0)
+    {
+        emit txReceived(message, heldUs);
+    }
     void closeUnexpectedly()
     {
         started = false;
@@ -416,6 +430,16 @@ struct TwoStations {
     void sendMicB() { sendMic(transportB, encoderB, sequenceB, kConnectionB); }
 };
 
+QStringList g_unkeyLines;
+
+void captureUnkeyLines(QtMsgType, const QMessageLogContext& context, const QString& message)
+{
+    if (context.category != nullptr && QByteArray(context.category) == "nereus.daemon.media"
+        && message.startsWith(QLatin1String("Transmit ended ("))) {
+        g_unkeyLines.append(message);
+    }
+}
+
 } // namespace
 
 class TestTxWorkerRemoteRing : public QObject {
@@ -453,6 +477,9 @@ private slots:
     void aLineClosedWhileItsKeyWaitsIsRefusedAtOnce();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
     void voxFromTheDevicesMicrophoneIsTheDevices();
+    void everyUnkeyThroughTheMoxControllerLogsTheMicrophoneLine();
+    void withTwoLinesOnlyTheKeyersControllerLogsTheUnkey();
+    void aKeyAtTheCoreLogsNoMicrophoneLine();
 
     // ---- The monitor ------------------------------------------------------------
 
@@ -1244,6 +1271,128 @@ void TestTxWorkerRemoteRing::monitorReachesTheRemoteAudioAtTheSpeakersLevel()
     }
     // MON at its volume: 0.4 x 0.5.
     QVERIFY2(std::abs(peak - 0.2) < 0.01, qPrintable(QString::number(peak)));
+}
+
+// TX stall lane: MoxController owns MOX, so the unkey's line follows its
+// walk. Before, the line hung off TransmitModel::moxChanged, which a
+// controller's unkey never reaches, and it never printed on the bench.
+void TestTxWorkerRemoteRing::everyUnkeyThroughTheMoxControllerLogsTheMicrophoneLine()
+{
+    g_unkeyLines.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Station station;
+    QVERIFY(station.startMedia(true));
+    MoxController* mox = station.core.model->moxController();
+    RemoteMicFeed* feed = station.core.model->remoteMicFeed();
+    QVERIFY(feed != nullptr);
+
+    // A device's key, unkeyed by the device.
+    sendCommand(station.app, "tx.key", 3901, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(station.core.model->remoteMicInUse());
+    station.sendMic();
+    station.sendMic();
+    QTRY_VERIFY(mox->isMox());
+    // TX mic thread fix round 2: "tx" keepalives that waited at the Core.
+    quint64 keepaliveSequence = 0;
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 90'000);
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 3'000);
+    // The pump plays the 40 ms the line delivered and then runs dry: one
+    // underrun in this over.
+    std::vector<float> out(kBlock);
+    for (int block = 0; block < 60; ++block) {
+        QVERIFY(feed->pull(out.data(), kBlock));
+    }
+    const int underruns = feed->stats().underflows;
+    QVERIFY(underruns >= 1);
+    sendCommand(station.app, "tx.unkey", 3902,
+                {int64("epoch", station.core.model->keyedBy().epoch)});
+    QTRY_VERIFY(!mox->isMox());
+    QTRY_COMPARE(g_unkeyLines.size(), 1);
+    const QString first = g_unkeyLines.at(0);
+    // The device's id in hex, as the watchdog's line names it.
+    QVERIFY2(first.contains(QString::fromLatin1(station.deviceId().toHex())), qPrintable(first));
+    // The over's underruns, taken before the feed left use and reset them.
+    QVERIFY2(first.contains(QStringLiteral("underruns %1,").arg(underruns)), qPrintable(first));
+    QVERIFY2(first.contains(QStringLiteral("transmit I/Q")), qPrintable(first));
+    // The microphone's waits are the line's; the event loop's show in the
+    // over's longest keepalive wait.
+    QVERIFY2(first.contains(QStringLiteral("; line waits mean ")), qPrintable(first));
+    QVERIFY2(first.contains(QStringLiteral("; keepalive waits max 90.0 ms; ")), qPrintable(first));
+
+    // A second key, ended at the Core (as the transmit watchdog ends one).
+    sendCommand(station.app, "tx.key", 3903, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(station.core.model->remoteMicInUse());
+    station.sendMic();
+    station.sendMic();
+    QTRY_VERIFY(mox->isMox());
+    station.transport->deliverTx(
+        RemoteTxWatchdog::channelKeepalive(++keepaliveSequence, 4294967295U), 37'000);
+    mox->setMox(false);
+    QTRY_COMPARE(g_unkeyLines.size(), 2);
+    // Each over's own: the first over's 90 ms is not the second's.
+    QVERIFY2(g_unkeyLines.at(1).contains(QStringLiteral("; keepalive waits max 37.0 ms; ")),
+             qPrintable(g_unkeyLines.at(1)));
+    QTRY_COMPARE(mox->state(), MoxState::Rx);
+    // One line per unkey, never two.
+    QCOMPARE(g_unkeyLines.size(), 2);
+}
+
+// TX stall lane, fix round 1: with two devices carrying a microphone
+// line, an unkey prints one line, under the keyer's id.
+void TestTxWorkerRemoteRing::withTwoLinesOnlyTheKeyersControllerLogsTheUnkey()
+{
+    g_unkeyLines.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    QTRY_COMPARE(s.hub->controllerCount(), 2);
+    MoxController* mox = s.core.model->moxController();
+    sendCommand(s.appA, "tx.key", 3911, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !mox->isMox(); ++i) {
+        s.sendMicA();
+        s.sendMicB();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(!resultFor(s.appA, 3911).isEmpty());
+    QVERIFY2(resultFor(s.appA, 3911).value(QStringLiteral("accepted")).toBool(),
+             qPrintable(resultFor(s.appA, 3911).value(QStringLiteral("reason")).toString()));
+    QTRY_VERIFY(mox->isMox());
+    QCOMPARE(s.core.model->keyedBy().deviceId, s.a.key.fingerprint());
+    sendCommand(s.appA, "tx.unkey", 3912, {int64("epoch", s.core.model->keyedBy().epoch)});
+    QTRY_VERIFY(!mox->isMox());
+    QTRY_COMPARE(mox->state(), MoxState::Rx);
+    QCOMPARE(g_unkeyLines.size(), 1);
+    const QString line = g_unkeyLines.at(0);
+    QVERIFY2(line.contains(QString::fromLatin1(s.a.key.fingerprint().toHex())), qPrintable(line));
+    QVERIFY2(!line.contains(QString::fromLatin1(s.b.key.fingerprint().toHex())), qPrintable(line));
+}
+
+// TX stall lane, fix round 1: a key at the Core itself is on no device's
+// microphone line, so no controller reports it, though two carry a line.
+void TestTxWorkerRemoteRing::aKeyAtTheCoreLogsNoMicrophoneLine()
+{
+    g_unkeyLines.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureUnkeyLines);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    QTRY_COMPARE(s.hub->controllerCount(), 2);
+    MoxController* mox = s.core.model->moxController();
+    mox->setMox(true, KeyerIdentity::station(PttMode::Manual));
+    QTRY_VERIFY2(mox->isMox(), qPrintable(mox->lastRefusal().text));
+    QVERIFY(!s.core.model->remoteMicInUse());
+    mox->setMox(false, KeyerIdentity::station(PttMode::Manual));
+    QTRY_COMPARE(mox->state(), MoxState::Rx);
+    QCOMPARE(g_unkeyLines.size(), 0);
 }
 
 QTEST_MAIN(TestTxWorkerRemoteRing)

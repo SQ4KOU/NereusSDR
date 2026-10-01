@@ -26,6 +26,15 @@
 //               web relay's leg (RelayLeg) and its per-connection candidate
 //               sources; the computer's own proxy settings (SystemProxy).
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: micRtpReceived carries heldUs, how long
+//               the packet waited between its receipt in the transport
+//               and its report, so the microphone buffer times it at
+//               receipt. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): setMicPacketSink, the
+//               microphone line delivered on a transport's own thread;
+//               txReceived carries heldUs. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -38,6 +47,7 @@
 #include <QPair>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 namespace NereusSDR {
@@ -364,6 +374,23 @@ public:
         return false;
     }
 
+    /// TX mic thread (JJ approved 2026-10-01): where a transport with a
+    /// thread of its own for the microphone line delivers that line's
+    /// packets, on that thread, as they arrive: the packet and how long it
+    /// waited since its receipt off the network, in microseconds. Such a
+    /// packet is never also reported by micRtpReceived(). The sink must be
+    /// safe on that thread and must not call back into the transport.
+    using MicPacketSink = std::function<void(const QByteArray& packet, qint64 heldUs)>;
+    /// Installs `sink` (an empty one goes back to micRtpReceived()). After
+    /// it returns, the sink it replaced is never called again. False when
+    /// this transport has no such thread (the line stays on
+    /// micRtpReceived(), on the owner's thread). Owner's thread only.
+    virtual bool setMicPacketSink(MicPacketSink sink)
+    {
+        Q_UNUSED(sink);
+        return false;
+    }
+
     virtual bool isReady() const = 0;
 
     /// Task 27: starts gathering, with these relay servers (none when the
@@ -410,10 +437,17 @@ signals:
     void iqErrorOccurred(const QString& reason);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: an RTP packet that arrived on the microphone line. Never
-    /// also reported by rtpReceived().
-    void micRtpReceived(const QByteArray& packet);
-    /// Task 37: a message that arrived on the "tx" data channel.
-    void txReceived(const QByteArray& message);
+    /// also reported by rtpReceived(). TX stall lane: `heldUs` is how long
+    /// the packet waited between its receipt off the network and this
+    /// report (0 when the transport does not know), so a stall of the
+    /// thread that reports it is not taken for the link's jitter.
+    void micRtpReceived(const QByteArray& packet, qint64 heldUs = 0);
+    /// Task 37: a message that arrived on the "tx" data channel. TX mic
+    /// thread: `heldUs` is how long it waited since its receipt off the
+    /// network (0 when the transport does not know), so the transmit
+    /// watchdog judges a keepalive by when it came, not by when a stalled
+    /// event loop reached it.
+    void txReceived(const QByteArray& message, qint64 heldUs = 0);
     /// The connection is up and the display channel and audio line are
     /// open. Reported before any display message, raw I/Q message or audio
     /// packet that arrived with that opening, so a handler of the first one

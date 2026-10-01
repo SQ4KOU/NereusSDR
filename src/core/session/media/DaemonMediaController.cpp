@@ -4,6 +4,33 @@
 // no-port-check: NereusSDR-original. See DaemonMediaController.h.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX stall lane: the unkey line names the device by its id in
+//               hex, as the transmit watchdog's line does, not its raw
+//               bytes. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//   2026-09-30: TX stall lane: the unkey line follows MoxController (its
+//               moxChanging and moxStateChanged), so it prints on every
+//               unkey; TransmitModel::moxChanged only saw the
+//               no-controller fallback. The microphone line's packets
+//               carry their wait at the Core (heldUs) to the receiver.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX stall lane, fix round 1: only the controller whose
+//               device holds the key on its line reports the unkey; the
+//               line adds the over's owner waits (mean, max, count over
+//               50 ms); a report pending when the controller goes is
+//               logged; "Microphone line open for" logs the id as hex.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): the microphone line's
+//               packets go through MicRoute, from the transport's own
+//               thread when it has one (MediaPeer::setMicPacketSink), so a
+//               stall of the Core's event loop never holds them; "tx"
+//               keepalives carry their receipt to the watchdog. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line's microphone
+//               waits are the line's ("line waits"), and it adds the
+//               over's longest wait of a "tx" keepalive at the Core (the
+//               event loop's stall). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: a replace may carry
 //               "mediaDirectVersion": 1 (STUN and host candidates, no
 //               tunnel or relay); the older relay-leg refusal judges the
@@ -782,12 +809,35 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             &DaemonMediaController::refreshMicWatching);
     connect(m_radioModel, &RadioModel::remoteMicInUseChanged, this,
             [this](bool) { refreshMicWatching(); });
-    connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged, this,
-            [this](bool mox) {
-                if (!mox) {
-                    logUnkeyStats();
-                }
-            });
+    // TX stall lane: MoxController owns MOX, so the unkey line follows its
+    // walk; TransmitModel::moxChanged only sees the no-controller fallback.
+    if (MoxController* moxController = m_radioModel->moxController()) {
+        connect(moxController, &MoxController::moxChanging, this,
+                [this](int, bool oldMox, bool newMox) {
+                    if (oldMox && !newMox) {
+                        snapshotUnkeyStats();
+                    } else if (!oldMox && newMox) {
+                        // A key cut the last unkey's walk short.
+                        logUnkeyStats();
+                        m_overKeepaliveWaitMaxUs = -1;   // a new over
+                    }
+                });
+        connect(moxController, &MoxController::moxStateChanged, this, [this](bool on) {
+            if (!on) {
+                logUnkeyStats();
+            }
+        });
+    } else {
+        connect(&m_radioModel->transmitModel(), &TransmitModel::moxChanged, this,
+                [this](bool mox) {
+                    if (!mox) {
+                        snapshotUnkeyStats();
+                        logUnkeyStats();
+                    } else {
+                        m_overKeepaliveWaitMaxUs = -1;   // a new over
+                    }
+                });
+    }
     // Task 76: a controller bound to a session starts with it at once
     // (DaemonMediaHub makes it as that session's media starts).
     if (m_boundEpoch != 0 && m_server->mediaAvailable(m_boundEpoch)) {
@@ -797,6 +847,15 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
 
 DaemonMediaController::~DaemonMediaController()
 {
+    // TX stall lane: an unkey whose walk is still running when the
+    // controller goes (its session ended in the tail) still gets its line.
+    logUnkeyStats();
+    // TX mic thread: no packet reaches the receiver from here on, whatever
+    // order the members go in.
+    {
+        const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+        m_micRoute->receiver = nullptr;
+    }
     if (m_radioModel) {
         // Parity Task 31: this device's DUP goes with its media.
         if (!m_duplexDevice.isEmpty()) {
@@ -1814,6 +1873,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     // stamp needs rewriting.
     m_sendSsrcRewrite.clear();
     m_micSsrcRewrite.clear();
+    syncMicRoute();
     wireCurrentPeer(peer, connectionId);
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     // iPhone app plan Task 28 (R-IOS-16): a session through the remote
@@ -1954,20 +2014,48 @@ void DaemonMediaController::wireCurrentPeer(MediaPeer* peer, const QString& conn
     // Task 37: the "tx" data channel's keepalives go to the Core's
     // transmit watchdog, for the device this media session is for.
     connect(peer, &MediaPeer::txReceived, this,
-            [this, peer, peerEpoch](const QByteArray& message) {
+            [this, peer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            noteKeepaliveWait(heldUs);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
     // Task 36: the microphone line's packets go to its receiver. Task 29:
     // after a replacement they carry this peer's SSRC, which the receiver
     // started before it takes as its own.
     connect(peer, &MediaPeer::micRtpReceived, this,
-            [this, peer, peerEpoch](const QByteArray& packet) {
+            [this, peer, peerEpoch](const QByteArray& packet, qint64 heldUs) {
         if (m_peer.get() == peer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micRoute->deliver(packet, heldUs);
         }
     });
+    // TX mic thread: on a transport with a thread of its own for the line,
+    // the packets go from that thread to the receiver, never through this
+    // event loop. Every peer with the sink is this controller's current,
+    // replacement or retiring one; any other is stopped, which ends its
+    // thread.
+    peer->setMicPacketSink(micRouteSink());
+}
+
+void DaemonMediaController::MicRoute::deliver(const QByteArray& packet, qint64 heldUs)
+{
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (receiver != nullptr) {
+        receiver->submit(rewriteRtpSsrc(packet, rewrite), heldUs);
+    }
+}
+
+void DaemonMediaController::syncMicRoute()
+{
+    const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+    m_micRoute->receiver = m_micReceiver.get();
+    m_micRoute->rewrite = m_micSsrcRewrite;
+}
+
+IMediaTransport::MicPacketSink DaemonMediaController::micRouteSink() const
+{
+    const std::shared_ptr<MicRoute> route = m_micRoute;
+    return [route](const QByteArray& packet, qint64 heldUs) { route->deliver(packet, heldUs); };
 }
 
 // ---- iPhone app plan Task 29 (R-IOS-16): replacing the media connection ----
@@ -2148,16 +2236,20 @@ bool DaemonMediaController::handleReplace(const QJsonObject& control)
     });
     // Microphone packets and "tx" keepalives are taken from the new peer as
     // soon as it carries them.
-    connect(peer, &MediaPeer::txReceived, this, [this, current, peerEpoch](const QByteArray& message) {
+    connect(peer, &MediaPeer::txReceived, this,
+            [this, current, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (current() && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            noteKeepaliveWait(heldUs);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
-    connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet) {
+    connect(peer, &MediaPeer::micRtpReceived, this, [this, current](const QByteArray& packet,
+                                                                      qint64 heldUs) {
         if (current() && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micRoute->deliver(packet, heldUs);
         }
     });
+    peer->setMicPacketSink(micRouteSink());
     m_replacementRouted = nextIce && nextIce->mediaRouting();
     peer->setIceConfiguration(nextIce);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId, m_audioTargetBitrate,
@@ -2181,6 +2273,7 @@ void DaemonMediaController::onReplacementReady()
     // The new peer's microphone packets reach the receiver as its own.
     if (m_micReceiver && m_replacement && m_replacement->micAudioSsrc() != 0) {
         m_micSsrcRewrite.insert(m_replacement->micAudioSsrc(), m_micReceiver->ssrc());
+        syncMicRoute();
     }
     m_replaceOverlapTimer.start(kReplaceOverlapMs);
     qCInfo(lcDaemonMedia) << "media replacement ready; audio on both connections";
@@ -2221,14 +2314,17 @@ void DaemonMediaController::finishReplacement()
     old->disconnect(this);
     MediaPeer* const oldPeer = old.get();
     const quint64 peerEpoch = m_epoch;
-    connect(oldPeer, &MediaPeer::txReceived, this, [this, oldPeer, peerEpoch](const QByteArray& message) {
+    connect(oldPeer, &MediaPeer::txReceived, this,
+            [this, oldPeer, peerEpoch](const QByteArray& message, qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_server) {
-            m_server->txChannelMessage(peerEpoch, message);
+            noteKeepaliveWait(heldUs);
+            m_server->txChannelMessage(peerEpoch, message, heldUs);
         }
     });
-    connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet) {
+    connect(oldPeer, &MediaPeer::micRtpReceived, this, [this, oldPeer, peerEpoch](const QByteArray& packet,
+                                                                         qint64 heldUs) {
         if (m_retiring.get() == oldPeer && m_epoch == peerEpoch && m_micReceiver) {
-            m_micReceiver->submit(rewriteRtpSsrc(packet, m_micSsrcRewrite));
+            m_micRoute->deliver(packet, heldUs);
         }
     });
     m_retiring = std::move(old);
@@ -2271,6 +2367,7 @@ void DaemonMediaController::failReplacement(const QString& reason)
     m_replacementReady = false;
     if (m_micReceiver) {
         m_micSsrcRewrite.remove(peer->micAudioSsrc());
+        syncMicRoute();
     }
     peer->disconnect(this);
     peer->stop();
@@ -2336,13 +2433,20 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
     m_micReceiver->setFeedWriter(m_radioModel->remoteMicWriter() == m_micDeviceId);
     refreshMicVoxArmed();
     refreshMicWatching();
-    qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId;
+    syncMicRoute();
+    qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId.toHex();
 }
 
 void DaemonMediaController::stopMicLine()
 {
     if (!m_micReceiver && m_micDeviceId.isEmpty()) {
         return;
+    }
+    // TX mic thread: out of the route first, so no packet in delivery on
+    // the line's thread reaches it after this.
+    {
+        const std::lock_guard<std::mutex> lock(m_micRoute->mutex);
+        m_micRoute->receiver = nullptr;
     }
     if (m_micReceiver) {
         m_micReceiver->stop();
@@ -2386,30 +2490,55 @@ void DaemonMediaController::refreshMicWatching()
     m_micReceiver->setWatching(keyed);
 }
 
-void DaemonMediaController::logUnkeyStats()
+void DaemonMediaController::snapshotUnkeyStats()
 {
-    // Only the controller carrying a microphone line reports, so a key
-    // from a device gives one line.
-    if (!m_micReceiver || !m_radioModel) {
+    // Only the controller whose device holds the key on its microphone
+    // line reports (refreshMicWatching's test, taken here before the walk
+    // clears the keyer), so an unkey gives one line, under the keyer's id,
+    // and a key that is not on a remote line gives none.
+    if (!m_micReceiver || !m_radioModel || !m_radioModel->remoteMicInUse()
+        || m_radioModel->keyedBy().deviceId != m_micDeviceId) {
+        m_unkeySnapshot.reset();
         return;
     }
-    RemoteMicFeed::Stats feed;
-    const bool haveFeed = m_radioModel->remoteMicFeed() != nullptr;
-    if (haveFeed) {
-        feed = m_radioModel->remoteMicFeed()->stats();
+    UnkeySnapshot snapshot;
+    snapshot.deviceId = m_micDeviceId;
+    snapshot.rx = m_micReceiver->stats();
+    snapshot.keepaliveWaitMaxUs = m_overKeepaliveWaitMaxUs;
+    snapshot.haveFeed = m_radioModel->remoteMicFeed() != nullptr;
+    if (snapshot.haveFeed) {
+        snapshot.feed = m_radioModel->remoteMicFeed()->stats();
     }
+    m_unkeySnapshot = std::move(snapshot);
+}
+
+void DaemonMediaController::logUnkeyStats()
+{
+    if (!m_unkeySnapshot || !m_radioModel) {
+        return;
+    }
+    const UnkeySnapshot snapshot = std::move(*m_unkeySnapshot);
+    m_unkeySnapshot.reset();
     RadioConnection::TxSendStats send;
     if (const RadioConnection* conn = m_radioModel->connection()) {
         send = conn->txSendStats();
     }
     qCInfo(lcDaemonMedia).noquote()
-        << unkeyStatsLine(m_micDeviceId, m_micReceiver->stats(), haveFeed ? &feed : nullptr, send);
+        << unkeyStatsLine(snapshot.deviceId.toHex(), snapshot.rx,
+                          snapshot.haveFeed ? &snapshot.feed : nullptr, send,
+                          snapshot.keepaliveWaitMaxUs);
+}
+
+void DaemonMediaController::noteKeepaliveWait(qint64 heldUs)
+{
+    m_overKeepaliveWaitMaxUs = std::max(m_overKeepaliveWaitMaxUs, std::max<qint64>(0, heldUs));
 }
 
 QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                                               const RemoteMicReceiver::Stats& rx,
                                               const RemoteMicFeed::Stats* feedStats,
-                                              const RadioConnection::TxSendStats& send)
+                                              const RadioConnection::TxSendStats& send,
+                                              qint64 keepaliveWaitMaxUs)
 {
     // One line (log only, never shown to a device).
     QString text;
@@ -2444,8 +2573,24 @@ QString DaemonMediaController::unkeyStatsLine(const QByteArray& deviceId,
                  << ms(feed.shedForRingFrames) << " ms for the ring), inserted "
                  << ms(feed.insertedFrames) << " ms, target grew " << feed.grows
                  << " times, held for DEXP " << feed.heldBlocks << " blocks";
+            // TX stall lane: how long the over's packets waited at the Core
+            // before the feed had them. Measured only. TX mic thread fix
+            // round 2: the line's own thread hands them over now, so this
+            // is the line's wait, not the event loop's.
+            line << "; line waits mean " << oneDecimal(feed.ownerWaitMeanMs) << " ms, max "
+                 << oneDecimal(feed.ownerWaitMaxMs) << " ms, " << feed.ownerWaitsLong
+                 << " over " << RemoteMicConfig::kLongOwnerWaitMs << " ms";
         } else {
             line << "no feed";
+        }
+        // TX mic thread fix round 2: the event loop's own stall, as the
+        // longest wait at the Core of a "tx" keepalive over the over.
+        line << "; keepalive waits ";
+        if (keepaliveWaitMaxUs >= 0) {
+            line << "max " << QString::number(static_cast<double>(keepaliveWaitMaxUs) / 1000.0, 'f', 1)
+                 << " ms";
+        } else {
+            line << "none";
         }
         line << "; packets concealed " << rx.concealedPackets << ", recovered "
              << rx.recoveredPackets << ", late " << rx.latePackets << ", long gaps " << rx.longGaps
@@ -6005,6 +6150,7 @@ void DaemonMediaController::clearSession()
     clearReplacement();
     m_sendSsrcRewrite.clear();
     m_micSsrcRewrite.clear();
+    syncMicRoute();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }

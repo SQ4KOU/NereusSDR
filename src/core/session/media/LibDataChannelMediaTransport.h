@@ -20,6 +20,9 @@
 //               the credentials are known, a 996-byte MTU, every candidate
 //               type. Host candidates only otherwise, as before. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): setMicPacketSink, the
+//               microphone line on a thread of its own. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -92,6 +95,7 @@ public:
     bool sendRtp(const QByteArray& packet) override;
     bool sendMicRtp(const QByteArray& packet) override;
     bool sendTx(const QByteArray& message) override;
+    bool setMicPacketSink(MicPacketSink sink) override;
 
     bool isReady() const override;
     bool gatherCandidates(const QList<IceRelayServer>& relays) override;

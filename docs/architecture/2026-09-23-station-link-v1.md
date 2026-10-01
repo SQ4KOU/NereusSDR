@@ -8165,6 +8165,20 @@ channel does (`tst_remote_tx_watchdog`). The rendezvous, relay and separate
 control connection (iPhone app plan Tasks 26 to 29) hand their keepalives
 to the same rules.
 
+**When a keepalive counts as heard.** A `tx`-channel keepalive is judged
+at its network receipt (when the media transport received it), not when
+the Core's event loop got round to it: a keepalive that waited behind a
+stall of the Core is heard at the time it arrived, and that time only
+moves the device's last keepalive forward, never back. The 400 ms is
+measured from that receipt both when a keepalive comes and when the
+check runs. A check that fires more than 5 ms after its time ran behind a
+stall, so it first lets the keepalives waiting behind it in, one turn of
+the event loop, and then judges. That turn is given once for each
+device's overdue period: the check after it judges the device, whatever
+else (another device's keepalives included) moved the check in between.
+A check no more than 5 ms late is the timer's ordinary slack and judges
+at once.
+
 **VOX a device armed.** A device whose media carries no microphone line
 cannot arm it: its `transmit.voxEnabled` write is refused "This device's
 microphone is not connected to the Core. Wait a moment and try again."

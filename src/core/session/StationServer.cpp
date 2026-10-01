@@ -947,6 +947,9 @@
 //               sent no controlTaken, and an older window left with none
 //               ends (ruling 6.10). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): a "tx" channel keepalive is
+//               heard at its receipt (txChannelMessage's heldUs). J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -9552,7 +9555,8 @@ QString StationServer::deviceNameForStop(const QByteArray& deviceId) const
     return QStringLiteral("a device");
 }
 
-void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& message)
+void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& message,
+                                     qint64 heldUs)
 {
     quint64 sequence = 0;
     quint32 epoch = 0;
@@ -9563,7 +9567,8 @@ void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& messa
     if (deviceId.isEmpty()) {
         return;
     }
-    m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel);
+    m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel,
+                            std::max<qint64>(0, heldUs) / 1000);
 }
 
 void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)

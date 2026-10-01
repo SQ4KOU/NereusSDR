@@ -529,6 +529,9 @@
 //               so a window test reaches a real take of transmit. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): txChannelMessage takes the
+//               keepalive's wait since its receipt (heldUs). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1489,8 +1492,10 @@ public:
     RemoteTxWatchdog* txWatchdog() const { return m_txWatchdog.get(); }
     /// Task 37: a keepalive from the media connection's "tx" data channel
     /// (RemoteTxWatchdog::channelKeepalive's 13 bytes), for the device the
-    /// media session `epoch` is for. Anything else is ignored.
-    void txChannelMessage(quint64 epoch, const QByteArray& message);
+    /// media session `epoch` is for. Anything else is ignored. TX mic
+    /// thread: `heldUs` is how long it waited since its receipt off the
+    /// network; the watchdog counts it as heard then.
+    void txChannelMessage(quint64 epoch, const QByteArray& message, qint64 heldUs = 0);
     /// Task 37 (remote design section 12.3): `deviceId`'s microphone line
     /// starved (true) or carries audio again (false) while it is keyed on
     /// it; the per-mode action (StarvationPolicy) follows.

@@ -5,6 +5,13 @@
 // StationServer/StationClient control session. Synthetic I/Q is test-only;
 // production reaches the source exclusively through RadioModel's tagged tap.
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-10-01: TX mic thread fix round 2: the unkey line's "line waits"
+//               and the over's longest "tx" keepalive wait; a real
+//               microphone line torn down (a new connection's start, and
+//               the session's end) while its own thread delivers. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// =================================================================
 
 #include <QtTest>
 
@@ -50,6 +57,7 @@
 #include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtEndian>
 
 #include <algorithm>
@@ -60,6 +68,7 @@
 #include <numbers>
 #include <numeric>
 #include <thread>
+#include <atomic>
 #include <utility>
 #include "fakes/UpgradedCoreToken.h"
 
@@ -677,6 +686,9 @@ private slots:
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
     void realDisplayErrorIsCountedAndLoggedOnce();
+    // TX mic thread fix round 2.
+    void realMicLineTornDownWhileItsThreadDelivers_data();
+    void realMicLineTornDownWhileItsThreadDelivers();
     void displayDiagnosticsLineReportsBytesAndFragments();
     void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
     void olderAppNeverReceivesReceiverStreams();
@@ -1757,6 +1769,174 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
              qPrintable(displayErrors.constFirst()));
     QCOMPARE(g_daemonMediaMessages.filter(QStringLiteral("media peer error:")).size(), 0);
     harness.finish();
+}
+
+// TX mic thread fix round 2: the Core's microphone line on the real
+// transport, its packets handed to the receiver on the transport's own
+// thread (NereusMicRx) while the phone keeps sending, is torn down from the
+// owner: by a start on a new connection (the session stays, the peer and
+// its line go) and by the session's end. Delivery stops with the line, the
+// receiver goes, and nothing reaches a receiver after it is gone (run under
+// ThreadSanitizer for the races).
+void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers_data()
+{
+    QTest::addColumn<bool>("sessionEnds");
+    QTest::newRow("a new connection's start") << false;
+    QTest::newRow("the session's end") << true;
+}
+
+void TstDaemonMediaController::realMicLineTornDownWhileItsThreadDelivers()
+{
+    QFETCH(bool, sessionEnds);
+    RemoteMicEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness harness;
+    QPointer<LibDataChannelMediaTransport> core;
+    harness.realTransport = [&core](QObject* parent) -> IMediaTransport* {
+        core = new LibDataChannelMediaTransport(parent);
+        return core;
+    };
+    harness.establishSession();
+
+    // The phone: its transport on a thread of its own, answering Core's
+    // offer over the session.
+    QThread phoneThread;
+    phoneThread.setObjectName(QStringLiteral("TestPhone"));
+    phoneThread.start();
+    QObject phoneContext;
+    phoneContext.moveToThread(&phoneThread);
+    std::unique_ptr<LibDataChannelMediaTransport> far;
+    const auto onPhone = [&phoneContext](auto work) {
+        QMetaObject::invokeMethod(&phoneContext, work, Qt::BlockingQueuedConnection);
+    };
+    const auto endPhone = qScopeGuard([&]() {
+        onPhone([&far]() { far.reset(); });
+        phoneThread.quit();
+        phoneThread.wait();
+    });
+    onPhone([&far]() { far = std::make_unique<LibDataChannelMediaTransport>(); });
+    const quint32 micSsrc = MediaPeer::micAudioSsrcForConnection(QLatin1String(kConnectionId));
+    std::atomic<bool> farReady{false};
+    std::atomic<bool> farFailed{false};
+    connect(far.get(), &IMediaTransport::ready, &phoneContext,
+            [&farReady]() { farReady.store(true); });
+    connect(far.get(), &IMediaTransport::connectionFailed, &phoneContext,
+            [&farFailed](const QString&) { farFailed.store(true); });
+    bool farStarted = false;
+    onPhone([&]() {
+        IMediaTransport::StartOptions options{IMediaTransport::Role::Answerer, 0x4e523302U};
+        options.micAudioSsrc = micSsrc;
+        farStarted = far->start(options);
+    });
+    QVERIFY(farStarted);
+    connect(&harness.client, &StationClient::mediaControlReceived, &harness.client,
+            [&](const QJsonObject& control) {
+        const QString op = control.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("description")) {
+            onPhone([&far, control]() {
+                far->acceptDescription(control.value(QStringLiteral("sdp")).toString(),
+                                       control.value(QStringLiteral("type")).toString());
+            });
+        } else if (op == QLatin1String("candidate")) {
+            onPhone([&far, control]() {
+                far->acceptCandidate(control.value(QStringLiteral("candidate")).toString(),
+                                     control.value(QStringLiteral("mid")).toString());
+            });
+        }
+    });
+    connect(far.get(), &IMediaTransport::localDescription, &harness.client,
+            [&harness](const QString& sdp, const QString& type) {
+        harness.client.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("description")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("sdp"), sdp},
+            {QStringLiteral("type"), type}}, harness.client.sessionEpoch());
+    });
+    connect(far.get(), &IMediaTransport::localCandidate, &harness.client,
+            [&harness](const QString& candidate, const QString& mid) {
+        harness.client.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("candidate")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("candidate"), candidate},
+            {QStringLiteral("mid"), mid}}, harness.client.sessionEpoch());
+    });
+    QVERIFY(harness.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("remoteTxVersion"), 1}},
+        harness.client.sessionEpoch()));
+    QTRY_VERIFY2_WITH_TIMEOUT(core && core->isReady() && farReady.load(),
+                              farFailed.load() ? "the phone's media link failed"
+                                               : "the media link did not come up in time",
+                              kRealTransportWaitMs);
+    QVERIFY2(harness.controller.micReceiver() != nullptr, "the Core opened no microphone line");
+
+    // The phone's microphone: a 20 ms packet every 2 ms, so the line's
+    // thread is delivering whenever the owner tears it down.
+    std::vector<QByteArray> packets;
+    {
+        std::vector<float> frame(RemoteMicConfig::kOpusFrameSamples, 0.0f);
+        for (int k = 0; k < 2000; ++k) {
+            for (int i = 0; i < RemoteMicConfig::kOpusFrameSamples; ++i) {
+                frame[static_cast<size_t>(i)] = 0.2f * static_cast<float>(std::sin(
+                    2.0 * std::numbers::pi * 1000.0
+                    * (static_cast<double>(k) * RemoteMicConfig::kOpusFrameSamples + i) / 48000.0));
+            }
+            packets.push_back(encoder.encode(frame.data(), static_cast<quint16>(k + 1),
+                                             static_cast<quint32>(k)
+                                                 * RemoteMicConfig::kOpusFrameSamples,
+                                             micSsrc));
+        }
+    }
+    std::atomic<bool> stopSending{false};
+    std::atomic<int> sent{0};   // packets handed to the phone's transport
+    std::thread sender([&]() {
+        for (size_t k = 0; k < packets.size() && !stopSending.load(); ++k) {
+            const QByteArray packet = packets[k];
+            QMetaObject::invokeMethod(
+                &phoneContext,
+                [&far, &sent, packet]() {
+                    if (far) {
+                        far->sendMicRtp(packet);
+                        sent.fetch_add(1);
+                    }
+                },
+                Qt::QueuedConnection);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    });
+    const auto joinSender = qScopeGuard([&]() {
+        stopSending.store(true);
+        sender.join();
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(harness.controller.micReceiver() != nullptr
+                                 && harness.controller.micReceiver()->stats().decodedPackets >= 20,
+                             kRealTransportWaitMs);
+
+    // Torn down from the owner while the line's thread delivers.
+    if (sessionEnds) {
+        harness.finish();
+        QTRY_VERIFY(!harness.server.mediaAvailable());
+    } else {
+        QVERIFY(harness.client.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("start")},
+            {QStringLiteral("connectionId"),
+             QStringLiteral("22222222-3333-4444-8555-666666666666")},
+            {QStringLiteral("remoteTxVersion"), 1}},
+            harness.client.sessionEpoch()));
+        // The old connection's transport is stopped (its peer goes later).
+        QTRY_VERIFY(!core || !core->isReady());
+    }
+    QTRY_VERIFY(harness.controller.micReceiver() == nullptr
+                || harness.controller.micReceiver()->stats().decodedPackets == 0);
+    // The phone goes on sending to a line that is gone.
+    QTest::qWait(200);
+    QVERIFY(sent.load() > 20);
+    // A new connection's line (not yet up) has heard nothing of the old.
+    QVERIFY(harness.controller.micReceiver() == nullptr
+            || harness.controller.micReceiver()->stats().decodedPackets == 0);
 }
 
 void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
@@ -4591,10 +4771,15 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
     feed.insertedFrames = 0;
     feed.grows = 1;
     feed.heldBlocks = 42;
+    // TX stall lane: the over's waits at the Core's event loop.
+    feed.ownerWaitMeanMs = 4.25;
+    feed.ownerWaitMaxMs = 91.0;
+    feed.ownerWaitsLong = 5;
     RadioConnection::TxSendStats send;
     send.valid = true;
     send.framesSent = 9600;
-    const QString line = DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send);
+    const QString line =
+        DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send, 91'456);
     QVERIFY2(line.contains(QStringLiteral("target 30 ms")), qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("added latency mean 22.5 ms, max 222.8 ms")),
              qPrintable(line));
@@ -4604,6 +4789,13 @@ void TstDaemonMediaController::unkeyLineCarriesTheMicrophonePathsLatency()
              qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("target grew 1 times, held for DEXP 42 blocks")),
              qPrintable(line));
+    QVERIFY2(line.contains(QStringLiteral(
+                 "held for DEXP 42 blocks; line waits mean 4.3 ms, max 91.0 ms, 5 over 50 ms; "
+                 "keepalive waits max 91.5 ms; packets concealed 2")),
+             qPrintable(line));
+    // TX mic thread fix round 2: an over with no "tx" keepalive says so.
+    QVERIFY(DaemonMediaController::unkeyStatsLine("phone-1", rx, &feed, send)
+                .contains(QStringLiteral("; keepalive waits none; ")));
     QVERIFY2(line.contains(QStringLiteral("packets concealed 2")), qPrintable(line));
     QVERIFY2(line.contains(QStringLiteral("frames 9600")), qPrintable(line));
 

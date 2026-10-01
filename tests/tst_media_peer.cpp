@@ -10,6 +10,9 @@
 //               session through the remote access service reach the media
 //               transport's start. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: a microphone sink's rejection
+//               posted before stop() or a restart is not reported after it.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -137,6 +140,13 @@ public:
     }
 
     bool isReady() const override { return readyState; }
+
+    bool setMicPacketSink(MicPacketSink sink) override
+    {
+        micSink = std::move(sink);
+        return true;
+    }
+
     void fireLocalDescription(const QString& sdp, const QString& type)
     {
         emit localDescription(sdp, type);
@@ -172,6 +182,7 @@ public:
     QList<QPair<QString, QString>> candidates;
     QList<QByteArray> sentDisplay;
     QList<QByteArray> sentRtp;
+    MicPacketSink micSink;
 };
 
 class ObservableFakeTransport final : public FakeTransport {
@@ -205,6 +216,7 @@ private slots:
     void headphonesMixFollowsTheStartOption();
     void iceSettingsReachTheTransport();
     void realPeersCarryDeclaredReceiverStreams();
+    void aMicSinkRejectionIsReportedOnlyForItsOwnStart();
 };
 
 void TestMediaPeer::terminalConnectionFailureIsTypedAndGenerationScoped()
@@ -916,6 +928,59 @@ void TestMediaPeer::iceSettingsReachTheTransport()
     peer.setIceConfiguration(std::nullopt);
     QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
     QVERIFY(!transports.constLast()->startedIce.has_value());
+    peer.stop();
+}
+
+// TX mic thread fix round 2: the sink (on the transport's thread) refuses a
+// packet off the line's SSRC and posts the report to the owner. Reported
+// while its start is current; dropped when stop() or a restart came between.
+void TestMediaPeer::aMicSinkRejectionIsReportedOnlyForItsOwnStart()
+{
+    QList<QPointer<FakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+    QSignalSpy errors(&peer, &MediaPeer::errorOccurred);
+    int delivered = 0;
+    QVERIFY(peer.setMicPacketSink([&delivered](const QByteArray&, qint64) { ++delivered; }) == false);
+    const auto startWithLine = [&peer]() {
+        return peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA),
+                          IMediaTransport::kDefaultAudioTargetBitrate, false, false, false, true);
+    };
+    const QByteArray wrongSsrc = rtpPacket(1, 0x01020304u);
+    const quint32 micSsrc = MediaPeer::micAudioSsrcForConnection(QLatin1String(kConnectionA));
+    QVERIFY(micSsrc != 0x01020304u);
+
+    // Current: delivered or reported.
+    QVERIFY(startWithLine());
+    QVERIFY(transports.constLast()->micSink);
+    transports.constLast()->micSink(rtpPacket(1, micSsrc), 0);
+    QCOMPARE(delivered, 1);
+    transports.constLast()->micSink(wrongSsrc, 0);
+    QCOMPARE(errors.size(), 0);   // posted, not emitted on the transport's thread
+    QCoreApplication::processEvents();
+    QCOMPARE(errors.size(), 1);
+
+    // Posted before stop(): dropped.
+    IMediaTransport::MicPacketSink stale = transports.constLast()->micSink;
+    stale(wrongSsrc, 0);
+    peer.stop();
+    QCoreApplication::processEvents();
+    QCOMPARE(errors.size(), 1);
+
+    // Posted before a restart: dropped; the new start's own report is not.
+    QVERIFY(startWithLine());
+    IMediaTransport::MicPacketSink first = transports.constLast()->micSink;
+    first(wrongSsrc, 0);
+    peer.stop();
+    QVERIFY(startWithLine());
+    QCoreApplication::processEvents();
+    QCOMPARE(errors.size(), 1);
+    transports.constLast()->micSink(wrongSsrc, 0);
+    QCoreApplication::processEvents();
+    QCOMPARE(errors.size(), 2);
     peer.stop();
 }
 

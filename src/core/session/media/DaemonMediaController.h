@@ -7,6 +7,17 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-10-01: TX stall lane, fix round 1: only the keyer's controller
+//               reports the unkey. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-10-01: TX mic thread (JJ approved): MicRoute, the microphone
+//               line's packets delivered from the transport's own thread.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-30: TX stall lane: the unkey line follows MoxController (its
+//               moxChanging and moxStateChanged), so it prints on every
+//               unkey; TransmitModel::moxChanged only saw the
+//               no-controller fallback. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-29: the direct media ladder: m_currentRouted and
 //               m_replacementRouted. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
@@ -74,6 +85,9 @@
 //   2026-09-29: slice control plan Task 6: the owner mix also sums the
 //               slices this device listens to, at its own listen level.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: TX mic thread fix round 2: the unkey line carries the
+//               over's longest "tx" keepalive wait. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -103,6 +117,7 @@
 #include <functional>
 #include <memory>
 #include <map>
+#include <mutex>
 #include <optional>
 
 namespace NereusSDR {
@@ -407,10 +422,12 @@ public:
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// R-IOS-13, R-R3-42: the text of the line logged at each unkey (log
     /// only, never shown to a device). `feed` is null when the Core has no
-    /// remote microphone feed.
+    /// remote microphone feed. `keepaliveWaitMaxUs` is the over's longest
+    /// wait at the Core of a "tx" keepalive, or -1 when none came.
     static QString unkeyStatsLine(const QByteArray& deviceId, const RemoteMicReceiver::Stats& rx,
                                   const RemoteMicFeed::Stats* feed,
-                                  const RadioConnection::TxSendStats& send);
+                                  const RadioConnection::TxSendStats& send,
+                                  qint64 keepaliveWaitMaxUs = -1);
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
     /// a controller on its own installs it on the Core's RemoteKeying, and
     /// DaemonMediaHub installs one that routes by device, fix wave C2).
@@ -595,6 +612,13 @@ private:
     void refreshMicWatching();
     // R-IOS-13, R-R3-42: at each unkey, one info line with this line's
     // microphone statistics and the transmit I/Q send path's counters.
+    // TX stall lane: the microphone figures are taken as the unkey starts
+    // (MoxController::moxChanging, before the feed leaves use and its
+    // underrun count resets), and the line is logged when the walk ends
+    // (moxStateChanged(false)), with the send path's counters then; a key
+    // that cuts the walk short logs it first. Only the controller whose
+    // device holds the key on its line takes the figures (fix round 1).
+    void snapshotUnkeyStats();
     void logUnkeyStats();
     bool acceptPeerControl(const QJsonObject& control);
     // iPhone app plan Task 29 (R-IOS-16; the media document, "Replacing
@@ -749,6 +773,20 @@ private:
     QTimer m_retireDrainTimer;
     QHash<quint32, quint32> m_sendSsrcRewrite;
     QHash<quint32, quint32> m_micSsrcRewrite;
+    // TX mic thread (JJ approved 2026-10-01): where the microphone line's
+    // packets go, from the transport's own thread or the event loop: this
+    // controller's receiver and SSRC rewrites, copied in under its lock
+    // whenever either changes (syncMicRoute). A packet in delivery holds
+    // the lock, so a receiver taken out of the route is never used again.
+    struct MicRoute {
+        std::mutex mutex;
+        RemoteMicReceiver* receiver{nullptr};
+        QHash<quint32, quint32> rewrite;
+        void deliver(const QByteArray& packet, qint64 heldUs);
+    };
+    std::shared_ptr<MicRoute> m_micRoute{std::make_shared<MicRoute>()};
+    void syncMicRoute();
+    IMediaTransport::MicPacketSink micRouteSink() const;
     // What the current peer's start negotiated, which a replacement keeps.
     bool m_startOfferedLossless{false};
     /// Task 29 step 2b: the media start declared the tunnel.
@@ -832,6 +870,19 @@ private:
     // device it is for.
     std::unique_ptr<RemoteMicReceiver> m_micReceiver;
     QByteArray m_micDeviceId;
+    // TX stall lane: the microphone figures of the unkey in progress.
+    struct UnkeySnapshot {
+        QByteArray deviceId;
+        RemoteMicReceiver::Stats rx;
+        RemoteMicFeed::Stats feed;
+        bool haveFeed{false};
+        qint64 keepaliveWaitMaxUs{-1};
+    };
+    std::optional<UnkeySnapshot> m_unkeySnapshot;
+    // TX mic thread fix round 2: the over's longest wait at the Core of a
+    // "tx" keepalive (-1: none yet), for the unkey line.
+    qint64 m_overKeepaliveWaitMaxUs{-1};
+    void noteKeepaliveWait(qint64 heldUs);
     std::map<quint32, EndpointEntry> m_endpoints;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;
