@@ -85,14 +85,14 @@ private slots:
             entry("100.64.1.1", 10),                // carrier-grade NAT
             entry("169.254.3.3", 16),               // link-local
             entry("127.0.0.1", 8),                  // loopback
-            entry("44.31.0.7", 24),                   // public
+            entry("1.2.3.4", 24),                  // public
             entry("192.0.2.7", 24),                 // documentation
         };
         const QStringList got =
             CoreAddresses::dialable(entries, QHostAddress(QHostAddress::Any), 47910);
         QCOMPARE(got, (QStringList{QStringLiteral("[2001:db8:1::5]:47910"),
                                    QStringLiteral("[2001:db8:1:0:211:22ff:fe33:4455]:47910"),
-                                   QStringLiteral("44.31.0.7:47910")}));
+                                   QStringLiteral("1.2.3.4:47910")}));
     }
 
     // The Rock's end1 as the lead read it (2026-09-29): six global
@@ -173,7 +173,7 @@ private slots:
     {
         const QList<QNetworkAddressEntry> entries{entry("2001:db8::7", 64),
                                                   entry("2001:db8::8", 64),
-                                                  entry("44.31.0.7", 24)};
+                                                  entry("1.2.3.4", 24)};
         // A loopback listener serves nobody else.
         QVERIFY(CoreAddresses::dialable(entries, QHostAddress(QHostAddress::LocalHost), 47910)
                     .isEmpty());
@@ -181,7 +181,7 @@ private slots:
                     .isEmpty());
         // One family, or one address.
         QCOMPARE(CoreAddresses::dialable(entries, QHostAddress(QHostAddress::AnyIPv4), 47910),
-                 QStringList{QStringLiteral("44.31.0.7:47910")});
+                 QStringList{QStringLiteral("1.2.3.4:47910")});
         QCOMPARE(CoreAddresses::dialable(entries, QHostAddress(QHostAddress::AnyIPv6), 47910),
                  (QStringList{QStringLiteral("[2001:db8::7]:47910"),
                               QStringLiteral("[2001:db8::8]:47910")}));
@@ -204,7 +204,7 @@ private slots:
         for (int i = 20; i >= 10; --i) {
             entries.append(entry(qPrintable(QStringLiteral("2001:db8::%1").arg(i))));
         }
-        entries.append(entry("44.31.0.7"));
+        entries.append(entry("1.2.3.4"));
         const QStringList got =
             CoreAddresses::dialable(entries, QHostAddress(QHostAddress::Any), 47910);
         QCOMPARE(got.size(), CoreAddresses::kMaxAddresses);
@@ -213,7 +213,7 @@ private slots:
         QStringList unique = got;
         QCOMPARE(unique.removeDuplicates(), 0);
         // Every IPv6 address comes before the IPv4 one, so the cap drops it.
-        QVERIFY(!got.contains(QStringLiteral("44.31.0.7:47910")));
+        QVERIFY(!got.contains(QStringLiteral("1.2.3.4:47910")));
     }
 
     void scopeIsDropped()
@@ -230,8 +230,8 @@ private slots:
     {
         QCOMPARE(CoreAddresses::toJson({}), QStringLiteral("{\"addresses\":[]}"));
         QCOMPARE(CoreAddresses::toJson({QStringLiteral("[2001:db8::7]:47910"),
-                                        QStringLiteral("44.31.0.7:47910")}),
-                 QStringLiteral("{\"addresses\":[\"[2001:db8::7]:47910\",\"44.31.0.7:47910\"]}"));
+                                        QStringLiteral("1.2.3.4:47910")}),
+                 QStringLiteral("{\"addresses\":[\"[2001:db8::7]:47910\",\"1.2.3.4:47910\"]}"));
     }
 
     void watcherSaysEachChangeOnce()

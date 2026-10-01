@@ -3378,7 +3378,7 @@ Notes on the keys:
     connection receives `""` (`StationServer::withPairingCodeFor`).
   - `coreAddresses` (`utf8`, `coreAddressesVersion` 1): where a device can
     dial this Core's control listener, as compact JSON
-    `{"addresses":["[2001:db8:1:0:211:22ff:fe33:4455]:47910","44.31.0.7:47910"]}`
+    `{"addresses":["[2001:db8:1:0:211:22ff:fe33:4455]:47910","203.0.113.7:47910"]}`
     (`CoreAddresses::toJson`). Each entry is `[<IPv6>]:<port>` or
     `<IPv4>:<port>`, the port the listener actually holds (`remote_port`,
     section 2); IPv6 entries first, then IPv4, each family in address

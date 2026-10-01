@@ -1,6 +1,6 @@
 {
     "runs": ["station"],
-    "stationSetup": {"radio": "static", "slices": 1, "coreListener": {"address": "::", "port": 47910}, "coreInterfaces": [{"ip": "fe80::1", "prefix": 64}, {"ip": "fd12:3456::1", "prefix": 64}, {"ip": "2001:db8:1::211:22ff:fe33:4455", "prefix": 64}, {"ip": "2001:db8:1::abcd", "prefix": 64, "temporary": true}, {"ip": "192.168.1.20", "prefix": 24}, {"ip": "44.31.0.7", "prefix": 24}]},
+    "stationSetup": {"radio": "static", "slices": 1, "coreListener": {"address": "::", "port": 47910}, "coreInterfaces": [{"ip": "fe80::1", "prefix": 64}, {"ip": "fd12:3456::1", "prefix": 64}, {"ip": "2001:db8:1::211:22ff:fe33:4455", "prefix": 64}, {"ip": "2001:db8:1::abcd", "prefix": 64, "temporary": true}, {"ip": "192.168.1.20", "prefix": 24}, {"ip": "1.2.3.4", "prefix": 24}]},
     "steps": [
         {"from": "station", "message": {"challenge": "$string", "features": {"deviceAuth": 1, "pairing": 1, "sessionHolder": 1}, "identity": {"certBinding": "$string", "publicKey": "$string"}, "major": 1, "majors": [1], "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
         {"from": "client", "role": "behaviour", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": "$int", "peer": "$string", "majors": "$majors", "features": {"deviceAuth": 1, "coreAddresses": 1}}},
@@ -31,7 +31,7 @@
         {"from": "station", "message": {"class": "SpotSourceHost", "key": "spotSources", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"coreInterfaces": [{"ip": "fe80::1", "prefix": 64}, {"ip": "2001:db8:1::211:22ff:fe33:4455", "prefix": 64, "deprecated": true}, {"ip": "2001:db8:9::211:22ff:fe33:4455", "prefix": 64}, {"ip": "192.168.1.20", "prefix": 24}, {"ip": "44.31.0.7", "prefix": 24}]},
+        {"coreInterfaces": [{"ip": "fe80::1", "prefix": 64}, {"ip": "2001:db8:1::211:22ff:fe33:4455", "prefix": 64, "deprecated": true}, {"ip": "2001:db8:9::211:22ff:fe33:4455", "prefix": 64}, {"ip": "192.168.1.20", "prefix": 24}, {"ip": "1.2.3.4", "prefix": 24}]},
         {"advanceMs": 50},
         {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "station.rename", "id": 1502, "args": [{"ordinal": 0, "name": "label", "kind": "utf8", "value": "KG4VCF/shack"}]}},
         {"from": "station", "message": {"key": "StationLabel", "origin": "", "properties": [{"kind": "utf8", "name": "StationLabel", "ordinal": 0, "value": "KG4VCF/shack"}], "type": "settings.value"}},
