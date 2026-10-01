@@ -61,10 +61,7 @@ comment on the nearest equivalent line with
   `../TAPR-OpenHPSDR-Firmware/` (`e7c6584`) or `../n1gp-Anvelina_PROIII/`
   (`8e86a61`), both pinned; never pull. Cite facts only; ask before porting
   Verilog logic. Details in HOW-TO-PORT.md.
-* piHPSDR (`../pihpsdr/`, pinned `4aa95c5`) and deskhpsdr (`../deskhpsdr/`,
-  pinned `f3d857c`) follow the same rule: cite facts only (PROVENANCE kind
-  `reference`), stop and ask before translating their logic, and never propose
-  adopting their structure. Details in HOW-TO-PORT.md.
+* piHPSDR (`../pihpsdr/`, pinned `4aa95c5`) and deskHPSDR (`../deskhpsdr/`, pinned `f3d857c`) are references like Thetis: facts cite them, and code ported from them keeps their GPL headers and attribution (HOW-TO-PORT.md).
 
 ## Agent boundaries
 

@@ -270,44 +270,28 @@ Not every Thetis capability is ported: NereusSDR keeps its own design (slices, V
 the remote Core), and a Thetis feature comes in when it fits that design and serves
 operators. Features built around Thetis's VFO A/B or RX1/RX2 structure are not forced in.
 
-## piHPSDR and deskhpsdr citations
+## piHPSDR and deskHPSDR
 
-Moved from CLAUDE.md (reference-repository entry 8 and the rule under its
-gateware section).
+These are references like Thetis: study them, then port what fits as written
+or design for NereusSDR with them as the basis.
 
-* **piHPSDR (dl1ycf)** - `https://github.com/dl1ycf/pihpsdr`
-   * **Clone to `../pihpsdr/` relative to NereusSDR root.** Pinned at SHA
-     `4aa95c5` (2026-08-06). GPLv3-or-later, the same licence NereusSDR ships
-     under, so there is no compatibility blocker.
-   * A mature C/GTK OpenHPSDR console with its own client/server remote mode.
-     Added 2026-08-08 after the maintainer evaluated it as a possible
-     alternative base and **decided against it**. That evaluation is the entry's
-     value: it is a second independent implementation of problems we are
-     solving, useful as design evidence and as a source of field-proven numbers.
-   * **The architecture decision is settled: we keep ours.** Their core is not
-     GUI-free (`src/receiver.h:190-192` holds `GtkWidget *panel`, `*panadapter`
-     and `*waterfall` inside `struct RECEIVER`; 150 of 219 source files include
-     `gtk/gtk.h`; no automated test suite). NereusSDR is already split into
-     `NereusCore` / `NereusGui` with `nereusd` as a real target. Do not propose
-     adopting their structure.
-   * Do **not** port their command set. Our generic `StateMirror` over 144
-     `Q_PROPERTY` declarations is deliberately better than their 114
-     hand-enumerated `CMD_*` types, because a new property mirrors for free
-     instead of costing two handlers.
-   * Useful facts cited so far: the remote-mode socket timeouts at
-     `src/server_thread.c:925-934` (15 s heartbeat, 30 s receive, 5 s send, a
-     shipping configuration on real internet links), and four R3 display-codec
-     observations recorded in
-     `docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md` §12.
-   * **`dl1bz/deskhpsdr`**, a piHPSDR desktop fork, is also cloned at
-     `../deskhpsdr/` (SHA `f3d857c`) and falls under the same rules.
+* **piHPSDR (dl1ycf)**, `https://github.com/dl1ycf/pihpsdr`, cloned to
+  `../pihpsdr/`, pinned at `4aa95c5` (2026-08-06). A C/GTK OpenHPSDR console
+  with its own client/server remote mode.
+* **deskHPSDR (dl1bz)**, `https://github.com/dl1bz/deskhpsdr`, a piHPSDR
+  desktop fork, cloned to `../deskhpsdr/`, pinned at `f3d857c`.
+* Do not `git pull` either one. Re-pinning is deliberate: bump the SHA and
+  re-verify every cite.
 
-**The same rule governs piHPSDR and deskhpsdr.** Both are GPLv3-or-later, so
-again the constraint is scope and correctness rather than law. Cite a fact (a
-timeout, a packet layout, a bitrate, a quantiser step) with a
-`// From piHPSDR src/server_thread.c:930 [@4aa95c5]` style cite and a PROVENANCE
-row of kind `reference`. **Stop and ask before translating any of their logic**,
-because the maintainer has already ruled that we keep our architecture, so
-needing their code almost certainly means a design took a wrong turn. Quoting one
-of their comments verbatim triggers the inline-comment-preservation rule exactly
-as a Thetis tag would.
+**Facts.** A timeout, packet layout, bitrate or quantiser step is cited, not
+ported: `// From piHPSDR src/server_thread.c:930 [@4aa95c5]`, with a PROVENANCE
+row of kind `reference`. Hardware and protocol facts still need a cite.
+
+**Ports.** Code translated from either repo uses the normal `port` kind and
+all the rules above. Read the repo's `COPYING` and the header of each upstream
+file, and copy that header byte-for-byte; do not assume the header form, since
+files differ. Keep every `Copyright (C)` line and author tag, add the
+Modification history block, and carry inline comments verbatim. Add the row to
+`DESKHPSDR-PROVENANCE.md` for deskHPSDR; piHPSDR has no provenance file yet, so
+create one in the same commit as the first port. Both repos are
+GPLv3-or-later, the licence NereusSDR ships under.
