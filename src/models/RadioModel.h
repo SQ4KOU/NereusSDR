@@ -512,6 +512,11 @@
 //                change and worker attach, so a RADE slice with no route
 //                yet plays silence, not its sideband. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-30 - TX safety: isRadioLinkDown, radioLinkDownChanged and
+//                transmitLockCoversVox; a lost radio link locks MOX, TUN
+//                and 2TONE until it is back (console.cs:27488-27493
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1622,6 +1627,17 @@ public:
     // The words a locked transmit button shows, joined with `otherReason`
     // as rxOnlyReasonAlongside does; `otherReason` as it is when unlocked.
     QString transmitLockReasonAlongside(const QString& otherReason) const;
+    // TX safety (2026-09-30): whether the lock covers VOX. Receive only and
+    // a TX inhibit disable it; a lost radio link does not, as Thetis's
+    // power-off leaves chkVOX alone (console.cs:27488-27493 [v2.10.3.15]).
+    bool transmitLockCoversVox() const;
+    // TX safety (2026-09-30): the link to the radio is lost and not yet
+    // back (LinkLost, and the Connecting or Probing that follows it). Every
+    // key is refused (MoxController::setRadioLinkDown) and MOX, TUN and
+    // 2TONE are locked with radioLinkDownReason(). Always false on a remote
+    // window, whose Core refuses the key.
+    bool isRadioLinkDown() const { return m_radioLinkDown; }
+    static QString radioLinkDownReason();
 
     // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
     // Which noise reduction runs is nrCannotRunReason's (DspAssetService,
@@ -5767,6 +5783,9 @@ signals:
     // (isRxOnly, isRxOnlyForced, rxOnlyReason).
     void rxOnlyChanged(bool on);
 
+    // TX safety (2026-09-30): isRadioLinkDown changed.
+    void radioLinkDownChanged(bool down);
+
     // Task 1.8: DSP rebuild elapsed time signal.
     // Emitted whenever a live DSP change (sample rate, active RX count,
     // DSP-Options buffer/filter changes) completes. The argument is the
@@ -7530,6 +7549,8 @@ private:
     bool m_rxOnlySetting{false};
     bool m_rxOnlyEffective{false};
     bool m_rxOnlyForced{false};
+    // TX safety (2026-09-30): see isRadioLinkDown.
+    bool m_radioLinkDown{false};
     // From Thetis Andromeda/Andromeda.cs:854-866 [v2.10.3.13] (_ganymedePresent / GanymedePresent setter).
     bool m_ganymedePresent{false};
 

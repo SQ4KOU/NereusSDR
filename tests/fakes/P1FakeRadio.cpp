@@ -162,6 +162,18 @@ int P1FakeRadio::ep2FramesReceived() const
     return m_ep2Count;
 }
 
+QList<QByteArray> P1FakeRadio::ep2CcReceived() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_ep2Cc;
+}
+
+void P1FakeRadio::clearEp2CcLog()
+{
+    QMutexLocker lock(&m_mutex);
+    m_ep2Cc.clear();
+}
+
 bool P1FakeRadio::isRunning() const
 {
     QMutexLocker lock(&m_mutex);
@@ -282,17 +294,22 @@ void P1FakeRadio::handleMetisCommand(const QByteArray& pkt,
     } else if (cmd == 0x00) {
         m_running = false;
         ++m_stopCount;
+        // The C&C log starts again at each stop, so a test reads what a
+        // (re)start sent, not frames that were still in flight before it.
+        m_ep2Cc.clear();
     }
 }
 
 // ---------------------------------------------------------------------------
-// handleEp2Frame — count ep2 command frames from the client
+// handleEp2Frame — count ep2 command frames from the client and keep their
+// C&C bytes (subframe 0 at offset 11, subframe 1 at offset 523)
 // ---------------------------------------------------------------------------
 void P1FakeRadio::handleEp2Frame(const QByteArray& pkt)
 {
     if (pkt.size() == 1032) {
         QMutexLocker lock(&m_mutex);
         ++m_ep2Count;
+        m_ep2Cc.append(pkt.mid(11, 5) + pkt.mid(523, 5));
     }
 }
 

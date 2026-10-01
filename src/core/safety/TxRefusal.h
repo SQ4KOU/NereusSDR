@@ -35,6 +35,9 @@
 //   2026-09-29: slice control plan Task 11: chooseTransmitSlice. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-30: TX safety: radioLinkDown, every key while the link to the
+//               radio is lost. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -108,6 +111,9 @@ TxRefusal stationReceiveOnly();
 TxRefusal bandPlan(const QString& reason);
 /// The radio's TX inhibit input holds transmit off.
 TxRefusal txInhibited();
+/// TX safety (2026-09-30, code interlock): every key while the link to the
+/// radio is lost and until it is back: "The link to the radio is down."
+TxRefusal radioLinkDown();
 /// The transmit interlock refused, for a reason other than the two below.
 TxRefusal interlock();
 /// The interlock refused because the amplifier is in standby.

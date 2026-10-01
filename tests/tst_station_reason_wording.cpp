@@ -1254,7 +1254,10 @@ const QList<ReasonSource>& reasonSources()
          // part 2): the reason setTxInhibited was given
          // (RadioModel::ioBoardFaultReason, scanned).
          {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()"),
-          QStringLiteral("TxRefusals::txInhibited()"), QStringLiteral("m_txInhibitReason")}},
+          QStringLiteral("TxRefusals::txInhibited()"), QStringLiteral("m_txInhibitReason"),
+          // TX safety (2026-09-30): the lost radio link's refusal.
+          QStringLiteral("TxRefusals::radioLinkDown()"),
+          QStringLiteral("TxRefusals::radioLinkDown().text")}},
         {"src/core/MoxController.h",
          {QStringLiteral("rxOnlyReason"), QStringLiteral("txInhibitReason")}, {}, 0, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
@@ -1263,6 +1266,8 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("m_rxOnlyReason"), QStringLiteral("m_txInhibitReason")}},
         {"src/models/RadioModel.cpp",
          {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
+          // TX safety (2026-09-30): the lost radio link's lock.
+          QStringLiteral("radioLinkDownReason"),
           // iPhone app plan Task 77: a device's Tuner Genius autotune.
           QStringLiteral("startTgxlAutotuneFor"),
           // Task 77 fix round 2: the cycle's own refusals, which
@@ -1280,6 +1285,9 @@ const QList<ReasonSource>& reasonSources()
           // Task 77 fix wave, I3: the on-air refusal's words
           // (TxRefusal.cpp, scanned there).
           QStringLiteral("TxRefusals::radioOnAir().text"),
+          // TX safety (2026-09-30): the lost radio link's words
+          // (TxRefusal.cpp, scanned there).
+          QStringLiteral("TxRefusals::radioLinkDown().text"),
           // Task 77 fix round 2: beginTgxlAutotune's refusal (its own
           // literals and the words above, all scanned here), passed on by
           // startTgxlAutotuneFor.
