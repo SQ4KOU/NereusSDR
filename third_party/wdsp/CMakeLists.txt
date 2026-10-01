@@ -112,7 +112,7 @@ target_include_directories(wdsp_static
     PUBLIC  ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Sub-epic C-1 NR backends (PR to be opened in Task 25):
+# Retained NR3 and NR4 backends:
 #   rnnr.c (NR3) needs rnnoise.h + rnnoise symbols → rnnoise_static
 #   sbnr.c (NR4) needs specbleach_adenoiser.h + specbleach symbols → specbleach_static
 # PUBLIC linkage transitively exposes the targets' include dirs so rnnr.c
@@ -193,8 +193,55 @@ else()
     endif()
 endif()
 
-# Suppress warnings in third-party C code
-target_compile_options(wdsp_static PRIVATE
-    $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-w>
-    $<$<C_COMPILER_ID:MSVC>:/W0>
+# Warnings are suppressed only in sources that are byte-identical to the
+# pinned WDSP 2.10 tree. Sources NereusSDR edits or adds (the "Modified" and
+# "NereusSDR-original" rows of docs/attribution/WDSP-PROVENANCE.md) build with
+# the compiler's default warnings, so a problem in our own changes shows up.
+# On Clang the edited upstream files still use WDSP's `if (x = f())` idiom,
+# so -Wparentheses alone is turned off for them. Keep this list in step with
+# the provenance table when a file is edited or synced back to the pin.
+set(WDSP_EDITED_SOURCES
+    src/RXA.c
+    src/TXA.c
+    src/amd.c
+    src/anf.c
+    src/anr.c
+    src/calcc.c
+    src/cfcomp.c
+    src/cfir.c
+    src/channel.c
+    src/dsplock.c
+    src/emnr.c
+    src/emph.c
+    src/eq.c
+    src/extrapolate.c
+    src/fmd.c
+    src/iqc.c
+    src/linux_port.c
+    src/main.c
+    src/netinterface_stub.c
+    src/nnet.c
+    src/nnio.c
+    src/nnr.c
+    src/nurbs_fit.c
+    src/nurbs_spline.c
+    src/ps_sync_stub.c
+    src/resample.c
+    src/rnnr.c
+    src/sbnr.c
+    src/snb.c
+    src/txgain_stub.c
+    src/wbfm.c
+)
+set(WDSP_PINNED_SOURCES ${WDSP_SOURCES})
+list(REMOVE_ITEM WDSP_PINNED_SOURCES ${WDSP_EDITED_SOURCES})
+set_source_files_properties(${WDSP_PINNED_SOURCES}
+    TARGET_DIRECTORY wdsp_static
+    PROPERTIES COMPILE_OPTIONS
+        "$<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-w>;$<$<C_COMPILER_ID:MSVC>:/W0>"
+)
+set_source_files_properties(${WDSP_EDITED_SOURCES}
+    TARGET_DIRECTORY wdsp_static
+    PROPERTIES COMPILE_OPTIONS
+        "$<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-parentheses>"
 )
