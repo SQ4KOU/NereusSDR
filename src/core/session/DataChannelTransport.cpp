@@ -41,6 +41,11 @@
 //   2026-09-30: LINK minor 9: the lingering close holds the application
 //               through a QPointer. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-30: Fix round 1 (LINK minor 9): the lingering close posts
+//               through a context object that the application's teardown
+//               deletes under a lock (qAddPostRoutine), not a QPointer read
+//               on libdatachannel's thread. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/DataChannelTransport.h"
@@ -1460,38 +1465,88 @@ struct Linger {
     }
 };
 
+// Fix round 1 (LINK minor 9): where a lingering close is finished. The
+// state callback runs on libdatachannel's thread, so it never reads the
+// application there: it posts to `target` under `mutex`, and the
+// application's teardown (a post routine, run first in QCoreApplication's
+// destructor) deletes `target` under the same lock. A post is then either
+// made to a live object or not made at all; one still queued is dropped
+// with the object.
+struct LingerContext {
+    std::mutex mutex;
+    std::unique_ptr<QObject> target;
+    bool routineAdded = false;
+};
+
+LingerContext& lingerContext()
+{
+    static LingerContext context;
+    return context;
+}
+
+void endLingerContext()
+{
+    LingerContext& context = lingerContext();
+    std::lock_guard lock(context.mutex);
+    context.target.reset();
+}
+
+// The context's target, made the first time and kept on the
+// application's thread.
+QObject* lingerTarget()
+{
+    if (QCoreApplication::instance() == nullptr) {
+        return nullptr;
+    }
+    LingerContext& context = lingerContext();
+    std::lock_guard lock(context.mutex);
+    if (!context.target) {
+        context.target = std::make_unique<QObject>();
+        // It works on the application's thread, as the application did.
+        context.target->moveToThread(QCoreApplication::instance()->thread());
+        if (!context.routineAdded) {
+            context.routineAdded = true;
+            qAddPostRoutine(&endLingerContext);
+        }
+    }
+    return context.target.get();
+}
+
 // True when the connection was handed to a Linger; false when there is
 // nothing to wait for (the caller closes the peer at once).
 bool lingerUntilClosed(const std::shared_ptr<rtc::PeerConnection>& peer,
                        const std::shared_ptr<rtc::DataChannel>& channel)
 {
-    // LINK minor 9: guarded, not raw: the state callback runs on
-    // libdatachannel's thread and may come after the application is gone.
-    const QPointer<QCoreApplication> app = QCoreApplication::instance();
-    if (app.isNull() || !peer || !channel || !channel->isOpen()) {
+    if (!peer || !channel || !channel->isOpen()) {
+        return false;
+    }
+    QObject* const target = lingerTarget();
+    if (target == nullptr) {
         return false;
     }
     auto linger = std::make_shared<Linger>();
     linger->peer = peer;
     linger->channel = channel;
     const std::weak_ptr<Linger> weak = linger;
-    peer->onStateChange([weak, app](rtc::PeerConnection::State state) {
+    peer->onStateChange([weak](rtc::PeerConnection::State state) {
         if (state != rtc::PeerConnection::State::Closed
             && state != rtc::PeerConnection::State::Failed
             && state != rtc::PeerConnection::State::Disconnected) {
             return;
         }
-        if (app.isNull()) {
+        LingerContext& context = lingerContext();
+        std::lock_guard lock(context.mutex);
+        if (!context.target) {
             return;
         }
-        QMetaObject::invokeMethod(app.data(), [weak]() {
+        QMetaObject::invokeMethod(context.target.get(), [weak]() {
             if (const auto held = weak.lock()) {
                 held->release();
             }
         }, Qt::QueuedConnection);
     });
     // The timer's copy holds the connection until the deadline at most.
-    QTimer::singleShot(DataChannelTransport::kCloseDrainDeadlineMs, app.data(),
+    QTimer::singleShot(DataChannelTransport::kCloseDrainDeadlineMs, target,
                        [linger]() { linger->release(); });
     channel->resetCallbacks();
     channel->close();
