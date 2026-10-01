@@ -87,6 +87,12 @@
 //                                    comes on the Core's next delta
 //                                    flush). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-30  J.J. Boyd / KG4VCF  Fix wave round 1: the header's fault
+//                                    width check lays the segment out
+//                                    with the fault text in place instead
+//                                    of measuring it against the width
+//                                    chosen for the muted text.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -101,6 +107,7 @@
 #include <QGroupBox>
 #include <QSpinBox>
 #include <QLabel>
+#include <QLayout>
 #include <QStackedWidget>
 #include <QTabWidget>
 #include <QLoggingCategory>
@@ -664,10 +671,27 @@ private slots:
                  qPrintable(QStringLiteral("muted segment %1, text %2")
                                 .arg(segment->width())
                                 .arg(headerMetrics.horizontalAdvance(segment->remotePresentationText()))));
+        // The longest audio group, "Audio unavailable", must fit beside the
+        // other three at 1440 px too. The segment is laid out with the fault
+        // text in place (the layout runs here, before the next telemetry
+        // refresh can put the muted text back), so the check measures the
+        // width the title bar gives that text in this platform's fonts, not
+        // whether the width chosen for "Audio muted" happens to cover it.
         QStringList faultGroups = segment->remotePresentationText().split(QStringLiteral(" · "));
         QCOMPARE(faultGroups.size(), 4);
         faultGroups[1] = ConnectionSegment::audioMetricText(
             std::nullopt, RemoteAudioStatus::State::PlaybackProblem);
+        segment->setRemoteMetrics(faultGroups);
+        QList<QLayout*> layouts;
+        for (QWidget* widget = segment->parentWidget(); widget; widget = widget->parentWidget()) {
+            if (widget->layout()) {
+                layouts.prepend(widget->layout());
+            }
+        }
+        for (QLayout* layout : std::as_const(layouts)) {
+            layout->activate();
+        }
+        QCOMPARE(segment->remotePresentationText(), faultGroups.join(QStringLiteral(" · ")));
         QVERIFY2(segment->width() >= headerMetrics.horizontalAdvance(faultGroups.join(QStringLiteral(" · "))) + 34,
                  qPrintable(QStringLiteral("fault segment %1, text %2: %3")
                                 .arg(segment->width())
