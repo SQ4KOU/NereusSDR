@@ -42,6 +42,10 @@
 // real-time pacing. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 // Code.
 //
+// 2026-10-01: Mic 48k lane: the microphone line's offer advertises
+// maxaveragebitrate=48000. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -2113,7 +2117,7 @@ void TestMediaTransport::micLineIsOfferedOnlyWhenAsked()
             QVERIFY(micOffer.contains(QStringLiteral("a=recvonly")));
             QVERIFY(micOffer.contains(QStringLiteral("a=rtpmap:111 opus/48000/2")));
             QVERIFY(micOffer.contains(QStringLiteral(
-                "a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000")));
+                "a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=48000")));
             for (const QString& line : micOffer) {
                 QVERIFY2(!line.startsWith(QLatin1String("a=ssrc:")), qPrintable(line));
                 QVERIFY2(!line.contains(QLatin1String("L16")), qPrintable(line));

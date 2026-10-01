@@ -17,9 +17,11 @@
 //   RemotePcm  a remote window's L16 line: 20 ms packets into RemoteMicFeed
 //              (jitter buffer, rmatch), pulled 64 frames a pump block.
 //   OpusPhone  the phone's encoder (NereusKit OpusEncoder.swift settings:
-//              VOIP, 24 kbit/s constrained VBR, in-band FEC, 10 % expected
+//              VOIP, 48 kbit/s constrained VBR, in-band FEC, 10 % expected
 //              loss, DTX off, complexity 9, voice), RTP into
 //              RemoteMicReceiver (the Core's decoder), then the feed.
+//   PhoneSave  the same at 24 kbit/s, the phone's Save data choice (and
+//              its only rate before the mic 48k lane).
 //   OpusDesk   RemoteMicEncoder (the desktop remote window's encoder), then
 //              the same receiver and feed.
 //   PhoneStalls OpusPhone over a link that stalls 100 ms every 1.5 s and
@@ -50,6 +52,18 @@
 // reaches the ALC's ceiling. The codec itself is the phone's choice and is
 // measured in the matrix, not asserted here.
 //
+// phonePausesStayUnderTheSilencePeak re-measures the pause level the
+// microphone feed's silence threshold (RemoteMicConfig::kSilencePeak) was
+// set from: speech in 300 ms pieces with 200 ms pauses, over a microphone
+// noise floor of -80 to -55 dBFS RMS, through each remote path. In the
+// pauses, from 20 ms in (the feed's kSilenceRunMs), it measures each
+// 64-frame block's peak; in the speech, the share of active blocks (input
+// peak at least -26 dBFS) that the threshold would call silent. It asserts
+// that at the phone's 48 kbit/s, over floors up to -60 dBFS, 99 % of pause
+// blocks stay under the threshold, and that no more active speech blocks
+// fall under it than on the L16 path. The table prints with
+// NEREUS_LEVELER_MATRIX=1.
+//
 // NEREUS_LEVELER_MATRIX=1 prints the whole measurement matrix.
 //
 // NEREUS_LEVELER_HASH=1 runs one key (the 150 Hz bursts through the L16
@@ -63,6 +77,10 @@
 //   2026-10-01: original test for NereusSDR by J.J. Boyd (KG4VCF), leveler
 //               lane, with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-10-01: Mic 48k lane: OpusPhone at the phone's 48 kbit/s,
+//               PhoneSave at its 24 kbit/s Save data, and
+//               phonePausesStayUnderTheSilencePeak. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -87,6 +105,7 @@
 #include <functional>
 #include <map>
 #include <numbers>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -105,8 +124,8 @@ constexpr quint32 kSsrc = 0x6d696301U;
 constexpr int kMeterLvlrGain = wdspTxaMeterIndex(TxMeterType::LevelerGain);
 constexpr int kMeterAlcGain = wdspTxaMeterIndex(TxMeterType::AlcGain);
 
-enum class Path { Local, RemotePcm, OpusPhone, OpusPhoneStalls, OpusDesk, OpusAudio32, OpusAudio48,
-                  OpusAudio64 };
+enum class Path { Local, RemotePcm, OpusPhone, OpusPhoneSaveData, OpusPhoneStalls, OpusDesk,
+                  OpusAudio32, OpusAudio48, OpusAudio64 };
 
 const char* pathName(Path p)
 {
@@ -114,6 +133,7 @@ const char* pathName(Path p)
     case Path::Local: return "Local";
     case Path::RemotePcm: return "RemotePcm";
     case Path::OpusPhone: return "OpusPhone";
+    case Path::OpusPhoneSaveData: return "PhoneSave";
     case Path::OpusPhoneStalls: return "PhoneStalls";
     case Path::OpusDesk: return "OpusDesk";
     case Path::OpusAudio32: return "OpusAudio32";
@@ -272,12 +292,16 @@ struct FakeTime {
     }
 };
 
-// The phone's encoder, NereusKit OpusEncoder.swift:62-66 as the controller
-// relayed it; `audioKbps` > 0 selects the AUDIO application at that rate.
+// The phone's encoder, NereusKit OpusEncoder.swift:58-73 (claude/
+// iphone-audioquality at bf72cdb30): 48 kbit/s, or 24 kbit/s under Save
+// data (`voipBitrate`); `audioKbps` > 0 selects the AUDIO application at
+// that rate instead.
+constexpr int kPhoneMicBitrate = 48000;
+constexpr int kPhoneMicSaveDataBitrate = 24000;
 struct PhoneEncoder {
     OpusEncoder* enc{nullptr};
     std::vector<unsigned char> payload = std::vector<unsigned char>(1500);
-    explicit PhoneEncoder(int audioKbps)
+    explicit PhoneEncoder(int audioKbps, int voipBitrate = kPhoneMicBitrate)
     {
         int error = OPUS_OK;
         enc = opus_encoder_create(kInRate, 1,
@@ -286,7 +310,7 @@ struct PhoneEncoder {
         if (enc == nullptr) {
             return;
         }
-        opus_encoder_ctl(enc, OPUS_SET_BITRATE(audioKbps > 0 ? audioKbps * 1000 : 24000));
+        opus_encoder_ctl(enc, OPUS_SET_BITRATE(audioKbps > 0 ? audioKbps * 1000 : voipBitrate));
         opus_encoder_ctl(enc, OPUS_SET_VBR(1));
         opus_encoder_ctl(enc, OPUS_SET_VBR_CONSTRAINT(1));
         opus_encoder_ctl(enc, OPUS_SET_INBAND_FEC(1));
@@ -333,6 +357,9 @@ std::vector<float> micStream(Path path, const std::vector<float>& input,
     switch (path) {
     case Path::OpusPhone:
     case Path::OpusPhoneStalls: phone = std::make_unique<PhoneEncoder>(0); break;
+    case Path::OpusPhoneSaveData:
+        phone = std::make_unique<PhoneEncoder>(0, kPhoneMicSaveDataBitrate);
+        break;
     case Path::OpusAudio32: phone = std::make_unique<PhoneEncoder>(32); break;
     case Path::OpusAudio48: phone = std::make_unique<PhoneEncoder>(48); break;
     case Path::OpusAudio64: phone = std::make_unique<PhoneEncoder>(64); break;
@@ -403,6 +430,7 @@ public:
 private slots:
     void initTestCase() { AppSettings::instance().clear(); }
     void remoteMicLevelsLikeLocalMic();
+    void phonePausesStayUnderTheSilencePeak();
     void measurementMatrix();
     void feedToneMatrix();
     void outputHash();
@@ -791,6 +819,119 @@ void TestTxLevelerRemoteMic::remoteMicLevelsLikeLocalMic()
 #endif
 }
 
+// The pause level after each remote path (the bounds are in the header
+// comment).
+void TestTxLevelerRemoteMic::phonePausesStayUnderTheSilencePeak()
+{
+    const std::vector<float>& speech = speechClip();
+    QVERIFY(!speech.empty());
+    constexpr int kWord = 14400;   // 300 ms
+    constexpr int kPause = 9600;   // 200 ms
+    constexpr int kRunFrames = RemoteMicConfig::kFramesPerMs * RemoteMicConfig::kSilenceRunMs;
+    constexpr float kActivePeak = 0.05f;   // -26 dBFS
+    const int words = static_cast<int>(speech.size()) / kWord;
+    const bool print = qEnvironmentVariableIntValue("NEREUS_LEVELER_MATRIX") == 1;
+    if (print) {
+        qInfo().noquote() << "PAUSE path speechPk floorRms | pause block peak p50 p90 p99 max "
+                             "| pause>=thr% | active<thr% | lag";
+    }
+    for (const double speechPeakDb : {-6.0, -20.0}) {
+        for (const double floorDb : {-80.0, -70.0, -60.0, -55.0}) {
+            // Words and pauses, the floor under both (Gaussian, a fixed
+            // seed, RMS at floorDb).
+            std::vector<float> clean;
+            std::vector<char> inPause;
+            const float g = static_cast<float>(std::pow(10.0, speechPeakDb / 20.0));
+            for (int w = 0; w < words; ++w) {
+                for (int n = 0; n < kWord; ++n) {
+                    clean.push_back(g * speech[static_cast<size_t>(w * kWord + n)]);
+                    inPause.push_back(0);
+                }
+                for (int n = 0; n < kPause; ++n) {
+                    clean.push_back(0.0f);
+                    inPause.push_back(n >= kRunFrames ? 1 : 0);
+                }
+            }
+            std::mt19937 rng(7);
+            std::normal_distribution<float> gauss(0.0f,
+                                                  static_cast<float>(std::pow(10.0, floorDb / 20.0)));
+            std::vector<float> input(clean.size());
+            for (size_t i = 0; i < clean.size(); ++i) {
+                input[i] = clean[i] + gauss(rng);
+            }
+            double pcmActiveUnder = 0.0;
+            for (const Path path : {Path::RemotePcm, Path::OpusPhoneSaveData, Path::OpusPhone,
+                                    Path::OpusDesk}) {
+                const std::vector<float> out = micStream(path, input);
+                QVERIFY(!out.empty());
+                // The path's delay: the lag that best matches the output to
+                // the input over the first 4 s.
+                int lag = 0;
+                double best = -1.0;
+                const size_t span = std::min<size_t>(192000, out.size() - 9600);
+                for (int l = 0; l < 9600; ++l) {
+                    double c = 0.0;
+                    for (size_t i = 0; i < span; i += 4) {
+                        c += double(out[i + static_cast<size_t>(l)]) * input[i];
+                    }
+                    if (c > best) {
+                        best = c;
+                        lag = l;
+                    }
+                }
+                std::vector<double> pausePeaks;
+                int pauseOver = 0;
+                int active = 0;
+                int activeUnder = 0;
+                for (size_t at = 0; at + kBlock + static_cast<size_t>(lag) <= out.size()
+                     && at + kBlock <= input.size();
+                     at += kBlock) {
+                    bool pause = true;
+                    float cleanPeak = 0.0f;
+                    for (int k = 0; k < kBlock; ++k) {
+                        pause = pause && inPause[at + static_cast<size_t>(k)] != 0;
+                        cleanPeak = std::max(cleanPeak, std::abs(clean[at + static_cast<size_t>(k)]));
+                    }
+                    float peak = 0.0f;
+                    for (int k = 0; k < kBlock; ++k) {
+                        peak = std::max(peak, std::abs(out[at + static_cast<size_t>(lag + k)]));
+                    }
+                    if (pause) {
+                        pausePeaks.push_back(toDb(peak));
+                        pauseOver += peak >= RemoteMicConfig::kSilencePeak ? 1 : 0;
+                    } else if (cleanPeak >= kActivePeak) {
+                        ++active;
+                        activeUnder += peak < RemoteMicConfig::kSilencePeak ? 1 : 0;
+                    }
+                }
+                QVERIFY(!pausePeaks.empty() && active > 0);
+                const double overPct = 100.0 * pauseOver / double(pausePeaks.size());
+                const double underPct = 100.0 * activeUnder / double(active);
+                if (print) {
+                    qInfo().noquote() << QStringLiteral("PAUSE %1 %2 %3 | %4 %5 %6 %7 | %8 | %9 | %10")
+                        .arg(QLatin1String(pathName(path)), -10)
+                        .arg(speechPeakDb, 4, 'f', 0).arg(floorDb, 4, 'f', 0)
+                        .arg(pct(pausePeaks, 0.50), 6, 'f', 1).arg(pct(pausePeaks, 0.90), 6, 'f', 1)
+                        .arg(pct(pausePeaks, 0.99), 6, 'f', 1).arg(pct(pausePeaks, 1.0), 6, 'f', 1)
+                        .arg(overPct, 6, 'f', 2).arg(underPct, 6, 'f', 2).arg(lag);
+                }
+                if (path == Path::RemotePcm) {
+                    pcmActiveUnder = underPct;
+                }
+                if (path == Path::OpusPhone && floorDb <= -60.0) {
+                    const QByteArray what = QByteArray("speech ")
+                        + QByteArray::number(speechPeakDb) + " floor "
+                        + QByteArray::number(floorDb) + " p99 "
+                        + QByteArray::number(pct(pausePeaks, 0.99));
+                    QVERIFY2(toDb(RemoteMicConfig::kSilencePeak) > pct(pausePeaks, 0.99),
+                             what.constData());
+                    QVERIFY2(underPct <= pcmActiveUnder + 0.5, what.constData());
+                }
+            }
+        }
+    }
+}
+
 // The measurement matrix (printed only with NEREUS_LEVELER_MATRIX=1).
 void TestTxLevelerRemoteMic::measurementMatrix()
 {
@@ -803,7 +944,7 @@ void TestTxLevelerRemoteMic::measurementMatrix()
     const std::vector<float>& speech = speechClip();
     QVERIFY(!speech.empty());
     const QList<Path> paths = {Path::Local, Path::RemotePcm, Path::OpusPhone,
-                               Path::OpusPhoneStalls, Path::OpusDesk, Path::OpusAudio32,
+                               Path::OpusPhoneSaveData, Path::OpusPhoneStalls, Path::OpusDesk, Path::OpusAudio32,
                                Path::OpusAudio48, Path::OpusAudio64};
     const QList<Path> tonePaths = {Path::Local, Path::RemotePcm, Path::OpusPhone, Path::OpusDesk,
                                    Path::OpusAudio64};

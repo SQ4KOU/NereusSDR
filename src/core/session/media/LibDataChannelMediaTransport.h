@@ -30,6 +30,9 @@
 //
 //   2026-10-01: Control logging lane: rttMs(). Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Mic 48k lane: kMicLineMaxAverageBitrate, the microphone
+//               line's 48 kbit/s ceiling. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -68,10 +71,19 @@ MediaSctpSettingsRecord mediaSctpSettingsRecord();
 /// (TX audio, R4).
 QString opusOfferFormatParameters(int targetBitrate);
 
+/// Mic 48k lane: the microphone line's maxaveragebitrate, bit/s. Under RFC
+/// 7587 section 6.1 it is the most the sender may average, so it is the
+/// ceiling of every microphone encoder that sends on the line: the phone's
+/// 48 kbit/s full band (24 kbit/s under Save data) and a desktop remote
+/// window's RemoteMicConfig::kOpusBitrate. 48000 is the highest profile in
+/// the measured Opus table (OpusAudioCodec.h kOpusMeasuredProfiles).
+inline constexpr int kMicLineMaxAverageBitrate = 48'000;
+
 /// iPhone app plan Task 36 (R-IOS-13): the Opus a=fmtp parameters of the
-/// microphone line, which the Core receives: mono 48 kHz, in-band FEC, a
-/// 24 kbit/s average, 10 ms minimum packet time (RFC 7587 section 6.1: the
-/// Core's receive preferences, matching the app's microphone encoder).
+/// microphone line, which the Core receives: mono 48 kHz, in-band FEC, an
+/// average of at most kMicLineMaxAverageBitrate, 10 ms minimum packet time
+/// (RFC 7587 section 6.1: the Core's receive preferences, which bound the
+/// device's microphone encoder).
 QString micLineOpusFormatParameters();
 
 /// TX diagnostics lane: when the microphone line warns of its timing, on

@@ -138,7 +138,9 @@ its `start` (see Microphone line); without it the offer, the answer and
 every audio line are exactly as before. Core's offer declares it
 receive-only (`a=recvonly`), with no SSRC of the Core's, carrying Opus as
 `a=rtpmap:111 opus/48000/2` with
-`a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000`,
+`a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=48000`
+(RFC 7587 section 6.1: the most the Core will receive on average, so the
+ceiling of every microphone encoder on the line),
 and, when the offer carries the lossless format on the main line, the same
 `a=rtpmap:96 L16/48000/2` after Opus. The answer takes it send-only and
 declares the microphone's SSRC on it:
@@ -1063,10 +1065,13 @@ peer). There is no control operation for the line: the client sends on it
 when it transmits, and the Core decides what the transmitter takes.
 
 **What the client sends.** The microphone, mono 48 kHz, as Opus 20 ms
-frames with in-band FEC (payload type 111, one channel), or, from a desktop
-remote window whose operator chose lossless audio and whose line agreed
-the L16 format, as L16 packets of 192 frames with the microphone in both
-channels (payload type 96). A client sends while its device holds transmit,
+frames with in-band FEC (payload type 111, one channel) averaging no more
+than the line's `maxaveragebitrate` of 48000 bit/s: the phone sends 48000
+bit/s full band, or 24000 bit/s under its Save data choice, and a desktop
+remote window 24000 bit/s. A client whose operator chose lossless audio
+and whose line agreed the L16 format (the phone or a desktop remote
+window) sends L16 packets of 192 frames with the microphone in both
+channels (payload type 96) instead. A client sends while its device holds transmit,
 while its own key is down, or while it has VOX armed (the Core's VOX on and
 its session permitted to transmit), and never otherwise. A program keying
 through a desktop window's TCI server is sent on the line in place of the

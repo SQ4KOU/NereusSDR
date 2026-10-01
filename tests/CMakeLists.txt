@@ -8934,6 +8934,17 @@ nereus_add_test(tst_session_link_loss
 # REALTIME (2026-09-24 checkpoint follow-up): each case does a real encrypted
 # loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
 nereus_add_test(tst_media_transport REALTIME)
+# Mic 48k lane: the Core's real offerer against an answerer that writes the
+# microphone line as the phone does (NereusKit MediaPeer.microphoneAnswer,
+# on libdatachannel directly): the 48 kbit/s ceiling is offered and echoed,
+# phone Opus at 48 kbit/s decodes, and lossless is granted and decodes.
+# REALTIME: a real encrypted loopback handshake inside a fixed wait.
+nereus_add_test(tst_mic_line_phone_answer CORE_ONLY REALTIME)
+if(TEST tst_mic_line_phone_answer)
+    target_link_libraries(tst_mic_line_phone_answer PRIVATE datachannel-static)
+    target_include_directories(tst_mic_line_phone_answer PRIVATE
+        "${libdatachannel_SOURCE_DIR}/include")
+endif()
 nereus_add_test(tst_remote_iq_codec)
 
 # iPhone app plan Task 36 (R-IOS-13): the microphone uplink at the Core: the

@@ -75,6 +75,12 @@
 //   2026-10-01: Control logging lane: rttMs() and the selected
 //               pair's candidate transports. Logging only. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Mic 48k lane (JJ's ruling: the phone microphone at 48
+//               kbit/s): the microphone line's offer advertises
+//               maxaveragebitrate=48000 (kMicLineMaxAverageBitrate), the
+//               ceiling the phone's 48 kbit/s encoder must respect under
+//               RFC 7587 section 6.1. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -728,9 +734,17 @@ QString micLineOpusFormatParameters()
 {
     // RFC 7587 section 6.1: these describe what the author of the offer
     // (the Core) prefers to receive on this line: mono (stereo=0), in-band
-    // FEC, a 24 kbit/s average and 10 ms minimum packet time, which is what
-    // the app's microphone encoder sends (20 ms frames, mono 48 kHz).
-    return QStringLiteral("minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000");
+    // FEC, 10 ms minimum packet time, and maxaveragebitrate, the maximum
+    // average bitrate the Core will receive, which the sender keeps under.
+    // The ceiling is 48 kbit/s, the highest measured Opus profile: the
+    // phone's microphone encoder sends 48 kbit/s full band, or 24 kbit/s
+    // under Save data, and a desktop remote window sends 24 kbit/s
+    // (RemoteMicConfig::kOpusBitrate), all within it. The device's own
+    // choice is not known when the offer is written (it comes in the
+    // `audio` control after the peer starts), so the line carries the
+    // ceiling rather than the choice.
+    return QStringLiteral("minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=%1")
+        .arg(kMicLineMaxAverageBitrate);
 }
 
 namespace {
