@@ -133,6 +133,14 @@
 //                 take (TxBadgeOffer) it is enabled, says what a click will
 //                 do, and a click emits txTakeRequested. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-10-01: Completed attribution for bright and dim slice palette, A through H
+//                 by J.J. Boyd (KG4VCF), with AI assistance via
+//                 OpenAI Codex. Port introduced 2026-09-23.
+//                 Source: AetherSDR src/gui/SliceColors.h [@0cd4559].
+//                 Upstream has no per-file copyright header.
+//                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
+//                 AetherSDR contributors. GPLv3; project source:
+//                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
 //=================================================================
@@ -3800,14 +3808,14 @@ QColor VfoWidget::sliceDimColor(int index)
     // color.slice.dim.a-h in resources/themes/default-dark.json:227-234
     // [@9f81dc00].
     switch (index % kSliceColorCount) {
-    case 0: return QColor(0x00, 0x60, 0x80);  // A = cyan, dim
-    case 1: return QColor(0x80, 0x20, 0x80);  // B = magenta, dim
-    case 2: return QColor(0x20, 0x80, 0x20);  // C = green, dim
-    case 3: return QColor(0x80, 0x80, 0x00);  // D = yellow, dim
-    case 4: return QColor(0x80, 0x50, 0x00);  // E = orange, dim
-    case 5: return QColor(0x00, 0x70, 0x60);  // F = teal, dim
-    case 6: return QColor(0x80, 0x30, 0x40);  // G = coral, dim
-    case 7: return QColor(0x58, 0x40, 0x80);  // H = lavender, dim
+    case 0: return QColor(0x00, 0x60, 0x80);  // A = cyan
+    case 1: return QColor(0x80, 0x20, 0x80);  // B = magenta
+    case 2: return QColor(0x20, 0x80, 0x20);  // C = green
+    case 3: return QColor(0x80, 0x80, 0x00);  // D = yellow
+    case 4: return QColor(0x80, 0x50, 0x00);  // E = orange
+    case 5: return QColor(0x00, 0x70, 0x60);  // F = teal
+    case 6: return QColor(0x80, 0x30, 0x40);  // G = coral
+    case 7: return QColor(0x58, 0x40, 0x80);  // H = lavender
     default: return QColor(0x00, 0x60, 0x80);
     }
 }

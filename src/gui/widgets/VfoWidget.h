@@ -62,6 +62,14 @@
 //                 txTakeRequested, a TX badge click that starts the take of
 //                 transmit or of the slice. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-10-01: Completed attribution for bright and dim slice palette, A through H
+//                 by J.J. Boyd (KG4VCF), with AI assistance via
+//                 OpenAI Codex. Port introduced 2026-09-23.
+//                 Source: AetherSDR src/gui/SliceColors.h [@0cd4559].
+//                 Upstream has no per-file copyright header.
+//                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
+//                 AetherSDR contributors. GPLv3; project source:
+//                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
 //=================================================================

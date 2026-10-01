@@ -116,6 +116,15 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-10-01: Completed attribution for per-slice marker colors
+//                 and selected-last paint order
+//                 by J.J. Boyd (KG4VCF), with AI assistance via
+//                 OpenAI Codex. Port introduced 2026-09-23.
+//                 Source: AetherSDR src/gui/SpectrumWidget.cpp [@9f81dc00].
+//                 Upstream has no per-file copyright header.
+//                 Copyright (C) 2024-2026 Jeremy (KK7GWY) and
+//                 AetherSDR contributors. GPLv3; project source:
+//                 https://github.com/ten9876/AetherSDR
 // =================================================================
 
 //=================================================================
@@ -7065,10 +7074,21 @@ const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
 QVector<SpectrumWidget::SliceMarkerGeometry>
 SpectrumWidget::sliceMarkerGeometry() const
 {
+    // [original inline comment from src/gui/SpectrumWidget.cpp:17450 [@9f81dc00]]
+    // Draw inactive slices first, then active slice on top
     const auto marker = [](double centreHz, int lowHz, int highHz,
                            const VfoWidget* flag, int sliceIndex, bool active) {
         const QColor lineColor = active ? VfoWidget::sliceColor(sliceIndex)
                                         : VfoWidget::sliceDimColor(sliceIndex);
+        // [original inline comments from src/gui/SpectrumWidget.cpp:17455-17462 [@9f81dc00]]
+        // Bandwidth affordances (passband fill + filter edges) render at full
+        // brightness so they stay visible on non-active slices (#3484) — but an
+        // inactive slice uses the neutral secondary colour instead of the
+        // slice's own colour, so it is COLOUR (not brightness) that signals
+        // inactive. That keeps the panadapter from making an inactive slice look
+        // TX-selectable (the #2389 confusion concern) while fixing the
+        // near-invisible passband. The VFO centre line, triangle, and RIT/XIT
+        // lines keep `col` (dimmed when inactive) to preserve the focus cue.
         const QColor edgeColor = active ? VfoWidget::sliceColor(sliceIndex)
                                         : QColor(Style::kTextSecondary);
         return SliceMarkerGeometry{centreHz, lowHz, highHz, flag,
@@ -7090,6 +7110,8 @@ SpectrumWidget::sliceMarkerGeometry() const
     // QMap, so this walks slices in index order and the paint order is stable
     // frame to frame rather than hash-dependent.
     out.reserve(m_vfoWidgets.size());
+    // [original inline comment from src/gui/SpectrumWidget.cpp:17710 [@9f81dc00]]
+    // Draw all slices (active last so its marker is on top)
     QVector<SliceMarkerGeometry> selected;
     for (auto it = m_vfoWidgets.constBegin(); it != m_vfoWidgets.constEnd(); ++it) {
         const VfoWidget* flag = it.value();
