@@ -87,9 +87,11 @@ of blocking forever. A few still override it in `tests/CMakeLists.txt`, each
 with its reason beside it: `tst_remote_audio_clock` (700 s, two simulated
 hours through WDSP's resampler), `tst_rendezvous_client`,
 `tst_remote_vax_feeder`, `tst_remote_media_controller`, `tst_media_tunnel`
-and the media-wait set (`tst_remote_audio_session`, `tst_media_replace`,
-`tst_remote_telemetry`, `tst_remote_connection_controls`) at 300 s, and the
-traversal harness (1800 s, dispatch-only). These are open review items:
+the media-wait set (`tst_remote_audio_session`, `tst_media_replace`,
+`tst_remote_telemetry`, `tst_remote_connection_controls`) and the link
+conformance session and its data-channel entry (92 to 104 s on the Linux CI
+runner) at 300 s, `tst_path_racer` at 400 s, and the traversal harness
+(1800 s, dispatch-only). These are open review items:
 the fix is a test seam that shortens the product deadline or backoff the
 test waits out, not a larger limit. Do not add a new override; make the
 test faster.

@@ -8672,14 +8672,17 @@ if(TEST tst_link_conformance_session)
     # Load findings 3: the two transports are now two entries of the same
     # binary, the first NEREUS_LINK_MODE=loopback (and every other check),
     # tst_link_conformance_session_datachannel NEREUS_LINK_MODE=datachannel.
-    # Each takes about 28 s at load 10 to 14 (2026-09-30), so both keep the
-    # default 120 s (fix wave INFRA-I3: the 300 s overrides are gone).
+    # Each keeps the 300 s override. Locally each takes about 28 s at load
+    # 10 to 14 (2026-09-30), but on the Linux CI runner they took 92.60 s
+    # and 104.16 s (run on 01d797e56), too close to the default 120 s.
+    # Making them faster is an open item; the limit is not raised past 300.
+    set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_MODE=loopback")
     add_test(NAME tst_link_conformance_session_datachannel COMMAND tst_link_conformance_session)
     set_tests_properties(tst_link_conformance_session_datachannel PROPERTIES
         LABELS "${_lcs_labels}"
-        TIMEOUT 120)
+        TIMEOUT 300)
     if(_lcs_env_mod)
         set_property(TEST tst_link_conformance_session_datachannel
             PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
@@ -9466,7 +9469,12 @@ target_compile_definitions(tst_path_racer PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     NEREUS_TEST_PYTHON="${NEREUS_TEST_PYTHON}")
 # 22 s at load 10 to 14 (2026-09-30), on the Python NEREUS_TEST_PYTHON
-# names; the default 120 s holds (INFRA-I3: the 400 s override is gone).
+# names, but it runs real sessions like the link conformance entries, which
+# take 3 to 4 times longer on the Linux CI runner than here, and it has no
+# CI timing of its own. It keeps the 400 s override it had.
+if(TEST tst_path_racer)
+    set_tests_properties(tst_path_racer PROPERTIES TIMEOUT 400)
+endif()
 # iPhone app plan Task 29 step 2b (R-IOS-16, R-IOS-08; the rendezvous
 # document, section 12.8): the Core's relay-leg runner over the relay
 # fixtures in rendezvous/conformance/v1/relay/, and the leg's own rules.
